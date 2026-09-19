@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-devtools"
 version.workspace = true
 edition.workspace = true
@@ -74,9 +75,10 @@ full = ["profiling", "timeline", "hot-reload", "inspector"]
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
 # tests call so a sibling test cannot poison their callsites' cached interest.
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
-# normally, which cargo permits for dev-dependencies precisely so a lower crate
-# can use the test support built on it.
-flui-testing = { workspace = true }
+# through its own dev graph. Cargo permits these checkout dev cycles so a lower
+# crate can use the test support built on it.
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-testing = { path = "../flui-testing" }
 
 # The profiler demo exercises the `profiling`-gated `profiler` module, so it
 # only builds when that feature is enabled (it is off in the default build).

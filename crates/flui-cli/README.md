@@ -17,11 +17,11 @@ cargo install --path crates/flui-cli
 ## Quick Start
 
 ```bash
-# Create a new project
-flui create my_app
+# From the FLUI checkout, create an application outside it
+flui create my_app --local --path ../apps
 
 # Run in development mode
-cd my_app
+cd ../apps/my_app
 flui run
 
 # Build for production
@@ -48,37 +48,50 @@ flui build desktop --release
 ## Project Creation
 
 ```bash
-# Default counter template
-flui create my_app
+# Default counter template, from the FLUI checkout
+flui create my_app --local
 
 # With organization ID
-flui create my_app --org com.example
+flui create my_app --local --org com.example
 
 # Specific template
-flui create my_app --template basic
+flui create my_app --local --template basic
 
-# Skip git initialization
-flui create my_app --no-git
+# Explicit checkout, from any working directory
+flui create my_app --local=/path/to/flui --path /path/to/apps
 ```
 
-Until FLUI is published, pass `--local` and create the project one directory
-below the FLUI checkout root — the generated `Cargo.toml` then uses
-`path = "../../crates/flui-app"` dependencies, which is the only mode that
-resolves today:
+Until FLUI is published, use local source dependencies. Bare `--local` selects
+the current working directory as the FLUI checkout; `--local=/path/to/flui`
+selects an explicit checkout. The `=` is required when supplying a path so that
+`flui create --local my_app` still treats `my_app` as the project name.
+
+`--path` selects the parent directory of the generated application. It can be
+outside the checkout and at any directory depth. Generated manifests contain
+absolute paths to the selected checkout, including in the hot-reload workspace:
 
 ```bash
-flui create my_app --local --path ./scratch
+flui create my_app --local=/path/to/flui --hot-reload --path /path/to/apps
 ```
+
+Keep the selected checkout available while using a local project. Moving the
+application does not break those dependency paths; moving the checkout requires
+updating them. Omit `--local` to generate registry dependencies once the matching
+FLUI version is published. Invalid local source paths fail before project creation.
 
 ### Templates
 
-Both templates generate a project that compiles (enforced by
-`tests/cli_create.rs`, which runs `cargo check` on the generated output).
+All templates declare `flui` as their only framework dependency. Generated code
+imports the public facade, beginning with `use flui::prelude::*;`. Local projects
+point that dependency at the checkout root; registry projects select the CLI's
+framework version. The hot-reload workspace enables `flui`'s `hot-reload` feature
+in its host, worker, and shared-types crates, and keeps sibling paths relative.
+
+`tests/cli_create.rs` checks all three generated project shapes in external
+temporary directories using Cargo.
 
 - **counter** (default) — `Column` of `Text` widgets showing a static count.
-  The interactive version needs a `'static` rebuild handle, which the public
-  `BuildContext` does not expose yet; the template documents the
-  `StatefulView` + `ViewState` pair to grow into.
+  This template does not yet demonstrate interactive state updates.
 - **basic** — minimal "Hello, FLUI!" `StatelessView`.
 - **todo** — Todo list application (planned)
 - **dashboard** — Dashboard with multiple widgets (planned)

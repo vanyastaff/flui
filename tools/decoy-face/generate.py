@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the synthetic font fixtures under `crates/flui-engine/assets/fonts`.
+"""Generate the synthetic font fixtures under `crates/flui-painting/assets/fonts`.
 
 Why it exists
 -------------
@@ -21,11 +21,11 @@ heuristic cosmic-text itself uses to decide `not_emoji`
 fallback tail (issue #930). A fixture that the shaper classifies the same way a
 real emoji font is classified is what lets a hermetic test reach that path.
 
-The same machinery supplies three more fixtures, for the same reason in a
-different place: every font asset the repository ships is a single-weight,
-non-monospaced, static face, so three arms of `font_resolve`'s weight
-resolution had nothing that could tell a correct implementation from a broken
-one. `FACES` at the bottom of this file lists what each fixture exists to
+The same machinery supplies three weight fixtures: the original runtime fonts
+were single-weight, non-monospaced, static faces, so three arms of
+`font_resolve`'s weight resolution had nothing that could tell a correct
+implementation from a broken one. The ordinary sans fixture separately
+provides complete coverage for the Ao Bo family-selection probe. `FACES` at the bottom of this file lists what each fixture exists to
 discriminate.
 
 Run: `python3 tools/decoy-face/generate.py` (no dependencies). Output is
@@ -33,6 +33,7 @@ deterministic: regenerating over an unchanged `FACES` reproduces every file
 byte for byte.
 """
 
+import argparse
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +55,8 @@ class FaceSpec:
     #: generic binding can choose it. The outline stays empty — coverage is
     #: what every probe in `font_resolve` actually reads.
     letters: bool = False
+    #: Explicit BMP coverage for the fixture with non-monospaced metadata.
+    codepoints: tuple[int, ...] = ()
     #: `OS/2.usWeightClass`, which is what fontdb reports as `face.weight`.
     weight: int = 400
     #: `post.isFixedPitch`, which is what fontdb reports as `face.monospaced`.
@@ -64,8 +67,12 @@ class FaceSpec:
     variable_wght: tuple[int, int, int] | None = None
 
     @property
+    def mapped_letters(self) -> tuple[int, ...]:
+        return (0x0041,) if self.letters else self.codepoints
+
+    @property
     def num_glyphs(self) -> int:
-        return 3 if self.letters else 2  # .notdef, space, [A]
+        return 2 + len(self.mapped_letters)  # .notdef, space, explicit letters
 
 
 def pad4(data: bytes) -> bytes:
@@ -121,7 +128,7 @@ def maxp_table(spec: FaceSpec) -> bytes:
 def hmtx_table(spec: FaceSpec) -> bytes:
     # One longHorMetric per glyph (numberOfHMetrics == numGlyphs).
     metrics = struct.pack(">Hh", 0, 0) + struct.pack(">Hh", spec.space_advance, 0)
-    if spec.letters:
+    for _ in spec.mapped_letters:
         metrics += struct.pack(">Hh", spec.space_advance, 0)
     return metrics
 
@@ -138,7 +145,7 @@ def glyf_table() -> bytes:
 def cmap_table(spec: FaceSpec) -> bytes:
     # Format 4: one segment per mapped codepoint, plus the required 0xFFFF
     # terminator segment.
-    codes = [(0x0020, 1)] + ([(0x0041, 2)] if spec.letters else [])
+    codes = [(0x0020, 1)] + [(code, glyph) for glyph, code in enumerate(spec.mapped_letters, start=2)]
     end_codes = [code for code, _ in codes] + [0xFFFF]
     start_codes = list(end_codes)
     # idDelta maps `code` to `glyph`: (code + delta) & 0xFFFF == glyph
@@ -206,7 +213,7 @@ def os2_table(spec: FaceSpec) -> bytes:
         b"FLUI",                            # achVendID
         struct.pack(">H", 0x0040),          # fsSelection: REGULAR
         struct.pack(">H", 0x0020),          # usFirstCharIndex
-        struct.pack(">H", 0x0041 if spec.letters else 0x0020),  # usLastCharIndex
+        struct.pack(">H", max((0x0020, *spec.mapped_letters))),  # usLastCharIndex
         struct.pack(">h", 800),             # sTypoAscender
         struct.pack(">h", -200),            # sTypoDescender
         struct.pack(">h", 0),               # sTypoLineGap
@@ -309,6 +316,17 @@ def build(spec: FaceSpec) -> bytes:
 
 #: Every generated fixture, and the property each one exists to give a test.
 FACES = [
+    # A second ordinary family for load-order and fallback probes. Empty
+    # outlines suffice: these tests shape Ao Bo and inspect glyph IDs/advances,
+    # not rasterized ink. No host or third-party font supplies these bytes.
+    FaceSpec(
+        family="FLUI Probe Sans",
+        postscript="FLUIProbeSans",
+        subfamily="Regular",
+        out="probe-sans-400.ttf",
+        codepoints=(0x0041, 0x0042, 0x006F),
+        space_advance=500,
+    ),
     # The oversized space of issue #927, with "Emoji" in the PostScript name so
     # cosmic-text classifies it the way it classifies a real emoji font.
     FaceSpec(
@@ -362,7 +380,10 @@ FACES = [
 
 
 if __name__ == "__main__":
-    assets = Path(__file__).resolve().parents[2] / "crates/flui-engine/assets/fonts"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parents[2] / "crates/flui-painting/assets/fonts")
+    assets = parser.parse_args().output_dir
+    assets.mkdir(parents=True, exist_ok=True)
     for spec in FACES:
         data = build(spec)
         out = assets / spec.out

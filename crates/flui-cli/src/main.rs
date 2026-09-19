@@ -98,9 +98,9 @@ enum Commands {
         #[arg(long)]
         path: Option<PathBuf>,
 
-        /// Use local path dependencies instead of crates.io versions
-        #[arg(long)]
-        local: bool,
+        /// Use a FLUI checkout (bare --local uses the current directory)
+        #[arg(long, num_args = 0..=1, default_missing_value = ".", require_equals = true, value_name = "PATH")]
+        local: Option<PathBuf>,
 
         /// Create a library instead of an application
         #[arg(long)]

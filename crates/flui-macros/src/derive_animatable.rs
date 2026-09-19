@@ -19,10 +19,8 @@
 //!
 //! ## Generated-code path strategy
 //!
-//! The emitted `impl` references the trait via the absolute
-//! `::flui_animation::TwoWayConverter` path, so every consumer of the derive
-//! must have `flui-animation` as a direct dependency. This matches the
-//! `::flui_foundation::…` strategy used by the other FLUI derives.
+//! Runtime paths resolve the direct owning crate first, otherwise its module
+//! in the `flui` facade. Cargo dependency aliases are respected.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -30,6 +28,10 @@ use syn::{Data, DeriveInput, Fields, Index, Type, spanned::Spanned};
 
 /// Entry point for `#[proc_macro_derive(Animatable)]`.
 pub fn expand(input: &DeriveInput) -> TokenStream {
+    let runtime = match crate::runtime_path::Runtime::Animation.resolve(input.ident.span()) {
+        Ok(path) => path,
+        Err(error) => return error.to_compile_error(),
+    };
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
@@ -80,7 +82,7 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
     };
 
     quote! {
-        impl #impl_generics ::flui_animation::TwoWayConverter for #name #ty_generics #where_clause {
+        impl #impl_generics #runtime::TwoWayConverter for #name #ty_generics #where_clause {
             type Vector = [f32; #count];
 
             #[inline]

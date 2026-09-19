@@ -4,18 +4,18 @@
 
 use crate::error::{CliResult, ResultExt};
 use crate::runner::{GitCommand, OutputStyle};
-use crate::templates::TemplateBuilder;
+use crate::templates::{DependencySource, TemplateBuilder};
 use crate::types::{OrganizationId, ProjectName, ProjectPath};
 use crate::{Platform, Template};
 use console::style;
 use std::path::{Path, PathBuf};
 
-/// The boolean switches of `flui create`, grouped so adding one is a field,
+/// The options of `flui create`, grouped so adding one is a field,
 /// not a positional argument every caller has to count.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CreateOptions {
     /// Use local path dependencies instead of crates.io versions.
-    pub local: bool,
+    pub local: Option<PathBuf>,
     /// Create a library instead of an application.
     pub lib: bool,
     /// Skip the post-scaffold `cargo check`. The check only reports — it
@@ -64,6 +64,8 @@ pub fn execute(
     let project_path = ProjectPath::new(&project_name, path)?;
     let project_dir = project_path.as_path();
 
+    let source = DependencySource::resolve(local.as_deref(), hot_reload)?;
+
     // Step 1: Create project directory
     let spinner = cliclack::spinner();
     spinner.start("Creating project directory...");
@@ -87,7 +89,7 @@ pub fn execute(
     spinner.start("Generating project files...");
     let _generated = TemplateBuilder::new(project_name.clone(), org_id)
         .template(template)
-        .local(local)
+        .dependency_source(source)
         .platforms(platform_names)
         .hot_reload(hot_reload)
         .with_git(false)

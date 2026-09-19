@@ -8,7 +8,7 @@
 use flui_painting::{TextPainter, shared_font_system};
 use flui_types::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 
-const ARIAL: &[u8] = include_bytes!("../assets/fonts/Arial.ttf");
+const PROBE_SANS: &[u8] = include_bytes!("../assets/fonts/probe-sans-400.ttf");
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 
 fn painter(text: &str) -> TextPainter {
@@ -49,7 +49,9 @@ fn shaping_never_bumps_the_generation() {
 fn register_font_bumps_the_generation_once() {
     let fonts = shared_font_system();
     let before = fonts.generation();
-    fonts.register_font(ARIAL).expect("Arial loads");
+    fonts
+        .register_font(PROBE_SANS)
+        .expect("FLUI Probe Sans loads");
     assert_eq!(fonts.generation(), before + 1);
     assert!(
         fonts.register_font(b"not a font").is_err(),

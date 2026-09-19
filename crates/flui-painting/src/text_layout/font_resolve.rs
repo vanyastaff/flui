@@ -403,7 +403,7 @@ impl cosmic_text::Fallback for EmojiForbiddenFallback {
 /// # What pins each arm
 ///
 /// No shipped font asset discriminates either arm — `Roboto-Regular`,
-/// `Arial` and `MaterialIcons-Regular` are all single-weight,
+/// `FLUI Probe Sans` and `MaterialIcons-Regular` are all single-weight,
 /// non-monospaced, static faces, so both arms could be deleted without
 /// turning the suite red. The generated fixtures exist for exactly this:
 /// `probe-mono-{100,600}.ttf` is one monospaced family at two weights, and
@@ -743,7 +743,7 @@ mod tests {
     use super::*;
 
     const ROBOTO: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
-    const ARIAL: &[u8] = include_bytes!("../../assets/fonts/Arial.ttf");
+    const PROBE_SANS: &[u8] = include_bytes!("../../assets/fonts/probe-sans-400.ttf");
     const MATERIAL_ICONS: &[u8] = include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
     /// Maps ONLY `U+0020`, at 1.3 em, with "Emoji" in its PostScript name.
     ///
@@ -753,6 +753,33 @@ mod tests {
     /// icon fonts carry neither. That made a merge-blocking assertion depend
     /// on a distro package's space advance (issue #932).
     const DECOY_WIDE_SPACE: &[u8] = include_bytes!("../../assets/fonts/decoy-wide-space.ttf");
+
+    #[test]
+    fn probe_sans_is_static_regular_and_covers_the_shaping_probe() {
+        use cosmic_text::skrifa::{
+            self, MetadataProvider as _,
+            instance::{LocationRef, Size},
+        };
+        let db = database(&[PROBE_SANS]);
+        let face = db.faces().next().expect("probe face loads");
+        assert_eq!(face.weight.0, 400);
+        assert_eq!(face.style, cosmic_text::Style::Normal);
+        assert!(!face.monospaced);
+        db.with_face_data(face.id, |data, index| {
+            let font = skrifa::FontRef::from_index(data, index).expect("parse generated font");
+            assert_eq!(font.axes().len(), 0, "the fallback tie needs a static face");
+            let metrics = font.glyph_metrics(Size::unscaled(), LocationRef::default());
+            for character in ['A', 'B', 'o', ' '] {
+                let glyph = font
+                    .charmap()
+                    .map(character)
+                    .expect("probe character is covered");
+                assert_ne!(glyph.to_u32(), 0, "coverage must not resolve to .notdef");
+                assert!(metrics.advance_width(glyph).expect("glyph has metrics") > 0.0);
+            }
+        })
+        .expect("fixture bytes available");
+    }
 
     fn database(faces: &[&[u8]]) -> Database {
         let mut db = Database::new();
@@ -1025,20 +1052,22 @@ mod tests {
     /// An absent primary falls through to the first INSTALLED family in the
     /// declared chain, rather than jumping to the generic.
     ///
-    /// This is what a Cupertino run hits on any host without
-    /// `CupertinoSystemText`: the theme declares
-    /// `["-apple-system", "system-ui", "Segoe UI", "Helvetica Neue", "Arial", "sans-serif"]`
-    /// and, before this, every one of them was skipped in favour of the
-    /// sans-serif generic even when the host carried one.
+    /// A Cupertino run on a host without `CupertinoSystemText` walks an
+    /// ordered fallback chain. This hermetic chain substitutes FLUI Probe Sans
+    /// for a host font, preserving the absent-primary/absent-first-fallback
+    /// case without depending on installed fonts.
     #[test]
     fn an_absent_primary_falls_through_to_an_installed_fallback() {
-        let mut system = font_system(database(&[ARIAL]));
-        let style = styled_with_fallback(Some("CupertinoSystemText"), &["Helvetica Neue", "Arial"]);
+        let mut system = font_system(database(&[PROBE_SANS]));
+        let style = styled_with_fallback(
+            Some("CupertinoSystemText"),
+            &["Helvetica Neue", "FLUI Probe Sans"],
+        );
         assert_eq!(
             resolved(&mut system, &style),
-            "Name(\"Arial\")",
-            "the primary is absent and so is the first fallback, but Arial is \
-             installed — before #928 this resolved to SansSerif with Arial \
+            "Name(\"FLUI Probe Sans\")",
+            "the primary is absent and so is the first fallback, but FLUI Probe Sans is \
+             installed — before #928 this resolved to SansSerif with FLUI Probe Sans \
              sitting right there in the database"
         );
     }
@@ -1049,19 +1078,20 @@ mod tests {
     /// searched the database rather than the chain, would pass the test above.
     #[test]
     fn the_chain_is_walked_in_declared_order() {
-        let mut system = font_system(database(&[ARIAL, ROBOTO]));
-        let earlier_first = styled_with_fallback(Some("Absent Primary"), &["Roboto", "Arial"]);
+        let mut system = font_system(database(&[PROBE_SANS, ROBOTO]));
+        let earlier_first =
+            styled_with_fallback(Some("Absent Primary"), &["Roboto", "FLUI Probe Sans"]);
         assert_eq!(
             resolved(&mut system, &earlier_first),
             "Name(\"Roboto\")",
             "both are installed, so the DECLARED order decides"
         );
 
-        let mut system = font_system(database(&[ARIAL, ROBOTO]));
-        let reversed = styled_with_fallback(Some("Absent Primary"), &["Arial", "Roboto"]);
+        let mut system = font_system(database(&[PROBE_SANS, ROBOTO]));
+        let reversed = styled_with_fallback(Some("Absent Primary"), &["FLUI Probe Sans", "Roboto"]);
         assert_eq!(
             resolved(&mut system, &reversed),
-            "Name(\"Arial\")",
+            "Name(\"FLUI Probe Sans\")",
             "reversing the chain reverses the answer — a resolver ignoring \
              order would return the same family for both"
         );
@@ -1071,9 +1101,9 @@ mod tests {
     /// preference list that overrides.
     #[test]
     fn an_installed_primary_is_not_displaced_by_the_chain() {
-        let mut system = font_system(database(&[ARIAL, ROBOTO]));
-        let style = styled_with_fallback(Some("Arial"), &["Roboto"]);
-        assert_eq!(resolved(&mut system, &style), "Name(\"Arial\")");
+        let mut system = font_system(database(&[PROBE_SANS, ROBOTO]));
+        let style = styled_with_fallback(Some("FLUI Probe Sans"), &["Roboto"]);
+        assert_eq!(resolved(&mut system, &style), "Name(\"FLUI Probe Sans\")");
     }
 
     /// A generic in the chain resolves as that generic and ends the walk.
@@ -1082,17 +1112,17 @@ mod tests {
     /// ends in "sans-serif" — rather than relying on the degrade below it.
     #[test]
     fn a_generic_in_the_chain_resolves_and_terminates_it() {
-        let mut system = font_system(database(&[ARIAL]));
-        // "Arial" is installed and sits AFTER the generic, so reaching it
+        let mut system = font_system(database(&[PROBE_SANS]));
+        // "FLUI Probe Sans" is installed and sits AFTER the generic, so reaching it
         // would prove the walk did not stop.
-        let style = styled_with_fallback(Some("Absent"), &["monospace", "Arial"]);
+        let style = styled_with_fallback(Some("Absent"), &["monospace", "FLUI Probe Sans"]);
         assert_eq!(resolved(&mut system, &style), "Monospace");
     }
 
     /// A chain of entirely absent names still degrades to the generic.
     #[test]
     fn an_all_absent_chain_still_degrades_to_the_generic() {
-        let mut system = font_system(database(&[ARIAL]));
+        let mut system = font_system(database(&[PROBE_SANS]));
         let style = styled_with_fallback(Some("Absent Primary"), &["Also Absent", "Still Absent"]);
         assert_eq!(resolved(&mut system, &style), "SansSerif");
     }
@@ -1296,10 +1326,10 @@ mod tests {
 
     #[test]
     fn a_present_family_is_used_verbatim() {
-        let mut system = font_system(database(&[ROBOTO, ARIAL]));
+        let mut system = font_system(database(&[ROBOTO, PROBE_SANS]));
         assert_eq!(
-            resolved(&mut system, &styled(Some("Arial"))),
-            r#"Name("Arial")"#
+            resolved(&mut system, &styled(Some("FLUI Probe Sans"))),
+            r#"Name("FLUI Probe Sans")"#
         );
     }
 
@@ -1348,14 +1378,14 @@ mod tests {
 
     #[test]
     fn binding_leaves_an_already_resolvable_generic_alone() {
-        let mut db = database(&[ROBOTO, ARIAL]);
-        db.set_sans_serif_family("Arial");
+        let mut db = database(&[ROBOTO, PROBE_SANS]);
+        db.set_sans_serif_family("FLUI Probe Sans");
 
         bind_generic_families(&mut db);
 
         assert_eq!(
             db.family_name(&Family::SansSerif),
-            "Arial",
+            "FLUI Probe Sans",
             "a generic the database already resolves must not be re-pointed"
         );
     }
@@ -1452,6 +1482,10 @@ mod tests {
             .layout_runs()
             .next()
             .expect("one line of shaped text");
+        for glyph in run.glyphs {
+            assert_ne!(glyph.glyph_id, 0, "shaping probe must not use .notdef");
+            assert!(glyph.w > 0.0, "shaping probe glyphs need positive advances");
+        }
         let letter = run.glyphs.first().expect("a letter glyph");
         let space = run
             .glyphs
@@ -1514,6 +1548,10 @@ mod tests {
             .layout_runs()
             .next()
             .expect("one line of shaped text");
+        for glyph in run.glyphs {
+            assert_ne!(glyph.glyph_id, 0, "shaping probe must not use .notdef");
+            assert!(glyph.w > 0.0, "shaping probe glyphs need positive advances");
+        }
         let letter = run.glyphs.first().expect("a letter glyph");
         let space = run
             .glyphs
@@ -1538,17 +1576,16 @@ mod tests {
     /// fixture happened to load them. Each row's `wrong_answer` is that, and
     /// no load order produces both right answers.
     ///
-    /// This pins family selection only. The oversized-space *symptom* needs a
-    /// face that carries `' '` but no letters, which no in-tree font does —
-    /// `oversized_space_from_an_emoji_face_is_closed` covers it against a host
-    /// emoji font instead.
+    /// This pins family selection only. The oversized-space symptom is tested
+    /// separately with the generated space-only emoji decoy; no host font is
+    /// needed by either test.
     #[test]
     fn an_uninstalled_family_shapes_in_the_bound_generic_both_ways() {
         let style = styled(Some("CupertinoSystemText"));
 
         for (faces, generic_target, wrong_answer) in [
-            (&[ARIAL, ROBOTO][..], "Roboto", "Arial"),
-            (&[ROBOTO, ARIAL][..], "Arial", "Roboto"),
+            (&[PROBE_SANS, ROBOTO][..], "Roboto", "FLUI Probe Sans"),
+            (&[ROBOTO, PROBE_SANS][..], "FLUI Probe Sans", "Roboto"),
         ] {
             let mut db = database(faces);
 
@@ -1741,13 +1778,18 @@ mod tests {
     fn swapping_one_face_for_another_invalidates_the_index() {
         let mut system = font_system(database(&[ROBOTO]));
         let mut installed = InstalledFamilies::default();
-        let arial = styled(Some("Arial"));
+        let probe_sans = styled(Some("FLUI Probe Sans"));
 
         let mut db_generation = 0;
         assert_eq!(
-            resolve_family(Some(&arial), &mut system, &mut installed, db_generation),
+            resolve_family(
+                Some(&probe_sans),
+                &mut system,
+                &mut installed,
+                db_generation
+            ),
             Family::SansSerif,
-            "precondition: Arial is absent to begin with"
+            "precondition: FLUI Probe Sans is absent to begin with"
         );
 
         // Remove one face, add one face: the count is what it was.
@@ -1759,7 +1801,7 @@ mod tests {
             .id;
         let faces_before = system.db().len();
         system.db_mut().remove_face(roboto_id);
-        system.db_mut().load_font_data(ARIAL.to_vec());
+        system.db_mut().load_font_data(PROBE_SANS.to_vec());
         assert_eq!(
             system.db().len(),
             faces_before,
@@ -1769,8 +1811,13 @@ mod tests {
         db_generation += 1;
 
         assert_eq!(
-            resolve_family(Some(&arial), &mut system, &mut installed, db_generation),
-            Family::Name("Arial"),
+            resolve_family(
+                Some(&probe_sans),
+                &mut system,
+                &mut installed,
+                db_generation
+            ),
+            Family::Name("FLUI Probe Sans"),
             "the family that arrived must be seen even though the face count \
              never moved"
         );

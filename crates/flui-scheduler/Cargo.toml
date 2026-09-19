@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-scheduler"
 version.workspace = true
 edition.workspace = true
@@ -47,7 +48,8 @@ criterion = { workspace = true }
 # edge, and a dev-only CYCLE: flui-testing depends on this crate normally,
 # which cargo permits for dev-dependencies precisely so a lower crate can use
 # the test support built on it.
-flui-testing = { workspace = true }
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-testing = { path = "../flui-testing" }
 
 [lib]
 name = "flui_scheduler"

@@ -22,6 +22,9 @@
 mod basic;
 mod counter;
 mod hot_reload;
+mod source;
+
+pub use source::DependencySource;
 
 use crate::Template;
 use crate::error::CliResult;
@@ -56,7 +59,7 @@ pub struct TemplateBuilder {
     template: Template,
     init_git: bool,
     run_cargo_check: bool,
-    local: bool,
+    source: DependencySource,
     platforms: Vec<String>,
     hot_reload: bool,
 }
@@ -75,7 +78,7 @@ impl TemplateBuilder {
             template: Template::Counter,
             init_git: true,
             run_cargo_check: true,
-            local: false,
+            source: DependencySource::Registry,
             platforms: Vec::new(),
             hot_reload: false,
         }
@@ -97,11 +100,9 @@ impl TemplateBuilder {
         self
     }
 
-    /// Use local path dependencies instead of crates.io versions.
-    ///
-    /// Default is `false`.
-    pub fn local(mut self, local: bool) -> Self {
-        self.local = local;
+    /// Select validated framework dependencies (default: crates.io).
+    pub fn dependency_source(mut self, source: DependencySource) -> Self {
+        self.source = source;
         self
     }
 
@@ -144,7 +145,7 @@ impl TemplateBuilder {
         let org_str = self.org.as_str();
 
         if self.hot_reload {
-            hot_reload::generate(dir, name_str, org_str, self.local)?;
+            hot_reload::generate(dir, name_str, org_str, &self.source)?;
             return Ok(GeneratedProject {
                 name: self.name,
                 org: self.org,
@@ -156,10 +157,10 @@ impl TemplateBuilder {
 
         match self.template {
             Template::Counter => {
-                counter::generate(dir, name_str, org_str, self.local, &self.platforms)?;
+                counter::generate(dir, name_str, org_str, &self.source, &self.platforms)?;
             }
             // TODO(#templates): Implement specific templates for Todo, Dashboard, Widget, Plugin, Empty
-            _ => basic::generate(dir, name_str, org_str, self.local, &self.platforms)?,
+            _ => basic::generate(dir, name_str, org_str, &self.source, &self.platforms)?,
         }
 
         Ok(GeneratedProject {

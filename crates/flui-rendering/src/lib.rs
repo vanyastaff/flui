@@ -54,6 +54,10 @@
 // Ship bar (wave 3): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
+// Public for exported macro expansion in downstream crates, not an authoring alias.
+#[doc(hidden)]
+pub use flui_types::Size as __MacroSize;
+
 pub mod binding;
 pub mod constraints;
 pub mod context;

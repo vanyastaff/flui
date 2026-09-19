@@ -10,56 +10,19 @@
 //! worker and the host independently: `flui run` watches the worker crate and
 //! rebuilds only it, leaving the running host untouched.
 
+use super::DependencySource;
 use crate::error::{CliResult, ResultExt};
 use std::fs;
 use std::path::Path;
 
-/// A `flui-*` dependency line pointing at the local source tree or a version.
-///
-/// `members_deep` is how many directories the depending manifest sits below the
-/// repository root. The hot-reload sub-crates are one level below the generated
-/// workspace root, which itself sits one level below the repo root (the
-/// `target/<name>` layout `flui create --local` documents), so they pass `3`.
-/// A plain template's manifest is `target/<name>` itself and passes `2`.
-fn workspace_dep(crate_name: &str, local: bool, members_deep: usize) -> String {
-    if local {
-        let up = "../".repeat(members_deep);
-        format!("{{ path = \"{up}crates/{crate_name}\" }}")
-    } else {
-        // FLUI is not published to crates.io; the version branch is the shape
-        // for when it is, matching the other templates.
-        let version = env!("CARGO_PKG_VERSION");
-        format!("{{ version = \"{version}\" }}")
-    }
-}
-
 /// A dependency on a sibling crate inside the generated workspace.
-///
-/// Unlike `workspace_dep`, these crates are not published and are not under the
-/// FLUI repo's `crates/` — they are workspace members named by their directory,
-/// so the `--local` path is the sibling itself and the published branch is the
-/// workspace's own `0.1.0` version.
 fn member_dep(sibling: &str) -> String {
-    format!("{{ path = \"../{sibling}\" }}")
+    let mut dependency = toml::Table::new();
+    dependency.insert("path".into(), format!("../{sibling}").into());
+    toml::Value::Table(dependency).to_string()
 }
 
-/// Append a feature list to a dependency inline-table string.
-fn with_features(dep: &str, features: &[&str]) -> String {
-    let list = features
-        .iter()
-        .map(|f| format!("\"{f}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    // `{ path = "..." }` → `{ path = "...", features = ["..."] }`
-    let trimmed = dep.trim_end();
-    if let Some(stripped) = trimmed.strip_suffix('}') {
-        format!("{}, features = [{list}] }}", stripped.trim_end())
-    } else {
-        dep.to_string()
-    }
-}
-
-pub fn generate(dir: &Path, name: &str, org: &str, local: bool) -> CliResult<()> {
+pub fn generate(dir: &Path, name: &str, org: &str, source: &DependencySource) -> CliResult<()> {
     let lib_name = name.replace('-', "_");
     let types_package = format!("{name}-types");
     let worker_package = format!("{name}-logic");
@@ -68,8 +31,8 @@ pub fn generate(dir: &Path, name: &str, org: &str, local: bool) -> CliResult<()>
 
     generate_root_workspace(dir, &types_package, &worker_package, &host_package)?;
     generate_flui_config(dir, name, org, &host_package, &worker_package, &worker_lib)?;
-    generate_types(dir, &types_package, local)?;
-    generate_logic(dir, &types_package, &worker_package, &worker_lib, local)?;
+    generate_types(dir, &types_package, source)?;
+    generate_logic(dir, &types_package, &worker_package, &worker_lib, source)?;
     generate_host(
         dir,
         name,
@@ -77,7 +40,7 @@ pub fn generate(dir: &Path, name: &str, org: &str, local: bool) -> CliResult<()>
         &host_package,
         &worker_package,
         &worker_lib,
-        local,
+        source,
     )?;
     generate_readme(dir, name, &types_package, &worker_package, &host_package)?;
 
@@ -159,13 +122,12 @@ types_watch = "{types_package}/src"
     Ok(())
 }
 
-fn generate_types(dir: &Path, types_package: &str, local: bool) -> CliResult<()> {
+fn generate_types(dir: &Path, types_package: &str, source: &DependencySource) -> CliResult<()> {
     let types_dir = dir.join(types_package);
     let src = types_dir.join("src");
     fs::create_dir_all(&src)?;
 
-    let view_dep = workspace_dep("flui-view", local, 3);
-    let hot_dep = workspace_dep("flui-hot-reload", local, 3);
+    let facade_dep = source.dependency("flui", &["hot-reload"]);
 
     let cargo = format!(
         r#"[package]
@@ -177,8 +139,7 @@ publish = false
 description = "Shared types and persistent State for the hot-reload app"
 
 [dependencies]
-flui-view = {view_dep}
-flui-hot-reload = {hot_dep}
+flui = {facade_dep}
 "#
     );
     fs::write(types_dir.join("Cargo.toml"), cargo).context("Failed to create types/Cargo.toml")?;
@@ -192,17 +153,14 @@ fn generate_logic(
     types_package: &str,
     worker_package: &str,
     worker_lib: &str,
-    local: bool,
+    source: &DependencySource,
 ) -> CliResult<()> {
     let logic_dir = dir.join(worker_package);
     let src = logic_dir.join("src");
     fs::create_dir_all(&src)?;
 
-    let hot_dep = with_features(&workspace_dep("flui-hot-reload", local, 3), &["app-plugin"]);
+    let facade_dep = source.dependency("flui", &["hot-reload"]);
     let types_dep = member_dep(types_package);
-    let view_dep = workspace_dep("flui-view", local, 3);
-    let widgets_dep = workspace_dep("flui-widgets", local, 3);
-    let types_geom_dep = workspace_dep("flui-types", local, 3);
     let types_crate = types_package.replace('-', "_");
 
     let cargo = format!(
@@ -219,10 +177,7 @@ crate-type = ["cdylib"]
 name = "{worker_lib}"
 
 [dependencies]
-flui-hot-reload = {hot_dep}
-flui-types = {types_geom_dep}
-flui-view = {view_dep}
-flui-widgets = {widgets_dep}
+flui = {facade_dep}
 {types_package} = {types_dep}
 "#
     );
@@ -240,14 +195,13 @@ fn generate_host(
     host_package: &str,
     worker_package: &str,
     worker_lib: &str,
-    local: bool,
+    source: &DependencySource,
 ) -> CliResult<()> {
     let host_dir = dir.join(host_package);
     let src = host_dir.join("src");
     fs::create_dir_all(&src)?;
 
-    let app_dep = with_features(&workspace_dep("flui-app", local, 3), &["hot-reload"]);
-    let hot_dep = with_features(&workspace_dep("flui-hot-reload", local, 3), &["app-plugin"]);
+    let facade_dep = source.dependency("flui", &["hot-reload"]);
     let types_dep = member_dep(types_package);
     let types_crate = types_package.replace('-', "_");
 
@@ -265,8 +219,7 @@ name = "{host_package}"
 path = "src/main.rs"
 
 [dependencies]
-flui-app = {app_dep}
-flui-hot-reload = {hot_dep}
+flui = {facade_dep}
 {types_package} = {types_dep}
 tracing = {{ workspace = true }}
 "#
@@ -340,8 +293,8 @@ use std::sync::{
     atomic::{AtomicI32, Ordering},
 };
 
-use flui_hot_reload::{WorkerBuildEnv, get_worker_build_ptr};
-use flui_view::prelude::*;
+use flui::hot_reload::{WorkerBuildEnv, get_worker_build_ptr};
+use flui::prelude::*;
 
 /// Stable-layout fingerprint. Bump when the shared types change shape.
 pub const TYPE_FINGERPRINT: u64 = 0xF10A_0001;
@@ -433,10 +386,10 @@ use std::sync::{
     atomic::{AtomicI32, Ordering},
 };
 
-use flui_hot_reload::{WorkerBuildEnv, hot_reload_worker, request_rebuild};
-use flui_types::Color;
-use flui_view::prelude::*;
-use flui_widgets::{ColoredBox, Column, GestureDetector, Padding, Text};
+use flui::hot_reload::{WorkerBuildEnv, hot_reload_worker, request_rebuild};
+use flui::types::Color;
+use flui::prelude::*;
+use flui::widgets::{ColoredBox, Column, GestureDetector, Padding, Text};
 use __TYPES_CRATE__::{CounterApp, CounterState, TYPE_FINGERPRINT};
 
 /// **Edit this string and rebuild to see hot reload.**
@@ -467,7 +420,7 @@ fn build_counter_ui(
     .boxed()
 }
 
-fn init_counter_worker(register: flui_hot_reload::RegisterWorkerBuildFn) {
+fn init_counter_worker(register: flui::hot_reload::RegisterWorkerBuildFn) {
     register(TYPE_FINGERPRINT, build_counter_ui as *const ());
 }
 
@@ -484,8 +437,8 @@ const HOST_MAIN: &str = r#"//! Host binary for the hot-reload app.
 use std::sync::{Arc, atomic::AtomicI32};
 
 use __TYPES_CRATE__::{CounterApp, CounterShell};
-use flui_app::{AppConfig, run_app_with_config};
-use flui_hot_reload::engine::env;
+use flui::app::{AppConfig, run_app_with_config};
+use flui::hot_reload::engine::env;
 
 /// Default worker dylib path, used when `FLUI_WORKER_PLUGIN` is unset (a bare
 /// `cargo run -p __HOST_PACKAGE__` without `flui run`).

@@ -13,6 +13,11 @@
 /// The function must have the signature `fn(f32, f32) -> Scene` where the
 /// two arguments are width and height in physical pixels.
 ///
+/// Expand this macro once per plugin image, with no competing `flui_scene_*`
+/// symbols. Keep the image loaded while any returned allocation or plugin-backed
+/// scene payload remains alive. Teardown has two exclusive ownership paths:
+/// original scene → `flui_scene_drop`, or one `ptr::read` → `flui_scene_free`.
+///
 /// # Generated Symbols
 ///
 /// - `flui_scene_build(width, height) -> *mut c_void` — builds a Scene, returns
@@ -30,22 +35,10 @@
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_hot_reload::scene_plugin;
-/// use flui_layer::*;
-/// use flui_types::geometry::{px, Rect, Size};
-/// use flui_types::painting::Paint;
-/// use flui_types::styling::Color;
+/// use flui::hot_reload::{Scene, scene_plugin};
 ///
-/// fn my_scene(width: f32, height: f32) -> Scene {
-///     let mut tree = LayerTree::new();
-///     let mut canvas_layer = CanvasLayer::new();
-///     let canvas = canvas_layer.canvas_mut();
-///     canvas.draw_rect(
-///         Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
-///         &Paint::fill(Color::rgb(128, 0, 128)),
-///     );
-///     let root = tree.insert(Layer::Canvas(canvas_layer));
-///     Scene::new(Size::new(px(width), px(height)), tree, Some(root), 1)
+/// fn my_scene(_width: f32, _height: f32) -> Scene {
+///     Scene::default()
 /// }
 ///
 /// scene_plugin!(my_scene);
@@ -57,11 +50,15 @@ macro_rules! scene_plugin {
         ///
         /// # Safety
         ///
-        /// The returned pointer must be passed to `flui_scene_drop` when no longer
-        /// needed, or taken ownership of via `Box::from_raw`.
+        /// Keep this plugin image loaded until the allocation and every plugin-backed
+        /// payload have been destroyed. Consume the pointer exactly once: pass
+        /// the original scene to `flui_scene_drop`, OR move it out once with
+        /// `ptr::read` and return the emptied allocation to `flui_scene_free`.
+        /// Never deallocate the allocation in the host.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_scene_build(width: f32, height: f32) -> *mut ::std::ffi::c_void {
-            let scene = $build_fn(width, height);
+            let scene: $crate::Scene = $build_fn(width, height);
             let boxed = ::std::boxed::Box::new(scene);
             ::std::boxed::Box::into_raw(boxed) as *mut ::std::ffi::c_void
         }
@@ -69,6 +66,7 @@ macro_rules! scene_plugin {
         /// Returns the plugin version number.
         ///
         /// The host uses this to confirm the plugin loaded successfully.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_scene_version() -> u32 {
             1
@@ -78,14 +76,20 @@ macro_rules! scene_plugin {
         ///
         /// # Safety
         ///
-        /// `ptr` must be a valid pointer returned by `flui_scene_build` that has
-        /// not already been dropped. Passing null is safe (no-op).
+        /// A non-null `ptr` must be the uniquely owned, live allocation returned by
+        /// this image's `flui_scene_build`, with its original initialized scene
+        /// still inside. It must not have been moved out, freed, or dropped.
+        /// Keep the image loaded through this call and until any retained
+        /// plugin-backed payloads are destroyed. Null is a no-op.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
-        pub extern "C" fn flui_scene_drop(ptr: *mut ::std::ffi::c_void) {
+        pub unsafe extern "C" fn flui_scene_drop(ptr: *mut ::std::ffi::c_void) {
             if !ptr.is_null() {
+                // SAFETY: the caller guarantees this image allocated the still-live box
+                // and transfers its unique ownership here; the null case was excluded.
                 #[expect(unsafe_code)]
                 unsafe {
-                    drop(::std::boxed::Box::from_raw(ptr as *mut ::flui_layer::Scene));
+                    drop(::std::boxed::Box::from_raw(ptr as *mut $crate::Scene));
                 }
             }
         }
@@ -99,16 +103,23 @@ macro_rules! scene_plugin {
         ///
         /// # Safety
         ///
-        /// `ptr` must come from `flui_scene_build`, and the host must have
-        /// already moved the `Scene` value out — after this call the pointee
-        /// is gone. Passing null is safe (no-op).
+        /// A non-null `ptr` must be the uniquely owned, live allocation returned by
+        /// this image's `flui_scene_build`, after moving its scene out exactly
+        /// once with `ptr::read`. It must not already have been freed or dropped.
+        /// Keep the image loaded through this call AND until the moved scene
+        /// and any retained plugin-backed payloads have been destroyed.
+        /// Never call the drop function on this emptied allocation. Null is a no-op.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
-        pub extern "C" fn flui_scene_free(ptr: *mut ::std::ffi::c_void) {
+        pub unsafe extern "C" fn flui_scene_free(ptr: *mut ::std::ffi::c_void) {
             if !ptr.is_null() {
+                // SAFETY: the caller guarantees this image allocated the still-live box
+                // and transfers its unique ownership here; the null case was excluded.
                 #[expect(unsafe_code)]
                 unsafe {
+                    // MaybeUninit has Scene's layout and suppresses drop after the move.
                     drop(::std::boxed::Box::from_raw(
-                        ptr as *mut ::std::mem::MaybeUninit<::flui_layer::Scene>,
+                        ptr as *mut ::std::mem::MaybeUninit<$crate::Scene>,
                     ));
                 }
             }
@@ -116,6 +127,7 @@ macro_rules! scene_plugin {
 
         /// Plugin-side ABI-compatibility token; the host refuses to load this
         /// library unless it equals the host's own token.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_scene_abi_token() -> u64 {
             $crate::abi_token()
@@ -147,18 +159,21 @@ macro_rules! hot_reload_worker {
         ///
         /// `register` is host-owned storage; never write build pointers into
         /// dylib-local `static` variables.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_worker_init(register: $crate::RegisterWorkerBuildFn) {
             $init_fn(register);
         }
 
         /// Worker version (for diagnostics).
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_worker_version() -> u32 {
             1
         }
 
         /// Stable-layout fingerprint for the shared `types` crate.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_worker_fingerprint() -> u64 {
             $fp
@@ -166,6 +181,7 @@ macro_rules! hot_reload_worker {
 
         /// Worker-side ABI-compatibility token; the host refuses to load this
         /// library unless it equals the host's own token.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_worker_abi_token() -> u64 {
             $crate::abi_token()
@@ -185,6 +201,12 @@ macro_rules! hot_reload_worker {
 /// the pipeline re-mounts from scratch, giving "hot restart" semantics (code
 /// updated, state lost).
 ///
+/// Expand this macro once per plugin image, with no competing `flui_app_*`
+/// symbols. Keep the image loaded until all returned allocations and retained
+/// plugin-backed payloads are destroyed. Teardown consumes either the original
+/// scene with `flui_app_drop`, or the emptied allocation with `flui_app_free`
+/// after exactly one `ptr::read`. These paths are mutually exclusive.
+///
 /// # Thread affinity
 ///
 /// The generated pipeline is confined to a single OS thread: whichever thread
@@ -197,7 +219,7 @@ macro_rules! hot_reload_worker {
 /// logged via `tracing::error!` and answered with a null pointer — rather
 /// than silently building a second, independent widget tree behind the same
 /// opaque symbol. A null return from `flui_app_build` carries no ownership;
-/// never pass it to `flui_app_drop`/`flui_app_free`.
+/// both `flui_app_drop` and `flui_app_free` accept it as a no-op.
 ///
 /// # Unload semantics
 ///
@@ -353,10 +375,13 @@ macro_rules! app_plugin {
         ///
         /// # Safety
         ///
-        /// A non-null returned pointer must be passed to `flui_app_drop` when
-        /// no longer needed, or taken ownership of via `Box::from_raw`. A null
-        /// return (wrong-thread call) owns nothing and must not be passed to
-        /// either.
+        /// Keep this plugin image loaded until the allocation and every plugin-backed
+        /// payload have been destroyed. Consume a non-null pointer exactly once:
+        /// pass the original scene to `flui_app_drop`, OR move it out once with
+        /// `ptr::read` and return the emptied allocation to `flui_app_free`.
+        /// Never deallocate the allocation in the host. Null owns nothing and
+        /// both teardown functions accept it as a no-op.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_app_build(width: f32, height: f32) -> *mut ::std::ffi::c_void {
             __FLUI_APP_STATE.with(|state| {
@@ -405,6 +430,7 @@ macro_rules! app_plugin {
         }
 
         /// Returns the plugin version number.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_app_version() -> u32 {
             1
@@ -414,16 +440,20 @@ macro_rules! app_plugin {
         ///
         /// # Safety
         ///
-        /// `ptr` must be a valid pointer returned by `flui_app_build` that has
-        /// not already been dropped. Passing null is safe (no-op).
+        /// A non-null `ptr` must be the uniquely owned, live allocation returned by
+        /// this image's `flui_app_build`, with its original initialized scene
+        /// still inside. It must not have been moved out, freed, or dropped.
+        /// Keep the image loaded through this call and until any retained
+        /// plugin-backed payloads are destroyed. Null is a no-op.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
-        pub extern "C" fn flui_app_drop(ptr: *mut ::std::ffi::c_void) {
+        pub unsafe extern "C" fn flui_app_drop(ptr: *mut ::std::ffi::c_void) {
             if !ptr.is_null() {
+                // SAFETY: the caller guarantees this image allocated the still-live box
+                // and transfers its unique ownership here; the null case was excluded.
                 #[expect(unsafe_code)]
                 unsafe {
-                    drop(::std::boxed::Box::from_raw(
-                        ptr.cast::<::flui_layer::Scene>(),
-                    ));
+                    drop(::std::boxed::Box::from_raw(ptr.cast::<$crate::Scene>()));
                 }
             }
         }
@@ -432,16 +462,23 @@ macro_rules! app_plugin {
         ///
         /// # Safety
         ///
-        /// `ptr` must come from `flui_app_build`, and the host must have
-        /// already moved the `Scene` value out — after this call the pointee
-        /// is gone. Passing null is safe (no-op).
+        /// A non-null `ptr` must be the uniquely owned, live allocation returned by
+        /// this image's `flui_app_build`, after moving its scene out exactly
+        /// once with `ptr::read`. It must not already have been freed or dropped.
+        /// Keep the image loaded through this call AND until the moved scene
+        /// and any retained plugin-backed payloads have been destroyed.
+        /// Never call the drop function on this emptied allocation. Null is a no-op.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
-        pub extern "C" fn flui_app_free(ptr: *mut ::std::ffi::c_void) {
+        pub unsafe extern "C" fn flui_app_free(ptr: *mut ::std::ffi::c_void) {
             if !ptr.is_null() {
+                // SAFETY: the caller guarantees this image allocated the still-live box
+                // and transfers its unique ownership here; the null case was excluded.
                 #[expect(unsafe_code)]
                 unsafe {
+                    // MaybeUninit has Scene's layout and suppresses drop after the move.
                     drop(::std::boxed::Box::from_raw(
-                        ptr.cast::<::std::mem::MaybeUninit<::flui_layer::Scene>>(),
+                        ptr.cast::<::std::mem::MaybeUninit<$crate::Scene>>(),
                     ));
                 }
             }
@@ -449,6 +486,7 @@ macro_rules! app_plugin {
 
         /// Plugin-side ABI-compatibility token; the host refuses to load this
         /// library unless it equals the host's own token.
+        // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_app_abi_token() -> u64 {
             $crate::abi_token()
@@ -498,7 +536,8 @@ mod thread_affinity_tests {
             !first.is_null(),
             "the pinning thread's own first call must succeed"
         );
-        flui_app_drop(first);
+        // SAFETY: this live scene came from this image and has not been moved or consumed.
+        unsafe { flui_app_drop(first) };
 
         // A call from a *different* OS thread must be refused: null, never a
         // second, independently-mounted Scene. (nextest gives this test its
@@ -521,6 +560,7 @@ mod thread_affinity_tests {
             "the pinning thread must keep working after a foreign-thread \
              call was refused"
         );
-        flui_app_drop(second);
+        // SAFETY: this live scene came from this image and has not been moved or consumed.
+        unsafe { flui_app_drop(second) };
     }
 }

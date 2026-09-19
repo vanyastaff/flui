@@ -2,6 +2,12 @@
 
 # FLUI Port Roadmap
 
+**Active release objective (2026-09-19):** [a verified FLUI beta](BETA.md), with
+usable cross-platform application workflows for developers and AI agents.
+The historical Flutter-parity destination and estimates below are background;
+they do not define beta scope or override the Rust-native design rules in
+`AGENTS.md`. Prior completion notes must be re-verified for the release candidate.
+
 > The dependency-ordered construction plan for porting Flutter to Rust — from the current codebase to full Flutter parity. It is written **backward from the finished product**: released Flutter is the specification, full parity is the destination, and the phases are the dependency-correct path to it. Progress is measured as **parity against `.flutter/`**, not as crates touched.
 
 This roadmap sits on top of [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architecture contract. The foundations say *what* is built and *to what rules*; this document says *in what order*. Phases are ordered purely by dependency correctness and risk. There are **no calendar dates** — a phase is done when its exit criteria are objectively met.

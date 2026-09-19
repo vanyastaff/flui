@@ -1,12 +1,12 @@
-//! Common error types for FLUI rendering backends
+//! Error types for FLUI's wgpu rendering engine
 //!
-//! This module provides backend-agnostic error types that can be used
-//! by any rendering backend (wgpu, skia, vello, software, etc.)
+//! This module describes engine failures and their recovery policy. GPU errors
+//! retain wgpu types and diagnostics across its platform backends.
 //!
 //! # Design Principles
 //!
-//! 1. **Backend-agnostic**: Core error variants don't depend on specific
-//!    backend types
+//! 1. **Typed diagnostics**: GPU variants preserve wgpu configuration and
+//!    failure details
 //! 2. **Extensible**: `#[non_exhaustive]` allows adding variants without
 //!    breaking changes
 //! 3. **Composable**: Backend-specific errors wrap underlying errors via
@@ -91,6 +91,14 @@ pub enum EngineError {
     /// frame instead of entering an unbounded retry loop.
     #[error("Surface texture validation error")]
     SurfaceValidation,
+
+    /// No advertised format/color-space pair accepts encoded sRGB shader output.
+    /// Retrying the same surface cannot repair this unsupported configuration.
+    #[error("Surface requires an SDR UNorm/Srgb presentation pair; advertised: {supported:?}")]
+    UnsupportedSurfaceColorConfiguration {
+        /// Per-format presentation color spaces reported by the adapter.
+        supported: Vec<wgpu::SurfaceFormatCapabilities>,
+    },
 
     // ========================================================================
     // Resource errors
@@ -259,7 +267,9 @@ impl EngineError {
             | Self::DeviceCreation(_)
             | Self::InvalidTargetSize { .. }
             | Self::NotInitialized => Recoverability::Fatal,
-            Self::SurfaceValidation | Self::ResourceIo { .. } => Recoverability::Unrecoverable,
+            Self::SurfaceValidation
+            | Self::ResourceIo { .. }
+            | Self::UnsupportedSurfaceColorConfiguration { .. } => Recoverability::Unrecoverable,
         }
     }
 }

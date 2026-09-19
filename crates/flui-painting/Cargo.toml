@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-painting"
 version.workspace = true
 edition.workspace = true
@@ -40,7 +41,8 @@ serde_json.workspace = true
 criterion = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
-flui-painting = { path = ".", version = "0.2.0", features = ["testing"] }
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-painting = { path = ".", features = ["testing"] }
 
 [features]
 default = ["bundled-fonts"]

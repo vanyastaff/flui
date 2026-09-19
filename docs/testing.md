@@ -4,6 +4,20 @@
 
 This page documents the test, lint, format, and benchmark commands enforced for FLUI. All gates listed here must pass before a change is merged.
 
+## Application tests through the facade
+
+An application can use the framework's test support without depending on its
+implementation crates. Add `features = ["testing"]` to the `flui` entry in
+`[dev-dependencies]`, using the same source/version as the normal dependency.
+Use `flui::testing::widgets::{lay_out, loose}` for widget layout and input,
+`flui::testing::HeadlessBinding` for a virtual-clock frame driver, and
+`flui::testing::rendering::{RenderTester, BoxQueryRun}` for custom render objects.
+Accessibility and gesture replay live in `flui::testing::{a11y, replay}`.
+
+The `testing` feature is off by default. Independent consumer tests check that
+ordinary dependency graphs do not include the headless test driver. The layer
+map below describes implementation ownership for framework contributors.
+
 ## Map of the testing layer
 
 FLUI's test support is a stack, not one harness. Each tier drives the machine at

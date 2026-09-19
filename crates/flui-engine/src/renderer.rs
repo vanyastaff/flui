@@ -477,15 +477,6 @@ impl GpuCapabilities {
         }
     }
 
-    /// Whether HDR output is expected on this backend.
-    ///
-    /// Metal (EDR on XDR displays) and DX12 (Windows Auto HDR) only; wgpu
-    /// exposes no feature bit for it.
-    #[must_use]
-    pub fn supports_hdr(&self) -> bool {
-        matches!(self.backend, wgpu::Backend::Metal | wgpu::Backend::Dx12)
-    }
-
     /// Whether the adapter accepts immediate constants ("push constants").
     #[must_use]
     pub fn supports_push_constants(&self) -> bool {
@@ -981,12 +972,11 @@ impl Renderer {
     fn derive_surface_config(
         surface: &wgpu::Surface<'_>,
         adapter: &wgpu::Adapter,
-        capabilities: &GpuCapabilities,
         width: u32,
         height: u32,
-    ) -> (wgpu::SurfaceConfiguration, bool) {
+    ) -> EngineResult<(wgpu::SurfaceConfiguration, bool)> {
         let surface_caps = surface.get_capabilities(adapter);
-        let surface_format = Self::select_surface_format(&surface_caps, capabilities);
+        let (surface_format, color_space) = Self::select_surface_format(&surface_caps)?;
 
         let supports_copy_src = surface_caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
         if !supports_copy_src {
@@ -1004,14 +994,7 @@ impl Renderer {
         let config = wgpu::SurfaceConfiguration {
             usage: surface_usage,
             format: surface_format,
-            // `Auto` is wgpu's own pre-30 behaviour, made explicit when wgpu 30
-            // added the field: sRGB for every format this engine configures, and
-            // extended-linear-sRGB only for an `Rgba16Float` surface that supports
-            // it. Naming a wide-gamut or HDR space instead would change how the
-            // shaders must encode their output, which is a rendering decision with
-            // its own colour-management work — not something a version bump gets
-            // to make.
-            color_space: wgpu::SurfaceColorSpace::Auto,
+            color_space,
             width,
             height,
             present_mode: Self::select_present_mode(&surface_caps),
@@ -1068,7 +1051,7 @@ impl Renderer {
             desired_maximum_frame_latency: 1,
         };
 
-        (config, supports_copy_src)
+        Ok((config, supports_copy_src))
     }
 
     /// Build the two objects that bake a surface `format`: the painter (whose
@@ -1202,7 +1185,7 @@ impl Renderer {
         let queue = Arc::new(queue);
 
         let (config, supports_copy_src) =
-            Self::derive_surface_config(&surface, &adapter, &capabilities, width, height);
+            Self::derive_surface_config(&surface, &adapter, width, height)?;
         surface.configure(&device, &config);
 
         let (painter, offscreen) = Self::build_format_consumers(
@@ -1568,60 +1551,31 @@ impl Renderer {
         limits
     }
 
-    /// Select surface format based on capabilities
+    /// Select a supported presentation pair for the shaders' encoded sRGB output.
     fn select_surface_format(
         surface_caps: &wgpu::SurfaceCapabilities,
-        capabilities: &GpuCapabilities,
-    ) -> wgpu::TextureFormat {
-        // Prefer plain UNorm onscreen formats over the *Srgb variants — this
-        // matches Flutter/Impeller, whose default onscreen format is plain
-        // UNorm on every backend (Metal kBGRA8UNorm, Vulkan eR8G8B8A8Unorm,
-        // GLES kR8G8B8A8UNormInt), *not* the sRGB variants.
-        //
-        // `Color::to_f32_array()` (flui-types) returns the sRGB-encoded byte
-        // value `/255` with no linearization, and the shaders emit that value
-        // verbatim. Writing that to a UNorm target stores the sRGB byte 1:1
-        // (no OETF on store), so authored `Color::rgb(128,128,128)` -> shader
-        // 0.502 -> stored byte 0x80 — exactly what the user authored, and
-        // blending happens in gamma space, which is Flutter's behavior.
-        //
-        // An sRGB target would instead treat the shader's already-sRGB output
-        // as *linear* and apply the linear->sRGB OETF on store, brightening
-        // mid-tones (0x80 -> ~0xBC) and forcing linear-space blends/gradient
-        // interpolation that diverge from Flutter's gamma-space lerp. Primaries
-        // (0 / 255) are OETF fixed points, so the divergence hides on solid
-        // black/white but corrupts every mid-tone.
-        let preferred_formats = if capabilities.supports_hdr() {
-            vec![
-                wgpu::TextureFormat::Rgba16Float, // HDR
-                wgpu::TextureFormat::Bgra8Unorm,
-                wgpu::TextureFormat::Rgba8Unorm,
-            ]
-        } else {
-            vec![
-                wgpu::TextureFormat::Bgra8Unorm,
-                wgpu::TextureFormat::Rgba8Unorm,
-                wgpu::TextureFormat::Bgra8UnormSrgb,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
-            ]
-        };
-
-        for format in preferred_formats {
-            if surface_caps.formats.contains(&format) {
-                tracing::debug!("Selected surface format: {:?}", format);
-                return format;
+    ) -> EngineResult<(wgpu::TextureFormat, wgpu::SurfaceColorSpace)> {
+        // Color::to_f32_array and the shaders preserve encoded values. Plain
+        // UNorm stores those bytes without another transfer function; explicit
+        // Srgb tells the compositor how to interpret them. An FP16/Auto surface
+        // can instead select ExtendedSrgbLinear and brighten the same values.
+        // Keep the existing encoded-space blending contract until the entire
+        // pipeline deliberately adopts linear/HDR color management.
+        for format in [
+            wgpu::TextureFormat::Bgra8Unorm,
+            wgpu::TextureFormat::Rgba8Unorm,
+        ] {
+            if surface_caps
+                .color_spaces(format)
+                .contains(wgpu::SurfaceColorSpaces::SRGB)
+            {
+                tracing::debug!(?format, color_space = ?wgpu::SurfaceColorSpace::Srgb, "Selected surface color configuration");
+                return Ok((format, wgpu::SurfaceColorSpace::Srgb));
             }
         }
-
-        // Fallback: some drivers report zero formats (e.g. headless CI).
-        // Default to a universally supported UNorm format (Impeller parity,
-        // see above) rather than panicking.
-        if let Some(fmt) = surface_caps.formats.first().copied() {
-            fmt
-        } else {
-            tracing::error!("surface reported zero formats; defaulting to Bgra8Unorm");
-            wgpu::TextureFormat::Bgra8Unorm
-        }
+        Err(EngineError::UnsupportedSurfaceColorConfiguration {
+            supported: surface_caps.format_capabilities.clone(),
+        })
     }
 
     /// Select present mode based on capabilities.
@@ -1921,7 +1875,7 @@ impl Renderer {
             .create_surface(Arc::clone(released.target()))
             .map_err(EngineError::surface_creation)?;
         let (fresh_config, supports_copy_src) =
-            Self::derive_surface_config(&surface, &self.adapter, &self.capabilities, width, height);
+            Self::derive_surface_config(&surface, &self.adapter, width, height)?;
 
         // Whether the fresh surface moved the format away from the one the
         // pipelines and the offscreen pool were built with. Read off the
@@ -2751,6 +2705,158 @@ impl Renderer {
 #[cfg(all(test, feature = "testing"))]
 mod tests {
     use super::*;
+
+    fn surface_caps(
+        pairs: &[(wgpu::TextureFormat, wgpu::SurfaceColorSpaces)],
+    ) -> wgpu::SurfaceCapabilities {
+        wgpu::SurfaceCapabilities {
+            formats: pairs.iter().map(|&(format, _)| format).collect(),
+            format_capabilities: pairs
+                .iter()
+                .map(|&(format, color_spaces)| wgpu::SurfaceFormatCapabilities {
+                    format,
+                    color_spaces,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sdr_surface_selection_preserves_encoded_colors() {
+        use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
+        for format in [Format::Bgra8Unorm, Format::Rgba8Unorm] {
+            for pairs in [
+                vec![
+                    (Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR),
+                    (format, Spaces::SRGB),
+                ],
+                vec![
+                    (format, Spaces::SRGB),
+                    (Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR),
+                ],
+            ] {
+                assert_eq!(
+                    Renderer::select_surface_format(&surface_caps(&pairs))
+                        .expect("supported SDR pair"),
+                    (format, wgpu::SurfaceColorSpace::Srgb)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sdr_surface_selection_rejects_incompatible_pairs() {
+        use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
+        for pairs in [
+            vec![],
+            vec![(Format::Bgra8UnormSrgb, Spaces::SRGB)],
+            vec![(Format::Rgba8UnormSrgb, Spaces::SRGB)],
+            vec![(Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR)],
+            vec![(Format::Bgra8Unorm, Spaces::EXTENDED_SRGB_LINEAR)],
+        ] {
+            let error = Renderer::select_surface_format(&surface_caps(&pairs))
+                .expect_err("unsupported color contract");
+            assert_eq!(
+                error.recoverability(),
+                crate::error::Recoverability::Unrecoverable
+            );
+            assert!(
+                matches!(error, EngineError::UnsupportedSurfaceColorConfiguration { supported } if supported.len() == pairs.len())
+            );
+        }
+        let caps = surface_caps(&[
+            (Format::Bgra8Unorm, Spaces::EXTENDED_SRGB_LINEAR),
+            (Format::Rgba8Unorm, Spaces::SRGB),
+        ]);
+        assert_eq!(
+            Renderer::select_surface_format(&caps)
+                .expect("RGBA alternative")
+                .0,
+            Format::Rgba8Unorm
+        );
+    }
+
+    #[test]
+    fn sdr_surface_selection_painter_readback_preserves_swatches_and_blending() {
+        use crate::painter::WgpuPainter;
+        use flui_painting::Paint;
+        use flui_types::{Color, Rect, geometry::px};
+        use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
+
+        let (device, queue) = crate::test_support::test_device_and_queue("SDR transfer regression");
+        for alternative in [Format::Bgra8Unorm, Format::Rgba8Unorm] {
+            let caps = surface_caps(&[
+                (Format::Rgba16Float, Spaces::EXTENDED_SRGB_LINEAR),
+                (alternative, Spaces::SRGB),
+            ]);
+            let (format, space) = Renderer::select_surface_format(&caps).expect("SDR pair");
+            assert_eq!(space, wgpu::SurfaceColorSpace::Srgb);
+            let size = 64;
+            let (target, view) = crate::test_support::create_target(
+                &device,
+                "SDR swatches",
+                size,
+                size,
+                format,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            );
+            crate::test_support::clear_target(&device, &queue, &view, wgpu::Color::BLACK);
+            let mut painter = WgpuPainter::with_shared_device(
+                Arc::clone(&device),
+                Arc::clone(&queue),
+                format,
+                (size, size),
+            );
+            let colors = [
+                Color::rgb(18, 18, 18),
+                Color::rgb(24, 24, 24),
+                Color::rgb(128, 128, 128),
+                Color::rgb(229, 57, 53),
+                Color::rgb(255, 0, 0),
+                Color::rgba(128, 128, 128, 128),
+            ];
+            for (index, color) in colors.iter().enumerate() {
+                painter.draw_rect(
+                    Rect::from_xywh(px(index as f32 * 10.0), px(0.0), px(10.0), px(64.0)),
+                    &Paint::fill(*color),
+                );
+            }
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            painter
+                .render_to_view(&view, &mut encoder)
+                .expect("paint swatches");
+            queue.submit([encoder.finish()]);
+            let bytes = crate::test_support::readback_bytes(&device, &queue, &target, size, size);
+            for (index, expected) in [
+                [18, 18, 18],
+                [24, 24, 24],
+                [128, 128, 128],
+                [229, 57, 53],
+                [255, 0, 0],
+                [64, 64, 64],
+            ]
+            .iter()
+            .enumerate()
+            {
+                let offset = (32 * size as usize + index * 10 + 5) * 4;
+                let raw = &bytes[offset..offset + 4];
+                let rgb = if format == Format::Bgra8Unorm {
+                    [raw[2], raw[1], raw[0]]
+                } else {
+                    [raw[0], raw[1], raw[2]]
+                };
+                for channel in 0..3 {
+                    assert!(
+                        (i32::from(rgb[channel]) - expected[channel]).abs() <= 1,
+                        "{format:?} swatch {index}: {rgb:?}, expected {expected:?}"
+                    );
+                }
+                assert_eq!(raw[3], 255, "opaque black underlay");
+            }
+        }
+    }
 
     #[test]
     fn test_backend_selection() {

@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-objects"
 version.workspace = true
 edition.workspace = true
@@ -34,7 +35,8 @@ serde = ["flui-types/serde"]
 
 [dev-dependencies]
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
-flui-objects = { path = ".", version = "0.2.0", features = ["testing"] }
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-objects = { path = ".", features = ["testing"] }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 insta = { workspace = true }
 flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }

@@ -1,3 +1,4 @@
+use super::DependencySource;
 use crate::error::{CliResult, ResultExt};
 use flui_build::scaffold::{ScaffoldParams, scaffold_platform};
 use std::fs;
@@ -7,11 +8,11 @@ pub fn generate(
     dir: &Path,
     name: &str,
     org: &str,
-    local: bool,
+    source: &DependencySource,
     platforms: &[String],
 ) -> CliResult<()> {
     // Create Cargo.toml
-    generate_cargo_toml(dir, name, local)?;
+    generate_cargo_toml(dir, name, source)?;
 
     // Create src/main.rs
     generate_main(dir)?;
@@ -31,32 +32,15 @@ pub fn generate(
     Ok(())
 }
 
-fn generate_cargo_toml(dir: &Path, name: &str, local: bool) -> CliResult<()> {
+fn generate_cargo_toml(dir: &Path, name: &str, source: &DependencySource) -> CliResult<()> {
     let version = env!("CARGO_PKG_VERSION");
 
-    // LOCAL mode: path deps assume the project lives at <flui-root>/<subdir>/<name>/
-    // so "../../crates/" resolves to the workspace crates directory.
-    // PUBLISHED mode: version strings won't resolve until FLUI is on crates.io.
-    //
-    // flui-view is a required direct dep: the `#[derive(StatelessView)]` macro
-    // expands to `::flui_view::View` references that must resolve at the crate root.
-    let deps = if local {
-        r#"flui-app = { path = "../../crates/flui-app" }
-flui-view = { path = "../../crates/flui-view" }
-flui-widgets = { path = "../../crates/flui-widgets" }"#
-            .to_string()
+    let deps = format!("flui = {}", source.dependency("flui", &[]));
+    let mode_comment = if matches!(source, DependencySource::Local(_)) {
+        " (local development)"
     } else {
-        format!(
-            // NOTE: FLUI is not yet published to crates.io.
-            // These version strings will not resolve until the crates are released.
-            // Use `flui create --local` when working from the FLUI source tree.
-            r#"flui-app = "{version}"
-flui-view = "{version}"
-flui-widgets = "{version}""#
-        )
+        ""
     };
-
-    let mode_comment = if local { " (local development)" } else { "" };
 
     let content = format!(
         r#"# FLUI Template v{version}{mode_comment}
@@ -91,9 +75,8 @@ fn generate_main(dir: &Path) -> CliResult<()> {
     // trigger) is not yet ergonomic through the public API. This template shows
     // the widget-composition surface and a static counter display; to add
     // live state see the StatefulView + ViewState pair in the flui-view docs.
-    let content = r#"use flui_app::run_app;
-use flui_widgets::prelude::*;
-use flui_widgets::column;
+    let content = r#"use flui::prelude::*;
+use flui::widgets::column;
 
 fn main() {
     run_app(CounterView);

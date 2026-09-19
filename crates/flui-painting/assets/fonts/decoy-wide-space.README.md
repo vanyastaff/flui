@@ -31,3 +31,25 @@ near the diff that triggered it (issue #932).
 
 Regenerate with `python3 tools/decoy-face/generate.py`; the output is
 byte-stable.
+
+## Other generated faces
+
+The same generator produces the two monospace weight probes, the variable-weight
+probe, and `probe-sans-400.ttf`. The sans probe replaces a restricted third-party
+test fixture. It is a static, normal, non-monospaced W400 face with explicit
+`A`, `B`, `o`, and space coverage and positive advances, sufficient for `Ao Bo`
+family/spacing assertions. Its outlines are deliberately empty: these fixtures
+test font selection and shaping metrics, not rasterization.
+
+`inventory.toml` records every shipped font's reviewed hash, provenance, and
+license/notice files. Generated fixtures use the project's MIT OR Apache-2.0
+license; full texts are copied into `licenses/`. Third-party font records pin
+upstream revisions or an exact release archive and retain full upstream licenses
+and copyright attributions. Roboto comes from the v2.138 Android release archive,
+not from a guessed current repository path.
+
+Run `just font-assets-check` for offline inventory mutations, generation into a
+temporary directory, byte comparisons, and Cargo file-selection checks. The four
+older generated files have historical hash controls. `cargo package --list`
+confirms file inclusion only; it does not establish that complete archives can
+be resolved, built, or published.

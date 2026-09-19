@@ -28,12 +28,11 @@
 //!
 //! ## Generated-code path strategy
 //!
-//! The derives emit absolute `::flui_view::…` paths inside the
-//! generated `impl View` block. Every consumer of the derive must
-//! have `flui-view` as a direct dependency — which is enforced by
-//! `flui-view` itself being the home of the re-exported derive.
-//! Authors who pull the derive via the prelude automatically satisfy
-//! this requirement.
+//! Derives resolve the owning runtime crate from the consumer's Cargo manifest,
+//! honoring renamed dependencies. A direct runtime dependency takes precedence;
+//! otherwise the generated code uses `flui::view`, `flui::foundation`, or
+//! `flui::animation` through the facade (including a renamed facade).
+//! Framework library code and integration targets use the same absolute path.
 
 // Ship bar (wave 1): every public item is documented; keep it that way.
 #![deny(missing_docs)]
@@ -43,6 +42,7 @@ mod derive_animatable;
 mod derive_diagnosticable;
 mod derive_stateful;
 mod derive_stateless;
+mod runtime_path;
 
 use proc_macro::TokenStream;
 use syn::{DeriveInput, parse_macro_input};
@@ -141,7 +141,7 @@ pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
 /// ```
 ///
 /// See [`macro@StatelessView`] for the generated-code path strategy
-/// (absolute `::flui_view::…` paths) and keyed-widget workaround
+/// (Cargo-resolved runtime paths) and keyed-widget workaround
 /// notes — the same patterns apply.
 #[proc_macro_derive(StatefulView)]
 pub fn derive_stateful_view(input: TokenStream) -> TokenStream {
@@ -227,7 +227,7 @@ pub fn derive_diagnosticable(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Emit `impl ::flui_animation::TwoWayConverter` for a struct of `f32` fields,
+/// Emit `impl TwoWayConverter` for a struct of `f32` fields,
 /// so the type can be spring-animated by `flui_animation::AnimatedValue`.
 ///
 /// Every field must be `f32`; a non-`f32` field is a compile error. The type

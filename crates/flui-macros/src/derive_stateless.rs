@@ -19,12 +19,8 @@
 //! No `impl View for Greeting` block, no `impl_stateless_view!`
 //! invocation, no `Box::new` at the call site.
 //!
-//! The generated `impl View` references `flui-view` items via the
-//! absolute `::flui_view::…` path: every consumer of the derive must
-//! have `flui-view` as a direct dependency, which `flui-view`'s own
-//! prelude re-export already enforces — authors write a single
-//! `use flui_view::prelude::*;` and pick up both the derive and the
-//! supporting trait.
+//! Runtime paths resolve a direct `flui-view` dependency first, otherwise the
+//! `flui::view` facade module. Cargo dependency aliases are respected.
 //!
 //! Authors who need a typed `key()` (to participate in keyed lists)
 //! write a single-method `impl View for Greeting { fn key() { … } }`
@@ -40,15 +36,9 @@ use syn::{DeriveInput, parse_quote};
 
 /// Expand `#[derive(StatelessView)]` into the canonical `impl View` block.
 ///
-/// Returns a `syn::Result` even though the current body never produces
-/// an error — the wrap reserves headroom for future attribute parsing
-/// (`#[view(key = …)]`, recursive-widget hints) that does need to
-/// surface fallible diagnostics through `into_compile_error`.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "future-proof against attribute parsing"
-)]
+/// Reports a compile error when no runtime dependency can be resolved.
 pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
+    let runtime = crate::runtime_path::Runtime::View.resolve(input.ident.span())?;
     let ident = &input.ident;
 
     // Honor the user's generic parameters: a stateless widget MAY be
@@ -64,7 +54,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     // and a mismatch surfaces at the call site of `StatelessElement::new`
     // (which carries the bound), not from the derive.
     //
-    // `Self: ::flui_view::StatelessView` is the predicate that makes the
+    // `Self: StatelessView` is the predicate that makes the
     // generated `create_element` body type-check — without it a user
     // who writes `#[derive(StatelessView)]` but forgets the
     // `impl StatelessView for #ident` block would see a confusing
@@ -75,15 +65,15 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let mut augmented_where = where_clause.cloned().unwrap_or_else(|| parse_quote!(where));
     augmented_where
         .predicates
-        .push(parse_quote!(Self: ::flui_view::StatelessView));
+        .push(parse_quote!(Self: #runtime::StatelessView));
 
     Ok(quote! {
         #[automatically_derived]
-        impl #impl_generics ::flui_view::View for #ident #ty_generics
+        impl #impl_generics #runtime::View for #ident #ty_generics
         #augmented_where
         {
-            fn create_element(&self) -> ::flui_view::element::ElementKind {
-                ::flui_view::element::ElementKind::stateless(self)
+            fn create_element(&self) -> #runtime::element::ElementKind {
+                #runtime::element::ElementKind::stateless(self)
             }
         }
     })

@@ -1,0 +1,106 @@
+# Offline provenance for every font distributed by flui-painting.
+# Hashes bind the reviewed bytes and complete license/attribution text.
+
+[[notice]]
+file = "licenses/Cupertino-MIT.txt"
+sha256 = "310d6ab6483280280c9db122bded0a63c09558bc5743720f61dbcbb494db370a"
+source = "https://raw.githubusercontent.com/flutter/packages/e32043a75a9708bff8a5872b1296773ce270ede9/third_party/packages/cupertino_icons/LICENSE"
+
+[[notice]]
+file = "licenses/Material-Apache-2.0.txt"
+sha256 = "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd"
+source = "https://raw.githubusercontent.com/google/material-design-icons/27e9ef1dbeedc13d682fece4a58e1eda4cb0961a/LICENSE"
+
+[[notice]]
+file = "licenses/Roboto-Apache-2.0.txt"
+sha256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+source = "https://github.com/googlefonts/roboto-2/releases/download/v2.138/roboto-android.zip (entry LICENSE)"
+
+[[notice]]
+file = "licenses/FLUI-MIT.txt"
+sha256 = "f81e9bc931ecd53c566aeb8e8ce54082d72b30e5f4121a492eef662048541c2e"
+source = "repository:LICENSE"
+
+[[notice]]
+file = "licenses/FLUI-Apache-2.0.txt"
+sha256 = "a69a78f0f3cbe3c224abd721098f10f77e847d9d417116ddb7a3ffd1bfcb085f"
+source = "repository:LICENSE-APACHE"
+
+[[notice]]
+file = "licenses/ATTRIBUTIONS.txt"
+sha256 = "8439bf2136caff1b6a4663388c30f7f884c85dea43abd461c55ec1cef81ed083"
+source = "font name tables and pinned upstream license files; see inventory font records"
+
+[[font]]
+file = "CupertinoIcons.ttf"
+sha256 = "67c44fe9183b002e79dde7f6977e2988661c9a3e4a3c5fce968787efdbed823c"
+kind = "upstream"
+source = "https://raw.githubusercontent.com/flutter/packages/e32043a75a9708bff8a5872b1296773ce270ede9/third_party/packages/cupertino_icons/assets/CupertinoIcons.ttf"
+revision = "e32043a75a9708bff8a5872b1296773ce270ede9"
+license = "MIT"
+notices = ["licenses/Cupertino-MIT.txt", "licenses/ATTRIBUTIONS.txt"]
+
+[[font]]
+file = "MaterialIcons-Regular.ttf"
+sha256 = "ef149f08bdd2ff09a4e2c8573476b7b0f3fbb15b623954ade59899e7175bedda"
+kind = "upstream"
+source = "https://raw.githubusercontent.com/google/material-design-icons/27e9ef1dbeedc13d682fece4a58e1eda4cb0961a/font/MaterialIcons-Regular.ttf"
+revision = "27e9ef1dbeedc13d682fece4a58e1eda4cb0961a"
+license = "Apache-2.0"
+notices = ["licenses/Material-Apache-2.0.txt", "licenses/ATTRIBUTIONS.txt"]
+
+[[font]]
+file = "Roboto-Regular.ttf"
+sha256 = "797e35f7f5d6020a5c6ea13b42ecd668bcfb3bbc4baa0e74773527e5b6cb3174"
+kind = "upstream"
+source = "https://github.com/googlefonts/roboto-2/releases/download/v2.138/roboto-android.zip"
+archive_entry = "Roboto-Regular.ttf"
+archive_sha256 = "c825453253f590cfe62557733e7173f9a421fff103b00f57d33c4ad28ae53baf"
+revision = "ab4876f650a4aeb9b661c83fee47f908c739bb70"
+license = "Apache-2.0"
+notices = ["licenses/Roboto-Apache-2.0.txt", "licenses/ATTRIBUTIONS.txt"]
+
+[[font]]
+file = "decoy-wide-space.ttf"
+sha256 = "a6fc5cabe4943b7ee032651bd7d7c0bef614f0b5a40bd1dfab62db5e516e0888"
+kind = "generated"
+source = "repository:tools/decoy-face/generate.py"
+generator = "tools/decoy-face/generate.py"
+license = "MIT OR Apache-2.0"
+notices = ["licenses/FLUI-MIT.txt", "licenses/FLUI-Apache-2.0.txt", "licenses/ATTRIBUTIONS.txt"]
+
+[[font]]
+file = "probe-mono-100.ttf"
+sha256 = "8b8b0fd14500faba32b7b9e1bdd1dedca42c89c0bd43451ae183b8cf391e1221"
+kind = "generated"
+source = "repository:tools/decoy-face/generate.py"
+generator = "tools/decoy-face/generate.py"
+license = "MIT OR Apache-2.0"
+notices = ["licenses/FLUI-MIT.txt", "licenses/FLUI-Apache-2.0.txt", "licenses/ATTRIBUTIONS.txt"]
+
+[[font]]
+file = "probe-mono-600.ttf"
+sha256 = "c06729a30262f8b541d33f9c8744885f937cb688834b68fb8f1e0b8b1651f996"
+kind = "generated"
+source = "repository:tools/decoy-face/generate.py"
+generator = "tools/decoy-face/generate.py"
+license = "MIT OR Apache-2.0"
+notices = ["licenses/FLUI-MIT.txt", "licenses/FLUI-Apache-2.0.txt", "licenses/ATTRIBUTIONS.txt"]
+
+[[font]]
+file = "probe-sans-400.ttf"
+sha256 = "7e3dc58ee5a4ce7b9551be47e7832cbd7f2379ad27b1f584cb714fa5fd2026b4"
+kind = "generated"
+source = "repository:tools/decoy-face/generate.py"
+generator = "tools/decoy-face/generate.py"
+license = "MIT OR Apache-2.0"
+notices = ["licenses/FLUI-MIT.txt", "licenses/FLUI-Apache-2.0.txt", "licenses/ATTRIBUTIONS.txt"]
+
+[[font]]
+file = "probe-variable-wght.ttf"
+sha256 = "9e3e800de59a6b850039e240192dce3ebecbd6625f222e57e22d1abc2b57acb5"
+kind = "generated"
+source = "repository:tools/decoy-face/generate.py"
+generator = "tools/decoy-face/generate.py"
+license = "MIT OR Apache-2.0"
+notices = ["licenses/FLUI-MIT.txt", "licenses/FLUI-Apache-2.0.txt", "licenses/ATTRIBUTIONS.txt"]

@@ -67,22 +67,10 @@
 //! ## Plugin Side (cdylib crate)
 //!
 //! ```rust,ignore
-//! use flui_hot_reload::scene_plugin;
-//! use flui_layer::*;
-//! use flui_types::geometry::{px, Rect, Size};
-//! use flui_types::painting::Paint;
-//! use flui_types::styling::Color;
+//! use flui::hot_reload::{Scene, scene_plugin};
 //!
-//! fn my_scene(width: f32, height: f32) -> Scene {
-//!     let mut tree = LayerTree::new();
-//!     let mut canvas_layer = CanvasLayer::new();
-//!     let canvas = canvas_layer.canvas_mut();
-//!     canvas.draw_rect(
-//!         Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
-//!         &Paint::fill(Color::rgb(128, 0, 128)),
-//!     );
-//!     let root = tree.insert(Layer::Canvas(canvas_layer));
-//!     Scene::new(Size::new(px(width), px(height)), tree, Some(root), 1)
+//! fn my_scene(_width: f32, _height: f32) -> Scene {
+//!     Scene::default()
 //! }
 //!
 //! scene_plugin!(my_scene);
@@ -139,6 +127,9 @@ pub mod engine;
 
 mod abi;
 pub use abi::abi_token;
+
+/// Canonical scene payload shared by plugin factories and the host ABI.
+pub use flui_layer::Scene;
 
 // Re-exported so `app_plugin!`'s generated `flui_app_build` can log its
 // wrong-thread refusal via `$crate::__private_tracing::error!` instead of a

@@ -146,6 +146,13 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Core modules - fundamental types with minimal dependencies
+// Derive expansions use the same absolute owner path in library and integration targets.
+#[allow(
+    unused_extern_crates,
+    reason = "derive expansions resolve the owner by its absolute crate name"
+)]
+extern crate self as flui_foundation;
+
 pub mod affinity;
 pub mod async_snapshot;
 pub mod callbacks;
@@ -342,5 +349,22 @@ mod tests {
 
         let notifier = ChangeNotifier::new();
         let _listener = notifier.add_listener(std::sync::Arc::new(|| {}));
+    }
+}
+
+#[cfg(test)]
+mod derive_owner_tests {
+    use super::Diagnosticable;
+
+    #[derive(Debug, flui_macros::Diagnosticable)]
+    struct Property {
+        width: u32,
+    }
+
+    #[test]
+    fn derive_resolves_owner_inside_library() {
+        let node = Property { width: 42 }.to_diagnostics_node();
+        assert_eq!(node.name(), Some("Property"));
+        assert_eq!(node.properties().len(), 1);
     }
 }

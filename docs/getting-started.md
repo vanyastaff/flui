@@ -8,14 +8,16 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 
 | Tool | Minimum version | Notes |
 |------|-----------------|-------|
-| Rust | 1.97 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned in `rust-toolchain.toml` (channel `1.97.1`). `rustup` installs/selects it automatically on first `cargo` invocation. |
+| Rust | 1.97 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned separately in `rust-toolchain.toml`. `rustup` installs/selects it automatically on first `cargo` invocation. |
 | Cargo | bundled with Rust | Workspace uses `resolver = "3"` (MSRV-aware) and edition 2024. |
 | Git | any recent | Required to clone the repo. |
+| Python | 3.11+ | Required for repository verification scripts (`just ci`), which import `tomllib`. Ensure `python3` on `PATH` selects this version; not required to run an application. |
 | `cargo-ndk` | 3.x | Required only for Android targets. |
 | `wasm-pack` | 0.13+ | Required only for `examples/web_demo` and `examples/painting_demo`. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android. |
 
-`wgpu` is currently at **29.x** and tracks the latest stable major (see `[workspace.dependencies]` in `Cargo.toml`).
+The GPU dependency version is defined by `wgpu` in `[workspace.dependencies]`
+in `Cargo.toml`; consult that manifest when checking driver or backend requirements.
 
 ## Clone and Build
 
@@ -25,7 +27,7 @@ cd flui
 cargo build --workspace
 ```
 
-The workspace builds in dependency order automatically (foundation → core → rendering → framework → application). Several crates are intentionally disabled in `Cargo.toml` while integration is in progress; see [`crates.md`](crates.md) for the active set.
+The workspace builds in dependency order automatically (foundation → core → rendering → framework → application). See [`crates.md`](crates.md) for the crate map and `Cargo.toml` for workspace membership.
 
 For a clean rebuild:
 
@@ -33,6 +35,31 @@ For a clean rebuild:
 cargo clean
 cargo build --workspace
 ```
+
+## Create an Application
+
+Until FLUI is published, generate an application using the local checkout.
+Run these commands from the checkout root:
+
+```bash
+cargo install --path crates/flui-cli --locked
+flui create my_app --local --path ../apps
+cd ../apps/my_app
+flui run
+```
+
+The generated application can live outside the FLUI repository. Bare `--local`
+uses the current directory as its source checkout; from another directory, use
+`--local=/path/to/flui`. Quote paths with spaces, for example
+`--local="/path with spaces/flui"`. The source must remain available because
+the generated `flui` dependency points to the checkout root by absolute path.
+`flui` is the application's only framework dependency. Start UI code with
+`use flui::prelude::*;`; Cargo dependency renames are supported by its derives.
+
+Add `--hot-reload` to `flui create` to generate the host/worker/types workspace
+used by the reload runner. See the [CLI guide](../crates/flui-cli/README.md) for
+template and build options. Current release requirements and unverified areas
+are tracked in [Beta release criteria](BETA.md).
 
 ## Run an Example
 
@@ -65,20 +92,20 @@ A window titled "Hello FLUI!" should open. Close it to terminate the process.
 | `wgpu_window` | `cargo run --example wgpu_window` | Raw `wgpu` window setup |
 | `window_features` | `cargo run --example window_features` | Window option matrix |
 | `windows11_demo` | `cargo run --example windows11_demo` | Windows 11 platform features |
-| `desktop_scene` | `cargo run -p desktop_scene` | Hot-reload-aware desktop scene plugin |
+| `desktop_scene` | `cargo build -p flui-desktop-scene` | Build the hot-reload scene library; this plugin is loaded by a host, not run as an executable |
 
 ### Web (WASM) examples
 
 ```bash
 # Built-in dev server (recommended)
-cargo run -p web-server
+cargo run -p flui-web-server
 
 # Or build manually with wasm-pack
 cd examples/web_demo
 wasm-pack build --target web --out-dir pkg
 ```
 
-Open `http://localhost:8080` once `web-server` reports it is ready.
+Open `http://localhost:8080` once `flui-web-server` reports it is ready.
 
 ### Android examples
 

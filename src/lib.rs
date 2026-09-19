@@ -102,9 +102,10 @@ fn main() {
 //! | `localizations` | `flui-localizations` | `localizations` | global (multi-language) localized resources |
 //! | [`app`] | `flui-app` | — | `run_app` + bindings |
 //!
-//! Lower layers (rendering, painting, engine, platform) are deliberately not
-//! re-exported: their surfaces are consumed *through* the widget layer and
-//! remain path-dependencies for the rare integrator who needs them directly.
+//! [`painting`], [`rendering`], and [`interaction`] expose selected authoring
+//! contracts for custom drawing, render objects, and gestures. Arena storage,
+//! the engine, and platform implementations remain outside this facade.
+//! Enable `testing` in a development dependency for deterministic headless tests.
 //! `flui::material` and `flui::cupertino` sit *above* [`widgets`] (ADR-0028's
 //! design-system decoupling contract — `material --> widgets`,
 //! `cupertino --> widgets`, never the reverse), which is why `flui` is on
@@ -116,6 +117,12 @@ fn main() {
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
+pub mod interaction;
+pub mod painting;
+pub mod rendering;
+#[cfg(feature = "testing")]
+pub mod testing;
+
 pub use flui_animation as animation;
 pub use flui_app as app;
 /// The iOS-style design system (`flui-cupertino`). Requires the `cupertino`
@@ -123,12 +130,19 @@ pub use flui_app as app;
 #[cfg(feature = "cupertino")]
 pub use flui_cupertino as cupertino;
 pub use flui_foundation as foundation;
+/// Structured diagnostic properties for application-defined types.
+pub use flui_foundation::Diagnosticable;
 pub use flui_geometry as geometry;
+/// Development hot-reload support. Requires the `hot-reload` feature.
+#[cfg(feature = "hot-reload")]
+pub use flui_hot_reload as hot_reload;
 /// Global (multi-language) implementations of the catalogs' localization
 /// contracts (`flui-localizations`) — FLUI's analog of Flutter's
 /// `flutter_localizations`. Requires the `localizations` feature.
 #[cfg(feature = "localizations")]
 pub use flui_localizations as localizations;
+/// Derive structured diagnostic properties without a direct implementation-crate dependency.
+pub use flui_macros::Diagnosticable;
 /// The Material Design system (`flui-material`). Requires the `material`
 /// feature, which is on by default.
 #[cfg(feature = "material")]

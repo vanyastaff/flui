@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-interaction"
 version.workspace = true
 edition.workspace = true
@@ -42,7 +43,8 @@ dpi = "0.1.2"
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
 # normally, which cargo permits for dev-dependencies precisely so a lower crate
 # can use the test support built on it.
-flui-testing = { workspace = true }
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-testing = { path = "../flui-testing" }
 static_assertions = { workspace = true }
 # `tracing-subscriber` is a dev-only dependency — the observability tests
 # install a `fmt::TestWriter` subscriber to exercise span emission on hot
@@ -60,7 +62,8 @@ criterion = { workspace = true }
 proptest = "1.5"
 # Bench fixtures use the `make_*_event` test helpers which are gated
 # behind the `testing` feature (they're not part of the release API).
-flui-interaction = { path = ".", version = "0.2.0", features = ["testing"] }
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-interaction = { path = ".", features = ["testing"] }
 
 [[bench]]
 name = "velocity_tracker_bench"

@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-macros"
 version.workspace = true
 edition.workspace = true
@@ -19,6 +20,7 @@ proc-macro = true
 # (`syn 2.0` via `bytemuck_derive`, `cosmic-text`, the wgpu chain), so
 # promoting them to direct deps of a workspace-owned crate adds zero new
 # lockfile entries.
+proc-macro-crate = "3.5"
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "3", features = ["full"] }
@@ -27,11 +29,12 @@ syn = { version = "3", features = ["full"] }
 default = []
 
 # `flui-foundation` is a dev-dependency only: the `Diagnosticable` derive
-# emits absolute `::flui_foundation::…` paths into the *consuming* crate, so
+# resolves runtime paths in the *consuming* crate, so
 # the proc-macro crate itself never needs `flui-foundation` at build time.
 # The integration tests in `tests/` are a separate compilation unit that DOES
 # use the runtime trait, hence the dev-dep. This introduces no dependency
-# cycle: `flui-foundation` does not depend on `flui-macros`.
+# production dependency cycle: `flui-foundation` uses `flui-macros` only
+# as a dev-dependency to test derives inside the runtime owner.
 [dev-dependencies]
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 

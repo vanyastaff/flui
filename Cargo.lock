@@ -1675,6 +1675,7 @@ dependencies = [
  "flui-interaction",
  "flui-layer",
  "flui-localizations",
+ "flui-macros",
  "flui-material",
  "flui-objects",
  "flui-painting",
@@ -1682,6 +1683,7 @@ dependencies = [
  "flui-rendering",
  "flui-scheduler",
  "flui-testing",
+ "flui-tree",
  "flui-types",
  "flui-view",
  "flui-widgets",
@@ -1690,6 +1692,8 @@ dependencies = [
  "parking_lot",
  "pollster",
  "raw-window-handle",
+ "tempfile",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "wgpu",
@@ -1885,6 +1889,7 @@ dependencies = [
 name = "flui-foundation"
 version = "0.2.0"
 dependencies = [
+ "flui-macros",
  "flui-types",
  "parking_lot",
  "serde",
@@ -2006,6 +2011,7 @@ name = "flui-macros"
 version = "0.2.0"
 dependencies = [
  "flui-foundation",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 3.0.6",

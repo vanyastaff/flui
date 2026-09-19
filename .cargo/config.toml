@@ -26,12 +26,9 @@ rustflags = ["-C", "link-arg=/DEBUG:NONE"] # Faster release builds
 # linker = "clang"
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
-# macOS - use lld linker
-[target.x86_64-apple-darwin]
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
-
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+# macOS uses the default Apple linker; no separate lld installation is required.
+# https://doc.rust-lang.org/rustc/platform-support/apple-darwin.html
+# Alternative linkers are a local opt-in, as on Linux above.
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Android NDK targets

@@ -73,11 +73,18 @@ schema = 1
 [[export_root]]
 file = "src/lib.rs"
 declarations = [
+    "pub mod interaction;",
+    "pub mod painting;",
+    "pub mod rendering;",
+    "pub mod testing;",
     "pub use flui_animation as animation;",
     "pub use flui_app as app;",
     "pub use flui_cupertino as cupertino;",
     "pub use flui_foundation as foundation;",
+    "pub use flui_foundation::Diagnosticable;",
+    "pub use flui_macros::Diagnosticable;",
     "pub use flui_geometry as geometry;",
+    "pub use flui_hot_reload as hot_reload;",
     "pub use flui_localizations as localizations;",
     "pub use flui_material as material;",
     "pub use flui_types as types;",

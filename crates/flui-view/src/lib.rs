@@ -79,6 +79,13 @@
 // Modules
 // ============================================================================
 
+// Derive expansions use the same absolute owner path in library and integration targets.
+#[allow(
+    unused_extern_crates,
+    reason = "derive expansions resolve the owner by its absolute crate name"
+)]
+extern crate self as flui_view;
+
 pub mod binding;
 pub mod child;
 pub mod context;
@@ -253,4 +260,49 @@ pub mod prelude {
             StatefulView, StatelessView, View, ViewExt, ViewState,
         },
     };
+}
+
+#[cfg(test)]
+mod derive_owner_tests {
+    use super::{BuildContext, IntoView, StatefulView, StatelessView, View, ViewState};
+
+    #[derive(Clone, flui_macros::StatelessView)]
+    struct Leaf;
+
+    impl StatelessView for Leaf {
+        fn build(&self, _context: &dyn BuildContext) -> impl IntoView {
+            Self
+        }
+    }
+
+    #[derive(Clone, flui_macros::StatefulView)]
+    struct StatefulLeaf;
+
+    struct State;
+
+    impl StatefulView for StatefulLeaf {
+        type State = State;
+
+        fn create_state(&self) -> Self::State {
+            State
+        }
+    }
+
+    impl ViewState<StatefulLeaf> for State {
+        fn build(&self, _view: &StatefulLeaf, _context: &dyn BuildContext) -> impl IntoView {
+            Leaf
+        }
+    }
+
+    #[test]
+    fn derives_resolve_owner_inside_library() {
+        assert!(matches!(
+            Leaf.create_element(),
+            super::element::ElementKind::Stateless(_)
+        ));
+        assert!(matches!(
+            StatefulLeaf.create_element(),
+            super::element::ElementKind::Stateful { .. }
+        ));
+    }
 }

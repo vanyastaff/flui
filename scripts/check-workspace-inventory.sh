@@ -26,7 +26,7 @@ trap 'rm -f "${metadata_file}"' EXIT
 
 cargo metadata --no-deps --format-version 1 >"${metadata_file}"
 
-python3 - "${repo_root}" "${metadata_file}" <<'PY'
+python3 -B - "${repo_root}" "${metadata_file}" <<'PY'
 import json
 import re
 import sys
@@ -43,12 +43,7 @@ workspace_members = set(data["workspace_members"])
 active_crates: list[str] = []
 active_crate_manifests: dict[str, Path] = {}
 workspace_packages: list[dict] = []
-workspace_package_by_manifest_dir: dict[Path, dict] = {}
 
-
-def publish_disabled(package: dict) -> bool:
-    # `cargo metadata` reports `publish = false` manifests as an empty list.
-    return package.get("publish") is False or package.get("publish") == []
 
 for package in data["packages"]:
     if package["id"] not in workspace_members:
@@ -56,7 +51,6 @@ for package in data["packages"]:
     workspace_packages.append(package)
 
     manifest = Path(package["manifest_path"]).resolve()
-    workspace_package_by_manifest_dir[manifest.parent] = package
     try:
         rel = manifest.relative_to(root)
     except ValueError:
@@ -146,30 +140,6 @@ for package in workspace_packages:
     manifest = Path(package["manifest_path"]).resolve()
     rel = manifest.relative_to(root)
     name = package["name"]
-
-    if not publish_disabled(package):
-        for dependency in package["dependencies"]:
-            dep_path = dependency.get("path")
-            if dep_path is None:
-                continue
-
-            req = dependency.get("req")
-            if not req or req == "*":
-                errors.append(
-                    f"{rel} dependency `{dependency['name']}` uses `path` without a publishable version requirement"
-                )
-                continue
-
-            dependency_package = workspace_package_by_manifest_dir.get(Path(dep_path).resolve())
-            if dependency_package is None:
-                continue
-
-            dependency_version = dependency_package["version"]
-            if req not in {dependency_version, f"^{dependency_version}"}:
-                errors.append(
-                    f"{rel} dependency `{dependency['name']}` uses version requirement {req!r}, "
-                    f"expected {dependency_version!r} or '^{dependency_version}'"
-                )
 
     if name == "flui":
         for field in ("authors", "repository", "description", "license"):
@@ -372,6 +342,12 @@ except (OSError, tomllib.TOMLDecodeError) as error:
     print("workspace-inventory: drift detected", file=sys.stderr)
     print(f"  - cannot load {policy_rel}: {error}", file=sys.stderr)
     sys.exit(1)
+
+# Release policy also covers optional/build/target and retained dev edges.
+sys.path.insert(0, str(root / "scripts"))
+from release_policy import check as check_release_policy
+release_report = check_release_policy(root)
+errors.extend(release_report.errors)
 
 VALID_DISPOSITIONS = {"keep", "rename", "narrow", "optionalize", "deferred-extraction"}
 VALID_PLANNED_STATUSES = {"gated", "sanctioned"}

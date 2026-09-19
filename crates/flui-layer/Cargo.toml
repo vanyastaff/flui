@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-layer"
 version.workspace = true
 edition.workspace = true
@@ -38,7 +39,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 # Turns the off-by-default `testing` feature on for this crate's own
 # integration tests.
-flui-layer = { path = ".", version = "0.2.0", features = ["testing"] }
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-layer = { path = ".", features = ["testing"] }
 # Compile-time pins of the raster-boundary auto traits (`Send + Sync` on
 # `Layer`, `LayerTree`, `Scene`, `SceneSnapshot`).
 static_assertions.workspace = true

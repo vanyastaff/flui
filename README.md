@@ -10,6 +10,9 @@ FLUI brings the proven three-tree architecture (View → Element → Render) to 
 
 **Project stage: pre-release — build from source.** FLUI is not published to crates.io; the workspace builds and runs from a clone (instructions below), and APIs may still change between commits. See [`CHANGELOG.md`](CHANGELOG.md) for notable changes and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what lands next.
 
+The next milestone is a beta release; its user workflows and required evidence
+are defined in [Beta release criteria](docs/BETA.md).
+
 ## Status
 
 - ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`, `flui-log`, `flui-tree`, `flui-platform`
@@ -90,9 +93,8 @@ pipeline (element tree → render objects → layout → paint → `wgpu`):
 
 ```rust
 //! examples/widgets_gallery.rs (excerpt)
-use flui_app::run_app;
-use flui_widgets::prelude::*;
-use flui_widgets::{column, row};
+use flui::prelude::*;
+use flui::widgets::{column, row};
 
 /// A circular colour avatar: a coloured box clipped to an inscribed oval.
 fn avatar(color: Color) -> ClipOval {

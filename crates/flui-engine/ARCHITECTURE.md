@@ -206,6 +206,29 @@ loom backend or the mailbox moves to `std::sync`.
 
 ## Mapping decisions
 
+### Encoded sRGB surface presentation
+
+The current shaders emit the encoded components supplied by `Color::to_f32_array`;
+blending remains in that encoded space. Windowed rendering therefore selects only
+an advertised `Bgra8Unorm` or `Rgba8Unorm` format paired with explicit `Srgb`
+presentation, preferring BGRA when both work. Format and presentation color space
+are one contract: an FP16 surface with `Auto` can select `ExtendedSrgbLinear`,
+causing the compositor to brighten already encoded values. An sRGB texture format
+would likewise encode those values a second time on storage.
+
+This follows [wgpu's per-format surface capabilities](https://docs.rs/wgpu/30.0.1/wgpu/struct.SurfaceCapabilities.html)
+and [explicit presentation color-space contract](https://docs.rs/wgpu/30.0.1/wgpu/enum.SurfaceColorSpace.html).
+A backend name is not evidence of display HDR support. `GpuCapabilities::supports_hdr`
+is removed; actual HDR requires a future end-to-end color-management contract.
+There is no arbitrary format fallback: incompatible capabilities produce
+`UnsupportedSurfaceColorConfiguration` before configuration or recreation commits.
+The error is nonretryable; failed recreation retains the released surface lease.
+
+Selector tests cover format order, both UNorm alternatives, and unsupported pairs.
+GPU tests draw through the production painter/shaders and verify dark, midtone,
+colored, saturated, and partial-alpha swatches in both byte layouts. These tests
+preserve the existing encoded-space blending behavior; they do not claim HDR output.
+
 Where this crate's shape is a deliberate choice rather than the obvious
 transcription. Protocol-level contracts point at their ADR; the rest are
 local. Each names the test that pins it.

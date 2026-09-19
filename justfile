@@ -554,7 +554,7 @@ doc-strict:
 
 [group("quality")]
 [doc("Check crate inventories + the docs/workspace-layers.toml layer policy against Cargo metadata")]
-inventory-check:
+inventory-check: release-policy-test
     bash scripts/check-workspace-inventory.sh
 
 [group("quality")]
@@ -764,7 +764,7 @@ text-check:
 
 [group("ci")]
 [doc("The non-test half of `ci` — what the pre-push hook runs")]
-gate: fmt-check text-check inventory-check runtime-conformance-check panic-policy-check port-check clippy doc-strict
+gate: fmt-check text-check font-assets-check inventory-check runtime-conformance-check panic-policy-check port-check clippy doc-strict
 
 [group("ci")]
 [doc("Run local CI gates (gate + test + doctests)")]
@@ -806,3 +806,24 @@ audit:
 [doc("Show outdated dependencies (requires cargo-outdated)")]
 outdated:
     cargo outdated --workspace
+
+[group("quality")]
+[doc("Test release roles, declaration closure and Cargo archive normalization on tiny fixtures")]
+release-policy-test:
+    python3 -B -m unittest discover -s scripts/tests -p test_release_policy.py
+
+[group("quality")]
+[doc("Show the computed product/support release inventory without creating archives")]
+release-inventory:
+    python3 -B scripts/release_policy.py --json
+
+[group("quality")]
+[doc("Create and inspect local archives for the selected release set; no build or upload")]
+release-package-check *options:
+    python3 -B scripts/release_policy.py --package {{options}}
+
+[group("quality")]
+[doc("Verify font provenance/notices, generated fixture bytes, and Cargo package file selection offline")]
+font-assets-check:
+    python3 -B -m unittest discover -s scripts/tests -p test_font_assets.py
+    python3 -B scripts/font_assets.py --package-list

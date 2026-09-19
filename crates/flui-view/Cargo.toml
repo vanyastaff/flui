@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-view"
 version.workspace = true
 edition.workspace = true
@@ -58,7 +59,8 @@ tracing-subscriber = { workspace = true, optional = true }
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
 # normally, which cargo permits for dev-dependencies precisely so a lower crate
 # can use the test support built on it.
-flui-testing = { workspace = true }
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-testing = { path = "../flui-testing" }
 criterion = { workspace = true }
 # Enable flui-rendering's `testing` feature for unit tests so the
 # layout-builder tests can read committed geometry back off the pipeline

@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-widgets"
 version.workspace = true
 edition.workspace = true
@@ -84,7 +85,8 @@ flui-testing = { workspace = true, optional = true }
 # `tests/common/mod.rs` is a thin re-export of `flui_widgets::testing`, which
 # only exists on the feature-gated build of the library the test binaries
 # link (the unit-test build reaches it via `cfg(test)` instead).
-flui-widgets = { path = ".", version = "0.2.0", features = ["testing"] }
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-widgets = { path = ".", features = ["testing"] }
 # Integration tests drive the real layout pipeline through the render harness.
 flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }

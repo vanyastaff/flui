@@ -11,7 +11,9 @@ use tempfile::TempDir;
 
 /// Get a command for the `flui` binary.
 fn flui() -> Command {
-    cargo_bin_cmd!("flui")
+    let mut command = cargo_bin_cmd!("flui");
+    command.current_dir(repo_root());
+    command
 }
 
 /// Workspace root — this crate lives at `<root>/crates/flui-cli`.
@@ -20,7 +22,8 @@ fn repo_root() -> PathBuf {
         .ancestors()
         .nth(2)
         .expect("BUG: flui-cli must sit two levels below the workspace root")
-        .to_path_buf()
+        .canonicalize()
+        .expect("canonical workspace root")
 }
 
 /// Generate a project with `--local` and prove it actually compiles.
@@ -30,11 +33,6 @@ fn repo_root() -> PathBuf {
 /// drifts the generated `main.rs` or `Cargo.toml` off the current public
 /// surface fails here.
 ///
-/// `flui create --local` emits `path = "../../crates/flui-app"`, so a generated
-/// project resolves its dependencies only from exactly one directory below the
-/// workspace root — hence `<root>/target/<name>` (already gitignored) rather
-/// than a `TempDir`.
-///
 /// The check gets its own `--target-dir`: reusing the workspace's would
 /// deadlock, since the outer `cargo test` holds that directory's build lock for
 /// the duration of the run.
@@ -42,24 +40,13 @@ fn assert_generated_project_compiles(template: &str) {
     let root = repo_root();
     let target = root.join("target");
     let name = format!("flui-tmpl-check-{template}");
-    let project = target.join(&name);
+    let output_dir = TempDir::new().expect("external output directory");
+    let project = output_dir.path().join(&name);
 
-    // `target/` may not exist yet when `CARGO_TARGET_DIR` points elsewhere.
-    std::fs::create_dir_all(&target).expect("create the scratch directory");
-    if project.exists() {
-        std::fs::remove_dir_all(&project).expect("clear the previous generated project");
-    }
-
-    // `flui create` runs its own `cargo check` on the scaffold (step 4 of
-    // `commands/create.rs::execute`) before this test gets to build anything,
-    // and that invocation carries neither a lockfile nor `--offline`. Left
-    // alone it would resolve and download the whole graph from the registry —
-    // the very thing the seeding below exists to prevent — so the network is
-    // closed for the CLI process too. Its internal check merely warns on
-    // failure (`run_cargo_check` returns `Ok(false)`, the scaffold itself
-    // having succeeded), so this cannot turn the assertion below red; it just
-    // stops the test reaching the network at all.
+    // The explicit check below is the compile oracle; skip the CLI's advisory
+    // check so it cannot resolve a fresh graph or build into a private target.
     flui()
+        .current_dir(&root)
         .env("CARGO_NET_OFFLINE", "true")
         .args([
             "create",
@@ -69,54 +56,22 @@ fn assert_generated_project_compiles(template: &str) {
             "--org",
             "com.test",
             "--local",
-            // The scaffold's own post-create `cargo check` is a full cold
-            // build into the scaffold's private target dir — measured at
-            // 236 s on the CI runner, per template. This test's own check
-            // below is the oracle; the internal one only reports.
             "--no-check",
         ])
         .arg("--path")
-        .arg(&target)
+        .arg(output_dir.path())
         .assert()
         .success();
 
-    // Seed the generated project with this workspace's own resolved versions
-    // before checking it, and forbid the network.
-    //
-    // Without this the generated project — which declares its own empty
-    // `[workspace]` to detach from ours — resolves its whole transitive graph
-    // fresh from the registry on every run. That makes this test, and
-    // therefore the merge gate, non-hermetic: any crate anywhere in that graph
-    // can turn CI red with nothing in this repository having changed. It has:
-    // an upstream `zune-jpeg` release stopped compiling under the pinned
-    // toolchain and took `main` down with it. Every other cargo invocation in
-    // `ci.yml` runs `--locked` for exactly this reason; this one escaped the
-    // discipline by construction, because it builds a *different* project.
-    //
-    // Copying the lock is sound here precisely because `--local` points the
-    // generated project's `flui-*` dependencies at this tree, so its
-    // third-party graph is a subset of ours. `cargo` still adds the new root
-    // package to the copied lock; `--offline` is what guarantees nothing else
-    // is re-resolved, and fails loudly rather than silently upgrading if a
-    // crate is somehow absent from the cache.
-    //
-    // What this deliberately gives up: this test no longer notices that the
-    // template compiles against the *current* published world. That check
-    // belongs in `weekly.yml`, which already builds against a fresh
-    // `cargo update` as early warning rather than as a merge gate.
+    // Reuse this checkout's resolved dependency graph and cached crates. The
+    // generated package is added to the copied lock by Cargo; --offline prevents
+    // this test from depending on registry availability or fresh releases.
     std::fs::copy(root.join("Cargo.lock"), project.join("Cargo.lock"))
         .expect("seed the generated project with the workspace's resolved versions");
 
-    // The scaffold is checked into a scratch target under `target/`, shared
-    // by the two template tests (cargo's build-directory lock serialises
-    // them, so the second finds the first's artifacts). Checking it into the
-    // workspace's own target instead was tried and measured on the CI
-    // runner: the check compiles nothing there, and still takes ~180 s per
-    // test — cargo's freshness scan over a 549-crate `--all-targets` target
-    // on a busy disk — which is slower than this cold build at opt-level 0.
-    // The scaffold's OWN post-create check is what used to dominate (236 s
-    // per template, a full cold build into the scaffold's private target);
-    // `--no-check` above removes that entirely.
+    // Template checks share a separate target so the enclosing cargo test's
+    // build lock cannot deadlock them. External output paths exercise the same
+    // dependency resolution users get outside the framework checkout.
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = std::process::Command::new(cargo)
         .arg("check")
@@ -154,13 +109,11 @@ fn generated_hot_reload_workspace_compiles() {
     let root = repo_root();
     let target = root.join("target");
     let name = "flui-tmpl-check-hot-reload";
-    let project = target.join(name);
-    std::fs::create_dir_all(&target).expect("create the scratch directory");
-    if project.exists() {
-        std::fs::remove_dir_all(&project).expect("clear the previous generated project");
-    }
+    let output_dir = TempDir::new().expect("external output directory");
+    let project = output_dir.path().join(name);
 
     flui()
+        .current_dir(&root)
         .env("CARGO_NET_OFFLINE", "true")
         .args([
             "create",
@@ -174,7 +127,7 @@ fn generated_hot_reload_workspace_compiles() {
             "--no-check",
         ])
         .arg("--path")
-        .arg(&target)
+        .arg(output_dir.path())
         .assert()
         .success();
 
@@ -227,6 +180,7 @@ fn create_project_with_basic_template() {
             "basic",
             "--org",
             "com.test",
+            "--no-check",
         ])
         .arg("--path")
         .arg(tmp.path())
@@ -259,6 +213,7 @@ fn create_project_with_counter_template() {
             "counter",
             "--org",
             "com.test",
+            "--no-check",
         ])
         .arg("--path")
         .arg(tmp.path())
@@ -290,6 +245,7 @@ fn create_project_with_local_flag() {
             "--org",
             "com.test",
             "--local",
+            "--no-check",
         ])
         .arg("--path")
         .arg(tmp.path())
@@ -320,6 +276,7 @@ fn create_project_with_platforms() {
             "com.test",
             "--platforms",
             "android,web",
+            "--no-check",
         ])
         .arg("--path")
         .arg(tmp.path())
@@ -351,7 +308,7 @@ fn create_project_default_template_is_counter() {
     let project_dir = tmp.path().join("test-default");
 
     flui()
-        .args(["create", "test-default", "--org", "com.test"])
+        .args(["create", "test-default", "--org", "com.test", "--no-check"])
         .arg("--path")
         .arg(tmp.path())
         .assert()
@@ -367,7 +324,7 @@ fn create_project_duplicate_name_fails() {
 
     // First creation should succeed
     flui()
-        .args(["create", "test-dup", "--org", "com.test"])
+        .args(["create", "test-dup", "--org", "com.test", "--no-check"])
         .arg("--path")
         .arg(tmp.path())
         .assert()
@@ -375,10 +332,342 @@ fn create_project_duplicate_name_fails() {
 
     // Second creation with same name should fail
     flui()
-        .args(["create", "test-dup", "--org", "com.test"])
+        .args(["create", "test-dup", "--org", "com.test", "--no-check"])
         .arg("--path")
         .arg(tmp.path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("already exists"));
+}
+
+#[test]
+fn local_source_resolves_outside_checkout() {
+    let tmp = TempDir::new().expect("temp dir");
+    flui()
+        .current_dir(repo_root())
+        .args(["create", "external-app", "--local", "--no-check"])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .success();
+    let manifest: toml::Table = std::fs::read_to_string(tmp.path().join("external-app/Cargo.toml"))
+        .expect("manifest")
+        .parse()
+        .expect("valid TOML");
+    let dependency = manifest["dependencies"]["flui"]["path"]
+        .as_str()
+        .expect("path dependency");
+    assert_eq!(Path::new(dependency), repo_root());
+}
+
+fn assert_manifest_source(project: &Path, source: &Path) {
+    let manifest: toml::Table = std::fs::read_to_string(project.join("Cargo.toml"))
+        .expect("manifest")
+        .parse()
+        .expect("valid TOML");
+    assert_eq!(
+        Path::new(
+            manifest["dependencies"]["flui"]["path"]
+                .as_str()
+                .expect("path")
+        ),
+        source
+    );
+}
+
+#[test]
+fn explicit_source_accepts_absolute_and_relative_paths() {
+    let tmp = TempDir::new().expect("temp dir");
+    let source = tmp.path().join("source with 'single' quotes");
+    std::fs::create_dir(&source).expect("source dir");
+    // A real directory (not a symlink) keeps unusual characters after canonicalization.
+    std::fs::copy(repo_root().join("Cargo.toml"), source.join("Cargo.toml"))
+        .expect("root manifest");
+    for name in ["flui-app", "flui-view", "flui-widgets"] {
+        let dir = source.join("crates").join(name);
+        std::fs::create_dir_all(&dir).expect("crate dir");
+        std::fs::copy(
+            repo_root().join("crates").join(name).join("Cargo.toml"),
+            dir.join("Cargo.toml"),
+        )
+        .expect("crate manifest");
+    }
+    for (name, path) in [
+        ("absolute", source.clone()),
+        ("relative", PathBuf::from("source with 'single' quotes")),
+    ] {
+        let mut flag = std::ffi::OsString::from("--local=");
+        flag.push(&path);
+        flui()
+            .current_dir(tmp.path())
+            .args(["create", name, "--no-check"])
+            .arg(flag)
+            .assert()
+            .success();
+        assert_manifest_source(
+            &tmp.path().join(name),
+            &source.canonicalize().expect("source root"),
+        );
+    }
+}
+
+#[test]
+fn bare_local_before_project_name_uses_current_directory() {
+    let tmp = TempDir::new().expect("temp dir");
+    flui()
+        .args(["create", "--local", "before", "--no-check", "--path"])
+        .arg(tmp.path())
+        .assert()
+        .success();
+    assert_manifest_source(&tmp.path().join("before"), &repo_root());
+}
+
+#[test]
+fn invalid_local_source_does_not_create_output() {
+    let tmp = TempDir::new().expect("temp dir");
+    for source in [tmp.path().to_path_buf(), tmp.path().join("missing")] {
+        let mut flag = std::ffi::OsString::from("--local=");
+        flag.push(source);
+        flui()
+            .args(["create", "invalid", "--no-check", "--path"])
+            .arg(tmp.path())
+            .arg(flag)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("FLUI"));
+        assert!(!tmp.path().join("invalid").exists());
+    }
+}
+
+#[test]
+fn registry_source_remains_versioned() {
+    let tmp = TempDir::new().expect("temp dir");
+    flui()
+        .args(["create", "registry-app", "--no-check", "--path"])
+        .arg(tmp.path())
+        .assert()
+        .success();
+    let manifest: toml::Table = std::fs::read_to_string(tmp.path().join("registry-app/Cargo.toml"))
+        .expect("manifest")
+        .parse()
+        .expect("TOML");
+    assert_eq!(
+        manifest["dependencies"]["flui"].as_str(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn local_source_preserves_quotes_and_backslashes() {
+    let tmp = TempDir::new().expect("temp dir");
+    let source = tmp.path().join("a \"quoted\" \\ source");
+    std::fs::create_dir(&source).expect("source dir");
+    std::fs::copy(repo_root().join("Cargo.toml"), source.join("Cargo.toml"))
+        .expect("root manifest");
+    for name in ["flui-app", "flui-view", "flui-widgets"] {
+        let dir = source.join("crates").join(name);
+        std::fs::create_dir_all(&dir).expect("crate dir");
+        std::fs::copy(
+            repo_root().join("crates").join(name).join("Cargo.toml"),
+            dir.join("Cargo.toml"),
+        )
+        .expect("crate manifest");
+    }
+    let mut flag = std::ffi::OsString::from("--local=");
+    flag.push(&source);
+    flui()
+        .current_dir(tmp.path())
+        .args(["create", "escaped", "--no-check"])
+        .arg(flag)
+        .assert()
+        .success();
+    assert_manifest_source(
+        &tmp.path().join("escaped"),
+        &source.canonicalize().expect("canonical source"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_source_is_rejected_without_output() {
+    use std::os::unix::ffi::OsStringExt;
+    let tmp = TempDir::new().expect("temp dir");
+    let source = tmp
+        .path()
+        .join(std::ffi::OsString::from_vec(vec![b's', 0xff]));
+    let mut flag = std::ffi::OsString::from("--local=");
+    flag.push(source);
+    flui()
+        .args(["create", "invalid", "--no-check", "--path"])
+        .arg(tmp.path())
+        .arg(flag)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("UTF-8"));
+    assert!(!tmp.path().join("invalid").exists());
+}
+
+#[test]
+fn incomplete_local_checkout_is_rejected_without_output() {
+    let tmp = TempDir::new().expect("temp dir");
+    std::fs::copy(
+        repo_root().join("Cargo.toml"),
+        tmp.path().join("Cargo.toml"),
+    )
+    .expect("root manifest");
+    flui()
+        .current_dir(tmp.path())
+        .args(["create", "incomplete", "--local", "--no-check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("flui-app"));
+    assert!(!tmp.path().join("incomplete").exists());
+}
+
+#[test]
+fn hot_reload_requires_its_additional_source_manifests() {
+    let tmp = TempDir::new().expect("temp dir");
+    std::fs::copy(
+        repo_root().join("Cargo.toml"),
+        tmp.path().join("Cargo.toml"),
+    )
+    .expect("root manifest");
+    for name in [
+        "flui-app",
+        "flui-view",
+        "flui-widgets",
+        "flui-hot-reload",
+        "flui-types",
+    ] {
+        if matches!(name, "flui-hot-reload" | "flui-types") {
+            flui()
+                .current_dir(tmp.path())
+                .args([
+                    "create",
+                    "incomplete",
+                    "--local",
+                    "--hot-reload",
+                    "--no-check",
+                ])
+                .assert()
+                .failure()
+                .stderr(predicate::str::contains(name));
+            assert!(!tmp.path().join("incomplete").exists());
+        }
+        let dir = tmp.path().join("crates").join(name);
+        std::fs::create_dir_all(&dir).expect("crate directory");
+        std::fs::copy(
+            repo_root().join("crates").join(name).join("Cargo.toml"),
+            dir.join("Cargo.toml"),
+        )
+        .expect("crate manifest");
+    }
+}
+
+#[test]
+fn all_templates_depend_on_the_public_facade_only() {
+    let tmp = TempDir::new().expect("temp dir");
+    for (name, template, hot_reload) in [
+        ("basic", "basic", false),
+        ("counter", "counter", false),
+        ("reload", "counter", true),
+        ("flui-reload", "counter", true),
+    ] {
+        let mut command = flui();
+        command
+            .args([
+                "create",
+                name,
+                "--template",
+                template,
+                "--local",
+                "--no-check",
+                "--path",
+            ])
+            .arg(tmp.path());
+        if hot_reload {
+            command.arg("--hot-reload");
+        }
+        command.assert().success();
+        let members = if hot_reload {
+            vec![
+                format!("{name}-types"),
+                format!("{name}-logic"),
+                format!("{name}-host"),
+            ]
+        } else {
+            vec![String::new()]
+        };
+        for member in members {
+            let path = tmp.path().join(name).join(&member).join("Cargo.toml");
+            let manifest: toml::Table = std::fs::read_to_string(path)
+                .expect("manifest")
+                .parse()
+                .expect("TOML");
+            let dependencies = manifest["dependencies"].as_table().expect("dependencies");
+            let types_package = format!("{name}-types");
+            let mut expected = vec!["flui"];
+            if hot_reload && member != types_package {
+                expected.push(&types_package);
+            }
+            if hot_reload && member == format!("{name}-host") {
+                expected.push("tracing");
+            }
+            expected.sort_unstable();
+            assert_eq!(
+                dependency_identities(dependencies),
+                expected,
+                "dependency packages for {name}/{member}"
+            );
+            let facade = &dependencies["flui"];
+            assert_eq!(
+                Path::new(facade["path"].as_str().expect("facade source")),
+                repo_root()
+            );
+            if hot_reload && member != types_package {
+                assert_eq!(
+                    dependencies[&types_package]["path"].as_str(),
+                    Some(format!("../{types_package}").as_str())
+                );
+            }
+            if hot_reload {
+                assert!(
+                    facade["features"]
+                        .as_array()
+                        .expect("features")
+                        .iter()
+                        .any(|feature| feature.as_str() == Some("hot-reload"))
+                );
+            }
+        }
+    }
+}
+
+fn dependency_identities(dependencies: &toml::Table) -> Vec<&str> {
+    let mut packages: Vec<_> = dependencies
+        .iter()
+        .map(|(name, value)| {
+            value
+                .as_table()
+                .and_then(|table| table.get("package"))
+                .map_or(name.as_str(), |package| {
+                    package.as_str().expect("Cargo package name")
+                })
+        })
+        .collect();
+    packages.sort_unstable();
+    packages
+}
+
+#[test]
+fn dependency_guard_detects_renamed_internal_packages() {
+    let mut dependencies: toml::Table = "flui = '0.2.0'".parse().expect("dependency table");
+    assert_eq!(dependency_identities(&dependencies), ["flui"]);
+    let mutation: toml::Table = "package = 'flui-view'\nversion = '0.2.0'"
+        .parse()
+        .expect("renamed dependency");
+    dependencies.insert("views".into(), mutation.into());
+    assert_eq!(dependency_identities(&dependencies), ["flui", "flui-view"]);
+    assert_ne!(dependency_identities(&dependencies), ["flui"]);
 }
