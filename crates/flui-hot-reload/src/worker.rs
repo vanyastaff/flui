@@ -342,6 +342,29 @@ fn resolve_worker_path(lib_path: &Path) -> PathBuf {
     lib_path.to_path_buf()
 }
 
+/// Identify the artifact `lib_path` resolves to right now: the resolved path
+/// plus its modification time, honouring the sidecar manifest exactly as
+/// [`WorkerReloadDriver`] does.
+///
+/// This is the **off-thread** companion to [`WorkerReloadDriver::poll`]. A host
+/// that only polls at frame boundaries cannot notice a rebuild while it is idle
+/// (an unfocused or occluded window receives no frames), so a small host-side
+/// watcher thread polls this instead and wakes the owner when it changes. It
+/// deliberately does no loading: [`WorkerReloadDriver`] owns the
+/// owner-thread-only `dlopen`/`dlclose` cycle, and this function touches only
+/// the filesystem, so it is safe from any thread.
+///
+/// The path is part of the stamp because the CLI assigns a content-addressed
+/// name (`{stem}-hot-{hash}{ext}`): two builds in the same wall-clock second can
+/// share an mtime, but they never share a path. Comparing only the mtime would
+/// miss that second build.
+#[must_use]
+pub fn worker_artifact_stamp(lib_path: &Path) -> (PathBuf, u64) {
+    let resolved = resolve_worker_path(lib_path);
+    let mtime = dynlib::file_mtime(&resolved);
+    (resolved, mtime)
+}
+
 /// Polls a worker dylib path and reloads on mtime changes.
 #[expect(missing_debug_implementations)]
 pub struct WorkerReloadDriver {
@@ -588,5 +611,78 @@ mod tests {
             "null pointer must not enter the session"
         );
         assert_eq!(get_worker_build_ptr(fp), None);
+    }
+
+    /// A self-cleaning temp directory for the artifact-stamp tests.
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let mut path = std::env::temp_dir();
+            path.push(format!("flui_worker_stamp_{tag}_{}", std::process::id()));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            Self(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The stamp must reflect the artifact's *identity*, not just its mtime.
+    ///
+    /// The CLI stages each build at a content-addressed name, so two builds in
+    /// the same wall-clock second share an mtime but never a path. The host's
+    /// background watcher compares this stamp to decide whether to wake the
+    /// owner; a stamp that only carried the mtime would let that second build
+    /// go unnoticed — exactly the repeated-edit case this watcher exists to
+    /// serve.
+    #[test]
+    fn artifact_stamp_tracks_the_path_even_when_the_mtime_matches() {
+        let dir = TempDir::new("path_identity");
+        let canonical = dir.path().join("libworker.dylib");
+
+        let first = dir.path().join("libworker-hot-aaaa.dylib");
+        let second = dir.path().join("libworker-hot-bbbb.dylib");
+        std::fs::write(&first, b"v1").expect("write first");
+        std::fs::write(&second, b"v2").expect("write second");
+
+        // Pin both files to the SAME modification time, so only the path can
+        // distinguish them — the collision this test exists to cover.
+        let stamp_time =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        for file in [&first, &second] {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(file)
+                .expect("open for set_modified")
+                .set_modified(stamp_time)
+                .expect("set mtime");
+        }
+
+        // Point the sidecar at the first, then the second.
+        let manifest = manifest_path_for(&canonical);
+        std::fs::write(&manifest, first.as_os_str().as_encoded_bytes()).expect("write sidecar 1");
+        let stamp_first = worker_artifact_stamp(&canonical);
+
+        std::fs::write(&manifest, second.as_os_str().as_encoded_bytes()).expect("write sidecar 2");
+        let stamp_second = worker_artifact_stamp(&canonical);
+
+        assert_eq!(
+            stamp_first.1, stamp_second.1,
+            "the test's premise: both files carry the same mtime"
+        );
+        assert_ne!(
+            stamp_first, stamp_second,
+            "a same-mtime rebuild at a different path must still change the stamp, \
+             or the watcher would miss every second edit in a one-second window"
+        );
+        assert_eq!(stamp_second.0, second);
     }
 }

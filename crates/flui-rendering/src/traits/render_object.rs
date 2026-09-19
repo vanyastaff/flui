@@ -136,15 +136,15 @@ impl HitTestOutcome {
 ///
 /// # Hot-reload note
 ///
-/// `reassemble` is a documented FLUI divergence: Flutter's
-/// `RenderObject.reassemble()` calls `markNeedsLayout` /
-/// `markNeedsPaint` / `markNeedsCompositingBitsUpdate` /
-/// `markNeedsSemanticsUpdate` / `visitChildren` — all pipeline-owner
-/// operations that require traversing the render tree via
-/// `PipelineOwner`. FLUI's object-level default is a no-op because
-/// render objects do not hold a pipeline-owner handle; the real fix
-/// (`PipelineOwner::reassemble_subtree`) is tracked as the hot-reload
-/// epic and deferred deliberately.
+/// `reassemble` here is an object-local hook and defaults to a no-op, because a
+/// render object holds no pipeline-owner handle and cannot reach the dirty
+/// queues itself. Flutter's `RenderObject.reassemble()` is really the
+/// pipeline-owner operation — `markNeedsLayout` / `markNeedsCompositingBitsUpdate`
+/// / `markNeedsPaint` / `markNeedsSemanticsUpdate` / `visitChildren` — and its
+/// FLUI counterpart is [`PipelineOwner::reassemble`](crate::pipeline::PipelineOwner::reassemble),
+/// which performs that traverse and marks all four phases. This object-level
+/// hook exists for a concrete object that must do additional per-object work on
+/// reload; the framework's tree-wide reassemble does not depend on it.
 ///
 /// # Tree-lifecycle note
 ///
@@ -764,8 +764,9 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
 
     /// Marks this render object for reprocessing after hot reload.
     ///
-    /// Default: no-op. See the *Hot-reload note* in the trait doc for the
-    /// reason this is a documented FLUI divergence from Flutter semantics.
+    /// Default: no-op. The tree-wide reload work is
+    /// [`PipelineOwner::reassemble`](crate::pipeline::PipelineOwner::reassemble);
+    /// see the *Hot-reload note* in the trait doc.
     fn reassemble(&mut self) {}
 
     // ========================================================================

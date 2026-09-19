@@ -789,6 +789,53 @@ impl HeadlessBinding {
         });
     }
 
+    /// Flutter `WidgetsBinding.performReassemble()` — the hot-reload entry
+    /// point, headless.
+    ///
+    /// Marks every mounted element dirty without unmounting or disposing any
+    /// `State`, exactly as production
+    /// [`WidgetsBinding::perform_reassemble`](flui_view::WidgetsBinding::perform_reassemble)
+    /// does. The next [`pump_frame`](Self::pump_frame) re-runs every `build()`
+    /// while `StatefulView` state stays in the element tree — the property a
+    /// hot reload relies on and the one a test must be able to assert.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the binding is not tree-bound (built via
+    /// [`with_tree`](Self::with_tree)).
+    pub fn perform_reassemble(&mut self) {
+        let Self {
+            tree,
+            interaction_lane,
+            ..
+        } = self;
+        interaction_lane.enter(|| {
+            let Some(tree_binding) = tree.as_mut() else {
+                panic!(
+                    "perform_reassemble requires a tree-bound binding (built via HeadlessBinding::with_tree)"
+                );
+            };
+            tree_binding.build_owner.reassemble(&mut tree_binding.tree);
+        });
+    }
+
+    /// Flutter `PipelineOwner.reassembleSubtree` — the render half of a hot
+    /// reload, headless.
+    ///
+    /// Marks the whole render tree's layout and paint dirty so the next frame
+    /// re-runs `perform_layout`/`paint`, mirroring production
+    /// `PipelineOwner::reassemble`.
+    pub fn reassemble_render_tree(&self) {
+        let Some(tree_binding) = self.tree.as_ref() else {
+            panic!(
+                "reassemble_render_tree requires a tree-bound binding (built via HeadlessBinding::with_tree)"
+            );
+        };
+        tree_binding
+            .pipeline_owner
+            .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
+    }
+
     /// Advance one deterministic frame by `dt`.
     ///
     /// # Ordering

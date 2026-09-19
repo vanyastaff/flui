@@ -68,8 +68,11 @@
 //! same-path reload there necessarily serves the retained image and the
 //! freshness assertion cannot hold. The test is therefore
 //! `#[cfg(not(target_os = "macos"))]`-gated with that reason stated at the
-//! gate; [`dlclose_then_reload_keeps_the_lifecycle_working`] still runs on
-//! every platform, covering that the load → drive → unload → reload cycle
+//! gate. [`dlclose_then_reload_distinct_paths_serve_fresh_images`] covers the
+//! macOS-relied-on property instead: a reload at a *distinct* path is a fresh
+//! mapping on every runtime, which is exactly what the CLI's content-addressed
+//! worker staging produces. [`dlclose_then_reload_keeps_the_lifecycle_working`]
+//! runs everywhere too, covering that the load → drive → unload → reload cycle
 //! stays functional even where the mapping is reused.
 //!
 //! Removing that deferred-unmap pin exposed a second hazard: the old affinity
@@ -88,11 +91,7 @@ use std::path::{Path, PathBuf};
 
 use flui_hot_reload::PluginKind;
 use flui_hot_reload::ScenePlugin;
-// Only the strict freshness test (non-macOS) drives the fixture's exported
-// symbol through a raw handle; see the `tick` helper below.
-#[cfg(not(target_os = "macos"))]
 use flui_hot_reload::dynlib::DynLib;
-#[cfg(not(target_os = "macos"))]
 use std::ffi::c_void;
 
 /// A self-cleaning temp file path unique to this test process (mirrors
@@ -216,10 +215,10 @@ fn fixture_artifact_path() -> PathBuf {
 /// image-local (1 → 2 → 3); dropping it before opening the next handle then
 /// proves whether `dlclose` really unmapped that image.
 ///
-/// Only the strict freshness test uses this, and that test is
-/// `not(target_os = "macos")`-gated (dyld does not unmap on `dlclose`), so
-/// this helper is gated with it.
-#[cfg(not(target_os = "macos"))]
+/// The same-path strict freshness test is `not(target_os = "macos")`-gated
+/// (dyld does not unmap on `dlclose`), but the distinct-path test below uses
+/// this helper on every platform — a distinct path is a fresh mapping even on
+/// dyld, which is exactly the property the CLI's versioned staging relies on.
 fn tick(lib: &DynLib) -> u32 {
     // SAFETY: `fixture_tick` is the fixture's own exported `extern "C" fn()
     // -> u32` (see examples/hot_reload_lifecycle_fixture/src/lib.rs); the
@@ -312,4 +311,42 @@ fn dlclose_then_reload_same_path_serves_a_fresh_image() {
         "a reload of the same path must start this fixture's tick counter fresh (1), \
          not continue the previous session's count"
     );
+}
+
+/// Freshness by **distinct path** — the property the CLI's content-addressed
+/// staging depends on, and the only reload-freshness proof that holds on
+/// macOS.
+///
+/// dyld is a deferred-unmap runtime, so a *same-path* reload can serve the
+/// retained image (why the test above is `not(target_os = "macos")`). A
+/// different path is a different mapping on every runtime, so loading the
+/// fixture from two distinct paths must yield two independent images, each
+/// starting its counter at 1. This is what makes staged names carry a content
+/// hash: a rebuilt worker lands at a new path, so the host cannot be served the
+/// stale one.
+#[test]
+fn dlclose_then_reload_distinct_paths_serve_fresh_images() {
+    let source = fixture_artifact_path();
+
+    let first = TempPath::new("distinct_first");
+    let second = TempPath::new("distinct_second");
+    std::fs::copy(&source, first.path()).expect("copy fixture to the first path");
+    std::fs::copy(&source, second.path()).expect("copy fixture to the second path");
+    assert_ne!(
+        first.path(),
+        second.path(),
+        "the two work paths must differ — that is the property under test"
+    );
+
+    load_drive_unload(first.path());
+
+    // Same bytes, different path: a fresh image with a fresh counter.
+    let image = DynLib::open(second.path()).expect("the second path must load");
+    assert_eq!(
+        tick(&image),
+        1,
+        "a reload at a DISTINCT path must start this fixture's tick counter fresh (1) — \
+         this is the property macOS content-addressed staging relies on"
+    );
+    assert_eq!(tick(&image), 2, "and the counter is image-local (1 → 2)");
 }

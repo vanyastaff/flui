@@ -8,11 +8,26 @@ use super::PipelineOwner;
 use crate::pipeline::phase::{Idle, PipelinePhase};
 
 impl<Phase: PipelinePhase> PipelineOwner<Phase> {
-    /// Reassemble every render object in the tree and mark layout + paint dirty.
+    /// Reassemble every render object in the tree and mark layout, compositing
+    /// bits, paint, and semantics dirty.
     ///
     /// Called during hot reload after the worker dylib is swapped. Preserves
     /// render object identity (same `RenderId`, same in-tree state) while
     /// forcing a full rebuild pass on the next frame.
+    ///
+    /// All four marks mirror Flutter's `RenderObject.reassemble()`
+    /// (`rendering/object.dart`), which does exactly:
+    /// `markNeedsLayout` / `markNeedsCompositingBitsUpdate` / `markNeedsPaint` /
+    /// `markNeedsSemanticsUpdate` plus a child walk. Reassemble is the one place
+    /// a hot reload can change code that affects compositing or semantics
+    /// without touching layout or paint, so omitting those two marks would leave
+    /// the changed behaviour invisible until something else dirtied those phases
+    /// — the mark-and-skip divergence this method exists to avoid.
+    ///
+    /// `mark_needs_semantics` remains gated on semantics being enabled
+    /// ([`PipelineOwner::semantics_enabled`]); that gate is the pipeline's own
+    /// contract, not a departure from Flutter, and marking is a no-op when
+    /// semantics are off.
     pub fn reassemble(&mut self) {
         let Some(root_id) = self.root_id else {
             return;
@@ -35,7 +50,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 node.mark_layout_flag();
             }
             self.add_node_needing_layout(id, depth);
+            self.mark_needs_compositing_bits_update(id);
             self.mark_needs_paint(id);
+            self.mark_needs_semantics(id);
         }
 
         tracing::info!(

@@ -76,6 +76,13 @@ pub mod timing {
     /// How often [`crate::HotReloadDriver`] checks the plugin artifact mtime.
     pub const ARTIFACT_POLL: Duration = Duration::from_millis(500);
 
+    /// How often the host's background worker-artifact watcher checks for a
+    /// rebuild. Same scale as [`ARTIFACT_POLL`]; kept separate because that
+    /// one paces an owner-thread poll at a frame boundary, while this paces a
+    /// standalone watcher thread that must notice a rebuild while the owner is
+    /// idle (see [`crate::worker_artifact_stamp`]).
+    pub const WATCHER_POLL: Duration = Duration::from_millis(500);
+
     /// Debounce for source-file watchers in `flui run` desktop mode.
     pub const SOURCE_DEBOUNCE: Duration = Duration::from_millis(500);
 

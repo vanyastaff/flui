@@ -1170,7 +1170,7 @@ impl WidgetsBinding {
             let mut inner = self.inner.write();
             let WidgetsBindingInner {
                 ref mut build_owner,
-                ref element_tree,
+                ref mut element_tree,
                 ..
             } = *inner;
             build_owner.reassemble(element_tree);
