@@ -15,7 +15,7 @@ debt, not singleton debt — see `Key constraints` below.
 - **run_app / run_app_with_config** — the supported entry points for starting the app
 - **run_direct** — experimental direct-engine escape hatch (no widget tree, no input); its bootstrap (window, GPU renderer, callback wiring) now runs inside `on_ready` (ADR-0039 slice 2), so it works on the winit backend too — still `experimental` by policy, not a supported cross-platform application entry point
 - **embedder / overlay** — app-level subsystems (PORT-CHECK-OK-SP4 marked)
-- **Re-exports** — `GestureBinding`, `PaintingBinding`, `PipelineOwner`, `RenderingFlutterBinding`, `UpdateScheduler`, `WidgetsBinding` from constituent crates. `SemanticsBinding` (flui-semantics) is retired — deleted, not slimmed; semantics enablement + announce/event delivery is now the private, per-presentation `SemanticsHost` (`app/semantics_host.rs`), and the process-scoped accessibility-feature flags live on `AppRuntime`'s `SharedEngineServices`.
+- **Re-exports** — `GestureBinding`, `PipelineOwner`, `RenderingFlutterBinding`, `UpdateScheduler`, `WidgetsBinding` from constituent crates. `SemanticsBinding` (flui-semantics) is retired — deleted, not slimmed; semantics enablement + announce/event delivery is now the private, per-presentation `SemanticsHost` (`app/semantics_host.rs`), and the process-scoped accessibility-feature flags live on `AppRuntime`'s `SharedEngineServices`.
 
 ## Key constraints
 

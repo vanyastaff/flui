@@ -273,7 +273,7 @@ regex = "1"
 
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
-# - glyphon, cosmic-text (text rendering)
+# - etagere (glyph atlas packing)
 # - lyon (tessellation)
 # - guillotiere (texture atlas)
 

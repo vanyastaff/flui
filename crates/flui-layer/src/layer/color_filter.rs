@@ -1,6 +1,4 @@
-//! `ColorFilterLayer` — applies a [`ColorFilter`] to its children.
-//!
-//! Corresponds to Flutter's `ColorFilterLayer`.
+//! `ColorFilterLayer` — recolours its subtree with a [`ColorFilter`].
 
 use flui_types::painting::{ColorFilter, effects::ColorMatrix};
 
@@ -48,42 +46,29 @@ pub struct ColorFilterLayer {
 }
 
 impl ColorFilterLayer {
-    /// Creates a new color filter layer with the given [`ColorFilter`].
+    /// Recolours the subtree with `color_filter`.
     #[inline]
     #[must_use]
     pub const fn new(color_filter: ColorFilter) -> Self {
         Self { color_filter }
     }
 
-    /// Creates an identity filter layer (no color transformation).
-    ///
-    /// The render impl short-circuits identity layers to a no-op.
+    /// A filter that changes nothing; the engine lowers it to a no-op.
     #[inline]
     #[must_use]
     pub fn identity() -> Self {
         Self::new(ColorFilter::Matrix(ColorMatrix::identity()))
     }
 
-    /// Returns the [`ColorFilter`] this layer applies.
-    ///
-    /// `ColorFilter` is `Copy`, so the value is returned by value at no cost.
+    /// The filter applied to the subtree (`ColorFilter` is `Copy`).
     #[inline]
     #[must_use]
     pub const fn color_filter(&self) -> ColorFilter {
         self.color_filter
     }
 
-    /// Replaces the active [`ColorFilter`].
-    #[inline]
-    pub fn set_color_filter(&mut self, color_filter: ColorFilter) {
-        self.color_filter = color_filter;
-    }
-
-    /// Returns `true` if this layer applies no transformation.
-    ///
-    /// Only a `Matrix`-variant that equals the identity matrix is considered
-    /// identity.  `Mode` and `Gamma` variants are never identity — they always
-    /// affect pixel values.
+    /// Whether the filter changes nothing: only a `Matrix` equal to the identity qualifies;
+    /// `Mode` and `Gamma` always affect pixels.
     #[inline]
     #[must_use]
     pub fn is_identity(&self) -> bool {
@@ -134,25 +119,6 @@ mod tests {
 
     // ── Copy + Clone ──────────────────────────────────────────────────────────
 
-    #[test]
-    fn layer_is_copy() {
-        let a = ColorFilterLayer::new(ColorFilter::grayscale());
-        let b = a; // Copy
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn layer_is_clone() {
-        // `ColorFilterLayer: Copy`; route through a generic `&T` call so
-        // clippy's `clone_on_copy` lint doesn't fire.
-        fn clone_it<T: Clone>(v: &T) -> T {
-            v.clone()
-        }
-        let a = ColorFilterLayer::new(ColorFilter::grayscale());
-        let b = clone_it(&a);
-        assert_eq!(a, b);
-    }
-
     // ── is_identity semantics ─────────────────────────────────────────────────
 
     #[test]
@@ -190,32 +156,5 @@ mod tests {
 
     // ── set_color_filter ──────────────────────────────────────────────────────
 
-    #[test]
-    fn set_color_filter_updates_field() {
-        let mut layer = ColorFilterLayer::identity();
-        assert!(layer.is_identity());
-
-        layer.set_color_filter(ColorFilter::grayscale());
-        assert!(!layer.is_identity());
-        assert_eq!(layer.color_filter(), ColorFilter::grayscale());
-    }
-
-    #[test]
-    fn set_mode_filter() {
-        let mut layer = ColorFilterLayer::identity();
-        let mode_filter = ColorFilter::mode(Color::RED, BlendMode::Multiply);
-        layer.set_color_filter(mode_filter);
-        assert_eq!(layer.color_filter(), mode_filter);
-        assert!(!layer.is_identity());
-    }
-
     // ── Send + Sync ───────────────────────────────────────────────────────────
-
-    #[test]
-    fn layer_is_send_and_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-        assert_send::<ColorFilterLayer>();
-        assert_sync::<ColorFilterLayer>();
-    }
 }

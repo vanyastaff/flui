@@ -114,7 +114,7 @@
 //! only way to "assert" it would be to read the hardcoded literal back,
 //! which proves nothing. The painting model itself is not the blocker —
 //! `flui_types::painting::Paint::anti_alias` exists and rides on every
-//! `DrawCommand::DrawRect`/`DrawRRect`/etc. variant
+//! `DrawOp::Rect`/`RRect`/etc. variant
 //! (`crates/flui-types/src/painting/paint.rs`) — this is a missing
 //! wiring/knob at the `ColoredBox`/`BoxDecoration` layer, not an absent
 //! painting capability. Filed as a new `docs/ROADMAP.md` Cross.H entry
@@ -348,7 +348,7 @@ fn colored_box_debug_fill_properties_carries_the_painted_color() {
 /// covers the widget→render-object wiring the render-level pin cannot see.
 #[test]
 fn colored_box_anti_alias_defaults_on_and_reaches_the_recorded_paint() {
-    use flui_painting::DrawCommand;
+    use flui_painting::DrawOp;
     use flui_rendering::layer::Layer;
 
     fn recorded_anti_alias(laid: &LaidOut) -> Vec<bool> {
@@ -356,10 +356,7 @@ fn colored_box_anti_alias_defaults_on_and_reaches_the_recorded_paint() {
         let Some(tree) = laid.layer_tree() else {
             return flags;
         };
-        let Some(root) = tree.root() else {
-            return flags;
-        };
-        let mut stack = vec![root];
+        let mut stack = vec![tree.root()];
         while let Some(id) = stack.pop() {
             let Some(layer) = tree.get_layer(id) else {
                 continue;
@@ -371,7 +368,7 @@ fn colored_box_anti_alias_defaults_on_and_reaches_the_recorded_paint() {
             };
             if let Some(commands) = commands {
                 for command in commands {
-                    if let DrawCommand::DrawRect { paint, .. } = command {
+                    if let DrawOp::Rect { paint, .. } = &command.op {
                         flags.push(paint.anti_alias);
                     }
                 }

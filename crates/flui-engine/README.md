@@ -24,12 +24,11 @@ All three constructors are `async` — wgpu's adapter and device requests are,
 so the library does not choose a blocking strategy on the caller's behalf:
 
 - `Renderer::new(window)` — windowed; owns its surface, recovers from device loss.
-- `Renderer::new_offscreen()` — no surface.
 - `HeadlessRenderer::new()` — rasterizes a `LayerTree` to RGBA8 without a
   window (the `flui --example screenshot` path).
 
-- `RasterBackend` — the frame-driver trait `flui-app`'s runners call, so a
-  future backend swaps in at one construction site.
+- `RasterBackend` — the frame-driver trait `flui-app`'s runners call;
+  `Renderer` implements it, and a GPU-free test double can stand in for it.
 - `WgpuPainter` — the per-frame painter, for embedders driving draw calls
   directly (see `examples/painting_demo`).
 

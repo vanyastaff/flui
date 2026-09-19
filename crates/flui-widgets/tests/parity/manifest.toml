@@ -1101,7 +1101,7 @@ cases = [
 rust = "text_test"
 family = "text"
 oracles = ["widgets/text_test.dart"]
-tests = 10
+tests = 11
 
 [[targets]]
 rust = "transform_test"

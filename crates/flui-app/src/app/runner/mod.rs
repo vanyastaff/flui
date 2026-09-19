@@ -206,7 +206,7 @@ where
     // advisory-only `vsync`/`target_fps` fields it used to have were removed
     // rather than kept misleading. The desktop runner's steady-state pacing
     // comes entirely from the GPU-side blocking Fifo present
-    // (`flui-engine::wgpu::Renderer::render_scene`) today. The unwired
+    // (`flui_engine::Renderer::render_scene`) today. The unwired
     // `RasterOptions` DTO was deleted with no reader rather than kept as a
     // shape; a frame-pacing surface returns with the threaded lane that can
     // act on one — that wiring is #559's job, not a claim this comment gets
@@ -339,7 +339,7 @@ mod tests {
     /// `bootstrap_desktop`/`run_android`/`run_web` themselves cannot run in a
     /// unit test: each opens its window from inside a live platform event loop
     /// (`ActiveEventLoop` is unreachable outside `Platform::run`) and creates a
-    /// real GPU `Renderer`, gated behind the separate `enable-wgpu-tests` CI job
+    /// real GPU `Renderer`, gated behind the separate `testing` CI job
     /// (WARP), not this one. This instead drives the exact ordering invariant
     /// headlessly: `HeadlessWindow::request_redraw` (flui-platform's headless
     /// backend, used elsewhere in this crate's tests) dispatches its

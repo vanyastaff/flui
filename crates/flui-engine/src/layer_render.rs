@@ -1,0 +1,1110 @@
+//! LayerRender trait - GPU rendering extension for layer types.
+//!
+//! This module adds GPU rendering capabilities to the core layer types
+//! from flui-layer.
+
+use flui_layer::{
+    BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
+    ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer,
+    OpacityLayer, PerformanceOverlayLayer, PictureLayer, PlatformViewLayer, ShaderMaskLayer,
+    TextureLayer, TransformLayer,
+};
+
+use crate::{
+    command_renderer::CommandRenderer, dispatch::dispatch_commands,
+    layer_state_stack::LayerStateStack,
+};
+
+// ============================================================================
+// LAYER RENDER TRAIT
+// ============================================================================
+
+/// Extension trait for rendering layers via CommandRenderer.
+///
+/// This trait adds GPU rendering capabilities to the core layer types
+/// from flui-layer.
+///
+/// Uses static dispatch via generics for zero-overhead renderer calls.
+/// The generic parameter `R` is on the trait level for cleaner implementations.
+///
+/// `LayerDispatcher` implements this for every `flui_layer::Layer` variant; the
+/// layer walk calls `render` on enter and `cleanup` on exit.
+pub(crate) trait LayerRender<R: CommandRenderer + LayerStateStack + ?Sized> {
+    /// Render this layer using the provided command renderer.
+    fn render(&self, renderer: &mut R);
+
+    /// Clean up any state pushed by render().
+    ///
+    /// This is called after all children have been rendered to restore
+    /// the renderer state (transforms, clips, effects).
+    ///
+    /// The default is a no-op, correct for every layer whose `render`
+    /// pushes nothing: the four clip layers are the ones that override it,
+    /// through `clip_layer_cleanup!` below.
+    fn cleanup(&self, _renderer: &mut R) {}
+}
+
+/// Generate the shared `cleanup` body for the SDF clip layers.
+///
+/// Each clip layer's `render` returns early when it clips nothing, so its
+/// `cleanup` must pop only what was actually pushed — the pairing is the
+/// contract, and one body keeps the two from drifting apart.
+macro_rules! clip_layer_cleanup {
+    () => {
+        fn cleanup(&self, renderer: &mut R) {
+            if self.clips() {
+                renderer.pop_clip();
+            }
+        }
+    };
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Layer {
+    fn render(&self, renderer: &mut R) {
+        match self {
+            // Leaf layers
+            Layer::Canvas(layer) => layer.render(renderer),
+            Layer::Picture(layer) => layer.render(renderer),
+
+            // Clip layers
+            Layer::ClipRect(layer) => layer.render(renderer),
+            Layer::ClipRRect(layer) => layer.render(renderer),
+            Layer::ClipPath(layer) => layer.render(renderer),
+            Layer::ClipSuperellipse(layer) => layer.render(renderer),
+
+            // Transform layers
+            Layer::Offset(layer) => layer.render(renderer),
+            Layer::Transform(layer) => layer.render(renderer),
+
+            // Effect layers
+            Layer::Opacity(layer) => layer.render(renderer),
+            Layer::ColorFilter(layer) => layer.render(renderer),
+            Layer::ImageFilter(layer) => layer.render(renderer),
+            Layer::ShaderMask(layer) => layer.render(renderer),
+            Layer::BackdropFilter(layer) => layer.render(renderer),
+
+            // Leaf layers (external content)
+            Layer::Texture(layer) => layer.render(renderer),
+            Layer::PlatformView(layer) => layer.render(renderer),
+
+            // Linking layers
+            Layer::Leader(layer) => layer.render(renderer),
+            Layer::Follower(layer) => layer.render(renderer),
+
+            // Annotation layers (metadata only, no visual rendering)
+            Layer::AnnotatedRegion(_) => {
+                // AnnotatedRegion is metadata-only, no visual rendering needed
+            }
+
+            // Debug/Performance layers
+            Layer::PerformanceOverlay(layer) => layer.render(renderer),
+        }
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        match self {
+            // Leaf layers - no cleanup needed
+            Layer::Canvas(layer) => layer.cleanup(renderer),
+            Layer::Picture(layer) => layer.cleanup(renderer),
+
+            // Clip layers
+            Layer::ClipRect(layer) => layer.cleanup(renderer),
+            Layer::ClipRRect(layer) => layer.cleanup(renderer),
+            Layer::ClipPath(layer) => layer.cleanup(renderer),
+            Layer::ClipSuperellipse(layer) => layer.cleanup(renderer),
+
+            // Transform layers
+            Layer::Offset(layer) => layer.cleanup(renderer),
+            Layer::Transform(layer) => layer.cleanup(renderer),
+
+            // Effect layers
+            Layer::Opacity(layer) => layer.cleanup(renderer),
+            Layer::ColorFilter(layer) => layer.cleanup(renderer),
+            Layer::ImageFilter(layer) => layer.cleanup(renderer),
+            Layer::ShaderMask(layer) => layer.cleanup(renderer),
+            Layer::BackdropFilter(layer) => layer.cleanup(renderer),
+
+            // Leaf layers (external content)
+            Layer::Texture(layer) => layer.cleanup(renderer),
+            Layer::PlatformView(layer) => layer.cleanup(renderer),
+
+            // Linking layers
+            Layer::Leader(layer) => layer.cleanup(renderer),
+            Layer::Follower(layer) => layer.cleanup(renderer),
+
+            // Annotation layers (metadata only, no cleanup needed)
+            Layer::AnnotatedRegion(_) => {}
+
+            // Debug/Performance layers
+            Layer::PerformanceOverlay(layer) => layer.cleanup(renderer),
+        }
+    }
+}
+
+// ============================================================================
+// LEAF LAYERS
+// ============================================================================
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for CanvasLayer {
+    fn render(&self, renderer: &mut R) {
+        dispatch_commands(self.display_list().commands(), renderer);
+    }
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PictureLayer {
+    fn render(&self, renderer: &mut R) {
+        dispatch_commands(self.picture().commands(), renderer);
+    }
+}
+
+// ============================================================================
+// CLIP LAYERS
+// ============================================================================
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipRectLayer {
+    fn render(&self, renderer: &mut R) {
+        if !self.clips() {
+            return;
+        }
+        let rect = self.clip_rect();
+        renderer.push_clip_rect(&rect, self.clip_behavior());
+    }
+
+    clip_layer_cleanup!();
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipRRectLayer {
+    fn render(&self, renderer: &mut R) {
+        if !self.clips() {
+            return;
+        }
+        let rrect = self.clip_rrect();
+        renderer.push_clip_rrect(rrect, self.clip_behavior());
+    }
+
+    clip_layer_cleanup!();
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ClipPathLayer {
+    fn render(&self, renderer: &mut R) {
+        if !self.clips() {
+            return;
+        }
+        let path = self.clip_path();
+        renderer.push_clip_path(path, self.clip_behavior());
+    }
+
+    clip_layer_cleanup!();
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R>
+    for flui_layer::ClipSuperellipseLayer
+{
+    fn render(&self, renderer: &mut R) {
+        if !self.clips() {
+            return;
+        }
+        // The squircle goes to the shaper of squircles, not through a
+        // tessellated path. `push_clip_path` reached a painter call that
+        // installed nothing, so this layer used to tessellate a shape and hand
+        // it to a discard, leaving its subtree unclipped (issue #921). That
+        // call now clips to the path's bounding box (issue #934) — which for a
+        // squircle is its outer rect, still not the shape, so the routing
+        // below is what earns the corners.
+        renderer.push_clip_rsuperellipse(self.clip_superellipse(), self.clip_behavior());
+    }
+
+    clip_layer_cleanup!();
+}
+
+// ============================================================================
+// TRANSFORM LAYERS
+// ============================================================================
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for OffsetLayer {
+    fn render(&self, renderer: &mut R) {
+        if self.is_zero() {
+            return;
+        }
+        renderer.push_offset(self.offset());
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if !self.is_zero() {
+            renderer.pop_transform();
+        }
+    }
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for TransformLayer {
+    fn render(&self, renderer: &mut R) {
+        if self.is_identity() {
+            return;
+        }
+        renderer.push_transform(self.transform());
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if !self.is_identity() {
+            renderer.pop_transform();
+        }
+    }
+}
+
+// ============================================================================
+// EFFECT LAYERS
+// ============================================================================
+
+/// Whether an opacity layer's composite is the identity — opaque, SrcOver —
+/// so no opacity group is pushed. An opaque advanced-blend layer MUST still
+/// be pushed so the compositor applies the dst-read blend to its children.
+fn opacity_is_identity(layer: &OpacityLayer) -> bool {
+    layer.is_opaque() && !layer.blend().is_advanced()
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for OpacityLayer {
+    /// The layer's offset applies to its children whatever the alpha, and
+    /// alpha 0 is a real opacity group, not a skip — the walk still descends,
+    /// so the children composite at zero alpha. That keeps the pushed
+    /// translation equal to `Layer::local_translation`, which the follower
+    /// resolver sums.
+    fn render(&self, renderer: &mut R) {
+        if self.has_offset() {
+            renderer.push_offset(self.offset());
+        }
+        if !opacity_is_identity(self) {
+            renderer.push_opacity_blend(self.alpha(), self.blend());
+        }
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        // Pop in reverse order: first opacity, then offset.
+        if !opacity_is_identity(self) {
+            renderer.pop_opacity();
+        }
+        if self.has_offset() {
+            renderer.pop_transform();
+        }
+    }
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ColorFilterLayer {
+    fn render(&self, renderer: &mut R) {
+        if self.is_identity() {
+            return;
+        }
+        // `color_filter()` returns `ColorFilter` by value (Copy); take a reference
+        // to match the `&ColorFilter` trait parameter.
+        let filter = self.color_filter();
+        renderer.push_color_filter(&filter);
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if !self.is_identity() {
+            renderer.pop_color_filter();
+        }
+    }
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ImageFilterLayer {
+    fn render(&self, renderer: &mut R) {
+        if self.has_offset() {
+            renderer.push_offset(self.offset());
+        }
+        renderer.push_image_filter(self.filter());
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        // Pop in reverse order: first filter, then offset
+        renderer.pop_image_filter();
+        if self.has_offset() {
+            renderer.pop_transform();
+        }
+    }
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ShaderMaskLayer {
+    fn render(&self, renderer: &mut R) {
+        // Create a compositing layer bounded to the mask area.
+        // Children will be rendered into this layer, then composited
+        // with the shader mask applied during restore.
+        let paint = flui_painting::Paint::default();
+        renderer.save_layer(
+            Some(self.bounds()),
+            &paint,
+            &flui_types::geometry::Matrix4::IDENTITY,
+        );
+        // Clip children to mask bounds so content outside is discarded
+        renderer.push_clip_rect(&self.bounds(), flui_types::painting::Clip::AntiAlias);
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        // Pop in reverse order: first clip, then compositing layer
+        renderer.pop_clip();
+        renderer.restore_layer(&flui_types::geometry::Matrix4::IDENTITY);
+    }
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for BackdropFilterLayer {
+    fn render(&self, _renderer: &mut R) {
+        // Backdrop blur is handled at the Renderer level in render_layer_recursive,
+        // which has access to the surface texture for mid-frame flush + copy + blur.
+        // This LayerRender impl is a no-op; the Renderer intercepts Layer::BackdropFilter
+        // before calling render()/cleanup().
+    }
+
+    fn cleanup(&self, _renderer: &mut R) {
+        // No-op — see render() comment above.
+    }
+}
+
+// ============================================================================
+// EXTERNAL CONTENT LAYERS
+// ============================================================================
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for TextureLayer {
+    fn render(&self, renderer: &mut R) {
+        if self.is_invisible() {
+            return;
+        }
+        renderer.render_texture(
+            self.texture_id(),
+            self.bounds(),
+            None,
+            self.filter_quality(),
+            self.opacity(),
+            &flui_types::geometry::Matrix4::IDENTITY,
+        );
+    }
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PlatformViewLayer {
+    fn render(&self, _renderer: &mut R) {
+        // Platform views are composited by the platform embedder
+    }
+}
+
+// ============================================================================
+// LINKING LAYERS
+// ============================================================================
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for LeaderLayer {
+    fn render(&self, renderer: &mut R) {
+        if !self.offset().is_zero() {
+            renderer.push_offset(self.offset());
+        }
+    }
+
+    fn cleanup(&self, renderer: &mut R) {
+        if !self.offset().is_zero() {
+            renderer.pop_transform();
+        }
+    }
+}
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for FollowerLayer {
+    fn render(&self, _renderer: &mut R) {
+        // Transform is calculated by the compositor
+    }
+
+    fn cleanup(&self, _renderer: &mut R) {
+        // No state to clean up
+    }
+}
+
+// ============================================================================
+// PERFORMANCE OVERLAY LAYER
+// ============================================================================
+
+impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for PerformanceOverlayLayer {
+    fn render(&self, renderer: &mut R) {
+        renderer.add_performance_overlay(
+            self.options(),
+            self.bounds(),
+            self.fps(),
+            self.frame_time_ms(),
+            self.total_frames(),
+            self.diagnostic_line(),
+        );
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flui_layer::{
+        BackdropFilterLayer, ClipRectLayer, ColorFilterLayer, ImageFilterLayer, OffsetLayer,
+        OpacityLayer, ShaderMaskLayer, TransformLayer,
+    };
+    use flui_painting::{BlendMode, Paint, PointMode};
+    use flui_types::{
+        geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size, px},
+        painting::{Clip, FilterQuality, Image, ImageFilter, Path, TextureId},
+        styling::Color,
+    };
+    use std::sync::Arc;
+
+    // ========================================================================
+    // MockRenderer — records push/pop/save/restore calls
+    // ========================================================================
+
+    struct MockRenderer {
+        calls: Vec<String>,
+        diagnostic_lines: Vec<Option<String>>,
+        /// The translation every `push_offset`/`push_transform` applied, in
+        /// order, so a test can compare the walk's pushes with
+        /// `Layer::local_translation`.
+        pushed_translations: Vec<Offset<Pixels>>,
+    }
+
+    impl MockRenderer {
+        fn new() -> Self {
+            Self {
+                calls: Vec::new(),
+                diagnostic_lines: Vec::new(),
+                pushed_translations: Vec::new(),
+            }
+        }
+    }
+
+    impl CommandRenderer for MockRenderer {
+        // ===== Primitive Shapes (no-ops) =====
+        fn render_rect(&mut self, _rect: Rect<Pixels>, _paint: &Paint, _transform: &Matrix4) {}
+        fn render_rrect(&mut self, _rrect: RRect, _paint: &Paint, _transform: &Matrix4) {}
+        fn render_circle(
+            &mut self,
+            _center: Point<Pixels>,
+            _radius: f32,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_oval(&mut self, _rect: Rect<Pixels>, _paint: &Paint, _transform: &Matrix4) {}
+        fn render_line(
+            &mut self,
+            _p1: Point<Pixels>,
+            _p2: Point<Pixels>,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_path(&mut self, _path: &Path, _paint: &Paint, _transform: &Matrix4) {}
+
+        // ===== Advanced Shapes (no-ops) =====
+        fn render_arc(
+            &mut self,
+            _rect: Rect<Pixels>,
+            _start_angle: f32,
+            _sweep_angle: f32,
+            _use_center: bool,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_drrect(
+            &mut self,
+            _outer: RRect,
+            _inner: RRect,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_points(
+            &mut self,
+            _mode: PointMode,
+            _points: &[Point<Pixels>],
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Text (no-ops) =====
+        fn render_paragraph(
+            &mut self,
+            _layout: &Arc<flui_painting::TextLayout>,
+            _offset: Offset<Pixels>,
+            _color: Color,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Images (no-ops) =====
+        fn render_image(
+            &mut self,
+            _image: &Image,
+            _dst: Rect<Pixels>,
+            _paint: Option<&Paint>,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_atlas(
+            &mut self,
+            _image: &Image,
+            _sprites: &[Rect<Pixels>],
+            _transforms: &[Matrix4],
+            _colors: Option<&[Color]>,
+            _blend_mode: BlendMode,
+            _paint: Option<&Paint>,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_image_repeat(
+            &mut self,
+            _image: &Image,
+            _dst: Rect<Pixels>,
+            _repeat: flui_types::painting::image::ImageRepeat,
+            _paint: Option<&Paint>,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_image_nine_slice(
+            &mut self,
+            _image: &Image,
+            _center_slice: Rect<Pixels>,
+            _dst: Rect<Pixels>,
+            _paint: Option<&Paint>,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_image_filtered(
+            &mut self,
+            _image: &Image,
+            _dst: Rect<Pixels>,
+            _filter: flui_types::painting::image::ColorFilter,
+            _paint: Option<&Paint>,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn render_texture(
+            &mut self,
+            _texture_id: TextureId,
+            _dst: Rect<Pixels>,
+            _src: Option<Rect<Pixels>>,
+            _filter_quality: FilterQuality,
+            _opacity: f32,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Effects (no-ops) =====
+        fn render_shadow(
+            &mut self,
+            _path: &Path,
+            _color: Color,
+            _elevation: f32,
+            _transform: &Matrix4,
+        ) {
+        }
+        // ===== Gradients (no-ops) =====
+        fn render_color(&mut self, _color: Color, _blend_mode: BlendMode, _transform: &Matrix4) {}
+        fn render_paint(&mut self, _paint: &Paint, _transform: &Matrix4) {}
+        // ===== Custom Geometry (no-op) =====
+        fn render_vertices(
+            &mut self,
+            _vertices: &[Point<Pixels>],
+            _colors: Option<&[Color]>,
+            _tex_coords: Option<&[Point<Pixels>]>,
+            _indices: &[u16],
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Clipping (no-ops) =====
+        fn clip_rect(
+            &mut self,
+            _rect: Rect<Pixels>,
+            _clip_op: flui_types::painting::ClipOp,
+            _clip_behavior: flui_types::painting::Clip,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn clip_rrect(
+            &mut self,
+            _rrect: RRect,
+            _clip_op: flui_types::painting::ClipOp,
+            _clip_behavior: flui_types::painting::Clip,
+            _transform: &Matrix4,
+        ) {
+        }
+        fn clip_path(
+            &mut self,
+            _path: &Path,
+            _clip_op: flui_types::painting::ClipOp,
+            _clip_behavior: flui_types::painting::Clip,
+            _transform: &Matrix4,
+        ) {
+        }
+
+        // ===== Layer Operations (recorded) =====
+        fn save_layer(
+            &mut self,
+            _bounds: Option<Rect<Pixels>>,
+            _paint: &Paint,
+            _transform: &Matrix4,
+        ) {
+            self.calls.push("save_layer".to_string());
+        }
+        fn restore_layer(&mut self, _transform: &Matrix4) {
+            self.calls.push("restore_layer".to_string());
+        }
+
+        fn save_state(&mut self) {
+            self.calls.push("save_state".to_string());
+        }
+
+        fn restore_state(&mut self) {
+            self.calls.push("restore_state".to_string());
+        }
+
+        // The push/pop methods live in `impl LayerStateStack` below, not here.
+
+        // ===== Performance Overlay (recorded) =====
+        fn add_performance_overlay(
+            &mut self,
+            _options: flui_layer::PerformanceOverlayOption,
+            _bounds: Rect<Pixels>,
+            _fps: f32,
+            _frame_time_ms: f32,
+            _total_frames: u64,
+            diagnostic_line: Option<&str>,
+        ) {
+            self.calls.push("add_performance_overlay".to_string());
+            self.diagnostic_lines
+                .push(diagnostic_line.map(str::to_owned));
+        }
+    }
+
+    // The layer-tree state-stack methods are implemented on their own
+    // dedicated `LayerStateStack` trait rather than on `CommandRenderer`.
+    // MockRenderer records each push/pop as a string for the ordering
+    // assertions in the test suite.
+    impl LayerStateStack for MockRenderer {
+        fn push_clip_rect(&mut self, _rect: &Rect<Pixels>, _clip_behavior: Clip) {
+            self.calls.push("push_clip_rect".to_string());
+        }
+        fn push_clip_rrect(&mut self, _rrect: &RRect, _clip_behavior: Clip) {
+            self.calls.push("push_clip_rrect".to_string());
+        }
+        // Recorded under its own name, so the routing assertion below can
+        // tell the squircle call from the rounded-rectangle one it must not
+        // reach. The trait requires the method, so a mock cannot silently
+        // report the wrong operation by omitting it.
+        fn push_clip_rsuperellipse(
+            &mut self,
+            _rse: &flui_types::geometry::RSuperellipse,
+            _clip_behavior: Clip,
+        ) {
+            self.calls.push("push_clip_rsuperellipse".to_string());
+        }
+        fn push_clip_path(&mut self, _path: &Path, _clip_behavior: Clip) {
+            self.calls.push("push_clip_path".to_string());
+        }
+        fn pop_clip(&mut self) {
+            self.calls.push("pop_clip".to_string());
+        }
+        fn push_offset(&mut self, offset: Offset<Pixels>) {
+            self.calls.push("push_offset".to_string());
+            self.pushed_translations.push(offset);
+        }
+        fn push_transform(&mut self, transform: &Matrix4) {
+            self.calls.push("push_transform".to_string());
+            let (dx, dy, _) = transform.translation_component();
+            self.pushed_translations
+                .push(Offset::new(Pixels::new(dx), Pixels::new(dy)));
+        }
+        fn pop_transform(&mut self) {
+            self.calls.push("pop_transform".to_string());
+        }
+        fn push_opacity(&mut self, _alpha: f32) {
+            self.calls.push("push_opacity".to_string());
+        }
+        fn pop_opacity(&mut self) {
+            self.calls.push("pop_opacity".to_string());
+        }
+        fn push_color_filter(&mut self, _filter: &flui_types::painting::ColorFilter) {
+            self.calls.push("push_color_filter".to_string());
+        }
+        fn pop_color_filter(&mut self) {
+            self.calls.push("pop_color_filter".to_string());
+        }
+        fn push_image_filter(&mut self, _filter: &flui_types::painting::effects::ImageFilter) {
+            self.calls.push("push_image_filter".to_string());
+        }
+        fn pop_image_filter(&mut self) {
+            self.calls.push("pop_image_filter".to_string());
+        }
+    }
+
+    // ========================================================================
+    // PerformanceOverlayLayer tests
+    // ========================================================================
+
+    #[test]
+    fn performance_overlay_forwards_the_runtime_diagnostic_line() {
+        let mut renderer = MockRenderer::new();
+        let mut layer =
+            PerformanceOverlayLayer::all_stats(PerformanceOverlayLayer::default_bounds());
+        layer.set_diagnostic_line(Some("deferred=2 dropped=1".to_owned()));
+
+        layer.render(&mut renderer);
+
+        assert_eq!(renderer.calls, vec!["add_performance_overlay"]);
+        assert_eq!(
+            renderer.diagnostic_lines,
+            vec![Some("deferred=2 dropped=1".to_owned())]
+        );
+    }
+
+    // ========================================================================
+    // OffsetLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_offset_layer_pushes_and_pops_transform() {
+        let mut renderer = MockRenderer::new();
+        let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset", "pop_transform"]);
+    }
+
+    #[test]
+    fn test_offset_layer_zero_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let layer = OffsetLayer::zero();
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "zero offset should not push");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "zero offset should not pop");
+    }
+
+    // ========================================================================
+    // TransformLayer tests
+    // ========================================================================
+
+    /// The follower resolver sums `Layer::local_translation` along ancestor
+    /// chains on the premise that it equals what these impls push. Pin the
+    /// premise for every variant, so a variant that gains or loses an offset
+    /// breaks here rather than as a misplaced follower.
+    #[test]
+    fn every_variant_pushes_exactly_its_local_translation() {
+        use flui_layer::{LayerLink, LeaderLayer};
+
+        let offset = Offset::new(px(7.0), px(-3.0));
+        let layers: Vec<Layer> = vec![
+            OffsetLayer::new(offset).into(),
+            TransformLayer::translation(7.0, -3.0).into(),
+            OpacityLayer::with_offset(0.5, offset).into(),
+            OpacityLayer::with_offset(1.0, offset).into(),
+            OpacityLayer::with_offset(0.0, offset).into(),
+            ImageFilterLayer::with_offset(ImageFilter::blur(2.0), offset).into(),
+            LeaderLayer::with_offset(LayerLink::new(), Size::ZERO, offset).into(),
+            OffsetLayer::zero().into(),
+            OpacityLayer::new(0.5).into(),
+            ClipRectLayer::new(
+                Rect::from_xywh(px(0.0), px(0.0), px(1.0), px(1.0)),
+                Clip::HardEdge,
+            )
+            .into(),
+            ColorFilterLayer::new(flui_types::painting::ColorFilter::grayscale()).into(),
+        ];
+        for layer in &layers {
+            let mut renderer = MockRenderer::new();
+            layer.render(&mut renderer);
+            let pushed = renderer
+                .pushed_translations
+                .iter()
+                .fold(Offset::ZERO, |sum, translation| sum + *translation);
+            assert_eq!(
+                pushed,
+                layer.local_translation(),
+                "{} pushed {pushed:?} but declares {:?}",
+                layer.kind_name(),
+                layer.local_translation()
+            );
+        }
+    }
+
+    #[test]
+    fn test_transform_layer_pushes_and_pops() {
+        let mut renderer = MockRenderer::new();
+        let layer = TransformLayer::translation(10.0, 20.0);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_transform"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_transform", "pop_transform"]);
+    }
+
+    #[test]
+    fn test_transform_layer_identity_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let layer = TransformLayer::identity();
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "identity should not push");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "identity should not pop");
+    }
+
+    // ========================================================================
+    // OpacityLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_opacity_layer_pushes_and_pops() {
+        let mut renderer = MockRenderer::new();
+        let layer = OpacityLayer::new(0.5);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_opacity"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_opacity", "pop_opacity"]);
+    }
+
+    #[test]
+    fn test_opacity_layer_with_offset_pushes_offset_then_opacity() {
+        let mut renderer = MockRenderer::new();
+        let layer = OpacityLayer::with_offset(0.5, Offset::new(px(10.0), px(20.0)));
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset", "push_opacity"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(
+            renderer.calls,
+            vec![
+                "push_offset",
+                "push_opacity",
+                "pop_opacity",
+                "pop_transform"
+            ]
+        );
+    }
+
+    /// Alpha 0 is an opacity group at zero — the walk still descends, so
+    /// skipping the push would draw the children fully visible.
+    #[test]
+    fn test_opacity_layer_invisible_pushes_a_zero_group() {
+        let mut renderer = MockRenderer::new();
+        let layer = OpacityLayer::transparent();
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_opacity"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_opacity", "pop_opacity"]);
+    }
+
+    #[test]
+    fn test_opacity_layer_opaque_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let layer = OpacityLayer::opaque();
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "opaque should skip render");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "opaque should skip cleanup");
+    }
+
+    /// The offset applies whatever the alpha: it is what
+    /// `Layer::local_translation` reports.
+    #[test]
+    fn test_opacity_layer_opaque_with_offset_pushes_only_the_offset() {
+        let mut renderer = MockRenderer::new();
+        let layer = OpacityLayer::with_offset(1.0, Offset::new(px(10.0), px(20.0)));
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset", "pop_transform"]);
+    }
+
+    // ========================================================================
+    // ClipRectLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_clip_rect_layer_pushes_and_pops() {
+        let mut renderer = MockRenderer::new();
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let layer = ClipRectLayer::new(rect, Clip::HardEdge);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_clip_rect"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_clip_rect", "pop_clip"]);
+    }
+
+    /// The squircle layer reaches the squircle call, not the path call that
+    /// discards its argument (issue #921).
+    ///
+    /// The GPU readback in `clip_layer_readback_tests` is the oracle for what
+    /// the clip *does*; this is the CPU-only pin on where it goes, so the
+    /// routing is gated on every run rather than only where an adapter exists.
+    #[test]
+    fn clip_superellipse_layer_routes_to_the_squircle_call() {
+        let mut renderer = MockRenderer::new();
+        let squircle = flui_types::geometry::RSuperellipse::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(24.0),
+        );
+        let layer = flui_layer::ClipSuperellipseLayer::new(squircle, Clip::AntiAlias);
+
+        layer.render(&mut renderer);
+        assert_eq!(
+            renderer.calls,
+            vec!["push_clip_rsuperellipse"],
+            "the layer must not reach `push_clip_path`, which clips to a \
+             path's bounding box and would square off the corners"
+        );
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_clip_rsuperellipse", "pop_clip"]);
+    }
+
+    #[test]
+    fn test_clip_rect_layer_no_clip_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let layer = ClipRectLayer::new(rect, Clip::None);
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not push");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not pop");
+    }
+
+    /// `Clip::None` is a no-op at the engine for the rounded-rect shape too —
+    /// same `clips()` gate `ClipRectLayer` reads, on `ClipRRectLayer`. This is
+    /// what backs the claim that no `RenderClip` setter needs to be
+    /// structural at `Clip::None`: the layer keeps existing, the engine just
+    /// never pushes it.
+    #[test]
+    fn test_clip_rrect_layer_no_clip_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let rrect = RRect::from_rect_circular(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            px(8.0),
+        );
+        let layer = ClipRRectLayer::new(rrect, Clip::None);
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not push");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not pop");
+    }
+
+    /// `Clip::None` is a no-op at the engine for the path shape too — same
+    /// `clips()` gate, on `ClipPathLayer`.
+    #[test]
+    fn test_clip_path_layer_no_clip_is_noop() {
+        let mut renderer = MockRenderer::new();
+        let mut path = Path::new();
+        path.add_rect(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let layer = ClipPathLayer::new(path, Clip::None);
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not push");
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty(), "Clip::None should not pop");
+    }
+
+    // ========================================================================
+    // ShaderMaskLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_shader_mask_layer_saves_and_clips() {
+        use flui_types::{
+            painting::BlendMode as TBlendMode, painting::Shader as TShader, styling::Color,
+        };
+
+        let mut renderer = MockRenderer::new();
+        let shader = TShader::solid(Color::WHITE);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let layer = ShaderMaskLayer::new(shader, TBlendMode::SrcOver, bounds);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["save_layer", "push_clip_rect"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(
+            renderer.calls,
+            vec!["save_layer", "push_clip_rect", "pop_clip", "restore_layer"]
+        );
+    }
+
+    // ========================================================================
+    // BackdropFilterLayer tests
+    // ========================================================================
+
+    #[test]
+    fn test_backdrop_filter_layer_is_noop() {
+        // BackdropFilterLayer rendering is handled at the Renderer level
+        // (render_layer_recursive intercepts it for mid-frame flush + blur).
+        // The LayerRender impl is intentionally a no-op.
+        let mut renderer = MockRenderer::new();
+        let filter = ImageFilter::blur(5.0);
+        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(200.0), px(150.0));
+        let layer =
+            BackdropFilterLayer::new(filter, flui_types::painting::BlendMode::SrcOver, bounds);
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, Vec::<String>::new());
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, Vec::<String>::new());
+    }
+
+    // ========================================================================
+    // Layer enum dispatch tests
+    // ========================================================================
+
+    #[test]
+    fn test_layer_enum_dispatches_to_offset() {
+        let mut renderer = MockRenderer::new();
+        let layer = Layer::Offset(OffsetLayer::new(Offset::new(px(5.0), px(10.0))));
+
+        layer.render(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset"]);
+
+        layer.cleanup(&mut renderer);
+        assert_eq!(renderer.calls, vec!["push_offset", "pop_transform"]);
+    }
+
+    #[test]
+    fn test_layer_enum_annotated_region_is_noop() {
+        use std::sync::Arc;
+        let mut renderer = MockRenderer::new();
+        let layer = Layer::AnnotatedRegion(flui_layer::AnnotatedRegionLayer::new(
+            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Arc::new("test annotation".to_string()),
+        ));
+
+        layer.render(&mut renderer);
+        assert!(renderer.calls.is_empty());
+
+        layer.cleanup(&mut renderer);
+        assert!(renderer.calls.is_empty());
+    }
+}

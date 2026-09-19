@@ -123,6 +123,7 @@ use flui_rendering::{
         FlexParentData, MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData,
         StackParentData, TableCellParentData,
     },
+    pipeline::Layer,
     semantics::SemanticsProperties,
     testing::{
         BoxQueryRun, DrawKind, ParentDataSeed, Probe, RenderTester, TreeNode,
@@ -1368,9 +1369,9 @@ fn harness_editable_lays_out_and_paints_collapsed_caret() {
 
     let commands = run.display_commands();
     assert!(
-        commands.iter().any(
-            |command| command.line.contains("DrawTextSpan") && command.line.contains("edit me")
-        ),
+        commands
+            .iter()
+            .any(|command| command.line.contains("Paragraph") && command.line.contains("edit me")),
         "RenderEditable must paint its text span; commands: {commands:#?}"
     );
     assert!(
@@ -1451,7 +1452,7 @@ fn harness_editable_hidden_caret_paints_no_caret_rect() {
     assert!(
         commands
             .iter()
-            .any(|command| command.line.contains("DrawTextSpan")),
+            .any(|command| command.line.contains("Paragraph")),
         "the text itself must still paint; commands: {commands:#?}"
     );
     assert!(
@@ -1489,7 +1490,7 @@ fn harness_editable_paints_the_selection_behind_the_glyphs() {
         .unwrap_or_else(|| panic!("a selection must paint a rect; commands: {commands:#?}"));
     let glyphs = commands
         .iter()
-        .position(|command| command.line.contains("DrawTextSpan"))
+        .position(|command| command.line.contains("Paragraph"))
         .unwrap_or_else(|| panic!("the text must paint; commands: {commands:#?}"));
 
     assert!(
@@ -1598,7 +1599,7 @@ fn harness_editable_hit_tests_self() {
 /// Red-check: write this test before `RenderEditable::paint`'s underline
 /// branch exists (or with `composing_range` never wired in) — it fails
 /// because no `DrawRect` command matches the expected rect at all (only the
-/// `DrawTextSpan` command is present).
+/// `Paragraph` command is present).
 #[test]
 fn harness_editable_composing_underline_paints_at_the_exact_multibyte_box() {
     // "abc" (3 ASCII bytes) + "你好" (two 3-byte CJK chars = 6 bytes) + "def".
@@ -6074,14 +6075,17 @@ fn harness_shader_mask_layer_field_round_trip() {
     .with_constraints(loose(200.0))
     .run_frame();
 
-    let (_, node) = run
+    let mask = run
         .layer_tree()
         .expect("frame must have painted a layer tree")
         .iter()
-        .find(|(_, n)| n.layer().is_shader_mask())
+        .find_map(|(_, n)| match n.layer() {
+            Layer::ShaderMask(mask) => Some(mask),
+            _ => None,
+        })
         .expect("ShaderMask layer must be present");
     assert_eq!(
-        node.layer().as_shader_mask().unwrap().blend_mode(),
+        mask.blend_mode(),
         BlendMode::Multiply,
         "blend_mode must reach the composed ShaderMaskLayer unchanged"
     );
@@ -6188,14 +6192,17 @@ fn harness_backdrop_filter_layer_field_round_trip() {
     .with_constraints(loose(200.0))
     .run_frame();
 
-    let (_, node) = run
+    let backdrop = run
         .layer_tree()
         .expect("frame must have painted a layer tree")
         .iter()
-        .find(|(_, n)| n.layer().is_backdrop_filter())
+        .find_map(|(_, n)| match n.layer() {
+            Layer::BackdropFilter(filter) => Some(filter),
+            _ => None,
+        })
         .expect("BackdropFilter layer must be present");
     assert_eq!(
-        node.layer().as_backdrop_filter().unwrap().blend_mode(),
+        backdrop.blend_mode(),
         BlendMode::Screen,
         "blend_mode must reach the composed BackdropFilterLayer unchanged"
     );
@@ -6288,7 +6295,7 @@ fn harness_leader_layer_field_round_trip() {
         .layer_tree()
         .expect("frame must have painted a layer tree")
         .iter()
-        .find(|(_, n)| n.layer().is_leader())
+        .find(|(_, n)| n.layer().as_leader().is_some())
         .expect("Leader layer must be present");
     let leader = node.layer().as_leader().unwrap();
     assert_eq!(
@@ -6399,7 +6406,7 @@ fn harness_follower_layer_field_round_trip() {
         .layer_tree()
         .expect("frame must have painted a layer tree")
         .iter()
-        .find(|(_, n)| n.layer().is_follower())
+        .find(|(_, n)| n.layer().as_follower().is_some())
         .expect("Follower layer must be present");
     let follower = node.layer().as_follower().unwrap();
     assert_eq!(follower.link(), link);
@@ -6680,7 +6687,7 @@ fn harness_physical_model_elevation_casts_shadow_before_fill_and_child() {
 //
 // `PaintCx::with_clip_rrect`/`with_clip_path` push a genuine `Layer::ClipRRect`/
 // `ClipPath` tree node (`flui-rendering/src/pipeline/owner/paint.rs::clip_layer`),
-// not a `DrawCommand::ClipRRect` embedded in a `Picture`'s display list — so
+// not a `DrawOp::ClipRRect` embedded in a `Picture`'s display list — so
 // `display_commands()` (which only extracts commands from `Picture` layers)
 // never surfaces a `DrawKind::Clip` entry for this path. The fork is instead
 // verified by (a) `run.structure()` proving a real clip layer was pushed
@@ -6703,6 +6710,15 @@ fn harness_physical_model_fills_before_clip_when_not_save_layer() {
     );
 
     let commands = run.display_commands();
+    assert_eq!(
+        commands
+            .iter()
+            .map(|command| command.line.as_str())
+            .filter(|line| matches!(*line, "Save" | "Restore"))
+            .collect::<Vec<_>>(),
+        ["Save", "Restore", "Save", "Restore"],
+        "the parent fill and clipped child must each retain their paint scope",
+    );
     assert_eq!(
         commands
             .iter()
@@ -6737,6 +6753,15 @@ fn harness_physical_model_fills_inside_clip_when_save_layer() {
     );
 
     let commands = run.display_commands();
+    assert_eq!(
+        commands
+            .iter()
+            .map(|command| command.line.as_str())
+            .filter(|line| matches!(*line, "Save" | "Restore"))
+            .collect::<Vec<_>>(),
+        ["Save", "Restore", "Save", "Restore"],
+        "the clipped fill and child must each retain their paint scope",
+    );
     assert_eq!(
         commands
             .iter()
@@ -12869,6 +12894,21 @@ fn harness_table_paints_row_decoration_then_children_then_border_in_order() {
     .run_frame();
 
     let commands = run.display_commands();
+    assert_eq!(
+        commands
+            .iter()
+            .map(|command| command.line.as_str())
+            .filter(|line| matches!(*line, "Save" | "Restore"))
+            .collect::<Vec<_>>(),
+        [
+            "Save", "Restore", "Save", "Restore", "Save", "Restore", "Save", "Restore"
+        ],
+        "decoration, each child, and border must retain separate paint scopes",
+    );
+    let commands: Vec<_> = commands
+        .iter()
+        .filter(|command| !matches!(command.line.as_str(), "Save" | "Restore"))
+        .collect();
     let kinds: Vec<_> = commands.iter().map(|c| c.kind).collect();
     assert_eq!(
         kinds,

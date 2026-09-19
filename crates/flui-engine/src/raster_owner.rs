@@ -330,16 +330,15 @@ impl Drop for InFlightTicket {
 /// non-panic path — this guard only extends that guarantee to the unwind
 /// path, never duplicates it there.
 struct WakeGuard {
-    /// An owned `Arc` clone, not a borrow of `&self.mailbox.accounting`:
+    /// An owned `Arc` clone, not a borrow of `&self.mailbox`:
     /// `RasterOwner::pump` calls `&mut self` methods (`handle_render_failure`)
-    /// while this guard is alive, which an `&InFlightAccounting` borrow of
-    /// `self` would conflict with. Cloning is a cheap atomic increment.
-    accounting: Arc<InFlightAccounting>,
-    /// The mailbox and epoch this guard publishes a `presented: false`
-    /// completion through when it retires a frame during an unwind. `None`
-    /// exactly when the guard is unarmed (a resize-only pump has no frame and
-    /// so has no completion to publish).
-    unwind_completion: Option<(Arc<RasterMailbox>, FrameEpoch)>,
+    /// while this guard is alive, which a borrow of `self` would conflict
+    /// with. Cloning is a cheap atomic increment.
+    mailbox: Arc<RasterMailbox>,
+    /// The frame being pumped, owned by the guard so that on an unwind its
+    /// ticket retires AFTER the completion is published (see `Drop`). `None`
+    /// on a resize-only pump, which has no frame and no completion to publish.
+    frame: Option<PendingFrame>,
     armed: bool,
 }
 
@@ -348,21 +347,22 @@ impl Drop for WakeGuard {
         if !self.armed {
             return;
         }
-        // Publish BEFORE waking. `notify_retired` drops `in_flight` to zero
-        // and fires the wake hook, and the woken consumer reads
-        // `last_completion` to decide its next move. Without this write it
-        // would see the PREVIOUS frame's completion — `presented: true` for an
-        // older epoch — while `in_flight()` says nothing is outstanding, which
-        // contradicts the latest-completion contract and can let a retry skip
-        // the no-present fallback pace. The panic itself stays fatal; this only
-        // keeps the published state honest for whoever observes it first.
-        if let Some((mailbox, epoch)) = &self.unwind_completion {
-            mailbox.set_last_completion(RasterCompletion {
-                epoch: *epoch,
+        // Publish, THEN retire the ticket, THEN wake — the order
+        // `InFlightAccounting::count`'s contract names: a consumer that sees
+        // the count drop must be able to see everything the retire did
+        // before the decrement. If the ticket dropped first (a local declared
+        // after the guard would), a polling consumer could read
+        // `in_flight() == 0` beside the PREVIOUS frame's `presented: true`.
+        // The panic itself stays fatal; this only keeps the published state
+        // honest for whoever observes it first.
+        if let Some(frame) = self.frame.take() {
+            self.mailbox.set_last_completion(RasterCompletion {
+                epoch: frame.snapshot.stamp.epoch,
                 presented: false,
             });
+            drop(frame);
         }
-        self.accounting.notify_retired();
+        self.mailbox.accounting.notify_retired();
     }
 }
 
@@ -755,6 +755,12 @@ impl RasterHandle {
             if state.shutting_down {
                 return Err(RasterSubmitError::ShuttingDown);
             }
+            // `Acquire`/`Release` on `owner_alive` are the defensive pair for
+            // a future lock-free reader; today the happens-before is carried by
+            // `state`'s mutex (this load is under it, the one `store(false)` in
+            // `Drop` precedes `Drop`'s own `state.lock()`), so a submit that
+            // reads a stale `true` inserts a frame the drop then retires —
+            // benign by design.
             if !self.mailbox.owner_alive.load(Ordering::Acquire) {
                 return Err(RasterSubmitError::OwnerGone);
             }
@@ -870,10 +876,17 @@ impl RasterHandle {
     /// subject to, never a false accept or a false reject caused by this
     /// method's own bookkeeping.
     ///
-    /// Infallible and best-effort: a resize against a shut-down or dropped
-    /// owner still mints and returns a generation (nothing downstream will
-    /// ever apply it) — there is nothing unsafe about minting one extra
-    /// generation nobody consumes.
+    /// Best-effort against a shut-down or dropped owner: it still mints and
+    /// returns a generation (nothing downstream will ever apply it) — there
+    /// is nothing unsafe about minting one extra generation nobody consumes.
+    ///
+    /// A zero-sized request (`width == 0 || height == 0`, what a minimized
+    /// window reports) returns `None` and mints nothing: the backend cannot
+    /// configure a zero-sized surface and `RasterBackend::resize` refuses
+    /// it, so a generation minted for it would be adopted by the pump as
+    /// "applied" while the surface stayed at the old configuration. The
+    /// caller keeps stamping with the generation it already holds; the next
+    /// non-zero resize mints the next one.
     ///
     /// # Thread safety of concurrent callers
     ///
@@ -892,14 +905,19 @@ impl RasterHandle {
     /// doc's own "not carried into the pending command" section above)
     /// deleted the second critical section entirely, and with it that
     /// hazard — this method now touches exactly one lock, once.
-    pub fn resize(&self, width: u32, height: u32) -> SurfaceGeneration {
+    #[must_use = "the minted generation is what the next frame must be stamped with"]
+    pub fn resize(&self, width: u32, height: u32) -> Option<SurfaceGeneration> {
+        if width == 0 || height == 0 {
+            tracing::debug!(width, height, "raster handle: zero-sized resize ignored");
+            return None;
+        }
         let mut state = self.mailbox.state.lock();
         state.current_surface_generation = state.current_surface_generation.next();
         let generation = state.current_surface_generation;
         state.pending_resize = Some((width, height));
         drop(state);
         self.mailbox.condvar.notify_one();
-        generation
+        Some(generation)
     }
 
     /// Coalesces a GPU-resource generation binding into the mailbox: any
@@ -1253,23 +1271,19 @@ impl<B: RasterBackend> RasterOwner<B> {
         // retire that never happened (see `InFlightAccounting::wake`'s own
         // "fires unconditionally... every time a frame retires" contract —
         // "unconditionally" is scoped to real retires, not to every pump
-        // call). `frame` is re-bound (shadowed) on the next line, declared
-        // AFTER `wake_guard`'s own `let`, so Rust's reverse-declaration-
-        // order drop retires the ticket (if any) before `wake_guard`'s
-        // `Drop` can fire the wake on ANY unwind past this point —
-        // including one from `resize` immediately below, not only one from
-        // `render_scene` much further down. `wake_guard`'s own `Drop`
-        // reads `self.armed`, which stays `false` for the rest of this
-        // call when `frame` was `None`, so a resize-only pump with no
-        // pending frame can never spuriously wake even if `resize` panics.
+        // call). The frame is OWNED by the guard from here on, so on ANY
+        // unwind past this point — including one from `resize` immediately
+        // below, not only one from `render_scene` much further down — the
+        // guard's `Drop` publishes the completion, retires the ticket, and
+        // wakes, in that order. `wake_guard`'s own `Drop` reads `self.armed`,
+        // which stays `false` for the rest of this call when `frame` was
+        // `None`, so a resize-only pump with no pending frame can never
+        // spuriously wake even if `resize` panics.
         let mut wake_guard = WakeGuard {
-            accounting: Arc::clone(&self.mailbox.accounting),
-            unwind_completion: frame
-                .as_ref()
-                .map(|frame| (Arc::clone(&self.mailbox), frame.snapshot.stamp.epoch)),
+            mailbox: Arc::clone(&self.mailbox),
             armed: frame.is_some(),
+            frame,
         };
-        let frame = frame;
 
         if let Some((width, height)) = resize {
             self.backend.resize(width, height);
@@ -1316,7 +1330,7 @@ impl<B: RasterBackend> RasterOwner<B> {
             );
         }
 
-        let Some(frame) = frame else {
+        let Some(frame) = wake_guard.frame.as_ref() else {
             // `wake_guard.armed` is already `false` here (`frame` was
             // `None` at construction above) -- nothing to disarm.
             if shutting_down {
@@ -1472,7 +1486,7 @@ impl<B: RasterBackend> RasterOwner<B> {
         // this function touched has already been released (the `state`
         // guard released at the very top; `surface_state` only ever
         // locked for the duration of one `set_*` call above).
-        drop(frame);
+        drop(wake_guard.frame.take());
         self.mailbox.accounting.notify_retired();
         outcome
     }
@@ -1602,6 +1616,13 @@ impl<B: RasterBackend> Drop for RasterOwner<B> {
             drop(orphaned);
             self.mailbox.accounting.notify_retired();
         }
+        // No retire can fire once the owner is gone, so the hook is cleared
+        // here: a hook that captured a `RasterHandle` (the natural way to read
+        // `in_flight()` from inside it) would otherwise close the cycle
+        // mailbox → accounting → hook → handle → mailbox and leak the mailbox
+        // for the process's lifetime. Bound by name so the displaced hook
+        // drops after the guard, never inside the lock.
+        let _hook = self.mailbox.accounting.wake.lock().take();
         // The one-shot shutdown-completion signal, sent here as well as from
         // `pump`: a consumer parked in `run_until_shutdown` waits on this
         // channel, not on `owner_alive`, and an owner dropped without an
@@ -1634,10 +1655,14 @@ mod tests {
 
     use flui_foundation::{FrameStamp, PresentationId, RealmId};
     use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene};
-    use flui_types::Size;
     use flui_types::geometry::{Pixels, Rect};
 
     use super::*;
+
+    /// A minimal non-empty scene: one canvas layer under a root.
+    fn scene_from_canvas() -> Scene {
+        Scene::new(flui_layer::LayerTree::new(Layer::from(CanvasLayer::new())))
+    }
 
     // -----------------------------------------------------------------------
     // FakeBackend — records invocations, returns pre-programmed outcomes.
@@ -1823,16 +1848,26 @@ mod tests {
         gpu_resource_generation: GpuResourceGeneration,
     ) -> SceneSnapshot {
         let stamp = FrameStamp::new(address, epoch, surface_generation, gpu_resource_generation);
-        SceneSnapshot::new(
-            stamp,
-            DamageRegion::Full,
-            Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
-        )
+        SceneSnapshot::new(stamp, DamageRegion::Full, scene_from_canvas())
     }
 
     // -----------------------------------------------------------------------
     // Compile-time contract assertions
     // -----------------------------------------------------------------------
+
+    /// A minimized window reports `0×0`; the backend cannot configure that,
+    /// so no generation is minted and the pump has nothing to adopt.
+    #[test]
+    fn a_zero_sized_resize_mints_nothing_and_queues_nothing() {
+        let (mut owner, handle, _acks, _shutdown) =
+            RasterOwner::new(FakeBackend::default(), test_address());
+        let before = handle.surface_state().required_generation;
+        assert_eq!(handle.resize(0, 10), None);
+        assert_eq!(handle.resize(10, 0), None);
+        assert_eq!(handle.surface_state().required_generation, before);
+        assert!(matches!(owner.pump(), PumpOutcome::Idle));
+        assert!(handle.resize(10, 10).is_some());
+    }
 
     #[test]
     fn contracts_are_send_and_sync() {
@@ -1851,7 +1886,9 @@ mod tests {
     #[test]
     fn in_flight_reads_exact_counts_across_submit_and_pump() {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
-        let primed = handle.resize(1, 1);
+        let primed = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
 
         assert_eq!(owner.in_flight(), 0);
         assert_eq!(handle.in_flight(), 0);
@@ -1899,7 +1936,9 @@ mod tests {
         // Primes past ADR-0045 decision 4's ZERO-rejection gate; coalesced
         // and applied by the owner thread's first pump, alongside whichever
         // frame survives the supersede below.
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
 
         thread::scope(|scope| {
             let owner_thread = scope.spawn(|| {
@@ -2036,7 +2075,9 @@ mod tests {
         let epoch3 = epoch2.next();
         // Primes past ADR-0045 decision 4's ZERO-rejection gate; applied by
         // the first loop iteration's pump, alongside epoch1's frame.
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
 
         for epoch in [epoch1, epoch2, epoch3] {
             handle
@@ -2136,7 +2177,9 @@ mod tests {
         // Primes past ADR-0045 decision 4's ZERO-rejection gate: this test is
         // about the render-failure classification, not the freshness check,
         // so the frame must actually reach `render_scene` to fail there.
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         handle
             .submit(test_frame(epoch, generation))
             .expect("submit");
@@ -2167,15 +2210,17 @@ mod tests {
     #[test]
     fn resize_coalesces_latest_wins() {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
-        handle.resize(100, 100);
-        handle.resize(200, 150);
+        let _ = handle.resize(100, 100);
+        let _ = handle.resize(200, 150);
         // ADR-0045 decision 4: the mint is generation-forward — EVERY call
         // mints, even the two whose (width, height) this coalesces away, so
         // the third call mints ZERO -> THREE, not ZERO -> ONE. Only the
         // *pending command* (width/height + the generation it carries)
         // coalesces to the latest call; the counter itself never skips a
         // superseded call's mint.
-        let generation = handle.resize(320, 240);
+        let generation = handle
+            .resize(320, 240)
+            .expect("non-zero size mints a generation");
         assert_eq!(
             generation,
             SurfaceGeneration::ZERO.next().next().next(),
@@ -2220,7 +2265,9 @@ mod tests {
         let epoch = FrameEpoch::ZERO.next();
         // Primes past ADR-0045 decision 4's ZERO-rejection gate so the frame
         // actually reaches render_scene, where the injected failure lives.
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         handle
             .submit(test_frame(epoch, generation))
             .expect("submit");
@@ -2258,7 +2305,9 @@ mod tests {
         // actually reaches render_scene, where the injected failure lives —
         // this test is about the render-failure mint, not the proactive
         // freshness check.
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         handle
             .submit(test_frame(epoch, generation))
             .expect("submit");
@@ -2305,7 +2354,7 @@ mod tests {
     #[test]
     fn stale_surface_generation_is_rejected_before_render() {
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
-        handle.resize(800, 600);
+        let _ = handle.resize(800, 600);
         // Stamped against the pre-resize generation (ZERO): the coalesced
         // resize applied inside the same pump bumps the owner's current
         // generation to ONE before this frame is ever considered for
@@ -2431,7 +2480,9 @@ mod tests {
             let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
                 RasterOwner::new(FakeBackend::default(), stamp);
             let epoch = FrameEpoch::ZERO.next();
-            let generation = handle.resize(1, 1);
+            let generation = handle
+                .resize(1, 1)
+                .expect("non-zero size mints a generation");
             handle
                 .submit(test_frame_for(epoch, stamp, generation))
                 .expect("submit");
@@ -2478,7 +2529,7 @@ mod tests {
         {
             let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
                 RasterOwner::new(FakeBackend::default(), stamp);
-            handle.resize(100, 100);
+            let _ = handle.resize(100, 100);
             let epoch = FrameEpoch::ZERO.next();
             handle
                 .submit(test_frame_for(epoch, stamp, SurfaceGeneration::ZERO))
@@ -2501,7 +2552,9 @@ mod tests {
             let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
                 RasterOwner::new(backend, stamp);
             let epoch = FrameEpoch::ZERO.next();
-            let generation = handle.resize(1, 1);
+            let generation = handle
+                .resize(1, 1)
+                .expect("non-zero size mints a generation");
             handle
                 .submit(test_frame_for(epoch, stamp, generation))
                 .expect("submit");
@@ -2538,7 +2591,9 @@ mod tests {
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) =
             RasterOwner::new(FakeBackend::default(), incarnation_one);
         let epoch = FrameEpoch::ZERO.next();
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         handle
             .submit(test_frame_for(epoch, incarnation_one, generation))
             .expect("submit");
@@ -2612,7 +2667,9 @@ mod tests {
         // first frame in the same pump call — it must still be the FIRST
         // reconfigure the reliable slot observes, which the assertion right
         // after the loop checks.
-        let primed = handle.resize(1, 1);
+        let primed = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         // `RasterHandle::resize` deliberately does NOT write the reliable
         // slot: it only requests a reconfigure, and the slot's own contract
         // is "the generation the owner has actually reconfigured against"
@@ -2667,7 +2724,7 @@ mod tests {
         // generation again, then a frame stamped against the pre-resize
         // generation is proactively rejected. The channel is still full, so
         // this ack is the one that gets silently dropped by `send_ack`.
-        handle.resize(800, 600);
+        let _ = handle.resize(800, 600);
         let epoch = FrameEpoch::ZERO.next();
         handle.submit(test_frame(epoch, primed)).expect("submit");
         let current = primed.next();
@@ -2716,7 +2773,9 @@ mod tests {
     fn reliable_completion_preserves_the_backends_actual_presented_bit() {
         let backend = FakeBackend::with_planned([Ok(false), Ok(true)]);
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
 
         let skipped_epoch = FrameEpoch::ZERO.next();
         handle
@@ -2757,7 +2816,9 @@ mod tests {
         assert_eq!(handle.in_flight(), 0);
 
         let epoch = FrameEpoch::ZERO.next();
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         handle
             .submit(test_frame(epoch, generation))
             .expect("submit");
@@ -2828,7 +2889,9 @@ mod tests {
         let backend = FakeBackend::with_planned([Err(EngineError::DeviceLost)]);
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
         let epoch = FrameEpoch::ZERO.next();
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         handle
             .submit(test_frame(epoch, generation))
             .expect("submit");
@@ -2890,7 +2953,9 @@ mod tests {
     #[test]
     fn a_panic_mid_render_publishes_a_not_presented_completion_for_its_own_epoch() {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
 
         // A frame that really presents, so `last_completion` holds a
         // `presented: true` value the panicking frame could be mistaken for.
@@ -2943,7 +3008,9 @@ mod tests {
         owner.with_backend(|backend| backend.panic_next_render = true);
 
         let epoch1 = FrameEpoch::ZERO.next();
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         handle
             .submit(test_frame(epoch1, generation))
             .expect("submit");
@@ -3016,7 +3083,9 @@ mod tests {
         }
 
         let epoch1 = FrameEpoch::ZERO.next();
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         handle
             .submit(test_frame(epoch1, generation))
             .expect("submit");
@@ -3097,7 +3166,7 @@ mod tests {
         // (`self.backend.resize` panics before `pump` ever reaches the
         // frame-freshness check), so it stays `ZERO` — this test is about
         // the wake guard's unwind coverage, not the generation check.
-        handle.resize(640, 480);
+        let _ = handle.resize(640, 480);
         let epoch1 = FrameEpoch::ZERO.next();
         handle
             .submit(test_frame(epoch1, SurfaceGeneration::ZERO))
@@ -3133,7 +3202,9 @@ mod tests {
         // resize is what a real caller would issue to recover, and it is
         // what this pump actually applies.
         let epoch2 = epoch1.next();
-        let recovered_generation = handle.resize(650, 490);
+        let recovered_generation = handle
+            .resize(650, 490)
+            .expect("non-zero size mints a generation");
         handle
             .submit(test_frame(epoch2, recovered_generation))
             .expect("submit after panic recovery");
@@ -3156,7 +3227,9 @@ mod tests {
         let mut epoch = FrameEpoch::ZERO;
         // Primes past ADR-0045 decision 4's ZERO-rejection gate; applied by
         // the first loop iteration's pump, alongside that iteration's frame.
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
 
         for i in 0..=ACK_CHANNEL_CAPACITY {
             epoch = epoch.next();
@@ -3247,7 +3320,7 @@ mod tests {
             let _ = owner.pump();
         }
         // A resize with no frame behind it still retires nothing.
-        handle.resize(64, 64);
+        let _ = handle.resize(64, 64);
         let _ = owner.pump();
         assert_eq!(
             wake_count.load(Ordering::SeqCst),
@@ -3333,7 +3406,9 @@ mod tests {
         }
 
         let epoch = FrameEpoch::ZERO.next();
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         handle
             .submit(test_frame(epoch, generation))
             .expect("submit");
@@ -3520,7 +3595,9 @@ mod tests {
     #[test]
     fn frame_is_rejected_when_not_attached_even_with_a_matching_generation() {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
-        let generation = handle.resize(1, 1);
+        let generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         assert_eq!(
             owner.pump(),
             PumpOutcome::Idle,
@@ -3582,7 +3659,9 @@ mod tests {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
 
         // Establish a baseline: both "sides" sit at the same generation G.
-        let g1 = handle.resize(1, 1);
+        let g1 = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         let epoch1 = FrameEpoch::ZERO.next();
         handle.submit(test_frame(epoch1, g1)).expect("submit");
         assert_eq!(
@@ -3617,7 +3696,9 @@ mod tests {
         // "The owner then issues a resize": must mint from the SAME counter
         // the surface-lost path just advanced, never re-deriving
         // `g1.next()` from a private, stale copy.
-        let after_resize = handle.resize(2, 2);
+        let after_resize = handle
+            .resize(2, 2)
+            .expect("non-zero size mints a generation");
         assert_ne!(
             after_resize, after_loss,
             "a resize must never re-mint the generation the surface-lost \
@@ -3701,7 +3782,9 @@ mod tests {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
 
         // Prime a baseline generation and apply it.
-        let g0 = handle.resize(1, 1);
+        let g0 = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         assert_eq!(
             owner.pump(),
             PumpOutcome::Idle,
@@ -3730,7 +3813,9 @@ mod tests {
 
             // The concurrent resize: mints from the mailbox's counter,
             // which is still at g0 (nothing else has minted yet).
-            let g1 = handle.resize(2, 2);
+            let g1 = handle
+                .resize(2, 2)
+                .expect("non-zero size mints a generation");
 
             // Release the pump thread BEFORE asserting anything. An
             // assertion that panics here would otherwise skip `open()`, and
@@ -3897,7 +3982,9 @@ mod tests {
         let backend = FakeBackend::with_planned(planned);
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(backend);
 
-        let mut generation = handle.resize(1, 1);
+        let mut generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
         let mut epoch = FrameEpoch::ZERO;
 
         for round in 0u32..3 {
@@ -3940,7 +4027,9 @@ mod tests {
 
             // The next resize must mint STRICTLY past what the second loss
             // just reported.
-            let next_generation = handle.resize(round + 10, 10);
+            let next_generation = handle
+                .resize(round + 10, 10)
+                .expect("non-zero size mints a generation");
             assert!(
                 next_generation > generation,
                 "round {round}: a resize issued after a loss must mint \
@@ -3982,7 +4071,9 @@ mod tests {
     #[test]
     fn mismatched_gpu_resource_generation_is_rejected_as_resource_outdated() {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
-        let surface_generation = handle.resize(1, 1);
+        let surface_generation = handle
+            .resize(1, 1)
+            .expect("non-zero size mints a generation");
 
         let bound = GpuResourceGeneration::mint();
         handle.bind_gpu_resource_generation(bound);
@@ -4100,7 +4191,9 @@ mod tests {
         let burst_thread = thread::spawn(move || {
             let mut last_generation = SurfaceGeneration::ZERO;
             for i in 0..RESIZE_BURST {
-                last_generation = handle.resize(100 + i, 100 + i);
+                last_generation = handle
+                    .resize(100 + i, 100 + i)
+                    .expect("non-zero size mints a generation");
             }
             // Stamped with the final minted generation while the pump is
             // still parked — the coalesced mailbox must hold exactly this.
@@ -4178,7 +4271,9 @@ mod tests {
         let stamper = thread::spawn(move || {
             let mut epoch = FrameEpoch::ZERO;
             for i in 0..ROUNDS {
-                let generation = stamp_handle.resize(100 + i, 100 + i);
+                let generation = stamp_handle
+                    .resize(100 + i, 100 + i)
+                    .expect("non-zero size mints a generation");
                 epoch = epoch.next();
                 // Best-effort: a submit racing this test's own teardown
                 // is not the concern here, only whether the pipeline as a
@@ -4220,7 +4315,9 @@ mod tests {
              design is supposed to stay live under"
         );
 
-        let generation = handle.resize(640, 480);
+        let generation = handle
+            .resize(640, 480)
+            .expect("non-zero size mints a generation");
         let epoch = FrameEpoch::ZERO.next();
         handle
             .submit(test_frame(epoch, generation))

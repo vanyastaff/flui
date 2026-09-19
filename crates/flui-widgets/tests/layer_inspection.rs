@@ -99,7 +99,7 @@ fn the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list() {
     laid.pump();
 
     let tree = laid.layer_tree().expect("a pumped frame composites a tree");
-    let root = tree.root().expect("the composited tree has a root");
+    let root = tree.root();
     assert!(
         tree.len() > 1,
         "this tree composites more than the root alone; got {} layer(s)",

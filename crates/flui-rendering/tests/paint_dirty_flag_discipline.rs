@@ -266,7 +266,7 @@ fn layer_tree_has_picture(tree: &LayerTree) -> bool {
         matches!(node.layer(), Layer::Picture(_))
             || node.children().iter().any(|&child| walk(tree, child))
     }
-    tree.root().is_some_and(|root| walk(tree, root))
+    walk(tree, tree.root())
 }
 
 #[test]

@@ -10,10 +10,3 @@
 //! flui-layer's integration tests do — the crate's only module-scope
 //! static is the `LeaderLayer` `NEXT_ID` monotonic counter (benign;
 //! no test asserts absolute ID values).
-
-#[path = "damage_tracking.rs"]
-mod damage_tracking;
-#[path = "layer_tree.rs"]
-mod layer_tree;
-#[path = "scene_builder.rs"]
-mod scene_builder;

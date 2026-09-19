@@ -866,7 +866,7 @@ mod tests {
     /// The thumb's painted circle center per `selected`, computed
     /// independently of `SwitchPainter::paint`'s own arithmetic — proves
     /// the painter is actually invoked (via a real [`Canvas`]/
-    /// [`flui_painting::display_list::DrawCommand`]) and that the thumb
+    /// [`flui_painting::DrawOp`]) and that the thumb
     /// really lands on the track's `track_inner_start`/`track_inner_end`
     /// x-coordinate for the given `selected`, not some other value.
     /// Mutation-run: swapping `track_inner_start`/`track_inner_end` in
@@ -874,7 +874,7 @@ mod tests {
     /// being reverted.
     #[test]
     fn thumb_circle_center_lands_on_the_correct_track_end_per_value() {
-        use flui_painting::display_list::DrawCommand;
+        use flui_painting::DrawOp;
 
         let size = Size::new(px(SWITCH_TAP_TARGET_WIDTH), px(SWITCH_TAP_TARGET_HEIGHT));
         let track_origin_x = (SWITCH_TAP_TARGET_WIDTH - SWITCH_TRACK_WIDTH) / 2.0;
@@ -890,8 +890,8 @@ mod tests {
             let circles: Vec<_> = canvas
                 .display_list()
                 .iter()
-                .filter_map(|command| match command {
-                    DrawCommand::DrawCircle { center, .. } => Some(*center),
+                .filter_map(|command| match &command.op {
+                    DrawOp::Circle { center, .. } => Some(*center),
                     _ => None,
                 })
                 .collect();

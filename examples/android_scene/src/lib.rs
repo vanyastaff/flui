@@ -8,12 +8,11 @@
 
 use flui_hot_reload::scene_plugin;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_types::geometry::{px, Rect, Size};
+use flui_types::geometry::{px, Rect};
 use flui_types::painting::Paint;
 use flui_types::styling::Color;
 
 fn my_scene(width: f32, height: f32) -> Scene {
-    let mut tree = LayerTree::new();
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 
@@ -81,8 +80,7 @@ fn my_scene(width: f32, height: f32) -> Scene {
         &Paint::fill(Color::rgb(255, 200, 0)),
     );
 
-    let root = tree.insert(Layer::Canvas(canvas_layer));
-    Scene::new(Size::new(px(width), px(height)), tree, Some(root), 1)
+    Scene::new(LayerTree::new(Layer::Canvas(canvas_layer)))
 }
 
 // Generate extern "C" wrappers: flui_scene_build, flui_scene_version, flui_scene_drop

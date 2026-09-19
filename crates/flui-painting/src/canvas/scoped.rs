@@ -1,14 +1,7 @@
-//! Canvas scoped operations: 12 `with_*` helpers that wrap
-//! `save()`/`restore()` around a closure.
-//!
-//! These were extracted from the 3,305-LOC `canvas.rs` god
-//! module. Each scoped helper compiles to a direct `save() + body +
-//! restore()` sequence -- zero overhead vs. manual save/restore.
-//!
-//! Scoped helpers are safer than manual save/restore because the
-//! canvas state is automatically restored after the closure (even if
-//! the closure panics, the `restore()` is in a `Drop`-equivalent
-//! position via the call-stack unwinding).
+//! `with_*` helpers that pair a `save` (or `save_layer`) with its `restore`
+//! around a closure, so the two cannot drift apart at a call site. A panic
+//! inside the closure unwinds past the `restore`; the canvas is not reused
+//! after a panic, so nothing depends on it.
 
 use flui_types::{
     geometry::{Matrix4, Pixels, RRect, Rect},
@@ -18,9 +11,7 @@ use flui_types::{
 use super::Canvas;
 
 impl Canvas {
-    /// Executes a closure with automatic save/restore.
-    #[inline]
-    pub fn with_save<F, R>(&mut self, f: F) -> R
+    fn with_save<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
@@ -28,67 +19,6 @@ impl Canvas {
         let result = f(self);
         self.restore();
         result
-    }
-
-    /// Executes a closure with a translated coordinate system.
-    #[inline]
-    pub fn with_translate<F, R>(&mut self, dx: f32, dy: f32, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.with_save(|c| {
-            c.translate(dx, dy);
-            f(c)
-        })
-    }
-
-    /// Executes a closure with a rotated coordinate system.
-    #[inline]
-    pub fn with_rotate<F, R>(&mut self, radians: f32, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.with_save(|c| {
-            c.rotate(radians);
-            f(c)
-        })
-    }
-
-    /// Executes a closure with a rotated coordinate system around a
-    /// pivot point.
-    #[inline]
-    pub fn with_rotate_around<F, R>(&mut self, radians: f32, pivot_x: f32, pivot_y: f32, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.with_save(|c| {
-            c.rotate_around(radians, pivot_x, pivot_y);
-            f(c)
-        })
-    }
-
-    /// Executes a closure with a scaled coordinate system.
-    #[inline]
-    pub fn with_scale<F, R>(&mut self, factor: f32, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.with_save(|c| {
-            c.scale_uniform(factor);
-            f(c)
-        })
-    }
-
-    /// Executes a closure with a non-uniform scaled coordinate system.
-    #[inline]
-    pub fn with_scale_xy<F, R>(&mut self, sx: f32, sy: f32, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.with_save(|c| {
-            c.scale_xy(sx, sy);
-            f(c)
-        })
     }
 
     /// Executes a closure with an arbitrary transform applied.

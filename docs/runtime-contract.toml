@@ -101,7 +101,7 @@ declarations = [
     "pub use app::{ CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse, request_presentation_close, };",
     "pub use app::open_secondary_window;",
     "pub use app::{run_app_android, run_app_android_with_config};",
-    "pub use bindings::{ GestureBinding, PaintingBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding, UpdateScheduler, WidgetsBinding, };",
+    "pub use bindings::{ GestureBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding, UpdateScheduler, WidgetsBinding, };",
     "pub use flui_log::{AppIdentity, AppleBundleId};",
     "pub use flui_view::{ BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView, StatelessElement, StatelessView, View, };",
     "pub mod prelude {",
@@ -196,22 +196,33 @@ declarations = [
 [[export_root]]
 file = "crates/flui-engine/src/lib.rs"
 declarations = [
-    # The embedder-facing surface, narrowed 2026-09-17: the layer/painter
-    # dispatch plumbing (`traits`, `commands`), the `flui-layer`/`flui_painting`
-    # re-exports, `Backend`, `LayerRender`, `FontLoader`, and `DebugBackend`
-    # moved to `pub(crate)`/module paths — no consumer outside the crate named
-    # them. The entry points below are what an embedder composes.
+    # The embedder-facing surface. wgpu is the engine, not a backend behind
+    # one (2026-09-18): the former `flui_engine::wgpu` module is flattened
+    # into the crate root and the name now re-exports the linked `wgpu`
+    # crate itself, so an embedder handing over a device or reading a
+    # surface format names the exact version without a second dependency
+    # line. The entry points are `Renderer` (a window), `HeadlessRenderer`
+    # (no window), `WgpuPainter` (hand-driven draw calls), and
+    # `RasterBackend` (the frame loop's seam). `OffscreenRenderer`,
+    # `TexturePool`, and `PathCache` are bench scaffolding reachable only
+    # under the `testing` feature.
     "pub mod error;",
     "pub mod raster;",
     "pub mod raster_owner;",
-    "pub mod fonts;",
-    "pub mod wgpu;",
+    "pub use ::wgpu;",
+    "pub mod headless;",
     "pub use error::{EngineError, EngineResult, Recoverability};",
     "pub use raster::{PrePresentHook, RasterBackend};",
     "pub use raster_owner::{ FrameDropReason, PumpOutcome, RasterAck, RasterCompletion, RasterHandle, RasterOwner, RasterSubmitError, SurfaceState, };",
-    "pub use wgpu::GpuResourceGeneration;",
-    "pub use wgpu::Renderer;",
-    "pub use wgpu::WgpuPainter;",
+    "pub use flui_foundation::GpuResourceGeneration;",
+    "pub use headless::HeadlessRenderer;",
+    "pub use painter::WgpuPainter;",
+    "pub use renderer::{GpuCapabilities, Renderer};",
+    "pub use window_target::WindowTarget;",
+    "pub use profiler::{GpuFrameProfile, PassTiming};",
+    "pub use offscreen::OffscreenRenderer;",
+    "pub use texture_pool::{PooledTexture, TexturePool};",
+    "pub use path_cache::PathCache;",
 ]
 
 [[export_root]]
@@ -258,21 +269,14 @@ declarations = [
 [[export_root]]
 file = "crates/flui-layer/src/lib.rs"
 declarations = [
-    "pub mod damage;",
-    "pub mod layer;",
     "pub mod testing;",
-    "pub mod tree;",
-    "pub use error::{LayerError, LayerResult};",
-    "pub use compositor::{CompositorStats, SceneBuilder, SceneCompositor};",
+    "pub use compositor::SceneBuilder;",
     "pub use flui_foundation::LayerId;",
-    "pub use layer::annotation::{AnnotationEntry, AnnotationResult, AnnotationSearchOptions};",
-    "pub use layer::{ AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LayerBounds, LayerLink, LeaderLayer, OffsetLayer, OpacityLayer, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceStats, PictureLayer, PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer, SystemUiOverlayStyle, TextureLayer, TransformLayer, };",
-    "pub use link_registry::{LeaderInfo, LinkRegistry, resolve_follower_offset};",
-    "pub use scene::{CompositionCallback, Scene};",
+    "pub use layer::{ AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, CanvasLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer, PerformanceOverlayLayer, PerformanceOverlayOption, PictureLayer, PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer, SystemUiOverlayStyle, TextureLayer, TransformLayer, };",
+    "pub use link::{LayerLink, resolve_follower_offset};",
+    "pub use scene::Scene;",
     "pub use scene_snapshot::{DamageRegion, SceneSnapshot};",
     "pub use tree::{LayerNode, LayerTree};",
-    "pub mod prelude {",
-    "pub const VERSION: &str = env!(\"CARGO_PKG_VERSION\");",
 ]
 
 [[export_root]]
@@ -2123,8 +2127,8 @@ domain = "raster"
 mechanical = true
 mechanism = "source-gate pins the Fifo selection expectation string"
 evidence = [
-    { kind = "symbol", file = "crates/flui-engine/src/wgpu/renderer.rs", contains = "fn select_present_mode" },
-    { kind = "source-gate", file = "crates/flui-engine/src/wgpu/renderer.rs", contains = "BUG: wgpu guarantees Fifo is always a supported present mode" },
+    { kind = "symbol", file = "crates/flui-engine/src/renderer.rs", contains = "fn select_present_mode" },
+    { kind = "source-gate", file = "crates/flui-engine/src/renderer.rs", contains = "BUG: wgpu guarantees Fifo is always a supported present mode" },
 ]
 
 [[contract]]
@@ -2759,7 +2763,7 @@ consumers = ["AppConfig FrameFailureHandler callbacks", "flui-app tracing adapte
 owner_issue = 561
 
 [[surface]]
-path = "flui_app::bindings re-export bundle (UpdateScheduler, PipelineOwner, PipelineCell, GestureBinding, WidgetsBinding, PaintingBinding, RenderingFlutterBinding)"
+path = "flui_app::bindings re-export bundle (UpdateScheduler, PipelineOwner, PipelineCell, GestureBinding, WidgetsBinding, RenderingFlutterBinding)"
 crate = "flui-app"
 kind = "re-export"
 declared_in = "crates/flui-app/src/bindings/mod.rs"
@@ -2767,7 +2771,7 @@ contains = "pipeline::{PipelineCell, PipelineOwner}"
 classification = "transitional"
 thread_affinity = "mixed; PipelineCell/PipelineOwner and WidgetsBinding are owner-thread-confined (!Send + !Sync, via PipelineCell's Rc<RefCell<_>>) -- a PipelineOwner belongs to exactly one presentation on exactly one thread. There is no singleton left in this bundle at all (`HasInstance`/`impl_binding_singleton!` were deleted from flui-foundation in #553, and nothing here uses them): `UpdateScheduler` is a plain `Arc`-backed value field constructed fresh per `UiRealm`, cheap to `Clone`, Send + Sync for cross-thread wake/cancellation -- realm-owned by value, never a process-wide instance."
 owner = "transitional per-realm service graph"
-failure_semantics = "singleton accessors construct lazily per thread; no typed errors (PaintingBinding and RenderingFlutterBinding excepted: both left the singleton graph -- PaintingBinding is a plain constructible value, RenderingFlutterBinding's impl_binding_singleton! invocation and instance()/ensure_initialized() are deleted -- both still re-exported here as types). SemanticsBinding is gone from this bundle entirely: it was deleted, not slimmed -- its process-scoped accessibility_features field moved to AppRuntime's SharedEngineServices, and its per-window enablement/announce/event state moved to the per-presentation SemanticsHost (crates/flui-app/src/app/semantics_host.rs)."
+failure_semantics = "singleton accessors construct lazily per thread; no typed errors (RenderingFlutterBinding excepted: it left the singleton graph -- its impl_binding_singleton! invocation and instance()/ensure_initialized() are deleted -- and is still re-exported here as a type. PaintingBinding is deleted outright: it owned an image cache nothing read and a font-change notifier nothing listened to, and its one live accessor reached the process-wide font system that flui_painting::shared_font_system() now names directly). SemanticsBinding is gone from this bundle entirely: it was deleted, not slimmed -- its process-scoped accessibility_features field moved to AppRuntime's SharedEngineServices, and its per-window enablement/announce/event state moved to the per-presentation SemanticsHost (crates/flui-app/src/app/semantics_host.rs)."
 consumers = ["flui-app prelude", "flui facade via app module"]
 owner_issue = 553
 
@@ -3138,10 +3142,10 @@ notes = "The former `pub fn budget(&self) -> parking_lot::MutexGuard<'_, FrameBu
 # a future `FrameClock` (a later #556 slice), not this crate.
 
 [[surface]]
-path = "flui_engine::wgpu::Renderer"
+path = "flui_engine::Renderer"
 crate = "flui-engine"
 kind = "type"
-declared_in = "crates/flui-engine/src/wgpu/renderer.rs"
+declared_in = "crates/flui-engine/src/renderer.rs"
 contains = "pub struct Renderer"
 classification = "transitional"
 thread_affinity = "Send + !Sync by compiler derivation — no manual Send impl anywhere in the crate (issue #1043 deleted the one raw-platform-handle newtype that ever needed one); !Sync is stated directly by a `_single_mutator: PhantomData<Cell<()>>` field rather than riding on some other field's type — movable to a raster owner, single mutator by convention"
@@ -3381,7 +3385,7 @@ note = "AssetRegistry::global(): named residual, out of this migration's scope e
 file = "crates/flui-painting/src/text_layout/layout.rs"
 grammar = "ambient-static"
 owner_issue = 553
-note = "shared_font_system()/FONT_SYSTEM: SharedEngineServices::resolve() (invoked from AppRuntime::ensure_services() at realm install) is the CONSTRUCTING owner -- it calls PaintingBinding::font_system() explicitly, eagerly installing the process-wide FontSystem instead of leaving it to whichever text-measurement call happens to run first. The READ path stays ambient on layout hot paths -- cross-realm register_font staleness mid-layout is a named, bounded hazard (Mutex<FontSystem> makes it staleness not a data race), not closed until fonts get their own owner-local-access/sharding follow-up (ADR-0027 follow-up 6). This migration additionally re-scoped ICON_FONTS_LOADED (flui-engine/src/wgpu/text.rs) from a process-global flag to a per-font, per-FontSystem-instance family-presence check (each embedded icon font probed and loaded independently, so one already-present family never gates the other), and gave TextRenderer::new an injected SharedFontSystem parameter instead of an ambient PaintingBinding::instance() reach -- neither changes this entry's hazard, which is specifically about concurrent register_font mutation, not construction-time ownership. A second CONSTRUCTING path exists for tests only: flui_painting::text_layout::init_font_system_with_faces (reached through flui_testing::fonts::pin_font_faces) installs a FontSystem built from caller-supplied faces instead of the host's, so a test that commits layout is not pinned to its author's font installation. It is one-shot and returns false rather than mutating when the font system already exists -- it cannot race the owner above, only lose to it. This is a construction path, not a new mutation path: it does not widen the register_font hazard."
+note = "shared_font_system()/FONT_SYSTEM: SharedEngineServices::resolve() (invoked from AppRuntime::ensure_services() at realm install) is the CONSTRUCTING owner -- it calls flui_painting::shared_font_system() explicitly, eagerly installing the process-wide FontSystem instead of leaving it to whichever text-measurement call happens to run first. The READ path stays ambient on layout hot paths -- cross-realm register_font staleness mid-layout is a named, bounded hazard (Mutex<FontSystem> makes it staleness not a data race), not closed until fonts get their own owner-local-access/sharding follow-up (ADR-0027 follow-up 6). ADR-0065 narrowed the mutation surface to one door: SharedFontSystem::register_font (append-only, bumps generation()) is the only way the database changes after construction; shape() hands out a Shaper that can resolve and shape but cannot reach the database, and the embedded baseline faces (flui_painting::fonts, `bundled-fonts`) are installed at construction rather than by the engine. The hazard is therefore exactly the register_font-vs-layout staleness named above, and every shaped-text cache keys on generation() so it heals at the next layout. A second CONSTRUCTING path exists for tests only: flui_painting::text_layout::init_font_system_with_faces (reached through flui_testing::fonts::pin_font_faces) installs a FontSystem built from caller-supplied faces instead of the host's, so a test that commits layout is not pinned to its author's font installation. It is one-shot and returns false rather than mutating when the font system already exists -- it cannot race the owner above, only lose to it. This is a construction path, not a new mutation path: it does not widen the register_font hazard."
 
 # =============================================================================
 # Public lock-shaped surface allowlist (runtime crates)
@@ -3556,10 +3560,10 @@ resolution); it happens to share the same slice number by coincidence, not \
 by relation.\
 """
 allow_files = [
-    "crates/flui-engine/src/wgpu/aa_oracle_tests.rs",
-    "crates/flui-engine/src/wgpu/advanced_blend/mod.rs",
-    "crates/flui-engine/src/wgpu/batches/shapes.rs",
-    "crates/flui-engine/src/wgpu/instancing.rs",
+    "crates/flui-engine/src/aa_oracle_tests.rs",
+    "crates/flui-engine/src/advanced_blend/mod.rs",
+    "crates/flui-engine/src/batches/shapes.rs",
+    "crates/flui-engine/src/instancing.rs",
     "crates/flui-types/src/styling/color.rs",
     "crates/flui-view/src/tree/element_tree.rs",
 ]
@@ -3568,50 +3572,50 @@ allow_files = [
 pattern = "PR-3"
 why = "See the `PR-1` entry above for the shared rationale. Pre-existing debt from the same earlier blend-mode-routing migration; out of scope to fix here."
 allow_files = [
-    "crates/flui-engine/src/wgpu/aa_oracle_tests.rs",
-    "crates/flui-engine/src/wgpu/advanced_blend/mod.rs",
-    "crates/flui-engine/src/wgpu/batches/paths.rs",
-    "crates/flui-engine/src/wgpu/batches/shapes.rs",
-    "crates/flui-engine/src/wgpu/layer_blend_tests.rs",
-    "crates/flui-engine/src/wgpu/mod.rs",
-    "crates/flui-engine/src/wgpu/pipeline_cache.rs",
-    "crates/flui-engine/src/wgpu/replay/mod.rs",
-    "crates/flui-engine/src/wgpu/ssaa.rs",
+    "crates/flui-engine/src/aa_oracle_tests.rs",
+    "crates/flui-engine/src/advanced_blend/mod.rs",
+    "crates/flui-engine/src/batches/paths.rs",
+    "crates/flui-engine/src/batches/shapes.rs",
+    "crates/flui-engine/src/layer_blend_tests.rs",
+    "crates/flui-engine/src/mod.rs",
+    "crates/flui-engine/src/pipeline_cache.rs",
+    "crates/flui-engine/src/replay/mod.rs",
+    "crates/flui-engine/src/ssaa.rs",
 ]
 
 [[forbidden_pattern]]
 pattern = "PR-4"
 why = "See the `PR-1` entry above for the shared rationale. Pre-existing debt from the same earlier blend-mode-routing migration; out of scope to fix here."
 allow_files = [
-    "crates/flui-engine/src/wgpu/aa_oracle_tests.rs",
-    "crates/flui-engine/src/wgpu/batches/paths.rs",
-    "crates/flui-engine/src/wgpu/batches/shapes.rs",
-    "crates/flui-engine/src/wgpu/mod.rs",
-    "crates/flui-engine/src/wgpu/pipeline_cache.rs",
-    "crates/flui-engine/src/wgpu/replay/mod.rs",
-    "crates/flui-engine/src/wgpu/shape_blend_tests.rs",
-    "crates/flui-engine/src/wgpu/ssaa.rs",
+    "crates/flui-engine/src/aa_oracle_tests.rs",
+    "crates/flui-engine/src/batches/paths.rs",
+    "crates/flui-engine/src/batches/shapes.rs",
+    "crates/flui-engine/src/mod.rs",
+    "crates/flui-engine/src/pipeline_cache.rs",
+    "crates/flui-engine/src/replay/mod.rs",
+    "crates/flui-engine/src/shape_blend_tests.rs",
+    "crates/flui-engine/src/ssaa.rs",
 ]
 
 [[forbidden_pattern]]
 pattern = "PR-5"
 why = "See the `PR-1` entry above for the shared rationale. Pre-existing debt from the same earlier blend-mode-routing migration; out of scope to fix here."
 allow_files = [
-    "crates/flui-engine/src/wgpu/layer_dispatcher.rs",
-    "crates/flui-engine/src/wgpu/batches/gradients.rs",
-    "crates/flui-engine/src/wgpu/batches/images.rs",
-    "crates/flui-engine/src/wgpu/batches/mod.rs",
-    "crates/flui-engine/src/wgpu/batches/shapes.rs",
-    "crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs",
-    "crates/flui-engine/src/wgpu/mod.rs",
-    "crates/flui-engine/src/wgpu/painter/draw.rs",
-    "crates/flui-engine/src/wgpu/pipeline_cache.rs",
+    "crates/flui-engine/src/layer_dispatcher.rs",
+    "crates/flui-engine/src/batches/gradients.rs",
+    "crates/flui-engine/src/batches/images.rs",
+    "crates/flui-engine/src/batches/mod.rs",
+    "crates/flui-engine/src/batches/shapes.rs",
+    "crates/flui-engine/src/gradient_image_blend_tests.rs",
+    "crates/flui-engine/src/mod.rs",
+    "crates/flui-engine/src/painter/draw.rs",
+    "crates/flui-engine/src/pipeline_cache.rs",
 ]
 
 [[forbidden_pattern]]
 pattern = "PR-6"
 why = "See the `PR-1` entry above for the shared rationale. Pre-existing debt from the same earlier blend-mode-routing migration; out of scope to fix here."
-allow_files = ["crates/flui-engine/src/wgpu/renderer.rs"]
+allow_files = ["crates/flui-engine/src/renderer.rs"]
 
 [[forbidden_pattern]]
 pattern = "WU-"
@@ -3866,8 +3870,8 @@ scope = "crates/flui-app/src/app/config.rs"
 why = """
 companion to the `pub vsync: bool` entry above: `AppConfig::target_fps` was \
 advisory-only (logged, never fed into the real present cadence) and was \
-removed for the same reason -- issue #556. The effective frame-pacing \
-config is `flui_engine::RasterOptions::target_frame_rate`; this scope is \
+removed for the same reason -- issue #556. No frame-pacing config replaced \
+it (`flui_engine::RasterOptions` was deleted unwired); this scope is \
 `config.rs` specifically because `flui-devtools`'s own `DevToolsConfig` and \
 `flui-scheduler`'s `FrameBudget`/`FrameTiming` builders legitimately use the \
 same field/method name for an unrelated, still-effective concept.\

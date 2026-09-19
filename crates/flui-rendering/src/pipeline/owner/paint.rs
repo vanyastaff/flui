@@ -5,8 +5,8 @@ use std::sync::Arc;
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
     BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, FollowerLayer, Layer,
-    LayerNode, LayerTree, LeaderLayer, LinkRegistry, OffsetLayer, OpacityLayer, PictureLayer,
-    ShaderMaskLayer, TransformLayer,
+    LayerNode, LayerTree, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer,
+    TransformLayer,
 };
 use flui_painting::DisplayList;
 use flui_types::Offset;
@@ -176,7 +176,6 @@ impl PipelineOwner<PaintPhase> {
                 Ok(()) => {
                     let (
                         layer_tree,
-                        link_registry,
                         follower_correlations,
                         retained_captures,
                         layer_patches,
@@ -281,29 +280,21 @@ impl PipelineOwner<PaintPhase> {
 
                     // ADR-0015: resolve each paint-phase-correlated
                     // follower's composite-resolved offset against the SAME
-                    // fully-built layer_tree/link_registry the GPU path
-                    // (flui-engine's `render_layer_recursive`) resolves
-                    // against, reusing the identical `resolve_follower_offset`
-                    // — one algorithm, two consumers (pixels + hit-test), not
-                    // two copies of the logic. Runs before these values are
-                    // handed to `last_layer_tree`/`last_link_registry` (and
-                    // eventually taken by the binding via
-                    // `take_link_registry()`).
+                    // fully-built layer_tree the GPU path (flui-engine's
+                    // `render_layer_recursive`) resolves against, reusing the
+                    // identical `resolve_follower_offset` — one algorithm, two
+                    // consumers (pixels + hit-test), not two copies of the
+                    // logic. The tree carries the leader index itself.
                     let mut follower_offsets = FxHashMap::default();
                     let mut hidden_follower_ids = FxHashSet::default();
                     for (render_id, follower_layer_id) in follower_correlations {
-                        let Some(follower) = layer_tree
-                            .get_layer(follower_layer_id)
-                            .and_then(Layer::as_follower)
-                        else {
-                            continue;
-                        };
-                        match flui_layer::resolve_follower_offset(
-                            &layer_tree,
-                            &link_registry,
-                            follower_layer_id,
-                            follower,
-                        ) {
+                        debug_assert!(
+                            layer_tree
+                                .get_layer(follower_layer_id)
+                                .is_some_and(|layer| layer.as_follower().is_some()),
+                            "BUG: a follower correlation must name a Layer::Follower node"
+                        );
+                        match flui_layer::resolve_follower_offset(&layer_tree, follower_layer_id) {
                             Some(offset) => {
                                 follower_offsets.insert(render_id, offset);
                             }
@@ -316,7 +307,6 @@ impl PipelineOwner<PaintPhase> {
                     self.last_hidden_follower_ids = hidden_follower_ids;
 
                     self.last_layer_tree = Some(layer_tree);
-                    self.last_link_registry = Some(link_registry);
                 }
                 Err(e) => {
                     // Restore the debug invariant before propagating so
@@ -1063,7 +1053,6 @@ struct EffectSlots {
 struct RetainedNode {
     layer: Layer,
     parent: Option<usize>,
-    offset: Option<flui_types::Offset<flui_types::geometry::Pixels>>,
     /// The stamp a captured node carried, so a nested boundary survives its
     /// enclosing boundary's reuse — see `graft`.
     render_id: Option<RenderId>,
@@ -1119,12 +1108,6 @@ struct FragmentComposer {
     tree: LayerTree,
     stack: Vec<LayerId>,
     open: DisplayList,
-    /// Leader/follower link relationships, populated as a byproduct of
-    /// [`Self::push_layer`] pushing a `Layer::Leader`/`Layer::Follower`.
-    /// Handed to `Scene::with_links` by the binding layer so `flui-engine`
-    /// can resolve follower positions at render time against this same
-    /// frame's fully-built `tree` (design research plan).
-    link_registry: LinkRegistry,
     /// `(RenderId, LayerId)` correlation for each `Layer::Follower` pushed
     /// this paint pass (ADR-0015) — the general `RenderId -> LayerId`
     /// primitive independently wanted by the snapshot/harness subtree-scoping
@@ -1189,7 +1172,6 @@ impl FragmentComposer {
     /// boundary nothing can identify -- the worst shape for anything pairing
     /// boundaries across frames, which is what `render_id` exists for.
     fn new(device_pixel_ratio: f32, root_boundary: Option<RenderId>) -> Self {
-        let mut tree = LayerTree::new();
         let root_layer = if (device_pixel_ratio - 1.0).abs() < f32::EPSILON {
             Layer::Offset(OffsetLayer::zero())
         } else {
@@ -1199,16 +1181,15 @@ impl FragmentComposer {
                 1.0,
             )))
         };
-        let root = match root_boundary {
-            Some(id) => tree.insert_node(LayerNode::new(root_layer).with_render_id(id)),
-            None => tree.insert(root_layer),
-        };
-        tree.set_root(Some(root));
+        let root_node = LayerNode::new(root_layer);
+        let tree = LayerTree::new(match root_boundary {
+            Some(id) => root_node.with_render_id(id),
+            None => root_node,
+        });
         Self {
+            stack: vec![tree.root()],
             tree,
-            stack: vec![root],
             open: DisplayList::new(),
-            link_registry: LinkRegistry::new(),
             follower_correlations: Vec::new(),
             retained_captures: Vec::new(),
             capture_scopes: Vec::new(),
@@ -1219,9 +1200,9 @@ impl FragmentComposer {
         }
     }
 
-    /// Merges a sealed fragment run into the open picture.
+    /// Merges a sealed run while keeping its canvas clips local to that run.
     fn append_run(&mut self, run: DisplayList) {
-        self.open.append(run);
+        self.open.append_isolated(run);
     }
 
     /// Flushes the open picture into a `PictureLayer` under the
@@ -1238,13 +1219,14 @@ impl FragmentComposer {
     }
 
     fn seal_picture(&mut self) {
-        if flui_painting::DisplayListCore::is_empty(&self.open) {
+        if self.open.is_empty() {
             return;
         }
         let list = std::mem::take(&mut self.open);
-        let layer_id = self.tree.insert(Layer::from(PictureLayer::new(list)));
         let parent = self.current_parent();
-        self.tree.add_child(parent, layer_id);
+        let _ = self
+            .tree
+            .push_child(parent, Layer::from(PictureLayer::new(list)));
     }
 
     /// Inserts `layer` under the current stack top, returning its freshly
@@ -1278,25 +1260,8 @@ impl FragmentComposer {
 
     fn push_layer_node(&mut self, node: LayerNode) -> LayerId {
         self.seal_picture();
-        let layer = node.layer();
-        // Extract the link-registry-relevant fields BEFORE `layer` moves
-        // into the tree — `Leader`/`Follower` are `Copy`-field-bearing, so
-        // this is a cheap read, not a clone of the layer itself.
-        let leader_registration = layer
-            .as_leader()
-            .map(|leader| (leader.link(), leader.get_offset(), leader.size()));
-        let follower_link = layer.as_follower().map(FollowerLayer::link);
-
-        let id = self.tree.insert_node(node);
-        if let Some((link, offset, size)) = leader_registration {
-            self.link_registry.register_leader(link, id, offset, size);
-        }
-        if let Some(link) = follower_link {
-            self.link_registry.register_follower(id, link);
-        }
-
         let parent = self.current_parent();
-        self.tree.add_child(parent, id);
+        let id = self.tree.push_child(parent, node);
         self.stack.push(id);
         id
     }
@@ -1325,12 +1290,11 @@ impl FragmentComposer {
     /// run was sealed, so the tree under `root` is complete.
     ///
     /// Returns `None` when the subtree contains a `Leader` or `Follower`.
-    /// Those register into `link_registry` as a side effect of
-    /// [`Self::push_layer`], and a graft re-inserts layers without replaying
-    /// that registration — a retained follower would lose its link on every
-    /// frame it was reused. Refusing to retain them is the bounded answer;
-    /// replaying the registration (and the `RenderId` correlation a follower
-    /// also needs, which the flattened form does not carry) is the complete
+    /// The tree re-indexes a grafted leader by itself, but a follower also
+    /// needs the `RenderId` correlation (`follower_correlations`) that the
+    /// flattened form does not carry, so its hit-test offset would go stale
+    /// on every reused frame. Refusing to retain either is the bounded
+    /// answer; carrying the correlation through the capture is the complete
     /// one.
     /// Record a boundary into every open capture scope.
     fn note_boundary(&mut self, id: RenderId) {
@@ -1397,7 +1361,6 @@ impl FragmentComposer {
             nodes.push(RetainedNode {
                 layer: layer.clone(),
                 parent,
-                offset: node.offset(),
                 render_id: node.render_id(),
             });
             for &child in node.children().iter().rev() {
@@ -1458,12 +1421,8 @@ impl FragmentComposer {
             if let Some(render_id) = node.render_id {
                 layer_node = layer_node.with_render_id(render_id);
             }
-            if let Some(offset) = node.offset {
-                layer_node = layer_node.with_offset(offset);
-            }
-            let id = self.tree.insert_node(layer_node);
             let parent = node.parent.map_or(root, |i| minted[i]);
-            self.tree.add_child(parent, id);
+            let id = self.tree.push_child(parent, layer_node);
             minted.push(id);
         }
     }
@@ -1485,7 +1444,6 @@ impl FragmentComposer {
         mut self,
     ) -> (
         LayerTree,
-        LinkRegistry,
         Vec<(RenderId, LayerId)>,
         Vec<(RenderId, Option<RetainedSubtree>)>,
         Vec<(RenderId, Vec<(usize, Layer)>)>,
@@ -1501,7 +1459,6 @@ impl FragmentComposer {
         );
         (
             self.tree,
-            self.link_registry,
             self.follower_correlations,
             self.retained_captures,
             self.layer_patches,
@@ -1632,7 +1589,7 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
             } else {
                 Arc::new(path.translate(origin))
             };
-            Layer::ClipPath(Box::new(ClipPathLayer::new(path, behavior)))
+            Layer::ClipPath(ClipPathLayer::new(path, behavior))
         }
         PaintClip::PathTarget {
             target,
@@ -1651,7 +1608,7 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
             } else {
                 path.translate(origin)
             };
-            Layer::ClipPath(Box::new(ClipPathLayer::new(Arc::new(path), behavior)))
+            Layer::ClipPath(ClipPathLayer::new(Arc::new(path), behavior))
         }
     }
 }
@@ -1812,15 +1769,8 @@ mod tests {
                 &FxHashMap::default(),
             )
             .expect("paint_subtree should succeed");
-        let (
-            layer_tree,
-            _link_registry,
-            follower_correlations,
-            _retained,
-            _patches,
-            _consumed,
-            _visited,
-        ) = composer.finish();
+        let (layer_tree, follower_correlations, _retained, _patches, _consumed, _visited) =
+            composer.finish();
 
         assert_eq!(
             follower_correlations.len(),
@@ -1836,7 +1786,7 @@ mod tests {
         assert!(
             layer_tree
                 .get_layer(correlated_layer_id)
-                .is_some_and(Layer::is_follower),
+                .is_some_and(|layer| layer.as_follower().is_some()),
             "the correlated LayerId must point at the pushed Layer::Follower node"
         );
     }

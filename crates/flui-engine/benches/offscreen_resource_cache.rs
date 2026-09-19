@@ -45,7 +45,7 @@ use std::sync::Arc;
 
 use bytemuck::cast_slice;
 use criterion::{Criterion, criterion_group, criterion_main};
-use flui_engine::wgpu::OffscreenRenderer;
+use flui_engine::OffscreenRenderer;
 use flui_types::{
     Rect, Size,
     geometry::{Pixels, px},

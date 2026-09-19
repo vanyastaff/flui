@@ -7,6 +7,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — glyphs cross to the engine, not the buffer (ADR-0067, 2026-09-18)
+
+- `TextLayout::placed_glyphs(origin, scale)` yields `PlacedGlyph { key:
+  GlyphKey, x, y, color }` in device pixels; `SharedFontSystem::rasterize(
+  GlyphKey) -> Option<GlyphImage>` is the fourth door of the font system.
+  `GlyphKey`, `PlacedGlyph`, `GlyphImage`, `GlyphContent` are exported.
+- `TextLayout::buffer()` is deleted, `Shaper::font_system()` is
+  crate-private, and the `FontSystem` re-export is gone: `Family` (on
+  `ResolvedFont`) is the one cosmic-text type on the surface.
+
+### Changed — the command is `{ transform, op }` (ADR-0066, 2026-09-18)
+
+- `DrawCommand` is now `struct { transform: Matrix4, op: DrawOp }`; the
+  operations live in `DrawOp` without the `Draw` prefix (`Rect`, `Path`,
+  `Paragraph`, …) and without per-variant transform fields. `Save`,
+  `Restore`, and `RestoreLayer` are unit variants: they scope clips and
+  nothing else. `DrawCommand::untransformed(op)` builds one under the
+  identity.
+- `DrawGradient`/`DrawGradientRRect` and `Canvas::draw_gradient`/
+  `draw_gradient_rrect` are gone: a gradient is a `Shader` on a fill
+  `Paint` drawn through `draw_rect`/`draw_rrect`/`draw_circle`.
+  `paint_box_decoration` records one shader paint for all three
+  silhouettes, so a rounded gradient keeps its per-corner radii.
+- `Canvas::draw_picture(&DisplayList)` is back: every command replays as
+  `ctm * command.transform`.
+- `flui_types::painting::Path` is copy-on-write (`Arc<Vec<PathCommand>>`);
+  a clone is a refcount bump, and `Path::shares_commands_with` observes it.
+- `DrawOp` is at most 128 bytes and `DrawCommand` 192
+  (`draw_command_fits_its_budget`); the previous command was 560 bytes.
+- New criterion bench `display_list_record`.
+
+### Changed — text crosses the display list shaped (ADR-0065 part 2, 2026-09-18)
+
+- `DrawCommand::DrawText` and `DrawTextSpan` are replaced by
+  `Paragraph { layout: Arc<TextLayout>, offset, color }`, recorded by
+  `Canvas::draw_paragraph`; `Canvas::draw_text`/`draw_text_span` are gone.
+  `TextPainter::paint` records the very layout it measured, so `max_lines`,
+  the ellipsis, and per-span faces paint as measured.
+- `TextLayout::buffer()`, `text()`, `describe_runs()` added; a span's colour
+  is baked into its shaped attrs when it differs from the root's, and
+  `TextPainter::set_text` reports a span recolour as `Invalidation::Layout`.
+- `TextPainter::get_offset_for_caret` takes `&self`.
+- serde derives are off `DrawCommand` and `DisplayList` (nothing enabled
+  them; a shaped layout is not serialisable).
+
+### Changed — the font system has three doors (ADR-0065 part 1, 2026-09-18)
+
+- `SharedFontSystem::with_mut`, `resolve_font`, and `resolve_fonts` are
+  replaced by `shape(|Shaper| …)` (resolve + shape under one lock, no
+  generation bump), `register_font` (the only mutation, append-only, bumps
+  the generation), and `generation()`. `TextPainter`'s layout cache and the
+  engine's buffer caches key on the generation, so a face registered after
+  layout is picked up at the next layout.
+- The embedded Roboto / Material Icons / Cupertino Icons faces moved here
+  (`flui_painting::fonts`, feature `bundled-fonts`, on by default) and are
+  installed at font-system construction; `flui_engine::fonts` and the
+  engine's `ensure_fonts_available` are gone, and a headless test measures
+  an icon in the face the app paints.
+- `TextLayout::get_offset_for_caret` takes `&self` and walks the laid-out
+  runs (it no longer takes the font lock, and it answers on wrapped lines,
+  where the previous implementation stopped at the first run).
+
+### Changed — surface cut to what has a consumer (2026-09-18)
+
+- **Deleted:** `PaintingBinding`, `ImageCache`, `CachedImage`, `ImageHandle`,
+  `SystemFontsNotifier` (the live decode cache is
+  `flui_widgets::image::decode_cache`; nothing listened to the notifier);
+  `ClipContext` (no production implementor); the sealed
+  `DisplayListCore`/`DisplayListExt` pair and `DisplayListStats`;
+  `DisplayList`'s mutation and analysis surface (`iter_mut`, `IndexMut`,
+  `AsMut`, `filter`, `map`, `to_opacity`, `apply_transform`, `stats`);
+  `DrawCommand::{ShaderMask, BackdropFilter}` (no producer; masks and
+  backdrop filters are layers) with `Canvas::draw_shader_mask` /
+  `draw_backdrop_filter` and the engine's second lowering for them;
+  `CommandKind`, `DrawCommand::{with_opacity, kind, is_*, paint, has_paint,
+  transform, transform_mut, apply_transform}`; the `prelude`;
+  `PaintingError` (five variants nothing produced) → `RegisterFontError`;
+  `measure_text`, `measure_inline_span`, `detect_text_direction`, `LineInfo`,
+  `TextLayout::{get_line_info, has_rtl_content, is_bidirectional,
+  was_truncated}`; `TextPainter`'s accepted-and-ignored `strut_style` /
+  `text_width_basis` / `text_height_behavior` / `placeholder_dimensions`
+  and `did_layout`; the non-`dart:ui` `Canvas` extras with no consumer
+  (`draw_point`, `draw_polyline`, `with_save`/`with_translate`/`with_rotate`/
+  `with_rotate_around`/`with_scale`/`with_scale_xy`, `rotate_around`,
+  `scale_uniform`, `clear_commands`, `local_clip_bounds`/
+  `device_clip_bounds`/`would_be_clipped` — the last three answered for the
+  last clip only and ignored `ClipOp::Difference`); `draw_picture` (it
+  ignored the current transform; returns with the `DrawCommand` split);
+  `CanvasState`/`ClipShape` from the public surface; `docs/{ARCHITECTURE,
+  PERFORMANCE,README,MIGRATION}.md` and `CONTRIBUTING.md`.
+- `shared_font_system()` is public and `register_font` lives on
+  `SharedFontSystem`; `AppRuntime` installs the font system at realm install.
+- `DisplayList::bounds()` and `Canvas::bounds()` return `Option<Rect>`;
+  `commands()` returns a slice; `len`/`is_empty`/`bounds`/`commands` are
+  inherent. `PictureLayer`/`CanvasLayer::bounds()` follow.
+- `DrawCommand` is no longer `#[non_exhaustive]`; the engine's dispatch
+  matches it exhaustively with no wildcard arm.
+- `Canvas::scale(sx, sy)` replaces `scale_xy`; the four clip methods and
+  their `_ext` forms share one private `push_clip`. Clip lifetime is carried
+  by the recorded save/restore commands; the unused clip-depth counter is gone.
+- `DisplayList` serialization contains commands only. Deserialization recomputes
+  bounds from those commands instead of accepting an externally supplied cache.
+- `DisplayList::append_isolated` adds a balanced run inside save/restore markers.
+  The rendering composer uses it to keep canvas clips local to each paint run;
+  `append` remains raw concatenation with shared replay state.
+- `flui_types::painting::Paint` derives `PartialEq` (the hand-written impl
+  skipped `shader`); `flui_geometry::RRect::contains` replaces three copies
+  of point-in-rounded-rect across this crate and `flui-objects`.
+- Docs: the front page is a compiled example; the `!Sync` claims on
+  `Canvas`/`TextPainter` (false) and the "restore on panic" claim on the
+  scoped helpers (false) are gone; `ARCHITECTURE.md` is a current-state
+  document with the open items (double shaping, cache invalidation,
+  `with_mut` reentrancy, command size).
+
+
 ### Removed
 
 - **`text_layout::fallback` parallel `TextLayout`** (plan U8 / audit P-3) —

@@ -398,7 +398,7 @@ macro_rules! app_plugin {
                         $root_view, width, height,
                     ))
                 });
-                let scene = pipeline.draw_frame(width, height);
+                let scene = pipeline.draw_frame();
                 ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene))
                     .cast::<::std::ffi::c_void>()
             })

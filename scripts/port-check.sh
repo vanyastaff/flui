@@ -23,9 +23,8 @@
 # added in engine overhaul T9f (C4: Matrix4 must not appear on the
 # record/pipeline side; convert at the Backend trait boundary). Trigger #20
 # added in advanced-blend PR-5 (gradient/image producers must not regress
-# to SrcOver warn-fallback; deleted strings must not reappear). Trigger #21
-# added in Core.0 N10 (RasterBackend seam): lyon CODE must stay confined to
-# wgpu/tessellator.rs so the rendering backend stays swappable.
+# to SrcOver warn-fallback; deleted strings must not reappear). Trigger #21:
+# lyon CODE must stay confined to tessellator.rs, the one adapter over it.
 #
 # Additionally reports the inline port-marker budget (TODO(port),
 # PERF(port), PORT NOTE) — markers are deliberate Phase B deferrals, NOT
@@ -281,12 +280,12 @@ check "4" \
 # Forward-looking. Scope:
 #   - flui-objects/src (per-render-object paint impls; moved from
 #     flui-rendering/src/objects per ADR-0008)
-#   - flui-engine/src/wgpu/layer_render.rs (per-layer wgpu walk; extended in
+#   - flui-engine/src/layer_render.rs (per-layer wgpu walk; extended in
 #     Mythos Step 13 of the flui-layer chain)
 #
 # *** SCOPE EXCLUSIONS BELOW ARE TRACKED-OUTSTANDING-REFACTOR WHITELISTS ***
 #
-# `flui-engine/src/wgpu/layer_dispatcher.rs` is NOT in the scope. The
+# `flui-engine/src/layer_dispatcher.rs` is NOT in the scope. The
 # `Arc<Mutex<OffscreenRenderer>>` refactor this exclusion originally tracked
 # has landed, but per-effect-frame `Arc::clone` sites survived it: the
 # offscreen-painter cache initialisation and the device/queue handle grabs
@@ -296,7 +295,7 @@ check "4" \
 # `layer_dispatcher.rs` to the scope requires either removing those clones or
 # a function-level exclusion mechanism this script does not have.
 #
-# `flui-engine/src/wgpu/renderer.rs` is NOT in the scope because:
+# `flui-engine/src/renderer.rs` is NOT in the scope because:
 # - `Renderer::new`, `new_offscreen`, `recover`, and
 #   `from_offscreen_services` perform setup-phase `Arc::clone(&device)` /
 #   `Arc::clone(&queue)` calls that amortise across the renderer's lifetime
@@ -315,7 +314,7 @@ check "5" \
   --glob '!**/test*.rs' \
   --glob '!**/tests/**' \
   crates/flui-objects/src \
-  crates/flui-engine/src/wgpu/layer_render.rs
+  crates/flui-engine/src/layer_render.rs
 
 # -----------------------------------------------------------------------------
 # Trigger 6 -- recursive Box<dyn View> stored in element child collections.
@@ -336,7 +335,7 @@ check "6" \
 
 # -----------------------------------------------------------------------------
 # Trigger 7 -- Arc<Mutex<*>> or Arc<RwLock<*>> on a *Renderer / *Pool / wgpu::*
-# field inside crates/flui-engine/src/wgpu/.
+# field inside crates/flui-engine/src/.
 #
 # The lock-or-interior-mutability problem: a renderer, a pool or a raw wgpu
 # handle behind a shared lock invites a second mutator into a single-mutator
@@ -374,12 +373,12 @@ check "6" \
 # `Renderer::offscreen`).
 # -----------------------------------------------------------------------------
 check "7" \
-  "Arc<(Mutex|RwLock)<*Renderer|*Pool|wgpu::*>> struct field in flui-engine wgpu module" \
+  "Arc<(Mutex|RwLock)<*Renderer|*Pool|wgpu::*>> struct field in flui-engine" \
   '^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)' \
   --type rust \
   --glob '!**/test*.rs' \
   --glob '!**/tests/**' \
-  crates/flui-engine/src/wgpu
+  crates/flui-engine/src
 
 # -----------------------------------------------------------------------------
 # FR-033: downcast_ref::<…> in the View-type update dispatch
@@ -1446,7 +1445,7 @@ fi
 # (record/pipeline modules), or `GpuReplay` (replay/submit module).
 #
 # C4 rule: `Matrix4`↔glam conversions must happen at the `LayerDispatcher`
-# trait boundary (crates/flui-engine/src/wgpu/layer_dispatcher.rs). The hot record path
+# trait boundary (crates/flui-engine/src/layer_dispatcher.rs). The hot record path
 # (`batches/`), the pipeline-set module (`pipeline_set.rs`), and the
 # replay/submit module (`replay/`) must be glam-only; importing or
 # accepting `Matrix4` in any of these leaks the flui-types coordinate type
@@ -1460,9 +1459,9 @@ fi
 # pass primitives down.
 # -----------------------------------------------------------------------------
 trigger19_hits=$(rg --line-number --column '\bMatrix4\b' \
-    crates/flui-engine/src/wgpu/batches \
-    crates/flui-engine/src/wgpu/pipeline_set.rs \
-    crates/flui-engine/src/wgpu/replay 2>/dev/null \
+    crates/flui-engine/src/batches \
+    crates/flui-engine/src/pipeline_set.rs \
+    crates/flui-engine/src/replay 2>/dev/null \
   | grep -Ev ':\s*(//!|///|//)' \
   || true)
 
@@ -1482,17 +1481,25 @@ fi
 # N-geom.U16: direct glam use in flui-engine is confined to the wgpu backend.
 #
 # Option D deliberately uses glam for GPU/painter hot-path math, but that policy
-# is an engine-edge policy, not a blanket license for higher engine modules to
-# reach around FLUI's typed geometry boundary. Keep direct `glam::...` and
-# `use glam...` code under `crates/flui-engine/src/wgpu/`; other engine modules
-# should speak FLUI geometry types or add a documented bridge.
+# is an engine-edge policy, not a blanket license for the engine's GPU-free
+# modules — the raster protocol, command dispatch, error types, fonts, frame
+# timing, the layer state stack, the superellipse cache — to reach around
+# FLUI's typed geometry boundary. Those modules speak FLUI geometry types or
+# add a documented bridge; every other engine module is the GPU edge.
 # -----------------------------------------------------------------------------
 check "N-geom.U16" \
-  "direct glam use outside flui-engine/src/wgpu (GPU math backend must stay at the engine edge)" \
+  "direct glam use in a GPU-free flui-engine module (GPU math backend must stay at the engine edge)" \
   '(^\s*use\s+glam\b|glam::)' \
   --type rust \
-  --glob '!**/wgpu/**' \
-  crates/flui-engine/src
+  crates/flui-engine/src/command_renderer.rs \
+  crates/flui-engine/src/dispatch.rs \
+  crates/flui-engine/src/error.rs \
+  crates/flui-engine/src/fonts.rs \
+  crates/flui-engine/src/frame_timing.rs \
+  crates/flui-engine/src/layer_state_stack.rs \
+  crates/flui-engine/src/raster.rs \
+  crates/flui-engine/src/raster_owner.rs \
+  crates/flui-engine/src/superellipse.rs
 
 # -----------------------------------------------------------------------------
 # Cross.H3: no `ElementBuildContext::new_minimal` resurrection in flui-view.
@@ -1528,9 +1535,9 @@ check "Cross.H3" \
 trigger20_hits=$(rg --line-number --column \
     -e 'is not supported by the' \
     -e 'rendering as SrcOver' \
-    crates/flui-engine/src/wgpu/batches \
-    crates/flui-engine/src/wgpu/renderer.rs \
-    crates/flui-engine/src/wgpu/layer_dispatcher.rs 2>/dev/null \
+    crates/flui-engine/src/batches \
+    crates/flui-engine/src/renderer.rs \
+    crates/flui-engine/src/layer_dispatcher.rs 2>/dev/null \
   || true)
 
 if [[ -n "${trigger20_hits}" ]]; then
@@ -1547,16 +1554,13 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# Trigger 21 (Core.0 N10 RasterBackend seam) — lyon confined to the wgpu
-# tessellator.
+# Trigger 21 — lyon confined to the tessellator.
 #
-# The rendering-backend swap seam (CommandRenderer + the RasterBackend driver
-# trait) only stays non-breaking if the lyon tessellation library is an
-# *internal detail* of the wgpu backend, not a dependency the rest of the
-# engine reaches into. All lyon CODE use (`lyon::…`, `use lyon …`) must live in
-# `crates/flui-engine/src/wgpu/tessellator.rs`. A future Vello/software backend
-# does not tessellate to triangles at all; any `lyon::` outside the tessellator
-# couples the codebase to one rasterization strategy and breaks the seam.
+# `tessellator.rs` is the one adapter over the tessellation crate. All lyon
+# CODE use (`lyon::…`, `use lyon …`) must live there, so a lyon type never
+# leaks into the Command IR, a pipeline layout, or a batch — the same
+# discipline that keeps etagere behind `glyph_atlas.rs`. A second site is a second
+# adapter, and two adapters over one library drift.
 #
 # Doc-comment mentions ("…tessellated by lyon…") are fine and filtered out by
 # the shared doc-comment filter in `check`; only real code constructs match.
@@ -1565,7 +1569,7 @@ fi
 # docs/designs/2026-06-30-rasterbackend-seam.md.
 # -----------------------------------------------------------------------------
 check "21" \
-  "lyon used outside wgpu/tessellator.rs (raster backend must stay swappable)" \
+  "lyon used outside tessellator.rs (one adapter over the tessellation crate)" \
   'lyon::|use\s+lyon\b' \
   --type rust \
   --glob '!**/tessellator.rs' \

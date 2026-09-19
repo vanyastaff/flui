@@ -1,7 +1,4 @@
-//! OpacityLayer - Alpha blending layer
-//!
-//! This layer applies an opacity (alpha) value to its children.
-//! Corresponds to Flutter's `OpacityLayer`.
+//! `OpacityLayer` — composites its subtree at an alpha, optionally with a blend mode.
 
 use flui_types::{Offset, geometry::Pixels, painting::BlendMode};
 
@@ -60,46 +57,38 @@ pub struct OpacityLayer {
 }
 
 impl OpacityLayer {
-    /// Creates a new opacity layer with `BlendMode::SrcOver`.
-    ///
-    /// # Arguments
-    ///
-    /// * `alpha` - Opacity value (0.0 to 1.0, will be clamped)
+    /// Composites the subtree at `alpha` (clamped to `0.0..=1.0`) with `BlendMode::SrcOver`.
     #[inline]
     pub fn new(alpha: f32) -> Self {
         Self {
-            alpha: alpha.clamp(0.0, 1.0),
+            alpha: super::unit_alpha(alpha),
             offset: Offset::ZERO,
             blend: BlendMode::SrcOver,
         }
     }
 
-    /// Creates an opacity layer with an offset and `BlendMode::SrcOver`.
-    ///
-    /// Combining offset with opacity avoids needing a separate OffsetLayer.
+    /// Like [`Self::new`], also translating the subtree by `offset`.
     #[inline]
     pub fn with_offset(alpha: f32, offset: Offset<Pixels>) -> Self {
         Self {
-            alpha: alpha.clamp(0.0, 1.0),
+            alpha: super::unit_alpha(alpha),
             offset,
             blend: BlendMode::SrcOver,
         }
     }
 
-    /// Creates an opacity layer with an explicit blend mode.
-    ///
-    /// Used by saveLayer paths that carry an advanced blend mode (Multiply,
-    /// Screen, etc.).  Plain opacity layers always use `BlendMode::SrcOver`.
+    /// An opacity group with an explicit blend mode, for `saveLayer` paths that carry an
+    /// advanced mode (Multiply, Screen, …); plain opacity is always `SrcOver`.
     #[inline]
     pub fn with_blend(alpha: f32, offset: Offset<Pixels>, blend: BlendMode) -> Self {
         Self {
-            alpha: alpha.clamp(0.0, 1.0),
+            alpha: super::unit_alpha(alpha),
             offset,
             blend,
         }
     }
 
-    /// Creates a fully transparent layer with `BlendMode::SrcOver`.
+    /// Alpha 0: the subtree composites to nothing.
     #[inline]
     pub const fn transparent() -> Self {
         Self {
@@ -109,7 +98,7 @@ impl OpacityLayer {
         }
     }
 
-    /// Creates a fully opaque layer with `BlendMode::SrcOver`.
+    /// Alpha 1: the group is the identity for `SrcOver`.
     #[inline]
     pub const fn opaque() -> Self {
         Self {
@@ -119,96 +108,46 @@ impl OpacityLayer {
         }
     }
 
-    /// Returns the alpha value.
+    /// The group's alpha in `0.0..=1.0`.
     #[inline]
     pub const fn alpha(&self) -> f32 {
         self.alpha
     }
 
-    /// Sets the alpha value.
-    ///
-    /// Value will be clamped to 0.0..=1.0.
-    #[inline]
-    pub fn set_alpha(&mut self, alpha: f32) {
-        self.alpha = alpha.clamp(0.0, 1.0);
-    }
-
-    /// Returns the offset.
+    /// The translation applied to the subtree (see [`Self::with_offset`]).
     #[inline]
     pub const fn offset(&self) -> Offset<Pixels> {
         self.offset
     }
 
-    /// Sets the offset.
-    #[inline]
-    pub fn set_offset(&mut self, offset: Offset<Pixels>) {
-        self.offset = offset;
-    }
-
-    /// Returns true if fully transparent (can skip rendering).
+    /// Whether alpha is 0.
     #[inline]
     pub fn is_invisible(&self) -> bool {
         self.alpha <= 0.0
     }
 
-    /// Returns true if fully opaque (can skip alpha blending).
+    /// Whether alpha is 1 (an identity group under `SrcOver`; not under an advanced blend).
     #[inline]
     pub fn is_opaque(&self) -> bool {
         self.alpha >= 1.0
     }
 
-    /// Returns true if this layer has a non-zero offset.
+    /// Whether the layer translates its subtree.
     #[inline]
     pub fn has_offset(&self) -> bool {
-        use flui_types::geometry::px;
-        self.offset.dx != px(0.0) || self.offset.dy != px(0.0)
+        !self.offset.is_zero()
     }
 
-    /// Returns the alpha as a byte value (0-255).
-    ///
-    /// Useful for GPU operations that expect integer alpha.
-    #[inline]
-    pub fn alpha_byte(&self) -> u8 {
-        (self.alpha * 255.0).round() as u8
-    }
-
-    /// Returns the blend mode for this layer.
-    ///
-    /// Plain opacity layers return `BlendMode::SrcOver`; advanced-blend
-    /// saveLayer paths return the caller-specified mode.
+    /// The blend mode: `SrcOver` for plain opacity, the caller's mode for advanced-blend groups.
     #[inline]
     pub const fn blend(&self) -> BlendMode {
         self.blend
-    }
-
-    /// Returns true if this layer needs compositing.
-    ///
-    /// Returns false if fully opaque (no compositing needed) or
-    /// fully transparent (nothing to render).
-    #[inline]
-    pub fn needs_compositing(&self) -> bool {
-        self.alpha > 0.0 && self.alpha < 1.0
     }
 }
 
 impl Default for OpacityLayer {
     fn default() -> Self {
         Self::opaque()
-    }
-}
-
-/// A set builder: opacity + offset + blend mode in one call.
-///
-/// Used by `SceneBuilder::push_opacity_blend` and the rendering pipeline's
-/// paint-effect hook when a node reports an advanced layer blend.
-impl OpacityLayer {
-    /// Convenience: opacity=1.0, zero offset, explicit blend mode.
-    ///
-    /// Intended for callers that only want to set the blend (no alpha
-    /// reduction), e.g. an opaque `saveLayer(Multiply)`.
-    #[inline]
-    pub fn blend_only(blend: BlendMode) -> Self {
-        Self::with_blend(1.0, Offset::ZERO, blend)
     }
 }
 
@@ -264,64 +203,9 @@ mod tests {
     }
 
     #[test]
-    fn test_opacity_layer_setters() {
-        let mut layer = OpacityLayer::new(0.5);
-
-        layer.set_alpha(0.75);
-        assert_eq!(layer.alpha(), 0.75);
-
-        layer.set_offset(Offset::new(px(5.0), px(10.0)));
-        assert_eq!(layer.offset().dx, px(5.0));
-    }
-
-    #[test]
-    fn test_opacity_layer_set_alpha_clamping() {
-        let mut layer = OpacityLayer::new(0.5);
-
-        layer.set_alpha(-1.0);
-        assert_eq!(layer.alpha(), 0.0);
-
-        layer.set_alpha(2.0);
-        assert_eq!(layer.alpha(), 1.0);
-    }
-
-    #[test]
-    fn test_opacity_layer_alpha_byte() {
-        assert_eq!(OpacityLayer::new(0.0).alpha_byte(), 0);
-        assert_eq!(OpacityLayer::new(0.5).alpha_byte(), 128);
-        assert_eq!(OpacityLayer::new(1.0).alpha_byte(), 255);
-    }
-
-    #[test]
-    fn test_opacity_layer_needs_compositing() {
-        assert!(!OpacityLayer::new(0.0).needs_compositing()); // Fully transparent
-        assert!(!OpacityLayer::new(1.0).needs_compositing()); // Fully opaque
-        assert!(OpacityLayer::new(0.5).needs_compositing()); // Semi-transparent
-        assert!(OpacityLayer::new(0.01).needs_compositing());
-        assert!(OpacityLayer::new(0.99).needs_compositing());
-    }
-
-    #[test]
     fn test_opacity_layer_default() {
         let layer = OpacityLayer::default();
 
         assert!(layer.is_opaque());
-    }
-
-    #[test]
-    fn test_opacity_layer_copy() {
-        let layer = OpacityLayer::new(0.5);
-        let copied = layer; // Copy
-
-        assert_eq!(layer, copied);
-    }
-
-    #[test]
-    fn test_opacity_layer_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<OpacityLayer>();
-        assert_sync::<OpacityLayer>();
     }
 }

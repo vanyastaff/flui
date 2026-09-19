@@ -47,7 +47,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use flui_layer::LayerLink;
-use flui_painting::{Canvas, DisplayList, DisplayListCore};
+use flui_painting::{Canvas, DisplayList};
 use flui_tree::{Arity, Optional, Single, Variable};
 use flui_types::{
     Matrix4, Offset, Pixels, Point, Rect, Size,
@@ -732,7 +732,7 @@ mod tests {
         // local (0,0,10,10) lands at (7,3,17,13) in layer space.
         assert_eq!(
             list.bounds(),
-            Rect::from_ltrb(px(7.0), px(3.0), px(17.0), px(13.0)),
+            Some(Rect::from_ltrb(px(7.0), px(3.0), px(17.0), px(13.0))),
             "record-time bounds must include the node-origin translation",
         );
     }

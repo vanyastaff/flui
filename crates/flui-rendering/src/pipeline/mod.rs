@@ -34,7 +34,3 @@ pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics}
 
 // Re-export contexts from context module (canonical location)
 pub use crate::context::{Canvas, DisplayList, Paint, PaintStyle};
-// `ClipContext` is canonically owned by `flui-painting` (Flutter parity with
-// `painting/clip.dart`); re-export through the pipeline path for ergonomic
-// in-crate imports.
-pub use flui_painting::ClipContext;

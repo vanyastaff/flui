@@ -72,7 +72,7 @@ impl DashPattern {
 ///
 /// Contains all the information needed to render a shape, including color,
 /// stroke/fill style, blend mode, and optional shader (gradient, pattern).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Paint {
     /// Paint style (fill or stroke).
@@ -327,20 +327,6 @@ impl Default for Paint {
     #[inline]
     fn default() -> Self {
         Self::fill(Color::BLACK)
-    }
-}
-
-impl PartialEq for Paint {
-    fn eq(&self, other: &Self) -> bool {
-        self.style == other.style
-            && self.color == other.color
-            && self.stroke_width == other.stroke_width
-            && self.stroke_cap == other.stroke_cap
-            && self.stroke_join == other.stroke_join
-            && self.blend_mode == other.blend_mode
-            && self.anti_alias == other.anti_alias
-            && self.dash_pattern == other.dash_pattern
-        // Note: shader comparison intentionally excluded (contains f32 arrays)
     }
 }
 

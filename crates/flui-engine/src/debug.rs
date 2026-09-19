@@ -1,0 +1,415 @@
+//! Debug renderer - logs commands and validates state
+//!
+//! Useful for development, debugging, and testing rendering without GPU.
+
+use std::sync::Arc;
+
+use flui_painting::{BlendMode, Paint, PointMode};
+use flui_types::{
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect},
+    painting::{Image, Path},
+    styling::Color,
+};
+
+use crate::command_renderer::CommandRenderer;
+use crate::layer_state_stack::LayerStateStack;
+
+/// Debug backend that logs all commands to tracing.
+#[derive(Debug)]
+pub(crate) struct DebugBackend {
+    command_count: usize,
+}
+
+impl DebugBackend {
+    /// Create a new debug backend.
+    pub(crate) fn new() -> Self {
+        Self { command_count: 0 }
+    }
+
+    /// Get the total number of commands processed.
+    pub(crate) fn command_count(&self) -> usize {
+        self.command_count
+    }
+
+    fn log_command(&mut self, name: &str, details: &str) {
+        self.command_count += 1;
+        tracing::trace!("[{}] {}: {}", self.command_count, name, details);
+    }
+}
+
+impl CommandRenderer for DebugBackend {
+    fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, _transform: &Matrix4) {
+        self.log_command("render_rect", &format!("rect={rect:?}, paint={paint:?}"));
+    }
+
+    fn render_rrect(&mut self, rrect: RRect, _paint: &Paint, _transform: &Matrix4) {
+        self.log_command("render_rrect", &format!("rrect={rrect:?}"));
+    }
+
+    fn render_circle(
+        &mut self,
+        center: Point<Pixels>,
+        radius: f32,
+        _paint: &Paint,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_circle",
+            &format!("center={center:?}, radius={radius}"),
+        );
+    }
+
+    fn render_oval(&mut self, rect: Rect<Pixels>, _paint: &Paint, _transform: &Matrix4) {
+        self.log_command("render_oval", &format!("rect={rect:?}"));
+    }
+
+    fn render_line(
+        &mut self,
+        p1: Point<Pixels>,
+        p2: Point<Pixels>,
+        _paint: &Paint,
+        _transform: &Matrix4,
+    ) {
+        self.log_command("render_line", &format!("p1={p1:?}, p2={p2:?}"));
+    }
+
+    fn render_path(&mut self, path: &Path, _paint: &Paint, _transform: &Matrix4) {
+        self.log_command(
+            "render_path",
+            &format!("commands={}", path.commands().len()),
+        );
+    }
+
+    fn render_arc(
+        &mut self,
+        _rect: Rect<Pixels>,
+        start_angle: f32,
+        sweep_angle: f32,
+        _use_center: bool,
+        _paint: &Paint,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_arc",
+            &format!("start={start_angle}, sweep={sweep_angle}"),
+        );
+    }
+
+    fn render_drrect(
+        &mut self,
+        _outer: RRect,
+        _inner: RRect,
+        _paint: &Paint,
+        _transform: &Matrix4,
+    ) {
+        self.log_command("render_drrect", "double rounded rect");
+    }
+
+    fn render_points(
+        &mut self,
+        mode: PointMode,
+        points: &[Point<Pixels>],
+        _paint: &Paint,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_points",
+            &format!("mode={:?}, count={}", mode, points.len()),
+        );
+    }
+
+    fn render_paragraph(
+        &mut self,
+        layout: &Arc<flui_painting::TextLayout>,
+        offset: Offset<Pixels>,
+        color: Color,
+        _transform: &Matrix4,
+    ) {
+        // Line count, not content: this backend is `cfg(debug_assertions)`,
+        // which is exactly the build a developer installs on a real device.
+        self.log_command(
+            "render_paragraph",
+            &format!(
+                "lines={}, offset={offset:?}, color={color:?}",
+                layout.metrics().line_count
+            ),
+        );
+    }
+
+    fn render_image(
+        &mut self,
+        _image: &Image,
+        dst: Rect<Pixels>,
+        _paint: Option<&Paint>,
+        _transform: &Matrix4,
+    ) {
+        self.log_command("render_image", &format!("dst={dst:?}"));
+    }
+
+    fn render_atlas(
+        &mut self,
+        _image: &Image,
+        sprites: &[Rect<Pixels>],
+        _transforms: &[Matrix4],
+        _colors: Option<&[Color]>,
+        _blend_mode: BlendMode,
+        _paint: Option<&Paint>,
+        _transform: &Matrix4,
+    ) {
+        self.log_command("render_atlas", &format!("sprites={}", sprites.len()));
+    }
+
+    fn render_image_repeat(
+        &mut self,
+        _image: &Image,
+        dst: Rect<Pixels>,
+        repeat: flui_types::painting::image::ImageRepeat,
+        _paint: Option<&Paint>,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_image_repeat",
+            &format!("dst={dst:?}, repeat={repeat:?}"),
+        );
+    }
+
+    fn render_image_nine_slice(
+        &mut self,
+        _image: &Image,
+        center_slice: Rect<Pixels>,
+        dst: Rect<Pixels>,
+        _paint: Option<&Paint>,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_image_nine_slice",
+            &format!("center_slice={center_slice:?}, dst={dst:?}"),
+        );
+    }
+
+    fn render_image_filtered(
+        &mut self,
+        _image: &Image,
+        dst: Rect<Pixels>,
+        filter: flui_types::painting::image::ColorFilter,
+        _paint: Option<&Paint>,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_image_filtered",
+            &format!("dst={dst:?}, filter={filter:?}"),
+        );
+    }
+
+    fn render_texture(
+        &mut self,
+        texture_id: flui_types::painting::TextureId,
+        dst: Rect<Pixels>,
+        src: Option<Rect<Pixels>>,
+        filter_quality: flui_types::painting::FilterQuality,
+        opacity: f32,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_texture",
+            &format!(
+                "texture_id={}, dst={:?}, src={:?}, filter={:?}, opacity={}",
+                texture_id.get(),
+                dst,
+                src,
+                filter_quality,
+                opacity
+            ),
+        );
+    }
+
+    fn render_shadow(&mut self, _path: &Path, color: Color, elevation: f32, _transform: &Matrix4) {
+        self.log_command(
+            "render_shadow",
+            &format!("color={color:?}, elevation={elevation}"),
+        );
+    }
+
+    fn render_color(&mut self, color: Color, _blend_mode: BlendMode, _transform: &Matrix4) {
+        self.log_command("render_color", &format!("color={color:?}"));
+    }
+
+    fn render_paint(&mut self, paint: &Paint, _transform: &Matrix4) {
+        self.log_command("render_paint", &format!("paint.color={:?}", paint.color));
+    }
+
+    fn render_vertices(
+        &mut self,
+        vertices: &[Point<Pixels>],
+        _colors: Option<&[Color]>,
+        _tex_coords: Option<&[Point<Pixels>]>,
+        indices: &[u16],
+        _paint: &Paint,
+        _transform: &Matrix4,
+    ) {
+        self.log_command(
+            "render_vertices",
+            &format!("vertices={}, indices={}", vertices.len(), indices.len()),
+        );
+    }
+
+    fn clip_rect(
+        &mut self,
+        rect: Rect<Pixels>,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        _transform: &Matrix4,
+    ) {
+        self.log_command("clip_rect", &format!("rect={rect:?}"));
+    }
+
+    fn clip_rrect(
+        &mut self,
+        rrect: RRect,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        _transform: &Matrix4,
+    ) {
+        self.log_command("clip_rrect", &format!("rrect={rrect:?}"));
+    }
+
+    fn clip_path(
+        &mut self,
+        path: &Path,
+        _clip_op: flui_types::painting::ClipOp,
+        _clip_behavior: flui_types::painting::Clip,
+        _transform: &Matrix4,
+    ) {
+        self.log_command("clip_path", &format!("commands={}", path.commands().len()));
+    }
+
+    fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint, _transform: &Matrix4) {
+        self.log_command("save_layer", &format!("bounds={bounds:?}, paint={paint:?}"));
+    }
+
+    fn restore_layer(&mut self, _transform: &Matrix4) {
+        self.log_command("restore_layer", "");
+    }
+
+    fn save_state(&mut self) {
+        self.log_command("save_state", "");
+    }
+
+    fn restore_state(&mut self) {
+        self.log_command("restore_state", "");
+    }
+
+    // The layer-tree push/pop methods live in
+    // `impl LayerStateStack for DebugBackend` below, not here — see the
+    // `LayerStateStack` trait doc comment in `traits.rs` for why they are
+    // split into their own trait.
+
+    fn add_performance_overlay(
+        &mut self,
+        options: flui_layer::PerformanceOverlayOption,
+        bounds: Rect<Pixels>,
+        fps: f32,
+        frame_time_ms: f32,
+        total_frames: u64,
+        diagnostic_line: Option<&str>,
+    ) {
+        self.log_command(
+            "add_performance_overlay",
+            &format!(
+                "options={options:?}, bounds={bounds:?}, fps={fps:.1}, frame_time={frame_time_ms:.2}ms, total_frames={total_frames}, diagnostic_line={diagnostic_line:?}"
+            ),
+        );
+    }
+}
+
+// The layer-tree state-stack methods live on the dedicated
+// `LayerStateStack` trait rather than on `CommandRenderer`. Bodies and
+// log-command output are unchanged from before the split.
+impl LayerStateStack for DebugBackend {
+    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip) {
+        self.log_command(
+            "push_clip_rect",
+            &format!("rect={rect:?}, behavior={clip_behavior:?}"),
+        );
+    }
+
+    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip) {
+        self.log_command(
+            "push_clip_rrect",
+            &format!("rrect={rrect:?}, behavior={clip_behavior:?}"),
+        );
+    }
+
+    // Logged under its own name. The trait requires this method precisely so
+    // an implementor cannot fall back to an approximation without deciding to
+    // — and a debug backend that renamed the operation it is recording would
+    // be worse than one that recorded nothing.
+    fn push_clip_rsuperellipse(
+        &mut self,
+        rse: &flui_types::geometry::RSuperellipse,
+        clip_behavior: flui_types::painting::Clip,
+    ) {
+        self.log_command(
+            "push_clip_rsuperellipse",
+            &format!("rse={rse:?}, behavior={clip_behavior:?}"),
+        );
+    }
+
+    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip) {
+        self.log_command(
+            "push_clip_path",
+            &format!(
+                "commands={}, behavior={:?}",
+                path.commands().len(),
+                clip_behavior
+            ),
+        );
+    }
+
+    fn pop_clip(&mut self) {
+        self.log_command("pop_clip", "");
+    }
+
+    fn push_offset(&mut self, offset: Offset<Pixels>) {
+        self.log_command("push_offset", &format!("offset={offset:?}"));
+    }
+
+    fn push_transform(&mut self, transform: &Matrix4) {
+        self.log_command("push_transform", &format!("transform={transform:?}"));
+    }
+
+    fn pop_transform(&mut self) {
+        self.log_command("pop_transform", "");
+    }
+
+    fn push_opacity(&mut self, alpha: f32) {
+        self.log_command("push_opacity", &format!("alpha={alpha}"));
+    }
+
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
+        self.log_command(
+            "push_opacity_blend",
+            &format!("alpha={alpha}, blend={blend:?}"),
+        );
+    }
+
+    fn pop_opacity(&mut self) {
+        self.log_command("pop_opacity", "");
+    }
+
+    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter) {
+        self.log_command("push_color_filter", &format!("filter={filter:?}"));
+    }
+
+    fn pop_color_filter(&mut self) {
+        self.log_command("pop_color_filter", "");
+    }
+
+    fn push_image_filter(&mut self, filter: &flui_types::painting::effects::ImageFilter) {
+        self.log_command("push_image_filter", &format!("filter={filter:?}"));
+    }
+
+    fn pop_image_filter(&mut self) {
+        self.log_command("pop_image_filter", "");
+    }
+}

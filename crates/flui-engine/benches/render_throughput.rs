@@ -30,8 +30,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use flui_engine::wgpu::WgpuPainter;
-use flui_engine::wgpu::path_cache::PathCache;
+use flui_engine::PathCache;
+use flui_engine::WgpuPainter;
 use flui_painting::Paint;
 use flui_types::Rect;
 use flui_types::{Offset, geometry::px, painting::Shader, styling::Color};

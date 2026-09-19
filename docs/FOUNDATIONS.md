@@ -47,7 +47,7 @@ Every subsystem has two axes. **Behavior** is always Flutter — the constraint,
 | Paint & display list | `rendering/object.dart`, `dart:ui` | Flutter / Skia / Vello record-replay | `Canvas` → `DisplayList` of `DrawCommand`, GPU-free |
 | Layer / compositor tree | `rendering/layer.dart` | Flutter retained-layer lifecycle | Layer tree + `LayerHandle` RAII + dirty bit + retained `engine_layer` |
 | GPU engine / tessellation | n/a (Flutter's C++ engine) | lyon now → Vello-hybrid later | `RasterBackend` trait seam; lyon impl now |
-| Text / shaping / IME | `painting/text_painter.dart`, `services/text_input.dart` | Rust-native (cosmic-text) + GPUI for IME | cosmic-text/glyphon; `PlatformTextInput` capability trait |
+| Text / shaping / IME | `painting/text_painter.dart`, `services/text_input.dart` | Rust-native (cosmic-text) + GPUI for IME | cosmic-text (painting) + engine glyph atlas; `PlatformTextInput` capability trait |
 | Scheduler & frame loop | `scheduler/binding.dart`, `ticker.dart` | Flutter phases + winit `ControlFlow::Wait` | Phase model, on-demand wakeup |
 | Gestures / hit-testing | `gestures/*` | Flutter 1:1 | Arena + recognizer FSMs, `ui-events` vocabulary |
 | Animation | `animation/*` | Flutter on FLUI `Listenable` | `AnimationController`/`Curve`/`Tween`, lock-free dirty-mark |

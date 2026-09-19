@@ -8,7 +8,6 @@
 
 use flui_layer::Layer;
 use flui_objects::RenderColoredBox;
-use flui_painting::DisplayListCore;
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
 use flui_types::{Point, Rect, Size, geometry::px};
 
@@ -33,7 +32,7 @@ fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
     owner.run_paint().expect("paint");
 
     let tree = owner.take_layer_tree().expect("layer tree");
-    let root_id = tree.root().expect("root layer");
+    let root_id = tree.root();
     let root_node = tree.get(root_id).expect("root node");
 
     // The root layer is the ONE place logical meets physical.
@@ -60,8 +59,11 @@ fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
         panic!("expected the merged picture under the root transform");
     };
     assert_eq!(
-        picture.picture().bounds(),
-        Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(100.0))),
+        picture.bounds(),
+        Some(Rect::from_origin_size(
+            Point::ZERO,
+            Size::new(px(100.0), px(100.0))
+        )),
         "draw commands must remain in logical pixels",
     );
 }
@@ -81,7 +83,7 @@ fn dpr_one_keeps_the_offset_root() {
     owner.run_paint().expect("paint");
 
     let tree = owner.take_layer_tree().expect("layer tree");
-    let root_node = tree.get(tree.root().expect("root")).expect("node");
+    let root_node = tree.get(tree.root()).expect("node");
     assert!(
         matches!(root_node.layer(), Layer::Offset(_)),
         "DPR 1.0 must not pay for an identity transform layer",

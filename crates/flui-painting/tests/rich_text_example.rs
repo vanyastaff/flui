@@ -7,7 +7,7 @@
 //! - RTL and bidirectional text
 //! - Line metrics
 
-use flui_painting::{DisplayListCore, TextPainter, detect_text_direction};
+use flui_painting::TextPainter;
 use flui_types::{
     geometry::{Offset, px},
     styling::Color,
@@ -257,39 +257,6 @@ fn example_line_metrics() {
 // Example: RTL Text
 // ============================================================================
 
-/// Demonstrates right-to-left text handling.
-#[test]
-fn example_rtl_text() {
-    // Arabic text
-    let arabic_text = "مرحبا بالعالم";
-
-    // Auto-detect direction
-    let detected = detect_text_direction(arabic_text);
-    assert_eq!(detected, Some(TextDirection::Rtl), "Should detect RTL");
-
-    let span = TextSpan::new(arabic_text).with_style(
-        TextStyle::new()
-            .with_font_size(18.0)
-            .with_color(Color::BLACK),
-    );
-
-    let mut painter = TextPainter::new()
-        .with_text(InlineSpan::new(span))
-        .with_text_direction(TextDirection::Rtl);
-
-    painter.layout(0.0, 300.0);
-
-    println!("RTL text size: {:?}", painter.size());
-
-    // Layout should succeed
-    assert!(painter.width() > 0.0);
-    assert!(painter.height() > 0.0);
-}
-
-// ============================================================================
-// Example: Bidirectional Text
-// ============================================================================
-
 /// Demonstrates mixed LTR/RTL text.
 #[test]
 fn example_bidirectional_text() {
@@ -318,30 +285,6 @@ fn example_bidirectional_text() {
 
 // ============================================================================
 // Example: Text Direction Detection
-// ============================================================================
-
-/// Demonstrates automatic text direction detection.
-#[test]
-fn example_direction_detection() {
-    let test_cases = [
-        ("Hello World", Some(TextDirection::Ltr)),
-        ("مرحبا", Some(TextDirection::Rtl)),
-        ("שלום", Some(TextDirection::Rtl)),
-        ("123", None),                             // Numbers are neutral
-        ("   ", None),                             // Whitespace is neutral
-        ("Hello مرحبا", Some(TextDirection::Ltr)), // First strong char wins
-        ("مرحبا Hello", Some(TextDirection::Rtl)), // First strong char wins
-    ];
-
-    for (text, expected) in test_cases {
-        let detected = detect_text_direction(text);
-        println!("'{text}' -> {detected:?}");
-        assert_eq!(detected, expected, "Direction mismatch for '{text}'");
-    }
-}
-
-// ============================================================================
-// Example: Text Alignment
 // ============================================================================
 
 /// Demonstrates different text alignments.

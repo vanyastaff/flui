@@ -21,8 +21,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use flui_engine::wgpu::Renderer;
-use flui_layer::{CanvasLayer, LayerTree, Scene, SceneBuilder};
+use flui_engine::Renderer;
+use flui_layer::{CanvasLayer, Scene, SceneBuilder};
 use flui_platform::{WindowOptions, current_platform};
 use flui_types::{
     Color, Offset,
@@ -54,13 +54,9 @@ use flui_types::{
 fn build_filter_scene(width: f32, height: f32) -> Scene {
     let half_width = width / 2.0;
 
-    let mut tree = LayerTree::new();
-
     // ── SceneBuilder: construct the layer hierarchy via push/pop ─────────────
-    //
-    // The builder is scoped so `tree` is available after the borrow ends.
-    let root_id = {
-        let mut builder = SceneBuilder::new(&mut tree);
+    let tree = {
+        let mut builder = SceneBuilder::new();
 
         // Root: zero-offset container so both children share one root id.
         builder.push_offset(Offset::ZERO);
@@ -120,7 +116,7 @@ fn build_filter_scene(width: f32, height: f32) -> Scene {
         "blurred shape via SceneBuilder::push_image_filter(Blur σ=8)"
     );
 
-    Scene::new(Size::new(px(width), px(height)), tree, root_id, 1)
+    Scene::new(tree)
 }
 
 /// Draws the demo shape set into `canvas`, offset by `x_offset` px within a

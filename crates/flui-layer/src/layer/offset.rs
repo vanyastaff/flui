@@ -1,13 +1,6 @@
-//! OffsetLayer - Simple translation layer
-//!
-//! This layer applies a simple offset (translation) to its children.
-//! Corresponds to Flutter's `OffsetLayer`, which is the base class
-//! for repaint boundary layers.
+//! `OffsetLayer` — translates its subtree.
 
-use flui_types::{
-    Offset,
-    geometry::{Pixels, Rect, Vec2},
-};
+use flui_types::{Offset, geometry::Pixels};
 
 /// Layer that applies a simple offset to its children.
 ///
@@ -18,7 +11,7 @@ use flui_types::{
 ///
 /// # Use Cases
 ///
-/// - Repaint boundary layers (like Flutter's `RepaintBoundary`)
+/// - Repaint boundary layers
 /// - Scrolling content
 /// - Animated translations
 ///
@@ -51,82 +44,28 @@ pub struct OffsetLayer {
 }
 
 impl OffsetLayer {
-    /// Creates a new offset layer with the given offset.
+    /// Translates the subtree by `offset`.
     #[inline]
     pub const fn new(offset: Offset<Pixels>) -> Self {
         Self { offset }
     }
 
-    /// Creates an offset layer with zero offset.
+    /// The identity translation.
     #[inline]
     pub const fn zero() -> Self {
         Self::new(Offset::ZERO)
     }
 
-    /// Creates an offset layer from x and y components.
-    #[inline]
-    pub fn from_xy(dx: f32, dy: f32) -> Self {
-        use flui_types::geometry::px;
-        Self::new(Offset::new(px(dx), px(dy)))
-    }
-
-    /// Returns the offset.
+    /// The translation applied to the subtree.
     #[inline]
     pub const fn offset(&self) -> Offset<Pixels> {
         self.offset
     }
 
-    /// Sets the offset.
-    #[inline]
-    pub fn set_offset(&mut self, offset: Offset<Pixels>) {
-        self.offset = offset;
-    }
-
-    /// Returns the x component of the offset.
-    #[inline]
-    pub const fn dx(&self) -> f32 {
-        self.offset.dx.0
-    }
-
-    /// Returns the y component of the offset.
-    #[inline]
-    pub const fn dy(&self) -> f32 {
-        self.offset.dy.0
-    }
-
-    /// Returns true if the offset is zero.
+    /// Whether this layer translates by nothing (the engine pushes no transform for it).
     #[inline]
     pub fn is_zero(&self) -> bool {
-        use flui_types::geometry::px;
-        self.offset.dx == px(0.0) && self.offset.dy == px(0.0)
-    }
-
-    /// Transforms a point by applying the offset.
-    #[inline]
-    pub fn transform_point(&self, x: f32, y: f32) -> (f32, f32) {
-        (x + self.offset.dx.0, y + self.offset.dy.0)
-    }
-
-    /// Transforms bounds by applying the offset.
-    ///
-    /// Returns the bounds translated by the offset.
-    #[inline]
-    pub fn transform_bounds(&self, bounds: Rect<Pixels>) -> Rect<Pixels> {
-        bounds.translate(Vec2::new(self.offset.dx, self.offset.dy))
-    }
-
-    /// Computes the bounds for rendering to an image.
-    ///
-    /// This is used when capturing the layer to a texture for caching.
-    #[inline]
-    pub fn to_image_bounds(&self, child_bounds: Rect<Pixels>) -> Rect<Pixels> {
-        self.transform_bounds(child_bounds)
-    }
-
-    /// Adds another offset to this layer.
-    #[inline]
-    pub fn add_offset(&mut self, offset: Offset<Pixels>) {
-        self.offset = Offset::new(self.offset.dx + offset.dx, self.offset.dy + offset.dy);
+        self.offset.is_zero()
     }
 }
 
@@ -149,16 +88,8 @@ mod tests {
         let layer = OffsetLayer::zero();
 
         assert!(layer.is_zero());
-        assert_eq!(layer.dx(), 0.0);
-        assert_eq!(layer.dy(), 0.0);
-    }
-
-    #[test]
-    fn test_offset_layer_from_xy() {
-        let layer = OffsetLayer::from_xy(5.0, 15.0);
-
-        assert_eq!(layer.dx(), 5.0);
-        assert_eq!(layer.dy(), 15.0);
+        assert_eq!(layer.offset().dx, px(0.0));
+        assert_eq!(layer.offset().dy, px(0.0));
     }
 
     #[test]
@@ -166,74 +97,5 @@ mod tests {
         let layer = OffsetLayer::default();
 
         assert!(layer.is_zero());
-    }
-
-    #[test]
-    fn test_offset_layer_set_offset() {
-        let mut layer = OffsetLayer::zero();
-
-        layer.set_offset(Offset::new(px(100.0), px(200.0)));
-        assert_eq!(layer.dx(), 100.0);
-        assert_eq!(layer.dy(), 200.0);
-    }
-
-    #[test]
-    fn test_offset_layer_transform_point() {
-        let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
-
-        let (x, y) = layer.transform_point(5.0, 5.0);
-        assert_eq!(x, 15.0);
-        assert_eq!(y, 25.0);
-    }
-
-    #[test]
-    fn test_offset_layer_transform_bounds() {
-        let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0));
-
-        let transformed = layer.transform_bounds(bounds);
-        assert_eq!(transformed.left(), px(10.0));
-        assert_eq!(transformed.top(), px(20.0));
-        assert_eq!(transformed.width(), px(100.0));
-        assert_eq!(transformed.height(), px(50.0));
-    }
-
-    #[test]
-    fn test_offset_layer_add_offset() {
-        let mut layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
-
-        layer.add_offset(Offset::new(px(5.0), px(10.0)));
-        assert_eq!(layer.dx(), 15.0);
-        assert_eq!(layer.dy(), 30.0);
-    }
-
-    #[test]
-    fn test_offset_layer_clone_copy() {
-        // Compile-time bound checks — fail to compile if `Clone` or `Copy`
-        // are ever removed from `OffsetLayer`.
-        fn assert_clone<T: Clone>() {}
-        fn assert_copy<T: Copy>() {}
-        assert_clone::<OffsetLayer>();
-        assert_copy::<OffsetLayer>();
-
-        let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
-        #[expect(
-            clippy::clone_on_copy,
-            reason = "intentionally exercise the explicit Clone path; the test name promises it"
-        )]
-        let cloned = layer.clone();
-        let copied = layer; // Copy
-
-        assert_eq!(layer, cloned);
-        assert_eq!(layer, copied);
-    }
-
-    #[test]
-    fn test_offset_layer_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<OffsetLayer>();
-        assert_sync::<OffsetLayer>();
     }
 }

@@ -6,12 +6,11 @@
 //! same contract the fragment paint model relies on.
 
 use flui_painting::{
-    Canvas, DecorationPaintOptions, DisplayListCore, DrawCommand, box_decoration_hit_test,
-    paint_box_decoration, resolve_gradient,
+    Canvas, DecorationPaintOptions, DrawOp, box_decoration_hit_test, paint_box_decoration,
 };
 use flui_types::{
     Offset, Pixels, Point,
-    geometry::{Rect, px},
+    geometry::{RRect, Radius, Rect, px},
     layout::BoxShape,
     painting::{Image, PaintStyle, PathCommand, Shader},
     styling::{
@@ -24,7 +23,7 @@ fn rect100() -> Rect<Pixels> {
     Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0))
 }
 
-fn commands(decoration: &BoxDecoration<Pixels>) -> Vec<DrawCommand> {
+fn commands(decoration: &BoxDecoration<Pixels>) -> Vec<DrawOp> {
     commands_in(rect100(), decoration)
 }
 
@@ -32,7 +31,7 @@ fn commands(decoration: &BoxDecoration<Pixels>) -> Vec<DrawCommand> {
 /// fixed 100x50 `rect100()` — needed for the `BoxShape::Circle` cases,
 /// which care about the rect's aspect ratio (the inscribed circle) and
 /// about non-degenerate vs. degenerate sizes.
-fn commands_in(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) -> Vec<DrawCommand> {
+fn commands_in(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) -> Vec<DrawOp> {
     let mut canvas = Canvas::new();
     paint_box_decoration(
         &mut canvas,
@@ -40,14 +39,14 @@ fn commands_in(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) -> Vec<Dr
         decoration,
         DecorationPaintOptions::default(),
     );
-    canvas.finish().commands().cloned().collect()
+    canvas.finish().iter().map(|c| c.op.clone()).collect()
 }
 
 #[test]
 fn color_only_paints_a_rect() {
     let cmds = commands(&BoxDecoration::with_color(Color::RED));
     assert_eq!(cmds.len(), 1);
-    assert!(matches!(cmds[0], DrawCommand::DrawRect { .. }));
+    assert!(matches!(cmds[0], DrawOp::Rect { .. }));
 }
 
 #[test]
@@ -56,7 +55,7 @@ fn radius_switches_to_rounded_primitives() {
         .set_border_radius(Some(BorderRadius::circular(px(8.0))));
     let cmds = commands(&decoration);
     assert_eq!(cmds.len(), 1);
-    assert!(matches!(cmds[0], DrawCommand::DrawRRect { .. }));
+    assert!(matches!(cmds[0], DrawOp::RRect { .. }));
 }
 
 #[test]
@@ -77,12 +76,12 @@ fn flutter_paint_order_shadow_background_border() {
     let cmds = commands(&decoration);
     assert_eq!(cmds.len(), 3, "shadow + background + border");
     assert!(
-        matches!(cmds[0], DrawCommand::DrawShadow { .. }),
+        matches!(cmds[0], DrawOp::Shadow { .. }),
         "shadows paint FIRST (behind everything)"
     );
-    assert!(matches!(cmds[1], DrawCommand::DrawRect { .. }));
+    assert!(matches!(cmds[1], DrawOp::Rect { .. }));
     assert!(
-        matches!(cmds[2], DrawCommand::DrawDRRect { .. }),
+        matches!(cmds[2], DrawOp::DRRect { .. }),
         "a uniform border strokes inside via an outer/inner pair, LAST"
     );
 }
@@ -103,15 +102,65 @@ fn gradient_wins_over_color_and_resolves_alignment() {
         1,
         "a gradient replaces the flat color entirely (Flutter contract)"
     );
-    assert!(matches!(cmds[0], DrawCommand::DrawGradient { .. }));
-
-    // Default LinearGradient runs centerLeft → centerRight: alignment
-    // resolves against the CONCRETE rect.
-    let Shader::LinearGradient { from, to, .. } = resolve_gradient(&gradient, rect100()) else {
-        panic!("linear gradient must resolve to a linear shader");
+    // A gradient is a shader on an ordinary fill: the same `Rect` op a flat
+    // colour records, with the shader in the paint. Default LinearGradient
+    // runs centerLeft → centerRight: alignment resolves against the CONCRETE
+    // rect, and the recorded shader carries the resolved endpoints.
+    let DrawOp::Rect { rect, paint } = &cmds[0] else {
+        panic!(
+            "a gradient background must record a Rect op; got {:?}",
+            cmds[0]
+        );
     };
-    assert_eq!(from, Offset::new(px(0.0), px(25.0)));
-    assert_eq!(to, Offset::new(px(100.0), px(25.0)));
+    assert_eq!(*rect, rect100());
+    let Some(Shader::LinearGradient { from, to, .. }) = &paint.shader else {
+        panic!("a linear gradient must record a linear shader; got {paint:?}");
+    };
+    assert_eq!(*from, Offset::new(px(0.0), px(25.0)));
+    assert_eq!(*to, Offset::new(px(100.0), px(25.0)));
+}
+
+/// A gradient on a rounded decoration is the same `RRect` op a flat colour
+/// records, with the gradient as the paint's shader: the per-corner radii
+/// travel with the geometry, so the backend's shader-rect dispatch sees the
+/// real `[tl, tr, br, bl]` rather than a uniform radius.
+#[test]
+fn box_decoration_gradient_records_a_shader_paint_rrect() {
+    let gradient = Gradient::Linear(LinearGradient::new(
+        flui_types::Alignment::CENTER_LEFT,
+        flui_types::Alignment::CENTER_RIGHT,
+        vec![Color::RED, Color::BLUE],
+        None,
+        flui_types::painting::TileMode::Clamp,
+    ));
+    let corners = [
+        Radius::circular(px(2.0)),
+        Radius::circular(px(4.0)),
+        Radius::circular(px(6.0)),
+        Radius::circular(px(8.0)),
+    ];
+    let radius = BorderRadius::only(corners[0], corners[1], corners[2], corners[3]);
+    let decoration = BoxDecoration::<Pixels>::new()
+        .set_gradient(Some(gradient))
+        .set_border_radius(Some(radius));
+    let cmds = commands(&decoration);
+    assert_eq!(cmds.len(), 1, "commands: {cmds:?}");
+    let DrawOp::RRect { rrect, paint } = &cmds[0] else {
+        panic!(
+            "a rounded gradient must record an RRect op; got {:?}",
+            cmds[0]
+        );
+    };
+    assert_eq!(
+        *rrect,
+        RRect::from_rect_and_corners(rect100(), corners[0], corners[1], corners[2], corners[3]),
+        "each corner's own radius reaches the op"
+    );
+    assert_eq!(paint.style, PaintStyle::Fill);
+    assert!(
+        matches!(paint.shader, Some(Shader::LinearGradient { .. })),
+        "the gradient rides on the paint: {paint:?}"
+    );
 }
 
 #[test]
@@ -124,10 +173,7 @@ fn non_uniform_border_paints_per_side_rects() {
     }));
     let cmds = commands(&decoration);
     assert_eq!(cmds.len(), 2, "one rect per non-empty side");
-    assert!(
-        cmds.iter()
-            .all(|c| matches!(c, DrawCommand::DrawRect { .. }))
-    );
+    assert!(cmds.iter().all(|c| matches!(c, DrawOp::Rect { .. })));
 }
 
 #[test]
@@ -223,7 +269,7 @@ fn circle_inscribes_in_the_shorter_side_and_centers() {
 
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {
-        DrawCommand::DrawCircle { center, radius, .. } => {
+        DrawOp::Circle { center, radius, .. } => {
             assert_eq!(*center, Point::new(px(100.0), px(50.0)));
             assert_eq!(*radius, px(50.0));
         }
@@ -237,7 +283,7 @@ fn circle_color_paints_a_circle_command_not_rect_or_rrect() {
     let cmds = commands(&decoration);
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {
-        DrawCommand::DrawCircle { paint, .. } => {
+        DrawOp::Circle { paint, .. } => {
             assert_eq!(paint.color, Color::RED);
         }
         other => panic!("expected DrawCircle, got {other:?}"),
@@ -262,7 +308,7 @@ fn circle_gradient_paints_a_circle_carrying_the_shader_and_stops() {
 
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {
-        DrawCommand::DrawCircle {
+        DrawOp::Circle {
             center,
             radius,
             paint,
@@ -299,12 +345,9 @@ fn circle_gradient_without_stops_falls_back_to_transparent_like_the_rect_path() 
     // `LinearGradient::new` does not validate `colors`; an empty list
     // constructs fine and makes the wgpu backend's `dispatch_shader_rect`
     // return `false` (`gradients.rs`: `stops.is_empty()`), falling through
-    // to a solid `paint.color` fill. The rect/rrect gradient paths
-    // (`render_gradient` / `render_gradient_rrect`) early-return and paint
-    // NOTHING for an empty color list, so the circle's fallback color must
-    // be `Color::TRANSPARENT` to match -- `Color::BLACK` would make the
-    // circle silently paint a solid black disc where its siblings paint
-    // nothing.
+    // to a solid `paint.color` fill. All three silhouettes now take that
+    // same path, so their fallback colour must agree: `Color::TRANSPARENT`
+    // paints nothing, where `Color::BLACK` would paint a solid black disc.
     let gradient = Gradient::Linear(LinearGradient::new(
         flui_types::Alignment::CENTER_LEFT,
         flui_types::Alignment::CENTER_RIGHT,
@@ -319,7 +362,7 @@ fn circle_gradient_without_stops_falls_back_to_transparent_like_the_rect_path() 
 
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {
-        DrawCommand::DrawCircle { paint, .. } => {
+        DrawOp::Circle { paint, .. } => {
             assert_eq!(paint.color, Color::TRANSPARENT);
         }
         other => panic!("expected DrawCircle, got {other:?}"),
@@ -340,15 +383,13 @@ fn circle_uniform_border_is_a_stroked_circle_not_a_drrect() {
 
     assert_eq!(cmds.len(), 2, "background fill + stroked border");
     assert!(
-        !cmds
-            .iter()
-            .any(|c| matches!(c, DrawCommand::DrawDRRect { .. })),
+        !cmds.iter().any(|c| matches!(c, DrawOp::DRRect { .. })),
         "a circular border must stroke a circle, not fill a drrect ring \
          (tessellate_drrect bulges ~6% on the diagonals relative to the \
          exact circle fill); commands: {cmds:?}"
     );
     match &cmds[1] {
-        DrawCommand::DrawCircle {
+        DrawOp::Circle {
             center,
             radius,
             paint,
@@ -392,7 +433,7 @@ fn circle_border_exactly_at_the_diameter_still_paints_a_full_disc() {
         2,
         "background fill plus the border stroke; commands: {cmds:?}"
     );
-    let DrawCommand::DrawCircle {
+    let DrawOp::Circle {
         center,
         radius,
         paint,
@@ -429,7 +470,7 @@ fn circle_border_past_the_diameter_skips_instead_of_bulging_past_the_fill() {
         1,
         "only the background fill, no border stroke; commands: {cmds:?}"
     );
-    assert!(matches!(cmds[0], DrawCommand::DrawCircle { .. }));
+    assert!(matches!(cmds[0], DrawOp::Circle { .. }));
 }
 
 #[test]
@@ -450,7 +491,7 @@ fn circle_non_uniform_border_paints_nothing_not_a_square_frame() {
     // the rect/rrect per-side strip painter, which would draw a square
     // frame around the circular fill.
     assert_eq!(cmds.len(), 1, "commands: {cmds:?}");
-    assert!(matches!(cmds[0], DrawCommand::DrawCircle { .. }));
+    assert!(matches!(cmds[0], DrawOp::Circle { .. }));
 }
 
 #[test]
@@ -476,15 +517,15 @@ fn a_circular_decoration_image_is_clipped_to_the_circle_and_the_clip_is_closed()
     // Save opens the scope, the clip narrows it, the image draws inside it,
     // and Restore closes it before the border. Any other order is a clip that
     // either does not apply to the image or does not stop after it.
-    let position = |predicate: fn(&DrawCommand) -> bool| cmds.iter().position(predicate);
+    let position = |predicate: fn(&DrawOp) -> bool| cmds.iter().position(predicate);
 
-    let save = position(|c| matches!(c, DrawCommand::Save { .. }))
+    let save = position(|c| matches!(c, DrawOp::Save))
         .unwrap_or_else(|| panic!("the image must be drawn inside a scope; commands: {cmds:?}"));
-    let clip = position(|c| matches!(c, DrawCommand::ClipRRect { .. }))
+    let clip = position(|c| matches!(c, DrawOp::ClipRRect { .. }))
         .unwrap_or_else(|| panic!("the image must be clipped to the circle; commands: {cmds:?}"));
-    let image = position(|c| matches!(c, DrawCommand::DrawImage { .. }))
+    let image = position(|c| matches!(c, DrawOp::Image { .. }))
         .unwrap_or_else(|| panic!("the decoration image must be drawn; commands: {cmds:?}"));
-    let restore = position(|c| matches!(c, DrawCommand::Restore { .. }))
+    let restore = position(|c| matches!(c, DrawOp::Restore))
         .unwrap_or_else(|| panic!("the scope must close; commands: {cmds:?}"));
 
     assert!(
@@ -493,7 +534,7 @@ fn a_circular_decoration_image_is_clipped_to_the_circle_and_the_clip_is_closed()
          {restore}; commands: {cmds:?}",
     );
 
-    let DrawCommand::ClipRRect { rrect, .. } = &cmds[clip] else {
+    let DrawOp::ClipRRect { rrect, .. } = &cmds[clip] else {
         unreachable!("position() matched this variant")
     };
     assert_eq!(
@@ -527,7 +568,7 @@ fn circle_shadow_spread_inflates_the_radius_translates_the_center_and_clamps_at_
         }]));
     let cmds = commands_in(rect, &decoration);
 
-    let DrawCommand::DrawShadow {
+    let DrawOp::Shadow {
         path, elevation, ..
     } = &cmds[0]
     else {
@@ -563,7 +604,7 @@ fn circle_shadow_spread_inflates_the_radius_translates_the_center_and_clamps_at_
             inset: false,
         }]));
     let cmds = commands_in(rect, &inverting); // must not panic
-    let DrawCommand::DrawShadow { path, .. } = &cmds[0] else {
+    let DrawOp::Shadow { path, .. } = &cmds[0] else {
         panic!("expected DrawShadow first; commands: {cmds:?}");
     };
     match path.commands() {
@@ -588,7 +629,7 @@ fn circle_ignores_border_radius_and_still_paints_the_circle() {
 
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {
-        DrawCommand::DrawCircle { center, radius, .. } => {
+        DrawOp::Circle { center, radius, .. } => {
             // The plain inscribed circle (r=50, centered) -- completely
             // unaffected by the ignored `border_radius: 20`. A variant-only
             // check would also pass if the radius silently changed.
@@ -640,10 +681,7 @@ fn circle_zero_size_and_negative_area_rects_do_not_panic() {
         let cmds = commands_in(rect, &decoration); // must not panic
         match (cmds.as_slice(), expected) {
             ([], None) => {}
-            (
-                [DrawCommand::DrawCircle { center, radius, .. }],
-                Some((expected_center, expected_radius)),
-            ) => {
+            ([DrawOp::Circle { center, radius, .. }], Some((expected_center, expected_radius))) => {
                 assert_eq!(*center, expected_center, "rect: {rect:?}");
                 assert_eq!(*radius, expected_radius, "rect: {rect:?}");
             }

@@ -45,13 +45,12 @@
 
 use std::sync::Arc;
 
-use flui_engine::{EngineError, Recoverability, wgpu::Renderer};
-use flui_layer::{LayerTree, Scene, SceneBuilder};
+use flui_engine::{EngineError, Recoverability, Renderer};
+use flui_layer::{Scene, SceneBuilder};
 use flui_platform::{
     WindowOptions,
     traits::{DispatchEventResult, PlatformInput},
 };
-use flui_types::{Size, geometry::px};
 use parking_lot::Mutex;
 
 use super::AppConfig;
@@ -91,7 +90,7 @@ use super::AppConfig;
 /// application entry point — see the module docs.
 pub fn run_direct(
     config: AppConfig,
-    render_fn: impl FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
+    render_fn: impl FnMut(&mut SceneBuilder, f32, f32) + Send + 'static,
 ) -> anyhow::Result<()> {
     // Managed startup, same contract as `run_app`: install FLUI's default
     // backend only into an empty slot. The historical code called
@@ -122,7 +121,7 @@ pub fn run_direct(
     /// function's own `Result` return is `run_direct`'s answer).
     fn bootstrap_direct<F>(config: AppConfig, render_fn: F) -> anyhow::Result<()>
     where
-        F: FnMut(&mut SceneBuilder<'_>, f32, f32) + Send + 'static,
+        F: FnMut(&mut SceneBuilder, f32, f32) + Send + 'static,
     {
         fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
             crate::app::runner::with_owner_platform(f)
@@ -166,12 +165,10 @@ pub fn run_direct(
         // 3. Wrap renderer and render_fn for callback sharing
         let renderer = Arc::new(Mutex::new(renderer));
         let render_fn = Arc::new(Mutex::new(render_fn));
-        let frame_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
         // 4. Register frame callback
         let renderer_frame = Arc::clone(&renderer);
         let render_fn_frame = Arc::clone(&render_fn);
-        let frame_counter_frame = Arc::clone(&frame_counter);
         window.on_request_frame(Box::new(move || {
             let mut r = renderer_frame.lock();
             let (w, h) = r.size();
@@ -184,17 +181,12 @@ pub fn run_direct(
             r.mark_full_repaint();
 
             // Build scene via user closure
-            let mut tree = LayerTree::new();
+            let mut builder = SceneBuilder::new();
             {
-                let mut builder = SceneBuilder::new(&mut tree);
                 let mut rfn = render_fn_frame.lock();
                 rfn(&mut builder, w as f32, h as f32);
-                // builder dropped here, releasing borrow on tree
             }
-
-            let root = tree.root();
-            let frame = frame_counter_frame.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let scene = Scene::new(Size::new(px(w as f32), px(h as f32)), tree, root, frame);
+            let scene = Scene::new(builder.build());
 
             if let Err(e) = r.render_scene(&scene) {
                 if e.recoverability() == Recoverability::Recoverable {

@@ -3,7 +3,7 @@
 //! Provides Path structure for creating complex shapes with lines, curves, and
 //! arcs.
 
-use smallvec::SmallVec;
+use std::sync::Arc;
 
 use crate::{
     geometry::{FloatUnit, NumericUnit, Offset, Pixels, Point, Rect, Vec2, px},
@@ -58,12 +58,16 @@ pub enum PathCommand {
 /// A path is an ordered list of [`PathCommand`]s (lines, Bézier curves, and
 /// whole shapes) plus a [`PathFillType`] that determines which regions count
 /// as inside when filling or hit-testing.
+///
+/// The command list is copy-on-write (Skia's `SkPath` over `SkPathRef`): a
+/// clone shares it, and the first mutation of a shared path copies it. A
+/// path recorded into a display list or a clip is therefore a pointer-sized
+/// handle plus its fill type and cached bounds, not a copy of every command.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Path {
-    /// The list of path commands.
-    /// Uses SmallVec to avoid heap allocation for simple paths (<16 commands).
-    commands: SmallVec<[PathCommand; 16]>,
+    /// The commands, shared until mutated.
+    commands: Arc<Vec<PathCommand>>,
 
     /// The fill type for this path.
     fill_type: PathFillType,
@@ -78,7 +82,7 @@ impl Path {
     #[inline]
     pub fn new() -> Self {
         Self {
-            commands: SmallVec::new(),
+            commands: Arc::default(),
             fill_type: PathFillType::default(),
             bounds: None,
         }
@@ -89,7 +93,7 @@ impl Path {
     #[inline]
     pub fn with_fill_type(fill_type: PathFillType) -> Self {
         Self {
-            commands: SmallVec::new(),
+            commands: Arc::default(),
             fill_type,
             bounds: None,
         }
@@ -335,34 +339,34 @@ impl Path {
     /// Starts a new subpath at `point` without drawing.
     #[inline]
     pub fn move_to(&mut self, point: Point<Pixels>) {
-        self.commands.push(PathCommand::MoveTo(point));
+        Arc::make_mut(&mut self.commands).push(PathCommand::MoveTo(point));
         self.bounds = None;
     }
 
     /// Adds a straight line from the current position to `point`.
     #[inline]
     pub fn line_to(&mut self, point: Point<Pixels>) {
-        self.commands.push(PathCommand::LineTo(point));
+        Arc::make_mut(&mut self.commands).push(PathCommand::LineTo(point));
         self.bounds = None;
     }
 
     /// Closes the current subpath with a line back to its starting point.
     #[inline]
     pub fn close(&mut self) {
-        self.commands.push(PathCommand::Close);
+        Arc::make_mut(&mut self.commands).push(PathCommand::Close);
     }
 
     /// Adds a rectangle as a separate subpath.
     #[inline]
     pub fn add_rect(&mut self, rect: Rect<Pixels>) {
-        self.commands.push(PathCommand::AddRect(rect));
+        Arc::make_mut(&mut self.commands).push(PathCommand::AddRect(rect));
         self.bounds = None;
     }
 
     /// Adds an oval inscribed in `rect` as a separate subpath.
     #[inline]
     pub fn add_oval(&mut self, rect: Rect<Pixels>) {
-        self.commands.push(PathCommand::AddOval(rect));
+        Arc::make_mut(&mut self.commands).push(PathCommand::AddOval(rect));
         self.bounds = None;
     }
 
@@ -393,8 +397,7 @@ impl Path {
     /// `add_arc`, or call `add_arc` as the first command on a fresh `Path`.
     #[inline]
     pub fn add_arc(&mut self, rect: Rect<Pixels>, start_angle: f32, sweep_angle: f32) {
-        self.commands
-            .push(PathCommand::AddArc(rect, start_angle, sweep_angle));
+        Arc::make_mut(&mut self.commands).push(PathCommand::AddArc(rect, start_angle, sweep_angle));
         self.bounds = None;
     }
 
@@ -403,6 +406,13 @@ impl Path {
     #[inline]
     pub fn commands(&self) -> &[PathCommand] {
         &self.commands
+    }
+
+    /// Whether `self` and `other` share one command list — true for a clone
+    /// until either side is mutated.
+    #[must_use]
+    pub fn shares_commands_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.commands, &other.commands)
     }
 
     /// Returns `true` if the path contains no commands.
@@ -417,7 +427,7 @@ impl Path {
     /// The fill type is preserved; the cached bounds are invalidated.
     #[inline]
     pub fn reset(&mut self) {
-        self.commands.clear();
+        Arc::make_mut(&mut self.commands).clear();
         self.bounds = None;
     }
 
@@ -453,7 +463,7 @@ impl Path {
         let mut max_x = f32::NEG_INFINITY;
         let mut max_y = f32::NEG_INFINITY;
 
-        for cmd in &self.commands {
+        for cmd in self.commands.iter() {
             match cmd {
                 PathCommand::MoveTo(p) | PathCommand::LineTo(p) => {
                     min_x = min_x.min(p.x.0);
@@ -544,7 +554,7 @@ impl Path {
             .collect();
 
         Self {
-            commands,
+            commands: Arc::new(commands),
             fill_type: self.fill_type,
             bounds: None,
         }
@@ -563,7 +573,7 @@ impl Path {
         // differently.
         let mut subpath_open = false;
 
-        for cmd in &self.commands {
+        for cmd in self.commands.iter() {
             match cmd {
                 PathCommand::MoveTo(p) => {
                     // Fill semantics: each subpath is implicitly closed for
@@ -700,7 +710,7 @@ impl Path {
         // differently.
         let mut subpath_open = false;
 
-        for cmd in &self.commands {
+        for cmd in self.commands.iter() {
             match cmd {
                 PathCommand::MoveTo(p) => {
                     // Fill semantics: implicitly close the subpath being left
@@ -1173,6 +1183,33 @@ impl Default for Path {
 mod tests {
     use super::*;
     use crate::geometry::{Point, px};
+
+    /// A clone is a refcount bump: both paths read one command buffer until
+    /// either side mutates, at which point only the mutating side copies.
+    /// `Canvas::draw_path`/`clip_path` rely on this to record a caller's path
+    /// without copying its commands.
+    #[test]
+    fn path_clone_shares_its_commands_until_mutated() {
+        let mut original = open_triangle(PathFillType::NonZero);
+        let recorded = original.clone();
+        assert!(recorded.shares_commands_with(&original));
+        assert_eq!(recorded.commands(), original.commands());
+
+        original.close();
+        assert!(
+            !recorded.shares_commands_with(&original),
+            "a mutation must detach the mutating side"
+        );
+        assert_eq!(
+            recorded.commands().len(),
+            3,
+            "the clone keeps the buffer it shared"
+        );
+        assert_eq!(original.commands().len(), 4);
+
+        let untouched = recorded.clone();
+        assert!(untouched.shares_commands_with(&recorded));
+    }
 
     /// Builds the triangle (0,0)→(100,0)→(50,100) without an explicit `close()`.
     fn open_triangle(fill_type: PathFillType) -> Path {

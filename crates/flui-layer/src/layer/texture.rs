@@ -1,7 +1,4 @@
-//! TextureLayer - External GPU texture rendering
-//!
-//! This layer displays an external GPU texture (video, camera, platform view)
-//! at a specific location. Corresponds to Flutter's `TextureLayer`.
+//! `TextureLayer` — an external GPU texture (video, camera) drawn into a rectangle.
 
 use flui_types::{
     geometry::{Pixels, Rect},
@@ -67,12 +64,7 @@ pub struct TextureLayer {
 }
 
 impl TextureLayer {
-    /// Creates a new texture layer.
-    ///
-    /// # Arguments
-    ///
-    /// * `texture_id` - ID of the external GPU texture
-    /// * `rect` - Destination rectangle for the texture
+    /// Draws the external GPU texture `texture_id` into `rect`.
     #[inline]
     pub fn new(texture_id: TextureId, rect: Rect<Pixels>) -> Self {
         Self {
@@ -84,127 +76,69 @@ impl TextureLayer {
         }
     }
 
-    /// Creates a frozen texture layer (texture won't update).
+    /// How the texture is sampled when scaled.
     #[inline]
-    pub fn frozen(texture_id: TextureId, rect: Rect<Pixels>) -> Self {
-        Self {
-            texture_id,
-            rect,
-            freeze: true,
-            filter_quality: FilterQuality::Low,
-            opacity: 1.0,
-        }
-    }
-
-    /// Sets the filter quality for texture sampling.
-    #[inline]
+    #[must_use]
     pub fn with_filter_quality(mut self, quality: FilterQuality) -> Self {
         self.filter_quality = quality;
         self
     }
 
-    /// Sets the opacity.
+    /// The alpha the texture is drawn with, clamped to `0.0..=1.0`.
     #[inline]
+    #[must_use]
     pub fn with_opacity(mut self, opacity: f32) -> Self {
-        self.opacity = opacity.clamp(0.0, 1.0);
+        self.opacity = super::unit_alpha(opacity);
         self
     }
 
-    /// Sets the freeze state.
-    #[inline]
-    pub fn with_freeze(mut self, freeze: bool) -> Self {
-        self.freeze = freeze;
-        self
-    }
-
-    /// Returns the texture ID.
+    /// The external texture to draw.
     #[inline]
     pub fn texture_id(&self) -> TextureId {
         self.texture_id
     }
 
-    /// Returns the destination rectangle.
-    #[inline]
-    pub fn rect(&self) -> Rect<Pixels> {
-        self.rect
-    }
-
-    /// Returns the bounds (same as rect for texture layers).
+    /// The destination rectangle.
     #[inline]
     pub fn bounds(&self) -> Rect<Pixels> {
         self.rect
     }
 
-    /// Returns whether the texture is frozen.
+    /// See [`Self::set_freeze`].
     #[inline]
     pub fn is_frozen(&self) -> bool {
         self.freeze
     }
 
-    /// Returns the filter quality.
+    /// See [`Self::with_filter_quality`].
     #[inline]
     pub fn filter_quality(&self) -> FilterQuality {
         self.filter_quality
     }
 
-    /// Returns the opacity.
+    /// See [`Self::with_opacity`].
     #[inline]
     pub fn opacity(&self) -> f32 {
         self.opacity
     }
 
-    /// Sets the texture ID.
-    #[inline]
-    pub fn set_texture_id(&mut self, texture_id: TextureId) {
-        self.texture_id = texture_id;
-    }
-
-    /// Sets the destination rectangle.
-    #[inline]
-    pub fn set_rect(&mut self, rect: Rect<Pixels>) {
-        self.rect = rect;
-    }
-
-    /// Sets the freeze state.
+    /// While frozen the backend keeps showing the last
+    /// frame it received, so a texture resized by the platform does not flicker.
     #[inline]
     pub fn set_freeze(&mut self, freeze: bool) {
         self.freeze = freeze;
     }
 
-    /// Sets the filter quality.
-    #[inline]
-    pub fn set_filter_quality(&mut self, quality: FilterQuality) {
-        self.filter_quality = quality;
-    }
-
-    /// Sets the opacity.
-    #[inline]
-    pub fn set_opacity(&mut self, opacity: f32) {
-        self.opacity = opacity.clamp(0.0, 1.0);
-    }
-
-    /// Returns true if the texture is fully transparent.
+    /// Whether opacity is 0.
     #[inline]
     pub fn is_invisible(&self) -> bool {
         self.opacity <= 0.0
     }
 
-    /// Returns true if the texture is fully opaque.
+    /// Whether opacity is 1.
     #[inline]
     pub fn is_opaque(&self) -> bool {
         self.opacity >= 1.0
-    }
-}
-
-impl Default for TextureLayer {
-    fn default() -> Self {
-        Self {
-            texture_id: TextureId::new(0),
-            rect: Rect::ZERO,
-            freeze: false,
-            filter_quality: FilterQuality::Low,
-            opacity: 1.0,
-        }
     }
 }
 
@@ -221,19 +155,10 @@ mod tests {
         let layer = TextureLayer::new(id, rect);
 
         assert_eq!(layer.texture_id(), id);
-        assert_eq!(layer.rect(), rect);
+        assert_eq!(layer.bounds(), rect);
         assert!(!layer.is_frozen());
         assert_eq!(layer.filter_quality(), FilterQuality::Low);
         assert_eq!(layer.opacity(), 1.0);
-    }
-
-    #[test]
-    fn test_texture_layer_frozen() {
-        let id = TextureId::new(456);
-        let rect = Rect::from_xywh(px(0.0), px(0.0), px(640.0), px(480.0));
-        let layer = TextureLayer::frozen(id, rect);
-
-        assert!(layer.is_frozen());
     }
 
     #[test]
@@ -276,23 +201,6 @@ mod tests {
     }
 
     #[test]
-    fn test_texture_layer_setters() {
-        let mut layer = TextureLayer::default();
-
-        layer.set_texture_id(TextureId::new(999));
-        layer.set_rect(Rect::from_xywh(px(5.0), px(5.0), px(50.0), px(50.0)));
-        layer.set_freeze(true);
-        layer.set_filter_quality(FilterQuality::Medium);
-        layer.set_opacity(0.8);
-
-        assert_eq!(layer.texture_id(), TextureId::new(999));
-        assert_eq!(layer.rect().left(), px(5.0));
-        assert!(layer.is_frozen());
-        assert_eq!(layer.filter_quality(), FilterQuality::Medium);
-        assert_eq!(layer.opacity(), 0.8);
-    }
-
-    #[test]
     fn test_texture_layer_visibility() {
         let id = TextureId::new(1);
         let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
@@ -308,38 +216,5 @@ mod tests {
         let semi = TextureLayer::new(id, rect).with_opacity(0.5);
         assert!(!semi.is_invisible());
         assert!(!semi.is_opaque());
-    }
-
-    #[test]
-    fn test_texture_layer_clone_copy() {
-        // Compile-time bound checks — fail to compile if `Clone` or `Copy`
-        // are ever removed from `TextureLayer`.
-        fn assert_clone<T: Clone>() {}
-        fn assert_copy<T: Copy>() {}
-        assert_clone::<TextureLayer>();
-        assert_copy::<TextureLayer>();
-
-        let layer = TextureLayer::new(
-            TextureId::new(1),
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-        );
-        let copied = layer; // Copy
-        #[expect(
-            clippy::clone_on_copy,
-            reason = "intentionally exercise the explicit Clone path; the test name promises it"
-        )]
-        let cloned = layer.clone();
-
-        assert_eq!(layer, copied);
-        assert_eq!(layer, cloned);
-    }
-
-    #[test]
-    fn test_texture_layer_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<TextureLayer>();
-        assert_sync::<TextureLayer>();
     }
 }

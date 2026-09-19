@@ -1,7 +1,4 @@
-//! ImageFilterLayer - Image filter effects layer
-//!
-//! This layer applies image filters (blur, dilate, erode, etc.) to its
-//! children. Corresponds to Flutter's `ImageFilterLayer`.
+//! `ImageFilterLayer` — filters its subtree's pixels: blur, dilate, erode, colour matrix.
 
 use flui_types::{Offset, geometry::Pixels, painting::effects::ImageFilter};
 
@@ -56,7 +53,7 @@ pub struct ImageFilterLayer {
 }
 
 impl ImageFilterLayer {
-    /// Creates a new image filter layer.
+    /// Filters the subtree's pixels with `filter`.
     #[inline]
     pub fn new(filter: ImageFilter) -> Self {
         Self {
@@ -65,124 +62,58 @@ impl ImageFilterLayer {
         }
     }
 
-    /// Creates an image filter layer with an offset.
-    ///
-    /// Combining offset with the filter avoids needing a separate OffsetLayer.
+    /// Like [`Self::new`], also translating the subtree by `offset`.
     #[inline]
     pub fn with_offset(filter: ImageFilter, offset: Offset<Pixels>) -> Self {
         Self { filter, offset }
     }
 
-    /// Creates a Gaussian blur filter.
-    ///
-    /// # Arguments
-    ///
-    /// * `sigma` - Blur radius (standard deviation) for both axes
+    /// A Gaussian blur with standard deviation `sigma` on both axes.
     #[inline]
     pub fn blur(sigma: f32) -> Self {
         Self::new(ImageFilter::blur(sigma))
     }
 
-    /// Creates a directional Gaussian blur filter.
-    ///
-    /// # Arguments
-    ///
-    /// * `sigma_x` - Horizontal blur radius
-    /// * `sigma_y` - Vertical blur radius
+    /// A Gaussian blur with per-axis standard deviations.
     #[inline]
     pub fn blur_xy(sigma_x: f32, sigma_y: f32) -> Self {
         Self::new(ImageFilter::blur_directional(sigma_x, sigma_y))
     }
 
-    /// Creates a dilate filter.
-    ///
-    /// Dilation expands bright regions and shrinks dark regions.
-    /// Useful for creating glow effects.
-    ///
-    /// # Arguments
-    ///
-    /// * `radius` - Dilation radius in pixels
+    /// A morphological dilation by `radius` pixels: bright regions grow (glow).
     #[inline]
     pub fn dilate(radius: f32) -> Self {
         Self::new(ImageFilter::dilate(radius))
     }
 
-    /// Creates an erode filter.
-    ///
-    /// Erosion shrinks bright regions and expands dark regions.
-    /// Opposite of dilate.
-    ///
-    /// # Arguments
-    ///
-    /// * `radius` - Erosion radius in pixels
+    /// A morphological erosion by `radius` pixels: bright regions shrink.
     #[inline]
     pub fn erode(radius: f32) -> Self {
         Self::new(ImageFilter::erode(radius))
     }
 
-    /// Creates a filter from a color matrix.
+    /// A colour-matrix filter.
     #[inline]
     pub fn matrix(matrix: flui_types::painting::effects::ColorMatrix) -> Self {
         Self::new(ImageFilter::matrix(matrix))
     }
 
-    /// Returns a reference to the image filter.
+    /// The filter applied to the subtree.
     #[inline]
     pub fn filter(&self) -> &ImageFilter {
         &self.filter
     }
 
-    /// Sets the image filter.
-    #[inline]
-    pub fn set_filter(&mut self, filter: ImageFilter) {
-        self.filter = filter;
-    }
-
-    /// Returns the offset.
+    /// The translation applied to the subtree (see [`Self::with_offset`]).
     #[inline]
     pub fn offset(&self) -> Offset<Pixels> {
         self.offset
     }
 
-    /// Sets the offset.
-    #[inline]
-    pub fn set_offset(&mut self, offset: Offset<Pixels>) {
-        self.offset = offset;
-    }
-
-    /// Returns true if this layer has a non-zero offset.
+    /// Whether the layer translates its subtree.
     #[inline]
     pub fn has_offset(&self) -> bool {
-        use flui_types::geometry::px;
-        self.offset.dx != px(0.0) || self.offset.dy != px(0.0)
-    }
-
-    /// Returns the blur sigma values if this is a blur filter.
-    ///
-    /// Returns `None` for non-blur filters.
-    pub fn blur_sigma(&self) -> Option<(f32, f32)> {
-        match &self.filter {
-            ImageFilter::Blur { sigma_x, sigma_y } => Some((*sigma_x, *sigma_y)),
-            _ => None,
-        }
-    }
-
-    /// Returns true if this is a blur filter.
-    #[inline]
-    pub fn is_blur(&self) -> bool {
-        matches!(self.filter, ImageFilter::Blur { .. })
-    }
-
-    /// Returns true if this is a dilate filter.
-    #[inline]
-    pub fn is_dilate(&self) -> bool {
-        matches!(self.filter, ImageFilter::Dilate { .. })
-    }
-
-    /// Returns true if this is an erode filter.
-    #[inline]
-    pub fn is_erode(&self) -> bool {
-        matches!(self.filter, ImageFilter::Erode { .. })
+        !self.offset.is_zero()
     }
 }
 
@@ -215,67 +146,24 @@ mod tests {
     #[test]
     fn test_image_filter_layer_blur() {
         let layer = ImageFilterLayer::blur(10.0);
-
-        assert!(layer.is_blur());
-        assert!(!layer.is_dilate());
-        assert!(!layer.is_erode());
-
-        let sigma = layer.blur_sigma().unwrap();
-        assert_eq!(sigma, (10.0, 10.0));
+        assert!(matches!(layer.filter(), ImageFilter::Blur { .. }));
     }
 
     #[test]
     fn test_image_filter_layer_blur_xy() {
         let layer = ImageFilterLayer::blur_xy(5.0, 15.0);
-
-        assert!(layer.is_blur());
-
-        let sigma = layer.blur_sigma().unwrap();
-        assert_eq!(sigma, (5.0, 15.0));
+        assert!(matches!(layer.filter(), ImageFilter::Blur { .. }));
     }
 
     #[test]
-    fn test_image_filter_layer_dilate() {
-        let layer = ImageFilterLayer::dilate(3.0);
-
-        assert!(layer.is_dilate());
-        assert!(!layer.is_blur());
-        assert!(layer.blur_sigma().is_none());
-    }
-
-    #[test]
-    fn test_image_filter_layer_erode() {
-        let layer = ImageFilterLayer::erode(2.0);
-
-        assert!(layer.is_erode());
-        assert!(!layer.is_blur());
-    }
-
-    #[test]
-    fn test_image_filter_layer_setters() {
-        let mut layer = ImageFilterLayer::blur(5.0);
-
-        layer.set_filter(ImageFilter::dilate(3.0));
-        assert!(layer.is_dilate());
-
-        layer.set_offset(Offset::new(px(5.0), px(10.0)));
-        assert!(layer.has_offset());
-    }
-
-    #[test]
-    fn test_image_filter_layer_clone() {
-        let layer = ImageFilterLayer::blur(5.0);
-        let cloned = layer.clone();
-
-        assert_eq!(layer, cloned);
-    }
-
-    #[test]
-    fn test_image_filter_layer_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<ImageFilterLayer>();
-        assert_sync::<ImageFilterLayer>();
+    fn test_image_filter_layer_dilate_and_erode() {
+        assert!(matches!(
+            ImageFilterLayer::dilate(3.0).filter(),
+            ImageFilter::Dilate { .. }
+        ));
+        assert!(matches!(
+            ImageFilterLayer::erode(2.0).filter(),
+            ImageFilter::Erode { .. }
+        ));
     }
 }

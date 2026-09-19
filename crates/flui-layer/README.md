@@ -8,196 +8,125 @@ View → Element → Render → Layer → Semantics
 
 ## Overview
 
-Layers handle compositing and GPU optimization. They're created at repaint boundaries and cached for efficient rendering.
+The paint walk in `flui-rendering` emits one `LayerTree` per frame; it is frozen into a `Scene`,
+stamped into a `SceneSnapshot`, moved by value to the raster side, and lowered to GPU work by
+`flui-engine`.
 
 ```
-RenderObject (flui_rendering)
-    │
-    │ paint() generates Canvas OR pushes Layer
-    ▼
-Layer (this crate)
-    │
-    │ render() → CommandRenderer
-    ▼
-GPU Rendering (wgpu via flui_engine)
+RenderObject::paint  ──►  LayerTree  ──►  Scene  ──►  SceneSnapshot  ──►  flui-engine
+  (flui-rendering)       (this crate)                 (raster boundary)     (wgpu)
 ```
 
-## Layer Types
+## Layer types
 
-### Leaf Layers
-| Layer | Description |
-|-------|-------------|
-| `CanvasLayer` | Standard canvas drawing commands (mutable) |
-| `PictureLayer` | Recorded drawing commands (immutable, for repaint boundaries) |
-| `TextureLayer` | External GPU texture rendering (video, camera) |
-| `PlatformViewLayer` | Native platform view embedding |
-| `PerformanceOverlayLayer` | Performance statistics display |
+| Kind | Variants |
+|------|----------|
+| Leaf | `PictureLayer` (sealed drawing commands), `CanvasLayer` (a live recorder), `TextureLayer`, `PlatformViewLayer`, `PerformanceOverlayLayer` |
+| Clip | `ClipRectLayer`, `ClipRRectLayer`, `ClipSuperellipseLayer`, `ClipPathLayer` |
+| Transform | `OffsetLayer`, `TransformLayer` |
+| Effect | `OpacityLayer`, `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` |
+| Link | `LeaderLayer`, `FollowerLayer` |
+| Annotation | `AnnotatedRegionLayer` |
 
-### Clip Layers
-| Layer | Description |
-|-------|-------------|
-| `ClipRectLayer` | Rectangular clipping |
-| `ClipRRectLayer` | Rounded rectangle clipping |
-| `ClipSuperellipseLayer` | iOS-style squircle clipping |
-| `ClipPathLayer` | Arbitrary path clipping |
-
-### Transform Layers
-| Layer | Description |
-|-------|-------------|
-| `OffsetLayer` | Simple translation (optimized for repaint boundaries) |
-| `TransformLayer` | Full 4x4 matrix transformation |
-
-### Effect Layers
-| Layer | Description |
-|-------|-------------|
-| `OpacityLayer` | Alpha blending |
-| `ColorFilterLayer` | Color matrix transformation (grayscale, sepia, etc.) |
-| `ImageFilterLayer` | Blur, dilate, erode effects |
-| `ShaderMaskLayer` | GPU shader masking (gradient fades, vignettes) |
-| `BackdropFilterLayer` | Backdrop filtering (frosted glass, blur) |
-
-### Linking Layers
-| Layer | Description |
-|-------|-------------|
-| `LeaderLayer` | Anchor point for linked positioning |
-| `FollowerLayer` | Positions content relative to a leader |
-
-### Annotation Layers
-| Layer | Description |
-|-------|-------------|
-| `AnnotatedRegionLayer` | Metadata regions for system UI integration |
+`Layer::local_translation()` is the one place the set of translating variants is written down;
+the engine's pushes and the follower resolver's chain sums both read it.
 
 ## Usage
 
+### Building a tree
+
 ```rust
-use flui_layer::prelude::*;
-use flui_types::geometry::Rect;
-use flui_types::painting::Clip;
+use flui_layer::{ClipRectLayer, Layer, LayerTree, OffsetLayer, PictureLayer, Scene};
+use flui_types::{geometry::{Rect, px}, painting::Clip};
 
-// Create a layer tree
 let mut tree = LayerTree::new();
+let root = tree.insert_root(Layer::from(OffsetLayer::zero()));
+let clip = tree.push_child(
+    root,
+    Layer::from(ClipRectLayer::new(
+        Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        Clip::AntiAlias,
+    )),
+);
+tree.push_child(clip, Layer::from(PictureLayer::default()));
 
-// Add a canvas layer
-let canvas_id = tree.insert(Layer::Canvas(CanvasLayer::new()));
-
-// Add a clip layer as a child
-let clip = ClipRectLayer::anti_alias(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
-let clip_id = tree.insert_child(canvas_id, Layer::ClipRect(clip));
-
-// Add transform with opacity
-let offset_id = tree.push_offset(10.0, 20.0);
-let opacity_id = tree.push_opacity(0.8);
+let scene = Scene::new(tree); // frozen: no `&mut` path back to the tree
+assert_eq!(scene.root(), Some(root));
 ```
 
-### Scene Building
+The tree is append-only: `push_child` mints the child's id in the call that links it, so a cycle
+or a doubly-parented node cannot be expressed and no walker needs a guard.
+
+### Scene building
 
 ```rust
-use flui_layer::{SceneBuilder, Scene};
+use flui_layer::{LayerTree, OpacityLayer, PictureLayer, SceneBuilder};
+use flui_painting::DisplayList;
+use flui_types::Offset;
 
-let mut builder = SceneBuilder::new();
-
-builder.push_offset(10.0, 20.0);
-builder.push_opacity(0.9);
-builder.add_canvas(canvas);
+let mut tree = LayerTree::new();
+let mut builder = SceneBuilder::new(&mut tree);
+builder.push_offset(Offset::ZERO);
+builder.push(OpacityLayer::new(0.9));
+builder.add_picture(DisplayList::new());
 builder.pop(); // opacity
 builder.pop(); // offset
-
-let scene: Scene = builder.build();
+let root = builder.build();
+assert!(root.is_some());
 ```
 
-### Layer Handles
-
-Type-safe handles for retained layer references:
-
-```rust
-use flui_layer::{LayerHandle, OpacityLayer};
-
-let handle: LayerHandle<OpacityLayer> = LayerHandle::new();
-handle.set(OpacityLayer::new(0.5));
-
-if let Some(layer) = handle.get() {
-    println!("Opacity: {}", layer.alpha());
-}
-```
-
-### Linked Layers
+### Linked layers
 
 For tooltips, dropdowns, and overlays that follow other content:
 
 ```rust
-use flui_layer::{LayerLink, LeaderLayer, FollowerLayer};
+use flui_layer::{FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, resolve_follower_offset};
+use flui_types::{geometry::{Offset, Size, px}, painting::Alignment};
 
-// Create a link
 let link = LayerLink::new();
-
-// Leader defines the anchor point
-let leader = LeaderLayer::new(link.clone())
-    .with_offset(100.0, 50.0);
-
-// Follower positions relative to leader
+let mut tree = LayerTree::new();
+let root = tree.insert_root(Layer::from(flui_layer::OffsetLayer::zero()));
+tree.push_child(
+    root,
+    Layer::from(LeaderLayer::with_offset(
+        link,
+        Size::new(px(100.0), px(30.0)),
+        Offset::new(px(40.0), px(10.0)),
+    )),
+);
+// Hang 5 px below the leader's bottom-center.
 let follower = FollowerLayer::new(link)
-    .right_of(10.0)  // 10px to the right of leader
-    .with_size(200.0, 100.0);
+    .with_leader_anchor(Alignment::BOTTOM_CENTER)
+    .with_follower_anchor(Alignment::TOP_CENTER)
+    .with_target_offset(Offset::new(px(0.0), px(5.0)))
+    .with_size(Size::new(px(60.0), px(20.0)));
+let follower_id = tree.push_child(root, Layer::from(follower));
+
+let resolved = resolve_follower_offset(&tree, follower_id);
+assert_eq!(resolved, Some(Offset::new(px(60.0), px(45.0))));
 ```
 
-### Annotation Search
-
-Find annotations at a specific point in the layer tree:
-
-```rust
-use flui_layer::{AnnotationResult, AnnotationSearchOptions};
-
-let mut result: AnnotationResult<String> = AnnotationResult::new();
-// ... populate during hit testing ...
-
-for entry in result.entries() {
-    println!("Found: {} at {:?}", entry.annotation, entry.local_position);
-}
-```
+The tree indexes every leader by link as it is pushed; at render time
+`resolve_follower_offset` walks both ancestor chains to their common ancestor and returns the
+offset the renderer applies at the follower's tree position.
 
 ## Features
 
-- `parallel` — Enable parallel layer operations via rayon
+- `testing` — the `testing::inspect` walkers (`structure`, `clip_rects`, `first_picture_bounds`,
+  `diagnostics_tree`, …). `flui-rendering`'s render harness re-exports them.
 
 ```toml
-[dependencies]
-flui-layer = { version = "0.1", features = ["parallel"] }
+[dev-dependencies]
+flui-layer = { version = "0.2", features = ["testing"] }
 ```
 
-## Design Principles
+## Design
 
-1. **Canonical IDs** — Uses `LayerId` from `flui-foundation`
-2. **Tree Traits** — Implements `TreeRead<LayerId>`, `TreeNav<LayerId>` from `flui-tree`
-3. **Separation** — Layer types here, rendering in `flui_engine`
-4. **Thread-safe** — All types are `Send + Sync`
-5. **Flutter-compatible** — API mirrors Flutter's layer.dart where applicable
-
-## Flutter Parity
-
-This crate provides equivalent functionality to Flutter's `layer.dart`:
-
-| Flutter | flui-layer |
-|---------|------------|
-| `Layer` | `Layer` enum |
-| `ContainerLayer` | `LayerTree` with parent-child |
-| `OffsetLayer` | `OffsetLayer` |
-| `ClipRectLayer` | `ClipRectLayer` |
-| `ClipRRectLayer` | `ClipRRectLayer` |
-| `ClipRSuperellipseLayer` | `ClipSuperellipseLayer` |
-| `ClipPathLayer` | `ClipPathLayer` |
-| `OpacityLayer` | `OpacityLayer` |
-| `ColorFilterLayer` | `ColorFilterLayer` |
-| `ImageFilterLayer` | `ImageFilterLayer` |
-| `BackdropFilterLayer` | `BackdropFilterLayer` |
-| `TransformLayer` | `TransformLayer` |
-| `LeaderLayer` | `LeaderLayer` |
-| `FollowerLayer` | `FollowerLayer` |
-| `AnnotatedRegionLayer` | `AnnotatedRegionLayer` |
-| `TextureLayer` | `TextureLayer` |
-| `PlatformViewLayer` | `PlatformViewLayer` |
-| `PerformanceOverlayLayer` | `PerformanceOverlayLayer` |
-| `ShaderMaskLayer` | `ShaderMaskLayer` |
-
-## License
-
-MIT OR Apache-2.0
+1. **Canonical IDs** — `LayerId` from `flui-foundation`, 1-based over a 0-based `Vec`
+2. **Tree traits** — `TreeRead<LayerId>` + `TreeNav<LayerId>` from `flui-tree`, so the generic
+   walkers (`ancestors`, `descendants`, `lowest_common_ancestor`) run over the compositor tree
+3. **Separation** — layer types here, GPU lowering in `flui-engine`
+4. **Single owner, value-moved** — built on the paint side, frozen into a `Scene`, rendered on the
+   raster side; no lock, no `Arc`
+5. **Every reference divergence is recorded** in [`ARCHITECTURE.md`](ARCHITECTURE.md) with the
+   test that covers it

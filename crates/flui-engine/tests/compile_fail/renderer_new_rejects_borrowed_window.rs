@@ -39,7 +39,7 @@ where
     // is a real diagnostic but not this issue's diagnostic.
     W: HasWindowHandle + HasDisplayHandle + Send + Sync,
 {
-    let renderer = flui_engine::wgpu::Renderer::new(&window).await;
+    let renderer = flui_engine::Renderer::new(&window).await;
     drop(window);
     let _ = renderer;
 }

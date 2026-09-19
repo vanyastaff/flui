@@ -189,7 +189,12 @@ impl RasterResizeHook {
     /// an interleaving that stamps an older mint is ordinary staleness the
     /// pump rejects, never a false accept.
     pub(crate) fn apply(&self, width: u32, height: u32) {
-        let generation = self.handle.resize(width, height);
+        // A zero-sized resize (a minimized window) mints nothing and is not
+        // the layout authority either: the surface stays at its last real
+        // configuration and so does the size the next frame is laid out at.
+        let Some(generation) = self.handle.resize(width, height) else {
+            return;
+        };
         let mut inner = self.stamp.inner.lock();
         inner.surface_generation = generation;
         inner.physical_size = (width, height);
@@ -233,7 +238,11 @@ impl<B: RasterBackend> RasterLane<B> {
     /// the pump rejects outright, by design).
     pub(crate) fn new(backend: B, address: PresentationAddress, width: u32, height: u32) -> Self {
         let (owner, handle, ack_rx, shutdown_rx) = RasterOwner::new(backend, address);
-        let generation = handle.resize(width, height);
+        // A zero-sized initial window leaves the stamp at `ZERO`, which the
+        // pump rejects until the first real resize mints a generation.
+        let generation = handle
+            .resize(width, height)
+            .unwrap_or(flui_foundation::SurfaceGeneration::ZERO);
         let stamp = Arc::new(LaneStamp {
             inner: Mutex::new(LaneStampInner {
                 surface_generation: generation,
@@ -289,7 +298,9 @@ impl<B: RasterBackend> RasterLane<B> {
     /// involved.
     pub(crate) fn note_surface_recreated(&mut self) {
         let (width, height) = self.stamp.physical_size();
-        let generation = self.handle.resize(width, height);
+        let Some(generation) = self.handle.resize(width, height) else {
+            return;
+        };
         self.stamp.set_surface_generation(generation);
         tracing::info!(
             width,
@@ -474,7 +485,6 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
 mod tests {
     use flui_foundation::{PresentationId, RealmId, SurfaceGeneration};
     use flui_layer::{CanvasLayer, Layer};
-    use flui_types::Size;
 
     use super::*;
 
@@ -485,8 +495,13 @@ mod tests {
         }
     }
 
+    /// A minimal non-empty scene: one canvas layer under a root.
+    fn scene_from_canvas() -> Scene {
+        Scene::new(flui_layer::LayerTree::new(Layer::from(CanvasLayer::new())))
+    }
+
     fn test_scene() -> Scene {
-        Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0)
+        scene_from_canvas()
     }
 
     /// A scripted backend for lane-behavior tests: every render outcome is

@@ -42,8 +42,12 @@ use flui_foundation::{
     SurfaceGeneration,
 };
 use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene, SceneSnapshot};
-use flui_types::Size;
 use flui_types::geometry::{Pixels, Rect};
+
+/// A minimal non-empty scene: one canvas layer under a root.
+fn scene_from_canvas() -> Scene {
+    Scene::new(flui_layer::LayerTree::new(Layer::from(CanvasLayer::new())))
+}
 
 /// A backend that does the minimum possible work per frame — isolates the
 /// mailbox/accounting overhead this bench measures from any real GPU cost.
@@ -97,11 +101,7 @@ fn bench_frame(epoch: FrameEpoch, surface_generation: SurfaceGeneration) -> Scen
         surface_generation,
         GpuResourceGeneration::ZERO,
     );
-    SceneSnapshot::new(
-        stamp,
-        DamageRegion::Full,
-        Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
-    )
+    SceneSnapshot::new(stamp, DamageRegion::Full, scene_from_canvas())
 }
 
 /// Uncontended baseline: one thread doing submit→pump→retire in a tight
@@ -121,7 +121,9 @@ fn submit_pump_retire_cycle(c: &mut Criterion) {
     let mut epoch = FrameEpoch::ZERO;
     // Prime the owner past ADR-0045 decision 4's ZERO-rejection gate; applied
     // by the first timed pump() below, alongside that iteration's frame.
-    let generation = handle.resize(1, 1);
+    let generation = handle
+        .resize(1, 1)
+        .expect("non-zero size mints a generation");
 
     c.bench_function("submit_pump_retire_cycle", |b| {
         b.iter_batched(
@@ -147,7 +149,9 @@ fn in_flight_read_under_retire_storm(c: &mut Criterion) {
     let (owner, handle, _ack_rx, _shutdown_complete_rx) =
         RasterOwner::new(NoOpBackend, bench_address());
     // Same priming as `submit_pump_retire_cycle` above — see its comment.
-    let generation = handle.resize(1, 1);
+    let generation = handle
+        .resize(1, 1)
+        .expect("non-zero size mints a generation");
 
     let stop = Arc::new(AtomicBool::new(false));
     let storm_handle = handle.clone();

@@ -2,7 +2,7 @@
 //! `crates/flui-painting/src/text_painter/mod.rs` during the text-painter
 //! module split.
 
-use flui_painting::{Canvas, DEFAULT_FONT_SIZE, DisplayListCore, TextBaseline, TextPainter};
+use flui_painting::{Canvas, TextBaseline, TextPainter};
 use flui_types::{
     geometry::{Offset, px},
     typography::{TextAlign, TextDirection, TextPosition, TextSpan},
@@ -36,7 +36,7 @@ fn test_text_painter_layout() {
 
     painter.layout(0.0, 200.0);
 
-    assert!(painter.did_layout());
+    assert!(painter.has_layout());
     assert!(painter.width() > 0.0);
     assert!(painter.height() > 0.0);
 }
@@ -48,16 +48,16 @@ fn test_text_painter_setters_invalidate_layout() {
         .with_text_direction(TextDirection::Ltr);
 
     painter.layout(0.0, 200.0);
-    assert!(painter.did_layout());
+    assert!(painter.has_layout());
 
     // Alignment is a paint offset over the shaped lines (shaped/paint
     // split) — the layout cache survives the change.
     painter.set_text_align(TextAlign::Center);
-    assert!(painter.did_layout());
+    assert!(painter.has_layout());
 
     // Layout-affecting setters still drop the cache.
     painter.set_max_lines(Some(1));
-    assert!(!painter.did_layout());
+    assert!(!painter.has_layout());
 }
 
 #[test]
@@ -70,11 +70,6 @@ fn test_text_painter_max_lines() {
 #[test]
 fn test_text_baseline() {
     assert_eq!(TextBaseline::default(), TextBaseline::Alphabetic);
-}
-
-#[test]
-fn test_default_font_size() {
-    assert!((DEFAULT_FONT_SIZE - 14.0).abs() < f32::EPSILON);
 }
 
 #[test]
@@ -178,7 +173,7 @@ fn painted_span_contributes_its_laid_out_box_to_display_list_bounds() {
     let origin = Offset::new(px(7.0), px(11.0));
     let mut canvas = Canvas::new();
     painter.paint(&mut canvas, origin);
-    let bounds = canvas.finish().bounds();
+    let bounds = canvas.finish().bounds().expect("a painted span has bounds");
 
     // `TextAlign::Start` under an unbounded width leaves the alignment
     // paint-offset at zero, so the box lands exactly at `origin`.

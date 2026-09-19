@@ -347,65 +347,7 @@ impl ClipGeometry for RRect {
     }
 
     fn contains(&self, position: Point<Pixels>) -> bool {
-        // First fail-fast: outside the bounding rect.
-        if !self.bounding_rect().contains(position) {
-            return false;
-        }
-        // Then exclude each rounded corner via the per-corner ellipse.
-        let r = self.bounding_rect();
-        let px = position.x.get();
-        let py = position.y.get();
-
-        // For each corner, if the point is inside the corner's "square"
-        // sub-region but outside the inscribed ellipse, it's outside the
-        // rounded rect.
-        let test_corner = |cx: f32, cy: f32, rx: f32, ry: f32, in_corner: bool| -> bool {
-            if !in_corner || rx <= 0.0 || ry <= 0.0 {
-                return true; // not in this corner OR no rounding → inside
-            }
-            let dx = (px - cx) / rx;
-            let dy = (py - cy) / ry;
-            dx * dx + dy * dy <= 1.0
-        };
-
-        let left = r.left().get();
-        let top = r.top().get();
-        let right = r.right().get();
-        let bottom = r.bottom().get();
-
-        // Top-left.
-        let tl_rx = self.top_left.x.get();
-        let tl_ry = self.top_left.y.get();
-        let in_tl = px < left + tl_rx && py < top + tl_ry;
-        if !test_corner(left + tl_rx, top + tl_ry, tl_rx, tl_ry, in_tl) {
-            return false;
-        }
-
-        // Top-right.
-        let tr_rx = self.top_right.x.get();
-        let tr_ry = self.top_right.y.get();
-        let in_tr = px > right - tr_rx && py < top + tr_ry;
-        if !test_corner(right - tr_rx, top + tr_ry, tr_rx, tr_ry, in_tr) {
-            return false;
-        }
-
-        // Bottom-right.
-        let br_rx = self.bottom_right.x.get();
-        let br_ry = self.bottom_right.y.get();
-        let in_br = px > right - br_rx && py > bottom - br_ry;
-        if !test_corner(right - br_rx, bottom - br_ry, br_rx, br_ry, in_br) {
-            return false;
-        }
-
-        // Bottom-left.
-        let bl_rx = self.bottom_left.x.get();
-        let bl_ry = self.bottom_left.y.get();
-        let in_bl = px < left + bl_rx && py > bottom - bl_ry;
-        if !test_corner(left + bl_rx, bottom - bl_ry, bl_rx, bl_ry, in_bl) {
-            return false;
-        }
-
-        true
+        RRect::contains(self, position)
     }
 
     fn resolve_rrect_border_radius(border_radius: BorderRadius, size: Size) -> Option<Self> {

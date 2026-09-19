@@ -16,12 +16,12 @@ use std::fmt::Write as _;
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::LayerTree;
 use flui_painting::PaintStyle;
-use flui_painting::display_list::{ClipOp, DisplayList, DrawCommand, Paint};
+use flui_painting::{DisplayList, DrawCommand, DrawOp};
+use flui_types::painting::{ClipOp, Paint};
 use flui_types::{
     geometry::{Matrix4, Pixels, Point, RRect, Rect},
     painting::Clip,
     styling::Color,
-    typography::{InlineSpan, TextSpan, TextStyle},
 };
 
 /// Coarse category of a drawing command.
@@ -51,10 +51,10 @@ pub enum DrawKind {
     Image,
     /// Drop shadow.
     Shadow,
-    /// Gradient fill.
-    Gradient,
-    /// Layer command (SaveLayer / RestoreLayer / ShaderMask / BackdropFilter).
+    /// Offscreen layer command (SaveLayer / RestoreLayer).
     Layer,
+    /// Save or restore the current transform and clip state.
+    State,
     /// Any variant not covered by the above (fills, vertices, …).
     Other,
 }
@@ -109,74 +109,6 @@ fn summarize_paint(paint: &Paint) -> String {
         format!("{style} {color} stroke={}{aliased}", f(paint.stroke_width))
     } else {
         format!("{style} {color}{aliased}")
-    }
-}
-
-/// Summarize the styles a span tree carries, as `" styles=[…]"`, or `""` when
-/// no node in it sets one.
-///
-/// Nodes are visited in the same pre-order `to_plain_text` concatenates, so the
-/// n-th entry is the style of the n-th styled run of the text beside it. Only
-/// nodes that actually set a style appear — an unstyled wrapper inherits and
-/// would add nothing but noise.
-fn summarize_span_styles(span: &InlineSpan) -> String {
-    fn walk(span: &TextSpan, out: &mut Vec<String>) {
-        if let Some(style) = span.style.as_ref() {
-            out.push(summarize_text_style(style));
-        }
-        for child in &span.children {
-            walk(child, out);
-        }
-    }
-
-    let mut styles = Vec::new();
-    match span {
-        InlineSpan::Text(text) => walk(text, &mut styles),
-        // A placeholder reserves space and paints nothing; its own style, when
-        // set, still rides the top-level accessor.
-        InlineSpan::Placeholder(_) => {
-            if let Some(style) = span.style() {
-                styles.push(summarize_text_style(style));
-            }
-        }
-    }
-
-    if styles.is_empty() {
-        String::new()
-    } else {
-        format!(" styles=[{}]", styles.join(", "))
-    }
-}
-
-/// Summarize the [`TextStyle`] fields a visual regression moves: the painted
-/// colors, and the metrics that change which glyphs are drawn and how wide.
-///
-/// Fields left out are either not paint-affecting or not yet exercised by any
-/// snapshot; add one here the moment a test needs to pin it.
-fn summarize_text_style(style: &TextStyle) -> String {
-    let mut parts = Vec::new();
-    if let Some(color) = style.color {
-        parts.push(hex_color(color));
-    }
-    if let Some(background) = style.background_color {
-        parts.push(format!("bg={}", hex_color(background)));
-    }
-    if let Some(size) = style.font_size {
-        parts.push(format!("size={}", f(size as f32)));
-    }
-    if let Some(weight) = style.font_weight {
-        parts.push(format!("weight={weight:?}"));
-    }
-    if let Some(font_style) = style.font_style {
-        parts.push(format!("style={font_style:?}"));
-    }
-    if let Some(family) = style.font_family.as_ref() {
-        parts.push(format!("family={family:?}"));
-    }
-    if parts.is_empty() {
-        "default".to_owned()
-    } else {
-        parts.join(" ")
     }
 }
 
@@ -265,466 +197,308 @@ fn maybe_transform(transform: &Matrix4) -> String {
 /// compile error here rather than silently falling through.
 #[must_use]
 pub fn summarize_command(cmd: &DrawCommand) -> DrawCommandSummary {
-    match cmd {
+    let DrawCommandSummary { kind, mut line } = summarize_op(&cmd.op);
+    line.push_str(&maybe_transform(&cmd.transform));
+    DrawCommandSummary { kind, line }
+}
+
+/// The op half of [`summarize_command`]: the variant and its geometry,
+/// without the transform suffix.
+fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
+    match op {
+        DrawOp::Save => DrawCommandSummary {
+            kind: DrawKind::State,
+            line: "Save".to_owned(),
+        },
+        DrawOp::Restore => DrawCommandSummary {
+            kind: DrawKind::State,
+            line: "Restore".to_owned(),
+        },
         // ── Clips ────────────────────────────────────────────────────────────
-        DrawCommand::ClipRect {
+        DrawOp::ClipRect {
             rect,
             clip_op,
             clip_behavior,
-            transform,
             ..
         } => DrawCommandSummary {
             kind: DrawKind::Clip,
             line: format!(
-                "ClipRect rect={} op={} clip={}{}",
+                "ClipRect rect={} op={} clip={}",
                 fmt_rect(*rect),
                 fmt_clip_op(*clip_op),
                 fmt_clip(*clip_behavior),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::ClipRRect {
+        DrawOp::ClipRRect {
             rrect,
             clip_op,
             clip_behavior,
-            transform,
             ..
         } => DrawCommandSummary {
             kind: DrawKind::Clip,
             line: format!(
-                "ClipRRect rrect={} op={} clip={}{}",
+                "ClipRRect rrect={} op={} clip={}",
                 fmt_rrect(rrect),
                 fmt_clip_op(*clip_op),
                 fmt_clip(*clip_behavior),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::ClipRSuperellipse {
+        DrawOp::ClipRSuperellipse {
             rsuperellipse,
             clip_op,
             clip_behavior,
-            transform,
             ..
         } => DrawCommandSummary {
             kind: DrawKind::Clip,
             line: format!(
-                "ClipRSuperellipse rect={} op={} clip={}{}",
+                "ClipRSuperellipse rect={} op={} clip={}",
                 fmt_rect(rsuperellipse.outer_rect()),
                 fmt_clip_op(*clip_op),
                 fmt_clip(*clip_behavior),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::ClipPath {
+        DrawOp::ClipPath {
             path,
             clip_op,
             clip_behavior,
-            transform,
             ..
         } => DrawCommandSummary {
             kind: DrawKind::Clip,
             line: format!(
-                "ClipPath bounds={} pts={} op={} clip={}{}",
+                "ClipPath bounds={} pts={} op={} clip={}",
                 fmt_rect(path.compute_bounds()),
                 path.commands().len(),
                 fmt_clip_op(*clip_op),
                 fmt_clip(*clip_behavior),
-                maybe_transform(transform),
             ),
         },
 
         // ── Primitive shapes ─────────────────────────────────────────────────
-        DrawCommand::DrawLine {
-            p1,
-            p2,
-            paint,
-            transform,
-        } => DrawCommandSummary {
+        DrawOp::Line { p1, p2, paint } => DrawCommandSummary {
             kind: DrawKind::Line,
             line: format!(
-                "DrawLine {}->{} {}{}",
+                "DrawLine {}->{} {}",
                 fmt_point(*p1),
                 fmt_point(*p2),
                 summarize_paint(paint),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::DrawRect {
-            rect,
-            paint,
-            transform,
-        } => DrawCommandSummary {
+        DrawOp::Rect { rect, paint } => DrawCommandSummary {
             kind: DrawKind::Rect,
             line: format!(
-                "DrawRect rect={} {}{}",
+                "DrawRect rect={} {}",
                 fmt_rect(*rect),
                 summarize_paint(paint),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::DrawRRect {
-            rrect,
-            paint,
-            transform,
-        } => DrawCommandSummary {
+        DrawOp::RRect { rrect, paint } => DrawCommandSummary {
             kind: DrawKind::RRect,
             line: format!(
-                "DrawRRect rrect={} {}{}",
+                "DrawRRect rrect={} {}",
                 fmt_rrect(rrect),
                 summarize_paint(paint),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::DrawCircle {
+        DrawOp::Circle {
             center,
             radius,
             paint,
-            transform,
         } => DrawCommandSummary {
             kind: DrawKind::Circle,
             line: format!(
-                "DrawCircle center={} r={} {}{}",
+                "DrawCircle center={} r={} {}",
                 fmt_point(*center),
                 f(radius.get()),
                 summarize_paint(paint),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::DrawOval {
-            rect,
-            paint,
-            transform,
-        } => DrawCommandSummary {
+        DrawOp::Oval { rect, paint } => DrawCommandSummary {
             kind: DrawKind::Oval,
             line: format!(
-                "DrawOval rect={} {}{}",
+                "DrawOval rect={} {}",
                 fmt_rect(*rect),
                 summarize_paint(paint),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::DrawPath {
-            path,
-            paint,
-            transform,
-        } => {
+        DrawOp::Path { path, paint } => {
             // Do NOT dump raw path verbs — too verbose and unstable.
             // Use bounds + command count as the stable fingerprint.
             DrawCommandSummary {
                 kind: DrawKind::Path,
                 line: format!(
-                    "DrawPath bounds={} pts={} {}{}",
+                    "DrawPath bounds={} pts={} {}",
                     fmt_rect(path.compute_bounds()),
                     path.commands().len(),
                     summarize_paint(paint),
-                    maybe_transform(transform),
                 ),
             }
         }
 
-        DrawCommand::DrawArc {
+        DrawOp::Arc {
             rect,
             start_angle,
             sweep_angle,
             use_center,
             paint,
-            transform,
         } => DrawCommandSummary {
             kind: DrawKind::Arc,
             line: format!(
-                "DrawArc rect={} start={} sweep={} center={} {}{}",
+                "DrawArc rect={} start={} sweep={} center={} {}",
                 fmt_rect(*rect),
                 f(*start_angle),
                 f(*sweep_angle),
                 use_center,
                 summarize_paint(paint),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::DrawDRRect {
+        DrawOp::DRRect {
             outer,
             inner,
             paint,
-            transform,
         } => DrawCommandSummary {
             kind: DrawKind::DRRect,
             line: format!(
-                "DrawDRRect outer={} inner={} {}{}",
+                "DrawDRRect outer={} inner={} {}",
                 fmt_rrect(outer),
                 fmt_rrect(inner),
                 summarize_paint(paint),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::DrawPoints {
+        DrawOp::Points {
             mode,
             points,
             paint,
-            transform,
         } => DrawCommandSummary {
             kind: DrawKind::Path,
             line: format!(
-                "DrawPoints mode={mode:?} pts={} {}{}",
+                "DrawPoints mode={mode:?} pts={} {}",
                 points.len(),
                 summarize_paint(paint),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::DrawVertices {
-            vertices,
-            paint,
-            transform,
-            ..
+        DrawOp::Vertices {
+            vertices, paint, ..
         } => DrawCommandSummary {
             kind: DrawKind::Other,
             line: format!(
-                "DrawVertices verts={} {}{}",
+                "DrawVertices verts={} {}",
                 vertices.len(),
                 summarize_paint(paint),
-                maybe_transform(transform),
             ),
         },
 
         // ── Text ─────────────────────────────────────────────────────────────
-        DrawCommand::DrawText {
-            text,
+        DrawOp::Paragraph {
+            layout,
             offset,
-            paint,
-            transform,
-            ..
-        } => DrawCommandSummary {
-            kind: DrawKind::Text,
-            line: format!(
-                "DrawText offset=({},{}) {:?} {}{}",
-                f(offset.dx.get()),
-                f(offset.dy.get()),
-                text,
-                summarize_paint(paint),
-                maybe_transform(transform),
-            ),
-        },
-
-        DrawCommand::DrawTextSpan {
-            span,
-            offset,
-            transform,
-            ..
+            color,
         } => {
-            // Plain text plus the styles the span tree carries. Glyph/run
-            // geometry is deliberately absent — that is the layer walk's
-            // concern — but the style is NOT optional detail: a regression that
-            // recolors, re-weights, or resizes a span moves no other field in
-            // this summary, so omitting it makes such a change invisible to
-            // every snapshot built on it.
-            let plain = span.to_plain_text();
+            // The text, the root colour, and what reached the shaper per run.
+            // Glyph geometry is deliberately absent, but the shaped styles are
+            // NOT optional detail: a regression that recolours, re-weights, or
+            // resizes a span moves no other field in this summary, so
+            // omitting them makes such a change invisible to every snapshot.
+            let runs = layout.describe_runs();
             DrawCommandSummary {
                 kind: DrawKind::Text,
                 line: format!(
-                    "DrawTextSpan offset=({},{}) {:?}{}{}",
+                    "Paragraph offset=({},{}) {:?} {} lines={} runs=[{}]",
                     f(offset.dx.get()),
                     f(offset.dy.get()),
-                    plain,
-                    summarize_span_styles(span),
-                    maybe_transform(transform),
+                    layout.text(),
+                    hex_color(*color),
+                    layout.metrics().line_count,
+                    runs.join(", "),
                 ),
             }
         }
 
         // ── Images ───────────────────────────────────────────────────────────
-        DrawCommand::DrawImage { dst, transform, .. } => DrawCommandSummary {
+        DrawOp::Image { dst, .. } => DrawCommandSummary {
             kind: DrawKind::Image,
-            line: format!(
-                "DrawImage dst={}{}",
-                fmt_rect(*dst),
-                maybe_transform(transform),
-            ),
+            line: format!("DrawImage dst={}", fmt_rect(*dst)),
         },
 
-        DrawCommand::DrawImageRepeat { dst, transform, .. } => DrawCommandSummary {
+        DrawOp::ImageRepeat { dst, .. } => DrawCommandSummary {
             kind: DrawKind::Image,
-            line: format!(
-                "DrawImageRepeat dst={}{}",
-                fmt_rect(*dst),
-                maybe_transform(transform),
-            ),
+            line: format!("DrawImageRepeat dst={}", fmt_rect(*dst)),
         },
 
-        DrawCommand::DrawImageNineSlice { dst, transform, .. } => DrawCommandSummary {
+        DrawOp::ImageNineSlice { dst, .. } => DrawCommandSummary {
             kind: DrawKind::Image,
-            line: format!(
-                "DrawImageNineSlice dst={}{}",
-                fmt_rect(*dst),
-                maybe_transform(transform),
-            ),
+            line: format!("DrawImageNineSlice dst={}", fmt_rect(*dst)),
         },
 
-        DrawCommand::DrawImageFiltered { dst, transform, .. } => DrawCommandSummary {
+        DrawOp::ImageFiltered { dst, .. } => DrawCommandSummary {
             kind: DrawKind::Image,
-            line: format!(
-                "DrawImageFiltered dst={}{}",
-                fmt_rect(*dst),
-                maybe_transform(transform),
-            ),
+            line: format!("DrawImageFiltered dst={}", fmt_rect(*dst)),
         },
 
-        DrawCommand::DrawTexture { dst, transform, .. } => DrawCommandSummary {
+        DrawOp::Texture { dst, .. } => DrawCommandSummary {
             kind: DrawKind::Image,
-            line: format!(
-                "DrawTexture dst={}{}",
-                fmt_rect(*dst),
-                maybe_transform(transform),
-            ),
+            line: format!("DrawTexture dst={}", fmt_rect(*dst)),
         },
 
-        DrawCommand::DrawAtlas {
-            image: _,
-            sprites,
-            transform,
-            ..
+        DrawOp::Atlas {
+            image: _, sprites, ..
         } => DrawCommandSummary {
             kind: DrawKind::Image,
-            line: format!(
-                "DrawAtlas sprites={}{}",
-                sprites.len(),
-                maybe_transform(transform),
-            ),
+            line: format!("DrawAtlas sprites={}", sprites.len()),
         },
 
         // ── Effects ──────────────────────────────────────────────────────────
-        DrawCommand::DrawShadow {
+        DrawOp::Shadow {
             path,
             color,
             elevation,
-            transform,
         } => DrawCommandSummary {
             kind: DrawKind::Shadow,
             line: format!(
-                "DrawShadow path_bounds={} color={} elev={}{}",
+                "DrawShadow path_bounds={} color={} elev={}",
                 fmt_rect(path.compute_bounds()),
                 hex_color(*color),
                 f(*elevation),
-                maybe_transform(transform),
-            ),
-        },
-
-        DrawCommand::DrawGradient {
-            rect, transform, ..
-        } => DrawCommandSummary {
-            kind: DrawKind::Gradient,
-            line: format!(
-                "DrawGradient rect={}{}",
-                fmt_rect(*rect),
-                maybe_transform(transform),
-            ),
-        },
-
-        DrawCommand::DrawGradientRRect {
-            rrect, transform, ..
-        } => DrawCommandSummary {
-            kind: DrawKind::Gradient,
-            line: format!(
-                "DrawGradientRRect rrect={}{}",
-                fmt_rrect(rrect),
-                maybe_transform(transform),
-            ),
-        },
-
-        DrawCommand::ShaderMask {
-            bounds,
-            transform,
-            // child: Box<DisplayList> — recursing into child display lists is
-            // Task 3 (layer walk). Here we only summarize this command line.
-            ..
-        } => DrawCommandSummary {
-            kind: DrawKind::Layer,
-            line: format!(
-                "ShaderMask bounds={}{}",
-                fmt_rect(*bounds),
-                maybe_transform(transform),
-            ),
-        },
-
-        DrawCommand::BackdropFilter {
-            bounds,
-            transform,
-            // child: Option<Box<DisplayList>> — recursing into child display
-            // lists is Task 3 (layer walk). Here we only summarize this line.
-            ..
-        } => DrawCommandSummary {
-            kind: DrawKind::Layer,
-            line: format!(
-                "BackdropFilter bounds={}{}",
-                fmt_rect(*bounds),
-                maybe_transform(transform),
             ),
         },
 
         // ── Fills ────────────────────────────────────────────────────────────
-        DrawCommand::DrawColor {
-            color,
-            blend_mode,
-            transform,
-        } => DrawCommandSummary {
+        DrawOp::Color { color, blend_mode } => DrawCommandSummary {
             kind: DrawKind::Other,
-            line: format!(
-                "DrawColor {} mode={blend_mode:?}{}",
-                hex_color(*color),
-                maybe_transform(transform),
-            ),
+            line: format!("DrawColor {} mode={blend_mode:?}", hex_color(*color)),
         },
 
-        DrawCommand::DrawPaint {
-            paint, transform, ..
-        } => DrawCommandSummary {
+        DrawOp::Paint { paint, .. } => DrawCommandSummary {
             kind: DrawKind::Other,
-            line: format!(
-                "DrawPaint {}{}",
-                summarize_paint(paint),
-                maybe_transform(transform),
-            ),
+            line: format!("DrawPaint {}", summarize_paint(paint)),
         },
 
         // ── Layer commands ───────────────────────────────────────────────────
-        DrawCommand::SaveLayer {
-            bounds,
-            paint,
-            transform,
-        } => DrawCommandSummary {
+        DrawOp::SaveLayer { bounds, paint } => DrawCommandSummary {
             kind: DrawKind::Layer,
             line: format!(
-                "SaveLayer bounds={} {}{}",
+                "SaveLayer bounds={} {}",
                 match bounds {
                     Some(r) => fmt_rect(*r),
                     None => "none".to_owned(),
                 },
                 summarize_paint(paint),
-                maybe_transform(transform),
             ),
         },
 
-        DrawCommand::RestoreLayer { transform } => DrawCommandSummary {
+        DrawOp::RestoreLayer => DrawCommandSummary {
             kind: DrawKind::Layer,
-            line: format!("RestoreLayer{}", maybe_transform(transform)),
-        },
-
-        // Catch-all for any future `#[non_exhaustive]` variants added to
-        // `DrawCommand` that are not yet named above. Every *named* variant
-        // above already has a dedicated arm, so nothing silently falls through
-        // within the current variant set.
-        _ => DrawCommandSummary {
-            kind: DrawKind::Other,
-            line: "Unknown".to_owned(),
+            line: "RestoreLayer".to_owned(),
         },
     }
 }
@@ -732,52 +506,19 @@ pub fn summarize_command(cmd: &DrawCommand) -> DrawCommandSummary {
 // ── LayerTree serialization ──────────────────────────────────────────────────
 
 /// Serialize a `DisplayList`'s commands into `out` at the given indent depth.
-///
-/// Recurses into the child `DisplayList`s embedded in `ShaderMask` and
-/// `BackdropFilter` commands so that masked content appears in the snapshot.
 fn write_display_list(out: &mut String, dl: &DisplayList, depth: usize) {
     let indent = "  ".repeat(depth);
     for cmd in dl {
-        // Recurse into effect-command children before printing the line so that
-        // the child content appears nested under the effect header.
-        match cmd {
-            DrawCommand::ShaderMask { child, .. }
-            | DrawCommand::BackdropFilter {
-                child: Some(child), ..
-            } => {
-                let summary = summarize_command(cmd);
-                out.push_str(&indent);
-                out.push_str(&summary.line);
-                out.push('\n');
-                write_display_list(out, child, depth + 1);
-            }
-            _ => {
-                let summary = summarize_command(cmd);
-                out.push_str(&indent);
-                out.push_str(&summary.line);
-                out.push('\n');
-            }
-        }
+        let summary = summarize_command(cmd);
+        out.push_str(&indent);
+        out.push_str(&summary.line);
+        out.push('\n');
     }
 }
 
-/// Collect all `DrawCommandSummary` values from a `DisplayList`, recursing
-/// into `ShaderMask` and `BackdropFilter` child lists.
+/// Collect all `DrawCommandSummary` values from a `DisplayList`.
 fn collect_from_display_list(dl: &DisplayList, out: &mut Vec<DrawCommandSummary>) {
-    for cmd in dl {
-        match cmd {
-            DrawCommand::ShaderMask { child, .. }
-            | DrawCommand::BackdropFilter {
-                child: Some(child), ..
-            } => {
-                out.push(summarize_command(cmd));
-                collect_from_display_list(child, out);
-            }
-            _ => {
-                out.push(summarize_command(cmd));
-            }
-        }
-    }
+    out.extend(dl.iter().map(summarize_command));
 }
 
 /// Write one layer node (and all its descendants) into `out`.
@@ -801,16 +542,20 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             out.push_str("Canvas\n");
         }
         Layer::Picture(p) => {
-            let b = p.bounds();
             out.push_str(&indent);
-            let _ = writeln!(
-                out,
-                "Picture bounds=({},{} {}x{})",
-                f(b.left().get()),
-                f(b.top().get()),
-                f(b.width().get()),
-                f(b.height().get()),
-            );
+            match p.bounds() {
+                Some(b) => {
+                    let _ = writeln!(
+                        out,
+                        "Picture bounds=({},{} {}x{})",
+                        f(b.left().get()),
+                        f(b.top().get()),
+                        f(b.width().get()),
+                        f(b.height().get()),
+                    );
+                }
+                None => out.push_str("Picture bounds=none\n"),
+            }
             // Emit commands one level deeper.
             write_display_list(out, p.picture(), depth + 1);
         }
@@ -880,7 +625,13 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
         }
         Layer::Offset(o) => {
             out.push_str(&indent);
-            let _ = writeln!(out, "Offset dx={} dy={}", f(o.dx()), f(o.dy()));
+            let offset = o.offset();
+            let _ = writeln!(
+                out,
+                "Offset dx={} dy={}",
+                f(offset.dx.get()),
+                f(offset.dy.get())
+            );
         }
         Layer::Transform(_) => {
             // Known blind spot: `TransformLayer` exposes no public matrix getter
@@ -966,9 +717,7 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
 #[must_use]
 pub fn serialize_layer_tree(tree: &LayerTree) -> String {
     let mut out = String::new();
-    if let Some(root) = tree.root() {
-        write_layer(&mut out, tree, root, 0);
-    }
+    write_layer(&mut out, tree, tree.root(), 0);
     out
 }
 
@@ -1011,9 +760,7 @@ pub fn collect_commands(tree: &LayerTree) -> Vec<DrawCommandSummary> {
     }
 
     let mut out = Vec::new();
-    if let Some(root) = tree.root() {
-        walk(tree, root, &mut out);
-    }
+    walk(tree, tree.root(), &mut out);
     out
 }
 
@@ -1071,7 +818,7 @@ pub fn assert_any(tree: Option<&LayerTree>, pred: impl Fn(&DrawCommandSummary) -
 mod tests {
     use std::sync::Arc;
 
-    use flui_painting::display_list::{DrawCommand, Paint};
+    use flui_painting::{DrawCommand, DrawOp, Paint};
     use flui_types::{
         geometry::{Matrix4, Pixels, Point, Rect, px},
         painting::Path,
@@ -1089,10 +836,12 @@ mod tests {
     /// `kind == Rect` and a stable line.
     #[test]
     fn summarize_draw_rect_is_stable() {
-        let cmd = DrawCommand::DrawRect {
-            rect: rect(0.0, 0.0, 40.0, 40.0),
-            paint: Arc::new(Paint::fill(Color::RED)),
+        let cmd = DrawCommand {
             transform: Matrix4::IDENTITY,
+            op: DrawOp::Rect {
+                rect: rect(0.0, 0.0, 40.0, 40.0),
+                paint: Arc::new(Paint::fill(Color::RED)),
+            },
         };
         let s = summarize_command(&cmd);
         assert_eq!(s.kind, DrawKind::Rect);
@@ -1109,11 +858,13 @@ mod tests {
         let mut path = Path::new();
         path.add_rect(rect(10.0, 10.0, 50.0, 30.0));
 
-        let cmd = DrawCommand::DrawShadow {
-            path,
-            color: Color::BLACK,
-            elevation: 4.0,
+        let cmd = DrawCommand {
             transform: Matrix4::IDENTITY,
+            op: DrawOp::Shadow {
+                path,
+                color: Color::BLACK,
+                elevation: 4.0,
+            },
         };
         let s = summarize_command(&cmd);
         assert_eq!(s.kind, DrawKind::Shadow);
@@ -1139,10 +890,12 @@ mod tests {
     #[test]
     fn non_identity_transform_is_appended() {
         let translate = Matrix4::translation(10.0, 20.0, 0.0);
-        let cmd = DrawCommand::DrawRect {
-            rect: rect(0.0, 0.0, 10.0, 10.0),
-            paint: Arc::new(Paint::fill(Color::BLUE)),
+        let cmd = DrawCommand {
             transform: translate,
+            op: DrawOp::Rect {
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+                paint: Arc::new(Paint::fill(Color::BLUE)),
+            },
         };
         let s = summarize_command(&cmd);
         assert!(
@@ -1155,10 +908,12 @@ mod tests {
     /// Identity transform must NOT append `xf=[...]`.
     #[test]
     fn identity_transform_is_omitted() {
-        let cmd = DrawCommand::DrawRect {
-            rect: rect(0.0, 0.0, 10.0, 10.0),
-            paint: Arc::new(Paint::fill(Color::BLUE)),
+        let cmd = DrawCommand {
             transform: Matrix4::IDENTITY,
+            op: DrawOp::Rect {
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+                paint: Arc::new(Paint::fill(Color::BLUE)),
+            },
         };
         let s = summarize_command(&cmd);
         assert!(
@@ -1171,10 +926,12 @@ mod tests {
     /// Stroke paint includes `stroke=<w>`.
     #[test]
     fn stroke_paint_includes_width() {
-        let cmd = DrawCommand::DrawRect {
-            rect: rect(0.0, 0.0, 10.0, 10.0),
-            paint: Arc::new(Paint::stroke(Color::GREEN, 2.5)),
+        let cmd = DrawCommand {
             transform: Matrix4::IDENTITY,
+            op: DrawOp::Rect {
+                rect: rect(0.0, 0.0, 10.0, 10.0),
+                paint: Arc::new(Paint::stroke(Color::GREEN, 2.5)),
+            },
         };
         let s = summarize_command(&cmd);
         // Color::GREEN = rgba(0,255,0,255)
@@ -1184,17 +941,20 @@ mod tests {
         );
     }
 
-    /// `DrawText` must summarize with `kind == Text` and include the text.
+    /// `Paragraph` must summarize with `kind == Text` and include the text.
     #[test]
-    fn summarize_draw_text_has_text_kind() {
+    fn summarize_paragraph_has_text_kind() {
+        use flui_painting::TextLayout;
         use flui_types::geometry::Offset;
-        let cmd = DrawCommand::DrawText {
-            text: "hello".to_owned(),
-            offset: Offset::new(px(1.0), px(2.0)),
-            size: flui_types::geometry::Size::new(px(50.0), px(12.0)),
-            style: flui_types::typography::TextStyle::default(),
-            paint: Arc::new(Paint::fill(Color::BLACK)),
+        use flui_types::typography::TextDirection;
+        let layout = TextLayout::new("hello", None, 14.0, None, None, TextDirection::Ltr);
+        let cmd = DrawCommand {
             transform: Matrix4::IDENTITY,
+            op: DrawOp::Paragraph {
+                layout: Arc::new(layout),
+                offset: Offset::new(px(1.0), px(2.0)),
+                color: Color::BLACK,
+            },
         };
         let s = summarize_command(&cmd);
         assert_eq!(s.kind, DrawKind::Text);
@@ -1204,13 +964,15 @@ mod tests {
     /// `ClipRect` must summarize with `kind == Clip`.
     #[test]
     fn summarize_clip_rect_has_clip_kind() {
-        use flui_painting::display_list::ClipOp;
         use flui_types::painting::Clip;
-        let cmd = DrawCommand::ClipRect {
-            rect: rect(5.0, 5.0, 100.0, 80.0),
-            clip_op: ClipOp::Intersect,
-            clip_behavior: Clip::HardEdge,
+        use flui_types::painting::ClipOp;
+        let cmd = DrawCommand {
             transform: Matrix4::IDENTITY,
+            op: DrawOp::ClipRect {
+                rect: rect(5.0, 5.0, 100.0, 80.0),
+                clip_op: ClipOp::Intersect,
+                clip_behavior: Clip::HardEdge,
+            },
         };
         let s = summarize_command(&cmd);
         assert_eq!(s.kind, DrawKind::Clip);
@@ -1236,15 +998,14 @@ mod tests {
     /// regression diffs the snapshot instead of passing silently.
     #[test]
     fn clip_behavior_distinguishes_clip_summaries() {
-        use flui_painting::display_list::ClipOp;
         use flui_types::painting::Clip;
+        use flui_types::painting::ClipOp;
         let mk = |behavior| {
-            summarize_command(&DrawCommand::ClipRect {
+            summarize_command(&DrawCommand::untransformed(DrawOp::ClipRect {
                 rect: rect(0.0, 0.0, 10.0, 10.0),
                 clip_op: ClipOp::Intersect,
                 clip_behavior: behavior,
-                transform: Matrix4::IDENTITY,
-            })
+            }))
             .line
         };
         let hard = mk(Clip::HardEdge);
@@ -1259,16 +1020,15 @@ mod tests {
     /// altered radius diffs the snapshot instead of passing silently.
     #[test]
     fn clip_rrect_radii_distinguish_summaries() {
-        use flui_painting::display_list::ClipOp;
         use flui_types::geometry::RRect;
         use flui_types::painting::Clip;
+        use flui_types::painting::ClipOp;
         let mk = |radius: f32| {
-            summarize_command(&DrawCommand::ClipRRect {
+            summarize_command(&DrawCommand::untransformed(DrawOp::ClipRRect {
                 rrect: RRect::from_rect_circular(rect(0.0, 0.0, 40.0, 40.0), px(radius)),
                 clip_op: ClipOp::Intersect,
                 clip_behavior: Clip::HardEdge,
-                transform: Matrix4::IDENTITY,
-            })
+            }))
             .line
         };
         assert_ne!(
@@ -1281,9 +1041,7 @@ mod tests {
     /// `RestoreLayer` must summarize with `kind == Layer`.
     #[test]
     fn summarize_restore_layer_has_layer_kind() {
-        let cmd = DrawCommand::RestoreLayer {
-            transform: Matrix4::IDENTITY,
-        };
+        let cmd = DrawCommand::untransformed(DrawOp::RestoreLayer);
         let s = summarize_command(&cmd);
         assert_eq!(s.kind, DrawKind::Layer);
         assert_eq!(s.line, "RestoreLayer");
@@ -1311,11 +1069,13 @@ mod tests {
     #[test]
     fn summarize_draw_image_has_image_kind() {
         use flui_types::painting::image::Image;
-        let cmd = DrawCommand::DrawImage {
-            image: Image::default(),
-            dst: rect(0.0, 0.0, 100.0, 80.0),
-            paint: None,
+        let cmd = DrawCommand {
             transform: Matrix4::IDENTITY,
+            op: DrawOp::Image {
+                image: Image::default(),
+                dst: rect(0.0, 0.0, 100.0, 80.0),
+                paint: None,
+            },
         };
         let s = summarize_command(&cmd);
         assert_eq!(s.kind, DrawKind::Image);
@@ -1419,10 +1179,9 @@ mod tests {
         );
     }
 
-    /// `collect_commands` on a fixed red box frame must return a non-empty
-    /// `Vec` whose first element has `kind == DrawKind::Rect`.
+    /// The painted rectangle remains enclosed by its run-local state scope.
     #[test]
-    fn collect_commands_red_box_first_is_rect() {
+    fn collect_commands_red_box_preserves_its_state_scope() {
         use flui_types::Size;
 
         use crate::testing::{RenderTester, box_node, collect_commands};
@@ -1436,15 +1195,11 @@ mod tests {
             .expect("RenderColoredBox must produce a layer tree");
         let cmds = collect_commands(tree);
 
-        assert!(
-            !cmds.is_empty(),
-            "collect_commands must return at least one command for a painted box"
-        );
         assert_eq!(
-            cmds[0].kind,
-            DrawKind::Rect,
-            "first command for a colored box must be a Rect, got: {:?}",
-            cmds[0].kind
+            cmds.iter().map(|command| command.kind).collect::<Vec<_>>(),
+            [DrawKind::State, DrawKind::Rect, DrawKind::State],
         );
+        assert_eq!(cmds[0].line, "Save");
+        assert_eq!(cmds[2].line, "Restore");
     }
 }
