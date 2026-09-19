@@ -8,81 +8,34 @@
 
 Three rules, in priority order. They override convenience, never each other.
 
-1. **Flutter is the reference and the oracle, not the ceiling.** The three-tree model (View → Element → Render), lifecycle, the layout/paint/hit-test protocol, and reconciliation take Flutter as their *behavioral reference*: its observable contracts (output, edge cases, ordering) and its test corpus under `.flutter/packages/flutter/test/` are the floor FLUI must at minimum meet — they encode ten years of production edge cases and are the cheapest verification that exists. Nothing else is inherited. *Structure, architecture, and code style* are designed for Rust and for the market as it is now, not transcribed from 2015-era Dart (Arity system, `NonZeroUsize` IDs, Slab arenas, `Result`/`thiserror`, field-granular inherited dependencies per ADR-0008, capability-scoped `BuildContext` per ADR-0018/21/30/37). Where a Flutter contract can be *improved* — more type-safe, faster, safer, more ergonomic, or a better contract outright — improve it; divergence is the expected outcome of understanding the reference, not a defect. "Same as Flutter" is a sufficient reason only when nothing better is known. What every divergence owes in return is honest accounting: (a) **name what is better and why** — an ADR for a protocol-level contract, a `## Mapping decisions` entry in the crate's `ARCHITECTURE.md` for a local one; (b) **replace the oracle** — where a Flutter test no longer applies, a FLUI test proving the new behavior takes its place, so coverage never drops below the reference; (c) **never lose an edge case by accident** — a behavior the reference handles is dropped only by decision, recorded in the same place. The one thing rule #1 protects unconditionally is the *framework user's* mental model: declarative widget composition over a retained three-tree, keys, lifecycle. See [`STRATEGY.md`](STRATEGY.md) and [`docs/PORT.md`](docs/PORT.md) §Mapping rules.
-2. **Search the market before settling.** Before adopting a design — Flutter's or your own — check what the current ecosystem does (Compose, SwiftUI, and the Rust frameworks: egui, Iced, Xilem/Masonry, Bevy UI, GPUI, Dioxus, Slint) and what the current Rust toolchain and crates offer, and pick the best-known shape, citing where it comes from. This applies to functionality, architecture, *and* code style alike: an idiom that is stable in today's Rust replaces the older pattern it supersedes. Breaking changes are cheap today and ossify once consumers exist; do not defer a better shape to "later". Where Flutter has *no strong contract* — animation curves, velocity prediction, color interpolation, input smoothing — Flutter is not even the baseline: propose the market-best abstraction directly. **Sanctioned leapfrog zones (ADR-0027):** multi-window ownership, runtime/scheduling topology, concurrency architecture, and presentation architecture — Flutter is the behavioral reference for widget-tree semantics, *not* for process/thread/window topology; a review must not reject `UiRealm`-model divergence (realm-scoped GlobalKey/focus, per-realm schedulers) as forbidden drift.
-3. **Done means verified against the reference — or against the documented improvement.** "Implemented" is not "done", and a green gate is necessary but not sufficient. Before claiming completion, verify against `.flutter/` where the contract is kept, and against the ADR / `## Mapping decisions` entry plus its replacement test where it is improved — see [Definition of Done](#definition-of-done-anti-cheating). "Better than Flutter" without the accounting from rule #1 is the same unverified claim as "same as Flutter" without a cross-check.
+1. **We take inspiration from Flutter; we do not match it.** The three-tree model (View → Element → Render), lifecycle, and the layout/paint/hit-test protocol are Flutter's ideas, and where they are good we start from them — but nothing is inherited wholesale. *Structure, architecture, and code style* are designed for Rust as it is now (Arity system, `NonZeroUsize` IDs, Slab arenas, `Result`/`thiserror`, and the divergences the ADRs record — ADR-0008, ADR-0018/21/30/37). Where we follow a Flutter contract, name which one and prove it with a test; where we improve on it — more type-safe, faster, safer, more ergonomic — the improvement is what the test asserts. Anything we improve on gets its reasoning written down: an ADR for a protocol-level contract, a `## Mapping decisions` entry in the crate's `ARCHITECTURE.md` for a local one. What is never acceptable is losing a behavior by accident — dropping one is a decision, recorded in the same place. What this rule protects unconditionally is the *framework user's* mental model: declarative widget composition over a retained three-tree, keys, lifecycle. See [`STRATEGY.md`](STRATEGY.md) and [`docs/PORT.md`](docs/PORT.md) §Mapping rules.
+2. **Search the market before settling.** Before adopting a design — Flutter's or your own — check what the current ecosystem does (Compose, SwiftUI, and the Rust frameworks: egui, Iced, Xilem/Masonry, Bevy UI, GPUI, Dioxus, Slint) and what the current Rust toolchain and crates offer, and pick the best-known shape, citing where it comes from. This applies to functionality, architecture, *and* code style alike: an idiom that is stable in today's Rust replaces the older pattern it supersedes. Breaking changes are cheap today and ossify once consumers exist; do not defer a better shape to "later". Where Flutter has *no strong contract* — animation curves, velocity prediction, color interpolation, input smoothing — Flutter is not even the baseline: propose the market-best abstraction directly. **Sanctioned leapfrog zones (ADR-0027):** multi-window ownership, runtime/scheduling topology, concurrency architecture, and presentation architecture — Flutter's widget-tree semantics are a starting point there, not a constraint; a review must not reject `UiRealm`-model divergence (realm-scoped GlobalKey/focus, per-realm schedulers) as forbidden drift.
+3. **Done means the behavior is verified and the reasoning is written down.** Before claiming completion, the change has a test that would fail without it, and any contract we chose over Flutter's is recorded (ADR / `## Mapping decisions`). "Better than Flutter" without that accounting is an unverified claim, exactly as "same as Flutter" would be. [Definition of Done](#definition-of-done-anti-cheating) is the checklist.
 
 ---
 
 ## Quick Start for AI Agents
 
-**Read this first.** Then read `crates/<crate>/AGENTS.md` for the crate you're working on.
+**Read this first.** Then read `crates/<crate>/AGENTS.md` for the crate you're working on, and pick your entry point from [Documentation](#documentation) below.
 
-### Decision Tree
-
-```
-You need to...
-├── Understand the project → read this file + README.md
-├── Work on a specific crate → read crates/<crate>/AGENTS.md
-├── Find a symbol, or its callers → rust-analyzer LSP if available, else rg
-├── Rename across files → LSP rename if available; else find every call site with rg first
-├── Understand port methodology → read docs/PORT.md
-├── Add a dependency → check workspace deps in root Cargo.toml
-├── Run tests for one crate → `just test-crate <crate-name>`
-├── Run a single test by name → `just test-name <crate> <name>` (or `cargo nextest run -p <crate> <name>`)
-├── Debug a failing test with stdout → `cargo test -p <crate> <name> -- --nocapture`
-├── Run full pre-PR gate → `just ci`
-├── Check if code compiles → `just check`
-└── Run port-check triggers → `just port-check-verbose`
-```
-
-### What to Read by Task
-
-| Task | Read First | Then |
-|------|-----------|------|
-| Fix a bug in a crate | `crates/<crate>/AGENTS.md` | crate's `src/lib.rs`, relevant ARCHITECTURE.md |
-| Add a new feature | `docs/ROADMAP.md` (is it planned?) | `crates/<crate>/AGENTS.md`, `docs/FOUNDATIONS.md` |
-| Change render/layout/paint | `crates/flui-rendering/AGENTS.md` | `.flutter/` reference, `docs/PORT.md` |
-| Understand error handling | `crates/flui-foundation/AGENTS.md` | `thiserror` in libs, `anyhow` in bins |
-| Touch logging setup or a log backend | `crates/flui-log/AGENTS.md` | `docs/workspace-layers.toml` (only composition roots may depend on it) |
-| Write or review Rust code | `STYLE.md` | Crate `AGENTS.md`, relevant architecture contract |
-| Add a cross-crate dep | `docs/workspace-layers.toml` (the checked layer policy) | Root `Cargo.toml` `[workspace.dependencies]`, `docs/FOUNDATIONS.md` Part IV |
-| Add a new crate | `docs/workspace-layers.toml` — classify it *first*; `[[planned]]` records gated extractions | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
-| Catch up on recent changes | `CHANGELOG.md` | `docs/ROADMAP.md` |
-| Understand GPU rendering | `crates/flui-engine/AGENTS.md` | `crates/flui-engine/ARCHITECTURE.md` |
-| Write a test that drives a frame, or add test support | `docs/testing.md` — the map of the tiers; pick the shallowest one that can fail | `crates/flui-testing/AGENTS.md`, `crates/flui-rendering/docs/TESTING.md` |
-| Create a PR | Run `just ci` first | Fix any failures before committing; a PR body may say `close(s)`/`fix(es)`/`resolve(s)` `#N` only when the merge is meant to close that issue — GitHub's linker ignores negation and surrounding prose ("PR4 closes #N" closed #N), so write `Refs #N` otherwise |
+- **Create a PR** — run `just ci` first and fix any failures before committing. A PR body may say `close(s)`/`fix(es)`/`resolve(s)` `#N` only when the merge is meant to close that issue: GitHub's linker ignores negation and surrounding prose ("PR4 closes #N" closed #N), so write `Refs #N` otherwise.
+- **Path-scoped reference lives in `.claude/rules/`** — `ci.md` (`.github/**`), `testing.md` (test files), `build-config.md` (`Cargo.toml` / `.cargo/**` / `rust-toolchain.toml`). Each loads only when you work with matching files, so it is *not* in context until then: open them deliberately when working near CI, tests, or build config. Same for `.claude/skills/` (e.g. `flutter-reference`), which loads on invocation.
 
 ---
 
 ## Code Navigation
 
-This repo declares exactly one MCP server in `.mcp.json` — **cratesio**, for crates.io package,
-version, and docs.rs lookups. It answers questions about *external* crates only; it knows nothing
-about this workspace. (`.codex/config.toml` also lists `cratesio` for Codex compatibility; use
-`.mcp.json` as the authoritative project declaration.) Everything else is local tooling:
+This repo declares exactly one MCP server in `.mcp.json` — **cratesio**, for crates.io package, version, and docs.rs lookups. It answers questions about *external* crates only; it knows nothing about this workspace. (`.codex/config.toml` also lists it for Codex compatibility; use `.mcp.json` as the authoritative project declaration.)
 
-- **A symbol's definition, its callers, or a rename** — the rust-analyzer LSP when its binary is on
-  PATH; otherwise `rg` for the name, then `read` the hits. A rename without an LSP means finding
-  every call site with `rg` first — never a blind search-and-replace.
-- **String literals, log messages, comments, attributes** — `rg`, always. An LSP can't see them.
-- **A file you can already name** — `read` it. Don't search for what you can open.
-
-Individual developers may have extra servers configured at user scope (a code-graph server, a
-notes vault); those are personal setup, not a repo contract — never assume one is present, and
-never make a workflow here depend on it.
+Individual developers may have extra servers configured at user scope (a code-graph server, a notes vault); those are personal setup, not a repo contract — never assume one is present, and never make a workflow here depend on it.
 
 ---
 
 ## Tech Stack
 
-FLUI is a Flutter-inspired declarative UI framework for Rust. The current vertical slice is **Core.1**:
-the widget catalog (`flui-widgets`), the full build → layout → paint → composite pipeline, and the
-gesture/animation integration are live end-to-end. Remaining work (runtime ownership, multi-window
-content, design-system completeness) lands incrementally; see [`docs/ROADMAP.md`](docs/ROADMAP.md).
-
-Pipeline in order: immutable `View` configuration → mutable `Element` lifecycle → layout/paint
-`RenderObject` → retained `Layer` tree → `flui-engine` compositor → `wgpu` GPU.
+FLUI is a Flutter-inspired declarative UI framework for Rust. Pipeline in order: immutable `View`
+configuration → mutable `Element` lifecycle → layout/paint `RenderObject` → retained `Layer` tree →
+`flui-engine` compositor → `wgpu` GPU. Current phase, and what lands when: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 Versions and the dependency set live in the root `Cargo.toml` (`[workspace.dependencies]`) — read
 them there. What the manifest can't tell you:
@@ -90,9 +43,8 @@ them there. What the manifest can't tell you:
 - **Layering:** crates form a DAG, foundation → core → rendering → framework → app. Dependencies
   point one way down that DAG; see [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md)
 - **Platform:** native Win32, AppKit, and headless backends, with `winit` only as a fallback
-- **Diagnostics:** `tracing` only — **no `println!`, `eprintln!`, or `dbg!` in shipped code** (CI enforces this in foundation/tree/macros crates via port-check trigger #15). *Emitting* is universal; *installing a subscriber* is a composition-root decision that lives in `flui-log` and never in a library
+- **Diagnostics:** *emitting* is universal; *installing a subscriber* is a composition-root decision that lives in `flui-log` and never in a library (CI enforces the `tracing`-only rule in foundation/tree/macros crates via port-check trigger #15)
 - **Errors:** `thiserror` (libraries), `anyhow` (applications); panics only per [`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md) — `expect("BUG: <invariant>")` for internal invariants, never bare `unwrap()` on production paths (`clippy::unwrap_used` gates this)
-`crates/flui-rendering/src/lib.rs` itself is a thin 220-line root — density lives deeper in the tree: `pipeline/owner/subtree_arena.rs` (~2.5k lines), `protocol/sliver_protocol.rs` (~1.9k), `storage/tree.rs` (~1.8k), and `protocol/box_protocol.rs` (~1.8k) are the densest files; budget accordingly.
 
 ## Build & Development Commands
 
@@ -103,17 +55,7 @@ cargo test -p flui-objects --test render_object_harness  # catalog guard for ren
 just port-check-verbose                                  # per-trigger pass/fail + marker totals
 ```
 
-To *see* what a widget tree renders without a live window, capture it to PNG:
-
-```bash
-cargo run -p flui --example screenshot -- <demo> [width] [height] [out.png]
-# demos: material | cupertino | vertical-slice
-```
-
-This uses the same GPU raster path as on-screen and is the canonical way to verify pixels where
-OS screenshot tools fail (GNOME/Wayland+Mutter, wgpu/Vulkan off-screen surfaces).
-
-Both of CI's non-cargo gates now run inside `just gate` (and so inside `just ci`), through the
+Both of CI's non-cargo gates run inside `just gate` (and so inside `just ci`), through the
 `text-check` recipe — **`typos`** (config: `typos.toml`) and **`taplo fmt --check`** (config:
 `.taplo.toml`). Each is skipped with a printed message when its binary is absent, so a green
 `just ci` on a machine without them is weaker than CI's: install both
@@ -137,174 +79,61 @@ These are enforced by `scripts/port-check.sh` in CI and locally via `just port-c
 | **No `println!`/`eprintln!`/`dbg!`** in foundation/tree/macros crates | Use `tracing` macros |
 | **No lifecycle-only presentation capability inside `build`/`perform_layout`/`paint`** — `rebuild_handle()` (ADR-0018), `post_frame_handle()` (ADR-0021), `text_input_handle()` (ADR-0030), and `focus_manager()` (ADR-0037) are acquired in `ViewState::init_state` / `did_change_dependencies` and used later | Trigger #22: mutation or scheduling from a frame phase can create an unbounded rebuild loop, re-enter the frame transaction, or leak ownership across presentations. Adding a capability to `BuildContext` means adding its token to `scripts/check-frame-capability-scope.sh` in the same change |
 
-## Testing Quirks
+## Where Flutter Is Consulted
 
-- **CI runs nextest fully parallel; nextest gives each test its own process.** `AppBinding` is fully retired (deleted, not slimmed — its fields dissolved into `AppRuntime`/`UiRealm`/`PresentationState`), and `UpdateScheduler` (formerly `Scheduler`, renamed in #556) is no longer singleton-backed either: each `UiRealm` owns a fresh `UpdateScheduler` value (`RealmServices::construct()`, `crates/flui-app/src/app/runtime.rs`), built new for every realm a test installs. `RenderingFlutterBinding` and `SemanticsBinding` left the singleton graph the same way earlier in this retirement (`SemanticsBinding` is gone entirely, not slimmed). None of this family's old test-serialization locks exist any more — `SINGLETON_WINDOW_TEST_LOCK`, `SCHEDULER_PHASE_TEST_LOCK`, and `SEMANTICS_TEST_LOCK` are all deleted along with the process-wide state each one guarded, and there is nothing left in `AppBinding`/`UpdateScheduler`/`RenderingFlutterBinding`/`SemanticsBinding` for a parallel test run to race on. What genuinely remains process-global (not realm- or test-scoped) is named per-symbol in `docs/runtime-contract.toml`'s ambient-reach ratchet — `flui-assets`'s `Registry::global` and flui-painting's free-standing `FONT_SYSTEM`. A new test that mutates one of THOSE resources (not a realm or its scheduler, which a fresh construction already isolates per test) needs its own explicit serialization — a `Mutex`/lock scoped to that test module — rather than reaching for a shared lock from this now-deleted family.
-- **Singleton retirement is complete (#553).** The transitional at-most-one-instance construction guard `UiRealm` used to enforce (`REALM_CLAIMED`, `UiRealmError::AlreadyExists`) and its own dedicated test lock are both deleted: any number of `UiRealm`s may be constructed and driven concurrently, on one thread or several — see `two_realms_coexist_same_thread` / `two_realms_two_threads_no_shared_state` / `dropping_realm_a_cannot_wake_realm_b` / `cross_realm_duplicate_global_key_mounts_succeed_in_both` in `crates/flui-app/src/app/ui_realm.rs`. The `impl_binding_singleton!` macro and the `HasInstance`/`BindingBase` trait pair that backed every one of these bindings are deleted entirely from `flui-foundation` — there is no ambient-singleton pattern left in the workspace for a new binding to reach for.
-- **`flui-platform`'s Linux-runnable suite runs in CI, filtered by mechanism, not by test name.** The CI `test` job's dedicated flui-platform step runs `cargo nextest run -p flui-platform --all-features` (default features alone silently skip the entire winit backend — see `crates/flui-platform/AGENTS.md`) under two green-by-construction devices: `FLUI_HEADLESS=1` routes `current_platform()` to the `HeadlessPlatform` mock (fixes the tests that call `open_window` outside `Platform::run`'s `on_ready` callback — an ordering requirement of the winit event-loop model, not a display-server issue), and `xvfb-run` gives the 9 winit-internals unit tests that construct `WinitPlatform::new()` directly a real (if virtual) X11 connection for clipboard init. All 175 runnable tests pass this way (5x-verified stable locally); doctests need neither device and are not excluded from the `doc-test` job either. What remains excluded, and why: the Windows, macOS, and Android backends are never linked or executed anywhere — `STATUS_HEAP_CORRUPTION` (ROADMAP-TRACKER item H9) is a Windows-only crash that cannot reproduce on the ubuntu-latest runners this CI uses, so there is nothing to gate it on yet; Android's own build needs the NDK's cross-linker, which these runners do not have; `cross-typecheck` lints all three backends (clippy, no link, no tests) as the only coverage they get. `just test-ci` mirrors the CI step and needs `xvfb-run` locally (`apt install xvfb` on Debian/Ubuntu).
-- **Multi-window / `WindowPolicy` testing (issue #555's final slice).** `flui_app::WindowPolicy` (`SeparateRealms` default, or `SharedRealm`) is the embedder-facing knob `flui_app::open_secondary_window` consults when opening a second top-level window; `flui_app::ExitPolicy` (default `OnLastWindowClosed`) governs when the platform loop exits once every hosted window has closed, and is now LIVE-WIRED into the real winit/headless backends via `flui_platform::traits::Platform::set_exit_policy_hook` (a new default-no-op trait method only the winit and headless backends override) — a backend deciding "every window I track just closed" no longer exits unconditionally; it consults this hook, which `runner/host.rs::install_exit_policy_hook` wires to `AppRuntime::should_exit`. Both policy modes are covered end-to-end under `HeadlessPlatform` in `crates/flui-app/src/app/runner/realm_dispatch.rs`'s `realm_dispatch_tests` module (`two_realms_via_separate_windows_policy_share_nothing`, `one_realm_two_windows_policy_routes_by_presentation`, the live-loop exit-policy probe, and the hot-restart probe) plus `crates/flui-platform/tests/headless.rs`'s own hook-level tests, driven entirely through the public `Platform`/`PlatformWindow` surface (`open_window`, `.close()`, `on_quit`, `set_exit_policy_hook`) — never internal `MockWindow` access. **Named gap, not silently assumed:** a window `open_secondary_window` opens carries no widget content and never renders a frame — see that function's own doc for the two reasons (rendering is one canonical frame-pump closure per BACKEND today, pinned by `crates/flui-app/tests/runner_frame_ordering.rs`'s own mechanical guards, not per-window; and `UiRealm::attach_root_widget` is wired to a realm's primary presentation only). A genuine live two-window winit smoke test does not exist yet, but the reason is no longer "winit refuses to build an `EventLoop` off the main thread": `platforms/winit/platform/real_loop_tests.rs` has a `build_test_event_loop` helper (`with_any_thread(true)` on Linux/Windows, main-thread-only and `#[ignore]`d on macOS) and drives REAL winit loops with it — the #713 close-arm test, the bootstrap-error propagation test, and the #919 programmatic-close test all run `event_loop.run_app` on an ordinary test thread under `xvfb-run`. That file is where a new real-loop test belongs; it was split out of `platform.rs` in #923 and is the whole family plus the four helpers only it uses. Write a real-loop test that way rather than concluding one is impossible; what is still missing is only the two-window *content* half named just above.
-- **Live E2E smoke (`just live-smoke`, CI's `live-smoke` step)** — `tools/live-smoke` drives a REAL windowed demo with REAL X11 input (XTEST) under Xvfb and asserts on captured pixels and the exit code. It is the only executing coverage of the band ABOVE synthetic event dispatch — platform translation, the event-loop wake chain, window-close teardown — each of which shipped broken while every synthetic gesture test stayed green. It also verifies hidden-surface gating against a REAL occlusion signal (issue #623): an input-transparent cover window drives X11 `VisibilityFullyObscured` → winit `Occluded(true)`, and the check asserts zero GPU submissions mid-fling while covered (oracle: per-present `flui.gpu` trace lines in the captured log), input still serviced at the translation layer, and no-input frame resumption on uncover. The occlusion check's fling drags UPWARD on purpose — its arming wheel-ticks walk the offset toward the top, so a downward fling would be dragging into the room the arming just consumed and would die against the top clamp with delivery perfectly healthy (that exact premise inversion is what made this check fail on `main`); the direction is documented at the drag itself. Input/pixel checks are X11-only; the Wayland close-path teardown ordering has its own variant: **`just live-smoke-wayland`** (CI's `live-smoke-wayland` step) runs the demo under a headless weston compositor and self-closes it through the platform's `FLUI_SELF_CLOSE_AFTER_MS` hook — the same `CloseRequested` arm a compositor close takes, and the only way to drive a Wayland close from a harness at all (no protocol lets one client close another's toplevel). Both harnesses also run the hook's `FLUI_SELF_CLOSE_ROUTE=programmatic` variant, which closes the window through `PlatformWindow::close` instead: the route an application closing its own window takes, which on winit hid the window but never left the backend's tracking map, so the process never exited (issue #919) while the compositor-route and headless close checks all stayed green. It exists because a wgpu surface torn down after its `wl_surface` segfaulted post-quit on Wayland (issue #713) while the X11 close check stayed green — Xlib tolerates the same out-of-order teardown. Skips with a message when `weston` is absent; CI installs weston explicitly so it can never silently skip there.
-- **Test support belongs in `flui-testing`, and mounting goes through `HeadlessBinding::mount_root`.** The eight-step headless bootstrap (capabilities before mount, mount inside the owner scope, initial `build_scope`, render-root discovery, root constraints, the layout↔build fixpoint frame — never a bare `PipelineOwner::run_frame` — the lazy-sliver service pass, then bind) is owned once, in `flui_testing::bootstrap`. Its contract is that the bootstrap frame is the same frame `pump_frame` runs. It was previously hand-rolled per harness and the copies drifted silently: a bare `run_frame` never services build-during-layout content, so a copy using one captured a `SliverAppBar`'s delegate child unbuilt, and no copy ran the service pass. (Measured on the six demo trees the snapshot suite covers, the fixpoint changes nothing — all six use `ListView::new`'s static children, which a bare `run_frame` already builds; the drift was real but those demos were never the ones exposing it.) `flui_widgets::testing::LaidOut` stays in flui-widgets only because it mounts widgets (`FocusRoot`/`VsyncScope`/`GestureArenaScope`) and flui-testing may never depend on the widget catalog — it is built on `mount_root` all the same. See [`docs/testing.md`](docs/testing.md) for the tier map.
-- **Render-object harness** — every concrete `RenderBox`/`RenderSliver` must have harness tests. See [`crates/flui-rendering/docs/TESTING.md`](crates/flui-rendering/docs/TESTING.md) for the `RenderTester`/`Probe` API and catalog rules. The catalog CI guard (`render_object_harness.rs`) verifies every exported type appears in `RENDER_OBJECT_TYPES` and has a matching `harness_*` test.
-- **wasm32 is compiled in three ways and executed in one.** `wasm-check` (`cargo check` + `cargo clippy`) and `wasm-link-check` prove type-checking and linking; neither runs an instruction, and on wasm32 even the link does not fail on an undefined symbol (rust-lld turns it into an import — hence the committed allowlist). `just wasm-test` is the only step that EXECUTES: it DISCOVERS the crates declaring a wasm32 `wasm-bindgen-test` dev-dependency and runs both their lib and `tests/wasm32.rs` targets on node via `wasm-bindgen-test-runner`, and CI runs it at the end of the `wasm-check` job. Which target kind is possible depends on visibility — an integration test sees only the public API, a `pub(crate)` seam only a lib test. Note a plain `#[test]` fn compiles for wasm32 but never RUNS (`no tests to run!`); only `#[wasm_bindgen_test]` registers, so opting a crate in does not drag its native suite onto wasm. The gap it closes is real — swap `web_time::Instant` for `std::time::Instant` in `flui-foundation/src/clock.rs` and every compile-only step stays green while the code panics `time not implemented on this platform` on first execution. Put a test there only when the behaviour *differs* on wasm32 (or a native-target substitution exists precisely to keep wasm32 working); anything that would pass identically on native buys a wasm build and no coverage. Three versions must agree or the runner refuses to start — the locked `wasm-bindgen`, `wasm-bindgen-test` (pinned `=0.3.77`; the unpinned `"0.3"` resolves to 0.3.78 and bumps the workspace lock), and `wasm-bindgen-cli`, whose version the recipe and CI step both read out of `Cargo.lock`. Discovery rather than a crate list is deliberate — a list is how the next suite added goes silently unrun — and it asserts three things: that a suite was found at all, that EACH suite executed a non-zero count (an aggregate check lets exactly the newly added suite be the inert one), and that the total is non-zero. `ExecutionServices`' `Backend::Sequential` branch is now executed (`execution.rs`'s `wasm_sequential_backend_tests`); it had to be a lib test because the type is `pub(crate)`. Still compile-only: flui-platform's web backend, which is wasm32-only and has no executing coverage at all. Tracked in #985.
-- **Coverage**: `just coverage` (requires `cargo-llvm-cov`)
-- **Visual self-verification (no window needed)** — to *see* what a widget tree renders, capture it to a PNG instead of screenshotting a live window: `cargo run -p flui --example screenshot -- <demo> [width] [height] [out.png]` (`<demo>` = `material` \| `cupertino` \| `vertical-slice`), then open the PNG. It mounts the tree through `HeadlessBinding`, extracts the `LayerTree`, and rasterizes it offscreen via `flui_engine::wgpu::HeadlessRenderer` (`crates/flui-engine/src/wgpu/headless.rs`) — same GPU raster path as on-screen, so shadows/blends match. Add a `match` arm in `examples/screenshot.rs` to cover another tree. This exists because OS screenshot tools can't grab the live window under GNOME/Wayland+Mutter (the wgpu/Vulkan surface never lands in the X11 framebuffer, and `wlr-screencopy`/`grim` is unsupported) — a green harness test is necessary but "MVP reported as parity" hides in the pixels the test never looks at (see [Definition of Done](#definition-of-done-anti-cheating)).
+Flutter is where we look first when designing widget-tree behavior — render tree, slivers, layout, paint, hit-test, semantics, scheduling, parent data — because it has solved problems we have not met yet. Read it for *what* and *why*, then design in Rust: nothing is owed to Dart's structure, naming, file layout, or 2015-era constraints (single isolate, nullable references, exceptions, string-keyed aspects). Two things are owed. **One:** when we deliberately do something better — more type-safe, faster, safer — that is a decision, not drift, and it is recorded in `docs/adr/` or the crate's `ARCHITECTURE.md` `## Mapping decisions`; a reviewer must not reject it as drift. **Two:** never lose a behavior by accident — dropping one is a decision, written down in the same place. Adapt patterns to FLUI idioms (Arity system, Ambassador delegation, no nullability).
 
-## Flutter as Reference
-
-When changing render-tree, sliver, layout, paint, hit-test, semantics, scheduling, or parent-data behavior, **check `.flutter/` first** — to learn the contract and its edge cases, not to copy the shape. Then decide, explicitly: keep the contract (and prove it with the ported test), or improve it (and record the improvement plus its replacement test — Prime Directive rule #1). Existing documented divergences live in `docs/adr/` and the crates' `ARCHITECTURE.md` `## Mapping decisions`; read them before "fixing" a divergence back toward Flutter — a reviewer must not reject a recorded improvement as drift. The `.flutter/` and `.gpui/` directories are read-only references — adapt patterns to FLUI idioms (Arity system, Ambassador delegation, no nullability).
-
-**Read the reference for *what* and *why*, then design in Rust from that understanding — do not transcribe.** What is owed to the reference is its observable behavior (output, edge cases, ordering) as a floor; nothing is owed to Dart's structure, naming, file layout, or 2015-era design constraints (single isolate, nullable references, exceptions, string-keyed aspects). Confirm the match — or the documented improvement — before reporting done; see [Definition of Done](#definition-of-done-anti-cheating).
-
-**Both references are gitignored local clones, so either can be absent — check before citing one.** `ls .flutter` costs nothing and a missing reference has already produced hollow "verified against Flutter" claims here.
-
-**And a present reference is not automatically the right one.** It has to sit at the pinned tag `3.44.0`, which is what every citation in this repository is written against. A clone of the default branch reads as present, answers every `grep`, and gives the *default-branch tip* — a different framework by hundreds of commits, and one that keeps moving. It also silently disarms a gate: `parity_inventory`'s reference-gated checks (case counts, claimed-name resolution, new-upstream-file detection) skip themselves unless `git describe --tags` inside `.flutter` prints exactly the manifest's tag. Verify before citing:
-
-```bash
-git -C .flutter describe --tags   # must print 3.44.0
-```
-
-This is not hypothetical: the clone here sat on the default branch until 2026-09-07, so those checks had never run, and reading `align_test.dart` from it gave 7 cases where the pinned tag has 6 — which produced a confident and wrong "the manifest is stale" claim.
-
-Restore `.flutter/` with a sparse shallow clone **at the tag** (~62 MB):
-
-```bash
-git clone --depth 1 --branch 3.44.0 --filter=blob:none --sparse \
-    https://github.com/flutter/flutter.git .flutter
-cd .flutter && git sparse-checkout set packages/flutter/lib packages/flutter/test
-```
-
-An existing default-branch clone is repaired in place, without re-downloading:
-
-```bash
-git -C .flutter fetch --depth 1 origin tag 3.44.0
-git -C .flutter checkout --detach 3.44.0
-```
-
-`.gpui/` is the same kind of local clone (from the Zed repository) and is consulted far less often; restore it only when a task actually calls for it.
-
-If a reference is unavailable, say so explicitly instead of reasoning from memory — an unverified parity claim is worse than a stated gap.
+The reference clones (`.flutter/`, and `.gpui/` from the Zed repository) are gitignored local copies and are optional reading, not a build dependency — a checkout at whatever revision you have is better than none, but state the revision you actually read rather than implying a check you did not run.
 
 ## Documentation
 
-| Document | Path | When to read |
-|----------|------|-------------|
+Entry points by task, then the reference documents with no task of their own.
+
+| Need | Read | Then / notes |
+|------|------|-------------|
+| Add a new feature | `docs/ROADMAP.md` (is it planned?) | `crates/<crate>/AGENTS.md`, `docs/FOUNDATIONS.md` |
+| Change render/layout/paint | `crates/flui-rendering/AGENTS.md` | `.flutter/` reference, `docs/PORT.md` (translation rules, refusal triggers, type map) |
+| Understand error handling | `crates/flui-foundation/AGENTS.md` | `thiserror` in libs, `anyhow` in bins |
+| Touch logging setup or a log backend | `crates/flui-log/AGENTS.md` | Subscriber policies, native sinks, who may depend on the backend; `docs/workspace-layers.toml` (only composition roots may depend on it) |
+| Write or review Rust code | `STYLE.md` | Crate `AGENTS.md`, relevant architecture contract |
+| Add a cross-crate dep | `docs/workspace-layers.toml` (the checked layer policy) | Root `Cargo.toml` `[workspace.dependencies]`, `docs/FOUNDATIONS.md` Part IV |
+| Add a new crate | `docs/workspace-layers.toml` — classify it *first*; `[[planned]]` records gated extractions | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
+| Catch up on recent changes | `CHANGELOG.md` | `docs/ROADMAP.md` |
+| Understand GPU rendering | `crates/flui-engine/AGENTS.md` | `crates/flui-engine/ARCHITECTURE.md` |
+| Write a test that drives a frame, or add test support | `docs/testing.md` — the map of the tiers; pick the shallowest one that can fail | `crates/flui-testing/AGENTS.md`, `crates/flui-rendering/docs/TESTING.md` (RenderTester API, catalog rules) |
 | **Foundations** | `docs/FOUNDATIONS.md` | Architecture contract, locked contracts (C1–C9) |
-| **Roadmap** | `docs/ROADMAP.md` | Current phase, dependency-ordered phases |
-| **Port methodology** | `docs/PORT.md` | Translation rules, refusal triggers, type map |
 | **Architecture** | `docs/architecture.md` | Three-tree pipeline overview |
-| **Crates map** | `docs/crates.md` | Per-layer crate inventory |
-| **Testing** | `docs/testing.md` | Build/test/coverage commands |
 | **Panic policy** | `docs/PANIC-POLICY.md` | When `expect("BUG: …")` is allowed vs. `Result`; `clippy::unwrap_used` gate |
 | **Runtime contract registry** | `docs/runtime-contract.toml` | Public shipped/planned runtime contracts, classified boundary families, and the checked root-export manifest. It deliberately does not depend on internal design records. Checked by `just runtime-conformance-check`; touching a monitored runtime export means updating it deliberately |
-| **Render harness** | `crates/flui-rendering/docs/TESTING.md` | RenderTester API, catalog rules |
-| **Logging ownership** | `crates/flui-log/AGENTS.md` | Subscriber policies, native sinks, who may depend on the backend |
 | **Crate ARCHITECTURE.md** | `crates/flui-{engine,foundation,layer,painting,platform,rendering,scheduler,widgets}/ARCHITECTURE.md` | Per-crate deep architecture |
 
 ## AI Context Files
 
 `AGENTS.md` (this file) is the cross-tool guide, shared by every agent runtime. `CLAUDE.md`,
 `mimocode.jsonc`, and `.pi/settings.json` are thin per-runtime shims that point back here —
-**keep the substance in this file**, or the runtimes drift apart. `STRATEGY.md` carries product
-strategy and the port rules behind the Prime Directive.
-
-## CI Pipeline
-
-CI runs on PR + push to main (+ merge queue). All jobs are gated on the fast `checks` source gate and aggregate into a single **`ci`** job. The aggregator enforces two rules on itself (since 2026-09-03): **completeness** — it parses `ci.yml` at run time and fails if any job key is missing from its `needs`, so a job *added* without editing the list is loud, not ungated (renaming was already safe: `needs` stops resolving); and **no silent skips** — `skipped` counts as red, since no job is conditional; a job that legitimately needs an `if:` goes in the step's `ALLOWED_SKIPS` with its reason, which makes the exception a reviewed decision. **What is NOT in place: no ruleset requires the `ci` check on `main`** — as of 2026-09-03 the only active ruleset requires `copilot_code_review`, and classic branch protection is absent, so a red PR is blocked by nothing but discipline, and the merge queue has no required check to wait on. Adding it is a one-time repository-settings change (needs an admin token; `gh api -X POST repos/vanyastaff/flui/rulesets` with a `required_status_checks` rule whose context is `ci`). **Job display names equal their keys** (plus the matrix dimension where there is one): the key is what `needs` and a required-check context reference, so the two must never drift; what a job does belongs in the comment above it, not in its name. All cargo invocations run `--locked`; actions are SHA-pinned (dependabot keeps them current, 7-day cooldown); workflow files are linted by actionlint + zizmor. A scheduled `weekly.yml` (Mondays + `workflow_dispatch`) re-checks RustSec advisories against the committed lockfile, builds/tests against a fresh `cargo update`, and runs a nightly canary (`cargo +nightly check`/`clippy` plus the future-incompat report; local mirror `just nightly-check`) — early warning, not a merge gate. The canary is how a deprecation or future-incompat error is caught *with its stable release date* instead of on release day under `CARGO_BUILD_WARNINGS: deny`.
-
-The job list and its exact commands live in `.github/workflows/ci.yml` — read them there. What the
-workflow file does *not* tell you, and what you will misjudge without it:
-
-- **cross-typecheck is the only gate on the Win32, AppKit, and Android backends.** It lints
-  `flui-platform` (`cargo clippy`, not plain `cargo check` — the latter let ~80 deny-level
-  violations accumulate unseen before this switched) for `x86_64-pc-windows-msvc`,
-  `aarch64-apple-darwin`, and `aarch64-linux-android`; `cargo clippy` does not link — no link, no
-  tests, and `flui-platform` is excluded from the `test` job. Green means "compiles clean under
-  the workspace lints", nothing more. Before this job existed those backends were only ever
-  compiled by whoever happened to develop on that OS, and the Windows one did not compile at all;
-  Android joined the matrix later (#556's device-recovery wake fix) for the identical reason —
-  it had never been built, type-checked, or linted anywhere in CI, carrying ~24 of its own
-  unseen lint violations at the time.
-- **miri covers `pipeline::owner` (widened from `pipeline::owner::subtree_arena`)** —
-  this now runs every unit test under that module, including `cell.rs`'s `PipelineCell` checkout
-  tests and two real-`NodePtr` walks driving `layout_dirty_root` through every reborrow phase of
-  `layout_subtree_borrowed_impl` (one straight pass, one cyclic edge exercising the baseline
-  callback's in-flight gate — removing that gate fails miri; both predate the widening and are
-  unchanged by it). Also new: an owner-local traversal (a full `run_frame` over a real 3-node tree,
-  driven through `PipelineCell::with_mut`) and a reentrant-layout walk (a Sliver child that issues
-  a mid-layout child-build request against the checked-out owner). Deeper sliver walks and
-  intrinsics queries are still not interpreted. Advisory while stabilizing.
-- **feature-matrix exists because workspace feature unification hides broken per-crate wiring.** A
-  crate whose features only resolve thanks to a sibling's dependency passes a normal build and
-  fails here. It runs as a **four-slice matrix**: three balanced package groups (`FM_GROUP_1..3`
-  in the workflow's top-level `env`, each running the same TWO `cargo hack clippy --each-feature
-  --optional-deps` passes the single job ran — a targetless libs/bins pass and a
-  `--tests --benches --examples` pass) plus a `combinations` slice for the flui-engine backend
-  powerset and the facade combos. It was one job doing the whole workspace — 640 s of cargo-hack on
-  one runner, 15–16 min, the workflow's critical path — until 2026-09-03. **Do not fold the two
-  passes into `--all-targets`**: under resolver v2, dev-dependency features unify with normal
-  dependencies only while dev targets are built, so a single all-targets pass can pass a
-  per-feature library configuration on a feature a dev-dep dragged in (flui-testing enabling
-  `flui-rendering/testing`) that a consumer of the library alone would not have. The targetless
-  pass is the one that sees the library as consumers do; the split buys runners, not fewer passes. **Every workspace
-  member must be in exactly one group**: each slice asserts the union of the three groups against
-  `cargo metadata` and fails on a missing, duplicated, or unknown package, so adding a crate
-  without placing it is loud. Rebalance by cargo-hack command count (the regeneration command is
-  in the `env` comment). cargo-hack's own `--partition` was rejected after measurement: with
-  `--print-command-list`, `1/2` printed the full list, so it cannot be trusted to partition.
-- **Every job has its own cache key; caches are saved only by runs on `main`** (`save-if:
-  github.ref == 'refs/heads/main'`, from #822). A shared key across clippy / test / test-features /
-  live-smoke / doc-test was tried on 2026-09-03 (#819, #823) and measured on a warm re-run of
-  `main`: it lost time on every run. GitHub keeps one immutable entry per key, so only one job
-  can write it; with `test` as the writer, clippy restored build-mode artifacts that cannot serve
-  check-mode and re-checked 428 crates (3.3 min vs 1.2), and test-features could never save its
-  non-default-feature dependencies (10.5 min vs 4.9). The 10 GB-cap pressure that motivated
-  sharing came from per-PR saves, which #822 removed; five main-only per-job entries are ~4 GB.
-  If a cold PR run looks wrong, check `gh api repos/vanyastaff/flui/actions/cache/usage` before
-  blaming the workflow. A PR run restores by the keys in the workflow file *it carries*, so a
-  branch cut before a key change is cold until rebased.
-- **The `test` job is split three ways.** `test` builds the workspace and runs the
-  default-feature lib+integration suite plus flui-platform's headless run;
-  `test-features` runs everything that needs NON-default features (flui-assets
-  `full`, flui-widgets' image features, the facade's cupertino/localizations
-  catalogs); `live-smoke` runs the two real-window suites. They were one job
-  until 2026-09-03, when it was the critical path at 17 min of an 18 min run —
-  the feature runs rebuild their crates under different features regardless of
-  what `test` compiled, and the smoke suites need only the demo binary, so
-  sharing a runner bought serialisation and nothing else. Adding a step to the
-  wrong one of the three is how coverage goes missing: put a default-feature
-  test in `test`, anything feature-gated in `test-features`.
-- **wasm-check excludes 7 crates** — the mio/uuid CLI stack and the dlopen-based hot-reload path,
-  none of which can work on wasm32. It runs `cargo clippy` as well as `cargo check` (lib/bin targets — test targets pull native-only dev-deps): the web backend of flui-platform is wasm32-only, so this is the only lint pass that ever sees it.
-- **gpu-test runs the readback suite on WARP** (windows-latest) and is merge-blocking. On an oracle
-  mismatch the harness dumps the actual frame as a PNG to `FLUI_READBACK_DUMP_DIR` and uploads it
-  as an artifact — fetch that before theorising about a pixel diff.
-- **test failures upload insta `.snap.new` candidates as artifacts** — review them rather than
-  regenerating snapshots blind.
-
-## Important Config
-
-- **Toolchain:** development toolchain pinned in `rust-toolchain.toml` to `1.98.1` with `rustfmt` + `clippy` components. The pin is deliberately NOT the MSRV floor (`rust-version = "1.97"`), so a future MSRV freeze does not hold the developer back from stable diagnostics; only the `msrv` CI job exercises the floor
-- **Cargo profiles:** dev `opt-level = 1` (faster runtime) + `debug = "line-tables-only"` (backtrace file:line only — matches CI; variable/type DWARF was the bulk of `target/debug/deps`), deps `opt-level = 2` + `debug = false` (deps carry no debuginfo at all; raise it for one package to step into it — a global `-C debuginfo=` rustflag, from `RUSTFLAGS` or a user-level cargo config, overrides any `debug =` key silently and without error, since rustflags append after the profile flag); `dbg` profile (`inherits = "dev"`, `debug = "full"`) is the opt-in full-type-info build for a step-debugger; release `lto = "thin"`, `codegen-units = 1`, `strip = "debuginfo"` (the symbol table is retained so `perf`/flamegraph/minidumps can resolve frames — measured cost +935 KiB; DWARF from the std rlibs is still dropped, 23.5 MB → 4.19 MB). Local disk: `target/debug/deps` is the largest consumer on a 28-crate wgpu workspace (incremental is off via `[profile.dev] incremental = false` in the root `Cargo.toml` — `.cargo/config.toml`'s `[env] CARGO_INCREMENTAL = "0"` feeds sccache but does not itself reach cargo's profile resolution) — artifacts accumulate per RUSTFLAGS/feature/toolchain fingerprint with no size cap; run `just sweep` periodically (cargo-sweep: current-toolchain + 7-day prune). CI sets `CARGO_INCREMENTAL=0` + `CARGO_PROFILE_DEV_DEBUG=line-tables-only` and reclaims ~25 GB of runner bloat before building.
+**keep the substance in this file**, or the runtimes drift apart. The `.claude/rules/*.md` files are
+the one deliberate exception: content there is path-scoped and Claude-only, so it is invisible to
+the other runtimes and must stay task-scoped reference, never a directive. `STRATEGY.md` carries
+product strategy and the port rules behind the Prime Directive.
 
 ## Error Triage
 
 When you hit a build/test error:
 
 1. **Port-check violation** → check `docs/PORT.md` for the trigger ID. The pattern you introduced is banned by the architecture contract.
-2. **Clippy warning** → run `just clippy` to see workspace-wide. Fix the warning, don't suppress it.
-3. **`unimplemented!()`/`todo!()` in production** → implement or gate behind `cfg(test)` / platform-init exemption.
-4. **Render-object harness failure** → every exported `RenderBox`/`RenderSliver` must appear in `RENDER_OBJECT_TYPES` with a matching `harness_*` test. See `crates/flui-rendering/docs/TESTING.md`.
-5. **Test flake (flui-app shared state)** → `AppBinding`/`UpdateScheduler`/`SemanticsBinding` are retired, not singletons any more (each `UiRealm` owns its own fresh `UpdateScheduler`; `AppBinding`/`SemanticsBinding` are deleted types), so a flake in this family means a test is mutating a *genuinely* process-global resource — one of the named ambient residuals in `docs/runtime-contract.toml`'s ambient-reach ratchet (`Registry::global`, `FONT_SYSTEM`), not the realm/scheduler. Add an explicit lock scoped to that test module; do not reach for `--test-threads=1`, and do not look for `SINGLETON_WINDOW_TEST_LOCK`/`SCHEDULER_PHASE_TEST_LOCK` — both are deleted along with the state they used to guard.
-6. **Type mismatch across crate boundary** → check if you're using the wrong ID type (1-based vs 0-based). See ID offset pattern above.
+2. **Render-object harness failure** → every exported `RenderBox`/`RenderSliver` must appear in `RENDER_OBJECT_TYPES` with a matching `harness_*` test. See `crates/flui-rendering/docs/TESTING.md`.
+3. **Test flake** → the singleton family is retired, so a flake means a test is mutating a *genuinely* process-global resource (`Registry::global`, `FONT_SYSTEM` — named in `docs/runtime-contract.toml`'s ambient-reach ratchet), not a realm or scheduler. Add a lock scoped to that test module. Full reasoning, including the deleted test locks that are no longer worth searching for: `.claude/rules/testing.md`.
+4. **Type mismatch across crate boundary** → check if you're using the wrong ID type (1-based vs 0-based). See ID offset pattern above.
+
+Anything else — a clippy warning, `todo!()` on a production path, a banned pattern — is the architecture table above or the Rust standards the studio injects on the file you edit.
 
 ## Definition of Done (anti-cheating)
 
-An agent reporting "done" makes a claim that later work is built on. A green gate is **necessary but not sufficient** — gates can be satisfied without implementing the behavior. The recurring failure mode in this repo is **"MVP reported as parity"**: a change passes the harness and port-check but silently loses an edge case the reference handles, on a path no test looks at. Its mirror image — **"MVP reported as improvement"** — is calling an accidental divergence "better than Flutter" after the fact, with no ADR/mapping entry and no replacement test; it is the same claim with a different label.
+An agent reporting "done" makes a claim that later work is built on. A green gate is **necessary but not sufficient** — gates can be satisfied without implementing the behavior. The recurring failure mode in this repo is **"MVP reported as done"**: a change passes the harness and port-check but silently loses a behavior nobody looked at, on a path no test covers. Its mirror image — **"MVP reported as an improvement"** — is calling an accidental divergence "better" after the fact, with no ADR/mapping entry and no test asserting the new behavior; it is the same claim with a different label.
 
 **Before reporting a render/layout/paint/lifecycle change done:**
 
-1. **Verify against `.flutter/` — or against the recorded improvement.** Open the corresponding Flutter source and confirm every edge case is either matched or *deliberately* improved, with the improvement recorded (ADR / `## Mapping decisions`) and covered by a FLUI test that replaces the Flutter one. An audit finding without a `.flutter/` cross-check is a hypothesis, not a fact; an "improvement" without the record and the test is a regression until proven otherwise.
+1. **Verify the behavior — and if we chose a different contract, verify that choice is recorded.** Open the Flutter source for the behavior you are claiming and confirm every case is either matched or *deliberately* different, with the difference recorded (ADR / `## Mapping decisions`) and covered by a test that asserts the contract we actually ship. An audit finding with no cross-check is a hypothesis, not a fact; a divergence with no record and no test is a regression until proven otherwise.
 2. **No fake-passing.** Never satisfy a gate by:
    - special-casing the test/harness input instead of implementing the behavior;
    - returning a stub / `Size::ZERO` / empty value that happens to pass;
@@ -315,14 +144,10 @@ An agent reporting "done" makes a claim that later work is built on. A green gat
 3. **Harness evidence.** Every concrete `RenderBox`/`RenderSliver` carries harness tests (catalog CI guard). New behavior needs a test that would *fail* without the change.
 4. **Report scope honestly.** "X done" from a prior session ≠ parity — re-verify. State what is implemented vs deferred and *why*; never imply completeness you did not check.
 
-> Rationale: the same guardrails Git's own Rust reimplementation (GitButler's Grit) had to encode for its agents — *"you gotta be super explicit with the ground rules"* — because agents will pass through to the reference or fake a feature to make tests green unless it is explicitly forbidden.
-
 ## Agent Rules
 
 - **Decompose chained shell commands** — run each step separately so failures are inspectable
 - **Never run destructive git operations** without explicit user permission
 - **Honor the architecture contract** — cross-check against `docs/FOUNDATIONS.md` and `docs/ROADMAP.md`
-- **Logging via `tracing` only** — no `println!`, `eprintln!`, or `dbg!` in shipped code
-- **Verify before committing** — for flui-rendering work: `cargo test -p flui-rendering`, `cargo fmt --package flui-rendering -- --check`, `cargo clippy -p flui-rendering --all-targets -- -D warnings`
-- **Behavior is the floor, not the design** — learn Flutter's edge cases from the reference, then design the Rust solution that is best by today's standards (functionality, architecture, idiom); record and test every improvement over the reference, never drop an edge case silently
-- **No internal process-ID markers in code** — comments, doc-comments, file names, and function/test names must not encode private review/planning history (`Cycle N`, audit finding IDs, `PR #NNN review`, agent-pass IDs, bare `U##` step-citations, spec `SC-NNN` success-criteria numbers). State the invariant or rationale in plain English instead — a reader shouldn't need a planning artifact that may not outlive the project to understand why the code is shaped this way. A marker is acceptable only when its meaning is defined beside its use (for example, a test-case ID in the same file's legend) or mechanically load-bearing (`FR-NNN`/`ADR-NNNN` references grepped by a checker). Repository sweeps may exclude only archival/planning roots: `docs/{audits,brainstorms,ideation,plans,research,superpowers}`, `.rust-studio/specs`, `specs`, and `openspec`; shipped docs such as crate `ARCHITECTURE.md` files and `docs/ROADMAP-TRACKER.md` remain in scope. This defines the denominator, not a claim that every in-scope hit has already been removed; known residue is tracked in issue #644.
+- **Verify before committing** — run `just ci`; for a narrower loop, the crate's own test/fmt/clippy invocations
+- **No internal process-ID markers in code** — the studio's core rules carry the prohibition and most of its examples (`Cycle N`, `PR #NNN review`, `Phase B`). Repo-specific are two families it does not name — bare `U##` step-citations and spec `SC-NNN` success-criteria numbers — plus the exception and the sweep's denominator. A marker is acceptable only when its meaning is defined beside its use (a test-case ID in the same file's legend) or is mechanically load-bearing (`FR-NNN`/`ADR-NNNN` references a checker greps). Sweeps may exclude only archival roots — `docs/{audits,brainstorms,ideation,plans,research,superpowers}`, `.rust-studio/specs`, `specs`, `openspec`; shipped docs such as crate `ARCHITECTURE.md` and `docs/ROADMAP-TRACKER.md` stay in scope. This defines the denominator, not a claim that every in-scope hit is gone; known residue is tracked in issue #644.
