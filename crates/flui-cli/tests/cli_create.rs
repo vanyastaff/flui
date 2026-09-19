@@ -63,6 +63,30 @@ fn assert_generated_project_compiles(template: &str) {
         .assert()
         .success();
 
+    if template == "counter" {
+        let source =
+            std::fs::read_to_string(project.join("src/main.rs")).expect("generated source");
+        assert!(
+            source.contains("fn counter_responds_to_pointer_input"),
+            "the generated counter must ship its real pointer-input regression test"
+        );
+        let manifest: toml::Table = std::fs::read_to_string(project.join("Cargo.toml"))
+            .expect("manifest")
+            .parse()
+            .expect("valid TOML");
+        assert_eq!(
+            manifest["dev-dependencies"]["flui"]["path"],
+            manifest["dependencies"]["flui"]["path"]
+        );
+        assert_eq!(
+            manifest["dev-dependencies"]["flui"]["features"]
+                .as_array()
+                .expect("features"),
+            &[toml::Value::String("testing".into())]
+        );
+        assert!(manifest["dependencies"]["flui"].get("features").is_none());
+    }
+
     // Reuse this checkout's resolved dependency graph and cached crates. The
     // generated package is added to the copied lock by Cargo; --offline prevents
     // this test from depending on registry availability or fresh releases.
@@ -73,7 +97,7 @@ fn assert_generated_project_compiles(template: &str) {
     // build lock cannot deadlock them. External output paths exercise the same
     // dependency resolution users get outside the framework checkout.
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let output = std::process::Command::new(cargo)
+    let output = std::process::Command::new(&cargo)
         .arg("check")
         .arg("--offline")
         .arg("--target-dir")
@@ -87,6 +111,57 @@ fn assert_generated_project_compiles(template: &str) {
         "`flui create --template {template}` generated a project that does not compile:\n{}",
         String::from_utf8_lossy(&output.stderr),
     );
+    if template == "counter" {
+        let output = std::process::Command::new(&cargo)
+            .args([
+                "tree",
+                "--offline",
+                "--edges",
+                "normal,build",
+                "--prefix",
+                "none",
+                "--format",
+                "{p}",
+            ])
+            .current_dir(&project)
+            .output()
+            .expect("normal dependency graph");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let graph = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !graph.lines().any(|line| line.starts_with("flui-testing ")),
+            "{graph}"
+        );
+
+        let output = std::process::Command::new(&cargo)
+            .args([
+                "test",
+                "--offline",
+                "--bin",
+                &name,
+                "tests::counter_responds_to_pointer_input",
+            ])
+            .arg("--target-dir")
+            .arg(target.join("cli-template-check"))
+            .args(["--", "--exact", "--nocapture"])
+            .current_dir(&project)
+            .output()
+            .expect("generated pointer regression");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("test tests::counter_responds_to_pointer_input ... ok"),
+            "named generated test did not execute: {stdout}"
+        );
+    }
 }
 
 #[test]

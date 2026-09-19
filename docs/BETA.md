@@ -133,10 +133,21 @@ remain outstanding.
 Text deletion still documents scalar-value deletion in `TextEditingController`;
 reproduce the grapheme-cluster cases before fixing them.
 
-The default counter template currently renders a fixed `0` and has no increment
-control. Replace it with a real stateful counter and an interaction test before
-using it as evidence of the first-application workflow. A compiling static
-example is not evidence that an application can handle input and rebuild.
+The default counter template owns its count in retained state and provides a
+Material Increment button. Its generated test sends pointer down/up events and
+checks rendered text 0 → 1 → 2 using scheduled frame ticks. A parent rebuild
+preserves 2, while an independent application starts at 0. The external CLI test
+runs that named test in a fresh generated project, checks its normal build, and
+verifies that `flui-testing` is absent from the normal dependency graph. Testing
+is enabled only through the generated `flui` development dependency. This is
+headless interaction evidence; live first-run verification remains separate.
+The external regression first failed against the static template; the updated
+creation suite passes 20 tests, including generated basic, counter and hot-reload
+projects. Removing the generated callback's rebuild scheduling fails at
+“counter should display 1”; restoring it passes. Scoped CLI Clippy and generated
+source formatting checks pass. Evidence: `/tmp/flui-counter-red.log`,
+`/tmp/flui-counter-cli-suite.log`, `/tmp/flui-counter-mutation.log`,
+`/tmp/flui-counter-restored.log`, and `/tmp/flui-counter-clippy.log`.
 
 Publication graph audit (manifests, not a successful package dry run): the facade
 currently reaches 20 workspace packages without default features, 21 with

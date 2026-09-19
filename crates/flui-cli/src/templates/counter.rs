@@ -36,6 +36,7 @@ fn generate_cargo_toml(dir: &Path, name: &str, source: &DependencySource) -> Cli
     let version = env!("CARGO_PKG_VERSION");
 
     let deps = format!("flui = {}", source.dependency("flui", &[]));
+    let test_deps = format!("flui = {}", source.dependency("flui", &["testing"]));
     let mode_comment = if matches!(source, DependencySource::Local(_)) {
         " (local development)"
     } else {
@@ -58,6 +59,9 @@ rust-version = "1.97"
 [dependencies]
 {deps}
 
+[dev-dependencies]
+{test_deps}
+
 [profile.release]
 opt-level = 3
 lto = "thin"
@@ -71,27 +75,104 @@ strip = "debuginfo"
 }
 
 fn generate_main(dir: &Path) -> CliResult<()> {
-    // The interactive-counter pattern (StatefulView + GestureDetector rebuild
-    // trigger) is not yet ergonomic through the public API. This template shows
-    // the widget-composition surface and a static counter display; to add
-    // live state see the StatefulView + ViewState pair in the flui-view docs.
-    let content = r#"use flui::prelude::*;
+    let content = r#"use std::{cell::Cell, rc::Rc};
+
+use flui::prelude::*;
+use flui::view::{RebuildHandle, RebuildReason};
 use flui::widgets::column;
 
 fn main() {
-    run_app(CounterView);
+    run_app(CounterApp);
 }
 
 #[derive(Clone, StatelessView)]
+struct CounterApp;
+
+impl StatelessView for CounterApp {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Theme::new(ThemeData::light(), CounterView)
+    }
+}
+
+#[derive(Clone, StatefulView)]
 struct CounterView;
 
-impl StatelessView for CounterView {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+struct CounterState {
+    count: Rc<Cell<usize>>,
+    rebuild: Option<RebuildHandle>,
+}
+
+impl StatefulView for CounterView {
+    type State = CounterState;
+
+    fn create_state(&self) -> Self::State {
+        CounterState {
+            count: Rc::new(Cell::new(0)),
+            rebuild: None,
+        }
+    }
+}
+
+impl ViewState<CounterView> for CounterState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.rebuild = Some(ctx.rebuild_handle());
+    }
+
+    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> impl IntoView {
+        let count = Rc::clone(&self.count);
+        let rebuild = self
+            .rebuild
+            .clone()
+            .expect("BUG: init_state runs before build");
+
         Center::new().child(Column::new(column![
             Text::new("You have pushed the button this many times:"),
             SizedBox::height(16.0),
-            Text::new("0"),
+            Text::new(self.count.get().to_string()),
+            SizedBox::height(16.0),
+            ElevatedButton::new(Text::new("Increment")).on_pressed(move || {
+                count.set(count.get() + 1);
+                rebuild.schedule(RebuildReason::StateChange);
+            }),
         ]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flui::testing::widgets::{lay_out, tight};
+
+    #[test]
+    fn counter_responds_to_pointer_input() {
+        let mut app = lay_out(CounterApp, tight(480.0, 320.0));
+        assert!(app.find_text("0").is_some());
+        for (previous, next) in [("0", "1"), ("1", "2")] {
+            let label = app.find_text("Increment").expect("increment button label");
+            let offset = app.absolute_offset(label);
+            let size = app.size(label);
+            let x = offset.dx.get() + size.width.get() / 2.0;
+            let y = offset.dy.get() + size.height.get() / 2.0;
+            app.dispatch_pointer_down(x, y);
+            app.dispatch_pointer_up(x, y);
+            // Only scheduled work runs: a missing rebuild request must fail.
+            app.tick();
+            assert!(
+                app.find_text(next).is_some(),
+                "counter should display {next}"
+            );
+            assert!(app.find_text(previous).is_none());
+        }
+        app.pump_widget(CounterApp);
+        assert!(
+            app.find_text("2").is_some(),
+            "state survives a parent rebuild"
+        );
+        let independent = lay_out(CounterApp, tight(480.0, 320.0));
+        assert!(
+            independent.find_text("0").is_some(),
+            "each app owns its state"
+        );
     }
 }
 "#;
@@ -140,7 +221,8 @@ fn generate_readme(dir: &Path, name: &str) -> CliResult<()> {
     let content = format!(
         r"# {name}
 
-A FLUI counter application.
+A FLUI counter application. Press Increment to update the count.
+The generated test exercises pointer input and checks that state survives a rebuild.
 
 ## Getting Started
 

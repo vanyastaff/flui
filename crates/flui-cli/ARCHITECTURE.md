@@ -58,3 +58,21 @@ This follows the application-facing entry points demonstrated by
 2026-09-19. Template integration tests assert exact framework dependency names,
 local root paths and reload feature selection, then compile every shape outside
 the repository.
+
+
+### Default counter state and interaction
+
+The counter template uses a stateless application shell with a stateful counter
+beneath a Material theme. The element owns `Rc<Cell<usize>>`; `init_state`
+acquires its rebuild handle. The button callback changes the value and schedules
+a state rebuild, while `build` only describes the current view. This follows
+[Iced's owned-state, event, and state-derived-view counter example](https://book.iced.rs/first-steps.html)
+(consulted 2026-09-19) through FLUI's retained element lifecycle rather than
+introducing a message architecture.
+
+The generated test dispatches real pointer down/up events to the Increment label
+and advances only scheduled work with `tick`, checking rendered text from 0 to 1
+to 2. A parent rebuild preserves 2; a separate app starts at 0. The external CLI
+regression executes that named generated test and checks a normal build whose
+dependency graph excludes `flui-testing`. The sole framework dependency remains
+`flui`; its `testing` feature is enabled only in development dependencies.
