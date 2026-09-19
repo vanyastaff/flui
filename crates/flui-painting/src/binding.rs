@@ -621,7 +621,7 @@ mod tests {
         // Shared workspace font fixture (dev-only `include_bytes!`; a build
         // input, not an API/layering coupling — flui-engine still depends on
         // flui-painting, never the reverse).
-        const ROBOTO: &[u8] = include_bytes!("../../flui-engine/assets/fonts/Roboto-Regular.ttf");
+        const ROBOTO: &[u8] = crate::fonts::ROBOTO_REGULAR;
         let binding = PaintingBinding::new();
 
         binding

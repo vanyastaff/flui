@@ -2,9 +2,16 @@
 //!
 //! Three faces ship inside the binary so a host with no usable system fonts
 //! still renders text and icons: a text fallback plus the two icon families
-//! whose private-use glyphs no system font carries. The wgpu backend's text
-//! renderer installs them into the shared `FontSystem` when it finds the
-//! database empty (text) or the family absent (icons).
+//! whose private-use glyphs no system font carries. The text fallback is
+//! installed by `flui-painting` when it constructs the shared `FontSystem`
+//! (ADR-0016 — the lowest owner loads the baseline); the renderer installs the
+//! two icon faces when it finds the families absent.
+//!
+//! The **assets live in `flui-painting`**. `flui-painting` owns the shared
+//! `FontSystem`, and a hot-reload worker `cdylib` links `flui-painting` but
+//! never `flui-engine`, so the text fallback has to be reachable from the
+//! lower crate. `ROBOTO_REGULAR` is therefore a re-export; the icon faces are
+//! engine-only and remain here.
 //!
 //! They are public because font resolution is otherwise *host*-dependent:
 //! `FontSystem::new()` loads whatever fonts the machine has installed, so the
@@ -15,7 +22,11 @@
 //! `flui_testing::fonts::pin_font_faces`.
 
 /// The embedded text fallback face (Roboto Regular).
-pub const ROBOTO_REGULAR: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
+///
+/// Re-exported from `flui-painting`, which installs it into the shared
+/// `FontSystem` when host discovery finds no Latin-capable face. See
+/// [`flui_painting::fonts`].
+pub use flui_painting::fonts::ROBOTO_REGULAR;
 
 /// The embedded Material Icons face, family `"Material Icons"`.
 pub const MATERIAL_ICONS_REGULAR: &[u8] =

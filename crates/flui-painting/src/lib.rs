@@ -167,6 +167,7 @@ pub mod decoration;
 pub mod display_list;
 pub mod error;
 
+pub mod fonts;
 pub mod table_border;
 pub mod text_layout;
 pub mod text_painter;

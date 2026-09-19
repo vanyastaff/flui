@@ -59,6 +59,42 @@ that unification is actually wired today."
 
 ---
 
+## Amendment (2026-09-18): the baseline face moves to `flui-painting`
+
+Decision §1 said "the logic currently in the engine's `initialize_font_system`
+/ `load_embedded_fonts` moves down here — the *lowest* owner loads the
+baseline". Only the loading *mechanism* moved at the time; the Roboto asset and
+its install lived in `flui-engine`'s `TextRenderer`. That left the baseline
+reachable from the **host** but not from a **hot-reload worker**.
+
+A worker is a `cdylib` that statically links its own `flui-painting` (hence its
+own `FONT_SYSTEM`) and **never links `flui-engine` at all** (`cargo tree -p
+hot-reload-counter-logic` shows zero `flui-engine` edges, normal or all). So the
+renderer's empty-database fallback never reaches the worker's `FontSystem`, and
+any widget the worker builds that shapes text panics inside cosmic-text
+(`shape.rs`: `FontFallbackIter::next().expect("no default font found")`).
+Invisible on macOS, where host discovery finds Latin faces; fatal on **iOS**,
+whose system faces are not exposed to cosmic-text/fontdb's scan, so the worker's
+database is empty. Verified: the counter worker renders on iOS-Simulator with
+its `Text` removed and aborts with it present.
+
+**What changed:** `Roboto-Regular.ttf` moved to
+`crates/flui-painting/assets/fonts/`, exposed as
+`flui_painting::fonts::ROBOTO_REGULAR`, and `font_system_arc()` installs it when
+host discovery finds no Latin-capable face (`font_resolve::install_text_fallback`
+— which also binds every generic family at the fallback, mirroring
+`bind_generic_families`). This is exactly Decision §1's "lowest owner loads the
+baseline", completed: the crate that owns the `FontSystem` is now the crate that
+guarantees it is usable, so *every* image linking `flui-painting` — host binary
+and worker `cdylib` alike — gets a working shaper without depending on
+`flui-engine` to prime it. `flui_engine::fonts::ROBOTO_REGULAR` is now a
+re-export; the two icon faces stay in the engine (only the renderer installs
+them, and it is host-only). Regression coverage:
+`an_empty_host_receives_the_embedded_text_fallback` /
+`a_host_with_fonts_does_not_get_the_fallback` in `font_resolve.rs`.
+
+---
+
 ## Context
 
 ### The gap (verified)

@@ -148,6 +148,20 @@ fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
         // flag and its GPOS/GSUB scripts, never from the generic names, so
         // binding afterwards changes nothing it froze.
         let mut discovered = FontSystem::new();
+        // A host with no discoverable Latin face would otherwise hand the
+        // shaper an empty database, and the first shaped run panics inside
+        // cosmic-text. Installing the embedded fallback here — in the crate
+        // that owns the `FontSystem`, before any shaping can reach it — is what
+        // makes text work on such a host, and specifically in a hot-reload
+        // worker `cdylib`, which links this crate but never `flui-engine`.
+        if font_resolve::install_text_fallback(discovered.db_mut(), crate::fonts::ROBOTO_REGULAR) {
+            tracing::warn!("no Latin-capable system font found; using embedded Roboto-Regular");
+        } else if !font_resolve::has_latin_capable_face(discovered.db()) {
+            tracing::error!(
+                "shared FontSystem has no usable text face and the embedded \
+                 fallback did not load; text layout will panic"
+            );
+        }
         font_resolve::bind_generic_families(discovered.db_mut());
         // Then rebuild once around the host's own emoji faces. Binding the
         // generics closes the fall-through for styles that name *no* family;

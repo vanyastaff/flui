@@ -181,6 +181,62 @@ pub(crate) fn bind_generic_families(db: &mut Database) {
     }
 }
 
+/// Whether `db` holds any face that can render basic Latin text.
+///
+/// The precondition [`install_text_fallback`] is gated on: a database that
+/// already carries a Latin-capable face needs nothing, and installing into it
+/// would only change which family an unmatched style lands on.
+pub(crate) fn has_latin_capable_face(db: &Database) -> bool {
+    db.faces().any(|face| can_render_latin(db, face.id))
+}
+
+/// Installs `fallback` into `db` when host discovery found no Latin-capable
+/// face, and points every generic family at the family it provides.
+///
+/// Returns `true` when the fallback was installed.
+///
+/// # Why this exists
+///
+/// `FontSystem::new()` loads whatever fonts the host has. Some hosts have none
+/// a plain discovery can see — a minimal container, CI, and **iOS**, where the
+/// system faces are not exposed through the paths cosmic-text/fontdb scan. The
+/// database is then empty, and the first shaped run panics inside cosmic-text
+/// (`FontFallbackIter::next().expect("no default font found")`). Installing a
+/// repository-shipped face is the difference between "text measures against
+/// embedded bytes" and "the process aborts on its first label".
+///
+/// # Why here and not in the renderer
+///
+/// `flui-engine`'s `TextRenderer` installs the same face when it finds the
+/// database empty, and that is sufficient for the host binary — but a
+/// hot-reload worker is a `cdylib` that statically links its own
+/// `flui-painting` and never links `flui-engine` at all. The worker therefore
+/// has its own `FONT_SYSTEM` that the renderer's fallback never reaches, and
+/// text built by worker code panics on iOS even though the host renders fine.
+/// The baseline belongs to the lowest crate that owns a `FontSystem`
+/// (ADR-0016), which is this one.
+///
+/// Named generics only — sans/serif/monospace/cursive/fantasy — mirror
+/// [`bind_generic_families`], for the same reason: a style naming no family
+/// must not fall through to whatever the host happens to carry.
+pub(crate) fn install_text_fallback(db: &mut Database, fallback: &[u8]) -> bool {
+    if has_latin_capable_face(db) {
+        return false;
+    }
+    db.load_font_data(fallback.to_vec());
+    let Some(family) = pick_family(db, false) else {
+        // The face failed to load (corrupt, or a build misconfiguration). The
+        // caller reports this; there is no useful family to bind.
+        return false;
+    };
+    db.set_sans_serif_family(family.clone());
+    db.set_serif_family(family.clone());
+    db.set_monospace_family(family.clone());
+    db.set_cursive_family(family.clone());
+    db.set_fantasy_family(family);
+    true
+}
+
 /// Whether `id` can render basic Latin text — the property a generic family
 /// has to have, tested by asking the face rather than by matching its name.
 ///
@@ -743,7 +799,7 @@ pub(crate) fn resolve_family<'a>(
 mod tests {
     use super::*;
 
-    const ROBOTO: &[u8] = include_bytes!("../../../flui-engine/assets/fonts/Roboto-Regular.ttf");
+    const ROBOTO: &[u8] = crate::fonts::ROBOTO_REGULAR;
     const ARIAL: &[u8] = include_bytes!("../../../flui-engine/assets/fonts/Arial.ttf");
     const MATERIAL_ICONS: &[u8] =
         include_bytes!("../../../flui-engine/assets/fonts/MaterialIcons-Regular.ttf");
@@ -763,6 +819,56 @@ mod tests {
             db.load_font_data((*face).to_vec());
         }
         db
+    }
+
+    /// A host with no discoverable Latin face must end up with a working
+    /// shaper: the embedded fallback is installed and every generic family is
+    /// pointed at it.
+    ///
+    /// This is the iOS / minimal-container path. `FontSystem::new()` there
+    /// yields an empty database, and the first shaped run panics inside
+    /// cosmic-text with `no default font found` — which is exactly what a
+    /// hot-reload worker `cdylib` hit on iOS, because it links `flui-painting`
+    /// (its own `FONT_SYSTEM`) but never `flui-engine`'s text renderer.
+    #[test]
+    fn an_empty_host_receives_the_embedded_text_fallback() {
+        let mut db = Database::new();
+        assert!(!has_latin_capable_face(&db), "precondition: empty database");
+
+        assert!(
+            install_text_fallback(&mut db, ROBOTO),
+            "the fallback must report installed on an empty host"
+        );
+        assert!(
+            has_latin_capable_face(&db),
+            "after install the database must be able to shape basic Latin"
+        );
+        for generic in [
+            Family::SansSerif,
+            Family::Serif,
+            Family::Monospace,
+            Family::Cursive,
+            Family::Fantasy,
+        ] {
+            assert!(
+                database_carries(&db, db.family_name(&generic)),
+                "generic {generic:?} must resolve to the fallback family, or an \
+                 unmatched style falls through to cosmic-text's emoji-first tail"
+            );
+        }
+    }
+
+    /// A host that already has a Latin-capable face is left untouched: the
+    /// fallback is a floor, not an override of the user's font environment.
+    #[test]
+    fn a_host_with_fonts_does_not_get_the_fallback() {
+        let mut db = database(&[ARIAL]);
+        assert!(has_latin_capable_face(&db));
+        assert!(
+            !install_text_fallback(&mut db, ROBOTO),
+            "a host that can already shape Latin must not have the fallback \
+             installed over its own fonts"
+        );
     }
 
     fn font_system(db: Database) -> FontSystem {
