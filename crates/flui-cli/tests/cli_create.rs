@@ -144,6 +144,76 @@ fn generated_counter_project_compiles() {
     assert_generated_project_compiles("counter");
 }
 
+/// The hot-reload template emits a three-crate *workspace*, and the real gate
+/// is that `cargo check --workspace` passes on it — the same "file existence is
+/// not enough" rule the single-crate templates follow. The workspace layout is
+/// what makes the host/worker split compile at all (each member resolves its
+/// siblings by `path`), so a drift there is caught here, not in production.
+#[test]
+fn generated_hot_reload_workspace_compiles() {
+    let root = repo_root();
+    let target = root.join("target");
+    let name = "flui-tmpl-check-hot-reload";
+    let project = target.join(name);
+    std::fs::create_dir_all(&target).expect("create the scratch directory");
+    if project.exists() {
+        std::fs::remove_dir_all(&project).expect("clear the previous generated project");
+    }
+
+    flui()
+        .env("CARGO_NET_OFFLINE", "true")
+        .args([
+            "create",
+            name,
+            "--template",
+            "counter",
+            "--org",
+            "com.test",
+            "--local",
+            "--hot-reload",
+            "--no-check",
+        ])
+        .arg("--path")
+        .arg(&target)
+        .assert()
+        .success();
+
+    // The workspace must be laid out exactly as the reload protocol expects.
+    for member in [
+        format!("{name}-types"),
+        format!("{name}-logic"),
+        format!("{name}-host"),
+    ] {
+        assert!(
+            project.join(&member).join("Cargo.toml").exists(),
+            "hot-reload workspace member {member} missing",
+        );
+    }
+    let flui_toml = std::fs::read_to_string(project.join("flui.toml")).expect("read flui.toml");
+    assert!(
+        flui_toml.contains("[hot_reload]"),
+        "flui.toml must carry the [hot_reload] section `flui run` reads",
+    );
+
+    std::fs::copy(root.join("Cargo.lock"), project.join("Cargo.lock"))
+        .expect("seed the generated workspace with the workspace's resolved versions");
+
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let output = std::process::Command::new(cargo)
+        .args(["check", "--workspace", "--offline"])
+        .arg("--target-dir")
+        .arg(target.join("cli-template-check"))
+        .current_dir(&project)
+        .output()
+        .expect("run cargo check on the generated hot-reload workspace");
+
+    assert!(
+        output.status.success(),
+        "`flui create --hot-reload` generated a workspace that does not compile:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 #[test]
 fn create_project_with_basic_template() {
     let tmp = TempDir::new().expect("temp dir");

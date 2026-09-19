@@ -110,6 +110,16 @@ enum Commands {
         #[arg(short, long)]
         interactive: bool,
 
+        /// Generate a Flutter-parity hot-reload project (three-crate
+        /// host / worker / types layout).
+        ///
+        /// The host binary holds the element-tree state; the reloadable worker
+        /// dylib holds only the `build()` implementations, so a code change to
+        /// the worker preserves `State` across a reload. `flui run` detects the
+        /// `[hot_reload]` section this writes and drives the worker rebuild.
+        #[arg(long)]
+        hot_reload: bool,
+
         /// Skip the `cargo check` that normally runs after scaffolding.
         ///
         /// The check only reports; it never fails the command. Skipping it
@@ -184,6 +194,18 @@ enum Commands {
         /// iOS: Build universal binary (arm64 + simulator)
         #[arg(long)]
         universal: bool,
+
+        /// Build a named example instead of the current package's binary.
+        ///
+        /// Needed inside the FLUI source tree, where the runnable entry points
+        /// are examples (`material_demo`, `widgets_gallery`, ...) rather than
+        /// one application package.
+        #[arg(long)]
+        example: Option<String>,
+
+        /// Build a named workspace package's binary.
+        #[arg(long)]
+        package: Option<String>,
     },
 
     /// Run tests
@@ -493,12 +515,18 @@ impl BuildTarget {
     }
 
     /// Get the Rust target triple for this build target.
+    ///
+    /// `macos` resolves to the *host* architecture's darwin triple: a build is
+    /// normally for the machine running it, and returning a fixed
+    /// `x86_64-apple-darwin` silently produced an Intel binary on Apple
+    /// Silicon. `--universal` (handled by the builder, not here) widens it to
+    /// both architectures.
     #[must_use]
-    pub fn target_triple(&self) -> &'static str {
+    pub const fn target_triple(&self) -> &'static str {
         match self {
             Self::Windows => "x86_64-pc-windows-msvc",
             Self::Linux => "x86_64-unknown-linux-gnu",
-            Self::Macos => "x86_64-apple-darwin",
+            Self::Macos => Self::host_darwin_triple(),
             Self::Android => "aarch64-linux-android",
             Self::Ios => "aarch64-apple-ios",
             Self::Web => "wasm32-unknown-unknown",
@@ -513,13 +541,26 @@ impl BuildTarget {
                 }
                 #[cfg(target_os = "macos")]
                 {
-                    "x86_64-apple-darwin"
+                    Self::host_darwin_triple()
                 }
                 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
                 {
                     "unknown"
                 }
             }
+        }
+    }
+
+    /// The darwin triple matching the machine the CLI itself was built for.
+    #[must_use]
+    pub const fn host_darwin_triple() -> &'static str {
+        #[cfg(target_arch = "aarch64")]
+        {
+            "aarch64-apple-darwin"
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            "x86_64-apple-darwin"
         }
     }
 }
@@ -606,6 +647,7 @@ fn main() {
             lib,
             interactive,
             no_check,
+            hot_reload,
         } => {
             if interactive || name.is_none() {
                 // Interactive mode — newtypes already validated by prompts
@@ -621,6 +663,7 @@ fn main() {
                             local,
                             lib,
                             skip_check: no_check,
+                            hot_reload,
                         },
                     )
                 })()
@@ -642,6 +685,7 @@ fn main() {
                             local,
                             lib,
                             skip_check: no_check,
+                            hot_reload,
                         },
                     )
                 })()
@@ -673,6 +717,8 @@ fn main() {
             split_per_abi,
             optimize_wasm,
             universal,
+            example,
+            package,
         } => commands::build::execute(
             platform,
             release,
@@ -680,6 +726,8 @@ fn main() {
             split_per_abi,
             optimize_wasm,
             universal,
+            example,
+            package,
         ),
 
         Commands::Test {

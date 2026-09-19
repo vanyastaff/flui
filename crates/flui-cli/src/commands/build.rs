@@ -3,14 +3,15 @@
 use crate::BuildTarget;
 use crate::error::{CliResult, ResultExt};
 use console::style;
+use flui_build::platform::BuildUnit as CargoBuildUnit;
 use flui_build::{
-    AndroidBuilder, BuildPhase, BuilderContextBuilder, DesktopBuilder, Platform, PlatformBuilder,
-    Profile, ProgressManager, WebBuilder,
+    AndroidBuilder, AppBundle, BuildPhase, BuilderContextBuilder, DesktopBuilder, IOSBuilder,
+    Platform, PlatformBuilder, Profile, ProgressManager, WebBuilder,
 };
 use std::path::PathBuf;
 
 /// Build options collected into a struct to avoid excessive bool parameters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BuildOptions {
     /// Build in release mode.
     pub release: bool,
@@ -22,6 +23,25 @@ pub struct BuildOptions {
     pub universal: bool,
     /// Use verbose output with progress bars.
     pub verbose: bool,
+    /// Build a named example rather than the current package's binary.
+    pub example: Option<String>,
+    /// Build a named workspace package's binary.
+    pub package: Option<String>,
+}
+
+impl BuildOptions {
+    /// Resolve the cargo unit this build selects.
+    ///
+    /// `--example` wins over `--package` when both are given (an example is the
+    /// more specific instruction), and neither given is the generated-project
+    /// default: the current directory's own binary.
+    fn cargo_target(&self) -> CargoBuildUnit {
+        match (&self.example, &self.package) {
+            (Some(example), _) => CargoBuildUnit::Example(example.clone()),
+            (None, Some(package)) => CargoBuildUnit::Package(package.clone()),
+            (None, None) => CargoBuildUnit::DefaultBinary,
+        }
+    }
 }
 
 /// Execute the build command.
@@ -33,6 +53,7 @@ pub struct BuildOptions {
     clippy::fn_params_excessive_bools,
     reason = "mirrors clap argument structure"
 )]
+#[expect(clippy::too_many_arguments, reason = "mirrors clap argument structure")]
 pub fn execute(
     target: BuildTarget,
     release: bool,
@@ -40,6 +61,8 @@ pub fn execute(
     split_per_abi: bool,
     optimize_wasm: bool,
     universal: bool,
+    example: Option<String>,
+    package: Option<String>,
 ) -> CliResult<()> {
     let options = BuildOptions {
         release,
@@ -47,16 +70,35 @@ pub fn execute(
         optimize_wasm,
         universal,
         verbose: false,
+        example,
+        package,
     };
 
     let mode = if release { "release" } else { "debug" };
     cliclack::intro(style(format!(" flui build {target} ")).on_cyan().black())?;
     cliclack::log::info(format!("Mode: {}", style(mode).cyan()))?;
 
+    ensure_resolvable_target(&options)?;
+
+    // `flui-build`'s builders shell out through `tokio::process`, whose
+    // `Command::status()` needs a Tokio reactor in scope on this thread.
+    // `pollster` only drives the future; it installs no reactor, so every
+    // build path panicked with "there is no reactor running" until this guard
+    // existed. A multi-thread runtime is what keeps the reactor driven while
+    // the main thread is parked inside `pollster::block_on` — the worker
+    // threads service the IO/signal driver that child-process reaping needs,
+    // which the current-thread flavour would leave undriven. Entering (not
+    // `block_on`) keeps the `pollster::block_on` call sites unchanged.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("Failed to start the build runtime")?;
+    let _reactor = runtime.enter();
+
     // Use flui_build for cross-platform builds
     let result = match target {
         BuildTarget::Android => build_android(options, output.as_ref()),
-        BuildTarget::Ios => build_ios(options),
+        BuildTarget::Ios => build_ios(options, output.as_ref()),
         BuildTarget::Web => build_web(options, output.as_ref()),
         BuildTarget::Desktop => build_desktop(options, output.as_ref()),
         BuildTarget::Windows | BuildTarget::Linux | BuildTarget::Macos => {
@@ -72,6 +114,78 @@ pub fn execute(
     cliclack::outro(style("Build completed successfully").green())?;
 
     Ok(())
+}
+
+/// Reject an unresolvable default target with an actionable message.
+///
+/// `--example`/`--package` name the unit explicitly. Without either, cargo
+/// builds the current directory's own binary — which the FLUI source tree
+/// itself does not have: its root is a library-only workspace package, and its
+/// runnable entry points are examples. Left unchecked, the failure surfaces
+/// deep inside cargo as an opaque "no bin target named ..." error.
+///
+/// This reads the manifest as text rather than parsing it: only the presence of
+/// a `[package]`/`[[bin]]` section and the framework crates' directory matters,
+/// and a text scan cannot be defeated by a stricter TOML grammar the way
+/// `toml::Value` was here (the repo's root manifest fails to parse under the
+/// pinned `toml` 1.1, which would have silently disabled a parse-based guard).
+fn ensure_resolvable_target(options: &BuildOptions) -> CliResult<()> {
+    if options.example.is_some() || options.package.is_some() {
+        return Ok(());
+    }
+
+    let Ok(manifest) = std::fs::read_to_string("Cargo.toml") else {
+        return Ok(());
+    };
+
+    // A manifest with a binary target is resolvable as-is.
+    if manifest.contains("[[bin]]") {
+        return Ok(());
+    }
+    // The FLUI source tree: a workspace root that also owns the framework
+    // crates. Generated projects are standalone workspaces without them.
+    let is_workspace_root = manifest.contains("[workspace]");
+    let has_crates_dir = std::path::Path::new("crates/flui-app").is_dir();
+    if !(is_workspace_root && has_crates_dir) {
+        return Ok(());
+    }
+
+    Err(crate::error::CliError::NotFluiProject {
+        reason: "This is the FLUI source tree, whose runnable entry points are \
+                 examples — pass `--example <name>` (see `examples/`) or \
+                 `--package <name>` to name the target to build."
+            .to_string(),
+    })
+}
+
+/// Resolve application-bundle metadata for a macOS build, from `flui.toml`.
+///
+/// A `.app` needs a display name and a bundle identifier; `flui.toml`'s
+/// `[app].name`/`[app].organization` are exactly those. When the file is absent
+/// (e.g. building an in-repo example), the directory name stands in — a bundle
+/// still gets staged, with a derived identifier, rather than the build silently
+/// degrading to a bare binary.
+fn macos_bundle() -> Option<AppBundle> {
+    let manifest = std::path::Path::new("flui.toml");
+    if let Ok(text) = std::fs::read_to_string(manifest)
+        && let Ok(value) = text.parse::<toml::Value>()
+        && let Some(app) = value.get("app")
+    {
+        let name = app
+            .get("name")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("FLUI App");
+        let org = app
+            .get("organization")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("dev.flui");
+        return Some(AppBundle::new(name, org));
+    }
+
+    let dir_name = std::env::current_dir()
+        .ok()
+        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))?;
+    Some(AppBundle::new(&dir_name, "dev.flui"))
 }
 
 /// Execute build with progress indicators from `flui_build`.
@@ -100,6 +214,8 @@ pub fn execute_with_progress(
         optimize_wasm,
         universal,
         verbose: true,
+        example: None,
+        package: None,
     };
 
     let progress_manager = ProgressManager::new();
@@ -108,7 +224,7 @@ pub fn execute_with_progress(
         BuildTarget::Android => {
             build_android_with_progress(options, output.as_ref(), &progress_manager)
         }
-        BuildTarget::Ios => build_ios(options),
+        BuildTarget::Ios => build_ios(options, output.as_ref()),
         BuildTarget::Web => build_web_with_progress(options, output.as_ref(), &progress_manager),
         BuildTarget::Desktop => {
             build_desktop_with_progress(options, output.as_ref(), &progress_manager)
@@ -242,19 +358,66 @@ fn build_android_with_progress(
     Ok(())
 }
 
-fn build_ios(options: BuildOptions) -> CliResult<()> {
-    cliclack::log::warning("iOS builds not yet supported")?;
+fn build_ios(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
+    let spinner = cliclack::spinner();
+    spinner.start("Building iOS libraries...");
 
-    let release_flag = if options.release { " --release" } else { "" };
-    let workaround = format!(
-        "{}\n  {}",
-        style("Workaround:").bold(),
-        style(format!(
-            "cargo build --target aarch64-apple-ios{release_flag}"
-        ))
-        .dim(),
-    );
-    cliclack::note("iOS Support", workaround)?;
+    let workspace_root = std::env::current_dir()?;
+    let profile = if options.release {
+        Profile::Release
+    } else {
+        Profile::Debug
+    };
+
+    // Default is the device arm64 slice; `--universal` adds the simulator
+    // slice so one artifact serves both. A caller that wants only one names
+    // it here rather than the builder guessing.
+    let targets = if options.universal {
+        vec![
+            "aarch64-apple-ios".to_string(),
+            "aarch64-apple-ios-sim".to_string(),
+        ]
+    } else {
+        vec!["aarch64-apple-ios".to_string()]
+    };
+
+    let ios_builder =
+        IOSBuilder::new(&workspace_root).context("Failed to initialize iOS builder")?;
+
+    let mut builder = BuilderContextBuilder::new(workspace_root)
+        .with_platform(Platform::IOS { targets })
+        .with_target(options.cargo_target())
+        .with_profile(profile);
+
+    if let Some(out) = output {
+        builder = builder.with_output_dir(out.clone());
+    }
+
+    let ctx = builder.build();
+
+    spinner.set_message("Validating iOS environment...");
+    ios_builder
+        .validate_environment()
+        .context("iOS environment validation failed")?;
+
+    spinner.set_message("Building iOS libraries...");
+    let artifacts = pollster::block_on(ios_builder.build_rust(&ctx))
+        .context("Failed to build iOS libraries")?;
+
+    spinner.set_message("Building iOS app...");
+    let final_artifacts = pollster::block_on(ios_builder.build_platform(&ctx, &artifacts))
+        .context("Failed to build iOS app")?;
+
+    spinner.stop(format!("{} iOS build finished", style("✓").green()));
+
+    cliclack::log::success(format!(
+        "Artifact: {}",
+        final_artifacts.app_binary.display()
+    ))?;
+    cliclack::log::info(format!(
+        "Size: {:.2} MB",
+        final_artifacts.size_bytes as f64 / 1_048_576.0
+    ))?;
 
     Ok(())
 }
@@ -387,7 +550,14 @@ fn build_desktop(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<(
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Desktop { target: None })
+        .with_target(options.cargo_target())
         .with_profile(profile);
+
+    // `Desktop` builds for the host; on macOS that means staging a `.app`.
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = macos_bundle() {
+        builder = builder.with_bundle(bundle);
+    }
 
     if let Some(out) = output {
         builder = builder.with_output_dir(out.clone());
@@ -443,7 +613,13 @@ fn build_desktop_with_progress(
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Desktop { target: None })
+        .with_target(options.cargo_target())
         .with_profile(profile);
+
+    #[cfg(target_os = "macos")]
+    if let Some(bundle) = macos_bundle() {
+        builder = builder.with_bundle(bundle);
+    }
 
     if let Some(out) = output {
         builder = builder.with_output_dir(out.clone());
@@ -487,6 +663,13 @@ fn build_specific_platform(
     options: BuildOptions,
     output: Option<&PathBuf>,
 ) -> CliResult<()> {
+    // A macOS universal binary is two single-arch builds combined with `lipo`;
+    // it is not a distinct cargo target, so it takes a dedicated path rather
+    // than being forced through the single-triple flow below.
+    if target == BuildTarget::Macos && options.universal {
+        return build_macos_universal(options, output);
+    }
+
     let target_triple = target.target_triple();
 
     let spinner = cliclack::spinner();
@@ -506,7 +689,15 @@ fn build_specific_platform(
         .with_platform(Platform::Desktop {
             target: Some(target_triple.to_string()),
         })
+        .with_target(options.cargo_target())
         .with_profile(profile);
+
+    // `flui build macos` stages a `.app`; other triples keep the bare binary.
+    if target == BuildTarget::Macos
+        && let Some(bundle) = macos_bundle()
+    {
+        builder = builder.with_bundle(bundle);
+    }
 
     if let Some(out) = output {
         builder = builder.with_output_dir(out.clone());
@@ -543,6 +734,105 @@ fn build_specific_platform(
     Ok(())
 }
 
+/// Build one macOS executable carrying both `arm64` and `x86_64` slices.
+///
+/// Each slice is a separate cargo invocation (there is no "fat" Rust target);
+/// `lipo -create` then fuses the two Mach-O files into a single universal
+/// binary. Both slices land in arch-specific scratch subdirectories, and only
+/// the fused artifact is promoted to the caller's output directory.
+fn build_macos_universal(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
+    const SLICES: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
+
+    let spinner = cliclack::spinner();
+    spinner.start("Building universal macOS binary (arm64 + x86_64)...");
+
+    let workspace_root = std::env::current_dir()?;
+    let profile = if options.release {
+        Profile::Release
+    } else {
+        Profile::Debug
+    };
+
+    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
+        .with_platform(Platform::Desktop {
+            target: Some(SLICES[0].to_string()),
+        })
+        .with_target(options.cargo_target())
+        .with_profile(profile);
+
+    if let Some(out) = output {
+        builder = builder.with_output_dir(out.clone());
+    }
+    let ctx = builder.build();
+    let output_dir = ctx.output_dir.clone();
+    std::fs::create_dir_all(&output_dir)?;
+    let scratch = output_dir.join(".slices");
+
+    let mut slice_paths = Vec::new();
+    for triple in SLICES {
+        let slice_dir = scratch.join(triple);
+        std::fs::create_dir_all(&slice_dir)?;
+
+        spinner.set_message(format!("Building {triple}..."));
+
+        let builder_inst =
+            DesktopBuilder::new(&workspace_root).context("Failed to initialize builder")?;
+        let slice_ctx = BuilderContextBuilder::new(workspace_root.clone())
+            .with_platform(Platform::Desktop {
+                target: Some(triple.to_string()),
+            })
+            .with_target(options.cargo_target())
+            .with_profile(profile)
+            .with_output_dir(slice_dir)
+            .build();
+
+        builder_inst
+            .validate_environment()
+            .context("Environment validation failed")?;
+        let artifacts = pollster::block_on(builder_inst.build_rust(&slice_ctx))
+            .with_context(|| format!("Failed to build {triple}"))?;
+        let final_artifacts =
+            pollster::block_on(builder_inst.build_platform(&slice_ctx, &artifacts))
+                .with_context(|| format!("Failed to stage {triple}"))?;
+        slice_paths.push(final_artifacts.app_binary);
+    }
+
+    let fused_name = slice_paths
+        .first()
+        .and_then(|p| p.file_name())
+        .ok_or_else(|| crate::error::CliError::BuildFailed {
+            platform: "macos".to_string(),
+            details: "a slice has no file name".to_string(),
+        })?;
+    let fused = output_dir.join(fused_name);
+
+    spinner.set_message("Fusing slices with lipo...");
+    let mut args: Vec<String> = vec!["-create".to_string()];
+    args.extend(slice_paths.iter().map(|p| p.display().to_string()));
+    args.push("-output".to_string());
+    args.push(fused.display().to_string());
+    let status = std::process::Command::new("lipo")
+        .args(&args)
+        .status()
+        .map_err(|e| crate::error::CliError::BuildFailed {
+            platform: "macos".to_string(),
+            details: format!("failed to run lipo: {e}"),
+        })?;
+    if !status.success() {
+        return Err(crate::error::CliError::BuildFailed {
+            platform: "macos".to_string(),
+            details: "lipo failed to fuse the arch slices".to_string(),
+        });
+    }
+
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    spinner.stop(format!("{} Universal binary built", style("✓").green()));
+    cliclack::log::success(format!("Binary location: {}", fused.display()))?;
+
+    Ok(())
+}
+
 fn build_specific_platform_with_progress(
     target: BuildTarget,
     options: BuildOptions,
@@ -566,7 +856,14 @@ fn build_specific_platform_with_progress(
         .with_platform(Platform::Desktop {
             target: Some(target_triple.to_string()),
         })
+        .with_target(options.cargo_target())
         .with_profile(profile);
+
+    if target == BuildTarget::Macos
+        && let Some(bundle) = macos_bundle()
+    {
+        builder = builder.with_bundle(bundle);
+    }
 
     if let Some(out) = output {
         builder = builder.with_output_dir(out.clone());

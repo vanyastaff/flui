@@ -28,7 +28,7 @@
 /// ```
 use std::path::PathBuf;
 
-use crate::platform::{BuilderContext, Platform, Profile};
+use crate::platform::{AppBundle, BuildUnit, BuilderContext, Platform, Profile};
 
 /// Type state: No platform set
 #[derive(Debug)]
@@ -98,9 +98,11 @@ pub struct HasProfile(pub(crate) Profile);
 pub struct BuilderContextBuilder<P = NoPlatform, Pr = NoProfile> {
     workspace_root: PathBuf,
     platform: P,
+    target: BuildUnit,
     profile: Pr,
     features: Vec<String>,
     output_dir: Option<PathBuf>,
+    bundle: Option<AppBundle>,
 }
 
 // Initial builder creation
@@ -124,9 +126,11 @@ impl BuilderContextBuilder<NoPlatform, NoProfile> {
         Self {
             workspace_root,
             platform: NoPlatform,
+            target: BuildUnit::DefaultBinary,
             profile: NoProfile,
             features: Vec::new(),
             output_dir: None,
+            bundle: None,
         }
     }
 }
@@ -154,9 +158,11 @@ impl<Pr> BuilderContextBuilder<NoPlatform, Pr> {
         BuilderContextBuilder {
             workspace_root: self.workspace_root,
             platform: HasPlatform(platform),
+            target: self.target,
             profile: self.profile,
             features: self.features,
             output_dir: self.output_dir,
+            bundle: self.bundle,
         }
     }
 }
@@ -182,15 +188,55 @@ impl<P> BuilderContextBuilder<P, NoProfile> {
         BuilderContextBuilder {
             workspace_root: self.workspace_root,
             platform: self.platform,
+            target: self.target,
             profile: HasProfile(profile),
             features: self.features,
             output_dir: self.output_dir,
+            bundle: self.bundle,
         }
     }
 }
 
 // Optional fields - available regardless of state
 impl<P, Pr> BuilderContextBuilder<P, Pr> {
+    /// Select which cargo package or example to compile.
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - The [`BuildUnit`] to compile
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_build::*;
+    /// use std::path::PathBuf;
+    ///
+    /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
+    ///     .with_target(BuildUnit::Example("material_demo".to_string()));
+    /// ```
+    #[must_use]
+    pub fn with_target(mut self, target: BuildUnit) -> Self {
+        self.target = target;
+        self
+    }
+
+    /// Stage the built executable into an application bundle with this identity.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use flui_build::*;
+    /// use std::path::PathBuf;
+    ///
+    /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
+    ///     .with_bundle(AppBundle::new("My App", "com.example"));
+    /// ```
+    #[must_use]
+    pub fn with_bundle(mut self, bundle: AppBundle) -> Self {
+        self.bundle = Some(bundle);
+        self
+    }
+
     /// Add features to enable.
     ///
     /// # Arguments
@@ -296,9 +342,11 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
         BuilderContext {
             workspace_root: self.workspace_root,
             platform: self.platform.0,
+            target: self.target,
             profile: self.profile.0,
             features: self.features,
             output_dir,
+            bundle: self.bundle,
         }
     }
 }

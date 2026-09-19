@@ -14,6 +14,9 @@ categories = ["development-tools::build-utils"]
 # All dependencies from workspace
 thiserror.workspace = true
 serde_json.workspace = true
+# Reading `[package].name` / `[[bin]].name` from a project manifest to resolve
+# the executable cargo will emit. Same pinned version `flui-cli` already uses.
+toml = "1.1"
 tracing.workspace = true
 tokio = { workspace = true, features = ["process", "io-util"] }
 which.workspace = true

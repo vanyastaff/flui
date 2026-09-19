@@ -22,6 +22,8 @@ pub struct CreateOptions {
     /// never fails the command — so skipping it changes nothing about the
     /// scaffold, only how long `create` takes.
     pub skip_check: bool,
+    /// Generate the Flutter-parity hot-reload workspace (host/worker/types).
+    pub hot_reload: bool,
 }
 
 /// Execute the create command.
@@ -53,6 +55,7 @@ pub fn execute(
         local,
         lib: _is_lib,
         skip_check,
+        hot_reload,
     } = options;
     cliclack::intro(style(" flui create ").on_cyan().black())?;
     cliclack::log::info(format!("Project: {}", style(&project_name).cyan()))?;
@@ -86,6 +89,7 @@ pub fn execute(
         .template(template)
         .local(local)
         .platforms(platform_names)
+        .hot_reload(hot_reload)
         .with_git(false)
         .with_cargo_check(false)
         .generate(project_dir)?;

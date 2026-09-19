@@ -43,3 +43,44 @@ template that only passes snapshot tests.
 - Cargo dependency names are hyphenated (`flui-app`). Anything sniffing a
   generated `Cargo.toml` must not match on `flui_app` alone — see
   `has_flui_dependency` in `src/commands/run.rs`.
+- **`flui build` must enter a tokio runtime before driving any `flui-build`
+  builder.** The builders shell out through `tokio::process`; `pollster` drives
+  the future but installs no reactor, so without the runtime every build path
+  panicked "there is no reactor running". See `commands/build.rs::execute`.
+- **`--example`/`--package` select the cargo unit.** The FLUI source tree's
+  runnable entry points are examples, not a binary package, so a bare
+  `flui build desktop` there is refused with a message naming the flag
+  (`ensure_resolvable_target`). A generated project needs neither.
+- **`flui create --hot-reload` emits a three-crate *workspace*** (types +
+  logic + host), not one crate. `tests/cli_create.rs` gates it with a real
+  `cargo check --workspace`, same rule as the single-crate templates.
+- **`flui build macos` stages a `.app`**, reading identity from `flui.toml`'s
+  `[app]` section. `flui build macos --universal` builds both darwin slices and
+  fuses them with `lipo`.
+- **`flui build ios` shells out to `IOSBuilder`** and builds the current
+  package's static library for `aarch64-apple-ios` (or both slices with
+  `--universal`). It is not the deprecated "not yet supported" message it once
+  printed.
+- **Worker hot reload stages at a content-addressed path.** `flui run`'s worker
+  mode does not load `target/<profile>/lib<worker>.dylib` directly; it copies
+  each build to `{stem}-hot-{fnv1a-hash}{ext}` (hash over the built bytes) and
+  writes that path into the `.flui_worker_plugin` sidecar. The changing name is
+  what defeats macOS's deferred-unmap dyld (a same-path reload can serve the
+  retained image). Identical bytes reuse the file untouched; superseded versions
+  are pruned best-effort. Do **not** reintroduce fixed A/B staging slots — they
+  stop changing path once both exist. The initial launch and every restart also
+  load a staged copy (never the canonical file), so cargo can overwrite the
+  canonical output on every platform while the host holds the staged one mapped.
+  On macOS each staged dylib is ad-hoc `codesign`ed best-effort (defensive; cargo
+  already linker-signs). See `stage_worker_artifact` in `src/commands/run.rs`.
+- **The worker and host must be built in ONE cargo invocation.** `flui run`
+  always builds them together (`cargo build -p worker -p host`), because cargo
+  unifies dependency features **per invocation** and Rust's `TypeId` is stable
+  only within one compiled instance of a crate. Building the worker separately
+  (or into an isolated `--target-dir`) can give the worker a different instance
+  of `flui-widgets`/`flui-view` than the host; the worker's
+  `TypeId::of::<GestureArenaScope>()` then misses the host's `HashMap<TypeId,
+  ElementId>`, and the first frame panics with "gesture consumers must be mounted
+  beneath GestureArenaScope". This is why `run_cargo_build_packages` takes a
+  slice of packages and why the old `worker-isolated-target-dir` scheme is gone.
+  Do not split the build back into per-package calls.

@@ -286,6 +286,7 @@ impl PlatformBuilder for AndroidBuilder {
 
         Ok(BuildArtifacts {
             rust_libs,
+            executable: None,
             metadata: serde_json::json!({}),
         })
     }

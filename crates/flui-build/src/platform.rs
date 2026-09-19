@@ -21,12 +21,88 @@ pub struct BuilderContext {
     pub workspace_root: PathBuf,
     /// Target platform to build for
     pub platform: Platform,
+    /// Which cargo package or example to compile.
+    pub target: BuildUnit,
     /// Build profile (debug or release)
     pub profile: Profile,
     /// Cargo features to enable
     pub features: Vec<String>,
     /// Output directory for build artifacts
     pub output_dir: PathBuf,
+    /// Application bundle metadata, when the target stages a platform bundle.
+    ///
+    /// `None` keeps the backend's plain-artifact behaviour (a bare executable
+    /// copy). On macOS a `Some` stages a `.app` whose `Info.plist` names the
+    /// application — the bundle a double-clickable, foreground-activatable app
+    /// needs, and which a bare Mach-O cannot substitute for.
+    pub bundle: Option<AppBundle>,
+}
+
+/// Identity an application bundle is staged under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppBundle {
+    /// Human-readable application name (the `.app` stem and `CFBundleName`).
+    pub name: String,
+    /// Reverse-DNS bundle identifier (`CFBundleIdentifier`).
+    pub identifier: String,
+}
+
+impl AppBundle {
+    /// Create bundle metadata from a display name and an org id.
+    ///
+    /// The identifier is `{identifier_prefix}.{slug}` with the name slugged to
+    /// lowercase alphanumerics — the shape a bundle id may legally take, so a
+    /// name like `My App` does not produce an invalid plist value.
+    #[must_use]
+    pub fn new(name: &str, identifier_prefix: &str) -> Self {
+        let slug: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let slug = slug.trim_matches('-').to_string();
+        Self {
+            name: name.to_string(),
+            identifier: format!("{identifier_prefix}.{slug}"),
+        }
+    }
+}
+
+/// What cargo should compile within the workspace.
+///
+/// A desktop build produces an *executable*, and which executable differs by
+/// call site: a generated application project has one binary package, while the
+/// FLUI source tree is a workspace whose runnable entry points are examples.
+/// This is the knob that keeps `DesktopBuilder` from hard-coding one of them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum BuildUnit {
+    /// Build the current package's default binary (`cargo build` in
+    /// `workspace_root`).
+    #[default]
+    DefaultBinary,
+    /// Build the named workspace package's binary (`cargo build -p NAME`).
+    Package(String),
+    /// Build the named example of the current package
+    /// (`cargo build --example NAME`).
+    Example(String),
+}
+
+impl BuildUnit {
+    /// The cargo arguments that select this target.
+    #[must_use]
+    pub fn cargo_args(&self) -> Vec<String> {
+        match self {
+            Self::DefaultBinary => Vec::new(),
+            Self::Package(name) => vec!["-p".to_string(), name.clone()],
+            Self::Example(name) => vec!["--example".to_string(), name.clone()],
+        }
+    }
 }
 
 /// Platform to build for
@@ -148,6 +224,11 @@ impl TryFrom<&str> for Platform {
 pub struct BuildArtifacts {
     /// Paths to compiled Rust libraries (.so, .dll, .dylib, .wasm)
     pub rust_libs: Vec<PathBuf>,
+    /// Path to a compiled executable, when the target produces one.
+    ///
+    /// Desktop builds produce an executable; mobile/web builds produce
+    /// libraries consumed by a platform bundle step and leave this `None`.
+    pub executable: Option<PathBuf>,
     /// Platform-specific metadata (JSON)
     pub metadata: serde_json::Value,
 }
@@ -193,4 +274,27 @@ pub trait PlatformBuilder: private::Sealed + Send + Sync {
 
     /// Clean build artifacts
     async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_target_default_is_the_current_packages_binary() {
+        assert_eq!(BuildUnit::default(), BuildUnit::DefaultBinary);
+        assert!(BuildUnit::DefaultBinary.cargo_args().is_empty());
+    }
+
+    #[test]
+    fn build_target_maps_to_its_cargo_selector() {
+        assert_eq!(
+            BuildUnit::Package("my-app".to_string()).cargo_args(),
+            vec!["-p".to_string(), "my-app".to_string()]
+        );
+        assert_eq!(
+            BuildUnit::Example("material_demo".to_string()).cargo_args(),
+            vec!["--example".to_string(), "material_demo".to_string()]
+        );
+    }
 }
