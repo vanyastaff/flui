@@ -9,6 +9,21 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### Headless explicit quit consumes its callback outside platform state
+
+`HeadlessPlatform::quit` uses the same take-then-invoke discipline as its window
+close and exit-policy re-evaluation paths: it marks the loop stopped and takes
+the current quit callback under the state lock, then invokes and drops it after
+the lock is released. Recursive or repeated quit does not re-invoke that
+registration. This is consumption of the existing callback slot, not a new
+process-wide latch; registering a later callback still replaces the slot.
+Callback panics propagate to the Rust caller after releasing state, and the
+consumed callback is not restored. Tests exercise the actual `Platform::quit`
+seam with a reentrant getter/quit, a captured-data drop sentinel, and an original
+panic payload. Their first nonblocking lock assertion makes a regression fail
+immediately instead of hanging while trying to re-enter the same mutex.
+
+
 ### Standalone AppKit stops its loop and returns through Rust cleanup
 
 The existing `Platform` exit-policy hook remains the boundary: `flui-app`

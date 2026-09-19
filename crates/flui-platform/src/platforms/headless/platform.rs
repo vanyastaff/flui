@@ -225,10 +225,15 @@ impl Platform for HeadlessPlatform {
     fn quit(&self) {
         tracing::info!("Quitting headless platform");
 
-        self.with_state(|state| {
+        // Consume before calling: callback bodies and captured-data destructors
+        // may re-enter the platform. Matches the close/reevaluation quit paths.
+        let callback = self.with_state(|state| {
             state.is_running = false;
-            state.handlers.invoke_quit();
+            state.handlers.quit.take()
         });
+        if let Some(mut callback) = callback {
+            callback();
+        }
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
@@ -1468,6 +1473,86 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
+
+    #[test]
+    fn explicit_quit_reenters_and_drops_its_callback_outside_the_state_lock() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        struct CallbackDrop {
+            platform: std::sync::Weak<HeadlessPlatform>,
+            released: Arc<AtomicBool>,
+        }
+        impl Drop for CallbackDrop {
+            fn drop(&mut self) {
+                let platform = self
+                    .platform
+                    .upgrade()
+                    .expect("platform still owned by test");
+                // Record rather than assert in Drop: on RED the callback body
+                // itself panics, so a second panic here would abort the process.
+                self.released
+                    .store(platform.state.try_lock().is_some(), Ordering::SeqCst);
+            }
+        }
+        let platform = Arc::new(HeadlessPlatform::new());
+        platform.state.lock().is_running = true;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let released = Arc::new(AtomicBool::new(false));
+        let callback_drop = CallbackDrop {
+            platform: Arc::downgrade(&platform),
+            released: Arc::clone(&released),
+        };
+        let callback_platform = Arc::clone(&platform);
+        let callback_calls = Arc::clone(&calls);
+        platform.on_quit(Box::new(move || {
+            let _ = &callback_drop;
+            assert!(
+                callback_platform.state.try_lock().is_some(),
+                "quit callback must run outside the state lock"
+            );
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            let _appearance = callback_platform.window_appearance();
+            callback_platform.quit();
+        }));
+        platform.quit();
+        platform.quit();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the registered callback is consumed before reentry"
+        );
+        assert!(
+            released.load(Ordering::SeqCst),
+            "captured callback data drops outside the state lock"
+        );
+        assert!(!platform.state.lock().is_running);
+    }
+
+    #[test]
+    fn explicit_quit_preserves_callback_panic_without_restoring_the_callback() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let platform = Arc::new(HeadlessPlatform::new());
+        platform.state.lock().is_running = true;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let callback_platform = Arc::clone(&platform);
+        let callback_calls = Arc::clone(&calls);
+        platform.on_quit(Box::new(move || {
+            assert!(
+                callback_platform.state.try_lock().is_some(),
+                "quit callback must run outside the state lock"
+            );
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            panic!("intentional headless quit panic");
+        }));
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| platform.quit()))
+            .expect_err("callback panic remains observable to the Rust caller");
+        assert_eq!(
+            panic.downcast_ref::<&str>(),
+            Some(&"intentional headless quit panic")
+        );
+        assert!(!platform.state.lock().is_running);
+        platform.quit();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn separate_headless_platforms_mint_distinct_window_ids() {
