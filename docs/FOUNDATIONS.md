@@ -1,4 +1,4 @@
-[STRATEGY](../STRATEGY.md) · [Port Methodology](PORT.md) · [Roadmap →](ROADMAP.md) · [Back to README](../README.md)
+[Port Methodology](PORT.md) · [Roadmap →](ROADMAP.md) · [Back to README](../README.md)
 
 # FLUI Architecture Foundations
 
@@ -13,7 +13,7 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 - **Benchmark / floor — released Flutter.** `.flutter/flutter-master/packages/flutter/lib/src/` is a shipped, mature product (~480k LOC of framework logic across 12 packages) with a test corpus to match. It defines the *minimum* observable behavior and the cheapest oracle for it; it does not define the ceiling, the architecture, or the idiom. FLUI is measured as *at least* this, and expected to be more.
 - **Target — the complete FLUI.** Flutter's behavior as the floor, Rust-native structure, and **better than Flutter wherever a better solution is known** — in functionality, architecture, and code style — with every improvement recorded (ADR / `## Mapping decisions`) and its oracle replaced by a FLUI test.
 - **Current code — a flawed head start.** The existing 21 crates are an inventory, not an anchor. Where the current code matches the target it is kept (a genuine head start — the render *machine* is gold-standard); where it does not, that is an unbuilt or wrong delta of **low narrative weight**, closed as normal construction reaches it. The current code does not anchor the target architecture — the target does. Where current-code defect *patterns* inform the standing quality discipline of Part VI, that is deliberate and forward-looking: a rule that refuses an observed mistake protects the finished product.
-- **The three architectural rules** (from [`STRATEGY.md`](../STRATEGY.md)): *behavior as floor, everything else designed for Rust* (observable contracts from `.flutter/` are the minimum, improved wherever a better solution is known and the improvement is recorded and tested), *compile-time over runtime*, *sync hot path, async at the edges*. What "better" may never cost is an edge case lost by accident: a Flutter behavior is dropped only by decision, with its test replaced.
+- **The three architectural rules**: *behavior as floor, everything else designed for Rust* (observable contracts from `.flutter/` are the minimum, improved wherever a better solution is known and the improvement is recorded and tested), *compile-time over runtime*, *sync hot path, async at the edges*. What "better" may never cost is an edge case lost by accident: a Flutter behavior is dropped only by decision, with its test replaced.
 
 **Backing research** (read for the per-decision depth this document synthesizes):
 
@@ -29,7 +29,7 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 | [`research/2026-08-01-ui-runtime-evolution-study.md`](research/2026-08-01-ui-runtime-evolution-study.md) | Cross-framework runtime, multi-window, concurrency, embedding, and frame-pacing evidence |
 | [`research/2026-08-01-runtime-architecture-execution-plan.md`](research/2026-08-01-runtime-architecture-execution-plan.md) | Dependency-ordered completion plan for ADR-0027/0037 and hostable runtime foundations |
 
-**Grounding.** Architecture decisions in this document are graded against *A Philosophy of Software Design* (Ousterhout) — deep vs shallow modules, information hiding, "different layer, different abstraction" — the canonical Rust corpus named in [`CLAUDE.md`](../CLAUDE.md) (*Programming Rust*, *Rust for Rustaceans*, *Rust Atomics and Locks*, *The Rust Performance Book*), and the Rust API Guidelines. [`STRATEGY.md`](../STRATEGY.md) is the product-philosophy anchor: FLUI's product is developer experience, and the success metric is whether an external contributor finds the mental model legible from outside.
+**Grounding.** Architecture decisions in this document are graded against *A Philosophy of Software Design* (Ousterhout): deep vs shallow modules, information hiding, "different layer, different abstraction". The other anchors are the canonical Rust corpus (*Programming Rust*, *Rust for Rustaceans*, *Rust Atomics and Locks*, *The Rust Performance Book*) and the Rust API Guidelines. FLUI's product is developer experience: the success metric is whether an external contributor finds the mental model legible from outside.
 
 ---
 
@@ -75,8 +75,8 @@ A port is not a transliteration. Flutter's *behavior* is the specification; Flut
 | 5 | **Dispatch** | Open class hierarchies | Sealed traits (`Arity`, `PlatformBuilder`); enum dispatch over `dyn` by default | Exhaustive `match`; the closed set is enforced; `dyn` is the justified exception, not the default. *Rust for Rustaceans* — sealed traits. |
 | 6 | **Resource lifecycle** | Manual `LayerHandle` ref-counting; GC for everything else | RAII — `Drop`; `LayerHandle<L>` releases the retained engine layer deterministically | Deterministic release is **more correct** than Dart's manual ref-counting and removes a whole class of leak. *Programming Rust* — RAII guards. |
 | 7 | **Frame cadence** | Event-driven | `ControlFlow::Wait` — an idle UI burns zero CPU; render only when dirty | Battery and thermal headroom by construction; Constitution Principle 7. |
-| 8 | **Developer surface** | One import: `package:flutter/material.dart` | A `flui` **facade crate** + `flui::prelude`; app authors depend on one crate, framework authors on the granular crates | A 24-crate workspace presents as a single dependency to an app author — the `STRATEGY.md` legibility metric, served. GPUI/`xilem` facade precedent. |
-| 9 | **No GC** | GC pauses possible mid-frame | Sync render hot path, arena allocation, zero hot-path allocations after build | Predictable frame budget; no GC jank. *STRATEGY.md* — sync hot path. |
+| 8 | **Developer surface** | One import: `package:flutter/material.dart` | A `flui` **facade crate** + `flui::prelude`; app authors depend on one crate, framework authors on the granular crates | A 24-crate workspace presents as a single dependency to an app author — the product legibility metric, served. GPUI/`xilem` facade precedent. |
+| 9 | **No GC** | GC pauses possible mid-frame | Sync render hot path, arena allocation, zero hot-path allocations after build | Predictable frame budget; no GC jank. Sync hot path. |
 
 These are not "nice to have." Items 1, 2, and 4 are *contracts* — they are baked into the `View`/`RenderBox` trait surfaces and cannot be added later without a rewrite. They are settled in Part III.
 
@@ -88,7 +88,7 @@ These nine decisions are the "right contract." Each is committed by the **first 
 
 ### C1 — Reactivity: `setState` canonical, signals out, `memoize` added
 
-Flutter's `setState` + `InheritedWidget` + depth-ordered dirty-element list is the **sole** canonical state model. The catalog crates — `flui-widgets`, `flui-material`, `flui-cupertino` — never take a dependency on a signals crate. `STRATEGY.md` mandates this explicitly ("Not working on" → «Смена mental model для пользователя фреймворка»: signals are not the *external* model; the mechanisms beneath it are open to improvement with the ledger); the ecosystem research confirms it (Xilem converged away from signals; Druid died of the `Data: Clone + PartialEq` constraint-creep). **The one addition:** Xilem's `memoize`, surfaced as the typed `View::can_update` of Part II item 4 plus a `Memo<V>` combinator — Flutter's own internal short-circuit, made first-class. Application state carries **no trait bound beyond `'static`** — the Druid mistake is the one most dangerous trap; do not repeat it. Signals are not banned outright: an *application-author* signal crate that drives `Element::mark_needs_build` from outside the catalog is a permitted post-parity opt-in, gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`. What is locked is the catalog's independence from signals — not a blanket language prohibition.
+Flutter's `setState` + `InheritedWidget` + depth-ordered dirty-element list is the **sole** canonical state model. The catalog crates — `flui-widgets`, `flui-material`, `flui-cupertino` — never take a dependency on a signals crate. This is mandated explicitly: signals are not the *external* model, and the mechanisms beneath it are open to improvement; the ecosystem research confirms it (Xilem converged away from signals; Druid died of the `Data: Clone + PartialEq` constraint-creep). **The one addition:** Xilem's `memoize`, surfaced as the typed `View::can_update` of Part II item 4 plus a `Memo<V>` combinator — Flutter's own internal short-circuit, made first-class. Application state carries **no trait bound beyond `'static`** — the Druid mistake is the one most dangerous trap; do not repeat it. Signals are not banned outright: an *application-author* signal crate that drives `Element::mark_needs_build` from outside the catalog is a permitted post-parity opt-in, gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`. What is locked is the catalog's independence from signals — not a blanket language prohibition.
 
 ### C2 — Heterogeneous children: a `ViewSeq` trait with two load-bearing paths
 
@@ -316,14 +316,13 @@ The **Mythos methodology** (audit → design → plan → atomic-commit waves, `
 
 This document is the **architecture contract** for the port. Its relationship to the other governing documents:
 
-- [`STRATEGY.md`](../STRATEGY.md) — *why* (target problem, the three architectural rules, product philosophy). Upstream of this document.
 - **`FOUNDATIONS.md`** (this document) — *what* (the target architecture, the locked contracts, the crate graph).
 - [`PORT.md`](PORT.md) — *how* (the port methodology, refusal triggers, mapping rules).
 - [`ROADMAP.md`](ROADMAP.md) — *when / in what order* (the dependency-ordered construction phases).
 - [`AGENTS.md`](../AGENTS.md) — the cross-tool ratified rules living in this checkout today. (There is no `.specify/memory/constitution.md` here — that path, and the amendment it once needed, are stale; `AGENTS.md` is kept current directly instead.)
 
-**Amendment.** A change to a locked contract (Part III) or the target crate graph (Part IV) requires: documented rationale, a corresponding `STRATEGY.md`/`PORT.md`/constitution sync if affected, and — once construction has begun — an explicit migration assessment, because a contract change after Phase 1 has catalog-wide blast radius. The contracts are locked precisely so that they are *not* casually amended.
+**Amendment.** A change to a locked contract (Part III) or the target crate graph (Part IV) requires: documented rationale, a corresponding `PORT.md` sync if affected, and — once construction has begun — an explicit migration assessment, because a contract change after Phase 1 has catalog-wide blast radius. The contracts are locked precisely so that they are *not* casually amended.
 
 ---
 
-[STRATEGY](../STRATEGY.md) · [Port Methodology](PORT.md) · [Roadmap →](ROADMAP.md) · [Back to README](../README.md)
+[Port Methodology](PORT.md) · [Roadmap →](ROADMAP.md) · [Back to README](../README.md)

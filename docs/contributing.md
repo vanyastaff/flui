@@ -8,16 +8,11 @@ Welcome! This page is the working agreement for changes to FLUI: how to plan, co
 
 Before opening a PR or even a planning issue, read:
 
-1. [`STYLE.md`](../STYLE.md) — **Rust engineering standard**: API design,
-   ownership, safety, concurrency, errors, performance, documentation, and
-   testing.
-2. [`docs/FOUNDATIONS.md`](FOUNDATIONS.md) — **architecture contract**: target architecture, locked contracts (C1–C9), target crate graph (Part IV).
-3. [`docs/ROADMAP.md`](ROADMAP.md) — **construction plan**: dependency-ordered phases that move the workspace from current state to the target.
-4. [`STRATEGY.md`](../STRATEGY.md) — product strategy and the three architectural rules ("Flutter is the reference and the oracle, not the ceiling").
-5. [`docs/PORT.md`](PORT.md) — port methodology, refusal triggers, per-crate `ARCHITECTURE.md` template.
-6. [`AGENTS.md`](../AGENTS.md) — the non-negotiable rules of this workspace: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, no polling render loops. `docs/FOUNDATIONS.md` (item 2 above) carries the full rule and anti-pattern reference.
-7. [`CLAUDE.md`](../CLAUDE.md) — Claude Code-specific guidance for this repo (build commands, troubleshooting).
-8. [Architecture overview](architecture.md) and [Crates Map](crates.md) — high-level orientation (current-state).
+1. [`docs/FOUNDATIONS.md`](FOUNDATIONS.md) — **architecture contract**: target architecture, the three architectural rules, locked contracts (C1–C9), target crate graph (Part IV).
+2. [`docs/ROADMAP.md`](ROADMAP.md) — **construction plan**: dependency-ordered phases that move the workspace from current state to the target.
+3. [`docs/PORT.md`](PORT.md) — port methodology, refusal triggers, per-crate `ARCHITECTURE.md` template.
+4. [`AGENTS.md`](../AGENTS.md) — the non-negotiable rules of this workspace: layered DAG, `unsafe` boundaries, no `unwrap()` / `println!`, no polling render loops, and the build/CI commands. `docs/FOUNDATIONS.md` (item 1 above) carries the full rule and anti-pattern reference.
+5. [Architecture overview](architecture.md) and [Crates Map](crates.md) — high-level orientation (current-state).
 
 ## Quality Gates
 
@@ -95,14 +90,11 @@ Allowed prefixes: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`. The option
 
 ## Code Style
 
-[`STYLE.md`](../STYLE.md) is the single workspace-wide Rust engineering
-standard. It covers naming, API design, ownership, errors and panics, unsafe
-proofs, concurrency, async code, lifecycle, performance, diagnostics,
-documentation, testing, features, and security.
-
-`rustfmt.toml`, `clippy.toml`, workspace lints, the architecture contract that ships with each crate,
-and accepted ADRs provide the mechanically enforced and subsystem-specific
-parts of that contract. Do not copy a subset into a crate and let it drift.
+`STYLE.md` was retired in 2026-09. What governs a change here is the enforced set: `rustfmt.toml`,
+`clippy.toml`, the workspace lints, `just port-check`'s architecture refusal triggers, the
+architecture contract that ships with each crate, and accepted ADRs — plus the studio's path-scoped
+Rust standards, injected when you edit a matching file. Do not copy a subset into a crate and let it
+drift.
 
 ## Architectural Constraints
 

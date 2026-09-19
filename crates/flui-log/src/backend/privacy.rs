@@ -46,16 +46,15 @@
 //! message is treated as the format-string analogue and published verbatim.
 //! That leaves one residual hole this module cannot close: first-party code
 //! interpolating a user-provided value *into the message*
-//! (`info!("loading {path}")`) publishes it. STYLE.md §17 already requires
-//! machine-readable values to be structured fields rather than message
-//! interpolations, which is what keeps this hole theoretical *for code this
-//! workspace reviews*.
+//! (`info!("loading {path}")`) publishes it. Machine-readable values are
+//! required to be structured fields rather than message interpolations, which
+//! keeps this hole theoretical *for code this workspace reviews*.
 //!
 //! No such rule binds a dependency. A record arriving through the `log`
 //! compatibility bridge is a third party's `log::info!("loading {}", path)`
 //! with the interpolation already flattened into `message` — free-form text
-//! from code that cannot carry a marker and was never reviewed against
-//! STYLE.md. Native `os_log` would have redacted exactly that dynamic string,
+//! from code that cannot carry a marker and was never reviewed against those
+//! requirements. Native `os_log` would have redacted exactly that dynamic string,
 //! so a bridged message is classified [`Private`](FieldPrivacy::Private), with
 //! deliberately no opt-out: the third party cannot classify its own text, and
 //! the embedding application should not vouch for text it does not produce.

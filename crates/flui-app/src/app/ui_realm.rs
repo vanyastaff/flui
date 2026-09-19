@@ -663,8 +663,8 @@ fn input_dropped_by_lifecycle(
 }
 
 /// A safe, content-free discriminator for a [`PlatformInput`] — never the
-/// payload itself. STYLE.md forbids logging text-input/IME and drag-and-drop
-/// payloads; this is the only thing about an input event that may reach a
+/// payload itself. Logging text-input/IME payloads and drag-and-drop payloads
+/// is forbidden; this is the only thing about an input event that may reach a
 /// trace/log line. Moved here from the retired `AppBinding`, unchanged.
 fn input_kind(input: &PlatformInput) -> &'static str {
     match input {

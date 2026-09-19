@@ -2,8 +2,8 @@
 #
 # CodeRabbit configuration for FLUI.
 #
-# The substance of what a reviewer must know lives in AGENTS.md, STYLE.md,
-# docs/PORT.md and docs/FOUNDATIONS.md — this file points CodeRabbit at them
+# The substance of what a reviewer must know lives in AGENTS.md, docs/PORT.md
+# and docs/FOUNDATIONS.md — this file points CodeRabbit at them
 # (knowledge_base.code_guidelines) and encodes the few things a document
 # cannot: which paths are worth reviewing, and which repo-specific gates a
 # pull request has to clear.
@@ -174,8 +174,8 @@ reviews:
   path_instructions:
     - path: "**/*.rs"
       instructions: |
-        Workspace-wide Rust rules. STYLE.md is the engineering standard;
-        docs/PANIC-POLICY.md governs panics. Flag, with a failure scenario:
+        Workspace-wide Rust rules; docs/PANIC-POLICY.md governs panics. Flag,
+        with a failure scenario:
 
         - `unwrap()` on a production path. The house form is
           `expect("BUG: <invariant>")` for an internal invariant that cannot
@@ -658,15 +658,13 @@ knowledge_base:
     scope: local
   code_guidelines:
     enabled: true
-    # A bare string entry is directory-scoped: `**/AGENTS.md` makes the root
-    # guide repo-wide and each crate's guide apply to that crate only. Object
-    # entries map a document to the paths it governs. The read budget is 50
-    # files per review after glob expansion — keep additions scoped.
+    # A bare string entry is directory-scoped: `**/AGENTS.md` resolves to the
+    # root guide, which is repo-wide. Object entries map a document to the
+    # paths it governs. The read budget is 50 files per review after glob
+    # expansion — keep additions scoped.
     filePatterns:
       - "**/AGENTS.md"
-      - "**/CLAUDE.md"
       - "**/ARCHITECTURE.md"
-      - "STYLE.md"
       - files: "docs/PORT.md"
         applyTo: "crates/**/*.rs,platforms/**/*.rs,src/**/*.rs"
       - files: "docs/FOUNDATIONS.md"
@@ -677,8 +675,6 @@ knowledge_base:
         applyTo: "**/tests/**,**/*_test.rs,**/*_tests.rs,crates/flui-testing/**"
       - files: "docs/workspace-layers.toml"
         applyTo: "**/Cargo.toml"
-      - files: "STRATEGY.md"
-        applyTo: "docs/adr/*.md,docs/*.md"
 
 code_generation:
   docstrings:

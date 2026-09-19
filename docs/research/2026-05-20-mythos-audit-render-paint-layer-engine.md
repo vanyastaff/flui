@@ -397,7 +397,7 @@ thread_local! { static SUPERELLIPSE_CACHE: RefCell<SuperellipseCache> = ...; }
 
 ### 💀 [DOC DRIFT | LOW]: `CLAUDE.md` claims crates disabled when all 4 are active
 
-[`CLAUDE.md`](../../CLAUDE.md) — "Active crates: flui-painting, flui-layer ...; Temporarily disabled: flui-rendering, flui-view, ..." but [`Cargo.toml`](../../Cargo.toml) lists all 4 as ACTIVE.
+`CLAUDE.md` — "Active crates: flui-painting, flui-layer ...; Temporarily disabled: flui-rendering, flui-view, ..." but [`Cargo.toml`](../../Cargo.toml) lists all 4 as ACTIVE.
 
 **Recommendation:** **update CLAUDE.md** — current crate status. Trivial fix.
 
@@ -460,7 +460,7 @@ thread_local! { static SUPERELLIPSE_CACHE: RefCell<SuperellipseCache> = ...; }
 1. **Delete commented-out RenderObject impl** in [render_view.rs:524-720+](../../crates/flui-rendering/src/view/render_view.rs). Pure comment removal.
 2. **Delete `IntrinsicProtocol` and `BaselineProtocol`** from [protocol/protocol.rs:91,106](../../crates/flui-rendering/src/protocol/protocol.rs) plus prelude/lib.rs/protocol/mod.rs re-exports.
 3. **Delete `RenderDirtyPropagation` trait + propagation.rs entirely** ([storage/state/propagation.rs](../../crates/flui-rendering/src/storage/state/propagation.rs)). Remove `pub use propagation::RenderDirtyPropagation;` from [storage/state/mod.rs:152](../../crates/flui-rendering/src/storage/state/mod.rs). Rewrite tests in [storage/state/tests.rs](../../crates/flui-rendering/src/storage/state/tests.rs) — replace MockTree paths with direct `AtomicRenderFlags` assertions, or delete tests that exist only to exercise the trait.
-4. **Update [CLAUDE.md](../../CLAUDE.md)** — set all four crates as ACTIVE; remove the outdated "disabled" notice.
+4. **Update `CLAUDE.md`** — set all four crates as ACTIVE; remove the outdated "disabled" notice.
 
 ### Step 2 — Privacy / API cleanup
 
@@ -873,7 +873,7 @@ Similarly, `RendererBinding` waits for the `flui-app` impl — it's a **migratio
 Repo-relative paths (clickable in markdown viewers):
 
 - [`Cargo.toml`](../../Cargo.toml)
-- [`CLAUDE.md`](../../CLAUDE.md)
+- `CLAUDE.md`
 - [`crates/flui-painting/src/lib.rs`](../../crates/flui-painting/src/lib.rs)
 - [`crates/flui-painting/src/clip_context.rs`](../../crates/flui-painting/src/clip_context.rs)
 - [`crates/flui-painting/src/tessellation.rs`](../../crates/flui-painting/src/tessellation.rs)

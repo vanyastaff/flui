@@ -1,4 +1,4 @@
-[← Foundations](FOUNDATIONS.md) · [Port Methodology](PORT.md) · [Strategy](../STRATEGY.md) · [Back to README](../README.md)
+[← Foundations](FOUNDATIONS.md) · [Port Methodology](PORT.md) · [Back to README](../README.md)
 
 # FLUI Port Roadmap
 
@@ -327,11 +327,11 @@ Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-
 
 ### Cross.P — Platform breadth
 
-**Goal.** Complete `flui-platform` backends — finish Windows/macOS, add native **Android + iOS** (mobile-native is a `STRATEGY.md` first-class commitment); engine backend breadth (DX12/Metal/Vulkan/WebGPU surface management). The winit fallback is now routed as the Linux path (`current_platform()` → `WinitPlatform` via `flui-app`'s target-scoped `winit-backend` feature; real window + Vulkan surface verified 2026-07-14) — native Wayland/X11 backends remain open items. **Entry:** none beyond `flui-types`. **Exit:** a trivial app runs on Windows, macOS, Linux, Android, iOS, Web with per-platform smoke tests. Platform work gates only each phase's *final on-device demonstration*, never the headless construction of the widget/material layers.
+**Goal.** Complete `flui-platform` backends — finish Windows/macOS, add native **Android + iOS** (mobile-native is a first-class commitment); engine backend breadth (DX12/Metal/Vulkan/WebGPU surface management). The winit fallback is now routed as the Linux path (`current_platform()` → `WinitPlatform` via `flui-app`'s target-scoped `winit-backend` feature; real window + Vulkan surface verified 2026-07-14) — native Wayland/X11 backends remain open items. **Entry:** none beyond `flui-types`. **Exit:** a trivial app runs on Windows, macOS, Linux, Android, iOS, Web with per-platform smoke tests. Platform work gates only each phase's *final on-device demonstration*, never the headless construction of the widget/material layers.
 
 ### Cross.D — Developer tooling
 
-**Goal.** `STRATEGY.md`'s DX track — complete `flui-devtools` (inspector, frame profiler), `flui-build` (Android/iOS/Desktop/Web builders), `flui-cli` (`flui new`/`build`/`run`); harden `flui-hot-reload`. All four crates are already active workspace members (and default-members) — the remaining work is **functionality**, not crate re-enablement. **Honest serialization:** several flagship deliverables are gated downstream — the **frame profiler** cannot complete until App.1 ships the full vsync-driven frame loop, and **`flui-build`** depends on Cross.P's mobile backends for the Android/iOS targets. `flui new` scaffolding and hot-reload hardening genuinely run in parallel; the headline DX features are partially serialized behind App.1 and Cross.P. **Exit:** `flui new`/`build`/`run` work; inspector + profiler functional; hot-reload preserves scene state. `STRATEGY.md`'s DX-day-1 ambition holds for the bookkeeping; the full-functionality bar lands post-App.1.
+**Goal.** The DX track — complete `flui-devtools` (inspector, frame profiler), `flui-build` (Android/iOS/Desktop/Web builders), `flui-cli` (`flui new`/`build`/`run`); harden `flui-hot-reload`. All four crates are already active workspace members (and default-members) — the remaining work is **functionality**, not crate re-enablement. **Honest serialization:** several flagship deliverables are gated downstream — the **frame profiler** cannot complete until App.1 ships the full vsync-driven frame loop, and **`flui-build`** depends on Cross.P's mobile backends for the Android/iOS targets. `flui new` scaffolding and hot-reload hardening genuinely run in parallel; the headline DX features are partially serialized behind App.1 and Cross.P. **Exit:** `flui new`/`build`/`run` work; inspector + profiler functional; hot-reload preserves scene state. The DX-day-1 ambition holds for the bookkeeping; the full-functionality bar lands post-App.1.
 
 ### Cross.H — Foundation hardening
 
@@ -394,4 +394,4 @@ Progress is reported as **parity against `.flutter/`** — the scoreboard at the
 
 ---
 
-[← Foundations](FOUNDATIONS.md) · [Port Methodology](PORT.md) · [Strategy](../STRATEGY.md) · [Back to README](../README.md)
+[← Foundations](FOUNDATIONS.md) · [Port Methodology](PORT.md) · [Back to README](../README.md)

@@ -7,12 +7,11 @@ FLUI is a **port** of Flutter's three-tree architecture into Rust, not a redesig
 1. **Governance layer** — the rules the maintainer refuses to break at write time (refusal triggers), the lock-decision matrix, the per-crate documentation shape that records port decisions, and the index of which crate holds which mapping.
 2. **Operational translation manual** — the concrete Dart→Rust type map, idiom map, string discipline, error-shape canon, marker tier, and ecosystem-adoption table that turn a Dart file into a Rust file without ad-hoc per-unit re-derivation.
 
-PORT.md sits inside a four-document governance set:
+PORT.md sits inside a three-document governance set:
 
-1. [`STRATEGY.md`](../STRATEGY.md) — product strategy, the three architectural rules, "Flutter is the reference and the oracle, not the ceiling".
-2. [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architecture contract (target architecture, locked contracts, target crate graph).
-3. **`PORT.md` (this page)** — governance + operational translation manual.
-4. [`ROADMAP.md`](ROADMAP.md) — the construction plan (dependency-ordered phases from current to target).
+1. [`FOUNDATIONS.md`](FOUNDATIONS.md) — the architecture contract (target architecture, locked contracts, target crate graph, the three architectural rules).
+2. **`PORT.md` (this page)** — governance + operational translation manual.
+3. [`ROADMAP.md`](ROADMAP.md) — the construction plan (dependency-ordered phases from current to target).
 
 For the rule-by-rule architectural guide (workspace layers, anti-pattern code examples, dependency DAG), read [`FOUNDATIONS.md`](FOUNDATIONS.md) (`.ai-factory/ARCHITECTURE.md` does not exist in this checkout). This page does not restate the strategy or contract layers; it is the operational layer that hangs off them.
 
@@ -49,9 +48,9 @@ Triggers are seeded from observed friction in the workspace. Forward-looking tri
 
 ### 1. `RwLock` field on a type used inside `perform_layout` or `paint`
 
-**Why:** the render hot path is strictly synchronous (see [`STRATEGY.md`](../STRATEGY.md) clause "sync hot path, async на краях"). A lock on a per-node storage type held across `perform_layout` or `paint` serialises the pipeline against itself and removes the "many readers OR one writer" guarantee the hot path depends on. Shared infrastructure locks (`PipelineOwner`, `WidgetsBinding`, route plumbing) are different — they sit one level above per-node mutation and are covered in [Lock decisions](#lock-decisions).
+**Why:** the render hot path is strictly synchronous (the "sync hot path, async at the edges" rule). A lock on a per-node storage type held across `perform_layout` or `paint` serialises the pipeline against itself and removes the "many readers OR one writer" guarantee the hot path depends on. Shared infrastructure locks (`PipelineOwner`, `WidgetsBinding`, route plumbing) are different — they sit one level above per-node mutation and are covered in [Lock decisions](#lock-decisions).
 
-**Back-references:** the project constitution's v2.2.0 Anti-Patterns entry ("`Arc<Mutex<>>` for tree structures") — historical citation; `.specify/memory/constitution.md` no longer exists in this checkout, see [`AGENTS.md`](../AGENTS.md) for the current rule; [`STRATEGY.md`](../STRATEGY.md) "sync hot path".
+**Back-references:** the project constitution's v2.2.0 Anti-Patterns entry ("`Arc<Mutex<>>` for tree structures") — historical citation; `.specify/memory/constitution.md` no longer exists in this checkout, see [`AGENTS.md`](../AGENTS.md) for the current rule; the "sync hot path" rule.
 
 **Regex (used by `just port-check`):** `RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` (storage-shaped violations). Scope extended in Mythos Step 13 of the `flui-layer` chain to cover `crates/flui-layer/src/` and to match `dyn Layer` / `dyn ContainerLayer` shapes as well. Re-confirmed in Mythos Step 13 of the `flui-painting` chain to cover the post-split `crates/flui-painting/src/` subdirectories (`canvas/`, `display_list/`, `text_layout/`, `text_painter/`) as a forward-looking guard.
 
@@ -71,7 +70,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Why:** the same sync-hot-path clause. Async on these methods would force the scheduler to await within a frame budget critical path.
 
-**Back-references:** [`STRATEGY.md`](../STRATEGY.md) "sync hot path, async на краях"; permitted at IO (`flui-assets`), scheduler (`flui-scheduler`), build pipeline (`flui-build`) only.
+**Back-references:** the "sync hot path, async at the edges" rule; permitted at IO (`flui-assets`), scheduler (`flui-scheduler`), build pipeline (`flui-build`) only.
 
 **Regex:** `async\s+fn\s+(build|layout|paint|perform_layout|composite|render|fire_composition_callbacks)\b` constrained to `crates/flui-{rendering,view,painting,layer}/src/**`. Scope and verb set extended in Mythos Step 13 of the `flui-layer` chain to catch layer-level async (`composite`, `render`, `fire_composition_callbacks`). Re-confirmed in Mythos Step 13 of the `flui-painting` chain to recurse into the post-split `crates/flui-painting/src/` subdirectories (rg recurses naturally; verified via `bash scripts/port-check.sh -v`).
 
@@ -576,7 +575,7 @@ The general rule is: **a lock that protects shared infrastructure mutated outsid
 
 ## Mapping rules
 
-These are the rules the methodology uses to resolve Dart ↔ Rust translation conflicts at port time. They are operational summaries of the strategy clauses in [`STRATEGY.md`](../STRATEGY.md) — when a clause conflicts with a refactor proposal, the clause wins, and the proposal is reshaped.
+These are the rules the methodology uses to resolve Dart ↔ Rust translation conflicts at port time. They are operational summaries of the rules above — when a rule conflicts with a refactor proposal, the rule wins, and the proposal is reshaped.
 
 ### Flutter behaviour as the floor, with the improvement ledger
 
@@ -1197,7 +1196,6 @@ External references this methodology builds on:
 
 - [`AGENTS.md`](../AGENTS.md) — current anti-patterns and architectural rules. (`.specify/memory/constitution.md` v2.2.0 and `.ai-factory/ARCHITECTURE.md` were the historical originals; neither exists in this checkout.)
 - [`FOUNDATIONS.md`](FOUNDATIONS.md) — full anti-pattern list with code examples.
-- [`STRATEGY.md`](../STRATEGY.md) — port rationale, Bun precedent, three architectural clauses.
 - [`docs/plans/2026-03-31-core-crates-hardening.md`](plans/2026-03-31-core-crates-hardening.md) — `Weak<RwLock<PipelineOwner>>` precedent.
 - [`docs/plans/2026-03-31-platform-roadmap.md`](plans/2026-03-31-platform-roadmap.md) — `PlatformTextSystem` deletion precedent (source of the binding-deletion carve-out).
 - [`docs/plans/2026-03-31-custom-render-callback-design.md`](plans/2026-03-31-custom-render-callback-design.md) — canonical justified `Box<dyn>` exception template.
