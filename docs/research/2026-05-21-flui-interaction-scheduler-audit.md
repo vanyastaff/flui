@@ -2538,8 +2538,8 @@ Statistical summary:
 Repo-relative paths (clickable in markdown viewers):
 
 - [`Cargo.toml`](../../Cargo.toml) — workspace root
-- [`CLAUDE.md`](../../CLAUDE.md) — engineering standards
-- [`STRATEGY.md`](../../STRATEGY.md) — "Behavior loyal, structure Rust-native" + "Sync hot path, async на краях"
+- `CLAUDE.md` — engineering standards
+- `STRATEGY.md` — "Behavior loyal, structure Rust-native" + "Sync hot path, async на краях"
 - [`docs/research/2026-05-21-view-tree-foundation-audit.md`](2026-05-21-view-tree-foundation-audit.md) — shape reference (frontmatter, finding format, Project Map ASCII, Dead Code Table, Restructuring Plan, What to Preserve, Priority Order)
 - [`crates/flui-scheduler/Cargo.toml`](../../crates/flui-scheduler/Cargo.toml)
 - [`crates/flui-scheduler/src/lib.rs`](../../crates/flui-scheduler/src/lib.rs)

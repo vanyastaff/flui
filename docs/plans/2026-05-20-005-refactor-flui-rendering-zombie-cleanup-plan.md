@@ -185,7 +185,7 @@ In `state/mod.rs`:
 **Dependencies:** None — independent doc edit. Land last among code-cleanup commits for clean log shape.
 
 **Files:**
-- [CLAUDE.md](../../CLAUDE.md)
+- `CLAUDE.md`
 
 **Approach:**
 - **Move `flui-rendering` and `flui-view`** out of the "Temporarily disabled until integration complete" list at `CLAUDE.md` around line 35 into the appropriate "Active crates" subsections at lines 29-31 (`flui-rendering` belongs under "Framework"; `flui-view` belongs under "Framework").

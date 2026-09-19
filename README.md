@@ -155,7 +155,7 @@ pin, this section, and CI together (the procedure lives in
 | [Contributing](docs/contributing.md) | Constitution, commits, speckit workflow, AI Factory skills |
 
 For deep architectural rules (dependency DAG, pipeline contracts, anti-patterns) see [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md).
-For Claude Code-specific guidance (build commands, troubleshooting) see [`CLAUDE.md`](CLAUDE.md).
+For AI-agent guidance (build commands, architecture, troubleshooting) see [`AGENTS.md`](AGENTS.md).
 
 ## Community
 

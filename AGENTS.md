@@ -8,7 +8,7 @@
 
 Three rules, in priority order. They override convenience, never each other.
 
-1. **We take inspiration from Flutter; we do not match it.** The three-tree model (View → Element → Render), lifecycle, and the layout/paint/hit-test protocol are Flutter's ideas, and where they are good we start from them — but nothing is inherited wholesale. *Structure, architecture, and code style* are designed for Rust as it is now (Arity system, `NonZeroUsize` IDs, Slab arenas, `Result`/`thiserror`, and the divergences the ADRs record — ADR-0008, ADR-0018/21/30/37). Where we follow a Flutter contract, name which one and prove it with a test; where we improve on it — more type-safe, faster, safer, more ergonomic — the improvement is what the test asserts. Anything we improve on gets its reasoning written down: an ADR for a protocol-level contract, a `## Mapping decisions` entry in the crate's `ARCHITECTURE.md` for a local one. What is never acceptable is losing a behavior by accident — dropping one is a decision, recorded in the same place. What this rule protects unconditionally is the *framework user's* mental model: declarative widget composition over a retained three-tree, keys, lifecycle. See [`STRATEGY.md`](STRATEGY.md) and [`docs/PORT.md`](docs/PORT.md) §Mapping rules. Flutter source is optional reading, not a build dependency: `.flutter/` and `.gpui/` (Zed) are gitignored local clones, and a checkout at whatever revision you have beats none — but state the revision you actually read rather than implying a check you did not run.
+1. **We take inspiration from Flutter; we do not match it.** The three-tree model (View → Element → Render), lifecycle, and the layout/paint/hit-test protocol are Flutter's ideas, and where they are good we start from them — but nothing is inherited wholesale. *Structure, architecture, and code style* are designed for Rust as it is now (Arity system, `NonZeroUsize` IDs, Slab arenas, `Result`/`thiserror`, and the divergences the ADRs record — ADR-0008, ADR-0018/21/30/37). Where we follow a Flutter contract, name which one and prove it with a test; where we improve on it — more type-safe, faster, safer, more ergonomic — the improvement is what the test asserts. Anything we improve on gets its reasoning written down: an ADR for a protocol-level contract, a `## Mapping decisions` entry in the crate's `ARCHITECTURE.md` for a local one. What is never acceptable is losing a behavior by accident — dropping one is a decision, recorded in the same place. What this rule protects unconditionally is the *framework user's* mental model: declarative widget composition over a retained three-tree, keys, lifecycle. See [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md) Part I and [`docs/PORT.md`](docs/PORT.md) §Mapping rules. Flutter source is optional reading, not a build dependency: `.flutter/` and `.gpui/` (Zed) are gitignored local clones, and a checkout at whatever revision you have beats none — but state the revision you actually read rather than implying a check you did not run.
 2. **Search the market before settling.** Before adopting a design — Flutter's or your own — check what the current ecosystem does (Compose, SwiftUI, and the Rust frameworks: egui, Iced, Xilem/Masonry, Bevy UI, GPUI, Dioxus, Slint) and what the current Rust toolchain and crates offer, and pick the best-known shape, citing where it comes from. This applies to functionality, architecture, *and* code style alike: an idiom that is stable in today's Rust replaces the older pattern it supersedes. Breaking changes are cheap today and ossify once consumers exist; do not defer a better shape to "later". Where Flutter has *no strong contract* — animation curves, velocity prediction, color interpolation, input smoothing — Flutter is not even the baseline: propose the market-best abstraction directly. **Sanctioned leapfrog zones (ADR-0027):** multi-window ownership, runtime/scheduling topology, concurrency architecture, and presentation architecture — Flutter's widget-tree semantics are a starting point there, not a constraint; a review must not reject `UiRealm`-model divergence (realm-scoped GlobalKey/focus, per-realm schedulers) as forbidden drift.
 3. **Done means the behavior is verified and the reasoning is written down.** Before claiming completion, the change has a test that would fail without it, and any contract we chose over Flutter's is recorded (ADR / `## Mapping decisions`). "Better than Flutter" without that accounting is an unverified claim, exactly as "same as Flutter" would be. [Definition of Done](#definition-of-done-anti-cheating) is the checklist.
 
@@ -19,7 +19,6 @@ Three rules, in priority order. They override convenience, never each other.
 **Read this first.** Then pick your entry point from [Documentation](#documentation) below.
 
 - **Create a PR** — run `just ci` first and fix any failures before committing. A PR body may say `close(s)`/`fix(es)`/`resolve(s)` `#N` only when the merge is meant to close that issue: GitHub's linker ignores negation and surrounding prose ("PR4 closes #N" closed #N), so write `Refs #N` otherwise.
-- **Path-scoped reference lives in `.claude/rules/`** — `ci.md` (`.github/**`), `testing.md` (test files), `build-config.md` (`Cargo.toml` / `.cargo/**` / `rust-toolchain.toml`). Each loads only when you work with matching files, so it is *not* in context until then: open them deliberately when working near CI, tests, or build config.
 
 ---
 
@@ -89,7 +88,7 @@ Entry points by task, then the reference documents with no task of their own.
 | Change render/layout/paint | `docs/PORT.md` (translation rules, refusal triggers, type map) | `.flutter/` reference |
 | Understand error handling | `thiserror` in libs, `anyhow` in bins | |
 | Touch logging setup or a log backend | Subscriber policies, native sinks, who may depend on the backend | `docs/workspace-layers.toml` (only composition roots may depend on it) |
-| Write or review Rust code | `STYLE.md` | Relevant architecture contract |
+| Write or review Rust code | the Rust standards the studio injects on the file you edit | Relevant architecture contract |
 | Add a cross-crate dep | `docs/workspace-layers.toml` (the checked layer policy) | Root `Cargo.toml` `[workspace.dependencies]`, `docs/FOUNDATIONS.md` Part IV |
 | Add a new crate | `docs/workspace-layers.toml` — classify it *first*; `[[planned]]` records gated extractions | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
 | Catch up on recent changes | `CHANGELOG.md` | `docs/ROADMAP.md` |
@@ -103,12 +102,10 @@ Entry points by task, then the reference documents with no task of their own.
 
 ## AI Context Files
 
-`AGENTS.md` (this file) is the cross-tool guide, shared by every agent runtime. `CLAUDE.md`,
-`mimocode.jsonc`, and `.pi/settings.json` are thin per-runtime shims that point back here —
-**keep the substance in this file**, or the runtimes drift apart. The `.claude/rules/*.md` files are
-the one deliberate exception: content there is path-scoped and Claude-only, so it is invisible to
-the other runtimes and must stay task-scoped reference, never a directive. `STRATEGY.md` carries
-product strategy and the port rules behind the Prime Directive.
+`AGENTS.md` (this file) is the single agent guide, shared by every agent runtime. There are no
+per-runtime shims and no separate path-scoped rule files: **put the substance here and nowhere
+else**, or the runtimes drift apart. The Rust engineering standards that `STYLE.md` used to carry
+are injected by the Rust Code Studio plugin when you edit a matching file.
 
 ## Error Triage
 
@@ -116,7 +113,7 @@ When you hit a build/test error:
 
 1. **Port-check violation** → check `docs/PORT.md` for the trigger ID. The pattern you introduced is banned by the architecture contract.
 2. **Render-object harness failure** → every exported `RenderBox`/`RenderSliver` must appear in `RENDER_OBJECT_TYPES` with a matching `harness_*` test. See `crates/flui-rendering/docs/TESTING.md`.
-3. **Test flake** → the singleton family is retired, so a flake means a test is mutating a *genuinely* process-global resource (`Registry::global`, `FONT_SYSTEM` — named in `docs/runtime-contract.toml`'s ambient-reach ratchet), not a realm or scheduler. Add a lock scoped to that test module. Full reasoning, including the deleted test locks that are no longer worth searching for: `.claude/rules/testing.md`.
+3. **Test flake** → the singleton family is retired, so a flake means a test is mutating a *genuinely* process-global resource (`Registry::global`, `FONT_SYSTEM` — named in `docs/runtime-contract.toml`'s ambient-reach ratchet), not a realm or scheduler. Add a lock scoped to that test module. The deleted test locks are no longer worth searching for.
 4. **Type mismatch across crate boundary** → check if you're using the wrong ID type (1-based vs 0-based). See ID offset pattern above.
 
 Anything else — a clippy warning, `todo!()` on a production path, a banned pattern — is the architecture table above or the Rust standards the studio injects on the file you edit.

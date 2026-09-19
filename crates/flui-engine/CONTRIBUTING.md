@@ -2,8 +2,8 @@
 
 The GPU compositor: it turns a `flui_layer::Scene` into wgpu draw calls. This
 page is what you need beyond the workspace-wide
-[`CONTRIBUTING.md`](../../CONTRIBUTING.md) and
-[`STYLE.md`](../../STYLE.md) — how to build, test, and debug *this* crate.
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md) — how to build, test, and debug
+*this* crate.
 
 ## The three documents, and which one you want
 
@@ -11,7 +11,6 @@ page is what you need beyond the workspace-wide
 |---|---|
 | [`README.md`](README.md) | What are the entry points? Which one do I use? |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | How is it built inside — the module map, the record/replay split, ownership, mapping decisions, open items? |
-| [`AGENTS.md`](AGENTS.md) | What are the crate's hard constraints? (Written for AI agents; the constraints apply to you too.) |
 | this file | How do I compile, test, and debug a change? |
 
 ## Build

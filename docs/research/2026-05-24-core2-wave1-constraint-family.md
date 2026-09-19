@@ -18,7 +18,7 @@ with a coherent, parallelizable wave that:
    `AspectRatio` widget, `FractionallySizedBox` widget).
 3. Showcases Rust-native architectural improvements over Flutter's class
    hierarchy without breaking behavior loyalty
-   ([`STRATEGY.md`](../../STRATEGY.md)).
+   (`STRATEGY.md`).
 
 ## What was built
 

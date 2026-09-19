@@ -33,7 +33,7 @@ authors:
 >
 > The auditor classified `flui-tree`'s `Depth`/`AtomicDepth`, `Mountable`/`Unmountable` typestate, `TreeVisitor`/`TreeCursor`/`TreePath`/`ChildDiff`/`Node` traits as deletable (Finding #4, ~10K LOC). That recommendation contradicts the crate's design intent and is **inverted** for execution planning.
 >
-> Per [`STRATEGY.md`](../../STRATEGY.md) "Behavior loyal, structure Rust-native": Flutter has four parallel tree implementations (Element / RenderObject / Layer / Semantics) each with its own bespoke traversal. `flui-tree` exists as **one unified Rust trait API** (`TreeRead`/`TreeNav`/`TreeWrite` + Arity system + typestate + visitors + cursors) that all four trees should build on top of. The crate was deliberately created by @vanyastaff as Rust-native consolidation of Flutter's multi-tree problem.
+> Per `STRATEGY.md` "Behavior loyal, structure Rust-native": Flutter has four parallel tree implementations (Element / RenderObject / Layer / Semantics) each with its own bespoke traversal. `flui-tree` exists as **one unified Rust trait API** (`TreeRead`/`TreeNav`/`TreeWrite` + Arity system + typestate + visitors + cursors) that all four trees should build on top of. The crate was deliberately created by @vanyastaff as Rust-native consolidation of Flutter's multi-tree problem.
 >
 > **Implication for the priority order below**: Finding #4 stays in the doc as a record of the auditor's observation but the *action* changes from "delete ~10K LOC" to "migrate production consumers (`flui-rendering`, `flui-layer`, `flui-semantics`, `flui-view`) TO the unified `flui-tree` API". Zero-consumer = migration gap, not deletion signal. Concrete abstractions that turn out to be wrong-shaped get redesigned, not removed.
 >
@@ -1063,7 +1063,7 @@ Findings **#9** (integration tests for the formerly-stubbed APIs) and **#10** (d
 Repo-relative paths (clickable in markdown viewers):
 
 - [`Cargo.toml`](../../Cargo.toml)
-- [`CLAUDE.md`](../../CLAUDE.md)
+- `CLAUDE.md`
 - [`crates/flui-foundation/src/lib.rs`](../../crates/flui-foundation/src/lib.rs)
 - [`crates/flui-foundation/src/key.rs`](../../crates/flui-foundation/src/key.rs)
 - [`crates/flui-foundation/src/notifier.rs`](../../crates/flui-foundation/src/notifier.rs)

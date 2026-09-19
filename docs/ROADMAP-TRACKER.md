@@ -135,8 +135,8 @@ These are written into ROADMAP.md and are non-negotiable — violating them crea
 | P1 | Finish Windows backend in `flui-platform` | ☐ todo | — | trivial app runs on Windows; per-platform smoke test green |
 | P2 | Finish macOS backend | ☐ todo | — | trivial app runs on macOS |
 | P3 | Complete `winit` fallback | ☐ todo | — | trivial app runs via winit on any host |
-| P4 | Native **Android** backend (`STRATEGY.md` first-class commitment) | ☐ todo | examples scaffolds present (`examples/android_*`) | trivial app runs on Android device/emulator |
-| P5 | Native **iOS** backend (`STRATEGY.md` first-class commitment) | ☐ todo | — | trivial app runs on iOS device/simulator |
+| P4 | Native **Android** backend (a first-class commitment) | ☐ todo | examples scaffolds present (`examples/android_*`) | trivial app runs on Android device/emulator |
+| P5 | Native **iOS** backend (a first-class commitment) | ☐ todo | — | trivial app runs on iOS device/simulator |
 | P6 | Wayland support | ☐ todo | — | trivial app runs on Wayland |
 | P7 | Engine backend breadth — DX12 / Metal / Vulkan / WebGPU surface management | ☐ todo | `flui-engine` | per-backend smoke test |
 

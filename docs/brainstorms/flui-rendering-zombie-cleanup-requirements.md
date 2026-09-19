@@ -51,7 +51,7 @@ A fifth item from the original drafting — **`ClipContext` trait consolidation*
 
   Post-edit: `cargo build -p flui-rendering` passes, `cargo test -p flui-rendering` passes, the five preserved tests still run and pass (commit 3).
 
-- R4. Update [CLAUDE.md](../../CLAUDE.md):
+- R4. Update `CLAUDE.md`:
   - **Move** `flui-rendering` and `flui-view` out of the "Temporarily disabled" subsection into the appropriate "Active crates" subsections, matching `Cargo.toml:21-22`.
   - **Move** `flui-build` out of the "Active crates: Tools" subsection into the "Temporarily disabled" subsection, matching `Cargo.toml:50` (currently commented out). Update any prose in the Active crates description that names `flui-build` as live.
   - Verify the resulting "Temporarily disabled" list matches `Cargo.toml:46-50` exactly: `flui-animation`, `flui-reactivity`, `flui-devtools`, `flui-cli`, `flui-build`.
