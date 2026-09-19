@@ -1,27 +1,27 @@
-// PORT-TARGET: flui-widgets::RichText, flui-widgets::TextField
-//! `TextLayout` -- cosmic-text-backed shaped text buffer.
+//! The process-wide font system and [`TextLayout`], a shaped cosmic-text
+//! `Buffer` with truncation and cursor / hit-test / line-metric queries.
 //!
-//! Extracted from the 1,243-LOC
-//! `text_layout.rs` god module. Holds the global `FONT_SYSTEM`
-//! singleton (lazy `OnceLock<Mutex<FontSystem>>`; per-shape lock;
-//! off the per-command hot path) plus the `TextLayout` struct that
-//! wraps cosmic-text's `Buffer` with cursor / hit-test / line-metric
-//! operations.
+//! The font system is taken per shape, never on the per-command path.
 
 use std::sync::{Arc, OnceLock};
 
 use cosmic_text::fontdb::Family;
-use cosmic_text::{Buffer, Cursor, FontSystem, Metrics, Shaping};
+use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, Style, SwashCache, Weight};
 use flui_types::{
     geometry::{Offset, Pixels, Rect},
+    styling::Color,
     typography::{
-        LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition, TextRange, TextStyle,
+        FontStyle, LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition, TextRange,
+        TextStyle,
     },
 };
 use parking_lot::Mutex;
 
+use crate::error::RegisterFontError;
+
+use super::TextLayoutResult;
 use super::font_resolve::{self, InstalledFamilies};
-use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
+use super::glyphs::{GlyphContent, GlyphImage, GlyphKey, PlacedGlyph};
 
 /// The font database and the derived index that describes it, kept together so
 /// the index cannot be consulted about a database it was not built from.
@@ -34,16 +34,16 @@ use super::{LineInfo, TextLayoutResult, measure::style_to_attrs};
 pub(super) struct FontState {
     pub(super) system: FontSystem,
     installed_families: InstalledFamilies,
-    /// Bumped by every [`SharedFontSystem::with_mut`], the one door through
-    /// which anything outside this module reaches the database.
-    ///
-    /// The index was keyed on the face count until review pointed out what
-    /// that misses: `with_mut` hands out `&mut FontSystem`, so a caller can
-    /// remove one face and load another and leave the count identical — after
-    /// which the index describes a database that no longer exists and styles
-    /// resolve through the wrong family indefinitely. Counting *mutations*
-    /// cannot be defeated that way, because what is counted is the door, not
-    /// what was done behind it.
+    /// The swash scaler context [`SharedFontSystem::rasterize`] draws with.
+    /// Kept beside the database because a scaler reads face data the lock
+    /// guards; its own memo tables are unused — the engine's atlas is the
+    /// cache.
+    scaler: SwashCache,
+    /// Bumped by [`SharedFontSystem::register_font`], the one door through
+    /// which the database changes after construction. Counting mutations
+    /// rather than faces means an index keyed on it can never describe a
+    /// database that no longer exists; shaping ([`SharedFontSystem::shape`])
+    /// cannot reach the database and so never bumps it.
     db_generation: u64,
 }
 
@@ -52,12 +52,13 @@ impl FontState {
         Self {
             system,
             installed_families: InstalledFamilies::default(),
+            scaler: SwashCache::new(),
             db_generation: 0,
         }
     }
 
     /// The family `style` should be shaped with — see
-    /// [`SharedFontSystem::resolve_font`], which this backs.
+    /// [`Shaper::resolve_font`], which this backs.
     ///
     /// Lives here so the borrow of the database and of the index describing it
     /// are taken together: no call site can pair one with the other's
@@ -67,6 +68,7 @@ impl FontState {
             system,
             installed_families,
             db_generation,
+            ..
         } = self;
         font_resolve::resolve_family(style, system, installed_families, *db_generation)
     }
@@ -115,15 +117,9 @@ impl FontState {
 /// `PoisonError`. We accept that today because (a) cosmic-text panics
 /// are rare in practice, and (b) `std::sync::Mutex`'s poisoning would
 /// force every call site to `match` the lock result. A `catch_unwind`
-/// wrapper around `set_text` / `shape_until_scroll` is the
-/// principled fix; the dated re-check marker below is what tracks it.
-//
-// REMOVE_BY: 2026-12-22 — scheduled re-check. Still deferred: the
-// `catch_unwind` wrapper remains unimplemented (no `catch_unwind` in
-// this crate) and no cosmic-text panic has surfaced in practice, so
-// the accept-the-corruption trade-off above still holds. By this date
-// either land the wrapper, or re-verify the trade-off and set a new
-// explicit date — do not let the footnote drift unverified.
+/// wrapper around `set_text` / `shape_until_scroll` would be the
+/// principled fix; it is not built, and no cosmic-text panic has surfaced
+/// in practice.
 static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>> = OnceLock::new();
 
 /// Gets or initializes the process-wide font system as a shared handle.
@@ -131,7 +127,7 @@ static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>> = OnceLock::new();
 /// Held in an `Arc` (per ADR-0016) so the render engine's glyph pipeline
 /// can shape against the *same* `FontSystem` this module measures with:
 /// a font registered through
-/// [`PaintingBinding::register_font`](crate::PaintingBinding::register_font)
+/// [`SharedFontSystem::register_font`]
 /// becomes visible to both measurement and rendering, closing the historic
 /// two-`FontSystem` gap where a registered face could measure but not paint.
 fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
@@ -148,20 +144,10 @@ fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
         // flag and its GPOS/GSUB scripts, never from the generic names, so
         // binding afterwards changes nothing it froze.
         let mut discovered = FontSystem::new();
-        // A host with no discoverable Latin face would otherwise hand the
-        // shaper an empty database, and the first shaped run panics inside
-        // cosmic-text. Installing the embedded fallback here — in the crate
-        // that owns the `FontSystem`, before any shaping can reach it — is what
-        // makes text work on such a host, and specifically in a hot-reload
-        // worker `cdylib`, which links this crate but never `flui-engine`.
-        if font_resolve::install_text_fallback(discovered.db_mut(), crate::fonts::ROBOTO_REGULAR) {
-            tracing::warn!("no Latin-capable system font found; using embedded Roboto-Regular");
-        } else if !font_resolve::has_latin_capable_face(discovered.db()) {
-            tracing::error!(
-                "shared FontSystem has no usable text face and the embedded \
-                 fallback did not load; text layout will panic"
-            );
-        }
+        // The embedded faces go in before the generics are bound, so an
+        // empty host binds sans-serif to Roboto rather than to nothing.
+        #[cfg(feature = "bundled-fonts")]
+        crate::fonts::load_missing_into(discovered.db_mut());
         font_resolve::bind_generic_families(discovered.db_mut());
         // Then rebuild once around the host's own emoji faces. Binding the
         // generics closes the fall-through for styles that name *no* family;
@@ -258,23 +244,18 @@ pub fn init_font_system_with_faces(faces: &[&[u8]], default_family: &str, locale
         .is_ok()
 }
 
-/// Gets or initializes the global font system for in-crate shaping.
-pub(super) fn font_system() -> &'static Mutex<FontState> {
-    // Deref-coerces `&Arc<Mutex<_>>` → `&Mutex<_>` at the return site.
-    font_system_arc()
-}
-
-/// Returns the shared font-system handle so another subsystem (e.g. the
-/// render engine's glyph pipeline) can shape against the exact same faces
-/// this module measures with. See ADR-0016.
-pub(crate) fn shared_font_system() -> SharedFontSystem {
+/// The process-wide font system, as a shared handle.
+///
+/// The render engine's glyph pipeline shapes against the exact same faces
+/// this module measures with (ADR-0016): a font registered through
+/// [`SharedFontSystem::register_font`] is visible to both.
+pub fn shared_font_system() -> SharedFontSystem {
     SharedFontSystem(Arc::clone(font_system_arc()))
 }
 
 /// Folds a **shaped** buffer's layout runs into [`TextLayoutResult`] metrics.
 ///
-/// The one metrics fold shared by [`TextLayout::metrics`] and
-/// [`super::measure::measure_text`] (previously two verbatim copies).
+/// Supplies [`TextLayout::metrics`] with dimensions and baselines from the shaped runs.
 /// Baselines come from the shaper: cosmic-text's `LayoutRun::line_y` IS the
 /// alphabetic baseline of the line; the ideographic baseline is bounded by
 /// the first line's descent edge (cosmic exposes no per-font ideographic
@@ -331,97 +312,118 @@ pub(super) fn metrics_from_shaped_buffer(
 /// never appears in a public signature (SP-6). `Clone` is an `Arc` bump —
 /// clone it to give another subsystem access to the *same* faces, so a font
 /// registered through
-/// [`PaintingBinding::register_font`](crate::PaintingBinding::register_font)
+/// [`SharedFontSystem::register_font`]
 /// is visible to both measurement and rendering.
 #[derive(Clone)]
 pub struct SharedFontSystem(Arc<Mutex<FontState>>);
 
 impl SharedFontSystem {
-    /// Runs `f` with exclusive access to the font system, holding the lock
-    /// only for the duration of the call.
+    /// Shapes under the font lock.
     ///
-    /// Keep the closure short — it runs on the per-shape path (measurement,
-    /// glyph rendering), not the per-command hot path.
-    pub fn with_mut<R>(&self, f: impl FnOnce(&mut FontSystem) -> R) -> R {
+    /// `f` receives a [`Shaper`], which resolves fonts and shapes with one
+    /// lock acquisition; it cannot reach the database, so shaping never
+    /// invalidates the family index. The lock is not reentrant: `f` must not
+    /// call any other text API of this crate (there is no need to — every
+    /// shaping input is available on the `Shaper`).
+    pub fn shape<R>(&self, f: impl FnOnce(&mut Shaper<'_>) -> R) -> R {
         let mut state = self.0.lock();
-        // Counted unconditionally: the closure receives `&mut FontSystem`, so
-        // this call is a mutation whether or not it was used as one.
-        // Over-invalidating the family index costs one rebuild;
-        // under-invalidating it means shaping through a family the database no
-        // longer carries, with nothing failing.
-        state.db_generation = state.db_generation.wrapping_add(1);
-        f(&mut state.system)
+        f(&mut Shaper { state: &mut state })
     }
 
-    /// The font family `style` should be shaped with on *this* machine.
+    /// Rasterises one glyph under the font lock.
     ///
-    /// Returns the style's own family when the font database carries it, the
-    /// matching generic when the style names one (`"monospace"`, `"serif"`, …),
-    /// and [`Family::SansSerif`] when it names a family that is not
-    /// installed. The generic binding points that fallback at a carried family
-    /// whenever the database holds any Latin-capable face.
+    /// The bitmap for `key` as the shaper placed it — hinted, at the key's
+    /// size and subpixel bin, synthesised italic/bold where the key says so.
+    /// `None` when the key's face is not in the database, which cannot
+    /// happen for a key this crate produced (faces are never removed); an
+    /// atlas treats it as an empty glyph. Colour bitmaps (emoji) come back as
+    /// [`GlyphContent::Color`]; everything else as a coverage mask.
     ///
-    /// # Why a style's family cannot go to the shaper unchecked
-    ///
-    /// An unresolvable family lets an emoji face shape the SPACE of an
-    /// ordinary Latin run at roughly 1.24 em — shaping is per word, so the
-    /// letters move on to a text face while the space, which an emoji face
-    /// does have, stays. Two independent routes lead there: cosmic-text's
-    /// platform fallback list ends in `"Noto Color Emoji"`, so the walk
-    /// reaches it at ANY weight when no earlier text family is installed; and
-    /// its exact-weight candidate filter empties every list for a family that
-    /// ships only 400 and 700, dropping the run into an unfiltered, emoji-first
-    /// tail. Naming a family the database carries forecloses both, because it
-    /// puts the CSS-matched face ahead of the emoji entry in each.
-    /// The crate's `font_resolve` module carries the full mechanism.
-    ///
-    /// The requested **weight** is answered alongside the family, snapped to
-    /// one the resolved family can serve. It is one call and one value
-    /// ([`ResolvedFont`]) because the two decisions are not separable: the
-    /// same candidate filter that abandons a family also decides which weight
-    /// keeps it, so a caller holding the resolved family and the style's
-    /// original weight shapes against a family the resolution ruled out. The
-    /// snap runs only when no face in the family — static *or* variable —
-    /// can serve the request, so a variable face is still instanced at the
-    /// weight asked for.
-    ///
-    /// Call this *before* [`Self::with_mut`], never inside it: the lock is not
-    /// reentrant.
-    ///
-    /// The returned `Family` borrows `style`, so this allocates nothing.
-    ///
-    /// Resolving several styles takes the lock once each — use
-    /// [`Self::resolve_fonts`] for a whole paragraph.
+    /// Not cached here: the caller's atlas is the cache, and a second copy
+    /// under the lock would pin every bitmap ever drawn for the life of the
+    /// process.
     #[must_use]
-    pub fn resolve_font<'a>(&self, style: Option<&'a TextStyle>) -> ResolvedFont<'a> {
-        let (family, weight) = self.0.lock().resolve_family_and_weight(style);
+    pub fn rasterize(&self, key: GlyphKey) -> Option<GlyphImage> {
+        let mut state = self.0.lock();
+        let FontState { system, scaler, .. } = &mut *state;
+        let image = scaler.get_image_uncached(system, key.0)?;
+        let content = match image.content {
+            cosmic_text::SwashContent::Color => GlyphContent::Color,
+            // Subpixel (LCD) masks are not produced — the scaler is asked for
+            // `Format::Alpha` — so this arm is a mask by construction.
+            cosmic_text::SwashContent::Mask | cosmic_text::SwashContent::SubpixelMask => {
+                GlyphContent::Mask
+            }
+        };
+        Some(GlyphImage {
+            left: image.placement.left,
+            top: image.placement.top,
+            width: image.placement.width,
+            height: image.placement.height,
+            content,
+            data: image.data,
+        })
+    }
+
+    /// The number of times the font database has changed since the font
+    /// system was built. A cache of shaped text keys on it: a face registered
+    /// after the cache was filled changes what the same text shapes to.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.0.lock().db_generation
+    }
+
+    /// Loads every face in `font_bytes` into the shared font database.
+    ///
+    /// The only public mutation of the database, and append-only: a face is
+    /// never removed, so a font id recorded anywhere stays valid for the life
+    /// of the process. The face is visible to measurement and to the engine's
+    /// glyph pipeline from the next shape onward, and [`Self::generation`]
+    /// advances so shaped-text caches refill — text already laid out is not
+    /// re-laid-out by this call.
+    ///
+    /// # Errors
+    ///
+    /// [`RegisterFontError`] when `font_bytes` parses to zero loadable faces
+    /// (empty, truncated, or not a font at all).
+    #[tracing::instrument(skip(self, font_bytes), fields(bytes = font_bytes.len()))]
+    pub fn register_font(&self, font_bytes: &[u8]) -> Result<(), RegisterFontError> {
+        let mut state = self.0.lock();
+        let faces_before = state.system.db().len();
+        state.system.db_mut().load_font_data(font_bytes.to_vec());
+        let faces_added = state.system.db().len() - faces_before;
+        if faces_added == 0 {
+            return Err(RegisterFontError);
+        }
+        state.db_generation = state.db_generation.wrapping_add(1);
+        tracing::debug!(faces_added, "registered font");
+        Ok(())
+    }
+}
+
+/// One lock acquisition of the shared font system: resolves fonts and
+/// shapes, and nothing else. Handed out only by [`SharedFontSystem::shape`].
+pub struct Shaper<'a> {
+    state: &'a mut FontState,
+}
+
+impl Shaper<'_> {
+    /// The font family and weight `style` should be shaped with on this
+    /// machine — see [`ResolvedFont`].
+    pub fn resolve_font<'s>(&mut self, style: Option<&'s TextStyle>) -> ResolvedFont<'s> {
+        let (family, weight) = self.state.resolve_family_and_weight(style);
         ResolvedFont { family, weight }
     }
 
-    /// Resolves a whole run of styles under **one** lock acquisition.
-    ///
-    /// A rich paragraph resolves one font per span and then shapes, so calling
-    /// [`Self::resolve_font`] per span takes this lock once per span plus once
-    /// more for the shape pass. The lock is shared with the render engine's
-    /// glyph pipeline (ADR-0016), so that is contention paid for nothing: the
-    /// answers do not depend on each other and the database does not change in
-    /// between.
-    ///
-    /// Each returned `Family` borrows its own style, so only the `Vec` is
-    /// allocated.
-    #[must_use]
-    pub fn resolve_fonts<'a>(
-        &self,
-        styles: impl IntoIterator<Item = Option<&'a TextStyle>>,
-    ) -> Vec<ResolvedFont<'a>> {
-        let mut state = self.0.lock();
-        styles
-            .into_iter()
-            .map(|style| {
-                let (family, weight) = state.resolve_family_and_weight(style);
-                ResolvedFont { family, weight }
-            })
-            .collect()
+    /// The cosmic-text font system, for shaping a `Buffer`.
+    pub(crate) fn font_system(&mut self) -> &mut FontSystem {
+        &mut self.state.system
+    }
+}
+
+impl std::fmt::Debug for Shaper<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shaper").finish_non_exhaustive()
     }
 }
 
@@ -482,6 +484,53 @@ pub struct TextLayout {
     truncated: bool,
 }
 
+/// Converts FLUI `TextStyle` to cosmic-text `Attrs`.
+///
+/// `family` comes from the crate's font resolution rather than from
+/// `style.font_family` directly: a family the host does not
+/// carry must not reach the shaper, or the run falls into cosmic-text's
+/// unfiltered, emoji-first fallback tail. The caller resolves it because
+/// resolution needs the font database, and the caller is what holds the lock.
+///
+/// The returned `Attrs` borrows the style's family string for
+/// `Family::Name`, hence the shared lifetime.
+fn style_to_attrs<'a>(
+    style: Option<&'a TextStyle>,
+    family: Family<'a>,
+    weight: Option<u16>,
+) -> Attrs<'a> {
+    let mut attrs = Attrs::new().family(family);
+
+    if let Some(style) = style {
+        // `weight` is the style's own request AFTER the resolved family has
+        // been consulted (`FontState::resolve_family_and_weight`): unchanged
+        // when the family can serve it, and the nearest weight the family does
+        // carry when it cannot. Asking for a weight the family has no face for
+        // makes cosmic-text discard the family entirely in favour of a
+        // `common_fallback()` one that happens to own it (issue #929), so the
+        // request that survives here is the one that keeps the family.
+        if let Some(weight) = weight {
+            attrs = attrs.weight(Weight(weight));
+        }
+
+        if let Some(font_style) = style.font_style {
+            let cosmic_style = match font_style {
+                FontStyle::Normal => Style::Normal,
+                FontStyle::Italic => Style::Italic,
+            };
+            attrs = attrs.style(cosmic_style);
+        }
+    }
+
+    attrs
+}
+
+/// The colour a style paints its glyphs with: `foreground` wins over
+/// `color`, as in Flutter's `TextStyle`.
+pub(crate) fn paint_color(style: &TextStyle) -> Option<flui_types::Color> {
+    style.foreground.or(style.color)
+}
+
 /// One styled run feeding rich shaping (`Buffer::set_rich_text`).
 #[derive(Clone)]
 struct OwnedRun {
@@ -526,7 +575,7 @@ impl TextLayout {
     /// Worst case the fit loop re-shapes once per dropped glyph on the
     /// last line — bounded by that line's glyph count; typical case is
     /// one extra shape.
-    #[expect(clippy::too_many_arguments)] // mirrors the shaping input surface; callers are the two crate-internal wrappers
+    #[expect(clippy::too_many_arguments)] // mirrors the shaping input surface
     pub fn with_overflow(
         text: &str,
         style: Option<&TextStyle>,
@@ -580,31 +629,35 @@ impl TextLayout {
 
         let line_height = line_height.unwrap_or(font_size * 1.2);
 
-        // Two short critical sections rather than one long one. Family
-        // resolution reads the font database, so it has to hold the lock —
-        // but `AttrsOwned` owns its family, so the guard is dropped the moment
-        // the runs are built and re-taken for the shape pass. Everything
-        // between (the buffer, the concatenated text) needs no database, and
-        // this mutex is shared with the render engine's glyph thread, which is
-        // why `SharedFontSystem::with_mut` documents it as one to hold
-        // briefly.
-        let runs: Vec<OwnedRun> = {
-            let mut state = font_system().lock();
-
-            let (default_family, default_weight) = state.resolve_family_and_weight(default_style);
+        // One acquisition of the font lock covers resolution and shaping:
+        // both need the database, and nothing between them does.
+        shared_font_system().shape(|shaper| {
+            let default = shaper.resolve_font(default_style);
             let default_attrs = cosmic_text::AttrsOwned::new(&style_to_attrs(
                 default_style,
-                default_family,
-                default_weight,
+                default.family,
+                default.weight,
             ));
-
-            spans
+            let root_color = default_style.and_then(paint_color);
+            let runs: Vec<OwnedRun> = spans
                 .into_iter()
                 .map(|(text, style)| {
                     let attrs = match &style {
                         Some(style) => {
-                            let (family, weight) = state.resolve_family_and_weight(Some(style));
-                            let mut attrs = style_to_attrs(Some(style), family, weight);
+                            let resolved = shaper.resolve_font(Some(style));
+                            let mut attrs =
+                                style_to_attrs(Some(style), resolved.family, resolved.weight);
+                            // A span colour rides in the attrs only when it
+                            // differs from the root's: the root colour rides
+                            // on the paragraph command instead, so a root-only
+                            // recolour paints without reshaping.
+                            if let Some(color) = paint_color(style)
+                                && Some(color) != root_color
+                            {
+                                attrs = attrs.color(cosmic_text::Color::rgba(
+                                    color.r, color.g, color.b, color.a,
+                                ));
+                            }
                             // Per-span font size/line height ride on the attrs
                             // (cosmic's per-span Metrics); spans without one
                             // inherit the buffer-level default.
@@ -627,38 +680,30 @@ impl TextLayout {
                     };
                     OwnedRun { text, attrs }
                 })
-                .collect()
-        };
-
-        // cosmic-text 0.19: `new_empty` skips the empty-string shape pass
-        // `Buffer::new` performs, and `set_size` is lazy, so the buffer is
-        // fully described outside the lock.
-        let mut buffer = Buffer::new_empty(Metrics::new(font_size, line_height));
-        buffer.set_size(max_width, None);
-
-        let text: String = runs.iter().map(|run| run.text.as_str()).collect();
-        let mut this = Self {
-            buffer,
-            text,
-            runs,
-            font_size,
-            line_height,
-            direction,
-            truncated: false,
-        };
-
-        {
-            let mut state = font_system().lock();
-            this.shape_runs(&mut state.system);
-
+                .collect();
+            // cosmic-text 0.19: `new_empty` skips the empty-string shape pass
+            // `Buffer::new` performs, and `set_size` is lazy.
+            let mut buffer = Buffer::new_empty(Metrics::new(font_size, line_height));
+            buffer.set_size(max_width, None);
+            let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+            let mut this = Self {
+                buffer,
+                text,
+                runs,
+                font_size,
+                line_height,
+                direction,
+                truncated: false,
+            };
+            let font_system = shaper.font_system();
+            this.shape_runs(font_system);
             if let Some(max_lines) = max_lines
                 && max_lines > 0
             {
-                this.enforce_max_lines(&mut state.system, max_lines, ellipsis, max_width);
+                this.enforce_max_lines(font_system, max_lines, ellipsis, max_width);
             }
-        }
-
-        this
+            this
+        })
     }
 
     /// (Re-)shapes the buffer from the current runs.
@@ -786,6 +831,77 @@ impl TextLayout {
         out
     }
 
+    /// The text the layout was shaped from (every run concatenated).
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// One line per shaped run naming what reached the shaper — family,
+    /// weight, style, metrics, and a span colour where one was baked in — so
+    /// a snapshot that prints it moves when a span is restyled.
+    #[must_use]
+    pub fn describe_runs(&self) -> Vec<String> {
+        self.runs
+            .iter()
+            .map(|run| {
+                let attrs = run.attrs.as_attrs();
+                let mut parts = vec![
+                    format!("len={}", run.text.len()),
+                    format!("family={:?}", attrs.family),
+                    format!("weight={}", attrs.weight.0),
+                    format!("style={:?}", attrs.style),
+                ];
+                if let Some(metrics) = attrs.metrics_opt {
+                    parts.push(format!("size={:.2}", Metrics::from(metrics).font_size));
+                }
+                if let Some(color) = attrs.color_opt {
+                    parts.push(format!(
+                        "color=#{:02x}{:02x}{:02x}{:02x}",
+                        color.r(),
+                        color.g(),
+                        color.b(),
+                        color.a()
+                    ));
+                }
+                parts.join(" ")
+            })
+            .collect()
+    }
+
+    /// Every glyph of the paragraph placed in device pixels, for a
+    /// rasteriser.
+    ///
+    /// `origin` is the paragraph's top-left in device pixels and `scale` the
+    /// device-pixel ratio the paragraph is drawn under: glyphs are placed at
+    /// `origin + glyph_position * scale`, snapped to a pixel with the
+    /// fractional remainder folded into the key's subpixel bin, and the key
+    /// names a bitmap rasterised at `font_size * scale` — so a 2× display
+    /// gets a 2× raster rather than an upscaled 1× one.
+    ///
+    /// `y` is the baseline row; [`PlacedGlyph`] says how the bitmap's
+    /// bearings apply. Runs come in layout order, top to bottom.
+    pub fn placed_glyphs(
+        &self,
+        origin: (f32, f32),
+        scale: f32,
+    ) -> impl Iterator<Item = PlacedGlyph> + '_ {
+        self.buffer.layout_runs().flat_map(move |run| {
+            let baseline = (run.line_y * scale).round() as i32;
+            run.glyphs.iter().map(move |glyph| {
+                let physical = glyph.physical(origin, scale);
+                PlacedGlyph {
+                    key: GlyphKey(physical.cache_key),
+                    x: physical.x,
+                    y: baseline + physical.y,
+                    color: glyph
+                        .color_opt
+                        .map(|c| Color::rgba(c.r(), c.g(), c.b(), c.a())),
+                }
+            })
+        })
+    }
+
     /// Returns the computed metrics for this layout.
     ///
     /// Baselines come from the shaper: cosmic-text's `LayoutRun::line_y`
@@ -798,48 +914,30 @@ impl TextLayout {
         metrics_from_shaped_buffer(&self.buffer, self.line_height, self.truncated)
     }
 
-    /// Whether `with_overflow` truncated the text to its max line count.
-    #[must_use]
-    pub fn was_truncated(&self) -> bool {
-        self.truncated
-    }
-
     /// Returns the screen offset for a caret at the given text
     /// position.
-    pub fn get_offset_for_caret(&mut self, position: TextPosition) -> Offset<Pixels> {
-        let mut font_system = font_system().lock();
-
-        let cursor = Cursor::new(0, position.offset);
-
-        if let Some(layout_cursor) = self.buffer.layout_cursor(&mut font_system.system, cursor) {
+    pub fn get_offset_for_caret(&self, position: TextPosition) -> Offset<Pixels> {
+        // Walk the laid-out runs for the glyph whose cluster contains the
+        // offset; the first match wins, so a caret on a wrap boundary sits at
+        // the end of the earlier line. Past every glyph, the caret trails the
+        // last run.
+        let mut trailing = Offset::ZERO;
+        for run in self.buffer.layout_runs() {
             let mut x = 0.0f32;
-            let mut y = 0.0f32;
-
-            for run in self.buffer.layout_runs() {
-                if run.line_i == layout_cursor.line {
-                    y = run.line_top;
-
-                    for glyph in run.glyphs {
-                        if glyph.start <= position.offset && position.offset <= glyph.end {
-                            let glyph_progress = if glyph.end > glyph.start {
-                                (position.offset - glyph.start) as f32
-                                    / (glyph.end - glyph.start) as f32
-                            } else {
-                                0.0
-                            };
-                            x = glyph.x + glyph.w * glyph_progress;
-                            break;
-                        }
-                        x = glyph.x + glyph.w;
-                    }
-                    break;
+            for glyph in run.glyphs {
+                if glyph.start <= position.offset && position.offset <= glyph.end {
+                    let progress = if glyph.end > glyph.start {
+                        (position.offset - glyph.start) as f32 / (glyph.end - glyph.start) as f32
+                    } else {
+                        0.0
+                    };
+                    return Offset::new(Pixels(glyph.x + glyph.w * progress), Pixels(run.line_top));
                 }
+                x = glyph.x + glyph.w;
             }
-
-            Offset::new(Pixels(x), Pixels(y))
-        } else {
-            Offset::ZERO
+            trailing = Offset::new(Pixels(x), Pixels(run.line_top));
         }
+        trailing
     }
 
     /// Returns the text position for a screen offset.
@@ -942,65 +1040,6 @@ impl TextLayout {
         }
 
         metrics
-    }
-
-    /// Returns extended line information including RTL status.
-    pub fn get_line_info(&self) -> Vec<LineInfo> {
-        let mut info = Vec::new();
-
-        for run in self.buffer.layout_runs() {
-            let start_index = run.glyphs.first().map_or(0, |g| g.start);
-            let end_index = run.glyphs.last().map_or(start_index, |g| g.end);
-
-            info.push(LineInfo {
-                line_number: run.line_i,
-                is_rtl: run.rtl,
-                width: run.line_w,
-                height: run.line_height,
-                top: run.line_top,
-                start_index,
-                end_index,
-            });
-        }
-
-        if info.is_empty() {
-            info.push(LineInfo {
-                line_number: 0,
-                is_rtl: self.direction.is_rtl(),
-                width: 0.0,
-                height: self.line_height,
-                top: 0.0,
-                start_index: 0,
-                end_index: 0,
-            });
-        }
-
-        info
-    }
-
-    /// Returns true if any line in the layout is RTL.
-    pub fn has_rtl_content(&self) -> bool {
-        self.buffer.layout_runs().any(|run| run.rtl)
-    }
-
-    /// Returns true if the layout contains bidirectional text.
-    pub fn is_bidirectional(&self) -> bool {
-        let mut has_ltr = false;
-        let mut has_rtl = false;
-
-        for run in self.buffer.layout_runs() {
-            if run.rtl {
-                has_rtl = true;
-            } else {
-                has_ltr = true;
-            }
-
-            if has_ltr && has_rtl {
-                return true;
-            }
-        }
-
-        false
     }
 
     /// Returns bounding boxes for the given text range.

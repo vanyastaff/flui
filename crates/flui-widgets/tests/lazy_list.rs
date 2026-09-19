@@ -1018,16 +1018,13 @@ fn lazy_list_view_builder_exhausted_budget_evicts_stale_residents_before_paint()
 /// Every `DrawRect` colour in the most recent frame's composited layer tree,
 /// in paint order.
 fn painted_rect_colors(laid: &LaidOut) -> Vec<Color> {
-    use flui_painting::DrawCommand;
+    use flui_painting::DrawOp;
     use flui_rendering::layer::Layer;
     let mut colors = Vec::new();
     let Some(tree) = laid.layer_tree() else {
         return colors;
     };
-    let Some(root) = tree.root() else {
-        return colors;
-    };
-    let mut stack = vec![root];
+    let mut stack = vec![tree.root()];
     while let Some(id) = stack.pop() {
         let Some(layer) = tree.get_layer(id) else {
             continue;
@@ -1038,8 +1035,8 @@ fn painted_rect_colors(laid: &LaidOut) -> Vec<Color> {
             _ => None,
         };
         if let Some(commands) = commands {
-            colors.extend(commands.iter().filter_map(|command| match command {
-                DrawCommand::DrawRect { paint, .. } => Some(paint.color),
+            colors.extend(commands.iter().filter_map(|command| match &command.op {
+                DrawOp::Rect { paint, .. } => Some(paint.color),
                 _ => None,
             }));
         }

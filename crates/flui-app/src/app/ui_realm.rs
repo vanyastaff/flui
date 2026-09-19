@@ -602,11 +602,7 @@ enum FramePaintOutcome {
     /// `SceneSnapshot` (that type's own "never `Arc<Scene>`" contract in
     /// `scene_snapshot.rs`), on the direct path it is borrowed internally
     /// and dropped when the render returns. Nothing shares this value, so
-    /// an `Arc` bought nothing here. `Scene` is not `Sync`
-    /// (`CompositionCallback` is `FnOnce + Send`, never `Sync`), which is
-    /// why wrapping it in `Arc` used to need a
-    /// `#[expect(clippy::arc_with_non_send_sync)]` at the construction
-    /// site below — removed along with the `Arc`.
+    /// an `Arc` bought nothing here.
     Painted(Scene),
     /// Nothing was dirty this frame; no new content to composite.
     Idle,
@@ -700,8 +696,8 @@ fn input_dropped_by_lifecycle(
 }
 
 /// A safe, content-free discriminator for a [`PlatformInput`] — never the
-/// payload itself. STYLE.md forbids logging text-input/IME and drag-and-drop
-/// payloads; this is the only thing about an input event that may reach a
+/// payload itself. Logging text-input/IME payloads and drag-and-drop payloads
+/// is forbidden; this is the only thing about an input event that may reach a
 /// trace/log line. Moved here from the retired `AppBinding`, unchanged.
 fn input_kind(input: &PlatformInput) -> &'static str {
     match input {
@@ -2635,19 +2631,14 @@ impl UiRealm {
         {
             Ok(layer_tree) => layer_tree,
             Err(error) => {
-                // Paint commits the layer tree and leader/follower registry
-                // as one pair before semantics runs. A semantics error must
-                // retain both so the retry cannot combine a retained tree
-                // with an empty or newer registry.
+                // Paint commits the layer tree (which carries its own
+                // leader index) before semantics runs; a semantics error
+                // retains it for the retry.
                 return Err(error);
             }
         };
 
         presentation.enter_segment_phase(SegmentPhase::Tail);
-        let link_registry = presentation
-            .renderer()
-            .root_pipeline_owner()
-            .with_mut(PipelineOwner::take_link_registry);
 
         // Production<->headless convergence point: the lazy-sliver safety net.
         // The fixpoint above already serviced child requests between its
@@ -2658,25 +2649,14 @@ impl UiRealm {
             w.service_child_requests(presentation.pipeline());
         }
 
-        // Phase 4: Create Scene from LayerTree
-        let size = constraints.constrain(Size::ZERO);
-        let frame_number = presentation.frames_rendered() + 1;
-
+        // Phase 4: freeze the LayerTree into a Scene.
         if let Some(mut layer_tree) = layer_tree {
             presentation.enter_segment_phase(SegmentPhase::Scene);
             presentation.attach_performance_overlay(&mut layer_tree);
 
-            let root = layer_tree.root();
-            let scene = Scene::with_links(
-                size,
-                layer_tree,
-                root,
-                link_registry.unwrap_or_default(),
-                frame_number,
-            );
             // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
             // own doc for why.
-            Ok(FramePaintOutcome::Painted(scene))
+            Ok(FramePaintOutcome::Painted(Scene::new(layer_tree)))
         } else {
             Ok(FramePaintOutcome::Idle)
         }
@@ -2842,11 +2822,9 @@ impl UiRealm {
         let mut retry_needs_repaint = false;
         let mut replay_committed_input = false;
         use super::raster_lane::SubmitVerdict;
-        if should_send
-            && let FramePaintOutcome::Painted(scene) = outcome
-            && scene.has_content()
-        {
-            let frame_number = scene.frame_number();
+        if should_send && let FramePaintOutcome::Painted(scene) = outcome {
+            // The frame this scene will become once presented.
+            let frame_number = producer.frames_rendered() + 1;
             // The scene is handed over BY VALUE: on the raster-lane path it
             // crosses the raster boundary as an owned, stamped
             // `SceneSnapshot` (the mailbox seam's own no-`Arc<Scene>`
@@ -8790,7 +8768,7 @@ mod tests {
             let b_layer_tree_before = realm.enter(|realm| {
                 let b = realm.presentations.get(b_id).expect("B installed");
                 match UiRealm::draw_frame_for_presentation(b, constraints) {
-                    Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.layer_tree()),
+                    Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.tree()),
                     Ok(FramePaintOutcome::Idle) => panic!("B's first frame must paint, got Idle"),
                     Ok(FramePaintOutcome::Errored) => {
                         panic!("draw_frame_for_presentation never returns Ok(Errored)")
@@ -8821,7 +8799,7 @@ mod tests {
                     }
                 });
                 match UiRealm::draw_frame_for_presentation(b, constraints) {
-                    Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.layer_tree()),
+                    Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.tree()),
                     Ok(FramePaintOutcome::Idle) => {
                         panic!("B's post-A-close frame must still paint, got Idle")
                     }
@@ -9195,11 +9173,6 @@ mod tests {
                 "pump 1 presents real content"
             );
             assert_eq!(backend.render_scene_calls, 1);
-            assert_eq!(
-                backend.submitted_scene_had_content,
-                vec![true],
-                "the one submitted scene carried real content"
-            );
 
             // Inject a segment failure and give the presentation demand so
             // its segment genuinely runs (a skipped segment would prove

@@ -867,8 +867,8 @@ where
     /// at `finalize_tree` — Flutter never disposes a `failed` subtree at
     /// all. A panic is caught and reported instead of unwinding out of the
     /// reconcile that dropped this element, mirroring `on_unmount`'s
-    /// containment shape one hook over — see the containment bullet in
-    /// `crates/flui-view/AGENTS.md`.
+    /// containment shape one hook over — see
+    /// `crates/flui-view/tests/lifecycle_panic_containment.rs`.
     ///
     /// The catch sits in the behavior, not around `ElementBase::deactivate`
     /// at the tree level: `unified.rs`'s `deactivate` still runs

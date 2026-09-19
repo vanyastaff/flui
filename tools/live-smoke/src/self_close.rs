@@ -72,7 +72,7 @@ pub(crate) fn assert_route_observed(log_path: &Path, route: CloseRoute) -> Resul
 }
 
 /// The `flui.gpu` trace's structured marker for a released GPU surface
-/// (`SurfaceLease::drop`, `crates/flui-engine/src/wgpu/surface_lease.rs`,
+/// (`SurfaceLease::drop`, `crates/flui-engine/src/surface_lease.rs`,
 /// issue #1043's cycle-breaker) — matched on the field, not the
 /// human-readable message, the same discipline `harness.rs`'s own
 /// `GPU_PRESENT_MARKER`/`GPU_PRE_PRESENT_MARKER` use. Requires `flui.gpu`

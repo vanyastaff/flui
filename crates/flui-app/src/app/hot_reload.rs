@@ -293,7 +293,7 @@ mod enabled {
         /// caller must not run the widget pipeline for this frame.
         pub(crate) fn try_render_frame(
             &self,
-            renderer: &mut flui_engine::wgpu::Renderer,
+            renderer: &mut flui_engine::Renderer,
             width: f32,
             height: f32,
         ) -> bool {
@@ -427,7 +427,7 @@ mod disabled {
         )]
         pub(crate) fn try_render_frame(
             &self,
-            _renderer: &mut flui_engine::wgpu::Renderer,
+            _renderer: &mut flui_engine::Renderer,
             _width: f32,
             _height: f32,
         ) -> bool {

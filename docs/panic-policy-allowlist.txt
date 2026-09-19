@@ -26,7 +26,7 @@
 #
 # Seeded 2026-08-04 with the worst offenders already burned down in the same
 # change that seeded this list: flui-hot-reload/src/worker.rs,
-# flui-engine/src/wgpu/backend.rs, flui-painting/src/text_painter/paint.rs,
+# flui-engine/src/backend.rs, flui-painting/src/text_painter/paint.rs,
 # flui-widgets/src/scroll/refresh_indicator.rs (all fully conforming now),
 # and flui-app/src/app/runner.rs (its one site converted to match
 # run_desktop's environmental-failure pattern instead of reworded, since the
@@ -62,17 +62,15 @@
 
 crates/flui-animation/src/controller.rs 4
 crates/flui-devtools/src/hot_reload.rs 1
-crates/flui-engine/src/wgpu/advanced_blend/pipeline.rs 1
-crates/flui-engine/src/wgpu/batches/images.rs 3
-crates/flui-engine/src/wgpu/headless.rs 1
-crates/flui-engine/src/wgpu/mode/pipeline.rs 1
-crates/flui-engine/src/wgpu/offscreen/blit.rs 1
-crates/flui-engine/src/wgpu/offscreen/blur.rs 3
-crates/flui-engine/src/wgpu/offscreen/mask.rs 2
-crates/flui-engine/src/wgpu/renderer.rs 2
-crates/flui-engine/src/wgpu/state_stack.rs 2
-crates/flui-engine/src/wgpu/texture_cache.rs 2
-crates/flui-engine/src/wgpu/texture_pool.rs 3
+crates/flui-engine/src/advanced_blend/pipeline.rs 1
+crates/flui-engine/src/batches/images.rs 3
+crates/flui-engine/src/headless.rs 1
+crates/flui-engine/src/mode/pipeline.rs 1
+crates/flui-engine/src/offscreen/blit.rs 1
+crates/flui-engine/src/offscreen/blur.rs 1
+crates/flui-engine/src/offscreen/mask.rs 2
+crates/flui-engine/src/renderer.rs 1
+crates/flui-engine/src/texture_pool.rs 3
 crates/flui-foundation/src/id.rs 3
 crates/flui-foundation/src/key.rs 4
 crates/flui-hot-reload/src/dev/source_watch.rs 1

@@ -1,126 +1,153 @@
 # flui-painting Architecture
 
-This document is the per-crate template instance for `flui-painting` as defined by [`docs/PORT.md`](../../docs/PORT.md). It records the Flutter / Skia → Rust mapping for this crate, the divergence decisions taken during the Mythos chain (PR opened 2026-05-20, commits `25f48fcc` through `ddd89e9a`), the current thread-safety surface, the known friction not yet refactored, and the planned cleanups that the methodology will pick up next.
+`flui-painting` is two things under one name: the recorder that turns a
+render object's (or a `CustomPaint` painter's) drawing into a
+[`DisplayList`](src/display_list/mod.rs), and the text stack that shapes an
+inline span through cosmic-text and answers layout queries on the result.
+Nothing is rasterised here — `flui-engine` replays the list.
 
-The deeper Mythos design verdict lives at [`docs/designs/2026-05-20-mythos-flui-painting-redesign.md`](../../docs/designs/2026-05-20-mythos-flui-painting-redesign.md). The implementation plan lives at [`docs/plans/2026-05-20-004-feat-flui-painting-mythos-redesign-plan.md`](../../docs/plans/2026-05-20-004-feat-flui-painting-mythos-redesign-plan.md). The requirements brainstorm lives at [`docs/brainstorms/flui-painting-mythos-redesign-requirements.md`](../../docs/brainstorms/flui-painting-mythos-redesign-requirements.md). The allocation hot-path audit lives at [`docs/research/2026-05-20-flui-painting-alloc-audit.md`](../../docs/research/2026-05-20-flui-painting-alloc-audit.md).
-
-Companion deep-dive docs live in [`docs/`](docs/) and are kept alongside this template:
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) -- pre-template architecture deep-dive (Command Pattern walkthrough, transform/clip stack design, integration points). Predates the Mythos chain; retained as reference companion.
-- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) -- perf guidance and benchmark targets (no actual benches landed yet; targets recorded for future criterion harness).
-- [`docs/MIGRATION.md`](docs/MIGRATION.md) -- stubbed in Mythos chain Step 3 (the original described migrations between non-existent crate versions).
-- [`docs/README.md`](docs/README.md) -- Q&A landing page; retained as companion.
+The reference is `dart:ui`'s `Canvas`/`Paint`/`Path` vocabulary and
+Flutter's `TextPainter`; the paint vocabulary itself (`Paint`, `Shader`,
+`BlendMode`, `Path`, geometry) is defined in `flui-types` and re-exported.
+Divergences from Flutter are recorded under [Mapping decisions](#mapping-decisions).
 
 ---
 
-## Flutter source mapping
+## Module map
 
-The Flutter `Canvas` API is split between `dart:ui` (the engine binding) and `package:flutter/src/painting/` (decoration/text/clip helpers). The `Skia SkCanvas` is the semantic reference for the recording API; cosmic-text is the Rust crate used in place of Skia's text shaping (a decision with recorded re-open triggers — [ADR-0059](../../docs/adr/ADR-0059-flui-stays-on-cosmic-text.md)); path tessellation lives in `flui-engine`, not in this crate.
-
-| Flutter / Skia source | FLUI module | Notes |
+| Concern | Files | What lives there |
 |---|---|---|
-| `dart:ui` `Canvas` + `PictureRecorder` (Flutter engine) | [`src/canvas/mod.rs`](src/canvas/mod.rs) -- `Canvas` struct | FLUI conflates recorder + canvas into one `Canvas` value. `Canvas::finish(self) -> DisplayList` consumes the canvas (equivalent to `recorder.endRecording()`). |
-| `dart:ui` `Canvas.translate`/`scale`/`rotate`/`skew`/`transform`/`setMatrix` | [`src/canvas/transform.rs`](src/canvas/transform.rs) | Transform stack operations; baked into emitted `DrawCommand::*` via `transform: Matrix4` field. |
-| `dart:ui` `Canvas.save`/`restore`/`saveLayer`/`getSaveCount`/`restoreToCount` | [`src/canvas/state.rs`](src/canvas/state.rs) -- `CanvasState`, `ClipShape`, save/restore/save_layer family | State stack with `(transform, clip_depth, is_layer)` tuples. |
-| `dart:ui` `Canvas.clipRect`/`clipRRect`/`clipPath` + bounds queries | [`src/canvas/clipping.rs`](src/canvas/clipping.rs) | 6 clip methods + 3 bounds queries. |
-| `dart:ui` `Canvas.draw*` (lines, rects, paths, text, image, atlas, ...) | [`src/canvas/drawing.rs`](src/canvas/drawing.rs) | 29 primary `draw_*` methods, each emitting one `DrawCommand` variant. |
-| Skia `SkCanvas` `save_layer` / `saveLayerAlpha` / `saveLayerOpacity` (extension) | [`src/canvas/state.rs`](src/canvas/state.rs) -- `save_layer_alpha`, `save_layer_opacity`, `save_layer_blend` | FLUI convenience overloads matching Flutter's `Canvas.saveLayer` shorthand variants. |
-| `dart:ui` scoped wrappers (Flutter-side ergonomic patterns; no engine analog) | [`src/canvas/scoped.rs`](src/canvas/scoped.rs) -- 12 `with_*` helpers | Closure-based save/restore wrappers; zero-cost. |
-| Multi-canvas composition (Flutter `PaintingContext.canvas` flow) | [`src/canvas/composition.rs`](src/canvas/composition.rs) -- `extend_from`/`merge`/`append_*` | First-child append uses `Vec::mem::swap` for O(1). |
-| `dart:ui` `Picture` (immutable recording) | [`src/lib.rs`](src/lib.rs) -- exported as `DisplayList` | The Flutter `Picture` name was an alias for `DisplayList`; the alias was deleted in plan U8 / audit P-9. Use `DisplayList` directly. |
-| `dart:ui` `Canvas.drawX` underlying engine command vocabulary | [`src/display_list/command.rs`](src/display_list/command.rs) -- `DrawCommand` enum (29 variants) | Closed enum (no `Box<dyn Drawable>` plugin trait). Same shape as `flui-layer::Layer` enum. |
-| `dart:ui` engine command dispatch | [`src/display_list/command_ops.rs`](src/display_list/command_ops.rs) -- `with_opacity`, `bounds`, `transform`, `paint`, `kind`, `is_*`, `apply_transform` | ~1,200 LOC of per-variant pattern matches. |
-| Sealed-extension-trait pattern (FLUI-side; no Flutter analog) | [`src/display_list/sealed.rs`](src/display_list/sealed.rs) -- `DisplayListCore` + `DisplayListExt` + 4 blanket impls | Cross-crate seam consumed by `flui-layer::Layer::Picture` (stores `DisplayList` by value today; the `Arc<DisplayList>` blanket impl is a forward-compatible shape for future retained-layer sharing) and `flui-engine`'s wgpu backend. |
-| `DisplayListStats` (FLUI invention for command-count stats) | [`src/display_list/stats.rs`](src/display_list/stats.rs) | |
-| `painting/clip.dart` `ClipContext` abstract class | [`src/clip_context.rs`](src/clip_context.rs) | Cross-crate seam (1 prod impl: `CanvasContext` in `flui-rendering`). 4 default `clip_*_and_paint` methods including `clip_rsuperellipse_and_paint` for Flutter parity. |
-| `painting/binding.dart` `PaintingBinding` mixin | [`src/binding.rs`](src/binding.rs) -- `PaintingBinding` singleton | Trimmed surface; `ShaderWarmUp` subsystem deleted in U2. |
-| `painting/image_cache.dart` `ImageCache` | [`src/binding.rs`](src/binding.rs) -- `ImageCache` struct | `RwLock<HashMap>` for cache + live_images; off the per-command hot path. |
-| `painting/binding.dart` `SystemFontsNotifier` | [`src/binding.rs`](src/binding.rs) -- `SystemFontsNotifier` struct | `RwLock<Vec<Arc<dyn Fn>>>` listener registry; setup-phase only. |
-| `painting/text_painter.dart` `TextPainter` | [`src/text_painter/*`](src/text_painter/) -- 4 files | TextPainter struct + builder + getters + setters + layout + measure + paint + cursor. Split in Mythos chain Step 7. |
-| `painting/text_painter.dart` `TextBaseline` enum | [`src/text_painter/baseline.rs`](src/text_painter/baseline.rs) | |
-| cosmic-text 0.19 `Buffer` + `FontSystem` shaping API | [`src/text_layout/*`](src/text_layout/) -- 5 files | cosmic-text-backed text shaping. Split in Mythos chain Step 6; `mod inner` cfg indirection flattened. |
-| Flutter `TextDirection` detection (Unicode bidi) | [`src/text_layout/detect.rs`](src/text_layout/detect.rs) | Strong-LTR / strong-RTL / neutral Unicode codepoint ranges. |
-| `painting/shader_warm_up.dart` `ShaderWarmUp` abstract class | -- | **Deleted in Mythos chain Step 2.** Decorative subsystem; `execute()` was a stub. Real offscreen-canvas-backed warm-up tracked in Outstanding refactors. |
+| Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
+| Wire vocabulary | `display_list/{mod,command,command_ops}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds` |
+| Text | `text_layout/{layout,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | The process-wide font system and `SharedFontSystem`, `TextLayout` (shape, truncate, caret/hit-test/line queries), family resolution against the host, `TextPainter` |
+| Decorations | `decoration.rs`, `table_border.rs` | `paint_box_decoration` / `box_decoration_hit_test`, `paint_table_border` |
+| Test support | `testing/mod.rs`, `text_layout::init_font_system_with_faces` | `record` (`testing` feature); pinning the font system to a known face set |
+
+---
+
+## The recorder
+
+Every `draw_*` records one `DrawCommand { transform, op }` through
+`Canvas::record`: the absolute transform at recording time and the
+`DrawOp`. Clips are the one thing that scopes — `DrawOp::Save`/`Restore`
+are unit markers the engine uses to unwind its clip stack. A `Clip::None`
+clip records nothing. A `DisplayList` has no `&mut` surface: nothing outside
+the crate can add, remove, or edit a command, so its cached `bounds()` is
+always the union the recorder computed (`op.local_bounds()` through the
+command's transform), and `Option<Rect>` because a list of only clips or
+`Paint`s has no extent (which is not an empty rect at the origin).
+`draw_picture` replays a list as `ctm * command.transform` per command.
+The wire carries no serde ([ADR-0066](../../docs/adr/ADR-0066-display-list-command-representation.md)).
+
+`Paint` is interned per canvas: each `draw_*` scans a small `Vec<Arc<Paint>>`
+for an equal paint and shares the `Arc`. `Path` is copy-on-write
+(`Arc<Vec<PathCommand>>`), so recording a caller's path copies nothing.
+`DrawOp` is at most 128 bytes and `DrawCommand` 192, pinned by
+`draw_command_fits_its_budget`; `display_list_record` (criterion) measures
+the recording cost.
+
+`Canvas::finish` is infallible: an unbalanced save fires a `debug_assert`
+and a `tracing::warn!`, then the list ships as recorded, which is what
+`PictureRecorder.endRecording()` does in release. `restore()` on an empty
+stack is a silent no-op for the same reason.
+
+---
+
+## Text
+
+`TextLayout::from_spans` shapes a paragraph through the process-wide font
+system: family and weight are resolved against the host database first
+(decision 8), the buffer is shaped, and `max_lines`/`ellipsis` truncation
+RE-SHAPES the kept prefix so size, line metrics, and glyphs agree.
+`TextPainter` is the Flutter-shaped facade over it that `RenderParagraph`
+drives; its intrinsic-width probes shape without truncation (decision 9).
+`TextPainter::paint` records `DrawCommand::Paragraph { layout, offset,
+color }` with the very `Arc<TextLayout>` its cache holds (ADR-0065): the
+engine rasterises what was measured and shapes nothing. The root colour
+rides on the command; a span's own colour is baked into the layout, so a
+span recolour is a layout change and a root recolour is not.
+
+The font system is a `OnceLock<Arc<Mutex<FontState>>>`, named as an ambient
+residual in `docs/runtime-contract.toml`; `AppRuntime` installs it at realm
+install so first use is not whichever text measurement runs first.
+`SharedFontSystem` is the handle the engine's glyph atlas rasterises from
+(ADR-0016), so a face registered through `register_font` measures and
+paints alike. It has four doors: `shape(|Shaper| …)` resolves and shapes
+under one acquisition and never bumps the generation; `register_font` is
+the only mutation, append-only, and bumps it; `generation()` is what every
+shaped-text cache keys on (ADR-0065); `rasterize(GlyphKey)` returns one
+glyph's bitmap for the engine's atlas (ADR-0067). The embedded baseline
+faces (`fonts.rs`, `bundled-fonts`) are installed at construction, so a
+headless test measures an `Icon` in the face the app paints.
+
+What crosses to the engine is `TextLayout::placed_glyphs(origin, scale)` —
+an iterator of `PlacedGlyph { key: GlyphKey, x, y, color }` in device
+pixels — and the `GlyphImage` that `rasterize` returns for a key. The shaped
+`cosmic_text::Buffer` never leaves this crate, and `GlyphKey` is opaque:
+the one cosmic-text type on the public surface is `Family`, carried by
+`ResolvedFont`.
+
+---
+
+## Thread safety
+
+`#![forbid(unsafe_code)]`. Every type is plain `Send + Sync` value data;
+`Canvas` and `TextPainter` are mutated through `&mut self` by one owner.
+The one lock is the font system's, never nested with another lock in this
+crate, and never held across a call into another crate except the engine's
+`with_mut` closure, which takes no painting lock.
 
 ---
 
 ## Mapping decisions
 
-This section records places where the Rust shape diverges from the Dart/Skia shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md).
+### 1. Closed `DrawCommand` enum, matched exhaustively
 
-### 1. Closed `DrawCommand` enum, not a `Box<dyn Drawable>` plugin trait
+`DrawCommand` has one variant per paint operation and no `#[non_exhaustive]`:
+the engine's `dispatch_command` has no wildcard arm, so a new variant is a
+compile error there until its `render_*` arm exists. That is the whole
+contract — a producer-side variant count would only prove the producer
+updated its own test. A trait-object command was rejected for the same
+reason `flui_layer::Layer` is an enum: a `Box<dyn Drawable>` is a boundary
+the GPU backend cannot translate.
 
-**Rule:** [`docs/PORT.md`](../../docs/PORT.md) Mapping rule "Compile-time over runtime"; constitution Anti-Patterns ("Prefer generics and enum dispatch over `dyn` trait objects"); strategy clause "Behavior as floor, everything else designed for Rust".
+### 2. `Canvas` keeps the `dart:ui` surface, and only that
 
-**Choice:** `DrawCommand` is a closed `enum` with 29 concrete variants ([`src/display_list/command.rs`](src/display_list/command.rs)). The closed enum is **the** trust boundary with `flui-engine`'s wgpu backend -- the backend pattern-matches every variant exhaustively for GPU lowering. Adding a 30th variant is a coordinated change in `flui-painting` + `flui-engine` (+ optionally `flui-rendering` if a render-object should emit it).
+`Canvas` is user-facing through `CustomPaint`, so `dart:ui`'s methods stay
+even where nothing in the workspace calls them today (`drawPoints`,
+`drawColor`, `restoreToCount`, `skew`, `drawPicture`, …). What is NOT `dart:ui`
+and had no consumer is gone: the closure helpers beyond `with_transform` /
+`with_clip_*` / `with_blend_mode` / `with_opacity`, multi-canvas composition,
+clip-bounds queries (whose implementation answered for the last clip only
+and ignored `ClipOp::Difference`), and `draw_shader_mask` /
+`draw_backdrop_filter` with their `DrawCommand` variants — masks and backdrop
+filters are layers (`flui_layer::{ShaderMaskLayer, BackdropFilterLayer}`),
+and the command-level copies had no producer and a second engine lowering.
 
-**Alternatives:**
-- `Box<dyn Drawable + Send + Sync>` mirroring Flutter's Dart class hierarchy -- rejected. The GPU backend cannot lower an arbitrary `dyn Drawable` to wgpu draw calls; every variant needs a hand-written translation. Closed-enum gives compile-time match-exhaustiveness; trait-object loses that. **Deliberately the same shape as `flui-layer::Layer` enum** (see [`docs/designs/2026-05-20-mythos-flui-layer-redesign.md`](../../docs/designs/2026-05-20-mythos-flui-layer-redesign.md) Mapping decisions #1).
-- Sealed-trait-with-private-impl-marker -- rejected. Same result as closed enum but with vtable dispatch on the hot path.
+### 3. No `DisplayList` mutation, no analysis layer, no trait pair
 
-**Accepted trade-off:** Plugin authors cannot define their own `DrawCommand` variants. The 29 variants must cover every compositor draw primitive forever (the rendering crate emits only these). When a new compositor primitive appears (e.g. mesh shaders, future WebGPU features), it lands as a new variant in a coordinated change. Verdict §12 rejected design #1.
+`DisplayList` exposes `iter`/`commands`/`len`/`is_empty`/`bounds`/`append`
+as inherent methods. The sealed `DisplayListCore` + blanket `DisplayListExt`
+pair had one implementor and no generic consumer — every import was there
+to call `.len()` on a concrete list — and the filter/count/`stats`/
+`with_opacity`/`apply_transform`/`filter`/`map`/`IndexMut` layer had no
+consumer at all and broke the "immutable after recording" claim.
 
-### 2. Sealed `DisplayListCore` / `DisplayListExt` extension-trait pair stays
+### 4. No `PaintingBinding`, no `ImageCache`, no `ClipContext`
 
-**Rule:** Verdict §12 rejected design #10; precedent: `flui-rendering`'s extension-trait split (commit `d0e53c63`).
-
-**Choice:** `DisplayListCore` is sealed via the `private::Sealed` marker trait; `DisplayListExt` is a blanket-implemented superset of helpers (filter iterators, count stats). Four blanket impls: `DisplayList`, `Arc<DisplayList>`, `Box<DisplayList>`, `&DisplayList`. `flui-layer::Layer::Picture` currently stores `Picture = DisplayList` by value (see [`crates/flui-layer/src/layer/picture.rs`](../flui-layer/src/layer/picture.rs)); the `Arc<DisplayList>` blanket impl is kept as a forward-compatible shape for retained-layer sharing across frames.
-
-**Alternatives:**
-- Demote `DisplayListCore` to `pub(crate)` and expose only `DisplayList` directly -- rejected. The trait is the cross-crate seam that lets `flui-engine`'s wgpu backend accept any of the four supported wrappers via `display_list.commands()`; demoting would force callers into explicit `.deref()` at every call site.
-- Replace the trait pair with inherent methods on `DisplayList` -- rejected. The blanket-on-smart-pointer pattern is what makes `Arc<DisplayList>` ergonomic for the eventual retained-layer use case; inherent methods would not generalise.
-
-**Accepted trade-off:** External callers must import `DisplayListCore` (or use the prelude) to access `.commands()` / `.bounds()` / `.len()` on `DisplayList`. The flui-rendering chain hit this friction and resolved it via prelude import; flui-engine's wgpu backend does the same.
-
-### 3. `WarmUpCanvas` + `ShaderWarmUp` subsystem deletion (decorative)
-
-**Rule:** Strategy clause "Every dyn, every Arc, every RwLock must defend its existence in writing"; verdict §12 rejected design #10 ("Convert `WarmUpCanvas` to a closed enum vocabulary -- rejected; deletion is the answer").
-
-**Choice:** In Mythos chain Step 1, the `WarmUpCanvas` trait (4 abstract methods, 0 production impls) was deleted from [`src/binding.rs`](src/binding.rs). In Step 2, the entire `ShaderWarmUp` trait + `DefaultShaderWarmUp` struct + `shader_warm_up: Option<Box<dyn ShaderWarmUp>>` field on `PaintingBinding` + `with_shader_warm_up` constructor variant + `set_shader_warm_up` setter + `BindingBase::init_instances` warm-up branch all went with it.
-
-**Alternatives:**
-- Convert `WarmUpCanvas` to a closed enum vocabulary `WarmUpCommand` -- rejected. Salvages the API but perpetuates the lie that warm-up actually does something. The `execute()` body of the original `DefaultShaderWarmUp` literally documented "in a real implementation, we'd create an offscreen canvas here".
-- Keep `ShaderWarmUp` as a trait with a stub impl, file real implementation as future work -- rejected. Future code lands cleaner on a deleted-then-rebuilt slate than on a stub-with-1-impl.
-
-**Accepted trade-off:** If a future Mythos chain needs real shader warm-up, the right shape is an offscreen canvas wired through `flui-engine`'s wgpu surface API (which does not yet exist in the workspace). Rebuilding will be ~50 LOC; the deleted ~75 LOC of trait + struct + binding plumbing was hostile to that rebuild. Tracked in `## Outstanding refactors` below.
-
-### 4. `ClipContext` retention as cross-crate seam (1 prod impl)
-
-**Rule:** Strategy clause "Composition over inheritance" but with awareness of cross-crate ergonomics.
-
-**Choice:** [`src/clip_context.rs`](src/clip_context.rs) carries the `ClipContext` trait with 4 default `clip_*_and_paint` methods (rect, rrect, rsuperellipse, path — full Flutter `painting/clip.dart` parity). The trait's only required method is `canvas(&mut self) -> &mut Canvas` (Flutter naming; the `&mut self -> &mut Canvas` signature does not need the Rust `_mut` suffix). The trait has exactly 1 production impl (`CanvasContext` in `flui-rendering::context::canvas`) + 1 test impl in `clip_context.rs`'s own tests module.
-
-**Alternatives:**
-- Demote the trait to `pub(crate)` and re-implement the 3 default methods as free functions taking `&mut Canvas` -- rejected. Would force `flui-rendering::CanvasContext` to call free functions awkwardly; the trait method dispatch is more ergonomic.
-- Inline the 3 default methods into `flui-rendering::CanvasContext` directly -- rejected. Would duplicate ~80 LOC of clip dispatch logic at the only caller site; the trait's default-method pattern is the legitimate boilerplate-saving mechanism.
-
-**Accepted trade-off:** The trait stays despite having only 1 production impl. The 3 default methods provide real value at the caller site; the seal (`canvas_mut` as the only required method) keeps the surface narrow. Documented as a legitimate single-impl trait for ergonomic cross-crate dispatch.
+`PaintingBinding` owned an image cache nothing read (the live decode cache
+is `flui_widgets::image::decode_cache`) and a font-change notifier nothing
+listened to; its one live accessor reached the process-wide font system,
+which `shared_font_system()` now names directly, and `register_font` lives
+on `SharedFontSystem`. `ClipContext` had no production implementor.
 
 ### 5. `Canvas::finish(self) -> DisplayList` stays infallible
 
-**Rule:** Strategy clause "Behavior as floor, everything else designed for Rust" -- Flutter behavior as the floor for the common case.
+Returning `Result` would put a `?` on every paint call site to report a
+programmer error Flutter also reports only in debug; `save_count()` is there
+for a caller that wants to check.
 
-**Choice:** `Canvas::finish(self)` returns `DisplayList` directly (not `Result<DisplayList, PaintingError>`). On unrestored `save()` calls, it fires `debug_assert!` (Mythos chain Step 10) to catch the bug during tests, and `tracing::warn!` for release-build observability. Flutter's `PictureRecorder.endRecording()` does the same -- silent finalisation with debug-time sanity checks.
-
-**Alternatives:**
-- Change to `finish(self) -> Result<DisplayList, PaintingError::SaveRestoreImbalance>` -- rejected. Massive caller-side ripple (every paint phase call site has to handle `Result`). Flutter parity matters more than the bug-class catching in release; debug builds already catch via the new `debug_assert!`.
-- Add `try_finish(self) -> Result<...>` companion method -- rejected. Adds API surface duplication without solving the caller-side problem; if callers want explicit error handling, they check `save_count() == 1` before calling `finish()`.
-
-**Accepted trade-off:** Release builds silently log the imbalance via tracing rather than surface it as an error. Developer-facing test builds catch the imbalance via panic. The trade matches Flutter's behaviour and avoids the workspace ripple. Verdict §12 rejected design "Make `Canvas::finish()` fallible".
-
-### 6. `Paint` interning per `Canvas::draw_*` (per-canvas `Arc<Paint>` pool)
-
-**Rule:** No-quick-wins memo's "concrete-blocker-with-named-dependency" exception; verdict §9 (Data-Oriented Notes).
-
-**Choice:** Every `Canvas::draw_*` method routes its `Paint` parameter through the crate-private `Canvas::intern_paint` ([`src/canvas/mod.rs`](src/canvas/mod.rs)): a per-canvas `Vec<Arc<Paint>>` pool is scanned linearly for a structurally equal entry; a hit returns an `Arc::clone` (one refcount bump), a miss allocates one `Arc::new(paint.clone())` to seed the pool. `DrawCommand` variants carry `paint: Arc<Paint>` ([`src/display_list/command.rs`](src/display_list/command.rs)), and `flui-engine` reads `&Paint` through the `Arc` at GPU lowering, so no handle-resolution table exists on the engine side. This was initially deferred behind named blockers (`Paint: Hash + Eq`, engine-side handle resolution); the shape that landed dissolves both.
-
-**Alternatives:**
-- `PaintHandle(NonZeroU32)` + per-canvas table + engine-side handle resolution -- rejected. Requires `Paint: Hash + Eq` (Paint contains `f32` colour components, so bit-pattern hashing or `ordered-float` wrapping) and a coordinated wgpu-backend change; the `Arc<Paint>` shape gets the same allocation win with neither, and realistic canvases hold few distinct paints (1-8 typical), so linear structural comparison beats a hash table anyway (see the [`Canvas::paint_pool`](src/canvas/mod.rs) doc).
-- Use `Cow<'a, Paint>` borrowing in `DrawCommand` -- rejected. Adds lifetime complexity to every `DrawCommand` variant; would force the `DisplayList` to hold the source borrows for its lifetime; ripples into `Arc<DisplayList>` retained-layer use cases where the borrow source is gone.
-
-**Accepted trade-off:** The first use of a distinct paint still pays one full `Paint::clone` (~80-200 bytes incl. optional `Box<Shader>` payload) to seed the pool, and every draw pays an O(distinct-paints) linear scan. Both amortise across a recording; no criterion benchmark has measured the win on a realistic workload (see Outstanding refactors "Paint interning at construction").
-
-### 7. The zero-area background guard sits on the FILL, not on a caller
+### 6. The zero-area background guard sits on the FILL, not on a caller
 
 **Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — behaviour is the floor, and an
 improvement over the reference owes a named record plus a replacement test.
@@ -156,7 +183,8 @@ precisely the reason the guard was worth adding for `ColoredBox` in the first pl
 (`crates/flui-objects/tests/render_object_harness.rs`) covers all three degenerate shapes. The twin
 that pinned the old unconditional behaviour is deleted rather than left contradicting it.
 
-### 8. `anti_alias` is a paint OPTION, not a `BoxDecoration` field
+
+### 7. `anti_alias` is a paint OPTION, not a `BoxDecoration` field
 
 **Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #2 — pick the best-known shape and say
 where it comes from.
@@ -172,12 +200,10 @@ that is not style.
 
 **Scope, stated:** the flag reaches the SOLID COLOUR fill and nothing else. Borders, shadows and
 images keep the default because a `ColoredBox` has none of them, so the reference says nothing
-about what they should do when it is off. Gradient backgrounds keep it for a different reason —
-`DrawGradient`/`DrawGradientRRect` carry a shader and no `Paint`, so there is nowhere to put the
-flag without widening the closed `DrawCommand` enum that is the trust boundary with the wgpu
-backend (mapping decision 1). The circle-gradient silhouette COULD carry it, since it goes through
-a `Paint`, and deliberately does not: one gradient shape smoothing differently from its rect and
-rrect neighbours is worse than a limitation that holds uniformly. `DecorationPaintOptions` is
+about what they should do when it is off. Gradient backgrounds keep it for the same reason: a
+`ColoredBox` has no gradient either, so the only reachable gradient is a `DecoratedBox`'s, where the
+reference has no anti-alias knob. (They COULD carry it — a gradient is a shader on an ordinary
+fill paint since ADR-0066 — and deliberately do not.) `DecorationPaintOptions` is
 `#[non_exhaustive]`, so growing it is additive if a consumer appears.
 
 **It reaches the GPU, and that took wiring.** `Paint::anti_alias` had existed as metadata for a
@@ -209,7 +235,8 @@ out, and nothing for the default. Printing it unconditionally would have added a
 line of every snapshot and changed all of them at once; printing only the deviation keeps existing
 snapshots untouched while making the opt-out visible to any test reading those lines.
 
-### 9. A style's font family is resolved against the host before it reaches the shaper
+
+### 8. A style's font family is resolved against the host before it reaches the shaper
 
 **Rule:** Prime Directive rule #1 — a behavioural divergence from the reference is recorded with the
 test that replaces the reference's own coverage.
@@ -312,7 +339,8 @@ request); `probe-variable-wght.ttf` carries an `fvar` `wght` axis spanning 100..
 `usWeightClass` of 400 (the variable-weight arm). Each of the three fails when its production arm is
 reverted; that was verified, not assumed.
 
-### 10. Intrinsic width probes skip `max_lines` truncation, floor at ellipsis
+
+### 9. Intrinsic width probes skip `max_lines` truncation, floor at ellipsis
 
 **Rule:** Prime Directive rule #1 — Flutter is not a clean oracle for this edge
 ([flutter/flutter#13512](https://github.com/flutter/flutter/issues/13512) still open; pinned
@@ -348,231 +376,15 @@ committed layout. Locked by `max_lines_does_not_collapse_min_intrinsic_width`,
 `wide_ellipsis_floors_min_intrinsic_width`, and the matching `RenderParagraph` intrinsic
 tests.
 
-### Net unsafe delta: 0
-
-The crate is `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs) before and after the chain. Zero `unsafe` blocks introduced; zero removed. Distinct from the `flui-layer` chain's -39 net delta (flui-layer had 39 cargo-cult `unsafe impl Send + Sync` blocks to delete; flui-painting never had them).
 
 ---
 
-## Thread safety
-
-`flui-painting` runs in the paint phase (scene construction) and the engine phase (GPU lowering). Per strategy clause "sync hot path", neither is multi-threaded within a single canvas/scene. Cross-thread movement is by value (`Canvas: Send`, `DisplayList: Send + Sync`).
-
-| Site | Primitive | Category | Notes |
-|---|---|---|---|
-| `Canvas` ([`src/canvas/mod.rs`](src/canvas/mod.rs)) | Owned struct | Auto-`Send` + auto-`!Sync` | No interior mutability on Canvas itself. Recording is single-threaded by design. |
-| `DisplayList` ([`src/display_list/mod.rs`](src/display_list/mod.rs)) | Owned struct | Auto-`Send + Sync` | Consumed-once value; immutable from public API after `Canvas::finish()`. |
-| `Arc<DisplayList>` blanket impl ([`src/display_list/sealed.rs`](src/display_list/sealed.rs)) | `Arc<>` wrap | Send + Sync via `Arc` | Forward-compatible blanket impl for future retained-layer caching across frames. `flui-layer::Layer::Picture` stores `DisplayList` by value today. Read-only via `DisplayListCore`. |
-| `Paint`, `Path`, `Shader`, `Image` etc. (re-exported from `flui_types::painting`) | Owned values | Auto-`Send + Sync` | Validated at construction in `flui-types`. |
-| `binding::ImageCache::cache` ([`src/binding.rs`](src/binding.rs)) | `RwLock<HashMap<String, CachedImage>>` | Shared infrastructure | Off per-command hot path per [`docs/PORT.md`](../../docs/PORT.md) lock-decision table. |
-| `binding::ImageCache::live_images` ([`src/binding.rs`](src/binding.rs)) | `RwLock<HashMap<String, CachedImage>>` | Shared infrastructure | Same; off per-command hot path. |
-| `binding::ImageCache::current_size_bytes` / `max_images` / `max_size_bytes` | `AtomicUsize` (3 sites) | Lock-free atomics | Set/get counters; no contention. |
-| `binding::SystemFontsNotifier::listeners` ([`src/binding.rs`](src/binding.rs)) | `RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>` | Setup-phase registry | System font change notifications are rare; off per-command hot path. |
-| `binding::PaintingBinding` | Plain owned value, constructed via `PaintingBinding::new()` | N/A — no longer process-global | Retired from `impl_binding_singleton!`: the macro (and the `flui-foundation::{HasInstance, BindingBase}` trait pair it implemented) is deleted entirely. `PaintingBinding` is now a field on `flui-app`'s `SharedEngineServices`, owned by `AppRuntime` and resolved once per owner thread — one value per process-composition-root, not a `'static` singleton other threads reach ambiently. |
-| `text_layout::layout::FONT_SYSTEM` ([`src/text_layout/layout.rs`](src/text_layout/layout.rs)) | `static OnceLock<Mutex<FontSystem>>` (feature-gated) | Lazy init + per-shape lock | cosmic-text font system; held during `Buffer::shape_until_scroll` and cursor queries only — cosmic-text 0.19's lazy setters (`set_size`/`set_text`/`set_rich_text`) no longer take it, so buffers are fully described before the lock is acquired. Off per-command hot path; per-text-layout-creation. Residual contention on multi-text-widget workloads -- filed in Outstanding refactors (per-thread `FontSystem`). |
-| `SceneBuilder::stack` (per-Canvas owned) | Owned `Vec<...>` | Single-mutator | Borrow checker enforces single-writer-during-build at compile time. |
-**Zero `unsafe impl Send/Sync` blocks anywhere in the crate.** `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs). Net unsafe delta for this chain: **0**.
-
----
-
-## Friction log
-
-Known sites that do not yet match the methodology but are not violations of the current refusal triggers. Each entry names the site and the next planned step.
-
-### Allocation hot path: `Paint.clone()` per draw_* -- landed as per-canvas `Arc<Paint>` interning
-
-**Site:** Every `Canvas::draw_*` method in [`src/canvas/drawing.rs`](src/canvas/drawing.rs).
-
-**Status:** Landed. `Canvas::intern_paint` ([`src/canvas/mod.rs`](src/canvas/mod.rs)) dedups structurally equal paints into a per-canvas `Arc<Paint>` pool, so a repeated paint costs one refcount bump instead of a full `Paint::clone` (~80-200 bytes); `DrawCommand` carries `paint: Arc<Paint>`. See Mapping decision #6 for the landed shape and Outstanding refactors "Paint interning at construction" for the one narrowed remainder (no measured benchmark). Original cost analysis: [`docs/research/2026-05-20-flui-painting-alloc-audit.md`](../../docs/research/2026-05-20-flui-painting-alloc-audit.md) finding F1.
-
-### Allocation hot path: per-`DrawCommand` 64-byte `Matrix4` baking
-
-**Site:** [`src/display_list/command.rs`](src/display_list/command.rs) -- every variant carries `transform: Matrix4`.
-
-**Cost:** 64 bytes per command, 64 KB for a 1000-command frame. If transform invariant across most commands, redundant. Audit finding F2.
-
-**Status:** Deferred to Outstanding refactor "Flat-bytecode DisplayList representation" (very high blast radius; named blockers: bytecode encoder/decoder, operation re-shape, measured benefit).
-
-### Allocation hot path: `Path.clone()` + `Box::new(Path::clone())`
-
-**Sites:**
-- `Canvas::draw_path` -- [`src/canvas/drawing.rs:107`](src/canvas/drawing.rs) -- clones `Path` (Vec<PathCommand>).
-- `Canvas::draw_shadow` -- [`src/canvas/drawing.rs`](src/canvas/drawing.rs) -- same.
-- `Canvas::clip_path` / `clip_path_ext` -- [`src/canvas/clipping.rs`](src/canvas/clipping.rs) -- additional `Box::new()` for `ClipShape::Path` variant uniformity.
-
-**Cost:** O(N) per path command + heap allocation; double allocation per `clip_path`. Audit findings F3 + F4.
-
-**Status:** Deferred to Outstanding refactors "Path Clone-on-Write" (`flui-types` breaking change blocker) and the smaller `ClipShape::Path(Path)` un-box (bundled with the same Path-CoW change).
-
-### cosmic-text `FontSystem` mutex contention
-
-**Site:** `text_layout::layout::FONT_SYSTEM` at [`src/text_layout/layout.rs`](src/text_layout/layout.rs).
-
-**Cost:** Per-shape lock held during `Buffer::set_text` + `Buffer::shape_until_scroll` (1-10ms for complex text). Multi-text-widget workloads serialise. Audit finding F5.
-
-**Status:** Deferred to Outstanding refactor "Per-thread cosmic-text FontSystem". The former blocker (cosmic-text 0.12 vs glyphon's 0.14 duplicate-version split) is resolved: the workspace is unified on cosmic-text 0.19 (2026-08 dep refresh).
-
-### Per-`draw_*` `tracing::instrument` -- NOT added by design
-
-**Sites:** All 29 `Canvas::draw_*` methods.
-
-**Status:** Verdict §13 Step 9 explicitly declined per-draw spans (Span allocation + thread-local lookup overhead non-trivial for 1000+ draws/frame). Existing tracing spans live on `Canvas::save_layer`, `Canvas::finish`, `Canvas::extend_from`, `Canvas::append_display_list_at_offset`, `DisplayList::append`, `DisplayList::to_opacity`, `PaintingBinding::handle_*` -- all coarser-than-per-draw. Audit finding F6.
-
-### Companion docs predate the template
-
-**Sites:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md), [`docs/README.md`](docs/README.md).
-
-**Status:** Retained as reference companions per the [`docs/PORT.md`](../../docs/PORT.md) graft instructions ("existing port-flavoured docs are integrated into the template in-place; do not rewrite"). This templated `ARCHITECTURE.md` at crate root is the authoritative document; the `docs/*.md` files are deeper companions linked from this file's Flutter source mapping section.
-
-[`docs/MIGRATION.md`](docs/MIGRATION.md) was stubbed in Mythos chain Step 3 (the original described migrations between non-existent crate versions).
-
-### Doctests use the canvas/drawing API correctly post-split
-
-**Sites:** ~20 doc examples across the post-split submodule files.
-
-**Status:** No verified breakage during the chain. If doctest failures surface in a future audit, they get tracked here.
-
-### CLAUDE.md drift (workspace-wide) -- resolved
-
-**Site:** [`CLAUDE.md`](../../CLAUDE.md).
-
-**Status:** Resolved. The root `CLAUDE.md` no longer carries a "Current Development Focus" crate inventory at all -- it is a thin shim that imports [`AGENTS.md`](../../AGENTS.md), so there is no second crate list left to drift. The active-crate inventory lives in [`docs/crates.md`](../../docs/crates.md) and the root `Cargo.toml` workspace members.
-
----
-
-## Outstanding refactors
-
-Concrete cleanups visible from `flui-painting` outward, sized for an `/aif-implement` dispatch. Each entry names a file/site and what would need to change. Named blockers are flagged per the no-quick-wins memo's "concrete-blocker-with-named-dependency" exception.
-
-### "Paint interning at construction" (landed)
-
-**Goal (met):** Replace per-`Canvas::draw_*` `Paint::clone()` with per-canvas interning. Landed as `Canvas::intern_paint` over a per-canvas `Vec<Arc<Paint>>` pool ([`src/canvas/mod.rs`](src/canvas/mod.rs)), cleared on `reset()`; `DrawCommand` variants carry `paint: Arc<Paint>` ([`src/display_list/command.rs`](src/display_list/command.rs)). The landed shape differs from the one sketched here -- structural-equality linear scan instead of `Paint: Hash + Eq` (realistic canvases hold 1-8 distinct paints, so a hash table loses), and `Arc` deref instead of `PaintHandle(NonZeroU32)` + engine-side resolution (`flui-engine` reads `&Paint` through the `Arc` unchanged). See Mapping decision #6.
-
-**Still open (narrowed):** the measured criterion benchmark for a 1,000-`draw_rect` synthetic workload was never captured; the win is reasoned, not measured.
-
-**Reference:** [`docs/research/2026-05-20-flui-painting-alloc-audit.md`](../../docs/research/2026-05-20-flui-painting-alloc-audit.md) finding F1.
-
-### "Flat-bytecode `Vec<u8>` `DisplayList` representation"
-
-**Goal:** Replace `Vec<DrawCommand>` with a byte buffer + opcode tags (Skia `SkRecord` shape). The engine decodes opcode + payload at GPU lowering. Dedups invariant transforms across runs.
-
-**Files:** [`src/display_list/mod.rs`](src/display_list/mod.rs), [`src/display_list/command.rs`](src/display_list/command.rs), [`src/display_list/command_ops.rs`](src/display_list/command_ops.rs); ripples into engine + retained-layer consumers.
-
-**Named blockers:**
-- Bytecode encoder per `DrawCommand` variant.
-- Bytecode decoder on `flui-engine` side.
-- Re-shape `with_opacity`, `apply_transform`, `bounds`, `filter`, `map`, `to_opacity` to work over bytecode (significant refactor of `command_ops.rs`).
-- Loss of `serde` derive ergonomics on `DrawCommand`; would need hand-rolled serde for the byte buffer.
-- Measured benchmark.
-
-**Reference:** Audit F2.
-
-### "`Path` Clone-on-Write (`Arc<[PathCommand]>`)"
-
-**Goal:** Change `Path` interior from `Vec<PathCommand>` to `Arc<[PathCommand]>`. `Path::clone()` becomes `Arc::clone()` (one atomic increment). Eliminates per-`draw_path` heap allocation.
-
-**Files:** `flui-types::painting::Path` (workspace breaking change).
-
-**Named blockers:**
-- `Path` lives in `flui-types::painting`. Requires a `flui-types` breaking change.
-- Existing `Path::push` / `Path::move_to` callers compile unchanged via `Arc::make_mut` but pay one-time cost on first mutation.
-- Measured benchmark on N-repeated-icon-paths workload.
-
-**Reference:** Audit F3 + F4.
-
-### "Per-thread cosmic-text `FontSystem` (cosmic-text 0.13+ upgrade)"
-
-**Goal:** Eliminate the global `Mutex<FontSystem>` contention by using cosmic-text 0.13+'s thread-local font system support.
-
-**Files:** [`src/text_layout/layout.rs`](src/text_layout/layout.rs), [`src/text_layout/measure.rs`](src/text_layout/measure.rs), [`Cargo.toml`](Cargo.toml).
-
-**Named blockers:**
-- ~~cosmic-text 0.12 → 0.13+ upgrade~~ — done: workspace unified on cosmic-text 0.19 / glyphon 0.12 (2026-08 dep refresh); the duplicate-version split is gone.
-- Measured benchmark on concurrent text-shape workload.
-
-**Reference:** Audit F5.
-
-### "UAX #29 word segmentation for `get_word_boundary`"
-
-**Goal:** Replace the deliberate "non-whitespace run" semantics in
-`TextLayout::get_word_boundary` with full UAX #29 word segmentation via the
-`unicode-segmentation` crate, matching platform text-selection behaviour for
-scripts without whitespace word breaks.
-
-**Files:** [`src/text_layout/layout.rs`](src/text_layout/layout.rs), [`Cargo.toml`](Cargo.toml).
-
-**Named blockers:**
-- Workspace dependency decision on `unicode-segmentation` (new crate in the tree).
-- Parity check against Flutter's `WordBoundary` semantics before switching defaults.
-
-### "Typed `NonNegativePixels` wrapper for radius/elevation"
-
-**Goal:** Replace `debug_assert!` panics on negative `radius` / `elevation` in `Canvas::draw_circle` / `Canvas::draw_shadow` with type-level enforcement via `NonNegativePixels(Pixels)`.
-
-**Files:** `flui-types::geometry::Pixels` (new wrapper type); ripples into [`src/canvas/drawing.rs`](src/canvas/drawing.rs) `draw_circle`, `draw_shadow`, `draw_point` signatures.
-
-**Named blockers:**
-- `flui-types` breaking change to add `NonNegativePixels`.
-- Ripples into every geometric API in the workspace that uses radius/elevation.
-
-### "Real offscreen-canvas-backed shader warm-up"
-
-**Goal:** Re-implement the deleted (Mythos chain Step 2) shader warm-up as an offscreen-canvas system that actually bootstraps shader compilation.
-
-**Files:** New `crates/flui-painting/src/warm_up/`; integrates with `flui-engine`'s wgpu surface API.
-
-**Named blockers:**
-- wgpu surface API for offscreen canvases does not yet exist in the workspace; needs `flui-engine`-side groundwork.
-- Measured frame-time benefit (the original Flutter rationale was "shader compilation can cause jank during animations"; jank measurement requires a real workload + GPU profiler).
-
-### "`gen_command_accessors!` macro for `DrawCommand` 29-variant operations"
-
-**Goal:** Apply the `flui-layer` Step 4 hand-written `macro_rules!` pattern to collapse [`src/display_list/command_ops.rs`](src/display_list/command_ops.rs) (~1,200 LOC of per-variant pattern matches) via a single macro invocation.
-
-**Files:** New `src/display_list/dispatch.rs`; modifies `command_ops.rs`.
-
-**Named blockers:**
-- The macro must mirror `DrawCommand`'s per-variant payload shapes 1:1, but each of the 29 variants has a distinct named-field set (`rect+paint+transform` vs. `path+paint+transform` vs. `child+filter+bounds+blend_mode+transform`). A bare `macro_rules!` arm cannot synthesise the field tokens from a single variant name, so the choices are: (a) hand-list every variant's payload tuple at the macro invocation site (defeats the LOC win) or (b) introduce the [`paste`](https://crates.io/crates/paste) crate as a workspace dependency so the macro can stamp out `transform_mut`/`transform`/`apply_transform` arms from the variant name alone.
-- Pick the `paste` adoption path. Coordinate workspace-wide: `flui-layer`'s Step 4 macro and `flui-engine`'s dispatch table would benefit from the same dep, so dep introduction should be a workspace-level decision rather than a per-crate one.
-
-**Reference:** `flui-layer` Step 4 commit `366f6c10`.
-
-### "Property tests for canvas/display_list invariants"
-
-**Goal:** Add `proptest`-based tests for:
-- For any sequence of `(draw_*, save, restore, save_layer, restore)`, `Canvas::finish()` produces a consistent DisplayList.
-- For any non-empty Canvas, `canvas.bounds()` contains the union of `cmd.bounds()` for all commands.
-- `to_opacity(1.0)` produces a byte-equivalent DisplayList modulo Paint Cow shape.
-
-**Files:** New `crates/flui-painting/tests/proptest_canvas.rs`, new `proptest` dev-dep.
-
-**Named blockers:**
-- `proptest` dev-dep decision.
-
-**Reference:** Mirrors `flui-rendering` and `flui-layer` chain Outstanding entries.
-
-### "Mutation testing with `cargo-mutants`"
-
-**Goal:** Run `cargo-mutants` against `flui-painting` to surface untested mutation paths.
-
-**Files:** New CI config; no source changes.
-
-**Named blockers:**
-- CI infra extension.
-
-### "Doctest sweep" (completed during code-review fixup pass 2)
-
-**Goal:** Verify all ~20 doc examples in the post-split files compile cleanly.
-
-**Status:** Completed during code-review fixup pass 2. `cargo test -p flui-painting --doc` ran clean: 19 doctests detected, 18 marked `rust,ignore` by design (they show idiomatic usage that depends on `prelude::*` imports we deliberately keep out of doc-test isolation), 1 executable doctest passed, 0 failures.
-
----
-
-## Notes
-
-- **Net unsafe delta for this chain: 0.** The crate is and stays `#[forbid(unsafe_code)]` at [`src/lib.rs:151`](src/lib.rs).
-- **Net LOC delta in `src/` production code:** approximately -2,000 LOC across the 4 god-module splits + dead-code deletions (canvas.rs 3305 → canvas/ 2187; display_list.rs 2434 → display_list/ 2016; text_layout.rs 1243 → text_layout/ 1161; text_painter.rs 990 → text_painter/ 873; binding.rs trimmed; WarmUpCanvas + ShaderWarmUp + DefaultShaderWarmUp deletions). New `tests/` integration files add ~580 LOC (4 files extracted from inline test blocks).
-- **Post-fixup test counts** (after code-review fixup pass 2): `cargo test -p flui-painting --lib` → 23 passing; `cargo test -p flui-painting --tests` → 141 passing across 13 integration files with default features; `cargo test --no-default-features -p flui-painting --tests` → 75 passing (cosmic-text-shape-dependent tests cfg-gated out, fallback tests cfg-gated in). Combined lib+tests under default features: 164; combined lib+tests under no-default features: 93.
-- **`port-check.sh` re-confirmed in Mythos chain Step 13** to cover the post-split `crates/flui-painting/src/` subdirectories (Triggers 1, 2, 3).
-- **Companion docs preserved.** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) + [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) + [`docs/README.md`](docs/README.md) stay alongside this templated file per the [`docs/PORT.md`](../../docs/PORT.md) graft instructions.
-- **CLAUDE.md drift** recorded in `## Friction log` is resolved: the root `CLAUDE.md` is now a thin shim importing `AGENTS.md` and carries no crate inventory.
+## Open items
+
+- **Nothing marks text render objects dirty on `register_font`.** The caches
+  heal at the next layout (they key on `generation()`), but the layout is
+  not requested by the registration — Flutter's `PaintingBinding.systemFonts`
+  listener is a realm-level broadcast that belongs to flui-app.
+- **`Save`/`Restore` carry a transform nobody reads.** Every command is
+  stamped, the markers included; a marker-only shape would save 64 bytes
+  per scope at the cost of a second command type on the wire.

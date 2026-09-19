@@ -22,6 +22,7 @@ pub(crate) mod hot_reload;
 pub(crate) mod lifecycle;
 pub(crate) mod logging;
 pub(crate) mod media_query_root;
+mod performance_stats;
 pub(crate) mod presentation;
 pub(crate) mod presentation_forest;
 pub(crate) mod raster_lane;

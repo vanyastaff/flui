@@ -39,7 +39,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use flui_engine::wgpu::Renderer;
+use flui_engine::Renderer;
 use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
 use flui_platform::{WindowOptions, current_platform};
@@ -51,8 +51,6 @@ use flui_types::{
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
 fn build_test_scene(width: f32, height: f32) -> Scene {
-    let mut tree = LayerTree::new();
-
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 
@@ -92,8 +90,7 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
         &Paint::fill(Color::rgb(255, 200, 0)),
     );
 
-    let root_id = tree.insert(Layer::from(canvas_layer));
-    Scene::new(Size::new(px(width), px(height)), tree, Some(root_id), 1)
+    Scene::new(LayerTree::new(Layer::from(canvas_layer)))
 }
 
 fn main() {

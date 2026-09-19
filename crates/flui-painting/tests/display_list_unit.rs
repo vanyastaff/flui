@@ -3,8 +3,7 @@
 
 use std::sync::Arc;
 
-use flui_painting::display_list::Shader;
-use flui_painting::{BlendMode, Canvas, DisplayList, DisplayListCore, DrawCommand, Paint};
+use flui_painting::{Canvas, DisplayList, DrawCommand, DrawOp, Paint, Shader};
 use flui_types::{
     geometry::{Matrix4, Rect, px},
     styling::Color,
@@ -15,44 +14,34 @@ fn test_display_list_creation() {
     let display_list = DisplayList::new();
     assert!(display_list.is_empty());
     assert_eq!(display_list.len(), 0);
-    assert_eq!(display_list.bounds(), Rect::ZERO);
+    assert_eq!(display_list.bounds(), None);
 }
 
 #[test]
-fn test_display_list_clear() {
-    // Build via Canvas because `DisplayList::push` is pub(crate).
-    use flui_painting::Canvas;
-
-    let mut canvas = Canvas::new();
-    canvas.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
-        &Paint::default(),
-    );
-
-    let mut display_list = canvas.finish();
-    assert!(!display_list.is_empty());
-
-    display_list.clear();
-    assert!(display_list.is_empty());
-    assert_eq!(display_list.bounds(), Rect::ZERO);
-}
-
-#[test]
-fn test_display_list_apply_transform_via_canvas() {
-    use flui_painting::Canvas;
-
-    let mut canvas = Canvas::new();
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
-    canvas.draw_rect(rect, &Paint::fill(Color::RED));
-
-    let mut dl = canvas.finish();
-    assert_eq!(dl.len(), 1);
-
-    let translation = Matrix4::translation(50.0, 0.0, 0.0);
-    dl.apply_transform(translation);
-
-    // Bounds should have shifted (left + 50.0)
-    assert!(dl.bounds().left() > px(0.0));
+fn isolated_append_preserves_bounds_and_scopes_the_run() {
+    let rect = Rect::from_xywh(px(100.0), px(200.0), px(30.0), px(40.0));
+    let run = flui_painting::testing::record(|canvas| {
+        canvas.clip_rect(rect);
+        canvas.draw_rect(rect, &Paint::fill(Color::RED));
+    });
+    let mut combined = DisplayList::new();
+    combined.append_isolated(DisplayList::new());
+    assert!(combined.is_empty());
+    combined.append_isolated(run);
+    assert_eq!(combined.bounds(), Some(rect));
+    let ops: Vec<&DrawOp> = combined.iter().map(|c| &c.op).collect();
+    assert!(matches!(
+        ops.as_slice(),
+        [
+            DrawOp::Save,
+            DrawOp::ClipRect { .. },
+            DrawOp::Rect { .. },
+            DrawOp::Restore,
+        ]
+    ));
+    combined.append_isolated(DisplayList::new());
+    assert_eq!(combined.len(), 4);
+    assert_eq!(combined.bounds(), Some(rect));
 }
 
 #[test]
@@ -69,68 +58,13 @@ fn test_display_list_command_iteration() {
         );
     });
 
-    let count = dl.commands().count();
+    let count = dl.commands().len();
     assert_eq!(count, 2);
 
     // Each command is a DrawRect.
     for cmd in dl.commands() {
-        assert!(matches!(cmd, DrawCommand::DrawRect { .. }));
+        assert!(matches!(cmd.op, DrawOp::Rect { .. }));
     }
-}
-
-/// Regression test for the `MAX_EFFECT_DEPTH` saturation guard added
-/// during the Mythos code-review fixup pass.
-///
-/// Builds a 256-deep `ShaderMask` chain (4× the 64-level cap) and
-/// calls both `DisplayList::to_opacity` and
-/// `DisplayList::apply_transform`. Without the depth cap, each
-/// recursion frame holds a full `DrawCommand` value plus the
-/// `Box<DisplayList>` drop ladder and blows the default thread stack
-/// (~8 MB) on the 800th–1500th frame. With the cap the call returns
-/// after visiting the first 64 levels and emits a `tracing::warn!`
-/// saturation event for the rest.
-///
-/// We do *not* assert on log output (no test subscriber wired here);
-/// the load-bearing assertion is that the call returns at all
-/// instead of overflowing.
-///
-/// `DisplayList::commands` / `push` are `pub(crate)`, so we
-/// construct the chain by seeding a single-command `DisplayList`
-/// through `Canvas` and re-mapping it via `DisplayList::map` 256
-/// times — each pass replaces the single command with a `ShaderMask`
-/// whose child is the previous step's `DisplayList`.
-#[test]
-fn nested_shader_mask_opacity_depth_saturates_without_overflow() {
-    use flui_painting::Canvas;
-
-    // Seed: a single-command DisplayList. The exact command is
-    // irrelevant — only the length-1 shape matters so `map` produces
-    // a length-1 wrapper list at each step.
-    let mut seed_canvas = Canvas::new();
-    seed_canvas.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(1.0), px(1.0)),
-        &Paint::fill(Color::BLACK),
-    );
-    let mut current = seed_canvas.finish();
-
-    for _ in 0..256 {
-        let prev = current.clone();
-        current = current.map(|_cmd| DrawCommand::ShaderMask {
-            child: Box::new(prev.clone()),
-            shader: Shader::Solid {
-                color: Color::WHITE,
-            },
-            bounds: Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0)),
-            blend_mode: BlendMode::SrcOver,
-            transform: Matrix4::identity(),
-        });
-    }
-
-    // Both calls must return without stack overflow.
-    let _ = current.to_opacity(0.5);
-
-    let mut transformed = current.clone();
-    transformed.apply_transform(Matrix4::translation(1.0, 2.0, 0.0));
 }
 
 // ============================================================================
@@ -146,8 +80,8 @@ fn nested_shader_mask_opacity_depth_saturates_without_overflow() {
 /// variant so an incorrectly-recorded command fails the test loudly
 /// instead of silently passing.
 fn rect_paint(cmd: &DrawCommand) -> &Arc<Paint> {
-    match cmd {
-        DrawCommand::DrawRect { paint, .. } => paint,
+    match &cmd.op {
+        DrawOp::Rect { paint, .. } => paint,
         other => panic!("expected DrawRect, got {other:?}"),
     }
 }
@@ -169,7 +103,7 @@ fn interning_shares_arc_for_identical_paints() {
     );
 
     let dl = canvas.finish();
-    let cmds: Vec<&DrawCommand> = dl.commands().collect();
+    let cmds: Vec<&DrawCommand> = dl.commands().iter().collect();
     assert_eq!(cmds.len(), 2);
 
     let p0 = rect_paint(cmds[0]);
@@ -196,7 +130,7 @@ fn interning_keeps_distinct_paints_separate() {
     );
 
     let dl = canvas.finish();
-    let cmds: Vec<&DrawCommand> = dl.commands().collect();
+    let cmds: Vec<&DrawCommand> = dl.commands().iter().collect();
     assert_eq!(cmds.len(), 2);
 
     let p0 = rect_paint(cmds[0]);
@@ -229,7 +163,7 @@ fn interning_100_draws_share_single_arc() {
     }
 
     let dl = canvas.finish();
-    let cmds: Vec<&DrawCommand> = dl.commands().collect();
+    let cmds: Vec<&DrawCommand> = dl.commands().iter().collect();
     assert_eq!(cmds.len(), 100);
 
     let first_paint = rect_paint(cmds[0]);
@@ -268,7 +202,7 @@ fn interning_distinguishes_paints_with_different_shaders() {
     );
 
     let dl = canvas.finish();
-    let cmds: Vec<&DrawCommand> = dl.commands().collect();
+    let cmds: Vec<&DrawCommand> = dl.commands().iter().collect();
 
     let p0 = rect_paint(cmds[0]);
     let p1 = rect_paint(cmds[1]);
@@ -297,30 +231,87 @@ fn bounds_less_leading_command_does_not_seed_the_origin() {
     canvas.clip_rect(far);
     canvas.draw_rect(far, &Paint::fill(Color::RED));
 
-    assert_eq!(canvas.finish().bounds(), far);
+    assert_eq!(canvas.finish().bounds(), Some(far));
 }
 
-/// Recording and recomputing must agree on the same list.
-///
-/// These are two independent implementations of the same union — the
-/// incremental one in `push`, the batch one in `recalculate_bounds` — and
-/// they disagreed: only the batch one distinguished "no bounds contributed
-/// yet" from "the union so far is the empty rect".
+/// `draw_picture` replays a recorded list under the caller's transform:
+/// each command's absolute transform becomes `ctm * recorded`, so a picture
+/// recorded at the origin lands where the canvas is currently translated,
+/// and a nested translation inside the picture composes with it.
 #[test]
-fn recorded_and_recomputed_bounds_agree() {
-    let far = Rect::from_ltrb(px(100.0), px(100.0), px(150.0), px(150.0));
+fn draw_picture_restamps_by_the_current_transform() {
+    let rect = Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0));
+    let picture = flui_painting::testing::record(|canvas| {
+        canvas.draw_rect(rect, &Paint::fill(Color::RED));
+        canvas.save();
+        canvas.translate(5.0, 0.0);
+        canvas.draw_rect(rect, &Paint::fill(Color::BLUE));
+        canvas.restore();
+    });
+    assert_eq!(picture.len(), 4);
 
-    let mut canvas = Canvas::new();
-    canvas.clip_rect(far);
-    canvas.draw_rect(far, &Paint::fill(Color::RED));
-    let mut list = canvas.finish();
+    let replayed = flui_painting::testing::record(|canvas| {
+        canvas.translate(100.0, 200.0);
+        canvas.draw_picture(&picture);
+    });
+    assert_eq!(
+        replayed.len(),
+        picture.len(),
+        "every command replays, scopes included"
+    );
 
-    let as_recorded = list.bounds();
-    // `apply_transform` recomputes the cached bounds from the commands;
-    // the identity leaves every command's own rect untouched, so any
-    // difference is the two paths disagreeing, not the transform.
-    list.apply_transform(Matrix4::IDENTITY);
+    let ctm = Matrix4::translation(100.0, 200.0, 0.0);
+    for (original, copy) in picture.iter().zip(replayed.iter()) {
+        assert_eq!(copy.transform, ctm * original.transform);
+    }
+    assert_eq!(
+        replayed.bounds(),
+        Some(Rect::from_xywh(px(100.0), px(200.0), px(15.0), px(10.0))),
+        "the replayed bounds are the picture's bounds under the ctm"
+    );
+    let ops: Vec<&DrawOp> = replayed.iter().map(|c| &c.op).collect();
+    assert!(matches!(
+        ops.as_slice(),
+        [
+            DrawOp::Rect { .. },
+            DrawOp::Save,
+            DrawOp::Rect { .. },
+            DrawOp::Restore
+        ]
+    ));
+}
 
-    assert_eq!(as_recorded, list.bounds());
-    assert_eq!(as_recorded, far);
+/// A command carries its full transform, so `Save`/`Restore` carry nothing:
+/// they are unit markers whose only job is to scope clips for the backend.
+/// The canvas still restores its own transform on `restore`, and a command
+/// recorded after the scope closes is stamped with the outer transform.
+#[test]
+fn save_and_restore_carry_no_state_but_the_clip_scope() {
+    let rect = Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0));
+    let list = flui_painting::testing::record(|canvas| {
+        canvas.translate(1.0, 0.0);
+        canvas.save();
+        canvas.translate(0.0, 2.0);
+        canvas.clip_rect(rect);
+        canvas.draw_rect(rect, &Paint::fill(Color::RED));
+        canvas.restore();
+        canvas.draw_rect(rect, &Paint::fill(Color::RED));
+    });
+    let cmds = list.commands();
+    assert!(matches!(cmds[0].op, DrawOp::Save));
+    assert!(matches!(cmds[3].op, DrawOp::Restore));
+    assert_eq!(
+        cmds[1].transform,
+        Matrix4::translation(1.0, 2.0, 0.0),
+        "the clip is stamped with the transform it was recorded under"
+    );
+    assert_eq!(cmds[2].transform, Matrix4::translation(1.0, 2.0, 0.0));
+    assert_eq!(
+        cmds[4].transform,
+        Matrix4::translation(1.0, 0.0, 0.0),
+        "restore unwinds the canvas transform for what follows"
+    );
+    // The markers' own transforms are what the canvas held at the time —
+    // informational only; nothing reads them.
+    assert_eq!(cmds[0].transform, Matrix4::translation(1.0, 0.0, 0.0));
 }

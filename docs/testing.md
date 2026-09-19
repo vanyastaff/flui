@@ -15,14 +15,14 @@ the same bug found by a whole-demo snapshot names a demo.
 |------|--------|-------------|------------|
 | Diagnostics | Structured self-description of any node | `flui_foundation::{DiagnosticsNode, DiagnosticsBuilder}` | always |
 | Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
-| Layer | A `LayerTree` built declaratively | `flui_layer::testing::{LayerTester, layer, inspect}` | `flui-layer/testing` |
+| Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
 | **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessBinding` | dev-dependency |
 | **Widget** | A mounted widget tree with geometry probes and synthetic input | `flui_widgets::testing::{lay_out, LaidOut}` | `flui-widgets/testing` |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
 | Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
-| GPU readback | Real pixels off a real device (WARP in CI) | `flui-engine`'s readback suite | `flui-engine/enable-wgpu-tests` |
+| GPU readback | Real pixels off a real device (WARP in CI) | `flui-engine`'s readback suite | `flui-engine/testing` |
 | Demo composition | A whole demo tree's committed `LayerTree`, as structured text | `tests/demo_layer_snapshots.rs` | `flui/material` + `flui/cupertino` |
 | Live E2E | A real window, real X11/Wayland input, real exit code | `tools/live-smoke` | `just live-smoke` |
 
@@ -32,8 +32,7 @@ Two structural rules hold across the stack:
   shipped crate. Where layering forbids the move — `flui_widgets::testing`
   mounts `FocusRoot`/`VsyncScope`/`GestureArenaScope`, which are widgets, and
   `flui-testing` may never depend on the widget catalog — the harness stays put
-  but is *built on* `flui-testing`, so the shared machinery is not forked. See
-  [`crates/flui-testing/AGENTS.md`](../crates/flui-testing/AGENTS.md).
+  but is *built on* `flui-testing`, so the shared machinery is not forked.
 - **Mount through `HeadlessBinding::mount_root`.** It owns the eight-step
   bootstrap whose ordering is load-bearing, and its contract is that the
   bootstrap frame is the same frame `pump_frame` runs (same layout↔build
@@ -272,11 +271,11 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 | Crate | Doc | Entry point |
 |-------|-----|-------------|
 | `flui-rendering` | [crates/flui-rendering/docs/TESTING.md](../crates/flui-rendering/docs/TESTING.md) | `RenderTester`, `Probe`, `box_node` / `sliver_node`, multi-frame `FrameRun` |
-| `flui-layer` | [crates/flui-layer/docs/TESTING.md](../crates/flui-layer/docs/TESTING.md) | `LayerTester`, `layer`, `inspect::structure` |
+| `flui-layer` | [crates/flui-layer/README.md](../crates/flui-layer/README.md) | `SceneBuilder`, `inspect::structure` / `clip_rects` / `first_picture_bounds` |
 | `flui-painting` | [crates/flui-painting/docs/TESTING.md](../crates/flui-painting/docs/TESTING.md) | `record`, `command_count`, `bounds`, `diagnostics` |
 | `flui-foundation` | [crates/flui-foundation/docs/TESTING.md](../crates/flui-foundation/docs/TESTING.md) | `DiagnosticsNode` / `DiagnosticsBuilder` for structured assertions (no `testing` module) |
-| `flui-testing` | [crates/flui-testing/AGENTS.md](../crates/flui-testing/AGENTS.md) | `HeadlessBinding` (`pump_frame`, `mount_root`, `replay`), `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
-| `flui-widgets` | [crates/flui-widgets/AGENTS.md](../crates/flui-widgets/AGENTS.md) | `testing::{lay_out, LaidOut, settle_lazy}` — the canonical widget harness, shared verbatim by `flui-material` / `flui-cupertino` |
+| `flui-testing` | [crates/flui-testing/README.md](../crates/flui-testing/README.md) | `HeadlessBinding` (`pump_frame`, `mount_root`, `replay`), `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
+| `flui-widgets` | [crates/flui-widgets/README.md](../crates/flui-widgets/README.md) | `testing::{lay_out, LaidOut, settle_lazy}` — the canonical widget harness, shared verbatim by `flui-material` / `flui-cupertino` |
 
 | Crate | What it gives you |
 |-------|-------------------|
@@ -449,8 +448,8 @@ Two crates deliberately do not, because they have nothing to poison — their
 capture tests share no callsite with anything else in their binary, each
 emitting at its own source line inside its own helper. `flui-log` additionally
 has no in-workspace dependencies at all, which its layer entry states as a
-contract; `flui-foundation` is emission-only and may not construct a subscriber
-(`crates/flui-foundation/AGENTS.md`), which is also why the primitive lives in
+contract; `flui-foundation` is emission-only and may not construct a subscriber,
+which is also why the primitive lives in
 `flui-testing` rather than at the bottom of the DAG where every crate could
 reach it without an edge.
 
@@ -509,7 +508,7 @@ Text measurement resolves against the host's fonts, and widgets sized to their
 text inherit that: the same Cupertino button measured 61.18 px wide on a host
 with fonts installed and 129.55 px on one without. `flui_testing::fonts::pin_font_faces`
 builds the process-wide `FontSystem` from the faces this repository ships
-(`flui_engine::fonts`), so the committed geometry is reproducible off any one
+(`flui_painting::fonts`), so the committed geometry is reproducible off any one
 machine.
 
 It *builds* the font system rather than editing it, and that distinction is
@@ -577,7 +576,7 @@ cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (co
                                                               # and intrinsics queries are not interpreted.
 ```
 
-The `gpu-test` job additionally runs the full `enable-wgpu-tests` readback
+The `gpu-test` job additionally runs the full `testing` readback
 suite on a windows-latest runner (WARP software rasterizer) and is
 merge-blocking. Failing snapshot/readback tests upload debuggable artifacts:
 insta `.snap.new` candidates (`test` job) and readback PNG dumps

@@ -5,7 +5,7 @@
 //! Generates Rust bindings for the transfer-filter shaders (gamma, blur,
 //! morphology, color_matrix) and the naga_oil-composed shaders (mode,
 //! advanced_blend) into `OUT_DIR`.  Each generated file is `include!`d from
-//! `src/wgpu/<name>/generated.rs`.
+//! `src/<name>/generated.rs`.
 //!
 //! ## Covered shaders (this file)
 //!
@@ -26,7 +26,7 @@
 //! `blend_helpers.wgsl` file found under the workspace root, the importing
 //! file's directory, or an additional scan directory — see
 //! `bevy_util::ModulePathResolver`).  `blend_helpers.wgsl` lives in
-//! `src/wgpu/shaders/`, so:
+//! `src/shaders/`, so:
 //!
 //! - `advanced_blend.wgsl` is in `shaders/` too → its workspace root is
 //!   `shaders/` and the import resolves with no extra scan directory.
@@ -101,7 +101,7 @@ const NEAREST_SRC: BindingOverrides = BindingOverrides {
 
 /// Configuration for one self-contained (import-free) shader.
 struct ShaderConfig {
-    /// Shader file name (relative to `src/wgpu/shaders/effects/`).
+    /// Shader file name (relative to `src/shaders/effects/`).
     shader_name: &'static str,
     /// Output file name written into `OUT_DIR`.
     out_file: &'static str,
@@ -145,15 +145,15 @@ const SHADER_CONFIGS: &[ShaderConfig] = &[
 /// Configuration for one composed shader whose `#import` must be resolved at
 /// codegen time so `wgsl_bindgen` can parse it.
 struct ComposedShaderConfig {
-    /// Entry shader path relative to `src/wgpu/shaders/`.
+    /// Entry shader path relative to `src/shaders/`.
     entry_rel: &'static str,
     /// Output file name written into `OUT_DIR`.
     out_file: &'static str,
-    /// Workspace root relative to `src/wgpu/shaders/`.  Empty string = `shaders/`
+    /// Workspace root relative to `src/shaders/`.  Empty string = `shaders/`
     /// itself.  Chosen so the generated module name is flat (`mode`, not
     /// `effects::mode`).
     workspace_rel: &'static str,
-    /// Import scan directories relative to `src/wgpu/shaders/` (empty string =
+    /// Import scan directories relative to `src/shaders/` (empty string =
     /// `shaders/`).  Needed when `blend_helpers.wgsl` is not under the workspace
     /// root or the entry's own directory.
     scan_rel: &'static [&'static str],
@@ -210,7 +210,7 @@ const COMPOSED_SHADER_CONFIGS: &[ComposedShaderConfig] = &[
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let crate_root = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
-    let shader_root = crate_root.join("src/wgpu/shaders");
+    let shader_root = crate_root.join("src/shaders");
     let effects_dir = shader_root.join("effects");
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
 

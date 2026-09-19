@@ -13,6 +13,13 @@ file records the repo-consumer-visible summary.
 
 ### Added
 
+- `DisplayList::append_isolated` scopes each composed paint run, preventing a
+  parent's canvas clip from leaking across `paint_child`. Serialized display
+  lists now contain commands only and recompute bounds on input.
+- Layer inspection's `clip_paths` returns borrowed paths (`Vec<&Path>`).
+  Duplicate-leader rejection preserves the tree index when its debug assertion
+  unwinds, and annotation diagnostics report the payload type.
+
 - **Recovered lifecycle-panic diagnostics** (#561): `flui-view` exports the
   cloneable, non-exhaustive `RecoveredPanic`, `RecoveredAt`, and
   `LifecycleHook` record types. `BuildOwner::take_recovered_panics` and
@@ -411,7 +418,7 @@ file records the repo-consumer-visible summary.
   instance → adapter → capabilities → device sequence that
   `Renderer::new_offscreen`, the offscreen half of `recover`, and
   `GpuServices::resolve_offscreen` each previously spelled out).
-  `wgpu/test_support.rs` (gated on `enable-wgpu-tests`) replaces the per-file
+  `wgpu/test_support.rs` (gated on `testing`) replaces the per-file
   GPU test scaffolding — adapter/device acquisition under six different names,
   render-target creation, clear passes, and the padded-row staging readback —
   that ~25 test files each carried a copy of; per-suite oracles and scene
@@ -483,7 +490,7 @@ file records the repo-consumer-visible summary.
   caps `lru` at `^0.16.2`.
 
   Not verified locally: the GPU readback and deterministic-replay suites
-  (`enable-wgpu-tests`) compile clean but cannot execute here — this container
+  (`testing`) compile clean but cannot execute here — this container
   has no Vulkan ICD and no `/dev/dri`, the same reason CI's Linux jobs don't run
   them. Their executing coverage is CI's `gpu-test` job on WARP.
 - **Dependency refresh: full `cargo update` plus ten semver-major bumps.**

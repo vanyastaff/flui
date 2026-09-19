@@ -9,7 +9,7 @@
 // turns that bool into an act on its renderer.
 //
 // It follows `device_recovery.rs`: a `pub(super)` trait narrows the concrete
-// `flui_engine::wgpu::Renderer` to the verbs a runner needs, so the decision
+// `flui_engine::Renderer` to the verbs a runner needs, so the decision
 // is host-testable against a scripted backend while the `Renderer`-side
 // mechanics stay type-checked only (they need a GPU). The module is
 // registered unconditionally — see `mod.rs` — so every host gate compiles it.
@@ -83,16 +83,16 @@ pub(super) trait SurfaceLifecycle {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl SurfaceLifecycle for flui_engine::wgpu::Renderer {
+impl SurfaceLifecycle for flui_engine::Renderer {
     fn release_surface(&mut self) {
         // `Renderer::release_surface` is the inherent method of the same
         // name; the qualified path is what keeps this from resolving back to
         // the trait method it implements.
-        flui_engine::wgpu::Renderer::release_surface(self);
+        flui_engine::Renderer::release_surface(self);
     }
 
     fn recreate_surface(&mut self) -> Result<(), EngineError> {
-        flui_engine::wgpu::Renderer::recreate_surface(self)
+        flui_engine::Renderer::recreate_surface(self)
     }
 }
 
@@ -331,13 +331,13 @@ mod surface_lifecycle_tests {
     ///
     /// This pins the *seam*: `ensure_surface` never consults what is held and
     /// never short-circuits. It does not pin the platform. The real Vulkan
-    /// backend allows one surface per `ANativeWindow`, and
-    /// `Renderer::recreate_surface` creates before it commits, so a second
-    /// surface on the same still-connected window is refused by the platform
-    /// and the held one stays; "recreates over a held surface" is delivered
-    /// by the platform only when the native handle changed (see that
-    /// method's doc). The scripted backend succeeds unconditionally because
-    /// the property under test is the seam's, not the driver's.
+    /// backend allows one surface per `ANativeWindow`, which is why
+    /// `Renderer::recreate_surface` releases the held surface before creating
+    /// the replacement (see that method's doc): a second `true` over a surface
+    /// still bound to the same live window then creates cleanly instead of
+    /// being aborted inside `wgpu-hal`'s `create_surface_android`. The
+    /// scripted backend succeeds unconditionally because the property under
+    /// test is the seam's, not the driver's.
     #[test]
     fn an_acquire_request_recreates_over_a_held_surface_and_reports_recreated() {
         let mut backend = ScriptedSurfaceBackend::holding_a_surface();

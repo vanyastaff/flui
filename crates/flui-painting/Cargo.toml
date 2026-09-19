@@ -36,12 +36,22 @@ cosmic-text = { version = "0.19" }
 unicode-script = { version = "=0.5.8" }
 
 [dev-dependencies]
+serde_json.workspace = true
+criterion = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
 flui-painting = { path = ".", version = "0.2.0", features = ["testing"] }
 
 [features]
+default = ["bundled-fonts"]
 serde = ["dep:serde", "flui-types/serde"]
+
+# bundled-fonts: embed Roboto Regular, Material Icons, and Cupertino Icons and
+# install whichever the host lacks into the process-wide font system at
+# construction, so text and icons measure and paint in the same face on every
+# machine. Off, the font system holds only what the host provides (and what
+# `register_font` adds).
+bundled-fonts = []
 
 # testing: opt-in painting test harness (`crate::testing`) — a `record`
 # builder for `DisplayList`s plus diagnostics helpers. Off by default;
@@ -52,5 +62,17 @@ testing = []
 name = "painting_it"
 path = "tests/main.rs"
 
+# Appends to the process-wide font database, so it runs in its own process.
+[[test]]
+name = "font_registration"
+path = "tests/font_registration.rs"
+
 [lints]
 workspace = true
+
+# Records a mixed display list — the recording cost of one `DrawCommand`
+# per op, with the transform stamped per command. Run with
+# `cargo bench -p flui-painting --bench display_list_record`.
+[[bench]]
+name = "display_list_record"
+harness = false

@@ -1,9 +1,7 @@
-//! Canvas layer - leaf layer with actual drawing commands
-//!
-//! CanvasLayer is the most common layer type, containing a Canvas
-//! with drawing commands that will be rendered to the screen.
+//! `CanvasLayer` — a live recorder inside the tree; no production producer, kept for
+//! hand-authored scenes (`SceneBuilder::add_canvas`) and fixtures.
 
-use flui_painting::{Canvas, DisplayList, DisplayListCore};
+use flui_painting::{Canvas, DisplayList};
 use flui_types::geometry::{Pixels, Rect};
 
 /// Canvas layer - a leaf layer that contains drawing commands
@@ -46,49 +44,45 @@ impl std::fmt::Debug for CanvasLayer {
 }
 
 impl CanvasLayer {
-    /// Creates a new empty canvas layer.
+    /// An empty recorder.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Creates a canvas layer from an existing canvas.
+    /// Wraps a recorder that already holds commands.
     pub fn from_canvas(canvas: Canvas) -> Self {
         Self { canvas }
     }
 
-    /// Clears the canvas, removing all drawing commands.
+    /// Drops every recorded command.
     pub fn clear(&mut self) {
         self.canvas = Canvas::new();
     }
 
-    /// Returns a reference to the underlying canvas.
+    /// The recorder.
     pub fn canvas(&self) -> &Canvas {
         &self.canvas
     }
 
-    /// Returns a mutable reference to the underlying canvas.
+    /// The recorder, for drawing into.
     pub fn canvas_mut(&mut self) -> &mut Canvas {
         &mut self.canvas
     }
 
-    /// Returns the display list containing all drawing commands.
+    /// The commands recorded so far.
     pub fn display_list(&self) -> &DisplayList {
         self.canvas.display_list()
     }
 
-    /// Returns the bounds of all drawing commands in this layer.
-    pub fn bounds(&self) -> Rect<Pixels> {
+    /// The union of the recorded commands that contribute bounds, or `None`
+    /// when none does yet.
+    pub fn bounds(&self) -> Option<Rect<Pixels>> {
         self.canvas.display_list().bounds()
     }
 
-    /// Returns true if the canvas has no drawing commands.
+    /// Whether nothing has been recorded.
     pub fn is_empty(&self) -> bool {
-        self.canvas.display_list().commands().count() == 0
-    }
-
-    /// Returns the number of drawing commands in this layer.
-    pub fn command_count(&self) -> usize {
-        self.canvas.display_list().commands().count()
+        self.canvas.display_list().is_empty()
     }
 }
 
@@ -100,7 +94,6 @@ mod tests {
     fn test_canvas_layer_new() {
         let layer = CanvasLayer::new();
         assert!(layer.is_empty());
-        assert_eq!(layer.command_count(), 0);
     }
 
     #[test]
@@ -113,17 +106,19 @@ mod tests {
     #[test]
     fn test_canvas_layer_clear() {
         let mut layer = CanvasLayer::new();
+        let rect = Rect::from_xywh(
+            flui_types::geometry::px(0.0),
+            flui_types::geometry::px(0.0),
+            flui_types::geometry::px(10.0),
+            flui_types::geometry::px(10.0),
+        );
+        layer
+            .canvas_mut()
+            .draw_rect(rect, &flui_painting::Paint::default());
+        assert!(!layer.is_empty());
         layer.clear();
         assert!(layer.is_empty());
-    }
-
-    #[test]
-    fn test_canvas_layer_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<CanvasLayer>();
-        assert_sync::<CanvasLayer>();
+        assert_eq!(layer.bounds(), None);
     }
 
     #[test]

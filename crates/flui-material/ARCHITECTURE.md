@@ -69,8 +69,7 @@ and AccessKit checked/mixed semantics stay aligned with the oracle for every
 
 Same public-widget invariant class as GitHub #1101 (tabs length/index):
 caller-violable construction contracts ship in release, preferring
-unrepresentable illegal states over `debug_assert!` alone — see
-[`AGENTS.md`](AGENTS.md) Key constraints.
+unrepresentable illegal states over `debug_assert!` alone.
 
 ### TabController length/index is enforced in release
 

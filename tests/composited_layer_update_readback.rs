@@ -8,12 +8,12 @@
 //!
 //! It lives in the facade rather than in `flui-rendering` because it needs
 //! BOTH the render pipeline (to produce the two layer trees) and
-//! `flui_engine::wgpu::HeadlessRenderer` (to rasterize them). Those crates are
+//! `flui_engine::HeadlessRenderer` (to rasterize them). Those crates are
 //! siblings in layer 4, and the facade is the one place that already depends
 //! on both — adding a wgpu dev-dependency to `flui-rendering` just to reach
 //! the renderer would pull the whole GPU stack into that crate's test build.
 
-use flui_engine::wgpu::HeadlessRenderer;
+use flui_engine::HeadlessRenderer;
 use flui_objects::{
     RenderClipRRect, RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding,
     RenderRepaintBoundary, RenderTransform,
@@ -127,7 +127,7 @@ fn the_update_path_and_a_repaint_produce_the_same_pixels() {
     // loudly. A readback test that silently skips is counted as passing and
     // then proves nothing, which is exactly how a GPU oracle goes quietly
     // dead.
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     let updated = frame_after_alpha_change(&renderer, 0.25, false);
@@ -161,7 +161,7 @@ fn the_update_path_and_a_repaint_produce_the_same_pixels() {
 /// produce different pixels for the comparison to mean anything.
 #[test]
 fn a_different_alpha_produces_different_pixels() {
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     let quarter = frame_after_alpha_change(&renderer, 0.25, false);
@@ -270,7 +270,7 @@ fn frame_after_transform_change(
 /// a byte difference that no layer-tree assertion would catch.
 #[test]
 fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     let updated = frame_after_transform_change(&renderer, Matrix4::scaling(3.0, 3.0, 1.0), false);
@@ -303,7 +303,7 @@ fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
 /// produce different pixels for the comparison to mean anything.
 #[test]
 fn a_different_matrix_produces_different_pixels() {
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     let smaller = frame_after_transform_change(&renderer, Matrix4::scaling(1.2, 1.2, 1.0), false);
@@ -444,7 +444,7 @@ fn pixel_at(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
 /// difference no layer-tree assertion would catch.
 #[test]
 fn the_clip_update_path_and_a_repaint_produce_the_same_pixels() {
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     let updated = frame_after_radius_change(&renderer, 2.0, false);
@@ -493,7 +493,7 @@ fn the_clip_update_path_and_a_repaint_produce_the_same_pixels() {
 /// entirely, or a fixture whose clip never reaches the sampled pixel.
 #[test]
 fn a_different_radius_produces_different_pixels() {
-    let renderer = HeadlessRenderer::new()
+    let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
 
     const SAMPLE: (u32, u32) = (21, 21);
@@ -519,5 +519,88 @@ fn a_different_radius_produces_different_pixels() {
         "radius 8 and 2 must rasterize differently at the clipped corner, or the \
          equivalence assertion above is comparing two images that never depended \
          on the radius",
+    );
+}
+
+#[derive(Debug)]
+struct RunLocalClipParent;
+
+impl flui_foundation::Diagnosticable for RunLocalClipParent {}
+
+impl flui_rendering::traits::RenderBox for RunLocalClipParent {
+    type Arity = flui_rendering::prelude::Single;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> Size {
+        let _ = ctx.layout_child(0, BoxConstraints::tight(Size::new(px(20.0), px(20.0))));
+        ctx.position_child(0, flui_types::Offset::new(px(40.0), px(0.0)));
+        ctx.constraints().biggest()
+    }
+
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {
+        use flui_painting::Paint;
+        use flui_types::{Color, Rect};
+
+        let canvas = ctx.canvas();
+        assert_eq!(canvas.save_count(), 1);
+        canvas.restore();
+        canvas.clip_rect(Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(20.0)));
+        canvas.draw_rect(
+            Rect::from_xywh(px(0.0), px(0.0), px(20.0), px(20.0)),
+            &Paint::fill(Color::RED),
+        );
+        ctx.paint_child();
+        ctx.canvas().draw_rect(
+            Rect::from_xywh(px(60.0), px(0.0), px(20.0), px(20.0)),
+            &Paint::fill(Color::GREEN),
+        );
+    }
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::context::BoxHitTestContext<'_, Self::Arity, Self::ParentData>,
+    ) -> bool {
+        false
+    }
+}
+
+#[test]
+fn canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture() {
+    let mut owner = PipelineOwner::new();
+    let (root_id, _) = tree::mount(
+        &mut owner,
+        box_node(RunLocalClipParent).child(box_node(RenderColoredBox::blue(20.0, 20.0))),
+    );
+    owner.set_root_id(Some(root_id));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(80.0), px(40.0)))));
+    let (_owner, frame) = owner.run_frame();
+    let layer_tree = frame.expect("paint frame").expect("layer tree");
+    let renderer = pollster::block_on(HeadlessRenderer::new()).expect("GPU adapter for readback");
+    let pixels = renderer
+        .render_layer_tree(&layer_tree, (80, 40))
+        .expect("readback");
+    let pixel = |x: usize| &pixels[(5 * 80 + x) * 4..(5 * 80 + x + 1) * 4];
+    assert_eq!(
+        pixel(5),
+        &[255, 0, 0, 255],
+        "the parent clip permits its interior"
+    );
+    assert_eq!(
+        pixel(15),
+        &[255, 255, 255, 255],
+        "the parent clip still clips its own run"
+    );
+    assert_eq!(
+        pixel(45),
+        &[0, 0, 255, 255],
+        "the child escapes the parent's run-local clip"
+    );
+    assert_eq!(
+        pixel(65),
+        &[0, 255, 0, 255],
+        "the resumed parent run starts unclipped"
     );
 }

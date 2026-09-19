@@ -7,7 +7,7 @@
 - **Status:** Accepted (record/replay split fully shipped T7–T10; C1 closed — painter.rs = 1 432 non-test LOC; T11 deterministic-replay test remains)
 - **Date:** 2026-06-17
 - **Deciders:** @vanyastaff
-- **Scope:** `crates/flui-engine` — `src/wgpu/batches/`, `src/wgpu/state_stack.rs`, `src/wgpu/layer_compositor.rs`, `src/wgpu/pipelines.rs`, `src/wgpu/painter.rs`, `src/wgpu/replay.rs`, `src/wgpu/backend.rs`
+- **Scope:** `crates/flui-engine` — `src/batches/`, `src/state_stack.rs`, `src/layer_compositor.rs`, `src/pipelines.rs`, `src/painter.rs`, `src/replay.rs`, `src/backend.rs`
 - **Spec reference:** `.rust-studio/specs/flui-engine-overhaul/spec.md` (C-IR approach, tasks 7–11)
 - **Supersedes:** `adr-flui-engine-decomposition.md` if it exists (that draft argued "no IR"; this ADR supersedes that position — the IR is explicit data, not a future option)
 
@@ -110,10 +110,10 @@ fn draw_rect(
 
 - Spec: `.rust-studio/specs/flui-engine-overhaul/spec.md` — C-IR approach, C4 acceptance criterion, tasks 7–11
 - `crates/flui-engine/ARCHITECTURE.md` — wgpu/Vulkan/Metal mapping, mapping decisions §1–6, record-side boundary section (T9f addition)
-- `crates/flui-engine/src/wgpu/state_stack.rs` — single `Matrix4`↔glam conversion edge (`current_transform_matrix`)
-- `crates/flui-engine/src/wgpu/backend.rs` — `with_transform` + `render_*` entry points; `Matrix4` lives here
-- `crates/flui-engine/src/wgpu/batches/` — record-method home; `Matrix4`-free by Trigger 19
-- `crates/flui-engine/src/wgpu/replay.rs` — replay/submit home; `Matrix4`-free by Trigger 19 (extended T10e)
-- `crates/flui-engine/src/wgpu/painter.rs` — thin coordinator (record-finish + replay.submit); text/rich_text pending T11
+- `crates/flui-engine/src/state_stack.rs` — single `Matrix4`↔glam conversion edge (`current_transform_matrix`)
+- `crates/flui-engine/src/backend.rs` — `with_transform` + `render_*` entry points; `Matrix4` lives here
+- `crates/flui-engine/src/batches/` — record-method home; `Matrix4`-free by Trigger 19
+- `crates/flui-engine/src/replay.rs` — replay/submit home; `Matrix4`-free by Trigger 19 (extended T10e)
+- `crates/flui-engine/src/painter.rs` — thin coordinator (record-finish + replay.submit); text/rich_text pending T11
 - Impeller precedent: DisplayList→flat Command vector, EntityPass tree deleted 2024 (`.flutter/` reference)
 - Port-check Trigger 19: `scripts/port-check.sh`; `docs/PORT.md` §19

@@ -11,7 +11,7 @@ name: CI
 #   cross-typecheck — cargo clippy (no link, no tests) of flui-platform's windows + macos + android backends
 #   test           — build + nextest (lib + integration), ubuntu, plus a
 #                    dedicated flui-platform (Linux-runnable subset) step
-#   gpu-test       — full enable-wgpu-tests readback suite on windows/WARP (merge-blocking)
+#   gpu-test       — full testing readback suite on windows/WARP (merge-blocking)
 #   bench-compile  — criterion benches compile + link
 #   doc            — rustdoc with RUSTDOCFLAGS=-D warnings
 #   deny           — advisories/bans/licenses/sources
@@ -195,14 +195,13 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      # Compile (not run) the feature-gated test module so the IR-purity witness
-      # (`_DRAW_SEGMENT_IS_CLONE` / `DrawSegment: Clone`) and the deterministic-replay
-      # tests are machine-checked in CI even though they require a GPU to execute.
-      # A future field that introduces a non-Clone GPU handle would fail here.
-      # `--tests` ensures the `#[cfg(all(test, feature = "enable-wgpu-tests"))]` block
-      # is compiled; `--no-run` (via clippy) is implicit — clippy only type-checks.
-      - name: cargo clippy flui-engine --features enable-wgpu-tests (IR-purity witness)
-        run: cargo clippy -p flui-engine --all-targets --locked --features enable-wgpu-tests -- -D warnings
+      # Lint the feature-gated GPU suites too: `testing` gates a body of code
+      # (the readback suites, the deterministic-replay tests, the bench
+      # scaffolding) that the workspace pass never compiles, so a break there
+      # is invisible until the gpu-test job. Clippy only type-checks; the
+      # suites execute in gpu-test.
+      - name: cargo clippy flui-engine --features testing
+        run: cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
   # test — workspace build + nextest. Matrix: Linux only today (see the
@@ -228,7 +227,7 @@ jobs:
     timeout-minutes: 40
     # Shrinks the build itself, which is what keeps this job inside the
     # runner's disk. DWARF is the single largest contributor to debug-target size; the
-    # full workspace (~28 crates + the wgpu/glyphon/lyon/naga stack + dev-deps)
+    # full workspace (~28 crates + the wgpu/cosmic-text/lyon/naga stack + dev-deps)
     # built with full debuginfo is what crept toward the runner's disk ceiling
     # (PRs #236/#242). `line-tables-only` drops the bulk of DWARF while keeping
     # file:line in panic backtraces, so CI failures stay diagnosable. Scoped to
@@ -291,7 +290,7 @@ jobs:
       # things this default-feature workspace run cannot give flui-platform:
       # `--all-features` (the winit backend, its actual Linux-runnable
       # implementation, only compiles under `winit-backend` — invisible to
-      # `default = ["desktop"]`, see crates/flui-platform/AGENTS.md) and a
+      # `default = ["desktop"]`) and a
       # real X11 connection for the handful of tests that construct
       # `WinitPlatform` directly. The dedicated step below supplies both and
       # runs flui-platform's Linux-runnable suite green; see that step's
@@ -356,7 +355,7 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────────
-  # gpu-test (PILOT) — actually RUN the `enable-wgpu-tests` readback/oracle
+  # gpu-test (PILOT) — actually RUN the `testing` readback/oracle
   # suite, which the `clippy` job above only TYPE-CHECKS. Without this, a
   # WGSL/blend-state/color-pipeline regression merges silently green — the #1
   # risk in two independent engine audits (the oracle infra exists and is
@@ -372,7 +371,7 @@ jobs:
   # selected on the hardware-GPU-less windows runner with no harness change, the
   # ±LSB oracle tolerances HOLD under software rasterization (blur_oracle ±3 LSB
   # passed), and the run is fast (nextest ~16 s; the ~8 min is the wgpu-stack
-  # build). So this now runs the FULL `enable-wgpu-tests` suite (~440 tests).
+  # build). So this now runs the FULL `testing` suite (~440 tests).
   #
   # MERGE-BLOCKING as of 2026-07: the full suite showed 3 consecutive green
   # runs on main (CI #583/#586/#595 — job wall-time 5m/7m/15m, nextest step
@@ -419,7 +418,7 @@ jobs:
       # exactly the gap that let the Business.1 flui-assets↔Image
       # verification tests go CI-dead once. Explicit feature-gated run, same
       # precedent as `cargo clippy -p flui-engine --features
-      # enable-wgpu-tests` above.
+      # testing` above.
       #
       # `asset-images`/`network-images` extend the same gap to the
       # flui-assets↔Image ASYNC bridge (`AssetImage`/`NetworkImage`,
@@ -537,6 +536,10 @@ jobs:
       # Surface the wgpu adapter selection in the log so the run confirms WARP
       # was enumerated (not a silently-missing-adapter skip).
       RUST_LOG: wgpu_hal=info,wgpu_core=info
+      # A readback test that finds no adapter returns early and is reported
+      # PASSED. This job exists to run those tests on WARP, so an unavailable
+      # GPU here is a failure, not a skip (`test_support::resolve_unavailable_gpu`).
+      FLUI_REQUIRE_GPU: "1"
       # Readback oracle mismatches dump the actual frame as PNG into this dir
       # (flui-engine readback test support, env-gated). Uploaded on failure
       # below — the WARP software path cannot be exercised on the dev
@@ -560,7 +563,7 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      # Full enable-wgpu-tests suite. `--test-threads 1`: each test builds its own
+      # Full testing suite. `--test-threads 1`: each test builds its own
       # wgpu::Device; WARP serializes command submission through one software
       # driver, so parallel submission can saturate it. The job-level
       # `timeout-minutes` is the hung-test backstop.
@@ -568,7 +571,7 @@ jobs:
         run: >
           cargo nextest run
           -p flui-engine
-          --features enable-wgpu-tests
+          --features testing
           --lib
           --locked
           --no-fail-fast
@@ -901,6 +904,25 @@ jobs:
       - name: cargo miri test (owner::global_key)
         run: cargo +nightly miri test -p flui-view --lib --locked owner::global_key
 
+      # The surface-ownership protocol (ADR-0063, issue #1043): the whole
+      # wgpu-free `SurfaceLease` protocol, which is where the two test-only
+      # `borrow_raw` calls and the load-bearing surface-before-target drop
+      # order live. `SurfaceLease` is generic over its surface type precisely
+      # so this needs no GPU — the lib target links wgpu, but Miri never
+      # enters it. Measured 6 tests / ~3.3s warm, in budget.
+      - name: cargo miri test (wgpu::surface_lease)
+        run: cargo +nightly miri test -p flui-engine --lib --locked wgpu::surface_lease
+
+      # The cancellation oracle for `Renderer::new` (issue #1149): drives the
+      # production `probe_then_build` seam with a builder that suspends
+      # forever, then drops the future and asserts the target's strong count
+      # returned to its pre-call value. GPU-free by construction — the
+      # synthetic builder is what keeps wgpu out of the path, since a first
+      # poll of the production builder enters `wgpu::Instance::new`.
+      # Measured 1 test / ~1.7s warm.
+      - name: cargo miri test (cancelling_renderer_new)
+        run: cargo +nightly miri test -p flui-engine --lib --locked cancelling_renderer_new
+
   # ─────────────────────────────────────────────────────────────────────────
   # feature-matrix — xilem-style per-feature clippy via cargo-hack. The plain
   # `clippy` job compiles the whole workspace under feature unification with
@@ -1032,7 +1054,7 @@ jobs:
       # deliberately out (2^N explosion for no known failure mode).
       - name: cargo hack check flui-engine (backend-feature pairs)
         if: matrix.slice == 'combinations'
-        run: cargo hack check -p flui-engine --locked --feature-powerset --include-features vulkan,metal,dx12,webgpu,gles,wgpu-backend --depth 2
+        run: cargo hack check -p flui-engine --locked --feature-powerset --include-features vulkan,metal,dx12,webgpu,gles --depth 2
 
       # The facade's catalog/localization/hot-reload features are the public
       # package surface, so each supported combination is compiled ON ITS OWN,

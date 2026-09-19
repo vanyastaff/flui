@@ -30,8 +30,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use flui_engine::PathCache;
 use flui_engine::WgpuPainter;
-use flui_engine::wgpu::path_cache::PathCache;
 use flui_painting::Paint;
 use flui_types::Rect;
 use flui_types::{Offset, geometry::px, painting::Shader, styling::Color};
@@ -125,7 +125,7 @@ fn build_frame(painter: &mut WgpuPainter) {
         let hue = i as f32 / 50.0;
         let color = Color::from_rgba_f32_array([hue, 0.5, 1.0 - hue, 1.0]);
         let paint = Paint::fill(black_box(color));
-        painter.rect(black_box(rect), &paint);
+        painter.draw_rect(black_box(rect), &paint);
     }
 
     // 1 linear gradient (4 colour stops — exercises SmallVec<GradientStop>)
@@ -135,11 +135,11 @@ fn build_frame(painter: &mut WgpuPainter) {
         Offset::new(px(800.0), px(600.0)),
         GRADIENT_COLORS.to_vec(),
     ));
-    painter.rect(black_box(gradient_rect), &gradient_paint);
+    painter.draw_rect(black_box(gradient_rect), &gradient_paint);
 
     // 1 text label (exercises text buffer + cache-key path)
     let text_paint = Paint::fill(Color::WHITE);
-    painter.text(
+    painter.draw_text(
         black_box("Hello, flui bench!"),
         flui_types::Point::new(px(10.0), px(480.0)),
         24.0,
@@ -316,11 +316,14 @@ fn damage_scissor(c: &mut Criterion) {
     fn build(painter: &mut WgpuPainter, layers: u32, damage: Option<f32>, w: f32, h: f32) {
         painter.save();
         if let Some(side) = damage {
-            painter.clip_rect(Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)), true);
+            painter.clip_rect(
+                Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)),
+                flui_types::painting::Clip::HardEdge,
+            );
         }
         for i in 0..layers {
             let f = i as f32;
-            painter.rect(
+            painter.draw_rect(
                 Rect::from_xywh(px(f * 2.0), px(f * 1.5), px(w), px(h)),
                 &Paint::fill(Color::rgba(0, 0, 255, 40)),
             );

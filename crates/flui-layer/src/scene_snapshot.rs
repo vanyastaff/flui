@@ -1,8 +1,7 @@
 //! `SceneSnapshot` — the owned per-presentation per-frame raster package.
 //!
 //! Compositing produces one `SceneSnapshot` per window per frame; it is the one
-//! seam a `UiRealm` hands to a raster owner (Flutter parity:
-//! `RenderView.compositeFrame` → `FlutterView.render` → dispose).
+//! seam a `UiRealm` hands to a raster owner.
 
 use flui_foundation::FrameStamp;
 
@@ -10,66 +9,40 @@ use crate::scene::Scene;
 
 /// Which regions of a [`SceneSnapshot`] changed since the previous frame.
 ///
-/// Only [`DamageRegion::Full`] exists today: every fresh [`Scene`] forces a
-/// full repaint (`flui-app`'s `binding.rs:837-844`). The type is
-/// `#[non_exhaustive]` so fine-grained sub-rect damage is additive later
-/// instead of a breaking change — a `match` on this
-/// enum already needs a `_` arm today, so a future `Partial` variant slots in
-/// without touching existing call sites.
+/// Only [`DamageRegion::Full`] exists today: the producer half of damage
+/// tracking is not written (ADR-0061), so every frame repaints in full. The
+/// type is `#[non_exhaustive]` so a sub-rect variant is additive for matchers
+/// when the producer lands.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DamageRegion {
-    /// Repaint the entire frame. The only variant that exists today.
+    /// Repaint the entire frame.
     Full,
 }
 
 /// The owned per-presentation per-frame raster package.
 ///
-/// Produced by compositing and moved **by value** into the raster mailbox —
-/// never `Arc<Scene>`. Ownership transfer, not shared reference counting, is
-/// the seam: the raster owner is the sole reader once a `SceneSnapshot` is sent,
-/// and it drops (or acks `Dropped`) the frame when done. This is one seam per
-/// window per frame, mirroring Flutter's `RenderView.compositeFrame` →
-/// `FlutterView.render` → dispose sequence.
+/// Produced by compositing and moved **by value** into the raster mailbox:
+/// ownership transfer, not reference counting, is the seam. The raster owner
+/// is the sole holder once a snapshot is sent and drops it when done. The
+/// type is `Send + Sync` (plain data), pinned below; the by-value contract is
+/// enforced by the mailbox API taking ownership, not by the auto traits.
 ///
 /// # Frame identity
 ///
 /// `stamp` carries the full identity/versioning group — which presentation,
-/// which epoch, against which raster surface configuration. See
-/// [`FrameStamp`]'s own doc for why those three values are bundled into one
-/// type rather than three struct fields here.
-///
-/// # Construction is narrowed, not additive
+/// which epoch, against which surface and GPU-resource generation. See
+/// [`FrameStamp`]'s own doc for why those are one value rather than fields
+/// here, and `docs/runtime-contract.toml`'s entry for this type for the
+/// construction-is-not-additive record.
 ///
 /// Fields are `pub` for direct read/match access; `#[non_exhaustive]` makes
-/// *matching* on this struct additive when a field is added later — it does
-/// **not** make *construction* additive, and neither does bundling three of
-/// this type's former fields into [`FrameStamp`].
-///
-/// This type used to carry a documented pre-graduation gate: a growing
-/// positional `new()` with five arguments (`address`, `epoch`,
-/// `surface_generation`, `damage`, `scene`) would break every call site on
-/// its next field. That gate is **narrowed, not discharged**. The prior
-/// revision of this doc claimed bundling the identity fields into
-/// `FrameStamp` plus a typestate builder made the *next* field addition
-/// additive; that claim was tested — a `gpu_resource_generation` field was
-/// actually added to `FrameStamp`, for real, in the ADR-0045 decision 4
-/// slice — and found false — see [`FrameStamp`]'s own doc for why no
-/// construction shape makes a required field additive, and why the
-/// correction there matters enough to repeat here rather than silently
-/// drop. What genuinely improved: a positional constructor argument list of
-/// five collapses to three (`SceneSnapshot::new(stamp, damage, scene)`),
-/// and a future field on `FrameStamp` breaks six call sites today — across
-/// `flui-foundation`, this crate (the stamp helper below) and
-/// `flui-engine` — each named directly by the compiler, rather than an
-/// unbounded set of external callers. Smaller and compiler-guided, not
-/// additive.
+/// matching additive when a field is added, never construction.
 #[non_exhaustive]
 #[derive(Debug)]
 pub struct SceneSnapshot {
-    /// This frame's identity: which presentation, which epoch, against
-    /// which raster surface configuration. See the type doc above and
-    /// [`FrameStamp`]'s own doc for the full disambiguation argument.
+    /// This frame's identity: which presentation, which epoch, against which
+    /// surface and GPU-resource generation.
     pub stamp: FrameStamp,
     /// Which regions changed since the previous frame.
     pub damage: DamageRegion,
@@ -78,9 +51,8 @@ pub struct SceneSnapshot {
 }
 
 impl SceneSnapshot {
-    /// Packages a composited [`Scene`] with the identity/versioning
-    /// [`FrameStamp`] and damage region the raster boundary needs to
-    /// accept, reject, or reconcile it.
+    /// Packages a composited [`Scene`] with the identity the raster boundary
+    /// needs to accept, reject, or reconcile it.
     #[must_use]
     pub fn new(stamp: FrameStamp, damage: DamageRegion, scene: Scene) -> Self {
         Self {
@@ -93,19 +65,19 @@ impl SceneSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Size;
     use static_assertions::assert_impl_all;
 
     use super::*;
-    use crate::CanvasLayer;
+    use crate::{Layer, LayerTree, OffsetLayer};
 
-    // The retained-seam boundary value moved from the (owner-thread-confined)
-    // rendering side to the raster/present side -- must stay `Send`
-    // independent of `PipelineCell`'s `!Send` upstream. Not `Sync`: `Scene`
-    // carries `Box<dyn FnOnce() + Send>` composition callbacks, which are
-    // `Send` but never `Sync`, and a snapshot is moved across the boundary
-    // (one owner at a time), never shared by reference.
-    assert_impl_all!(SceneSnapshot: Send);
+    // The values that cross the raster boundary (and, via `Layer`, every
+    // payload they carry) are plain data: `Send` because the snapshot moves to
+    // the raster thread, `Sync` because nothing in them is interior-mutable.
+    // A future field that breaks either trait breaks this line, not a caller.
+    assert_impl_all!(Layer: Send, Sync);
+    assert_impl_all!(LayerTree: Send, Sync);
+    assert_impl_all!(Scene: Send, Sync);
+    assert_impl_all!(SceneSnapshot: Send, Sync);
 
     fn test_stamp() -> FrameStamp {
         FrameStamp::new(
@@ -122,11 +94,13 @@ mod tests {
     #[test]
     fn new_packages_all_fields() {
         let stamp = test_stamp();
-        let scene = Scene::from_layer(Size::ZERO, crate::Layer::from(CanvasLayer::new()), 0);
+        let tree = LayerTree::new(Layer::from(OffsetLayer::zero()));
+        let root = tree.root();
 
-        let frame = SceneSnapshot::new(stamp, DamageRegion::Full, scene);
+        let frame = SceneSnapshot::new(stamp, DamageRegion::Full, Scene::new(tree));
 
         assert_eq!(frame.stamp, stamp);
         assert_eq!(frame.damage, DamageRegion::Full);
+        assert_eq!(frame.scene.root(), root);
     }
 }

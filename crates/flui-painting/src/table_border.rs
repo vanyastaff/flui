@@ -85,7 +85,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{DisplayListCore, DrawCommand};
+    use crate::DrawOp;
 
     fn rect() -> Rect<Pixels> {
         Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(60.0))
@@ -120,7 +120,7 @@ mod tests {
 
         let cmds: Vec<_> = list.iter().collect();
         #[expect(clippy::panic)] // Test assertion
-        let DrawCommand::DrawPath { path, .. } = &cmds[0] else {
+        let DrawOp::Path { path, .. } = &cmds[0].op else {
             panic!("expected the first command to be the vertical interior line path");
         };
         assert_eq!(
@@ -132,7 +132,7 @@ mod tests {
         );
 
         #[expect(clippy::panic)] // Test assertion
-        let DrawCommand::DrawPath { path, .. } = &cmds[1] else {
+        let DrawOp::Path { path, .. } = &cmds[1].op else {
             panic!("expected the second command to be the horizontal interior line path");
         };
         assert_eq!(
@@ -144,7 +144,7 @@ mod tests {
         );
 
         assert!(
-            matches!(cmds[2], DrawCommand::DrawDRRect { .. }),
+            matches!(cmds[2].op, DrawOp::DRRect { .. }),
             "expected the outer border to paint last as a uniform DrawDRRect; got {:?}",
             cmds[2]
         );
@@ -165,7 +165,7 @@ mod tests {
         // The single (uniform) outer border rounds its OUTER rrect to the
         // requested 8px corners — the deferred-edge feature working end to end.
         #[expect(clippy::panic)] // Test assertion
-        let DrawCommand::DrawDRRect { outer, .. } = &cmds[0] else {
+        let DrawOp::DRRect { outer, .. } = &cmds[0].op else {
             panic!("expected a single uniform outer DrawDRRect; got {:?}", cmds);
         };
         assert_eq!(outer.top_left, Radius::circular(px(8.0)));
@@ -184,7 +184,7 @@ mod tests {
         let cmds: Vec<_> = list.iter().collect();
 
         #[expect(clippy::panic)] // Test assertion
-        let DrawCommand::DrawDRRect { outer, .. } = &cmds[0] else {
+        let DrawOp::DRRect { outer, .. } = &cmds[0].op else {
             panic!("expected a single uniform outer DrawDRRect; got {:?}", cmds);
         };
         assert_eq!(

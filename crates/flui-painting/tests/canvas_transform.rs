@@ -5,7 +5,7 @@
 
 use std::f32::consts::PI;
 
-use flui_painting::prelude::*;
+use flui_painting::{Canvas, Paint};
 use flui_types::{
     geometry::{Matrix4, Rect, Transform, px},
     styling::Color,
@@ -164,7 +164,7 @@ fn test_transform_mixed_with_legacy_methods() {
     canvas.transform(Transform::rotate(PI / 4.0));
 
     // New scale API
-    canvas.scale_uniform(2.0);
+    canvas.scale(2.0, 2.0);
 
     let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
     let paint = Paint::fill(Color::RED);
@@ -257,40 +257,4 @@ fn test_transform_card_flip_pattern() {
 
     let display_list = canvas.finish();
     assert_eq!(display_list.len(), 1);
-}
-
-#[test]
-fn test_transform_parallax_layers() {
-    // Test parallax scrolling pattern with different translation speeds
-    let mut parent = Canvas::new();
-
-    // Background layer (slow)
-    let mut bg = Canvas::new();
-    bg.transform(Transform::translate(0.0, 50.0));
-    bg.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(800.0), px(600.0)),
-        &Paint::fill(Color::rgba(200, 200, 255, 255)),
-    );
-    parent.extend_from(bg);
-
-    // Midground layer (medium)
-    let mut mg = Canvas::new();
-    mg.transform(Transform::translate(0.0, 100.0));
-    mg.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(800.0), px(600.0)),
-        &Paint::fill(Color::rgba(150, 150, 255, 255)),
-    );
-    parent.extend_from(mg);
-
-    // Foreground layer (fast)
-    let mut fg = Canvas::new();
-    fg.transform(Transform::translate(0.0, 150.0));
-    fg.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(800.0), px(600.0)),
-        &Paint::fill(Color::rgba(100, 100, 255, 255)),
-    );
-    parent.extend_from(fg);
-
-    let display_list = parent.finish();
-    assert_eq!(display_list.len(), 3);
 }

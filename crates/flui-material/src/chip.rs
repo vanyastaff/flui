@@ -1436,8 +1436,6 @@ mod tests {
 
     #[test]
     fn border_painter_draws_nothing_for_a_zero_width_side() {
-        use flui_painting::DisplayListCore;
-
         let painter = ChipBorderPainter {
             side: BorderSide::new(Color::BLACK, px(0.0), BorderStyle::Solid),
             shape: chip_default_shape(),
@@ -1449,7 +1447,7 @@ mod tests {
 
     #[test]
     fn border_painter_draws_a_ring_for_a_visible_side() {
-        use flui_painting::display_list::DrawCommand;
+        use flui_painting::DrawOp;
 
         let painter = ChipBorderPainter {
             side: BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid),
@@ -1461,7 +1459,7 @@ mod tests {
             canvas
                 .display_list()
                 .iter()
-                .any(|command| matches!(command, DrawCommand::DrawDRRect { .. }))
+                .any(|command| matches!(command.op, DrawOp::DRRect { .. }))
         );
     }
 
@@ -1478,7 +1476,7 @@ mod tests {
 
     #[test]
     fn checkmark_painter_draws_a_path() {
-        use flui_painting::display_list::DrawCommand;
+        use flui_painting::DrawOp;
 
         let painter = ChipCheckmarkPainter {
             color: Color::BLACK,
@@ -1492,7 +1490,7 @@ mod tests {
             canvas
                 .display_list()
                 .iter()
-                .any(|command| matches!(command, DrawCommand::DrawPath { .. }))
+                .any(|command| matches!(command.op, DrawOp::Path { .. }))
         );
     }
 
@@ -1512,7 +1510,7 @@ mod tests {
     /// diverges from every one of them identically.
     #[test]
     fn checkmark_painter_scales_to_75_percent_and_centers_within_the_cell() {
-        use flui_painting::display_list::DrawCommand;
+        use flui_painting::DrawOp;
 
         let cell = CHIP_ICON_SIZE;
         let painter = ChipCheckmarkPainter {
@@ -1524,8 +1522,8 @@ mod tests {
         let mut path = canvas
             .display_list()
             .iter()
-            .find_map(|command| match command {
-                DrawCommand::DrawPath { path, .. } => Some(path.clone()),
+            .find_map(|command| match &command.op {
+                DrawOp::Path { path, .. } => Some(path.clone()),
                 _ => None,
             })
             .expect("checkmark painter must emit a DrawPath command");

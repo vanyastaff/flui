@@ -1,10 +1,5 @@
-//! `TextPainter` painting + cursor methods: `paint`,
-//! `get_offset_for_caret`, `get_position_for_offset`,
-//! `get_line_metrics`, `get_boxes_for_selection`, `get_word_boundary`.
-//!
-//! Extracted from the 990-LOC `text_painter.rs`
-//! god module. All methods here depend on the cached layout
-//! (`TextLayoutCache`) populated by [`super::measure`]'s `layout()`.
+//! `TextPainter` painting and cursor queries, all over the layout that
+//! [`super::measure`]'s `layout()` cached.
 
 use flui_types::{
     geometry::{Offset, Pixels},
@@ -26,10 +21,10 @@ impl TextPainter {
     /// called.
     #[must_use]
     #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
-    pub fn get_offset_for_caret(&mut self, position: TextPosition) -> Offset<Pixels> {
+    pub fn get_offset_for_caret(&self, position: TextPosition) -> Offset<Pixels> {
         let cache = self
             .layout_cache
-            .as_mut()
+            .as_ref()
             .expect("BUG: TextPainter::layout() must be called before get_offset_for_caret() — it reads the cached layout that layout() populates");
 
         let offset = cache.layout.get_offset_for_caret(position);
@@ -137,22 +132,12 @@ impl TextPainter {
             .expect("BUG: TextPainter::layout() must be called before paint() — it reads the cached layout that layout() populates");
 
         let paint_offset = offset + cache.paint_offset;
-
-        // Pass wrap-width to the GPU text renderer so glyphon respects
-        // the same line-breaking constraints as the cosmic-text layout cache.
-        // None = unbounded (no wrapping); Some(w) = wrap at w pixels.
-        let wrap_width = if cache.max_width.is_finite() && cache.max_width > 0.0 {
-            Some(cache.max_width)
-        } else {
-            None
-        };
-
-        canvas.draw_text_span(
-            text,
-            paint_offset,
-            cache.size,
-            self.text_scale_factor as f64,
-            wrap_width,
-        );
+        let color = text
+            .style()
+            .and_then(crate::text_layout::paint_color)
+            .unwrap_or(flui_types::Color::BLACK);
+        // The very layout this painter measured: what the engine rasterises
+        // is, by identity, what was laid out.
+        canvas.draw_paragraph(&cache.layout, paint_offset, color);
     }
 }

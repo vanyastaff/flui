@@ -392,6 +392,15 @@ impl PersistentHeaderCore {
     ///
     /// Set once by the element that owns the delegate, at mount. A header with
     /// a static child never calls this and publishes nothing.
+    /// Record the core's diagnostics shared by every header variant.
+    fn fill_diagnostics(&self, builder: &mut DiagnosticsBuilder) {
+        builder.add("min_extent", self.min_extent);
+        builder.add("max_extent", self.max_extent);
+        if let Some(stretch) = &self.stretch_configuration {
+            builder.add("stretch_trigger_offset", stretch.stretch_trigger_offset);
+        }
+    }
+
     fn set_shrink_cell(&mut self, cell: std::sync::Arc<crate::layout::HeaderShrinkCell>) {
         self.shrink_cell = Some(cell);
         // The delegate has never been built against this header, so the next
@@ -514,6 +523,79 @@ fn position_persistent_header_child(
 // RenderSliverScrollingPersistentHeader — "no effort to avoid overlapping"
 // =============================================================================
 
+/// Generate the extent, stretch, and shrink-cell accessors every persistent
+/// header delegates to its [`PersistentHeaderCore`].
+///
+/// The pinned, scrolling, and floating variants hold the same core and differ
+/// only in layout behavior, so the delegation surface has one body per method.
+/// The impl header is passed verbatim, which is what lets the generic floating
+/// base take part.
+macro_rules! header_core_accessors {
+    (impl $($header:tt)*) => {
+        impl $($header)* {
+            /// The current minimum extent.
+            #[must_use]
+            pub fn min_extent(&self) -> f32 {
+                self.core.min_extent
+            }
+
+            /// The current maximum extent.
+            #[must_use]
+            pub fn max_extent(&self) -> f32 {
+                self.core.max_extent
+            }
+
+            /// Replaces the minimum extent and returns the exact pipeline
+            /// impact.
+            pub fn set_min_extent(
+                &mut self,
+                min_extent: f32,
+            ) -> flui_rendering::RenderUpdateImpact {
+                layout_impact(self.core.set_min_extent(min_extent))
+            }
+
+            /// Attaches the build-during-layout mailbox this header publishes
+            /// into (ADR-0017). Set by the element that drives a delegate; a
+            /// header with a static child leaves it unset and publishes
+            /// nothing.
+            pub fn set_shrink_cell(
+                &mut self,
+                cell: std::sync::Arc<crate::layout::HeaderShrinkCell>,
+            ) {
+                self.core.set_shrink_cell(cell);
+            }
+
+            /// Replaces the maximum extent and returns the exact pipeline
+            /// impact.
+            pub fn set_max_extent(
+                &mut self,
+                max_extent: f32,
+            ) -> flui_rendering::RenderUpdateImpact {
+                layout_impact(self.core.set_max_extent(max_extent))
+            }
+
+            /// Replaces the stretch configuration; the impact reports layout
+            /// when the configuration's presence changed.
+            pub fn set_stretch_configuration(
+                &mut self,
+                stretch: Option<OverScrollHeaderStretchConfiguration>,
+            ) -> flui_rendering::RenderUpdateImpact {
+                layout_impact(self.core.set_stretch_configuration(stretch))
+            }
+
+            /// Installs a stretch configuration (builder style).
+            #[must_use]
+            pub fn with_stretch_configuration(
+                mut self,
+                stretch: OverScrollHeaderStretchConfiguration,
+            ) -> Self {
+                self.core.stretch_configuration = Some(stretch);
+                self
+            }
+        }
+    };
+}
+
 /// A header that shrinks to `min_extent` as it hits the leading edge of the
 /// viewport, then scrolls off normally.
 ///
@@ -526,6 +608,8 @@ pub struct RenderSliverScrollingPersistentHeader {
     child_position: f32,
 }
 
+header_core_accessors!(impl RenderSliverScrollingPersistentHeader);
+
 impl RenderSliverScrollingPersistentHeader {
     /// Creates a scrolling persistent header with the given extents.
     #[must_use]
@@ -534,53 +618,6 @@ impl RenderSliverScrollingPersistentHeader {
             core: PersistentHeaderCore::new(min_extent, max_extent, None),
             child_position: 0.0,
         }
-    }
-
-    /// Installs a stretch configuration (builder style).
-    #[must_use]
-    pub fn with_stretch_configuration(
-        mut self,
-        stretch: OverScrollHeaderStretchConfiguration,
-    ) -> Self {
-        self.core.stretch_configuration = Some(stretch);
-        self
-    }
-
-    /// The current minimum extent.
-    #[must_use]
-    pub fn min_extent(&self) -> f32 {
-        self.core.min_extent
-    }
-
-    /// The current maximum extent.
-    #[must_use]
-    pub fn max_extent(&self) -> f32 {
-        self.core.max_extent
-    }
-
-    /// Replaces the minimum extent and reports layout when changed.
-    pub fn set_min_extent(&mut self, min_extent: f32) -> flui_rendering::RenderUpdateImpact {
-        layout_impact(self.core.set_min_extent(min_extent))
-    }
-
-    /// Attaches the build-during-layout mailbox this header publishes into
-    /// (ADR-0017). Set by the element that drives a delegate; a header with a
-    /// static child leaves it unset and publishes nothing.
-    pub fn set_shrink_cell(&mut self, cell: std::sync::Arc<crate::layout::HeaderShrinkCell>) {
-        self.core.set_shrink_cell(cell);
-    }
-
-    /// Replaces the maximum extent and returns the exact pipeline impact.
-    pub fn set_max_extent(&mut self, max_extent: f32) -> flui_rendering::RenderUpdateImpact {
-        layout_impact(self.core.set_max_extent(max_extent))
-    }
-
-    /// Replaces the stretch configuration; returns `true` if presence changed.
-    pub fn set_stretch_configuration(
-        &mut self,
-        stretch: Option<OverScrollHeaderStretchConfiguration>,
-    ) -> flui_rendering::RenderUpdateImpact {
-        layout_impact(self.core.set_stretch_configuration(stretch))
     }
 
     /// Mirrors `updateGeometry` (`:365-383`) exactly: the return value uses
@@ -620,11 +657,7 @@ impl RenderSliverScrollingPersistentHeader {
 
 impl Diagnosticable for RenderSliverScrollingPersistentHeader {
     fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
-        builder.add("min_extent", self.core.min_extent);
-        builder.add("max_extent", self.core.max_extent);
-        if let Some(stretch) = &self.core.stretch_configuration {
-            builder.add("stretch_trigger_offset", stretch.stretch_trigger_offset);
-        }
+        self.core.fill_diagnostics(builder);
     }
 }
 
@@ -689,6 +722,8 @@ pub struct RenderSliverPinnedPersistentHeader {
     core: PersistentHeaderCore,
 }
 
+header_core_accessors!(impl RenderSliverPinnedPersistentHeader);
+
 impl RenderSliverPinnedPersistentHeader {
     /// Creates a pinned persistent header with the given extents.
     #[must_use]
@@ -697,62 +732,11 @@ impl RenderSliverPinnedPersistentHeader {
             core: PersistentHeaderCore::new(min_extent, max_extent, None),
         }
     }
-
-    /// Installs a stretch configuration (builder style).
-    #[must_use]
-    pub fn with_stretch_configuration(
-        mut self,
-        stretch: OverScrollHeaderStretchConfiguration,
-    ) -> Self {
-        self.core.stretch_configuration = Some(stretch);
-        self
-    }
-
-    /// The current minimum extent.
-    #[must_use]
-    pub fn min_extent(&self) -> f32 {
-        self.core.min_extent
-    }
-
-    /// The current maximum extent.
-    #[must_use]
-    pub fn max_extent(&self) -> f32 {
-        self.core.max_extent
-    }
-
-    /// Replaces the minimum extent and returns the exact pipeline impact.
-    pub fn set_min_extent(&mut self, min_extent: f32) -> flui_rendering::RenderUpdateImpact {
-        layout_impact(self.core.set_min_extent(min_extent))
-    }
-
-    /// Attaches the build-during-layout mailbox this header publishes into
-    /// (ADR-0017). Set by the element that drives a delegate; a header with a
-    /// static child leaves it unset and publishes nothing.
-    pub fn set_shrink_cell(&mut self, cell: std::sync::Arc<crate::layout::HeaderShrinkCell>) {
-        self.core.set_shrink_cell(cell);
-    }
-
-    /// Replaces the maximum extent and returns the exact pipeline impact.
-    pub fn set_max_extent(&mut self, max_extent: f32) -> flui_rendering::RenderUpdateImpact {
-        layout_impact(self.core.set_max_extent(max_extent))
-    }
-
-    /// Replaces the stretch configuration; returns `true` if presence changed.
-    pub fn set_stretch_configuration(
-        &mut self,
-        stretch: Option<OverScrollHeaderStretchConfiguration>,
-    ) -> flui_rendering::RenderUpdateImpact {
-        layout_impact(self.core.set_stretch_configuration(stretch))
-    }
 }
 
 impl Diagnosticable for RenderSliverPinnedPersistentHeader {
     fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
-        builder.add("min_extent", self.core.min_extent);
-        builder.add("max_extent", self.core.max_extent);
-        if let Some(stretch) = &self.core.stretch_configuration {
-            builder.add("stretch_trigger_offset", stretch.stretch_trigger_offset);
-        }
+        self.core.fill_diagnostics(builder);
     }
 }
 
@@ -1049,6 +1033,8 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     _mode: PhantomData<M>,
 }
 
+header_core_accessors!(impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M>);
+
 impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     /// Creates a floating persistent header. `controller` is optional: pass
     /// `None` when this header will never snap or programmatically expand.
@@ -1071,58 +1057,11 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
         }
     }
 
-    /// Installs a stretch configuration (builder style).
-    #[must_use]
-    pub fn with_stretch_configuration(
-        mut self,
-        stretch: OverScrollHeaderStretchConfiguration,
-    ) -> Self {
-        self.core.stretch_configuration = Some(stretch);
-        self
-    }
-
     /// Installs a snap configuration (builder style).
     #[must_use]
     pub fn with_snap_configuration(mut self, snap: FloatingHeaderSnapConfiguration) -> Self {
         self.snap_configuration = Some(snap);
         self
-    }
-
-    /// The current minimum extent.
-    #[must_use]
-    pub fn min_extent(&self) -> f32 {
-        self.core.min_extent
-    }
-
-    /// The current maximum extent.
-    #[must_use]
-    pub fn max_extent(&self) -> f32 {
-        self.core.max_extent
-    }
-
-    /// Replaces the minimum extent and returns the exact pipeline impact.
-    pub fn set_min_extent(&mut self, min_extent: f32) -> flui_rendering::RenderUpdateImpact {
-        layout_impact(self.core.set_min_extent(min_extent))
-    }
-
-    /// Attaches the build-during-layout mailbox this header publishes into
-    /// (ADR-0017). Set by the element that drives a delegate; a header with a
-    /// static child leaves it unset and publishes nothing.
-    pub fn set_shrink_cell(&mut self, cell: std::sync::Arc<crate::layout::HeaderShrinkCell>) {
-        self.core.set_shrink_cell(cell);
-    }
-
-    /// Replaces the maximum extent and returns the exact pipeline impact.
-    pub fn set_max_extent(&mut self, max_extent: f32) -> flui_rendering::RenderUpdateImpact {
-        layout_impact(self.core.set_max_extent(max_extent))
-    }
-
-    /// Replaces the stretch configuration; returns `true` if presence changed.
-    pub fn set_stretch_configuration(
-        &mut self,
-        stretch: Option<OverScrollHeaderStretchConfiguration>,
-    ) -> flui_rendering::RenderUpdateImpact {
-        layout_impact(self.core.set_stretch_configuration(stretch))
     }
 
     /// Replaces the snap configuration. Inert setter (matches the oracle's
@@ -1281,11 +1220,7 @@ impl<M: FloatingHeaderMode> Diagnosticable for RenderSliverFloatingHeaderBase<M>
     }
 
     fn debug_fill_properties(&self, builder: &mut DiagnosticsBuilder) {
-        builder.add("min_extent", self.core.min_extent);
-        builder.add("max_extent", self.core.max_extent);
-        if let Some(stretch) = &self.core.stretch_configuration {
-            builder.add("stretch_trigger_offset", stretch.stretch_trigger_offset);
-        }
+        self.core.fill_diagnostics(builder);
         if let Some(offset) = self.effective_scroll_offset {
             builder.add("effective_scroll_offset", offset);
         }

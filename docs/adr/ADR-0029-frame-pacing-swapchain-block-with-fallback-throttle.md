@@ -7,7 +7,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-17
 - **Deciders:** @vanyastaff
-- **Scope:** `crates/flui-engine/src/wgpu/renderer.rs` (`select_present_mode`, `Renderer::render_scene`), `crates/flui-platform/src/platforms/winit/platform.rs` (`WinitApp::about_to_wait`), `crates/flui-app/src/app/{runner.rs,binding.rs,config.rs}`, `crates/flui-platform/src/traits/capabilities.rs`, `docs/ROADMAP.md` App.1
+- **Scope:** `crates/flui-engine/src/renderer.rs` (`select_present_mode`, `Renderer::render_scene`), `crates/flui-platform/src/platforms/winit/platform.rs` (`WinitApp::about_to_wait`), `crates/flui-app/src/app/{runner.rs,binding.rs,config.rs}`, `crates/flui-platform/src/traits/capabilities.rs`, `docs/ROADMAP.md` App.1
 - **Related:** ADR-0027 (sanctioned leapfrog zones name *presentation architecture* explicitly — this ADR is exactly that category: Flutter's own scheduler/vsync binding is a different runtime model (`Window.scheduleFrame`/`onBeginFrame` driven by the engine's platform-specific vsync callback), not a behavioral oracle FLUI transcribes here per Prime Directive #2). This is itself a leapfrog-zone unit: no Flutter source is cited as the contract below — the contract IS the spec.
 
 ---

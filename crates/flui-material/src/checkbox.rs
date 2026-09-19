@@ -1107,7 +1107,7 @@ mod tests {
     }
 
     /// Proves the painter is actually invoked (via a real [`Canvas`]/
-    /// [`flui_painting::display_list::DrawCommand`]) and paints the
+    /// [`flui_painting::DrawOp`]) and paints the
     /// correct mark per tristate value: a checkmark (`DrawPath`) only for
     /// `Some(true)`, a dash (`DrawLine`) only for `None`, and neither for
     /// `Some(false)` — [`CheckboxPainter::paint`]'s `match self.value`
@@ -1116,7 +1116,7 @@ mod tests {
     /// before being reverted.
     #[test]
     fn draws_the_correct_mark_per_tristate_value() {
-        use flui_painting::display_list::DrawCommand;
+        use flui_painting::DrawOp;
 
         let size = Size::new(px(CHECKBOX_TAP_TARGET_SIZE), px(CHECKBOX_TAP_TARGET_SIZE));
 
@@ -1131,11 +1131,11 @@ mod tests {
             let has_path = canvas
                 .display_list()
                 .iter()
-                .any(|command| matches!(command, DrawCommand::DrawPath { .. }));
+                .any(|command| matches!(command.op, DrawOp::Path { .. }));
             let has_line = canvas
                 .display_list()
                 .iter()
-                .any(|command| matches!(command, DrawCommand::DrawLine { .. }));
+                .any(|command| matches!(command.op, DrawOp::Line { .. }));
 
             assert_eq!(
                 has_path, expect_path,

@@ -520,7 +520,7 @@ greps agree.
 
 **Landed.** `PresentDisposition { Presented, NoDamage, NotShown }` replaced
 `Result<bool>` on `RasterBackend::render_scene`; `SubmitVerdict` gained the matching variant; the
-frame tail retains on `NotShown` and clears on `NoDamage`. ADR-0065 records it, the registry entry
+frame tail retains on `NotShown` and clears on `NoDamage`. ADR-0068 records it, the registry entry
 is `frame-disposition-distinguishes-withheld-from-idle` (state `partial`), and the four obligations
 §2.6.4 listed are all discharged. The naming collision §2.6.4 flagged is real but harmless:
 `flui_scheduler::frame_telemetry::PresentOutcome { Presented, Errored }` already existed, so the
@@ -1239,7 +1239,7 @@ and is named rather than implied.
    `a_frame_with_nothing_owed_is_not_retained`, `the_withheld_retry_is_bounded_and_then_parks`,
    `a_presented_frame_clears_the_withheld_streak`. Contract
    `frame-disposition-distinguishes-withheld-from-idle` (`runtime-contract.toml:918`, state
-   `partial`); `PresentDisposition` entered the root-export manifest in the same change; ADR-0065
+   `partial`); `PresentDisposition` entered the root-export manifest in the same change; ADR-0068
    records it.
    **What was refuted, in this paragraph's own words, so the correction travels with it.** It said
    the rule was "one line in the same `NoPresent` arm: **when the cause was surface-unavailability,
@@ -1570,7 +1570,7 @@ and is named rather than implied.
   distinction at the trait boundary, which §2.6.5 landed as `PresentDisposition`.)*
 - 2026-09-17: **§2.6.4's widening landed and its open tuning question is closed — see §2.6.5.**
   `PresentDisposition` replaced `Result<bool>`; the frame tail retains on `NotShown` and clears on
-  `NoDamage`; ADR-0065 + the `frame-disposition-distinguishes-withheld-from-idle` registry entry
+  `NoDamage`; ADR-0068 + the `frame-disposition-distinguishes-withheld-from-idle` registry entry
   record it. The bound is `MAX_NOT_SHOWN_RETRIES = 128` per presentation.
 - 2026-09-17: **the "~105 Hz idle loop" the bound guards against was NOT what the traces showed,
   and saying so mattered.** Three runs with unbounded retention gave 240/137/150 presents (baseline

@@ -50,7 +50,7 @@ fn capturing_backend(submitted: Arc<StdMutex<Vec<String>>>) -> TestRasterBackend
         submitted
             .lock()
             .expect("scene capture mutex")
-            .push(format!("{:?}", scene.layer_tree()));
+            .push(format!("{:?}", scene.tree()));
         Ok(PresentDisposition::Presented)
     })
 }
@@ -99,10 +99,11 @@ fn mount_linked_render_root() -> UiRealm {
     realm
 }
 
-/// A semantics error happens after paint has committed both frame artifacts.
-/// The realm must retain that pair and submit it intact on its automatic retry.
+/// A semantics error happens after paint has committed the layer tree, leader
+/// index included. The realm must retain it and submit it intact on its
+/// automatic retry.
 #[test]
-fn semantics_failure_retry_submits_the_retained_non_empty_link_registry() {
+fn semantics_failure_retry_submits_the_retained_linked_tree() {
     let realm = mount_linked_render_root();
     realm.pipeline_for_test().with_mut(|owner| {
         owner.fail_next_semantics_after_paint_for_test(RenderError::semantics(
@@ -113,13 +114,20 @@ fn semantics_failure_retry_submits_the_retained_non_empty_link_registry() {
     let submitted_link_counts = Arc::new(StdMutex::new(Vec::new()));
     let captured_counts = Arc::clone(&submitted_link_counts);
     let mut backend = TestRasterBackend::new(move |_, scene| {
+        let tree = scene.tree();
+        let (leaders, followers) =
+            tree.iter()
+                .fold((0, 0), |(l, f), (_, node)| match node.layer() {
+                    flui_layer::Layer::Leader(leader) => {
+                        (l + usize::from(tree.leader(leader.link()).is_some()), f)
+                    }
+                    flui_layer::Layer::Follower(_) => (l, f + 1),
+                    _ => (l, f),
+                });
         captured_counts
             .lock()
             .expect("link-count capture mutex")
-            .push((
-                scene.link_registry().leader_count(),
-                scene.link_registry().follower_count(),
-            ));
+            .push((leaders, followers));
         Ok(PresentDisposition::Presented)
     });
 
@@ -146,7 +154,7 @@ fn semantics_failure_retry_submits_the_retained_non_empty_link_registry() {
             .lock()
             .expect("link-count capture mutex"),
         vec![(1, 1)],
-        "the submitted scene must carry the retained frame's leader and follower"
+        "the submitted scene must carry the retained frame's indexed leader and its follower"
     );
 }
 

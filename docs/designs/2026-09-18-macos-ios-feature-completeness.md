@@ -144,7 +144,7 @@ show/hide-soft-keyboard or IME-position surface. iOS cannot host a text field.
 defaults, so no existing backend breaks.
 
 **Must not break.** The macOS `NSTextInputClient` conformance is the model:
-one producer per press (ADR-0066), composition state in `RefCell` on the view.
+one producer per press (ADR-0069), composition state in `RefCell` on the view.
 
 ### 6. Haptics implementations
 

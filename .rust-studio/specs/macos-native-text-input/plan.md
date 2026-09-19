@@ -177,7 +177,7 @@ Everything the probe needs is **public API plus AppKit** — no crate internals,
 
 **The assertions, and which one is the point.**
 
-1. **Mutual exclusion — this is the ADR-0066 assertion, and the reason the probe exists.** With
+1. **Mutual exclusion — this is the ADR-0069 assertion, and the reason the probe exists.** With
    `set_ime_allowed(true)`, synthesize a real `NSEvent` for an ordinary letter via
    `+[NSEvent keyEventWithType:…characters:@"a"…]` and send it to the view's `keyDown:`. Assert
    **exactly one** `PlatformInput::Ime(Commit("a"))` and **zero** `Key::Character`. Then
@@ -200,7 +200,7 @@ Everything the probe needs is **public API plus AppKit** — no crate internals,
    session. The implementation agent flagged this gap itself.
 5. **Drop, not commit, on disable.** `set_ime_allowed(false)` clears the marked state as well as
    emitting `Disabled`, so a composition in flight at that moment produces no `Commit`. Asserted as
-   an absence — the contract ADR-0066 records — so the probe would fail if the backend began
+   an absence — the contract ADR-0069 records — so the probe would fail if the backend began
    committing.
 6. **The release, and its gate** (added after the first four assertions passed, because the probe
    as first written sent only `keyDown:`). `keyUp:` is a separate AppKit entry point gated on the
@@ -219,7 +219,7 @@ Everything the probe needs is **public API plus AppKit** — no crate internals,
 
 **Honest limits to write into the probe's own module doc, not to discover later:** arm 2's
 synthesized `NSEvent` is not a human keystroke and does not run a genuine input method — it proves
-the *routing*, which is what ADR-0066 decides. A real composition (press-and-hold, or a CJK source)
+the *routing*, which is what ADR-0069 decides. A real composition (press-and-hold, or a CJK source)
 stays **not driven** until a real one is used, and the probe must say so rather than imply the IME
 gap is closed. §6's "what is not claimed" still stands against this probe, and §10 is the attempt
 that was made against it plus the measurement that leaves it standing.
@@ -338,7 +338,7 @@ failure `AGENTS.md` warns about) found **three written claims that the reference
 in the two directions of error. All three are corrected in place, in shipped files:
 
 1. **"Flutter's `TextInputConnection.connectionClosed` commits"** — written in
-   `crates/flui-platform/ARCHITECTURE.md` and again in **ADR-0066's Consequences bullet**. True in
+   `crates/flui-platform/ARCHITECTURE.md` and again in **ADR-0069's Consequences bullet**. True in
    effect, false as stated, and the first correction of it was false the other way.
    `EditableTextState.connectionClosed` (`editable_text.dart:4138`) nulls the connection, drops
    `_lastKnownRemoteTextEditingValue` and unfocuses — no commit call anywhere. The unfocus routes
@@ -355,7 +355,7 @@ in the two directions of error. All three are corrected in place, in shipped fil
    (`winit-0.30.13/src/platform_impl/macos/view.rs:880`) clears `marked_text` before setting
    `ImeState::Disabled` and queueing `WindowEvent::Ime(Ime::Disabled)`. The public doc for the call
    (`src/window.rs:1265`) states only "the window won't receive `Ime` events, and will receive
-   `KeyboardInput` for every keypress". ADR-0066 now cites the implementation, and says why it is
+   `KeyboardInput` for every keypress". ADR-0069 now cites the implementation, and says why it is
    the implementation rather than the doc.
 3. **`PlatformTextInput::set_ime_allowed`'s own doc** (`traits/text_input.rs`) said the drop
    "follows winit's own semantics" and described the Flutter side only as "keeps the uncommitted

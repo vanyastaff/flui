@@ -15,7 +15,9 @@ use flui_foundation::PresentationId;
 use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
 };
-use flui_layer::{LayerTree, PerformanceOverlayLayer, PerformanceStats};
+use flui_layer::{LayerTree, PerformanceOverlayLayer};
+
+use super::performance_stats::PerformanceStats;
 #[cfg(test)]
 use flui_platform::traits::PlatformTextInput;
 use flui_platform::{
@@ -1186,15 +1188,13 @@ impl PresentationState {
         let Some(stats) = slot.as_mut() else {
             return;
         };
-        let Some(root) = layer_tree.root() else {
-            return;
-        };
+        let root = layer_tree.root();
 
         stats.record_frame();
 
         let mut overlay =
             PerformanceOverlayLayer::all_stats(PerformanceOverlayLayer::default_bounds());
-        overlay.update_stats(stats);
+        overlay.update_stats(stats.fps(), stats.avg_frame_time_ms(), stats.total_frames());
 
         let snapshots = self.clock.frames_since(None);
         let present_p99 = produce_to_present_histogram(&snapshots)
@@ -1212,15 +1212,7 @@ impl PresentationState {
             self.frames_dropped(),
         )));
 
-        let overlay_id = layer_tree.insert(overlay.into());
-        // `insert` does not link the node — parent and child sides are set
-        // explicitly, same as every other layer-tree insertion.
-        if let Some(node) = layer_tree.get_mut(overlay_id) {
-            node.set_parent(Some(root));
-        }
-        if let Some(root_node) = layer_tree.get_mut(root) {
-            root_node.add_child(overlay_id);
-        }
+        let _overlay_id = layer_tree.push_child(root, flui_layer::Layer::from(overlay));
     }
 
     fn attach_surface(&self) {
@@ -1682,9 +1674,8 @@ mod tests {
         use super::*;
 
         fn tree_with_root() -> (LayerTree, flui_layer::LayerId) {
-            let mut tree = LayerTree::new();
-            let root = tree.insert(Layer::Canvas(Box::new(CanvasLayer::new())));
-            tree.set_root(Some(root));
+            let tree = LayerTree::new(Layer::from(CanvasLayer::new()));
+            let root = tree.root();
             (tree, root)
         }
 
@@ -1716,7 +1707,8 @@ mod tests {
             assert!(
                 tree.get_layer(overlay_id)
                     .expect("overlay layer")
-                    .is_performance_overlay(),
+                    .as_performance_overlay()
+                    .is_some(),
                 "the appended layer is the performance overlay"
             );
             assert_eq!(
@@ -1724,17 +1716,6 @@ mod tests {
                 Some(root),
                 "the overlay's parent side must be linked too, not just the root's child list"
             );
-        }
-
-        #[test]
-        fn overlay_on_a_rootless_tree_is_a_no_op() {
-            let presentation = presentation();
-            presentation.set_performance_overlay(true);
-            let mut tree = LayerTree::new();
-
-            presentation.attach_performance_overlay(&mut tree);
-
-            assert_eq!(tree.len(), 0, "nothing to parent the overlay under");
         }
 
         #[test]
@@ -1819,7 +1800,7 @@ mod tests {
         }
 
         fn tree_root_children(tree: &LayerTree) -> Vec<flui_layer::LayerId> {
-            let root = tree.root().expect("root");
+            let root = tree.root();
             tree.get(root).expect("root node").children().to_vec()
         }
     }

@@ -497,7 +497,7 @@ mod tests {
     // mounted `BuildContext` (not just constructed and equality-checked) is
     // covered by `tests/colors.rs::static_color_resolves_to_itself_through_a_real_context`
     // — this crate's unit tests stay to pure data-model behavior with no
-    // mounted context available (see this crate's `AGENTS.md`, "Testing").
+    // mounted context available (see `docs/testing.md`).
 
     #[test]
     fn from_color_and_from_dynamic_color_construct_the_matching_variant() {

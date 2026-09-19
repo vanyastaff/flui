@@ -40,7 +40,7 @@ pub mod unified;
 
 use flui_foundation::ElementId;
 // Slot types live in flui-tree (canonical home per `flui-tree-unified-interface-intent`
-// memory + STRATEGY.md "Behavior loyal, structure Rust-native"). flui-view re-exports
+// memory + the "behavior loyal, structure Rust-native" rule). flui-view re-exports
 // the bare `IndexedSlot` and aliases `ElementSlot` to its `ElementId` instantiation.
 pub use flui_tree::IndexedSlot;
 

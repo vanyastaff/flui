@@ -1,16 +1,17 @@
-//! Backend-agnostic frame-driver trait.
+//! The frame-driver trait the application layer calls on a renderer.
 //!
-//! [`RasterBackend`] is the swap point for the rendering backend. A future
-//! Vello or software backend implements this trait; lyon and wgpu are
-//! internal implementation details of the current wgpu backend.
+//! [`RasterBackend`] has one production implementor, [`Renderer`], and
+//! exists so `flui-app`'s frame loop, raster lane, and device-recovery
+//! paths can be driven by a scripted fake with no GPU (every other
+//! implementor is a test double). It is a test seam, not a plugin point:
+//! wgpu is the engine and no second backend is planned.
 //!
+//! [`Renderer`]: crate::Renderer
 //! # Design notes
 //!
 //! - Constructors are deliberately excluded: backend construction is
 //!   window-specific and async, so it stays on the concrete type.
 //! - The trait is dyn-compatible (no generics, no `async` in methods).
-//! - Feature gating: the trait itself is unconditional; only the
-//!   `impl RasterBackend for Renderer` is gated on `wgpu-backend`.
 
 use flui_layer::Scene;
 use flui_types::geometry::{Pixels, Rect};
@@ -83,9 +84,9 @@ impl PresentDisposition {
 /// calls on a renderer. Constructors are excluded — backend creation is
 /// window-specific and async, so it lives on the concrete type.
 ///
-/// This is the swap point: a future Vello or software backend implements
-/// this trait while the application layer changes only the construction line.
-/// Lyon and wgpu are internal details of the wgpu implementation.
+/// [`Renderer`](crate::Renderer) is the one production implementor; the
+/// others are test doubles that let the application layer's frame loop run
+/// without a GPU.
 ///
 /// The trait is dyn-compatible (no generic parameters, no `async` methods).
 /// `Send` is a supertrait (ADR-0045 decision 1): the raster owner moves the
@@ -118,6 +119,7 @@ pub trait RasterBackend: Send {
     /// flag is set. The caller should attempt recovery via the concrete
     /// type's `recover()` method (excluded from this trait — it is async
     /// and takes a window handle, which are backend-specific concerns).
+    #[must_use]
     fn is_device_lost(&self) -> bool;
 
     /// Mark a screen region as dirty (needs repaint on the next frame).
@@ -127,11 +129,13 @@ pub trait RasterBackend: Send {
     fn mark_full_repaint(&mut self);
 
     /// Returns `true` if the renderer has pending damage to paint.
+    #[must_use]
     fn has_damage(&self) -> bool;
 
     /// Current surface size as `(width, height)` in physical pixels.
     ///
     /// Returns `(0, 0)` when no surface is configured (e.g. offscreen).
+    #[must_use]
     fn size(&self) -> (u32, u32);
 
     /// Reconfigure the surface after an outdated or lost surface error.
@@ -142,12 +146,8 @@ pub trait RasterBackend: Send {
     ///
     /// While a windowed backend holds no surface because it released one, the
     /// call is a no-op rather than an error: there is nothing to reconfigure
-    /// and the release is deliberate. That clause covers the released state
-    /// only. A backend with no window at all is a different state with a
-    /// different answer — the wgpu `Renderer` returns
-    /// [`EngineError::NotInitialized`] for an offscreen or shared-services
-    /// origin, because reaching a reconfigure from one is a program error
-    /// rather than a lifecycle state.
+    /// and the release is deliberate. The wgpu `Renderer` never fails here;
+    /// the `Result` is for a backend whose reconfigure can.
     fn reconfigure_surface(&mut self) -> Result<(), EngineError>;
 
     /// Install the hook this backend runs immediately before every present
@@ -176,9 +176,7 @@ pub trait RasterBackend: Send {
 // ---------------------------------------------------------------------------
 // wgpu backend implementation
 // ---------------------------------------------------------------------------
-
-#[cfg(feature = "wgpu-backend")]
-impl RasterBackend for crate::wgpu::Renderer {
+impl RasterBackend for crate::Renderer {
     fn render_scene(&mut self, scene: &Scene) -> Result<PresentDisposition, EngineError> {
         self.render_scene(scene)
     }
@@ -212,7 +210,8 @@ impl RasterBackend for crate::wgpu::Renderer {
     }
 
     fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
-        self.reconfigure_surface()
+        self.reconfigure_surface();
+        Ok(())
     }
 }
 

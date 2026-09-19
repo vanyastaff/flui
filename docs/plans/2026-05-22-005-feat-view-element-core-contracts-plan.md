@@ -41,7 +41,7 @@ The plan is **Deep**: cross-cutting, contract-locking, high-risk silent-correctn
 - Heterogeneous children rely on a builder-only `Children` API (`crates/flui-view/src/child/children.rs`); no `column!` / `row!` macro path exists, no `ViewSeq` trait exists, no `Vec<BoxedView>` first-class path.
 - Widget-authoring is a 3-step ritual (`struct` + manual `impl View` + `impl_stateless_view!`/`impl_stateful_view!`); `bon` is declared in the workspace but unused for widgets; no `#[derive(StatelessView)]` exists.
 
-Shipping the widget catalog on this surface bakes a silent-correctness trap into every list-shaped widget (US1) and a verbose authoring API that suppresses the [`STRATEGY.md`](../../STRATEGY.md) adoption metric at the source (US4). The contracts must lock before [ROADMAP Core.1 — Vertical slice](../ROADMAP.md) starts.
+Shipping the widget catalog on this surface bakes a silent-correctness trap into every list-shaped widget (US1) and a verbose authoring API that suppresses the `STRATEGY.md` adoption metric at the source (US4). The contracts must lock before [ROADMAP Core.1 — Vertical slice](../ROADMAP.md) starts.
 
 ---
 
@@ -1113,5 +1113,5 @@ Pattern (b) in spec Edge Cases. Spec defers to "may land with C3 if benchmarks s
 - **Architecture correction**: [`docs/research/2026-05-22-architecture-correction-plan.md`](../research/2026-05-22-architecture-correction-plan.md) — D-2 (the index-not-key defect FR-024/FR-025 closes).
 - **Ideation source**: [`docs/ideation/2026-05-22-001-core-contracts-stress-test.md`](../ideation/2026-05-22-001-core-contracts-stress-test.md) — round-3 6-frame stress-test producing S1/S2/S3/S4/S5/S6/S7/S8/S9/S10 survivors.
 - **Flutter algorithm source**: `.flutter/flutter-master/packages/flutter/lib/src/widgets/framework.dart` — `RenderObjectElement.updateChildren`, `Element.updateChild`, `Widget.canUpdate`.
-- **Strategy anchor**: [`STRATEGY.md`](../../STRATEGY.md) — "behavior loyal, structure Rust-native"; FR-035's `tracing::event!` grounded in this principle.
+- **Strategy anchor**: `STRATEGY.md` — "behavior loyal, structure Rust-native"; FR-035's `tracing::event!` grounded in this principle.
 - **Constitution**: [`.specify/memory/constitution.md`](../../.specify/memory/constitution.md) v2.3.0 — Principle IV (composition over inheritance, enum dispatch not `dyn` by default), Principle 6 (no `unwrap`/`println!`/`dbg!`), Principle 8 (coverage), Principle 9 (ID offset pattern).

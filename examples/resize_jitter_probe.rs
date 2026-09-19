@@ -3,7 +3,7 @@
 //!
 //! This probe was built to be the executable half of the rationale pinned on
 //! `desired_maximum_frame_latency: 1` in
-//! [`flui_engine::wgpu::Renderer::derive_surface_config`]. That literal is held
+//! [`flui_engine::Renderer::derive_surface_config`]. That literal is held
 //! at its tightest possible value on the stated grounds that a latency of 2
 //! "lets the present queue hold frames rendered for an older size, which the
 //! compositor then stretches to the current window → visible resize jitter",
@@ -63,7 +63,7 @@ mod appkit_resize_jitter_probe {
     use std::time::{Duration, Instant};
 
     use flui_engine::PresentDisposition;
-    use flui_engine::wgpu::Renderer;
+    use flui_engine::Renderer;
     use flui_layer::{LayerTree, Scene};
     use flui_platform::Platform;
     use flui_platform::traits::PlatformWindow;
@@ -261,24 +261,18 @@ mod appkit_resize_jitter_probe {
                         state.resizes_applied += 1;
                     }
                 }
-                // The scene is drawn at whatever the surface is actually
-                // configured for — not at the window's size, which is the
-                // mismatch this probe is here to catch.
-                let target = state.applied.unwrap_or(SIZES[0]);
+                // The scene is empty — the probe measures the surface's own
+                // resize tracking, not what is drawn into it. The renderer
+                // paints at whatever the surface is actually configured for,
+                // not the window's size, which is the mismatch this probe is
+                // here to catch.
+                //
                 // The engine resets damage at the end of every rendered frame,
                 // so a probe that wants a frame per request must ask for one —
                 // this is the same call `flui-app`'s direct path makes.
                 renderer.mark_full_repaint();
 
-                let tree = LayerTree::new();
-                let root = tree.root();
-                let frame = state.frames;
-                let scene = Scene::new(
-                    Size::new(px(target.0 as f32), px(target.1 as f32)),
-                    tree,
-                    root,
-                    frame,
-                );
+                let scene = Scene::new(LayerTree::default());
                 if let Ok(PresentDisposition::Presented) = renderer.render_scene(&scene) {
                     state.presented += 1;
                 }

@@ -1,17 +1,9 @@
-//! Canvas state stack: save/restore + save_layer family.
+//! Canvas state stack: save/restore and the save_layer family.
 //!
-//! These were extracted from the 3,305-LOC `canvas.rs` god
-//! module into a focused file. The state stack carries:
-//!
-//! - The current transform matrix (snapshotted by `save()`).
-//! - The clip stack depth (truncated back to the saved depth on
-//!   `restore()`).
-//! - A `is_layer` flag (used by `save_layer()` to emit a matching
-//!   `DrawCommand::RestoreLayer` when the layer is composited back).
-//!
-//! `restore()` on an empty save stack is a silent no-op (Flutter parity
-//! with `Canvas.restore()` -- Skia drops unrestored saves on
-//! finalisation; we follow the same shape).
+//! A saved state is the transform and
+//! whether the save opened a layer (so `restore` emits the matching
+//! `RestoreLayer`). `restore()` on an empty save stack is a silent no-op,
+//! as `dart:ui`'s `Canvas.restore()` is in release builds.
 
 use flui_types::{
     geometry::{Matrix4, Pixels, Rect},
@@ -20,39 +12,15 @@ use flui_types::{
 };
 
 use super::Canvas;
-use crate::display_list::{DrawCommand, Paint};
+use crate::display_list::{DrawOp, Paint};
 
 /// Saved canvas state (for save/restore).
 #[derive(Debug, Clone)]
-pub struct CanvasState {
+pub(crate) struct CanvasState {
     /// Saved transform matrix.
     pub(crate) transform: Matrix4,
-    /// Depth of clip stack when saved.
-    pub(crate) clip_depth: usize,
     /// Whether this save created a layer (for save_layer).
     pub(crate) is_layer: bool,
-}
-
-/// Clip operation stored in the clip stack.
-///
-/// Currently used for tracking clip depth in save/restore operations.
-/// The clip geometry (Rect/RRect/Path) is stored for future
-/// optimizations:
-///
-/// - Culling: skip drawing commands outside the clip bounds.
-/// - Clip bounds queries: `canvas.local_clip_bounds()`.
-/// - Render optimization: merge adjacent clips.
-#[derive(Debug, Clone)]
-// Fields stored for future optimization features
-pub enum ClipShape {
-    /// Rectangular clip.
-    Rect(Rect<Pixels>),
-    /// Rounded-rectangle clip.
-    RRect(flui_types::geometry::RRect),
-    /// Rounded-superellipse clip (Flutter `RSuperellipse`).
-    RSuperellipse(flui_types::geometry::RSuperellipse),
-    /// Path clip; boxed for variant size uniformity.
-    Path(Box<flui_types::painting::Path>),
 }
 
 impl Canvas {
@@ -67,16 +35,12 @@ impl Canvas {
     pub fn save(&mut self) {
         self.save_stack.push(CanvasState {
             transform: self.transform,
-            clip_depth: self.clip_stack.len(),
             is_layer: false,
         });
         // The backend needs the scope marker too, not just this stack: a clip
         // recorded after this point narrows the backend's state, and only a
-        // matching `Restore` tells it when to stop. Without the pair, the
-        // clip_stack below would unwind on the CPU while the GPU kept clipping.
-        self.display_list.push(DrawCommand::Save {
-            transform: self.transform,
-        });
+        // matching `Restore` tells it when to stop.
+        self.record(DrawOp::Save);
     }
 
     /// Restores the most recently saved state.
@@ -95,29 +59,17 @@ impl Canvas {
             // composites the offscreen target and unwinds its own state; a
             // plain `save` recorded a `Save` and is closed by `Restore`.
             if state.is_layer {
-                self.display_list.push(DrawCommand::RestoreLayer {
-                    transform: self.transform,
-                });
+                self.record(DrawOp::RestoreLayer);
             } else {
-                self.display_list.push(DrawCommand::Restore {
-                    transform: self.transform,
-                });
+                self.record(DrawOp::Restore);
             }
 
             self.transform = state.transform;
-            self.clip_stack.truncate(state.clip_depth);
         }
     }
 
-    /// Returns the number of saved states (plus 1 for the initial
-    /// state). The initial save count is 1.
-    ///
-    /// Flutter-parity (`Canvas.getSaveCount()` returns 1 for an
-    /// unmodified canvas — the initial save scope counts). Audit P-16
-    /// flagged a possible `save_depth` rename for clarity and the audit
-    /// itself recommended defer; the rename is a public-API cosmetic
-    /// change that does not pay for itself. The 1-indexed semantics are
-    /// fixed by Flutter parity, not by this name.
+    /// The number of saved states plus one for the initial state, so an
+    /// unmodified canvas answers 1 (`dart:ui`'s `Canvas.getSaveCount()`).
     pub fn save_count(&self) -> usize {
         self.save_stack.len() + 1
     }
@@ -147,17 +99,6 @@ impl Canvas {
     /// layer is composited back using the specified paint settings
     /// (opacity, blend mode, color filter, etc.).
     ///
-    /// # Paint validation
-    ///
-    /// This method does *not* clamp `paint.color.alpha_f32()` into
-    /// `[0.0, 1.0]` — the caller is expected to hand in a validated
-    /// `Paint`. Use [`Self::save_layer_opacity`] (which performs
-    /// `opacity.clamp(0.0, 1.0)` before forwarding) if your opacity
-    /// value comes from untrusted input. Passing an out-of-range
-    /// alpha here lets the value reach the GPU backend, which may
-    /// over-saturate or produce undefined blend behaviour depending
-    /// on the wgpu target.
-    ///
     /// # Performance
     ///
     /// `save_layer` is relatively expensive because it:
@@ -176,17 +117,11 @@ impl Canvas {
     pub fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint) {
         self.save_stack.push(CanvasState {
             transform: self.transform,
-            clip_depth: self.clip_stack.len(),
             is_layer: true,
         });
 
-        let interned_paint = self.intern_paint(paint);
-        let transform = self.transform;
-        self.display_list.push(DrawCommand::SaveLayer {
-            bounds,
-            paint: interned_paint,
-            transform,
-        });
+        let paint = self.intern_paint(paint);
+        self.record(DrawOp::SaveLayer { bounds, paint });
 
         tracing::debug!(layer_depth = self.save_stack.len(), "Layer created");
     }
@@ -194,10 +129,7 @@ impl Canvas {
     /// Saves the canvas state with a layer that applies alpha
     /// transparency.
     ///
-    /// Convenience method equivalent to:
-    /// ```rust,ignore
-    /// canvas.save_layer(bounds, &Paint::new().with_opacity(alpha / 255.0));
-    /// ```
+    /// Equivalent to `save_layer` with a paint whose opacity is `alpha / 255`.
     pub fn save_layer_alpha(&mut self, bounds: Option<Rect<Pixels>>, alpha: u8) {
         let opacity = alpha as f32 / 255.0;
         self.save_layer(
@@ -234,34 +166,27 @@ impl Canvas {
 mod tests {
     use flui_types::painting::BlendMode;
 
-    use crate::display_list::Paint;
-    use flui_types::styling::Color;
+    use super::{Canvas, DrawOp};
 
-    /// `save_layer_blend` must produce a paint with alpha = 255 (opaque).
-    ///
-    /// The engine derives layer opacity from `paint.color.a`.  Before this fix
-    /// `save_layer_blend` forwarded `Color::TRANSPARENT` (alpha = 0), making the
-    /// advanced-blend layer a silent no-op: opacity = 0 → backdrop passthrough
-    /// regardless of the requested blend mode.
-    ///
-    /// This test fails on pre-fix code where `with_opacity(1.0)` is absent.
+    /// `save_layer_blend` must record an OPAQUE paint carrying the blend
+    /// mode: the engine derives layer opacity from `paint.color.a`, so a
+    /// `Color::TRANSPARENT` paint (alpha 0) makes the advanced-blend layer a
+    /// silent backdrop passthrough whatever mode was asked for.
     #[test]
-    fn save_layer_blend_paint_is_opaque() {
-        // Verify the paint that save_layer_blend would pass to save_layer carries
-        // alpha = 255.  We construct the same expression used by the method body
-        // directly — this is a white-box test of the documented fixed invariant.
-        let blend_paint = Paint::fill(Color::TRANSPARENT)
-            .with_opacity(1.0)
-            .with_blend_mode(BlendMode::Multiply);
-        assert_eq!(
-            blend_paint.color.a, 255,
-            "save_layer_blend paint must be opaque (alpha = 255); \
-             alpha = 0 silently no-ops the advanced-blend layer"
+    fn save_layer_blend_records_an_opaque_paint_with_the_mode() {
+        let mut canvas = Canvas::new();
+        canvas.save_layer_blend(None, BlendMode::Multiply);
+        let recorded = &canvas.display_list()[0].op;
+        assert!(
+            matches!(recorded, DrawOp::SaveLayer { .. }),
+            "got {recorded:?}"
         );
-        assert_eq!(
-            blend_paint.blend_mode,
-            BlendMode::Multiply,
-            "save_layer_blend paint must carry the requested blend mode"
-        );
+        if let DrawOp::SaveLayer { paint, .. } = recorded {
+            assert_eq!(
+                paint.color.a, 255,
+                "alpha 0 silently no-ops the advanced-blend layer"
+            );
+            assert_eq!(paint.blend_mode, BlendMode::Multiply);
+        }
     }
 }

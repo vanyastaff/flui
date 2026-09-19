@@ -1,20 +1,19 @@
-//! Tree trait implementations for LayerTree
+//! `TreeRead<LayerId>` + `TreeNav<LayerId>` for [`LayerTree`], so the generic
+//! walkers in `flui-tree` (`ancestors`, `descendants`,
+//! `lowest_common_ancestor`) run over the compositor tree without a second
+//! copy of each algorithm here.
 //!
-//! This module implements `TreeRead<LayerId>` and `TreeNav<LayerId>` from
-//! flui-tree, enabling generic tree algorithms and visitors to work with
-//! LayerTree.
+//! `TreeWrite` is deliberately not implemented: the tree is append-only (see
+//! [`LayerTree::push_child`]), and the trait's `remove`/`clear` shapes would
+//! promise a mutation the type cannot honour.
 
 use flui_foundation::LayerId;
 use flui_tree::{
-    TreeNav, TreeRead, TreeWrite,
+    TreeNav, TreeRead,
     iter::{AllSiblings, Ancestors, DescendantsWithDepth},
 };
 
 use super::layer_tree::{LayerNode, LayerTree};
-
-// ============================================================================
-// TREE READ IMPLEMENTATION
-// ============================================================================
 
 impl TreeRead<LayerId> for LayerTree {
     type Node = LayerNode;
@@ -39,13 +38,9 @@ impl TreeRead<LayerId> for LayerTree {
 
     #[inline]
     fn node_ids(&self) -> impl Iterator<Item = LayerId> + '_ {
-        self.iter_slab().map(slab_index_to_layer_id)
+        self.ids()
     }
 }
-
-// ============================================================================
-// TREE NAV IMPLEMENTATION
-// ============================================================================
 
 impl TreeNav<LayerId> for LayerTree {
     const MAX_DEPTH: usize = 32;
@@ -58,10 +53,9 @@ impl TreeNav<LayerId> for LayerTree {
 
     #[inline]
     fn children(&self, id: LayerId) -> impl Iterator<Item = LayerId> + '_ {
-        self.get(id)
-            .map(|node| node.children().iter().copied())
+        LayerTree::children(self, id)
             .into_iter()
-            .flatten()
+            .flat_map(|children| children.iter().copied())
     }
 
     #[inline]
@@ -78,260 +72,44 @@ impl TreeNav<LayerId> for LayerTree {
     fn siblings(&self, id: LayerId) -> impl Iterator<Item = LayerId> + '_ {
         AllSiblings::new(self, id)
     }
-
-    #[inline]
-    fn child_count(&self, id: LayerId) -> usize {
-        self.get(id).map_or(0, |node| node.children().len())
-    }
-
-    #[inline]
-    fn has_children(&self, id: LayerId) -> bool {
-        self.get(id).is_some_and(|node| !node.children().is_empty())
-    }
 }
-
-// ============================================================================
-// TREE WRITE IMPLEMENTATION
-// ============================================================================
-//
-// Hoists the cascade-by-default `remove` from the inherent API up to
-// the unified [`TreeWrite`] trait so every tree type shares one removal
-// contract. Callers now write `use flui_tree::TreeWrite; tree.remove(id);`
-// and get cascade automatically. The inherent `LayerTree::remove_shallow`
-// is the trait primitive; the trait default `remove` (in
-// `flui-tree/src/traits/write.rs`) walks descendants and calls
-// `remove_shallow`.
-
-impl TreeWrite<LayerId> for LayerTree {
-    #[inline]
-    fn get_mut(&mut self, id: LayerId) -> Option<&mut Self::Node> {
-        LayerTree::get_mut(self, id)
-    }
-
-    #[inline]
-    fn insert(&mut self, node: Self::Node) -> LayerId {
-        LayerTree::insert_node(self, node)
-    }
-
-    #[inline]
-    fn remove_shallow(&mut self, id: LayerId) -> Option<Self::Node> {
-        LayerTree::remove_shallow(self, id)
-    }
-
-    #[inline]
-    fn clear(&mut self) {
-        LayerTree::clear(self);
-    }
-}
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
-/// Converts slab index to LayerId.
-#[inline]
-fn slab_index_to_layer_id((index, _): (usize, &LayerNode)) -> LayerId {
-    LayerId::new(index + 1)
-}
-
-// ============================================================================
-// TESTS
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
+    use flui_tree::{TreeNav, TreeRead};
+
     use super::*;
-    use crate::layer::{CanvasLayer, Layer};
+    use crate::{Layer, OffsetLayer};
 
-    #[test]
-    fn test_tree_read_get() {
-        let mut tree = LayerTree::new();
-        let id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        // Use TreeRead trait method
-        let node: Option<&LayerNode> = TreeRead::get(&tree, id);
-        assert!(node.is_some());
+    fn offset() -> Layer {
+        Layer::from(OffsetLayer::zero())
     }
 
     #[test]
-    fn test_tree_read_contains() {
-        let mut tree = LayerTree::new();
-        let id = tree.insert(Layer::from(CanvasLayer::new()));
+    fn trait_views_agree_with_inherent_ones() {
+        let mut tree = LayerTree::new(offset());
+        let root = tree.root();
+        let a = tree.push_child(root, offset());
+        let b = tree.push_child(root, offset());
+        let c = tree.push_child(a, offset());
 
-        assert!(TreeRead::contains(&tree, id));
-        assert!(!TreeRead::contains(&tree, LayerId::new(999)));
-    }
-
-    #[test]
-    fn test_tree_read_len() {
-        let mut tree = LayerTree::new();
-        assert_eq!(TreeRead::<LayerId>::len(&tree), 0);
-
-        let _ = tree.insert(Layer::from(CanvasLayer::new()));
-        assert_eq!(TreeRead::<LayerId>::len(&tree), 1);
-
-        let _ = tree.insert(Layer::from(CanvasLayer::new()));
-        assert_eq!(TreeRead::<LayerId>::len(&tree), 2);
-    }
-
-    #[test]
-    fn test_tree_nav_parent() {
-        let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        tree.add_child(parent_id, child_id);
-
-        assert_eq!(TreeNav::parent(&tree, child_id), Some(parent_id));
-        assert_eq!(TreeNav::parent(&tree, parent_id), None);
-    }
-
-    #[test]
-    fn test_tree_nav_children() {
-        let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child1_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child2_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        tree.add_child(parent_id, child1_id);
-        tree.add_child(parent_id, child2_id);
-
-        let children: Vec<_> = TreeNav::children(&tree, parent_id).collect();
-        assert_eq!(children.len(), 2);
-        assert!(children.contains(&child1_id));
-        assert!(children.contains(&child2_id));
-    }
-
-    #[test]
-    fn test_tree_nav_ancestors() {
-        let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let grandchild_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        tree.add_child(root_id, child_id);
-        tree.add_child(child_id, grandchild_id);
-
-        let ancestors: Vec<_> = TreeNav::ancestors(&tree, grandchild_id).collect();
-        assert_eq!(ancestors, vec![grandchild_id, child_id, root_id]);
-    }
-
-    #[test]
-    fn test_tree_nav_descendants() {
-        let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let grandchild_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        tree.add_child(root_id, child_id);
-        tree.add_child(child_id, grandchild_id);
-
-        let descendants: Vec<_> = TreeNav::descendants(&tree, root_id).collect();
-        assert_eq!(descendants.len(), 3);
-        assert_eq!(descendants[0], (root_id, 0));
-        assert_eq!(descendants[1], (child_id, 1));
-        assert_eq!(descendants[2], (grandchild_id, 2));
-    }
-
-    #[test]
-    fn test_tree_nav_siblings() {
-        let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child1_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child2_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child3_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        tree.add_child(parent_id, child1_id);
-        tree.add_child(parent_id, child2_id);
-        tree.add_child(parent_id, child3_id);
-
-        let siblings: Vec<_> = TreeNav::siblings(&tree, child2_id).collect();
-        assert_eq!(siblings.len(), 2);
-        assert!(siblings.contains(&child1_id));
-        assert!(siblings.contains(&child3_id));
-        assert!(!siblings.contains(&child2_id));
-    }
-
-    #[test]
-    fn test_tree_nav_child_count() {
-        let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child1_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child2_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        assert_eq!(TreeNav::child_count(&tree, parent_id), 0);
-
-        tree.add_child(parent_id, child1_id);
-        assert_eq!(TreeNav::child_count(&tree, parent_id), 1);
-
-        tree.add_child(parent_id, child2_id);
-        assert_eq!(TreeNav::child_count(&tree, parent_id), 2);
-    }
-
-    #[test]
-    fn test_tree_nav_has_children() {
-        let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        assert!(!TreeNav::has_children(&tree, parent_id));
-
-        tree.add_child(parent_id, child_id);
-        assert!(TreeNav::has_children(&tree, parent_id));
-    }
-
-    #[test]
-    fn test_tree_nav_is_leaf() {
-        let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        assert!(TreeNav::is_leaf(&tree, parent_id));
-
-        tree.add_child(parent_id, child_id);
-        assert!(!TreeNav::is_leaf(&tree, parent_id));
-        assert!(TreeNav::is_leaf(&tree, child_id));
-    }
-
-    #[test]
-    fn test_tree_nav_is_root() {
-        let mut tree = LayerTree::new();
-        let parent_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        tree.add_child(parent_id, child_id);
-
-        assert!(TreeNav::is_root(&tree, parent_id));
-        assert!(!TreeNav::is_root(&tree, child_id));
-    }
-
-    #[test]
-    fn test_tree_nav_find_root() {
-        let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let grandchild_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        tree.add_child(root_id, child_id);
-        tree.add_child(child_id, grandchild_id);
-
-        assert_eq!(TreeNav::find_root(&tree, grandchild_id), root_id);
-        assert_eq!(TreeNav::find_root(&tree, child_id), root_id);
-        assert_eq!(TreeNav::find_root(&tree, root_id), root_id);
-    }
-
-    #[test]
-    fn test_tree_nav_depth() {
-        let mut tree = LayerTree::new();
-        let root_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let child_id = tree.insert(Layer::from(CanvasLayer::new()));
-        let grandchild_id = tree.insert(Layer::from(CanvasLayer::new()));
-
-        tree.add_child(root_id, child_id);
-        tree.add_child(child_id, grandchild_id);
-
-        assert_eq!(TreeNav::depth(&tree, root_id), 0);
-        assert_eq!(TreeNav::depth(&tree, child_id), 1);
-        assert_eq!(TreeNav::depth(&tree, grandchild_id), 2);
+        assert_eq!(TreeRead::len(&tree), 3 + 1);
+        assert!(TreeRead::contains(&tree, c));
+        assert_eq!(
+            TreeRead::node_ids(&tree).collect::<Vec<_>>(),
+            vec![root, a, b, c]
+        );
+        assert_eq!(TreeNav::parent(&tree, c), Some(a));
+        assert_eq!(
+            TreeNav::children(&tree, root).collect::<Vec<_>>(),
+            vec![a, b]
+        );
+        assert_eq!(tree.ancestors(c).collect::<Vec<_>>(), vec![c, a, root]);
+        assert_eq!(tree.lowest_common_ancestor(c, b), Some(root));
+        assert_eq!(tree.lowest_common_ancestor(c, a), Some(a));
+        assert_eq!(
+            tree.descendants(root).map(|(id, _)| id).collect::<Vec<_>>(),
+            vec![root, a, c, b]
+        );
     }
 }

@@ -45,11 +45,11 @@ use std::sync::Arc;
 
 use bytemuck::cast_slice;
 use criterion::{Criterion, criterion_group, criterion_main};
-use flui_engine::wgpu::OffscreenRenderer;
+use flui_engine::OffscreenRenderer;
 use flui_types::{
     Rect, Size,
     geometry::{Pixels, px},
-    painting::{BlendMode, Shader},
+    painting::Shader,
     styling::Color,
 };
 use wgpu::util::DeviceExt as _;
@@ -182,13 +182,7 @@ fn bench_render_masked(c: &mut Criterion) {
     // Warm-up: one render pass ensures pipeline compilation is excluded.
     {
         let source = make_source_texture(&device, format);
-        let _ = offscreen.render_masked(
-            child_bounds,
-            result_size,
-            &mask_shader,
-            BlendMode::SrcOver,
-            &source,
-        );
+        let _ = offscreen.render_masked(child_bounds, result_size, &mask_shader, &source);
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
     }
 
@@ -203,7 +197,6 @@ fn bench_render_masked(c: &mut Criterion) {
                 black_box(child_bounds),
                 black_box(result_size),
                 black_box(&mask_shader),
-                black_box(BlendMode::SrcOver),
                 black_box(&source),
             );
             let _ = device.poll(wgpu::PollType::wait_indefinitely());

@@ -1,4 +1,3 @@
-// PORT-TARGET: flui-painting::TextLayout, flui-engine::wgpu::TextRenderer
 //! Choosing the font family a [`TextStyle`] is shaped with, so the shaper is
 //! never handed a family this machine does not carry.
 //!
@@ -181,62 +180,6 @@ pub(crate) fn bind_generic_families(db: &mut Database) {
     }
 }
 
-/// Whether `db` holds any face that can render basic Latin text.
-///
-/// The precondition [`install_text_fallback`] is gated on: a database that
-/// already carries a Latin-capable face needs nothing, and installing into it
-/// would only change which family an unmatched style lands on.
-pub(crate) fn has_latin_capable_face(db: &Database) -> bool {
-    db.faces().any(|face| can_render_latin(db, face.id))
-}
-
-/// Installs `fallback` into `db` when host discovery found no Latin-capable
-/// face, and points every generic family at the family it provides.
-///
-/// Returns `true` when the fallback was installed.
-///
-/// # Why this exists
-///
-/// `FontSystem::new()` loads whatever fonts the host has. Some hosts have none
-/// a plain discovery can see — a minimal container, CI, and **iOS**, where the
-/// system faces are not exposed through the paths cosmic-text/fontdb scan. The
-/// database is then empty, and the first shaped run panics inside cosmic-text
-/// (`FontFallbackIter::next().expect("no default font found")`). Installing a
-/// repository-shipped face is the difference between "text measures against
-/// embedded bytes" and "the process aborts on its first label".
-///
-/// # Why here and not in the renderer
-///
-/// `flui-engine`'s `TextRenderer` installs the same face when it finds the
-/// database empty, and that is sufficient for the host binary — but a
-/// hot-reload worker is a `cdylib` that statically links its own
-/// `flui-painting` and never links `flui-engine` at all. The worker therefore
-/// has its own `FONT_SYSTEM` that the renderer's fallback never reaches, and
-/// text built by worker code panics on iOS even though the host renders fine.
-/// The baseline belongs to the lowest crate that owns a `FontSystem`
-/// (ADR-0016), which is this one.
-///
-/// Named generics only — sans/serif/monospace/cursive/fantasy — mirror
-/// [`bind_generic_families`], for the same reason: a style naming no family
-/// must not fall through to whatever the host happens to carry.
-pub(crate) fn install_text_fallback(db: &mut Database, fallback: &[u8]) -> bool {
-    if has_latin_capable_face(db) {
-        return false;
-    }
-    db.load_font_data(fallback.to_vec());
-    let Some(family) = pick_family(db, false) else {
-        // The face failed to load (corrupt, or a build misconfiguration). The
-        // caller reports this; there is no useful family to bind.
-        return false;
-    };
-    db.set_sans_serif_family(family.clone());
-    db.set_serif_family(family.clone());
-    db.set_monospace_family(family.clone());
-    db.set_cursive_family(family.clone());
-    db.set_fantasy_family(family);
-    true
-}
-
 /// Whether `id` can render basic Latin text — the property a generic family
 /// has to have, tested by asking the face rather than by matching its name.
 ///
@@ -308,7 +251,7 @@ fn can_render_latin(db: &Database, id: fontdb::ID) -> bool {
 /// which runs in the `FontSystem` constructor, and exposes no setter —
 /// `Fallbacks::extend` refreshes only the per-script lists. So an emoji face
 /// registered *after* construction, through
-/// `PaintingBinding::register_font` or any `SharedFontSystem::with_mut`, is
+/// `SharedFontSystem::register_font` or any other `SharedFontSystem::with_mut`, is
 /// never forbidden.
 ///
 /// That is the same growth [`InstalledFamilies::sync`] exists to track, and it
@@ -671,8 +614,8 @@ impl InstalledFamilies {
     /// host where `FontSystem::new()` finds no faces at all — headless, CI, a
     /// minimal container — construction-time binding has nothing to choose
     /// from and binds nothing, leaving sans-serif pointing at cosmic-text's
-    /// hard-coded `"Open Sans"`. `TextRenderer::new` then loads the embedded
-    /// Roboto and the two icon fonts into that same database. Without a
+    /// hard-coded `"Open Sans"`. `register_font` then loads faces into that
+    /// same database (as the bundled fonts once did from the engine). Without a
     /// rebind, every later run resolves through a generic that names a family
     /// the database still does not carry, which is the exact condition this
     /// module exists to prevent — and no test would catch it, because the
@@ -799,10 +742,9 @@ pub(crate) fn resolve_family<'a>(
 mod tests {
     use super::*;
 
-    const ROBOTO: &[u8] = crate::fonts::ROBOTO_REGULAR;
-    const ARIAL: &[u8] = include_bytes!("../../../flui-engine/assets/fonts/Arial.ttf");
-    const MATERIAL_ICONS: &[u8] =
-        include_bytes!("../../../flui-engine/assets/fonts/MaterialIcons-Regular.ttf");
+    const ROBOTO: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
+    const ARIAL: &[u8] = include_bytes!("../../assets/fonts/Arial.ttf");
+    const MATERIAL_ICONS: &[u8] = include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
     /// Maps ONLY `U+0020`, at 1.3 em, with "Emoji" in its PostScript name.
     ///
     /// Generated by `tools/decoy-face/generate.py`. This test used to build
@@ -810,8 +752,7 @@ mod tests {
     /// play the part — a decoy has to carry `U+0020` and no letters, and both
     /// icon fonts carry neither. That made a merge-blocking assertion depend
     /// on a distro package's space advance (issue #932).
-    const DECOY_WIDE_SPACE: &[u8] =
-        include_bytes!("../../../flui-engine/assets/fonts/decoy-wide-space.ttf");
+    const DECOY_WIDE_SPACE: &[u8] = include_bytes!("../../assets/fonts/decoy-wide-space.ttf");
 
     fn database(faces: &[&[u8]]) -> Database {
         let mut db = Database::new();
@@ -819,56 +760,6 @@ mod tests {
             db.load_font_data((*face).to_vec());
         }
         db
-    }
-
-    /// A host with no discoverable Latin face must end up with a working
-    /// shaper: the embedded fallback is installed and every generic family is
-    /// pointed at it.
-    ///
-    /// This is the iOS / minimal-container path. `FontSystem::new()` there
-    /// yields an empty database, and the first shaped run panics inside
-    /// cosmic-text with `no default font found` — which is exactly what a
-    /// hot-reload worker `cdylib` hit on iOS, because it links `flui-painting`
-    /// (its own `FONT_SYSTEM`) but never `flui-engine`'s text renderer.
-    #[test]
-    fn an_empty_host_receives_the_embedded_text_fallback() {
-        let mut db = Database::new();
-        assert!(!has_latin_capable_face(&db), "precondition: empty database");
-
-        assert!(
-            install_text_fallback(&mut db, ROBOTO),
-            "the fallback must report installed on an empty host"
-        );
-        assert!(
-            has_latin_capable_face(&db),
-            "after install the database must be able to shape basic Latin"
-        );
-        for generic in [
-            Family::SansSerif,
-            Family::Serif,
-            Family::Monospace,
-            Family::Cursive,
-            Family::Fantasy,
-        ] {
-            assert!(
-                database_carries(&db, db.family_name(&generic)),
-                "generic {generic:?} must resolve to the fallback family, or an \
-                 unmatched style falls through to cosmic-text's emoji-first tail"
-            );
-        }
-    }
-
-    /// A host that already has a Latin-capable face is left untouched: the
-    /// fallback is a floor, not an override of the user's font environment.
-    #[test]
-    fn a_host_with_fonts_does_not_get_the_fallback() {
-        let mut db = database(&[ARIAL]);
-        assert!(has_latin_capable_face(&db));
-        assert!(
-            !install_text_fallback(&mut db, ROBOTO),
-            "a host that can already shape Latin must not have the fallback \
-             installed over its own fonts"
-        );
     }
 
     fn font_system(db: Database) -> FontSystem {
@@ -920,13 +811,10 @@ mod tests {
     /// probes below have no other fixture in the crate that can tell a correct
     /// implementation from a broken one — every shipped font asset is a
     /// single-weight, non-monospaced, static face.
-    const PROBE_MONO_100: &[u8] =
-        include_bytes!("../../../flui-engine/assets/fonts/probe-mono-100.ttf");
-    const PROBE_MONO_600: &[u8] =
-        include_bytes!("../../../flui-engine/assets/fonts/probe-mono-600.ttf");
+    const PROBE_MONO_100: &[u8] = include_bytes!("../../assets/fonts/probe-mono-100.ttf");
+    const PROBE_MONO_600: &[u8] = include_bytes!("../../assets/fonts/probe-mono-600.ttf");
     /// `usWeightClass` 400 with an `fvar` `wght` axis spanning 100..900.
-    const PROBE_VARIABLE: &[u8] =
-        include_bytes!("../../../flui-engine/assets/fonts/probe-variable-wght.ttf");
+    const PROBE_VARIABLE: &[u8] = include_bytes!("../../assets/fonts/probe-variable-wght.ttf");
 
     /// A monospaced face must not be accepted at a weight its family does not
     /// carry.
@@ -1818,8 +1706,7 @@ mod tests {
     #[test]
     fn a_face_loaded_after_the_first_resolve_is_picked_up() {
         // The shared database really does grow after text has been measured:
-        // `TextRenderer::new` loads Roboto and both icon fonts into it at
-        // renderer construction, which happens after layout has run.
+        // `register_font` may run at any point after layout has run.
         let mut system = font_system(database(&[ROBOTO]));
         let mut installed = InstalledFamilies::default();
         let style = styled(Some("Material Icons"));
@@ -1891,8 +1778,7 @@ mod tests {
 
     /// The generic bindings must survive a database that was EMPTY when the
     /// font system was built — the headless and CI path, where
-    /// `FontSystem::new()` finds nothing and `TextRenderer::new` loads the
-    /// embedded faces afterwards.
+    /// `FontSystem::new()` finds nothing and faces are registered afterwards.
     ///
     /// Construction-time binding has nothing to choose from there, so without
     /// a rebind every later run resolves through a generic naming a family the

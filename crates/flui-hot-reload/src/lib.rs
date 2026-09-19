@@ -22,7 +22,8 @@
 //!   BEFORE its image unmaps, so [`worker::get_worker_build_ptr`] returning
 //!   `Some` implies a live image; `None` means "worker unavailable".
 //! * What remains, and why this stays a dev-loop tool: a returned `Scene`
-//!   holds `Box<dyn FnOnce>` and `Arc<dyn Any>` whose vtables live in the
+//!   can hold `Arc<dyn Any>` (`AnnotatedRegionLayer`) and `Arc<dyn Fn>`
+//!   (`InlineSpan::on_tap` inside a display list) whose vtables live in the
 //!   plugin image, and no lifetime ties it to [`dynlib::DynLib`]'s `dlclose`
 //!   — the caller must drop the scene before unloading
 //!   ([`ScenePlugin::build_scene`] stays `unsafe` for exactly this), and the

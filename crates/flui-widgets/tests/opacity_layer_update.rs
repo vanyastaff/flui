@@ -32,7 +32,7 @@ fn opacity_alpha_u8(harness: &flui_widgets::testing::LaidOut) -> Option<u8> {
         node.children().iter().find_map(|&c| find(tree, c))
     }
     let tree = harness.layer_tree()?;
-    find(tree, tree.root()?)
+    find(tree, tree.root())
 }
 
 #[test]

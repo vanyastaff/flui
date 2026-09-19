@@ -84,7 +84,6 @@ the tap). Not yet
 shipped (tracked): `ClipPath`, `Image`, implicit animations
 (`AnimatedContainer` & friends), and the remaining recognizers
 (double-tap / long-press). See
-[`AGENTS.md`](AGENTS.md) for the authoring pattern and
 [`docs/adr/ADR-0009`](../../docs/adr/ADR-0009-flui-widgets-authoring-catalog.md)
 for the design rationale.
 

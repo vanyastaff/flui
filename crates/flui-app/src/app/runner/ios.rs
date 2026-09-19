@@ -152,7 +152,7 @@ where
 {
     use std::sync::Arc;
 
-    use flui_engine::wgpu::Renderer;
+    use flui_engine::Renderer;
     use flui_platform::{
         WindowOptions,
         traits::{DispatchEventResult, PlatformInput},

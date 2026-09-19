@@ -14,7 +14,8 @@ Flutter's tree behavior without copying its process/runtime topology:
 | `run_app` / `run_app_with_config` | `runApp` |
 | `WidgetsBinding` | `WidgetsBinding` |
 | `RenderingFlutterBinding` + `PipelineOwner` | `RendererBinding` |
-| `GestureBinding` / `PaintingBinding` / `UpdateScheduler` | `GestureBinding` / `PaintingBinding` / `SchedulerBinding` |
+| `GestureBinding` / `UpdateScheduler` | `GestureBinding` / `SchedulerBinding` |
+| `flui_painting::shared_font_system()` (installed by `AppRuntime`) | `PaintingBinding` |
 | per-presentation `SemanticsHost` | `SemanticsBinding` |
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,

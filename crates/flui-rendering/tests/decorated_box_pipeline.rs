@@ -5,7 +5,7 @@
 
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{DecorationPosition, RenderColoredBox, RenderDecoratedBox};
-use flui_painting::{DisplayListCore, DrawCommand};
+use flui_painting::DrawOp;
 use flui_rendering::{
     constraints::BoxConstraints, hit_testing::HitTestResult, pipeline::PipelineOwner,
 };
@@ -25,9 +25,11 @@ fn frame_commands(owner: PipelineOwner) -> (PipelineOwner, Vec<&'static str>) {
         let Some(node) = tree.get(id) else { return };
         if let Layer::Picture(picture) = node.layer() {
             for command in picture.picture().commands() {
-                kinds.push(match command {
-                    DrawCommand::DrawRect { .. } => "rect",
-                    DrawCommand::DrawRRect { .. } => "rrect",
+                kinds.push(match &command.op {
+                    DrawOp::Save => "save",
+                    DrawOp::Restore => "restore",
+                    DrawOp::Rect { .. } => "rect",
+                    DrawOp::RRect { .. } => "rrect",
                     _ => "other",
                 });
             }
@@ -36,9 +38,7 @@ fn frame_commands(owner: PipelineOwner) -> (PipelineOwner, Vec<&'static str>) {
             walk(tree, child, kinds);
         }
     }
-    if let Some(root) = tree.root() {
-        walk(&tree, root, &mut kinds);
-    }
+    walk(&tree, tree.root(), &mut kinds);
     (owner, kinds)
 }
 
@@ -65,7 +65,7 @@ fn background_decoration_paints_before_the_child() {
     let (_owner, kinds) = frame_commands(owner);
     assert_eq!(
         kinds,
-        vec!["rrect", "rect"],
+        vec!["save", "rrect", "restore", "save", "rect", "restore"],
         "background decoration (rounded red) must precede the child's \
          rect in the merged fragment"
     );
@@ -77,7 +77,7 @@ fn foreground_decoration_paints_after_the_child() {
     let (_owner, kinds) = frame_commands(owner);
     assert_eq!(
         kinds,
-        vec!["rect", "rrect"],
+        vec!["save", "rect", "restore", "save", "rrect", "restore"],
         "foreground decoration must follow the child's rect"
     );
 }

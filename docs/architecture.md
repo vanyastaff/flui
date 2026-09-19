@@ -138,9 +138,9 @@ pub trait Platform: Send + Sync + 'static {
 let platform = current_platform().expect("failed to initialize platform");
 ```
 
-Backends: `WindowsPlatform` (Win32), `MacOSPlatform` (AppKit), `HeadlessPlatform` (CI / tests), and a `winit` fallback. All platform-specific imports (`windows::*`, `objc2::*`/`objc2-app-kit::*`/`objc2-ui-kit::*`, `winit::*`) are confined to this crate. The Apple backends both use the `objc2` binding family — macOS/AppKit and iOS/UIKit alike; the older `cocoa`/`objc` crates this backend used are gone (ADR-0068).
+Backends: `WindowsPlatform` (Win32), `MacOSPlatform` (AppKit), `HeadlessPlatform` (CI / tests), and a `winit` fallback. All platform-specific imports (`windows::*`, `objc2::*`/`objc2-app-kit::*`/`objc2-ui-kit::*`, `winit::*`) are confined to this crate. The Apple backends both use the `objc2` binding family — macOS/AppKit and iOS/UIKit alike; the older `cocoa`/`objc` crates this backend used are gone (ADR-0071).
 
-Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformTextSystem`) was deleted under the [binding-deletion carve-out in `PORT.md`](PORT.md#flutter-behaviour-primacy-with-binding-deletion-carve-out); `cosmic-text` + `glyphon` (+ future `flui-assets`) cover the responsibility end-to-end.
+Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformTextSystem`) was deleted under the [binding-deletion carve-out in `PORT.md`](PORT.md#flutter-behaviour-primacy-with-binding-deletion-carve-out); `cosmic-text` (shaping, flui-painting) + the engine's glyph atlas (+ `flui-assets`) cover the responsibility end-to-end.
 
 ## Confinement of `unsafe`
 

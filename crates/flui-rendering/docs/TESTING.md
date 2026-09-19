@@ -275,7 +275,7 @@ fails CI if a new render object lacks harness coverage.
 
 | Crate | Re-use |
 |-------|--------|
-| [`flui_layer::testing`](../../flui-layer/docs/TESTING.md) | Layer-tree walkers (`structure`, `first_picture_bounds`, `first_opacity_alpha`) |
+| [`flui_layer::testing`](../../flui-layer/README.md) | Layer-tree walkers (`structure`, `first_picture_bounds`, `first_opacity_alpha`) |
 | [`flui_foundation`](../../flui-foundation/docs/TESTING.md) | `DiagnosticsNode` query API for structured assertions |
 | [`flui_painting::testing`](../../flui-painting/docs/TESTING.md) | Display-list recording when testing paint in isolation |
 

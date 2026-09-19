@@ -1293,7 +1293,7 @@ mod committed_layer_tree_tests {
             BuildOwner::new(),
             ElementTree::new(),
             PipelineCell::new(PipelineOwner::new()),
-            Some(LayerTree::new()),
+            Some(LayerTree::default()),
         );
         assert!(binding.layer_tree().is_some());
         assert!(binding.did_paint_last_frame());

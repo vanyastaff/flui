@@ -32,7 +32,7 @@
 /// for the measurements behind that). In practice: call it at the top of a
 /// test, guarded by a `std::sync::Once` when several tests share the binary.
 ///
-/// `faces` are raw font-file bytes; `flui_engine::fonts` exposes the faces
+/// `faces` are raw font-file bytes; `flui_painting::fonts` exposes the faces
 /// this repository ships. `default_family` must name a family one of `faces`
 /// provides — it becomes the target of every generic family, so text whose
 /// style names no family cannot fall through to a host font.

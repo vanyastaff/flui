@@ -26,7 +26,7 @@ pub(super) trait DeviceRecovery {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl DeviceRecovery for flui_engine::wgpu::Renderer {
+impl DeviceRecovery for flui_engine::Renderer {
     fn try_recover_device(&mut self) -> Result<(), flui_engine::EngineError> {
         // `pollster` is already a dep and safe to use here — the
         // desktop/Android runners own synchronous platform callbacks, not

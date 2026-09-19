@@ -29,8 +29,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use flui_engine::wgpu::Renderer;
-use flui_layer::{CanvasLayer, LayerTree, Scene, SceneBuilder};
+use flui_engine::Renderer;
+use flui_layer::{CanvasLayer, Scene, SceneBuilder};
 use flui_platform::{WindowOptions, current_platform};
 use flui_types::{
     Color, Offset,
@@ -107,10 +107,8 @@ fn build_color_filter_scene(viewport_width: f32, viewport_height: f32) -> Scene 
     let column_count = columns.len() as f32;
     let column_width = viewport_width / column_count;
 
-    let mut tree = LayerTree::new();
-
-    let root_id = {
-        let mut builder = SceneBuilder::new(&mut tree);
+    let tree = {
+        let mut builder = SceneBuilder::new();
 
         // Root offset layer.
         builder.push_offset(Offset::ZERO);
@@ -161,12 +159,7 @@ fn build_color_filter_scene(viewport_width: f32, viewport_height: f32) -> Scene 
         "color filter demo scene built via SceneBuilder::push_color_filter"
     );
 
-    Scene::new(
-        Size::new(px(viewport_width), px(viewport_height)),
-        tree,
-        root_id,
-        1,
-    )
+    Scene::new(tree)
 }
 
 /// Draws the demo shapes into a `CanvasLayer` for one column of the display.

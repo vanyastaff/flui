@@ -24,7 +24,7 @@ debug/
 !.claude/hooks/*
 
 # Local agent runtime mounts/state. Project-authored guidance lives in
-# AGENTS.md and the tracked runtime-specific config files, not in these dirs.
+# AGENTS.md, not in these dirs.
 /.agents/
 /.codex/
 .mimocode/
@@ -222,7 +222,6 @@ flamegraph.svg
 # in `.serena/.gitignore` (committed); nothing more is needed at the repo root.
 .tokensave
 
-# Per-developer agent-runtime state. Unlike `.pi/settings.json` (a checked-in
-# shim pointing at shared skills), these hold personal permission allowlists —
-# machine state, and not something to grant every contributor by default.
+# Per-developer agent-runtime state: personal permission allowlists, which are
+# machine state rather than something to grant every contributor by default.
 .qwen/

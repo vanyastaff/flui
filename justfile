@@ -294,7 +294,7 @@ macos-resize-jitter:
 } }}
 
 [group("test")]
-[doc("Executable macOS text-input coverage on a real Mac: builds the ime_probe example, stages it into a staged .app the same way macos-frame-pump does, runs it with RUST_LOG=info, and asserts exit 0 plus the IME_PROBE_RESULT=PASS marker. The probe runs the real backend through the production launch path, reaches the window's content view through AppKit, and drives four assertions: (A, ADR-0066) one synthesized keyDown for one letter reaches the application as exactly one ImeEvent::Commit with zero Key::Character while a text input is attached, and the exact inverse with it detached; (B) the NSTextInputClient queries AppKit makes answer correctly, including the UTF-16 to byte cursor conversion; (C) a cursor area set through the trait comes back as a non-zero rect; (D) unmarkText announces the end of composition. The key events are synthesized, not human keystrokes, and NO genuine input method runs, so a real composition stays undriven - the probe covers the routing and the protocol, not the input method. macOS-only by construction; skips with a message on other hosts")]
+[doc("Executable macOS text-input coverage on a real Mac: builds the ime_probe example, stages it into a staged .app the same way macos-frame-pump does, runs it with RUST_LOG=info, and asserts exit 0 plus the IME_PROBE_RESULT=PASS marker. The probe runs the real backend through the production launch path, reaches the window's content view through AppKit, and drives four assertions: (A, ADR-0069) one synthesized keyDown for one letter reaches the application as exactly one ImeEvent::Commit with zero Key::Character while a text input is attached, and the exact inverse with it detached; (B) the NSTextInputClient queries AppKit makes answer correctly, including the UTF-16 to byte cursor conversion; (C) a cursor area set through the trait comes back as a non-zero rect; (D) unmarkText announces the end of composition. The key events are synthesized, not human keystrokes, and NO genuine input method runs, so a real composition stays undriven - the probe covers the routing and the protocol, not the input method. macOS-only by construction; skips with a message on other hosts")]
 macos-ime:
     {{ if os() == "macos" {
 "cargo build -p flui-platform --locked --example ime_probe\nAPP=target/macos-ime/ImeProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.ime_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/ime_probe \"$APP/Contents/MacOS/ime_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/ime_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'IME_PROBE_RESULT=PASS'; then\n  echo 'macos-ime FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
@@ -322,8 +322,8 @@ test-ci:
     cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
     # Mirrors CI's dedicated flui-platform step, guarded by host OS:
     # `--all-features` is required just to compile the winit backend
-    # (crates/flui-platform/AGENTS.md — invisible under `default =
-    # ["desktop"]`); `FLUI_HEADLESS=1` routes `current_platform()` to the
+    # (invisible under `default = ["desktop"]`); `FLUI_HEADLESS=1` routes
+    # `current_platform()` to the
     # `HeadlessPlatform` mock so most of the suite needs no display server;
     # a handful of winit-internals unit tests construct `WinitPlatform::new()`
     # directly and need a real (if virtual) X11 connection for clipboard
@@ -331,9 +331,9 @@ test-ci:
     # On Windows this is not a missing-tool gap: STATUS_HEAP_CORRUPTION
     # (H9, docs/ROADMAP-TRACKER.md) is an unresolved crash in this crate's
     # Windows backend, so the tests must not run there at all. 175/175
-    # pass on Linux, 5x-verified stable — see AGENTS.md Testing Quirks for
-    # what stays excluded and why.
-    {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else if os() == "windows" { "echo 'Skipping flui-platform tests: STATUS_HEAP_CORRUPTION (H9, docs/ROADMAP-TRACKER.md) is an unresolved Windows crash in this crate -- do not run its tests on a Windows host until that investigation lands a fix.'" } else { "echo 'Skipping flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see crates/flui-platform/AGENTS.md.'" } }}
+    # pass on Linux, 5x-verified stable — see docs/testing.md for what stays
+    # excluded and why.
+    {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else if os() == "windows" { "echo 'Skipping flui-platform tests: STATUS_HEAP_CORRUPTION (H9, docs/ROADMAP-TRACKER.md) is an unresolved Windows crash in this crate -- do not run its tests on a Windows host until that investigation lands a fix.'" } else { "echo 'Skipping flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md.'" } }}
 
 [group("test")]
 [doc("Test a single crate (e.g. just test-crate flui-tree)")]
@@ -422,11 +422,21 @@ deny:
 # identity registry, the cross-owner claim table, the per-frame reservation
 # ledger, and the tree-driving verification/repair tests that put a real
 # `ElementTree` through `BuildOwner::finalize_tree`. Measured 28 tests / ~7s.
+#
+# The third covers flui-engine's surface lease (issue #1043/#1149): the whole
+# wgpu-free `SurfaceLease` protocol at `wgpu/surface_lease.rs`, which is where
+# the two test-only `borrow_raw` calls and the surface-before-target drop
+# order live; plus `cancelling_renderer_new_mid_flight_releases_the_target`,
+# which drives the same `probe_then_build` seam with a never-resolving builder
+# and so never touches wgpu either. `SurfaceLease` is generic over its surface
+# type precisely so this runs without a GPU. Measured 7 tests / ~4s warm.
 [group("test")]
-[doc("Run miri on flui-rendering's pipeline::owner and flui-view's owner::global_key tests (requires nightly + miri)")]
+[doc("Run miri on flui-rendering's pipeline::owner, flui-view's owner::global_key, and flui-engine's GPU-free surface-lease tests (requires nightly + miri)")]
 miri:
     cargo +nightly miri test -p flui-rendering --lib pipeline::owner
     cargo +nightly miri test -p flui-view --lib owner::global_key
+    cargo +nightly miri test -p flui-engine --lib wgpu::surface_lease
+    cargo +nightly miri test -p flui-engine --lib cancelling_renderer_new
 
 # Local mirror of the weekly `nightly-canary` job. Advisory: nightly is where
 # the next stable's deprecations, new lints, and future-incompat errors show
@@ -454,12 +464,12 @@ coverage:
 [doc("Run clippy exactly as CI does: workspace, then flui-engine's GPU-gated code")]
 clippy:
     # Both invocations, both `--locked`, because that is what the CI job runs.
-    # The second one is not optional: `enable-wgpu-tests` gates a body of code
+    # The second one is not optional: `testing` gates a body of code
     # -- the readback suite and the deterministic-replay tests -- that the
     # workspace pass never compiles, so a break there is invisible until CI.
     # A marker sweep missed an entire file for exactly this reason.
     cargo clippy --workspace --all-targets --locked -- -D warnings
-    cargo clippy -p flui-engine --all-targets --locked --features enable-wgpu-tests -- -D warnings
+    cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings
 
 [group("quality")]
 [doc("Run clippy and apply auto-fixes (uncommitted changes only)")]

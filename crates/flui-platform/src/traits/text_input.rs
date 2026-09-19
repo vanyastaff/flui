@@ -35,7 +35,7 @@ pub trait PlatformTextInput: Send + Sync {
     /// `set_ime_allowed(false)` before queueing `Ime::Disabled`, and a
     /// deliberate divergence from Flutter, which closes a connection leaving
     /// the composed characters in the controller's text and clears only the
-    /// composing range. See the `PlatformTextInput` ADR (ADR-0066).
+    /// composing range. See the `PlatformTextInput` ADR (ADR-0069).
     fn set_ime_allowed(&self, allowed: bool);
 
     /// Tell the platform IME where to draw its candidate/composition

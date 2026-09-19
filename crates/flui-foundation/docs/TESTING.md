@@ -99,5 +99,5 @@ wrap common `DiagnosticsNode` checks:
 ## See also
 
 - Render harness: [`flui-rendering/docs/TESTING.md`](../../flui-rendering/docs/TESTING.md)
-- Layer harness diagnostics: [`flui-layer/docs/TESTING.md`](../../flui-layer/docs/TESTING.md)
+- Layer-tree walkers: [`flui-layer/README.md`](../../flui-layer/README.md) (`testing::inspect`)
 - Workspace overview: [`docs/testing.md`](../../../docs/testing.md)

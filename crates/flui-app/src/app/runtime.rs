@@ -10,7 +10,7 @@
 //! `hot_reload.rs`, `config.rs`) are untouched — they remain until the
 //! change that retires each singleton they reach for.
 //! `flui-engine/src/wgpu/text.rs`'s ambient reach for painting has since
-//! closed: `TextRenderer::new` takes an injected `SharedFontSystem`
+//! closed: `GlyphAtlas::new` takes an injected `SharedFontSystem`
 //! parameter instead of calling `PaintingBinding::instance()` itself. This
 //! is not a forwarding shim: no old API is preserved-but-deprecated here,
 //! and no ambient access point this change does not touch is claimed as
@@ -52,7 +52,6 @@ use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
 
 use flui_foundation::PresentationAddress;
-use flui_painting::PaintingBinding;
 use flui_platform::OwnerPlatform;
 use flui_platform::traits::{Clipboard, PlatformWindow};
 use flui_semantics::AccessibilityFeatures;
@@ -73,17 +72,12 @@ use super::window_registry::{RegistryError, WindowRegistry};
 /// [`SharedEngineServices::resolve`] — never re-resolved on every access, and
 /// never reached ambiently from inside `UiRealm`.
 ///
-/// `painting` is an OWNED [`PaintingBinding`] value: `PaintingBinding`'s
-/// singleton-macro invocation was deleted as the remaining singletons here
-/// move behind explicit owners one at a time, so this is the first field
-/// here to complete its flip from a `'static` singleton reference to a
-/// plain owned value — the same "flip-containment" shape
-/// `PaintingBinding::font_system` already proved possible (it returns
-/// `SharedFontSystem` by value, so consumers never observed the `'static`
-/// lifetime in the first place). `accessibility_features` completed the
-/// same flip alongside `painting`: the retired `SemanticsBinding` singleton
-/// no longer exists at all (its enablement/announce/event state moved to
-/// the per-presentation `SemanticsHost` instead — see
+/// Owns the process-level accessibility flags and initializes the shared font
+/// system through [`flui_painting::shared_font_system`]. Semantics state belongs
+/// to each presentation's `SemanticsHost`; scheduling belongs to each realm
+/// (see [`RealmServices::construct`]). The retired `SemanticsBinding`
+/// singleton no longer exists at all (its enablement/announce/event state
+/// moved to the per-presentation `SemanticsHost` instead — see
 /// `super::semantics_host` — since that half of the old binding was a
 /// per-window platform seam, not process-global state); only the OS-level,
 /// read-mostly accessibility flags stayed process-scoped, and this struct
@@ -92,15 +86,6 @@ use super::window_registry::{RegistryError, WindowRegistry};
 /// [`RealmServices::construct`]), so there is no process-level scheduler
 /// left for this struct to resolve.
 pub(crate) struct SharedEngineServices {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "this change only creates the resolution seam; a later \
-                      change wires the first real consumer"
-        )
-    )]
-    pub(super) painting: PaintingBinding,
     /// OS-level accessibility flags (reduced motion, high contrast, ...).
     /// Process-scoped and read-mostly — re-homed here from the retired
     /// `SemanticsBinding` singleton (see this struct's own doc comment).
@@ -151,8 +136,6 @@ impl SharedEngineServices {
     /// idempotent guarantee the retired `AppBinding::instance()`'s
     /// thread-local initializer gave.
     fn resolve() -> Self {
-        let painting = PaintingBinding::new();
-
         // `SharedEngineServices::resolve()` -- reached only through
         // `AppRuntime::ensure_services()`, at the realm-install point -- is
         // the CONSTRUCTING owner of the free-standing `FONT_SYSTEM`
@@ -163,12 +146,10 @@ impl SharedEngineServices {
         // paths: this is a named exclusion (see this crate's
         // `ambient_reach` entry in `docs/runtime-contract.toml`), not closed
         // here -- injecting the font system into every `perform_layout`
-        // text-measurement call is a separate, larger follow-up (the
-        // icon-font-loading/sharding work).
-        let _ = painting.font_system();
+        // text-measurement call is a separate, larger follow-up.
+        let _ = flui_painting::shared_font_system();
 
         Self {
-            painting,
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
         }
     }
@@ -1693,7 +1674,6 @@ mod app_runtime_tests {
         let mut runtime = AppRuntime::new();
 
         let services = runtime.ensure_services();
-        let _painting_image_cache = services.painting.image_cache();
         let _accessibility_features = services.accessibility_features();
 
         assert!(

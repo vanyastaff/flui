@@ -6,4 +6,6 @@ expression: run.snapshot()
 Offset dx=0.00 dy=0.00
   Opacity alpha=0.50
     Picture bounds=(0.00,0.00 50.00x50.00)
+      Save
       DrawRect rect=(0.00,0.00 50.00x50.00) fill #FF0000FF
+      Restore

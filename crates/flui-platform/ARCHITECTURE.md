@@ -437,7 +437,7 @@ which calls *back* into the same view (`setMarkedText:` while composing,
 `insertText:` on commit). Calling it alongside the existing conversion would make
 one physical press reach the application twice — a `Key::Character` **and** an
 `ImeEvent::Commit`. That is ADR-0044 §3's double-producer defect class, and
-ADR-0066 states the contract it violates. The gate makes attachment the *only*
+ADR-0069 states the contract it violates. The gate makes attachment the *only*
 variable: the pre-existing path is byte-identical at the default, so the
 conformance adds no regression surface to a window that never attaches a text
 input.
@@ -470,7 +470,7 @@ therefore still there afterwards, as ordinary text. What Flutter does *not* do
 on teardown is announce a commit: the text simply remains, and the commit the
 application finally observes is the input method's own last
 `updateEditingValue` before the close. `set_ime_allowed(false)` here **drops**
-the composition (ADR-0066) and `unmarkText` emits
+the composition (ADR-0069) and `unmarkText` emits
 `ImeEvent::Preedit { text: String::new(), cursor: None }` rather than nothing, so
 the second divergence is a *third* answer to the same situation rather than the
 inverse of Flutter's. It is grounded in the client-side bug class
@@ -478,7 +478,7 @@ inverse of Flutter's. It is grounded in the client-side bug class
 never told ended suppresses `Key::Character` for the rest of the focus session
 and keeps the cancelled slice in its buffer — and in winit's own macOS
 implementation, which drops the marked text on `set_ime_allowed(false)`, so
-ADR-0066 cites that implementation for the drop-vs-commit half rather than the
+ADR-0069 cites that implementation for the drop-vs-commit half rather than the
 Flutter contrast. AppKit's header does not say whether an empty
 `setMarkedText:` always precedes `unmarkText`, so both paths are covered; the
 event is inert when nothing is composing, which is why the callback carries no
@@ -535,7 +535,7 @@ or a CJK source) remains **not driven**.
 **Decision.** The iOS backend (`platforms/ios/`) binds UIKit through `objc2`
 0.6 / `objc2-ui-kit` 0.3 / `objc2-quartz-core` / `objc2-metal` / `block2` /
 `dispatch2`, and takes its framework loop-exit signal from
-`applicationWillTerminate:`. ADR-0067 carries the full record.
+`applicationWillTerminate:`. ADR-0070 carries the full record.
 
 **Why `objc2` and not the macOS backend's `cocoa`/`objc`.** The choice is not
 consistency-versus-modernity: `objc` has not released since 2019 and `cocoa`
@@ -590,8 +590,8 @@ adapter caps `max_inter_stage_shader_variables` at 15 where
 iOS/UIKit, `objc2-foundation`, `objc2-quartz-core`, `objc2-metal`) at the
 versions `wgpu-hal` already pins. The `cocoa` 0.27 / `objc` 0.2 dependency pair
 and the `build.rs` that existed only for its `cfg` macros are removed from the
-crate; neither appears in `Cargo.lock` any more. ADR-0068 carries the full
-record (ADR-0067 chose the stack for iOS first).
+crate; neither appears in `Cargo.lock` any more. ADR-0071 carries the full
+record (ADR-0070 chose the stack for iOS first).
 
 **Why.** `objc` has not released since 2019 and points at `objc2` as its
 successor; `cocoa` deprecated its whole surface in the same direction and has no

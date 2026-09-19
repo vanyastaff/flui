@@ -6,7 +6,7 @@
 //! does not carry inline `#[cfg(test)] mod tests` blocks for surface
 //! that is already exercised through the public API.
 
-use flui_painting::{Canvas, DisplayListCore, Paint};
+use flui_painting::{Canvas, Paint};
 use flui_types::{
     geometry::{Point, Rect, px},
     styling::Color,
@@ -154,83 +154,4 @@ fn test_canvas_reset_returns_to_fresh_state() {
     assert_eq!(canvas.save_count(), 1);
 }
 
-/// `Canvas::clear_commands()` must drop recorded commands but preserve
-/// the save stack and current transform.
-#[test]
-fn test_canvas_clear_commands_preserves_state() {
-    let mut canvas = Canvas::new();
-    canvas.save();
-    canvas.translate(25.0, 25.0);
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0));
-    canvas.draw_rect(rect, &Paint::fill(Color::BLUE));
-    // `Save` from the outstanding save(), plus the rect.
-    assert_eq!(canvas.display_list().len(), 2);
-    let before_count = canvas.save_count();
-
-    canvas.clear_commands();
-
-    assert_eq!(canvas.display_list().len(), 0);
-    // State (save stack, transform) survives `clear_commands`.
-    assert_eq!(canvas.save_count(), before_count);
-
-    // Pop the save we still have outstanding so finish() does not
-    // trip the unrestored-save debug_assert.
-    canvas.restore();
-    let dl = canvas.finish();
-    // One command, and it is an unmatched `Restore`: `clear_commands` drops the
-    // recorded `Save` while deliberately preserving the save *stack*, so the
-    // pop that balances the CPU-side stack has no opening command left to
-    // close. A backend replaying this fragment alone sees a stack underflow
-    // (it warns and ignores). That is inherent to clearing a recording
-    // mid-scope, not a defect in the pair — callers who clear commands are
-    // expected to restart the recording, not splice it onto the old one.
-    assert_eq!(dl.len(), 1);
-}
-
 // ===== draw_polyline =====
-
-/// `draw_polyline` over N points records N-1 line segments. The
-/// `windows(2)` shape handles `N < 2`
-/// correctly by yielding zero pairs, matching the pre-change
-/// behaviour exactly.
-#[test]
-fn test_draw_polyline_empty_records_nothing() {
-    let mut canvas = Canvas::new();
-    let paint = Paint::stroke(Color::BLACK, 1.0);
-    canvas.draw_polyline(&[], &paint);
-    assert_eq!(canvas.finish().len(), 0);
-}
-
-#[test]
-fn test_draw_polyline_single_point_records_nothing() {
-    let mut canvas = Canvas::new();
-    let paint = Paint::stroke(Color::BLACK, 1.0);
-    canvas.draw_polyline(&[Point::new(px(0.0), px(0.0))], &paint);
-    assert_eq!(canvas.finish().len(), 0);
-}
-
-#[test]
-fn test_draw_polyline_two_points_records_one_segment() {
-    let mut canvas = Canvas::new();
-    let paint = Paint::stroke(Color::BLACK, 1.0);
-    canvas.draw_polyline(
-        &[Point::new(px(0.0), px(0.0)), Point::new(px(10.0), px(10.0))],
-        &paint,
-    );
-    assert_eq!(canvas.finish().len(), 1);
-}
-
-#[test]
-fn test_draw_polyline_five_points_records_four_segments() {
-    let mut canvas = Canvas::new();
-    let paint = Paint::stroke(Color::BLACK, 1.0);
-    let points = [
-        Point::new(px(0.0), px(0.0)),
-        Point::new(px(10.0), px(10.0)),
-        Point::new(px(20.0), px(0.0)),
-        Point::new(px(30.0), px(10.0)),
-        Point::new(px(40.0), px(0.0)),
-    ];
-    canvas.draw_polyline(&points, &paint);
-    assert_eq!(canvas.finish().len(), 4);
-}

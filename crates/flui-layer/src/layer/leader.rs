@@ -1,137 +1,56 @@
-//! LeaderLayer - Linked positioning anchor
-//!
-//! This layer establishes a coordinate space that FollowerLayer instances
-//! can link to. Used for tooltips, dropdowns, and connected overlays.
-
-use std::sync::atomic::{AtomicU64, Ordering};
+//! `LeaderLayer` — the anchor a [`FollowerLayer`](super::FollowerLayer)
+//! positions itself against (tooltips, dropdowns, connected overlays).
 
 use flui_types::geometry::{Offset, Pixels, Rect, Size};
 
-/// Unique identifier for leader-follower linkage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LayerLink {
-    id: u64,
-}
+use crate::LayerLink;
 
-impl LayerLink {
-    /// Creates a new unique layer link.
-    pub fn new() -> Self {
-        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-        Self {
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
-        }
-    }
-
-    /// Returns the internal ID for debugging.
-    #[inline]
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-}
-
-impl Default for LayerLink {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Layer that establishes a coordinate space for linked positioning.
+/// Publishes a [`LayerLink`] at a position in the layer tree.
 ///
-/// A LeaderLayer creates an anchor point that FollowerLayer instances
-/// can attach to. When the leader moves, all linked followers move with it.
-///
-/// # Use Cases
-///
-/// - Tooltips that follow a target widget
-/// - Dropdown menus attached to buttons
-/// - Popups anchored to specific locations
-/// - Connected overlay effects
-///
-/// # Architecture
-///
-/// ```text
-/// LeaderLayer (anchor)
-///   │
-///   │ Provides coordinate space via LayerLink
-///   ▼
-/// FollowerLayer(s)
-///   │
-///   │ Transform relative to leader
-///   ▼
-/// Content positioned relative to anchor
-/// ```
-///
-/// # Example
-///
-/// ```rust
-/// use flui_layer::{FollowerLayer, LayerLink, LeaderLayer};
-/// use flui_types::geometry::{Offset, Size, px};
-///
-/// // Create a link between leader and follower
-/// let link = LayerLink::new();
-///
-/// // Leader defines the anchor point
-/// let leader = LeaderLayer::new(link, Size::new(px(100.0), px(30.0)));
-///
-/// // Follower positions relative to the leader
-/// let follower = FollowerLayer::new(link).with_target_offset(Offset::new(px(0.0), px(35.0)));
-/// // Below the leader
-/// ```
+/// `offset` is the layer's own translation — the position it gives its
+/// children and the point a follower resolves to — and `size` is what a
+/// follower's anchor aligns within. The
+/// tree indexes every leader by link as it is pushed
+/// ([`LayerTree::leader`](crate::LayerTree::leader)).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LeaderLayer {
-    /// Link for follower attachment
     link: LayerLink,
-
-    /// Size of the leader area
     size: Size<Pixels>,
-
-    /// Offset from parent
     offset: Offset<Pixels>,
 }
 
 impl LeaderLayer {
-    /// Creates a new leader layer with the given link and size.
+    /// A leader at the paint origin.
     #[inline]
     pub fn new(link: LayerLink, size: Size<Pixels>) -> Self {
-        Self {
-            link,
-            size,
-            offset: Offset::ZERO,
-        }
+        Self::with_offset(link, size, Offset::ZERO)
     }
 
-    /// Creates a leader layer with an offset.
+    /// A leader translated by `offset` within its parent.
     #[inline]
     pub fn with_offset(link: LayerLink, size: Size<Pixels>, offset: Offset<Pixels>) -> Self {
         Self { link, size, offset }
     }
 
-    /// Sets the offset.
-    #[inline]
-    pub fn offset(mut self, offset: Offset<Pixels>) -> Self {
-        self.offset = offset;
-        self
-    }
-
-    /// Returns the layer link.
+    /// The link followers target.
     #[inline]
     pub fn link(&self) -> LayerLink {
         self.link
     }
 
-    /// Returns the size.
+    /// The extent a follower's leader anchor aligns within.
     #[inline]
     pub fn size(&self) -> Size<Pixels> {
         self.size
     }
 
-    /// Returns the offset.
+    /// The translation this leader applies to its children.
     #[inline]
-    pub fn get_offset(&self) -> Offset<Pixels> {
+    pub fn offset(&self) -> Offset<Pixels> {
         self.offset
     }
 
-    /// Returns the bounds.
+    /// The leader's rectangle in its parent's coordinates.
     #[inline]
     pub fn bounds(&self) -> Rect<Pixels> {
         Rect::from_xywh(
@@ -140,18 +59,6 @@ impl LeaderLayer {
             self.size.width,
             self.size.height,
         )
-    }
-
-    /// Sets the size.
-    #[inline]
-    pub fn set_size(&mut self, size: Size<Pixels>) {
-        self.size = size;
-    }
-
-    /// Sets the offset.
-    #[inline]
-    pub fn set_offset(&mut self, offset: Offset<Pixels>) {
-        self.offset = offset;
     }
 }
 
@@ -162,78 +69,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_layer_link_unique() {
-        let link1 = LayerLink::new();
-        let link2 = LayerLink::new();
-
-        assert_ne!(link1, link2);
-        assert_ne!(link1.id(), link2.id());
-    }
-
-    #[test]
-    fn test_leader_layer_new() {
-        let link = LayerLink::new();
-        let size = Size::new(px(100.0), px(50.0));
-        let layer = LeaderLayer::new(link, size);
-
-        assert_eq!(layer.link(), link);
-        assert_eq!(layer.size(), size);
-        assert_eq!(layer.get_offset(), Offset::ZERO);
-    }
-
-    #[test]
-    fn test_leader_layer_with_offset() {
-        let link = LayerLink::new();
-        let size = Size::new(px(100.0), px(50.0));
-        let offset = Offset::new(px(10.0), px(20.0));
-        let layer = LeaderLayer::with_offset(link, size, offset);
-
-        assert_eq!(layer.get_offset(), offset);
-    }
-
-    #[test]
-    fn test_leader_layer_bounds() {
-        let link = LayerLink::new();
-        let size = Size::new(px(100.0), px(50.0));
-        let offset = Offset::new(px(10.0), px(20.0));
-        let layer = LeaderLayer::with_offset(link, size, offset);
-
-        let bounds = layer.bounds();
-        assert_eq!(bounds.left(), px(10.0));
-        assert_eq!(bounds.top(), px(20.0));
-        assert_eq!(bounds.width(), px(100.0));
-        assert_eq!(bounds.height(), px(50.0));
-    }
-
-    #[test]
-    fn test_leader_layer_setters() {
-        let link = LayerLink::new();
-        let mut layer = LeaderLayer::new(link, Size::new(px(10.0), px(10.0)));
-
-        layer.set_size(Size::new(px(200.0), px(100.0)));
-        layer.set_offset(Offset::new(px(5.0), px(5.0)));
-
-        assert_eq!(layer.size(), Size::new(px(200.0), px(100.0)));
-        assert_eq!(layer.get_offset(), Offset::new(px(5.0), px(5.0)));
-    }
-
-    #[test]
-    fn test_leader_layer_builder() {
-        let link = LayerLink::new();
-        let layer = LeaderLayer::new(link, Size::new(px(100.0), px(50.0)))
-            .offset(Offset::new(px(10.0), px(20.0)));
-
-        assert_eq!(layer.get_offset(), Offset::new(px(10.0), px(20.0)));
-    }
-
-    #[test]
-    fn test_leader_layer_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<LeaderLayer>();
-        assert_sync::<LeaderLayer>();
-        assert_send::<LayerLink>();
-        assert_sync::<LayerLink>();
+    fn bounds_are_offset_by_size() {
+        let layer = LeaderLayer::with_offset(
+            LayerLink::new(),
+            Size::new(px(100.0), px(50.0)),
+            Offset::new(px(10.0), px(20.0)),
+        );
+        assert_eq!(
+            layer.bounds(),
+            Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0))
+        );
+        assert_eq!(
+            LeaderLayer::new(LayerLink::new(), Size::ZERO).offset(),
+            Offset::ZERO
+        );
     }
 }

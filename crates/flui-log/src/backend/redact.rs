@@ -785,7 +785,7 @@ mod tests {
         assert_eq!(
             *field(event, "message"),
             redacted(),
-            "a bridged message is third-party interpolated text; STYLE.md's \
+            "a bridged message is third-party interpolated text; the \
              fields-not-messages rule does not bind a dependency, so the \
              message is the leak channel and must not publish"
         );

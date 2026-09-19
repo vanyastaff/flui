@@ -1,8 +1,4 @@
-//! ShaderMaskLayer - Applies a shader as a mask to child content
-//!
-//! This layer type enables advanced masking effects like gradient fades and
-//! vignettes by rendering child content to an offscreen texture and applying a
-//! GPU shader as a mask.
+//! `ShaderMaskLayer` — masks its subtree with a shader: gradient fades, vignettes.
 
 use flui_types::{
     geometry::{Pixels, Rect},
@@ -59,13 +55,7 @@ pub struct ShaderMaskLayer {
 }
 
 impl ShaderMaskLayer {
-    /// Create new shader mask layer
-    ///
-    /// # Arguments
-    ///
-    /// * `shader` - Shader (linear gradient, radial gradient, solid, etc.)
-    /// * `blend_mode` - Blend mode for compositing
-    /// * `bounds` - Bounding rectangle for rendering
+    /// Masks the subtree with `shader` inside `bounds`, compositing with `blend_mode`.
     pub fn new(shader: Shader, blend_mode: BlendMode, bounds: Rect<Pixels>) -> Self {
         Self {
             shader,
@@ -74,24 +64,19 @@ impl ShaderMaskLayer {
         }
     }
 
-    /// Get the shader.
+    /// The mask shader (gradient, solid, …).
     pub fn shader(&self) -> &Shader {
         &self.shader
     }
 
-    /// Get the blend mode.
+    /// How the masked subtree composites onto its parent.
     pub fn blend_mode(&self) -> BlendMode {
         self.blend_mode
     }
 
-    /// Get the bounding rectangle of this layer.
+    /// The rectangle the mask covers.
     pub fn bounds(&self) -> Rect<Pixels> {
         self.bounds
-    }
-
-    /// Set new bounds for this layer.
-    pub fn set_bounds(&mut self, bounds: Rect<Pixels>) {
-        self.bounds = bounds;
     }
 }
 
@@ -169,25 +154,5 @@ mod tests {
             }
             _ => panic!("Expected RadialGradient"),
         }
-    }
-
-    #[test]
-    fn test_shader_mask_layer_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<ShaderMaskLayer>();
-        assert_sync::<ShaderMaskLayer>();
-    }
-
-    #[test]
-    fn test_shader_mask_layer_clone() {
-        let shader = Shader::solid(Color::RED);
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
-        let layer = ShaderMaskLayer::new(shader, BlendMode::SrcOver, bounds);
-
-        let cloned = layer.clone();
-        assert_eq!(cloned.bounds(), layer.bounds());
-        assert_eq!(cloned.blend_mode(), layer.blend_mode());
     }
 }

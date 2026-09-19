@@ -20,7 +20,7 @@
 //! - ✅ Keyboard, mouse, scroll and hover events (`events.rs`/`view.rs`)
 //! - ✅ `NSPasteboard` clipboard, routed through the owner lane (`clipboard.rs`)
 //! - ✅ IME composition via an `NSTextInputClient` conformance
-//!   (`text_input.rs`, [ADR-0066](../../../../../docs/adr/ADR-0066-a-keydown-produces-one-semantic-event.md)):
+//!   (`text_input.rs`, [ADR-0069](../../../../../docs/adr/ADR-0069-a-keydown-produces-one-semantic-event.md)):
 //!   `keyDown:` is a gate, so one press reaches the application exactly once —
 //!   either as a composition/commit or as a key event, never both
 //! - ✅ `refresh_period()` from the display's current mode

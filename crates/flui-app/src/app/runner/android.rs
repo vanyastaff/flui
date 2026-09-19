@@ -75,7 +75,7 @@ where
 {
     use std::{path::PathBuf, sync::Arc};
 
-    use flui_engine::wgpu::Renderer;
+    use flui_engine::Renderer;
     use flui_platform::{
         AndroidPlatform, Platform, WindowOptions,
         traits::{DispatchEventResult, PlatformInput},

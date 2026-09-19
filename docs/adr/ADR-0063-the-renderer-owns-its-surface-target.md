@@ -324,7 +324,7 @@ ownership discipline.
      raster lane's guard across it, deliberately, because the drop has to
      complete before the callback that asked for it returns.
    - **The cost is per edge, not per defect, and a second `true` on the same
-     window is refused rather than paid twice.** Android maps `false` to both
+     window re-creates cleanly.** Android maps `false` to both
      `Pause` and `TerminateWindow` and `true` to both `Resume` and
      `InitWindow`, and the seam attempts a recreation on every `true` (the
      asymmetry in the bullet above), so the count is per signal rather than
@@ -332,27 +332,22 @@ ownership discipline.
      surface is still held. When it is not (the ordinary cycle, where the
      `false` between them released it), the second `true` rebuilds. When it is
      — a `true` arriving over a surface still bound to the *same*
-     `ANativeWindow` — the platform refuses the rebuild instead of running a
-     second create/configure pair: the Vulkan specification for
-     `vkCreateAndroidSurfaceKHR` states that "only one `VkSurfaceKHR` can
-     exist at a time for a given window" and returns
-     `VK_ERROR_NATIVE_WINDOW_IN_USE_KHR` for the second, and
-     `recreate_surface` creates before it commits, so the held surface is
-     still alive at that moment. The old surface stays in place and stays
-     valid; no second mint and no second repaint occur, because a refused
-     create never reaches the mint. What the refusal costs is decided by the
-     `wgpu-hal` in the lockfile rather than by this design: the seam's
-     `Failed` arm would log it once at `warn` as a `SurfaceCreation` error,
-     but `wgpu-hal` 30.0.1's `create_surface_android`
+     `ANativeWindow` — `recreate_surface` releases that surface before
+     creating the replacement (see that method's doc and the amendment
+     below), so the Vulkan rule that "only one `VkSurfaceKHR` can exist at a
+     time for a given window" is never asked to admit a second one. It
+     releases and re-creates rather than being refused: a refused create
+     would be a panic rather than a `warn` on this stack, because
+     `wgpu-hal` 30.0.1's `create_surface_android`
      (`src/vulkan/instance.rs`) `expect`s the `vkCreateAndroidSurfaceKHR`
-     result ("AndroidSurface failed"), so under that version the refusal is a
-     panic on the callback thread, not the `warn`. Two routes reach it, and
-     neither is the ordinary cycle, where every `true` follows a `false` that
-     released: a `false` missed on a window that survived, and two `true`s
-     with no `false` between them, which is the `InitWindow`-before-`Resume`
-     ordering. It is the price of recreating without consulting what is
-     held; a held-surface short-circuit is deliberately not added, because it
-     would reintroduce the state the asymmetry bullet exists to avoid. On the
+     result ("AndroidSurface failed"). Two routes reach a second `true` over
+     a held surface, and neither is the ordinary cycle, where every `true`
+     follows a `false` that released: a `false` missed on a window that
+     survived, and two `true`s with no `false` between them, which is the
+     `InitWindow`-before-`Resume` ordering. It is the price of recreating
+     without consulting what is held; a held-surface short-circuit is
+     deliberately not added, because it would reintroduce the state the
+     asymmetry bullet exists to avoid. On the
      cold-launch ordering (`Resume` first) the first `true` finds no window
      and its probe reports `SurfaceTargetUnavailable`, so only the
      `InitWindow` rebuild lands. Whether the other ordering, `InitWindow`
@@ -444,7 +439,7 @@ backoff loop is the mechanism #1043 makes sound.
 **Positive**
 - Net unsafe delta in `renderer.rs`: −1 `unsafe {}` block and −1 manual
   `Send` impl (the old file had exactly one of each; `git show
-  53b04347:crates/flui-engine/src/wgpu/renderer.rs | rg -n 'unsafe impl|unsafe \{'`).
+  53b04347:crates/flui-engine/src/renderer.rs | rg -n 'unsafe impl|unsafe \{'`).
   Two test-only `borrow_raw` blocks arrive with the lease's fake target. The
   crate's remaining production SAFETY stories are ones the code enforces.
 - Android device-loss recovery after a pause/resume cycle rebuilds against
@@ -515,3 +510,64 @@ backoff loop is the mechanism #1043 makes sound.
   the native lifetime on Win32/AppKit, and the reference's unbounded form of
   this wait is an ANR in production (flutter/flutter#190599, #169585)". The
   decision itself is unchanged.
+
+## Amendment (2026-09-17): `recreate_surface` releases before it creates
+
+Decision 6's bullet "The cost is per edge" originally described a second `true`
+over a surface still bound to the same live `ANativeWindow` as **refused** by
+the platform, with the held surface staying in place. The body text above now
+describes the corrected behaviour; this records what changed and why.
+
+**The order changed: `recreate_surface` releases the held surface before
+calling `create_surface`.** It used to create first and commit last, which on
+the one platform that emits this signal is a process abort rather than a
+`Failed` outcome: `vkCreateAndroidSurfaceKHR` refuses a second surface for a
+live `ANativeWindow`, and `wgpu-hal` 30.0.1's `create_surface_android`
+`expect`s that result. The refusal was already documented as outside the
+ordinary cycle (a missed `false`, or two `true`s with no `false` between
+them), but "outside the ordinary cycle" is exactly the class this method must
+stay safe for: it is stateless *because* a missed signal is undetectable from
+here, so an unconditionally re-askable method may not contain an order that
+aborts when the re-ask is not redundant.
+
+**What the old order bought, and what is given up.** Build-first kept a
+still-valid surface alive when the create failed. That is worth less than it
+looks here: the old surface's window is either the same one — so the create is
+refused, and keeping the old surface is the only alternative — or already
+dead, in which case the surface is useless. On a create failure the
+presentation is left released, which decision 6's own `Failed` arm already
+documented, and the next `true` re-asks. The cost is one unconditional
+surface release per recreation, whose `vkDeviceWaitIdle` price the decision-6
+bullet on release already accounts for.
+
+**What did not change.** The method stays stateless: it still never consults
+whether a surface is held, and no held-surface short-circuit was added — that
+would reintroduce the stranded-surface failure mode the asymmetry bullet
+exists to avoid. `release_surface` is untouched. `recreate_surface`'s
+"build FIRST, commit LAST" comment now applies only to
+`configure` (which still precedes `replace_surface`), not to
+`create_surface`.
+
+**Evidence.** The executed pin is the drop-order pair in
+`wgpu/surface_lease.rs` (`drop_order_is_surface_before_target`,
+`release_drops_the_surface_and_keeps_the_target`), which covers the lease's
+half of the ordering; the `Renderer`-side call order needs a GPU and is
+compile-verified only, as decision 6's "The executed evidence is partial"
+bullet already states for this whole path. Filed and closed as issue #1185.
+
+**`recover()` carried the same defect on a reachable path, and is fixed the
+same way.** `recover` rebuilds the windowed stack through the same
+`build_windowed_gpu_stack`, whose `create_surface` ran while the lease still
+held the old surface — but unlike `recreate_surface`, nothing released it
+first: a lost device does not release its surface, and the device-loss flag is
+the only precondition. So the abort this amendment removes from
+`recreate_surface` was reachable through the ordinary device-recovery loop
+(`flui-app`'s `render_frame_with_device_recovery` → `attempt_device_recovery`
+→ `Renderer::recover`), not only through the missed-signal route decision 6
+books. `recover` now releases the held surface before the rebuild, under the
+caller's exclusive `&mut` borrow, so no frame is in flight. A failed rebuild
+leaves the presentation released and the next attempt re-asks — the same
+post-state `recreate_surface` documents. This instance was found while
+verifying the `recreate_surface` change, not reported; it is recorded here
+rather than silently folded in, because it makes the defect class
+*reachable* rather than latent.

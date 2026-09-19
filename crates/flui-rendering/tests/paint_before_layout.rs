@@ -89,8 +89,8 @@ fn a_healthy_frame_through_run_frame_is_unaffected() {
         .expect("a healthy frame succeeds")
         .expect("a healthy frame produces a layer tree");
     assert!(
-        layer_tree.root().is_some(),
-        "the layer tree must be non-empty",
+        layer_tree.len() > 1,
+        "the layer tree must carry more than its root",
     );
     drop(owner.take_layer_tree());
 }

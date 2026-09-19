@@ -59,42 +59,6 @@ that unification is actually wired today."
 
 ---
 
-## Amendment (2026-09-18): the baseline face moves to `flui-painting`
-
-Decision §1 said "the logic currently in the engine's `initialize_font_system`
-/ `load_embedded_fonts` moves down here — the *lowest* owner loads the
-baseline". Only the loading *mechanism* moved at the time; the Roboto asset and
-its install lived in `flui-engine`'s `TextRenderer`. That left the baseline
-reachable from the **host** but not from a **hot-reload worker**.
-
-A worker is a `cdylib` that statically links its own `flui-painting` (hence its
-own `FONT_SYSTEM`) and **never links `flui-engine` at all** (`cargo tree -p
-hot-reload-counter-logic` shows zero `flui-engine` edges, normal or all). So the
-renderer's empty-database fallback never reaches the worker's `FontSystem`, and
-any widget the worker builds that shapes text panics inside cosmic-text
-(`shape.rs`: `FontFallbackIter::next().expect("no default font found")`).
-Invisible on macOS, where host discovery finds Latin faces; fatal on **iOS**,
-whose system faces are not exposed to cosmic-text/fontdb's scan, so the worker's
-database is empty. Verified: the counter worker renders on iOS-Simulator with
-its `Text` removed and aborts with it present.
-
-**What changed:** `Roboto-Regular.ttf` moved to
-`crates/flui-painting/assets/fonts/`, exposed as
-`flui_painting::fonts::ROBOTO_REGULAR`, and `font_system_arc()` installs it when
-host discovery finds no Latin-capable face (`font_resolve::install_text_fallback`
-— which also binds every generic family at the fallback, mirroring
-`bind_generic_families`). This is exactly Decision §1's "lowest owner loads the
-baseline", completed: the crate that owns the `FontSystem` is now the crate that
-guarantees it is usable, so *every* image linking `flui-painting` — host binary
-and worker `cdylib` alike — gets a working shaper without depending on
-`flui-engine` to prime it. `flui_engine::fonts::ROBOTO_REGULAR` is now a
-re-export; the two icon faces stay in the engine (only the renderer installs
-them, and it is host-only). Regression coverage:
-`an_empty_host_receives_the_embedded_text_fallback` /
-`a_host_with_fonts_does_not_get_the_fallback` in `font_resolve.rs`.
-
----
-
 ## Context
 
 ### The gap (verified)
@@ -103,9 +67,9 @@ FLUI cannot render a glyph from a non-system font (icon fonts, bundled app fonts
 
 1. **No public font-registration API, and the layout `FontSystem` is unreachable.** `crates/flui-painting/src/text_layout/layout.rs:48` holds a private `static FONT_SYSTEM: OnceLock<Mutex<FontSystem>>` initialised with a bare `FontSystem::new()`; the accessor `font_system()` at `:51` is `pub(super)`. Nothing outside that module can inject font bytes. Every widget shapes and *measures* against this instance during layout (`from_spans` at `:169` locks it at `:220`).
 
-2. **A second, disjoint `FontSystem` in the engine.** `crates/flui-engine/src/wgpu/text.rs:360` gives each `TextRenderer` its own `font_system: FontSystem`, initialised by `initialize_font_system` (`:400`) — system fonts if present, else the embedded `Roboto-Regular.ttf` (`load_embedded_fonts`, `:425`). This is what glyphon rasterises glyphs from on the GPU.
+2. **A second, disjoint `FontSystem` in the engine.** `crates/flui-engine/src/text.rs:360` gives each `TextRenderer` its own `font_system: FontSystem`, initialised by `initialize_font_system` (`:400`) — system fonts if present, else the embedded `Roboto-Regular.ttf` (`load_embedded_fonts`, `:425`). This is what glyphon rasterises glyphs from on the GPU.
 
-3. **`FontLoader` exists but is dead.** `crates/flui-engine/src/wgpu/font_loader.rs` can `load_bytes`/`load_file`/`load_directory` into a `&mut FontSystem` handed to it — but it has **zero callers** and no way to reach the private layout singleton.
+3. **`FontLoader` exists but is dead.** `crates/flui-engine/src/font_loader.rs` can `load_bytes`/`load_file`/`load_directory` into a `&mut FontSystem` handed to it — but it has **zero callers** and no way to reach the private layout singleton.
 
 Net: a `TextSpan { font_family: Some("MaterialIcons"), text: "\u{e87d}" }` resolves to tofu. The font is in neither `FontSystem`, and the layout one cannot be given fonts at all. This blocks the `Icon` widget's glyph rendering *and* any bundled/custom application font (Flutter's `pubspec` asset fonts, `dart:ui.loadFontFromList`).
 
@@ -236,7 +200,7 @@ Concretely:
   collapse into an idempotent `ensure_fonts_available` (embedded Roboto loads into the shared db only
   when it has zero faces). The two disjoint FontSystems are now **one** — measure and paint share it.
   Test-plan items 1 (type-identity failsafe — the `with_mut` closure compiles iff cosmic-text versions
-  match) and 3 (register→paint — the `enable-wgpu-tests` readback `atlas_trim_each_frame_keeps_text_rendering`
+  match) and 3 (register→paint — the `testing` readback `atlas_trim_each_frame_keeps_text_rendering`
   still rasterises text, 124/124 GPU tests green) covered.
 - **Slice 3 — bundled Material icon font + app-bootstrap registration** 🛇 BLOCKED on an asset/strategy
   decision: bundling a specific OFL/Apache icon font is an outward, licensing-bearing change (new binary
@@ -252,11 +216,36 @@ Concretely:
 
 - Icon plan (the deferral this unblocks): `docs/research/2026-07-02-icon-widget-plan.md` §"THE GAP".
 - Layout singleton: `crates/flui-painting/src/text_layout/layout.rs:48` (`FONT_SYSTEM`), `:51` (`pub(super) font_system()`), `:220` (per-shape lock).
-- Engine second FontSystem: `crates/flui-engine/src/wgpu/text.rs:360`, `:400` (`initialize_font_system`), `:425` (`load_embedded_fonts`).
-- Dead loader: `crates/flui-engine/src/wgpu/font_loader.rs` (zero callers).
+- Engine second FontSystem: `crates/flui-engine/src/text.rs:360`, `:400` (`initialize_font_system`), `:425` (`load_embedded_fonts`).
+- Dead loader: `crates/flui-engine/src/font_loader.rs` (zero callers).
 - Shared-owner home: `crates/flui-painting/src/binding.rs:354` (`PaintingBinding`), `:359` (`SystemFontsNotifier`); init at `crates/flui-app/src/bindings/renderer_binding.rs:320`.
 - Version proof: single `cosmic-text 0.18.2` in `Cargo.lock`; `glyphon 0.11` re-exports it.
 - Flutter parity: `.flutter/flutter-master/packages/flutter/lib/src/services/font_loader.dart:16` (`FontLoader`), `:36` (`addFont`), `:76` (`loadFontFromList`); `dart:ui.loadFontFromList`; single Skia `FontCollection` shared by layout + paint.
 - Related ADRs: ADR-0013 (close a gap by reusing existing machinery, not a parallel channel); ADR-0002 (engine-wide threading — lock/ownership posture).
 </content>
 </invoke>
+
+---
+
+## Amendment (2026-09-18, ADR-0065)
+
+The shared `FontSystem` stays the boundary; its surface narrowed. `with_mut`
+(and with it the type-identity failsafe named in test-plan item 1) is
+replaced by `shape(|Shaper| …)`, which still hands the engine a
+`&mut cosmic_text::FontSystem` and therefore still fails to compile on a
+cosmic-text version mismatch. The embedded baseline faces load in
+`flui-painting` at font-system construction, not in the engine's
+`ensure_fonts_available` (deleted), which is what Decision §1 ("the lowest
+owner loads the baseline") said and Slice 2 folded away. See
+[ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md).
+
+## Amendment (2026-09-18, ADR-0067)
+
+glyphon is gone; the engine rasterises through its own atlas. The
+`&mut cosmic_text::FontSystem` the engine used to take (`Shaper::font_system`,
+now crate-private) is replaced by two painting doors that name no cosmic-text
+type: `TextLayout::placed_glyphs` and `SharedFontSystem::rasterize(GlyphKey)`.
+The version-skew coupling this ADR accepted (`flui-painting`'s cosmic-text
+must equal glyphon's) no longer exists — cosmic-text is `flui-painting`'s
+dependency alone, and `flui-engine` has none. See
+[ADR-0067](ADR-0067-engine-owned-glyph-atlas.md).

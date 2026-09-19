@@ -5,7 +5,7 @@
 //! `FLUIContentView` conforms to `NSTextInputClient`, and `keyDown:` routes a
 //! key press either into AppKit's input context (`interpretKeyEvents:`) or
 //! through the keyboard conversion, never both — that mutual exclusion is
-//! ADR-0066. This probe is its executable evidence: it runs the real backend
+//! ADR-0069. This probe is its executable evidence: it runs the real backend
 //! through the production launch path (`MacOSPlatform::new` → `Platform::run`
 //! → a visible window → the real AppKit run loop), reaches the window's content
 //! view through AppKit itself, and drives it the way an input method would.
@@ -254,7 +254,7 @@ mod appkit_ime_probe {
             fatal(
                 "PlatformWindow::text_input() returned None on the macOS backend. Its \
                  `MacOSTextInput` capability is what enables composition, so with no capability \
-                 every key press takes the keyboard route and the input-method route ADR-0066 \
+                 every key press takes the keyboard route and the input-method route ADR-0069 \
                  decides is unreachable."
                     .to_string(),
             );
@@ -789,14 +789,14 @@ mod appkit_ime_probe {
             failures.push(format!(
                 "assertion A (text input attached): expected exactly one Commit(\"{LETTER}\"), \
                  got {attached_commits:?} — one key press must reach the application as one \
-                 semantic event (ADR-0066)"
+                 semantic event (ADR-0069)"
             ));
         }
         if !attached_typed.is_empty() {
             failures.push(format!(
                 "assertion A (text input attached): the same press ALSO produced \
                  {attached_typed:?} on the keyboard path. One physical key reached the \
-                 application twice — the defect ADR-0066 exists to forbid."
+                 application twice — the defect ADR-0069 exists to forbid."
             ));
         }
         if attached.len() != 1 {
@@ -879,7 +879,7 @@ mod appkit_ime_probe {
                 "assertion A (no text input attached): the press ALSO produced \
                  {detached_ime:?} through the input context. The two routes are mutually \
                  exclusive, and which one a press takes depends only on whether a text input is \
-                 attached (ADR-0066)."
+                 attached (ADR-0069)."
             ));
         }
         if detached.len() != 1 {
