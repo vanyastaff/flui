@@ -829,6 +829,59 @@ fn the_withheld_retry_is_bounded_and_then_parks() {
     );
 }
 
+/// After an exhausted budget parks, a real event while the drawable is STILL
+/// unavailable must open a fresh retry burst — not inherit the spent count and
+/// park in the same breath.
+///
+/// Regression: parking used to leave `not_shown_streak` above the limit, so
+/// the next event-driven frame incremented the stale count and parked again
+/// immediately. If the drawable returned asynchronously afterwards the window
+/// could stay blank until some unrelated event happened to force a successful
+/// frame. The cap is a bound on a *continuous* withdrawal, never a permanent
+/// disable.
+#[test]
+fn an_exhausted_budget_opens_a_fresh_burst_after_an_event() {
+    let budget = super::MAX_NOT_SHOWN_RETRIES;
+    let realm = mount_box();
+    // Every attempt is withheld, before and after the event.
+    let mut backend = TestRasterBackend::new(|_, _| Ok(PresentDisposition::NotShown));
+
+    // Spend the budget and park.
+    for _ in 0..=budget {
+        assert!(!realm.render_frame_entered(&mut backend));
+    }
+    let parked = backend.render_scene_calls;
+    assert_eq!(
+        parked,
+        budget + 1,
+        "the budget must be spent by re-arming before this test means anything"
+    );
+
+    // A real event dirties the pipeline. The drawable is still unavailable, so
+    // the frame it produces is withheld — and must be RETAINED, opening a
+    // fresh burst off the cleared counter.
+    realm.pipeline_for_test().with_mut(|owner| {
+        let root = owner.root_id().expect("root installed");
+        owner.mark_needs_paint(root);
+    });
+    realm.request_redraw();
+
+    assert!(
+        !realm.render_frame_entered(&mut backend),
+        "the event-driven frame is still withheld"
+    );
+    assert_eq!(
+        backend.render_scene_calls,
+        parked + 1,
+        "the event-driven withheld frame must reach the backend"
+    );
+    assert!(
+        realm.needs_redraw(),
+        "a withheld frame after a real event must retain again — the streak \
+         was cleared on the park, not left spent"
+    );
+}
+
 /// A withheld streak ends on any frame that ends otherwise, so an exhausted
 /// budget does not disable retention permanently.
 ///

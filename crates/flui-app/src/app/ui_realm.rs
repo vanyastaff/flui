@@ -2951,9 +2951,22 @@ impl UiRealm {
                     } else {
                         // Budget exhausted: park rather than retry. The tree
                         // stays committed (the scene above is still the latest
-                        // this presentation has) and the next real platform
-                        // event dirties the pipeline as usual, which clears
-                        // this streak on whatever frame it produces.
+                        // this presentation has).
+                        //
+                        // Reset the streak with the park, not on the next
+                        // presented frame alone. Left above the limit, the
+                        // very next event-driven frame that lands here — the
+                        // drawable still unavailable, which is exactly the
+                        // case this cap exists for — would increment the stale
+                        // count and park again immediately, never opening the
+                        // fresh retry burst the comment above promises. If the
+                        // drawable returned asynchronously afterwards the
+                        // window could stay blank until some unrelated event
+                        // forced a successful frame. Clearing here makes the
+                        // cap a bound on a *continuous* withdrawal, never a
+                        // permanent disable: the next real event gets a full
+                        // budget again.
+                        producer.clear_not_shown_streak();
                         tracing::warn!(
                             frame = frame_number,
                             streak,

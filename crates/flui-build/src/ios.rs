@@ -103,6 +103,40 @@ impl PlatformBuilder for IOSBuilder {
             });
         };
 
+        // An example is a runnable binary cargo writes to
+        // `target/<triple>/<profile>/examples/<name>` — there is no static
+        // library to find. A library build is the static-link path a real
+        // Xcode app consumes.
+        if let BuildUnit::Example(name) = &ctx.target {
+            let mut executables = Vec::new();
+            for target in targets {
+                tracing::info!("Building iOS example '{name}' for target: {target}");
+                let args = cargo_args_for(ctx, target);
+                process::run_command_in_dir("cargo", &args, &self.workspace_root).await?;
+
+                let example_path =
+                    example_binary_path(&self.workspace_root, target, ctx.profile.as_str(), name);
+                if !example_path.is_file() {
+                    return Err(BuildError::PathNotFound {
+                        path: example_path,
+                        context: format!("Compiled iOS example binary '{name}' not found"),
+                    });
+                }
+                executables.push(example_path);
+            }
+
+            let executable = executables.into_iter().next().ok_or_else(|| {
+                BuildError::Other("No iOS example binaries generated".to_string())
+            })?;
+            tracing::info!("Generated iOS example binary");
+
+            return Ok(BuildArtifacts {
+                rust_libs: Vec::new(),
+                executable: Some(executable),
+                metadata: serde_json::json!({}),
+            });
+        }
+
         let ios_frameworks_dir = self
             .workspace_root
             .join("platforms")
@@ -122,22 +156,7 @@ impl PlatformBuilder for IOSBuilder {
         for target in targets {
             tracing::info!("Building for iOS target: {}", target);
 
-            let mut args = vec!["build".to_string(), "--target".to_string(), target.clone()];
-            args.extend(ctx.target.cargo_args());
-            // `--lib` and `--example` are mutually exclusive in cargo; a library
-            // is what an iOS static-link build needs, so it is only added when
-            // the target is not an explicit example.
-            if !matches!(ctx.target, BuildUnit::Example(_)) {
-                args.push("--lib".to_string());
-            }
-            if let Some(profile_flag) = ctx.profile.cargo_flag() {
-                args.push(profile_flag.to_string());
-            }
-            if !ctx.features.is_empty() {
-                args.push("--features".to_string());
-                args.push(ctx.features.join(","));
-            }
-
+            let args = cargo_args_for(ctx, target);
             process::run_command_in_dir("cargo", &args, &self.workspace_root).await?;
 
             // Find the .a static library
@@ -178,6 +197,31 @@ impl PlatformBuilder for IOSBuilder {
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
     ) -> BuildResult<FinalArtifacts> {
+        // An example build produces a bare executable, not a static library an
+        // Xcode project links: there is nothing for `xcodebuild` to consume.
+        // Stage the executable itself as the artifact.
+        if let Some(executable) = &artifacts.executable {
+            tracing::info!("Staging iOS example executable: {}", executable.display());
+            let output = ctx.output_dir.join(executable.file_name().ok_or_else(|| {
+                BuildError::invalid_config(
+                    "executable",
+                    format!("{} has no file name", executable.display()),
+                )
+            })?);
+            if output.exists() {
+                std::fs::remove_file(&output)?;
+            }
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(executable, &output)?;
+            let size_bytes = std::fs::metadata(&output)?.len();
+            return Ok(FinalArtifacts {
+                app_binary: output,
+                size_bytes,
+            });
+        }
+
         tracing::info!("Building iOS app with Xcode...");
 
         let ios_dir = self.workspace_root.join("platforms").join("ios");
@@ -291,6 +335,44 @@ impl PlatformBuilder for IOSBuilder {
 
         Ok(())
     }
+}
+
+/// The cargo invocation that builds `ctx.target` for one iOS `target` triple.
+///
+/// `--lib` is added only for the library path: `--lib` and `--example` are
+/// mutually exclusive in cargo, and an example must be built with
+/// `--example NAME` alone.
+fn cargo_args_for(ctx: &BuilderContext, target: &str) -> Vec<String> {
+    let mut args = vec![
+        "build".to_string(),
+        "--target".to_string(),
+        target.to_string(),
+    ];
+    args.extend(ctx.target.cargo_args());
+    if !matches!(ctx.target, BuildUnit::Example(_)) {
+        args.push("--lib".to_string());
+    }
+    if let Some(profile_flag) = ctx.profile.cargo_flag() {
+        args.push(profile_flag.to_string());
+    }
+    if !ctx.features.is_empty() {
+        args.push("--features".to_string());
+        args.push(ctx.features.join(","));
+    }
+    args
+}
+
+/// Where cargo writes an example's executable for one iOS target triple.
+///
+/// Examples live under the `examples/` subdirectory of the profile dir, not
+/// the profile root, and there is no `lib<package>.a` for them at all.
+fn example_binary_path(workspace_root: &Path, target: &str, profile: &str, name: &str) -> PathBuf {
+    workspace_root
+        .join("target")
+        .join(target)
+        .join(profile)
+        .join("examples")
+        .join(name)
 }
 
 /// Calculate total size of a directory recursively

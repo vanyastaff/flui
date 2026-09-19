@@ -26,19 +26,14 @@ impl DesktopBuilder {
 
     /// Resolve the built executable path for `name` under a target/profile dir.
     ///
-    /// Cargo writes `name` (plus `.exe` on Windows) into
-    /// `target/<triple>/<profile>/`.
+    /// Cargo writes `name` (plus `.exe` when `target` is a Windows triple)
+    /// into `target/<triple>/<profile>/`.
     fn executable_path(&self, target: &str, profile: &str, name: &str) -> PathBuf {
-        let file = if cfg!(target_os = "windows") {
-            format!("{name}.exe")
-        } else {
-            name.to_string()
-        };
         self.workspace_root
             .join("target")
             .join(target)
             .join(profile)
-            .join(file)
+            .join(executable_file_name(target, name))
     }
 
     /// Detect the host target triple from `rustc -vV`.
@@ -273,9 +268,9 @@ impl DesktopBuilder {
 </dict>
 </plist>
 "#,
-            name = bundle.name,
-            identifier = bundle.identifier,
-            executable = exe_name,
+            name = xml_escape(&bundle.name),
+            identifier = xml_escape(&bundle.identifier),
+            executable = xml_escape(&exe_name),
         );
         std::fs::write(contents.join("Info.plist"), plist)?;
 
@@ -299,11 +294,7 @@ impl DesktopBuilder {
                 .join(target)
                 .join(profile_dir)
                 .join("examples")
-                .join(if cfg!(target_os = "windows") {
-                    format!("{name}.exe")
-                } else {
-                    name.clone()
-                }),
+                .join(executable_file_name(target, name)),
             BuildUnit::Package(name) => {
                 let bin = self
                     .binary_name_from_manifest(name)
@@ -401,6 +392,46 @@ impl DesktopBuilder {
     }
 }
 
+/// Escape the five XML metacharacters in a plist `<string>` value.
+///
+/// `Info.plist` is XML: an app name like `R&D` interpolated raw
+/// (`<string>R&D</string>`) is malformed, and Launch Services can reject or
+/// misread the staged `.app`. Escaping the interpolated values keeps any
+/// human-readable name valid; the `&` must be escaped first so the entities
+/// this function introduces are not escaped a second time.
+#[cfg(target_os = "macos")]
+fn xml_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The file name cargo emits for a binary, given the *requested* target
+/// triple.
+///
+/// The suffix must come from `target`, never the host: a cross-build
+/// (`flui build windows` on macOS or Linux) writes
+/// `target/<windows-triple>/<profile>/<name>.exe`, and a Windows host building
+/// a Linux target writes a bare `<name>`. Keying off `cfg!(target_os = ...)`
+/// checks the CLI host and gets both directions wrong — the build succeeds but
+/// the artifact lookup reports `PathNotFound`.
+fn executable_file_name(target: &str, name: &str) -> String {
+    if target.contains("windows") {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
 /// Total size of every file under `dir`, recursively.
 ///
 /// Used to report a staged macOS `.app`'s on-disk size to the caller; gated
@@ -418,4 +449,62 @@ fn calculate_dir_size(dir: &Path) -> BuildResult<u64> {
         }
     }
     Ok(total)
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod xml_escape_tests {
+    use super::xml_escape;
+
+    #[test]
+    fn metacharacters_are_escaped_so_the_plist_stays_well_formed() {
+        assert_eq!(xml_escape("R&D"), "R&amp;D");
+        assert_eq!(xml_escape("a<b>c"), "a&lt;b&gt;c");
+        assert_eq!(xml_escape("\"quoted\""), "&quot;quoted&quot;");
+        assert_eq!(xml_escape("it's"), "it&apos;s");
+    }
+
+    #[test]
+    fn the_ampersand_is_escaped_first_so_entities_are_not_double_escaped() {
+        // If `&` were replaced after `<`, `&lt;` would become `&amp;lt;`.
+        assert_eq!(xml_escape("<"), "&lt;");
+        assert_eq!(xml_escape("&lt;"), "&amp;lt;");
+    }
+
+    #[test]
+    fn ordinary_names_pass_through_unchanged() {
+        assert_eq!(xml_escape("My Great App"), "My Great App");
+        assert_eq!(xml_escape("com.example.app"), "com.example.app");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::executable_file_name;
+
+    #[test]
+    fn a_windows_target_gets_an_exe_suffix_on_any_host() {
+        // The regression: this used to key off `cfg!(target_os = "windows")`,
+        // the CLI host. A Linux or macOS host cross-building
+        // `x86_64-pc-windows-msvc` searched for a bare name and reported
+        // `PathNotFound` after a successful compile.
+        assert_eq!(
+            executable_file_name("x86_64-pc-windows-msvc", "demo"),
+            "demo.exe"
+        );
+        assert_eq!(
+            executable_file_name("aarch64-pc-windows-msvc", "demo"),
+            "demo.exe"
+        );
+    }
+
+    #[test]
+    fn a_non_windows_target_has_no_suffix_even_on_a_windows_host() {
+        // The inverse direction: a Windows host targeting Linux/macOS must
+        // not append `.exe`.
+        assert_eq!(
+            executable_file_name("x86_64-unknown-linux-gnu", "demo"),
+            "demo"
+        );
+        assert_eq!(executable_file_name("aarch64-apple-darwin", "demo"), "demo");
+    }
 }

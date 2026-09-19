@@ -186,6 +186,18 @@ impl WakePump {
                 // keeps an idle app from ticking: it sends no redraw
                 // requests, so this is the only place the chain could
                 // restart itself.
+                //
+                // Clear `pending_at` with the stop. This tick has run, so no
+                // tick is queued any more; leaving the (now-expired) instant
+                // behind would make every later `arm()` see a pending tick
+                // earlier than its own target and return without scheduling —
+                // `arm` reads a nonzero `pending_at` as "a tick is still
+                // queued", which is no longer true. The next real deadline
+                // (no-present fallback, device recovery) would then never
+                // wake the loop. The store must happen before the trace so a
+                // reader of the field after this arm never sees the stopped
+                // tick as live.
+                self.pending_at.store(0, Ordering::Release);
                 tracing::trace!(
                     target: "flui.pace",
                     event = "wake_pump_idle",
@@ -336,6 +348,41 @@ mod tests {
             pump.generation.load(Ordering::Acquire),
             before,
             "an arm earlier than the pending tick must replace it"
+        );
+    }
+
+    #[test]
+    fn a_stopped_chain_lets_the_next_arm_schedule_again() {
+        // Regression: `Stop` used to leave `pending_at` pointing at the
+        // stopped (now-expired) tick, so every later `arm` read a "pending"
+        // tick earlier than its own target and returned without scheduling.
+        // After the first idle cycle the pump was effectively dead: the next
+        // no-present fallback or device-recovery deadline could never wake
+        // the loop.
+        let pump = silent_pump();
+        // A tick that has already run, whose instant was never cleared.
+        pump.pending_at.store(
+            micros_since_base(web_time::Instant::now()),
+            Ordering::Release,
+        );
+
+        // Drive the stop through `fire` so the clearing under test runs.
+        let generation = pump.generation.load(Ordering::Acquire);
+        pump.fire(generation);
+        assert_eq!(
+            pump.pending_at.load(Ordering::Acquire),
+            0,
+            "a stopped chain must clear its pending marker, or the next arm \
+             sees a phantom tick and schedules nothing"
+        );
+
+        // With the marker clear, a fresh arm must actually schedule.
+        let before = pump.generation.load(Ordering::Acquire);
+        pump.arm();
+        assert_ne!(
+            pump.generation.load(Ordering::Acquire),
+            before,
+            "the first arm after an idle stop must schedule a new tick"
         );
     }
 
