@@ -5,7 +5,7 @@
 //! ```text
 //! View (TextLabel) → Element tree → RenderParagraph
 //!   → layout (TextPainter / cosmic-text) → paint (DrawTextSpan)
-//!   → glyphon rich-text rasterization → wgpu
+//!   → engine glyph atlas → wgpu
 //! ```
 //!
 //! Renders "Hello, FLUI!" with the word `FLUI` in bold red — so it also

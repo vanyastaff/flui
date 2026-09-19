@@ -1,8 +1,5 @@
-//! AnnotatedRegionLayer - Metadata regions
-//!
-//! This layer annotates a region of the layer tree with metadata.
-//! Used for system UI integration (status bar color, etc.) and
-//! accessibility regions.
+//! `AnnotatedRegionLayer` — attaches a type-erased value to a region for a reader above
+//! the tree; the reader does not exist yet.
 
 use std::{any::Any, fmt, sync::Arc};
 
@@ -42,20 +39,13 @@ pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
 /// ```rust
 /// use std::sync::Arc;
 ///
-/// use flui_layer::{AnnotatedRegionLayer, AnnotationValue};
+/// use flui_layer::{AnnotatedRegionLayer, SystemUiOverlayStyle};
 /// use flui_types::geometry::{Rect, px};
 ///
-/// // Define a status bar style annotation
-/// #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// pub enum SystemUiOverlayStyle {
-///     Light,
-///     Dark,
-/// }
-///
-/// // Create an annotation for status bar style
 /// let style = Arc::new(SystemUiOverlayStyle::Dark);
 /// let layer = AnnotatedRegionLayer::new(Rect::from_xywh(px(0.0), px(0.0), px(400.0), px(24.0)), style);
 /// ```
+#[derive(Clone)]
 pub struct AnnotatedRegionLayer {
     /// The annotated region bounds
     rect: Rect<Pixels>,
@@ -68,12 +58,7 @@ pub struct AnnotatedRegionLayer {
 }
 
 impl AnnotatedRegionLayer {
-    /// Creates a new annotated region layer.
-    ///
-    /// # Arguments
-    ///
-    /// * `rect` - The region bounds
-    /// * `value` - The annotation value (must be Send + Sync)
+    /// Attaches `value` to `rect` for a reader above the tree to find.
     #[inline]
     pub fn new<T: Any + Send + Sync>(rect: Rect<Pixels>, value: Arc<T>) -> Self {
         Self {
@@ -83,7 +68,7 @@ impl AnnotatedRegionLayer {
         }
     }
 
-    /// Creates an annotated region that is sized by its parent.
+    /// An annotation whose region is its parent's bounds.
     #[inline]
     pub fn sized_by_parent<T: Any + Send + Sync>(value: Arc<T>) -> Self {
         Self {
@@ -93,63 +78,22 @@ impl AnnotatedRegionLayer {
         }
     }
 
-    /// Sets whether the region is sized by its parent.
-    #[inline]
-    pub fn with_sized_by_parent(mut self, sized: bool) -> Self {
-        self.sized_by_parent = sized;
-        self
-    }
-
-    /// Returns the region bounds.
-    #[inline]
-    pub fn rect(&self) -> Rect<Pixels> {
-        self.rect
-    }
-
-    /// Returns the region bounds.
+    /// The region bounds (`Rect::ZERO` when sized by the parent).
     #[inline]
     pub fn bounds(&self) -> Rect<Pixels> {
         self.rect
     }
 
-    /// Returns the annotation value as a type-erased reference.
+    /// The annotation value, type-erased; a reader downcasts it.
     #[inline]
     pub fn value(&self) -> &AnnotationValue {
         &self.value
     }
 
-    /// Attempts to downcast the annotation value to a specific type.
-    #[inline]
-    pub fn downcast_value<T: Any>(&self) -> Option<&T> {
-        self.value.downcast_ref()
-    }
-
-    /// Returns whether the region is sized by its parent.
+    /// Whether the region takes its parent's bounds instead of `bounds()`.
     #[inline]
     pub fn is_sized_by_parent(&self) -> bool {
         self.sized_by_parent
-    }
-
-    /// Sets the region bounds.
-    #[inline]
-    pub fn set_rect(&mut self, rect: Rect<Pixels>) {
-        self.rect = rect;
-    }
-
-    /// Sets the annotation value.
-    #[inline]
-    pub fn set_value<T: Any + Send + Sync>(&mut self, value: Arc<T>) {
-        self.value = value;
-    }
-}
-
-impl Clone for AnnotatedRegionLayer {
-    fn clone(&self) -> Self {
-        Self {
-            rect: self.rect,
-            value: Arc::clone(&self.value),
-            sized_by_parent: self.sized_by_parent,
-        }
     }
 }
 
@@ -158,14 +102,10 @@ impl fmt::Debug for AnnotatedRegionLayer {
         f.debug_struct("AnnotatedRegionLayer")
             .field("rect", &self.rect)
             .field("sized_by_parent", &self.sized_by_parent)
-            .field("value_type", &self.value.type_id())
+            .field("value_type", &self.value.as_ref().type_id())
             .finish()
     }
 }
-
-// ============================================================================
-// COMMON ANNOTATION TYPES
-// ============================================================================
 
 /// System UI overlay style for status bar appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -179,16 +119,16 @@ pub enum SystemUiOverlayStyle {
 
 /// Semantic label for accessibility.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SemanticLabel(pub String);
+pub struct SemanticLabel(String);
 
 impl SemanticLabel {
-    /// Creates a new semantic label.
+    /// A label from any string-like value.
     #[inline]
     pub fn new(label: impl Into<String>) -> Self {
         Self(label.into())
     }
 
-    /// Returns the label text.
+    /// The label text.
     #[inline]
     pub fn text(&self) -> &str {
         &self.0
@@ -214,12 +154,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn debug_reports_the_annotation_payload_type() {
+        let layer = AnnotatedRegionLayer::sized_by_parent(Arc::new(SystemUiOverlayStyle::Dark));
+        let debug = format!("{layer:?}");
+        let payload_type = std::any::TypeId::of::<SystemUiOverlayStyle>();
+        assert!(
+            debug.contains(&format!("value_type: {payload_type:?}")),
+            "{debug}"
+        );
+    }
+
+    #[test]
     fn test_annotated_region_new() {
         let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
         let value = Arc::new(SystemUiOverlayStyle::Dark);
         let layer = AnnotatedRegionLayer::new(rect, value);
 
-        assert_eq!(layer.rect(), rect);
         assert_eq!(layer.bounds(), rect);
         assert!(!layer.is_sized_by_parent());
     }
@@ -230,21 +180,7 @@ mod tests {
         let layer = AnnotatedRegionLayer::sized_by_parent(value);
 
         assert!(layer.is_sized_by_parent());
-        assert_eq!(layer.rect(), Rect::ZERO);
-    }
-
-    #[test]
-    fn test_annotated_region_downcast() {
-        let value = Arc::new(SystemUiOverlayStyle::Dark);
-        let layer = AnnotatedRegionLayer::new(Rect::ZERO, value);
-
-        let style = layer.downcast_value::<SystemUiOverlayStyle>();
-        assert!(style.is_some());
-        assert_eq!(*style.unwrap(), SystemUiOverlayStyle::Dark);
-
-        // Wrong type should return None
-        let wrong = layer.downcast_value::<SemanticLabel>();
-        assert!(wrong.is_none());
+        assert_eq!(layer.bounds(), Rect::ZERO);
     }
 
     #[test]
@@ -255,34 +191,8 @@ mod tests {
             label,
         );
 
-        let value = layer.downcast_value::<SemanticLabel>().unwrap();
+        let value = layer.value().downcast_ref::<SemanticLabel>().unwrap();
         assert_eq!(value.text(), "Submit Button");
-    }
-
-    #[test]
-    fn test_annotated_region_setters() {
-        let value = Arc::new(42i32);
-        let mut layer = AnnotatedRegionLayer::new(Rect::ZERO, value);
-
-        layer.set_rect(Rect::from_xywh(px(5.0), px(5.0), px(50.0), px(50.0)));
-        assert_eq!(layer.rect().left(), px(5.0));
-
-        layer.set_value(Arc::new(100i32));
-        assert_eq!(*layer.downcast_value::<i32>().unwrap(), 100);
-    }
-
-    #[test]
-    fn test_annotated_region_clone() {
-        let value = Arc::new(SystemUiOverlayStyle::Dark);
-        let layer = AnnotatedRegionLayer::new(
-            Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)),
-            value,
-        );
-
-        let cloned = layer.clone();
-        assert_eq!(layer.rect(), cloned.rect());
-        // Arc is cloned, so values point to same data
-        assert!(Arc::ptr_eq(layer.value(), cloned.value()));
     }
 
     #[test]
@@ -300,14 +210,5 @@ mod tests {
 
         let from_string: SemanticLabel = String::from("From String").into();
         assert_eq!(from_string.text(), "From String");
-    }
-
-    #[test]
-    fn test_annotated_region_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<AnnotatedRegionLayer>();
-        assert_sync::<AnnotatedRegionLayer>();
     }
 }

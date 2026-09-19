@@ -82,10 +82,7 @@ struct TreeIds {
 /// readback suite.
 fn fingerprint(t: &flui_layer::LayerTree) -> Vec<(&'static str, usize)> {
     let mut out = Vec::new();
-    let Some(root) = t.root() else {
-        return out;
-    };
-    let mut stack = vec![root];
+    let mut stack = vec![t.root()];
     while let Some(id) = stack.pop() {
         // Not `unwrap_or(&[])`: the walk only ever visits ids the tree just
         // handed out, so a `None` here means the graft minted a dangling
@@ -513,10 +510,7 @@ fn a_retained_frame_still_identifies_every_boundary() {
 /// Every stamp in `t`, in a deterministic walk order.
 fn stamps_of(t: &flui_layer::LayerTree) -> Vec<flui_foundation::RenderId> {
     let mut out = Vec::new();
-    let Some(root) = t.root() else {
-        return out;
-    };
-    let mut stack = vec![root];
+    let mut stack = vec![t.root()];
     while let Some(id) = stack.pop() {
         if let Some(node) = t.get(id)
             && let Some(render_id) = node.render_id()
@@ -1141,7 +1135,7 @@ fn picture_count(t: &flui_layer::LayerTree) -> usize {
         let self_count = usize::from(matches!(node.layer(), flui_layer::Layer::Picture(_)));
         self_count + node.children().iter().map(|&c| walk(t, c)).sum::<usize>()
     }
-    t.root().map_or(0, |root| walk(t, root))
+    walk(t, t.root())
 }
 
 /// An update served by grafting an OUTER boundary must not leave the inner
@@ -2242,7 +2236,7 @@ fn two_opacities_under_one_boundary_both_update_without_repainting() {
     // an oracle written in floats would be asserting about the rounding rather
     // than about the update.
     let mut alphas: Vec<u8> = Vec::new();
-    let mut stack = vec![tree.root().expect("root")];
+    let mut stack = vec![tree.root()];
     while let Some(id) = stack.pop() {
         if let Some(node) = tree.get(id) {
             if let flui_layer::Layer::Opacity(o) = node.layer() {
@@ -4339,11 +4333,10 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
         let target_b_reference = register_left_half(&handle);
         let (reference, _, _) = mount(target_b_reference);
         let (_, result) = reference.run_frame();
-        let reference_paths = clip_paths(
-            &result
-                .expect("reference frame")
-                .expect("reference frame produces a layer tree"),
-        );
+        let reference_tree = result
+            .expect("reference frame")
+            .expect("reference frame produces a layer tree");
+        let reference_paths = clip_paths(&reference_tree);
         assert_eq!(
             reference_paths.len(),
             1,

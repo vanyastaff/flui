@@ -10,7 +10,7 @@ page is what you need beyond the workspace-wide
 | File | Answers |
 |---|---|
 | [`README.md`](README.md) | What are the entry points? Which one do I use? |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | How is it built inside — the record/replay split, wgpu mapping, mapping decisions, friction log? |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | How is it built inside — the module map, the record/replay split, ownership, mapping decisions, open items? |
 | [`AGENTS.md`](AGENTS.md) | What are the crate's hard constraints? (Written for AI agents; the constraints apply to you too.) |
 | this file | How do I compile, test, and debug a change? |
 
@@ -37,10 +37,10 @@ cargo nextest run -p flui-engine
 pixel oracles live:
 
 ```bash
-cargo nextest run -p flui-engine --features enable-wgpu-tests --lib
+cargo nextest run -p flui-engine --features testing --lib
 ```
 
-The `enable-wgpu-tests` feature gates an entire body of code — the readback
+The `testing` feature gates an entire body of code — the readback
 suite and the deterministic-replay tests — that the default workspace pass
 never compiles. This is the single most common way to ship a broken change
 here: you edit a GPU path, the default suite stays green because it never
@@ -51,13 +51,13 @@ Both clippy passes have the same shape and the same trap:
 
 ```bash
 cargo clippy -p flui-engine --all-targets --locked -- -D warnings
-cargo clippy -p flui-engine --all-targets --locked --features enable-wgpu-tests -- -D warnings
+cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings
 ```
 
 `just clippy` runs both, plus the workspace pass — that is the one to run.
 
 **A single test, with its output.** Note that `just test-name` does not pass
-`enable-wgpu-tests`, so it only reaches the default suite — for a GPU test,
+`testing`, so it only reaches the default suite — for a GPU test,
 call cargo directly:
 
 ```bash
@@ -65,10 +65,10 @@ call cargo directly:
 just test-name flui-engine <substring-of-test-name>
 
 # GPU suite, with stdout/stderr surfaced:
-cargo test -p flui-engine --features enable-wgpu-tests <substring> -- --nocapture
+cargo test -p flui-engine --features testing <substring> -- --nocapture
 
 # via nextest (faster, per-test process):
-cargo nextest run -p flui-engine --features enable-wgpu-tests -E 'test(<substring>)'
+cargo nextest run -p flui-engine --features testing -E 'test(<substring>)'
 ```
 
 ## See what it renders
@@ -93,7 +93,7 @@ not list yet, add a match arm in `examples/screenshot.rs`.
 ## Debugging a readback failure
 
 The GPU readback oracles compare rendered pixels against a CPU model of the
-fixed-function blender (`wgpu/blend_oracle.rs`). When one fails:
+fixed-function blender (`blend_oracle.rs`). When one fails:
 
 1. **Read the assertion.** It names the oracle's expected value and the actual
    pixel, and usually names the defect class (`BUG 1`, `BUG 2`, …) with the
@@ -129,7 +129,7 @@ For a change confined to this crate, the parts that matter most:
 | Gate | Command | Why it catches *this* crate |
 |---|---|---|
 | clippy, both feature sets | `just clippy` | The GPU-gated code is invisible to the workspace pass |
-| engine tests | `cargo nextest run -p flui-engine --features enable-wgpu-tests` | The readback oracles |
+| engine tests | `cargo nextest run -p flui-engine --features testing` | The readback oracles |
 | docs | `RUSTDOCFLAGS="-D warnings" cargo doc -p flui-engine --no-deps` | Broken intra-doc links; the crate renamed a lot of public surface recently |
 | doc examples | `cargo test -p flui-engine --doc` | Every `///` example in this crate is compile-checked |
 | architecture contract | `just port-check` | The 23 refusal triggers, several of which name `flui-engine` files |
@@ -145,20 +145,22 @@ For a change confined to this crate, the parts that matter most:
   happens in `layer_dispatcher.rs` and nowhere else. The record path
   (`batches/`), the pipeline set, and `replay/` are glam-only; port-check
   trigger #19 enforces it.
-- **`lyon` lives in `tessellator.rs`.** Trigger #21: any other file reaching
-  for the tessellation library couples the crate to one rasterization strategy
-  and breaks the `RasterBackend` swap seam.
+- **`lyon` lives in `tessellator.rs`.** Trigger #21: the tessellator is the
+  one adapter over that crate, so a lyon type never leaks into the Command
+  IR or a pipeline layout — the same reason `etagere` stays behind `glyph_atlas.rs`.
 - **No `async fn` on the hot path.** Async is for the acquisition edges
   (`Renderer::new`, `recover`, `HeadlessRenderer::new`) only. The layer walk,
   the dispatch, and the replay path are sync — trigger #3.
-- **`DrawSegment` stays `Clone`.** That derive is a compile-time witness that
-  the command IR carries no GPU handles. If you add a field that is not
-  `Clone`, you have put a device resource into the IR — see
-  `ARCHITECTURE.md`'s record/replay section before working around it.
+- **`DrawSegment` stays `Clone`, and holds no `PooledTexture`.** Textures
+  are acquired at replay, never stored at record; the derive is what bars a
+  `PooledTexture` field (it is `!Clone`). It does not bar a raw wgpu handle —
+  those are `Clone` — so read `command_ir`'s field types, not the derive, when
+  you need the "no GPU handle" property. See `ARCHITECTURE.md`'s
+  record/replay section.
 - **A public method that accepts a blend mode must honour it.** Two defects in
   this crate's history were exactly this: a mode accepted, carried on the
-  wire, and dropped at the last step. `ARCHITECTURE.md` mapping decisions 8
-  and 12 record both. If your change routes a mode anywhere, add a test that
+  wire, and dropped at the last step. `ARCHITECTURE.md` mapping decisions 5
+  and 10 record both. If your change routes a mode anywhere, add a test that
   fails when the mode is discarded.
 
 ## Where the code lives
@@ -167,13 +169,13 @@ The crate is ~40k non-test lines. The densest files, and what each owns:
 
 | Area | Files | Owns |
 |---|---|---|
-| Top-level entry | `wgpu/renderer.rs`, `wgpu/headless.rs` | The windowed and headless renderers; device/surface lifecycle, recovery |
-| Frame walk | `wgpu/layer_walk.rs`, `wgpu/layer_render.rs`, `wgpu/layer_dispatcher.rs` | Iterative layer traversal; per-layer rendering; `DrawCommand` → painter routing |
-| Recording | `wgpu/batches/`, `wgpu/command_ir.rs` | Batched command IR — the record half |
-| Replay | `wgpu/replay/` | Command IR → wgpu encoding — the replay half |
-| State | `wgpu/state_stack.rs`, `wgpu/layer_compositor.rs` | Transform/clip/opacity stacks; layer save-state |
-| GPU resources | `wgpu/{texture_pool,texture_cache,path_cache,buffer_pool}.rs` | Pooling and caching |
-| Filters | `wgpu/{blur,mode,gamma,color_matrix,morphology}/` | The offscreen filter passes, each with its own pipeline |
+| Top-level entry | `renderer.rs`, `headless.rs` | The windowed and headless renderers; device/surface lifecycle, recovery |
+| Frame walk | `layer_walk.rs`, `layer_render.rs`, `layer_dispatcher.rs` | Iterative layer traversal; per-layer rendering; `DrawCommand` → painter routing |
+| Recording | `batches/`, `command_ir.rs` | Batched command IR — the record half |
+| Replay | `replay/` | Command IR → wgpu encoding — the replay half |
+| State | `state_stack.rs`, `layer_compositor.rs` | Transform/clip/opacity stacks; layer save-state |
+| GPU resources | `{texture_pool,texture_cache,path_cache,buffer_pool}.rs` | Pooling and caching |
+| Filters | `{blur,mode,gamma,color_matrix,morphology}/` | The offscreen filter passes, each with its own pipeline |
 | Raster boundary | `raster_owner.rs`, `raster.rs` | The mailbox protocol between the app and the GPU |
 
 ## Getting help

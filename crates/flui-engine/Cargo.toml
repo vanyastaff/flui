@@ -13,25 +13,16 @@ keywords = ["rendering", "gpu", "wgpu", "ui", "graphics"]
 categories = ["rendering::engine", "graphics", "gui"]
 
 [features]
-default = ["wgpu-backend"]
-
-# === Rendering Backends ===
-wgpu-backend = ["dep:wgpu", "dep:glyphon", "dep:lyon"]
-# Future: skia-backend, vello-backend, software-backend
+default = []
 
 # === wgpu GPU API Selection ===
-# Use these to control which GPU APIs wgpu compiles support for
-vulkan = ["wgpu-backend", "wgpu/vulkan", "wgpu/wgsl"]
-metal = ["wgpu-backend", "wgpu/metal", "wgpu/wgsl"]
-dx12 = ["wgpu-backend", "wgpu/dx12", "wgpu/wgsl"]
-webgpu = ["wgpu-backend", "wgpu/webgpu", "wgpu/wgsl"]
-gles = ["wgpu-backend", "wgpu/gles", "wgpu/wgsl"]
-
-# === Optional Features ===
-# lyon sub-features: use the weak-dep `?` so they compose with --no-default-features
-# (no wgpu-backend → no lyon → these are silently no-ops rather than errors).
-serialization = ["lyon?/serialization"]
-lyon-debugger = ["lyon?/debugger"]
+# Additive pass-throughs to wgpu's own API features; the right one for the
+# target OS is already enabled by the per-target dependency entries below.
+vulkan = ["wgpu/vulkan", "wgpu/wgsl"]
+metal = ["wgpu/metal", "wgpu/wgsl"]
+dx12 = ["wgpu/dx12", "wgpu/wgsl"]
+webgpu = ["wgpu/webgpu", "wgpu/wgsl"]
+gles = ["wgpu/gles", "wgpu/wgsl"]
 
 # GPU profiling via wgpu-profiler 0.28. OFF by default and excluded from wasm32
 # — not because the crate cannot build there any more (0.28 type-checks clean
@@ -40,8 +31,12 @@ lyon-debugger = ["lyon?/debugger"]
 # support at runtime; the engine gracefully no-ops when the adapter lacks it.
 gpu-profiler = ["dep:wgpu-profiler"]
 
-# === Test Features ===
-enable-wgpu-tests = []
+# testing: the GPU readback/oracle suites (`cargo nextest run -p flui-engine
+# --features testing`, CI's gpu-test job) and the bench scaffolding they share
+# (`OffscreenRenderer`, `TexturePool`, `PathCache`). Off by default and not
+# part of the public API; the same name and meaning as in flui-layer and
+# flui-rendering.
+testing = []
 
 [dependencies]
 flui-types = { path = "../flui-types", version = "0.2.0" }
@@ -50,22 +45,26 @@ flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 flui-layer = { path = "../flui-layer", version = "0.2.0" }
 
 # === GPU Rendering (wgpu backend) ===
-wgpu = { workspace = true, default-features = false, optional = true }
+wgpu = { workspace = true, default-features = false }
 # Shader composition: resolves #import directives at pipeline-init time.
-# Only used in the wgpu backend; compile-time feature-gated via the wgpu-backend feature.
 naga_oil = { workspace = true }
 # `std` is required so `raw_window_handle::HandleError` impls `std::error::Error`
 # (the impl is `#[cfg(feature = "std")]` in raw-window-handle 0.6.2); that lets us
 # box a `HandleError` directly into `EngineError::SurfaceCreation` via the typed
 # `#[source] Box<dyn Error + Send + Sync + 'static>` ctor instead of stringifying.
 raw-window-handle = { version = "0.6", features = ["std"] }
-glyphon = { version = "0.12", optional = true }
+# Glyph atlas packer (`crate::glyph_atlas`): the bucketed shelf allocator
+# glyphon used, now driven directly — the engine rasterises through
+# `flui_painting::SharedFontSystem::rasterize` and owns the atlas (ADR-0067).
+etagere = "0.3"
+# Glyph-key hashing in the atlas: a `GlyphKey` is five small integers, where
+# SipHash costs more than the lookup it guards (measured: ~20% of a
+# text-heavy frame).
+rustc-hash = { workspace = true }
 bytemuck = { workspace = true }
 
-# Vector graphics tessellation — optional, pulled in by `wgpu-backend`.
-# All lyon use is inside crate::wgpu::tessellator, which is already behind
-# the wgpu-backend feature gate, so no call site needs updating.
-lyon = { version = "1.0.16", optional = true }
+# Vector graphics tessellation (`crate::wgpu::tessellator`).
+lyon = { version = "1.0.16" }
 
 # Math for GPU rendering — workspace base has bytemuck; add serde here for GPU struct serialization
 glam = { workspace = true, features = ["serde"] }
@@ -99,13 +98,13 @@ wgpu-profiler = { workspace = true, optional = true }
 # `Renderer::select_backend()`; the named features above (`vulkan`, `metal`,
 # `dx12`, `webgpu`, `gles`) remain available to enable additional backends.
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu = { workspace = true, default-features = false, features = ["dx12"], optional = true }
+wgpu = { workspace = true, default-features = false, features = ["dx12"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-wgpu = { workspace = true, default-features = false, features = ["metal"], optional = true }
+wgpu = { workspace = true, default-features = false, features = ["metal"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
-wgpu = { workspace = true, default-features = false, features = ["vulkan"], optional = true }
+wgpu = { workspace = true, default-features = false, features = ["vulkan"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # fragile-send-sync-non-atomic-wasm: wgpu types are Rc/RefCell-based on the
@@ -116,7 +115,7 @@ wgpu = { workspace = true, default-features = false, features = [
     "webgpu",
     "gles",
     "fragile-send-sync-non-atomic-wasm",
-], optional = true }
+] }
 
 [build-dependencies]
 # Generates Rust bindings from gamma.wgsl in build.rs (P1 pilot).
@@ -146,14 +145,19 @@ wasm-bindgen-test = "=0.3.77"
 [[bench]]
 name = "render_throughput"
 harness = false
-# Drives `WgpuPainter` and the raw `wgpu` API; skipped unless the wgpu
-# backend is compiled in (same mechanism as `offscreen_resource_cache`).
-required-features = ["wgpu-backend"]
+# Measures a warm `PathCache::get` hit, reachable only under the test feature.
+required-features = ["testing"]
+
+# Text-heavy frames end to end (record → encode → submit); the gate for the
+# engine-owned glyph rasteriser (ADR-0067).
+[[bench]]
+name = "text_throughput"
+harness = false
 
 [[bench]]
 name = "offscreen_resource_cache"
 harness = false
-required-features = ["enable-wgpu-tests", "wgpu-backend"]
+required-features = ["testing"]
 
 [[bench]]
 name = "raster_backpressure"
@@ -165,10 +169,9 @@ harness = false
 workspace = true
 
 [package.metadata.docs.rs]
-# NOT `all-features`: that would enable `enable-wgpu-tests`, whose
+# NOT `all-features`: that would enable `testing`, whose
 # `OffscreenRenderer`/`PooledTexture`/`TexturePool` re-exports are bench
 # scaffolding the crate documents as "NOT part of the public API". The
-# backend's own per-target wgpu entries in this manifest apply on docs.rs's
-# linux host, so `wgpu-backend` is the whole of what the page needs.
-features = ["wgpu-backend"]
+# per-target wgpu entries in this manifest apply on docs.rs's linux host.
+features = []
 rustdoc-args = ["--cfg", "docsrs"]

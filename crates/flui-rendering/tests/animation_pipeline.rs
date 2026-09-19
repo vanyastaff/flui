@@ -148,7 +148,7 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
             }
             node.children().iter().find_map(|&c| find(tree, c))
         }
-        find(tree, tree.root()?)
+        find(tree, tree.root())
     }
     fn has_picture(tree: &LayerTree) -> bool {
         fn find(tree: &LayerTree, id: flui_foundation::LayerId) -> bool {
@@ -158,7 +158,7 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
             matches!(node.layer(), Layer::Picture(_))
                 || node.children().iter().any(|&c| find(tree, c))
         }
-        tree.root().is_some_and(|r| find(tree, r))
+        find(tree, tree.root())
     }
 
     // Frame at t=0: still fully opaque. `paint_effects().opacity` is `None`

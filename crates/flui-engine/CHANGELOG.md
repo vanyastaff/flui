@@ -12,6 +12,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 0.1.0 release is cut. The entries below capture the engine's evolution since the
 **wgpu 25 → 29 migration** (the `0.1.0`-dev baseline).
 
+### Changed — engine-owned glyph atlas, glyphon removed (ADR-0067, 2026-09-18)
+
+- Text is a batch of its `DrawSegment` (`glyph_batch`, `Phase::Glyph`):
+  `DrawBatcher::draw_paragraph` places each glyph of a `TextLayout` through
+  `placed_glyphs`, rasterises it on first use through
+  `SharedFontSystem::rasterize` into the new `GlyphAtlas` (two `etagere`
+  pages, frame-stamped eviction, grow-in-place), and records a
+  `GlyphInstance` under the scissor run, SDF clip, and layer opacity.
+  `flush_segment` draws glyphs at the end of the instanced pass when order
+  allows, else in a sixth phase.
+- Deleted: `text.rs` (`TextRenderer`, `TextPlacement`), the per-segment
+  glyph ranges and the replay's claimed-text/gap-pass machinery,
+  `seal_text_tail`, `EngineError::{TextPrepare, TextRender}` and their
+  constructors, the `glyphon` dependency. The engine names no cosmic-text
+  type (`the_engine_does_not_shape` checks source and manifest).
+- Fixed on the way: a rounded clip now clips text
+  (`text_is_clipped_by_a_rounded_clip`); mid-tone text colour lands as
+  recorded on the gamma-space target (`glyph_colour_lands_as_recorded` —
+  glyphon converted it to linear); text inside a filter input or advanced
+  shape renders with its segment rather than over everything.
+- Rotated and anisotropic CTMs reach text: each glyph quad carries the
+  CTM's linear part over the raster scale; the uniform path (device-pixel
+  ratio, translation) still snaps to the device grid.
+- New bench `text_throughput`: 470 → 400 µs steady, 762 → 645 µs cold rows
+  against the glyphon build.
+
+### Changed — one gradient path, `DrawOp` dispatch (ADR-0066, 2026-09-18)
+
+- `dispatch_command` matches `DrawCommand::op` (a `DrawOp`) under
+  `DrawCommand::transform`; the `CommandRenderer` arms are unchanged except
+  that `render_gradient`/`render_gradient_rrect` are gone.
+- `WgpuPainter::draw_gradient_rect`, `draw_radial_gradient_rect`,
+  `draw_sweep_gradient_rect`, and `draw_shadow_rect` are deleted, and
+  `GradientStop`/`ShadowParams` are no longer exported: a gradient is a
+  `Shader` on a fill `Paint` through `draw_rect`/`draw_rrect`/`draw_circle`,
+  which reaches the one shader-rect dispatch with the paint's blend mode,
+  `anti_alias`, the painter's transform, and per-corner radii — none of
+  which the deleted path honoured.
+- New readback test `gradient_rrect_keeps_per_corner_radii`.
+
+### Changed — wgpu is the engine (2026-09-18)
+
+- **The engine no longer shapes text** (ADR-0065): `CommandRenderer::
+  render_paragraph` replaces `render_text`/`render_text_span`,
+  `WgpuPainter::draw_paragraph` replaces `draw_rich_text` (`draw_text`
+  stays as a shaping convenience for the hand-driven painter), and
+  `TextRenderer` hands the recorded `TextLayout`'s buffer to glyphon — its
+  two buffer caches, `collect_styled_spans`, and `style_to_attrs_owned` are
+  deleted. `paragraph_readback_tests::the_engine_does_not_shape` pins it.
+- **The embedded fonts moved to `flui_painting::fonts`** (ADR-0065): the
+  engine's `fonts` module and `TextRenderer::ensure_fonts_available` are
+  gone; the font system installs its baseline faces at construction. The
+  text renderer shapes through `SharedFontSystem::shape` and drops its
+  buffer caches when `generation()` moves.
+- **The `wgpu` module is flattened into the crate root**, and
+  `flui_engine::wgpu` now re-exports the linked `wgpu` crate itself.
+  `flui_engine::wgpu::Renderer` → `flui_engine::Renderer`, likewise
+  `HeadlessRenderer`, `WgpuPainter`, `WindowTarget`, `GpuCapabilities`,
+  `GpuFrameProfile`/`PassTiming`; `GradientStop` and `ShadowParams` are
+  re-exported at the root and `effects` is private.
+- **The `wgpu-backend` feature is gone**; `wgpu`, `glyphon`, and `lyon` are
+  unconditional. The per-target wgpu entries are non-optional (they were
+  `optional = true`, which with no feature naming them left the crate with
+  no backend at all — every `Instance::new` panicked).
+- **`enable-wgpu-tests` is renamed `testing`**, the same name and meaning as
+  flui-layer's and flui-rendering's. It also gates `PathCache`, so the
+  `render_throughput` bench needs it.
+- **`Renderer`** holds `lease`, `config`, `painter`, `offscreen` as
+  non-`Option` fields; `GpuStackOrigin`, `new_offscreen`, and the
+  `device`/`queue`/`surface`/`surface_config` getters are deleted.
+  `render_scene_content` returns `EngineResult` and runs end-of-frame
+  maintenance on the error path. `reconfigure_surface` returns `()`.
+- **`SurfaceLease::release`** returns a `#[must_use] Released` token that
+  `replace_surface` consumes; the surface/target drop order is a type
+  obligation, not a comment.
+- **`RasterOwner::resize`** returns `Option<SurfaceGeneration>` — `None`
+  for a zero axis, which mints nothing and queues nothing. A `WakeGuard`
+  publishes the completion and retires the frame on unwind; `Drop for
+  RasterOwner` breaks the wake-hook cycle (Miri: 0 leaks).
+- **The shader-mask painter** moved from the per-frame `LayerDispatcher` to
+  `OffscreenRenderer::mask_painter`, cached across frames.
+- **`StateStack::concat` / `WgpuPainter::transform`** concatenate a
+  `Matrix4` directly; `push_transform` no longer decomposes and recomposes.
+- `GradientStop` / `ShadowParams` fields are private with getters;
+  `ShadowParams::new` normalises `blur_sigma`. `Recoverability` is no longer
+  `#[non_exhaustive]`. A gradient with more than eight stops warns once.
+  `WgpuPainter::size` / `viewport_bounds` are `#[must_use]`.
+- **`readback_dump`** takes an explicit directory instead of mutating the
+  process environment.
+- `#![cfg_attr(not(test), deny(unsafe_code))]`: the crate has no hand-written
+  `unsafe`. The "IR-purity witness" (`DrawSegment: Clone` as proof of no GPU
+  handle) is withdrawn — wgpu 30's handles are `Clone`; the derive bars a
+  `PooledTexture` field and nothing more, and the docs say so.
+- Deleted with no consumer: `WgpuPainter::save_layer_with_tint`,
+  `flush_texture_batch`, `OffscreenGpu`/`request_offscreen_gpu`,
+  `TexturePool::from_size`, `PathCache::clear`, the gradient-instance
+  `vertical`/`horizontal`/`diagonal`/`centered`/`full_circle` conveniences.
+- `ARCHITECTURE.md` is rewritten as a current-state document (module map,
+  frame path, ownership, mapping decisions, open items).
+
 ### Deleted (same pass)
 
 - **`wgpu/multi_draw.rs`** (`MultiDrawBatcher`, `PipelineId`, `MultiDrawStats`).

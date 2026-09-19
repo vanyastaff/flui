@@ -9,11 +9,12 @@
 //! caller, and `Backend` is the only production implementor.
 
 use flui_painting::{BlendMode, Paint, PointMode};
+use std::sync::Arc;
+
 use flui_types::{
     geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect},
     painting::{Image, Path, TextureId},
     styling::Color,
-    typography::TextStyle,
 };
 
 /// The command half of the backend dispatch surface: one method per
@@ -87,23 +88,13 @@ pub(crate) trait CommandRenderer {
 
     // ===== Text =====
 
-    /// Render text with given style
-    fn render_text(
+    /// Render a shaped paragraph with its top-left at `offset`; `color`
+    /// paints every glyph that carries no span colour of its own.
+    fn render_paragraph(
         &mut self,
-        text: &str,
+        layout: &Arc<flui_painting::TextLayout>,
         offset: Offset<Pixels>,
-        style: &TextStyle,
-        paint: &Paint,
-        transform: &Matrix4,
-    );
-
-    /// Render rich text span
-    fn render_text_span(
-        &mut self,
-        span: &flui_types::typography::InlineSpan,
-        offset: Offset<Pixels>,
-        text_scale_factor: f64,
-        wrap_width: Option<f32>,
+        color: Color,
         transform: &Matrix4,
     );
 
@@ -136,7 +127,7 @@ pub(crate) trait CommandRenderer {
         &mut self,
         image: &Image,
         dst: Rect<Pixels>,
-        repeat: flui_painting::display_list::ImageRepeat,
+        repeat: flui_types::painting::image::ImageRepeat,
         paint: Option<&Paint>,
         transform: &Matrix4,
     );
@@ -156,7 +147,7 @@ pub(crate) trait CommandRenderer {
         &mut self,
         image: &Image,
         dst: Rect<Pixels>,
-        filter: flui_painting::display_list::ColorFilter,
+        filter: flui_types::painting::image::ColorFilter,
         paint: Option<&Paint>,
         transform: &Matrix4,
     );
@@ -177,49 +168,13 @@ pub(crate) trait CommandRenderer {
     /// Render a shadow for a path
     fn render_shadow(&mut self, path: &Path, color: Color, elevation: f32, transform: &Matrix4);
 
-    /// Apply a shader as a mask to child content
-    fn render_shader_mask(
-        &mut self,
-        child: &flui_painting::DisplayList,
-        shader: &flui_painting::Shader,
-        bounds: Rect<Pixels>,
-        blend_mode: BlendMode,
-        transform: &Matrix4,
-    );
-
-    // ===== Gradients =====
-
-    /// Render a gradient-filled rectangle
-    fn render_gradient(
-        &mut self,
-        rect: Rect<Pixels>,
-        shader: &flui_painting::Shader,
-        transform: &Matrix4,
-    );
-
-    /// Render a gradient-filled rounded rectangle
-    fn render_gradient_rrect(
-        &mut self,
-        rrect: RRect,
-        shader: &flui_painting::Shader,
-        transform: &Matrix4,
-    );
+    // ===== Full-target fills =====
 
     /// Fill entire viewport with color
     fn render_color(&mut self, color: Color, blend_mode: BlendMode, transform: &Matrix4);
 
     /// Fill entire viewport with paint (supports shaders, blend modes, etc.)
     fn render_paint(&mut self, paint: &Paint, transform: &Matrix4);
-
-    /// Render backdrop filter effect (blur, color adjustments, etc.)
-    fn render_backdrop_filter(
-        &mut self,
-        child: Option<&flui_painting::DisplayList>,
-        filter: &flui_painting::display_list::ImageFilter,
-        bounds: Rect<Pixels>,
-        blend_mode: BlendMode,
-        transform: &Matrix4,
-    );
 
     // ===== Custom Geometry =====
 
@@ -325,7 +280,7 @@ pub(crate) trait CommandRenderer {
     ///
     /// # Arguments
     ///
-    /// * `options_mask` - Bitmask of `PerformanceOverlayOption` flags
+    /// * `options` - Which readouts to draw
     /// * `bounds` - Rectangle where the overlay should be displayed
     /// * `fps` - Current frames per second
     /// * `frame_time_ms` - Average frame time in milliseconds
@@ -333,7 +288,7 @@ pub(crate) trait CommandRenderer {
     /// * `diagnostic_line` - Optional runtime-owned structured-metric summary
     fn add_performance_overlay(
         &mut self,
-        options_mask: u32,
+        options: flui_layer::PerformanceOverlayOption,
         bounds: Rect<Pixels>,
         fps: f32,
         frame_time_ms: f32,

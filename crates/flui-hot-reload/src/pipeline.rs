@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 use flui_layer::Scene;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_types::{Size, geometry::px};
 use flui_view::{StatelessView, View, WidgetsBinding};
 
 /// Log messages via Android logcat (or stderr on other platforms).
@@ -131,7 +130,7 @@ impl PluginPipeline {
     /// 2. **Layout / Compositing / Paint / Semantics** — Via the
     ///    typestate-driven `PipelineOwner::run_frame`.
     /// 3. **Scene** — Extract `LayerTree` and create `Scene`
-    pub fn draw_frame(&mut self, width: f32, height: f32) -> Scene {
+    pub fn draw_frame(&mut self) -> Scene {
         let widgets = &self.widgets;
         let pipeline_owner = &self.pipeline_owner;
         widgets.with_global_key_registry(|| {
@@ -179,17 +178,15 @@ impl PluginPipeline {
                 }
             });
 
-            // Phase 3: Extract Scene from LayerTree
-            let size = Size::new(px(width), px(height));
-
-            if let Some(layer_tree) = layer_tree {
-                let root = layer_tree.root();
-                Scene::new(size, layer_tree, root, 1)
-            } else {
-                log("draw_frame: no LayerTree produced after force-repaint");
-                let tree = flui_layer::LayerTree::new();
-                Scene::new(size, tree, None, 1)
-            }
+            // Phase 3: freeze the LayerTree into a Scene (an empty one when
+            // the pipeline produced nothing).
+            layer_tree.map_or_else(
+                || {
+                    log("draw_frame: no LayerTree produced after force-repaint");
+                    Scene::default()
+                },
+                Scene::new,
+            )
         })
     }
 }
@@ -262,7 +259,7 @@ mod tests {
             observed_in_probe.store(key_in_probe.current_element().is_some(), Ordering::Relaxed);
         }));
 
-        let _scene = pipeline.draw_frame(320.0, 240.0);
+        let _scene = pipeline.draw_frame();
         assert!(
             observed.load(Ordering::Relaxed),
             "real draw_frame must keep plugin registry active after build lock release"

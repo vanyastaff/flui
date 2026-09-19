@@ -35,6 +35,22 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 This section records places where the Rust shape diverges from the Dart shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
+### Canvas clips belong to one fragment run
+
+Flutter's `PaintingContext` warns that painting a child may replace its canvas
+(`rendering/object.dart`, Flutter 3.44.0). FLUI makes that boundary deterministic:
+`PaintCx::canvas` state belongs to the current run; `paint_child` seals it and
+later drawing starts with a fresh canvas. Effects covering children use the
+`with_clip_*` layer scopes.
+
+The composer brackets each nonempty run with save/restore when merging pictures.
+Raw command concatenation is insufficient: a clip recorded without an explicit
+save remains active during replay and would incorrectly clip the child and the
+parent's next run. The cost is two replay commands per nonempty run, while inline
+children still share one picture. The facade readback test
+`canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture` checks the parent
+clip, an unclipped child, and the resumed parent run through a real frame and GPU.
+
 ### The set POSITION is published; the set size waits, and the delegates do not wrap
 
 **Rule:** a screen reader announces "item 12 of 100" from the platform's set-position concept.
@@ -534,7 +550,7 @@ enclosing boundary's capture, through `RenderClip<S>::paint_effects` /
   `ClipRectLayer::clips()`/`ClipRRectLayer::clips()`/`ClipPathLayer::clips()`
   (`crates/flui-layer/src/layer/clip_rect.rs` and its rrect/path
   siblings) gate `LayerRender::render`/`cleanup`
-  (`crates/flui-engine/src/wgpu/layer_render.rs`), pinned by
+  (`crates/flui-engine/src/layer_render.rs`), pinned by
   `test_clip_rect_layer_no_clip_is_noop`, `test_clip_rrect_layer_no_clip_is_noop`
   and `test_clip_path_layer_no_clip_is_noop` — so crossing `Clip::None` never
   changes the layer count. A token-driven path clip is reported as

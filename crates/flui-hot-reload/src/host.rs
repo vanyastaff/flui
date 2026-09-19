@@ -266,8 +266,8 @@ impl ScenePlugin {
     /// # Safety
     ///
     /// One obligation remains with the caller, and it is why this stays an
-    /// `unsafe fn`: the returned `Scene` holds `Box<dyn FnOnce>` and
-    /// `Arc<dyn Any>` whose vtables live in the plugin image, so the caller
+    /// `unsafe fn`: the returned `Scene` can hold `Arc<dyn Any>` /
+    /// `Arc<dyn Fn>` payloads whose vtables live in the plugin image, so the caller
     /// must drop it BEFORE the library is unloaded. No lifetime ties the
     /// scene to the [`DynLib`]; dropping it after `dlclose` is a
     /// use-after-free of code. Development-only tooling either way. This

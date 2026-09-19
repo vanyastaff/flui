@@ -1,10 +1,7 @@
-//! `TextPainter` layout + measurement: `layout`,
-//! `compute_layout_metrics`, `compute_paint_offset`, `size`, `width`,
-//! `height`, `compute_distance_to_actual_baseline`,
-//! `did_exceed_max_lines`.
-//!
-//! Extracted from the 990-LOC `text_painter.rs`
-//! god module.
+//! `TextPainter` layout and measurement: `layout`, the cached metrics it
+//! produces, and the size / baseline / overflow queries over them.
+
+use std::sync::Arc;
 
 use flui_types::{
     geometry::{Offset, Pixels, Size},
@@ -31,7 +28,9 @@ impl TextPainter {
             "Width constraints must not be NaN"
         );
 
+        let font_generation = crate::shared_font_system().generation();
         if let Some(cache) = &self.layout_cache
+            && cache.font_generation == font_generation
             && (cache.min_width - min_width).abs() < f32::EPSILON
             && (cache.max_width - max_width).abs() < f32::EPSILON
         {
@@ -69,6 +68,7 @@ impl TextPainter {
         let max_intrinsic_width = max_metrics.size.width.0.max(ellipsis_floor);
 
         self.layout_cache = Some(TextLayoutCache {
+            font_generation,
             min_width,
             max_width,
             size: metrics.size,
@@ -76,10 +76,26 @@ impl TextPainter {
             ideographic_baseline: metrics.ideographic_baseline,
             did_exceed_max_lines: metrics.did_exceed_max_lines,
             paint_offset: metrics.paint_offset,
-            layout,
+            layout: Arc::new(layout),
             min_intrinsic_width,
             max_intrinsic_width,
         });
+    }
+
+    /// The colour each shaped run carries, relative to the root. Baked into
+    /// the layout at shape time, so `set_text` treats a change to one as a
+    /// layout change.
+    pub(super) fn span_colors(&self, text: &InlineSpan) -> Vec<Option<flui_types::Color>> {
+        let root = text.style().and_then(crate::text_layout::paint_color);
+        collect_styled_spans(text, self.text_scale_factor)
+            .iter()
+            .map(|(_, style)| {
+                style
+                    .as_ref()
+                    .and_then(crate::text_layout::paint_color)
+                    .filter(|color| Some(*color) != root)
+            })
+            .collect()
     }
 
     /// Computes layout metrics for the text using cosmic-text.

@@ -18,8 +18,12 @@ use flui_foundation::{
     SurfaceGeneration,
 };
 use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene, SceneSnapshot};
-use flui_types::Size;
 use flui_types::geometry::{Pixels, Rect};
+
+/// A minimal non-empty scene: one canvas layer under a root.
+fn scene_from_canvas() -> Scene {
+    Scene::new(flui_layer::LayerTree::new(Layer::from(CanvasLayer::new())))
+}
 
 // Per-thread, not process-global: a `GlobalAlloc` sees every thread's
 // allocations, so process-wide counters charge any other thread's work to the
@@ -135,11 +139,7 @@ fn frame(epoch: FrameEpoch, surface_generation: SurfaceGeneration) -> SceneSnaps
         surface_generation,
         GpuResourceGeneration::ZERO,
     );
-    SceneSnapshot::new(
-        stamp,
-        DamageRegion::Full,
-        Scene::from_layer(Size::ZERO, Layer::from(CanvasLayer::new()), 0),
-    )
+    SceneSnapshot::new(stamp, DamageRegion::Full, scene_from_canvas())
 }
 
 /// The measured claim: after warmup (the owner's own one-time
@@ -162,7 +162,9 @@ fn submit_pump_retire_cycle_allocates_nothing_on_the_accounting_path() {
     // any allocation counter is read below — not part of the measured
     // region, and not itself a source of heap allocation (a mint is a plain
     // atomic increment).
-    let generation = handle.resize(1, 1);
+    let generation = handle
+        .resize(1, 1)
+        .expect("non-zero size mints a generation");
 
     // Warmup: settles the owner's one-time construction cost and the first
     // `tracing::instrument`d call's one-time callsite-interest caching,

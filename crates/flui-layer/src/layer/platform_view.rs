@@ -1,7 +1,5 @@
-//! PlatformViewLayer - Native view embedding
-//!
-//! This layer embeds a native platform view (Android View, iOS UIView, etc.)
-//! into the FLUI layer tree.
+//! `PlatformViewLayer` — a native view (Android `View`, iOS `UIView`) the embedder
+//! composites at a rectangle.
 
 use flui_types::geometry::{Pixels, Rect};
 
@@ -10,13 +8,13 @@ use flui_types::geometry::{Pixels, Rect};
 pub struct PlatformViewId(i64);
 
 impl PlatformViewId {
-    /// Creates a new platform view ID.
+    /// Wraps the platform's integer view id.
     #[inline]
     pub const fn new(id: i64) -> Self {
         Self(id)
     }
 
-    /// Returns the raw ID value.
+    /// The platform's own integer id.
     #[inline]
     pub const fn value(&self) -> i64 {
         self.0
@@ -99,7 +97,7 @@ pub struct PlatformViewLayer {
 }
 
 impl PlatformViewLayer {
-    /// Creates a new platform view layer.
+    /// Composites the native view `view_id` at `rect`.
     #[inline]
     pub fn new(view_id: PlatformViewId, rect: Rect<Pixels>) -> Self {
         Self {
@@ -109,65 +107,30 @@ impl PlatformViewLayer {
         }
     }
 
-    /// Sets the hit test behavior.
+    /// How pointer events over the view are routed.
     #[inline]
+    #[must_use]
     pub fn with_hit_test_behavior(mut self, behavior: PlatformViewHitTestBehavior) -> Self {
         self.hit_test_behavior = behavior;
         self
     }
 
-    /// Returns the platform view ID.
+    /// The platform view to composite.
     #[inline]
     pub fn view_id(&self) -> PlatformViewId {
         self.view_id
     }
 
-    /// Returns the display rectangle.
-    #[inline]
-    pub fn rect(&self) -> Rect<Pixels> {
-        self.rect
-    }
-
-    /// Returns the bounds (same as rect).
+    /// The rectangle the view occupies.
     #[inline]
     pub fn bounds(&self) -> Rect<Pixels> {
         self.rect
     }
 
-    /// Returns the hit test behavior.
+    /// See [`Self::with_hit_test_behavior`].
     #[inline]
     pub fn hit_test_behavior(&self) -> PlatformViewHitTestBehavior {
         self.hit_test_behavior
-    }
-
-    /// Sets the platform view ID.
-    #[inline]
-    pub fn set_view_id(&mut self, view_id: PlatformViewId) {
-        self.view_id = view_id;
-    }
-
-    /// Sets the display rectangle.
-    #[inline]
-    pub fn set_rect(&mut self, rect: Rect<Pixels>) {
-        self.rect = rect;
-    }
-
-    /// Sets the hit test behavior.
-    #[inline]
-    pub fn set_hit_test_behavior(&mut self, behavior: PlatformViewHitTestBehavior) {
-        self.hit_test_behavior = behavior;
-    }
-
-    /// Returns true if the platform view consumes hit tests.
-    #[inline]
-    pub fn is_hit_test_opaque(&self) -> bool {
-        self.hit_test_behavior == PlatformViewHitTestBehavior::Opaque
-    }
-
-    /// Returns true if the platform view should be skipped in hit testing.
-    #[inline]
-    pub fn is_hit_test_transparent(&self) -> bool {
-        self.hit_test_behavior == PlatformViewHitTestBehavior::Transparent
     }
 }
 
@@ -190,7 +153,7 @@ mod tests {
         let layer = PlatformViewLayer::new(id, rect);
 
         assert_eq!(layer.view_id(), id);
-        assert_eq!(layer.rect(), rect);
+        assert_eq!(layer.bounds(), rect);
         assert_eq!(
             layer.hit_test_behavior(),
             PlatformViewHitTestBehavior::Opaque
@@ -217,53 +180,5 @@ mod tests {
         let layer = PlatformViewLayer::new(id, rect);
 
         assert_eq!(layer.bounds(), rect);
-    }
-
-    #[test]
-    fn test_platform_view_layer_setters() {
-        let mut layer = PlatformViewLayer::new(
-            PlatformViewId::new(1),
-            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
-        );
-
-        layer.set_view_id(PlatformViewId::new(99));
-        layer.set_rect(Rect::from_xywh(px(5.0), px(5.0), px(50.0), px(50.0)));
-        layer.set_hit_test_behavior(PlatformViewHitTestBehavior::Transparent);
-
-        assert_eq!(layer.view_id().value(), 99);
-        assert_eq!(layer.rect().left(), px(5.0));
-        assert!(layer.is_hit_test_transparent());
-    }
-
-    #[test]
-    fn test_platform_view_hit_test_queries() {
-        let id = PlatformViewId::new(1);
-        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
-
-        let opaque = PlatformViewLayer::new(id, rect)
-            .with_hit_test_behavior(PlatformViewHitTestBehavior::Opaque);
-        assert!(opaque.is_hit_test_opaque());
-        assert!(!opaque.is_hit_test_transparent());
-
-        let transparent = PlatformViewLayer::new(id, rect)
-            .with_hit_test_behavior(PlatformViewHitTestBehavior::Transparent);
-        assert!(!transparent.is_hit_test_opaque());
-        assert!(transparent.is_hit_test_transparent());
-
-        let defer = PlatformViewLayer::new(id, rect)
-            .with_hit_test_behavior(PlatformViewHitTestBehavior::Defer);
-        assert!(!defer.is_hit_test_opaque());
-        assert!(!defer.is_hit_test_transparent());
-    }
-
-    #[test]
-    fn test_platform_view_layer_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<PlatformViewLayer>();
-        assert_sync::<PlatformViewLayer>();
-        assert_send::<PlatformViewId>();
-        assert_sync::<PlatformViewId>();
     }
 }

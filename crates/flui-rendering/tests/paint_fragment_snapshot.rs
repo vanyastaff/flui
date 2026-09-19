@@ -22,7 +22,6 @@ use flui_objects::{
     RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary, RenderSliverPadding,
     RenderSliverToBoxAdapter,
 };
-use flui_painting::DisplayListCore;
 use flui_painting::Paint;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
@@ -73,7 +72,7 @@ fn first_picture(tree: &LayerTree) -> &flui_painting::DisplayList {
         }
         node.children().iter().find_map(|&c| find(tree, c))
     }
-    find(tree, tree.root().expect("tree has a root")).expect("tree contains a picture layer")
+    find(tree, tree.root()).expect("tree contains a picture layer")
 }
 
 // ============================================================================
@@ -138,13 +137,16 @@ fn inline_siblings_merge_into_one_origin_baked_picture() {
 
     let picture = first_picture(&tree);
     assert_eq!(
-        picture.len(),
+        picture
+            .iter()
+            .filter(|command| matches!(command.op, flui_painting::DrawOp::Rect { .. }))
+            .count(),
         2,
         "one DrawRect per ColoredBox, merged in z-order",
     );
     assert_eq!(
         picture.bounds(),
-        Rect::from_ltrb(px(0.0), px(0.0), px(90.0), px(40.0)),
+        Some(Rect::from_ltrb(px(0.0), px(0.0), px(90.0), px(40.0))),
         "record-time bounds must reflect the committed child offsets: \
          child 0 at (0,0)-(40,40), child 1 at (50,0)-(90,40)",
     );
@@ -187,7 +189,10 @@ fn repaint_boundary_child_splits_into_rebased_offset_layer() {
     let picture = first_picture(&tree);
     assert_eq!(
         picture.bounds(),
-        Rect::from_origin_size(Point::ZERO, Size::new(px(40.0), px(40.0))),
+        Some(Rect::from_origin_size(
+            Point::ZERO,
+            Size::new(px(40.0), px(40.0))
+        )),
         "boundary-subtree coordinates must be rebased to Offset::ZERO",
     );
 }
@@ -363,7 +368,10 @@ fn box_host_splices_sliver_leaf_paint_into_picture() {
     );
     assert_eq!(
         first_picture(&tree).bounds(),
-        Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(80.0))),
+        Some(Rect::from_origin_size(
+            Point::ZERO,
+            Size::new(px(100.0), px(80.0))
+        )),
     );
 }
 
@@ -401,7 +409,7 @@ fn box_host_splices_sliver_to_box_adapter_child_at_paint_offset() {
 
     assert_eq!(
         first_picture(&tree).bounds(),
-        Rect::from_ltrb(px(0.0), px(-40.0), px(100.0), px(40.0)),
+        Some(Rect::from_ltrb(px(0.0), px(-40.0), px(100.0), px(40.0))),
         "RenderSliverToBoxAdapter paint must compose its Box child at \
          the same -scroll_offset paint offset committed during layout",
     );
@@ -476,7 +484,7 @@ fn box_host_splices_sliver_padding_child_at_paint_offset() {
 
     assert_eq!(
         first_picture(&tree).bounds(),
-        Rect::from_ltrb(px(7.0), px(10.0), px(107.0), px(90.0)),
+        Some(Rect::from_ltrb(px(7.0), px(10.0), px(107.0), px(90.0))),
         "sliver child paint must be composed at the paint offset computed \
          by RenderSliverPadding",
     );

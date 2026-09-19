@@ -34,7 +34,7 @@
 //! Applications normally enter through [`run_app`] or
 //! [`run_app_with_config`]; the runner constructs and owns the UI realm.
 
-// Proving `flui_engine::wgpu::Renderer: Send` (for the `Send` frame
+// Proving `flui_engine::Renderer: Send` (for the `Send` frame
 // callbacks that capture it) descends through wgpu-core past the default
 // recursion limit under the next-generation trait solver; see the matching
 // attribute and rationale at the top of flui-engine's `lib.rs`.
@@ -106,8 +106,8 @@ pub use app::open_secondary_window;
 pub use app::{run_app_android, run_app_android_with_config};
 // Bindings re-exports
 pub use bindings::{
-    GestureBinding, PaintingBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding,
-    UpdateScheduler, WidgetsBinding,
+    GestureBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding, UpdateScheduler,
+    WidgetsBinding,
 };
 // Application identity is part of `AppConfig`; low-level subscriber/filter
 // controls remain in `flui-log` rather than leaking through this API surface.
@@ -138,7 +138,6 @@ pub mod prelude {
     pub use crate::{AppConfig, run_app, run_app_with_config, run_direct};
     // Bindings
     pub use crate::{
-        GestureBinding, PaintingBinding, PipelineOwner, RenderingFlutterBinding, UpdateScheduler,
-        WidgetsBinding,
+        GestureBinding, PipelineOwner, RenderingFlutterBinding, UpdateScheduler, WidgetsBinding,
     };
 }

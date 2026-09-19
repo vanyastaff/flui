@@ -187,16 +187,9 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
-    /// The leader/follower link registry produced as a byproduct of the
-    /// last paint phase's `FragmentComposer` walk (see `paint.rs`'s
-    /// `FragmentComposer::link_registry`). Handed to `Scene::with_links`
-    /// by the binding layer so `flui-engine` can resolve `Layer::Follower`
-    /// positions at render time against this same frame's `last_layer_tree`.
-    last_link_registry: Option<flui_layer::LinkRegistry>,
-
     /// Composite-resolved offsets for `Layer::Follower` render nodes,
     /// keyed by `RenderId` (ADR-0015) — a per-frame byproduct mirroring
-    /// `last_layer_tree`/`last_link_registry`. Populated post-paint
+    /// `last_layer_tree`. Populated post-paint
     /// (`paint.rs::run_paint`) by resolving each `FragmentComposer`-recorded
     /// follower correlation via the SAME `flui_layer::resolve_follower_offset`
     /// the GPU path (flui-engine's `render_layer_recursive`) resolves
@@ -303,7 +296,6 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
                 &self.scheduler.debug_doing_semantics(),
             )
             .field("has_layer_tree", &self.last_layer_tree.is_some())
-            .field("has_link_registry", &self.last_link_registry.is_some())
             .field("follower_offset_count", &self.last_follower_offsets.len())
             .field(
                 "hidden_follower_count",
@@ -341,7 +333,6 @@ where
         semantics_owner: from.semantics_owner,
         semantics_update_callback: from.semantics_update_callback,
         last_layer_tree: from.last_layer_tree,
-        last_link_registry: from.last_link_registry,
         last_follower_offsets: from.last_follower_offsets,
         retained_boundaries: from.retained_boundaries,
         last_hidden_follower_ids: from.last_hidden_follower_ids,

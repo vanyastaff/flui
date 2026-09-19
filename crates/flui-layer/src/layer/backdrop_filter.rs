@@ -1,8 +1,4 @@
-//! BackdropFilterLayer - Applies image filter to backdrop content
-//!
-//! This layer type enables effects like frosted glass by capturing the content
-//! behind a widget and applying blur or color filters before compositing the
-//! child content on top.
+//! `BackdropFilterLayer` — filters what is already painted behind it: frosted glass.
 
 use flui_types::{
     geometry::{Pixels, Rect},
@@ -55,13 +51,7 @@ pub struct BackdropFilterLayer {
 }
 
 impl BackdropFilterLayer {
-    /// Create new backdrop filter layer
-    ///
-    /// # Arguments
-    ///
-    /// * `filter` - Image filter (blur, color adjustments, etc.)
-    /// * `blend_mode` - Blend mode for compositing
-    /// * `bounds` - Bounding rectangle for backdrop capture
+    /// Filters what is already painted behind `bounds` with `filter`, compositing with `blend_mode`.
     pub fn new(filter: ImageFilter, blend_mode: BlendMode, bounds: Rect<Pixels>) -> Self {
         Self {
             filter,
@@ -70,24 +60,19 @@ impl BackdropFilterLayer {
         }
     }
 
-    /// Get the image filter.
+    /// The filter applied to the backdrop.
     pub fn filter(&self) -> &ImageFilter {
         &self.filter
     }
 
-    /// Get the blend mode.
+    /// How the filtered backdrop composites.
     pub fn blend_mode(&self) -> BlendMode {
         self.blend_mode
     }
 
-    /// Get the bounding rectangle of this layer.
+    /// The rectangle of backdrop captured and filtered.
     pub fn bounds(&self) -> Rect<Pixels> {
         self.bounds
-    }
-
-    /// Set new bounds for this layer.
-    pub fn set_bounds(&mut self, bounds: Rect<Pixels>) {
-        self.bounds = bounds;
     }
 }
 
@@ -158,25 +143,5 @@ mod tests {
             }
             _ => panic!("Expected ColorAdjust filter with Brightness"),
         }
-    }
-
-    #[test]
-    fn test_backdrop_filter_layer_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<BackdropFilterLayer>();
-        assert_sync::<BackdropFilterLayer>();
-    }
-
-    #[test]
-    fn test_backdrop_filter_layer_clone() {
-        let filter = ImageFilter::blur(5.0);
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
-        let layer = BackdropFilterLayer::new(filter, BlendMode::SrcOver, bounds);
-
-        let cloned = layer.clone();
-        assert_eq!(cloned.bounds(), layer.bounds());
-        assert_eq!(cloned.blend_mode(), layer.blend_mode());
     }
 }

@@ -13,7 +13,6 @@
 
 use flui_layer::Layer;
 use flui_objects::RenderColoredBox;
-use flui_painting::DisplayListCore;
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
@@ -42,12 +41,11 @@ fn run_frame_sizes(
     fn picture_size(tree: &flui_layer::LayerTree, id: flui_foundation::LayerId) -> Option<Size> {
         let node = tree.get(id)?;
         if let Layer::Picture(p) = node.layer() {
-            let b = p.picture().bounds();
-            return Some(Size::new(b.width(), b.height()));
+            return p.bounds().map(|b| Size::new(b.width(), b.height()));
         }
         node.children().iter().find_map(|&c| picture_size(tree, c))
     }
-    let painted = picture_size(&tree, tree.root().expect("root layer")).expect("picture layer");
+    let painted = picture_size(&tree, tree.root()).expect("picture layer");
 
     let root_id = owner.root_id().expect("root id set");
     let root_geometry = owner

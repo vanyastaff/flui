@@ -44,11 +44,6 @@ pub(crate) struct TestRasterBackend {
     /// How many times `render_scene` ran — the "did the scene actually
     /// reach the backend" oracle most tests assert on.
     pub(crate) render_scene_calls: u32,
-    /// `Scene::has_content()` of every scene that reached `render_scene`,
-    /// in call order. Recorded unconditionally (the query is cheap) so
-    /// last-good-retention tests can distinguish "submitted nothing" from
-    /// "submitted a blank stand-in scene".
-    pub(crate) submitted_scene_had_content: Vec<bool>,
     /// What `size()` reports.
     size: (u32, u32),
     /// The installed pre-present hook, run before every script outcome
@@ -67,7 +62,6 @@ impl TestRasterBackend {
         Self {
             render: Box::new(render),
             render_scene_calls: 0,
-            submitted_scene_had_content: Vec::new(),
             size: (800, 600),
             pre_present_hook: None,
         }
@@ -115,7 +109,6 @@ impl RasterBackend for TestRasterBackend {
     fn render_scene(&mut self, scene: &Scene) -> Result<bool, EngineError> {
         let call_index = self.render_scene_calls;
         self.render_scene_calls += 1;
-        self.submitted_scene_had_content.push(scene.has_content());
         let outcome = (self.render)(call_index, scene);
         // Mirror the wgpu renderer's contract: the hook runs only for a
         // frame that presents, and before that present.

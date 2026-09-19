@@ -53,26 +53,6 @@ ignore = [
     # yet).  Parsing happens on locally installed fonts, not remote input.
     # Revisit when cosmic-text migrates (skrifa is the ecosystem successor).
     { id = "RUSTSEC-2026-0192" },
-
-    # RUSTSEC-2026-0253: lru <0.18.2 `LruCache::pop()` is not panic-safe — a
-    # panicking key `Drop` skips `detach()`, leaving a dangling node in the
-    # linked list for a later eviction to write through (UAF / double-free).
-    # Source: lru v0.16.4 ← glyphon v0.12 ← flui-engine.
-    #
-    # Not reachable here, on two independent grounds, both re-checked against
-    # glyphon 0.12.0's own source rather than carried over from the 0.11 entry:
-    #   1. The advisory needs a key whose `Drop` can panic. `GlyphonCacheKey`
-    #      derives `Copy` (text_render.rs:376), and Rust forbids `Copy + Drop`,
-    #      so the precondition is structurally impossible rather than unlikely.
-    #   2. glyphon never calls the vulnerable function — zero `.pop(` sites
-    #      across its source, and its cache is built with
-    #      `LruCache::unbounded_with_hasher` (text_atlas.rs:57), so no eviction
-    #      path runs at all.
-    # Unfixable locally: 0.12.0 still caps lru at ^0.16.2 (its Cargo.toml), so
-    # the workspace bump to glyphon 0.12 / wgpu 30 did not clear this. Drop the
-    # ignore when glyphon releases against lru >=0.18.2 — note flui-widgets'
-    # own direct `lru` dep is already on 0.18 and unaffected.
-    { id = "RUSTSEC-2026-0253" },
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════

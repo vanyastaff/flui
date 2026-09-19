@@ -1,31 +1,15 @@
-// PORT-TARGET: flui-widgets::RichText, flui-widgets::TextField
-//! Text measurement and painting.
+//! [`TextPainter`]: lays an inline span out against a width constraint,
+//! answers size / baseline / caret / hit-test queries on the result, and
+//! paints it — the shape a `RenderParagraph` drives.
 //!
-//! Provides [`TextPainter`], which measures and paints styled text.
-//! Rust equivalent of Flutter's `TextPainter` class.
-//!
-//! # Concern split
-//!
-//! The 990-LOC `text_painter.rs` god module was split into a
-//! `text_painter/` directory. Four files:
-//!
-//! - This module (`mod.rs`) -- `TextPainter` struct + `TextLayoutCache` +
-//!   `LayoutMetrics` + `Default` + builder API + getters + setters +
-//!   `mark_needs_layout` / `did_layout` lifecycle.
-//! - [`baseline`] -- `TextBaseline` enum.
-//! - [`measure`]  -- `layout` + `compute_layout_metrics` +
-//!   `compute_paint_offset` + `size`/`width`/`height` +
-//!   `compute_distance_to_actual_baseline` + `did_exceed_max_lines`.
-//! - [`paint`]    -- `paint` + cursor methods (`get_offset_for_caret`,
-//!   `get_position_for_offset`, `get_line_metrics`,
-//!   `get_boxes_for_selection`, `get_word_boundary`).
+//! - `measure` — `layout` and the queries over its cached metrics.
+//! - `paint` — `paint` and the cursor queries.
+
+use std::sync::Arc;
 
 use flui_types::{
     geometry::{Offset, Pixels, Size},
-    typography::{
-        InlineSpan, PlaceholderDimensions, StrutStyle, TextAlign, TextDirection,
-        TextHeightBehavior, TextWidthBasis,
-    },
+    typography::{InlineSpan, TextAlign, TextDirection},
 };
 
 use crate::text_layout::TextLayout;
@@ -37,7 +21,7 @@ pub mod paint;
 pub use baseline::TextBaseline;
 
 /// Default font size when none is specified.
-pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
 
 /// What a property change invalidates — the shaped/paint split.
 ///
@@ -78,11 +62,6 @@ pub enum Invalidation {
 /// 4. Read metrics like [`width`](TextPainter::width),
 ///    [`height`](TextPainter::height).
 /// 5. Call [`paint`](TextPainter::paint) to render.
-///
-/// # Thread Safety
-///
-/// `TextPainter` is `Send` but not `Sync` due to mutable layout
-/// state.
 #[derive(Debug)]
 pub struct TextPainter {
     /// The styled text to paint.
@@ -103,18 +82,6 @@ pub struct TextPainter {
     /// Ellipsis string for overflow.
     pub(super) ellipsis: Option<String>,
 
-    /// Strut style for consistent line height.
-    pub(super) strut_style: Option<StrutStyle>,
-
-    /// How to measure text width.
-    pub(super) text_width_basis: TextWidthBasis,
-
-    /// Text height behavior.
-    pub(super) text_height_behavior: Option<TextHeightBehavior>,
-
-    /// Placeholder dimensions for inline widgets.
-    pub(super) placeholder_dimensions: Vec<PlaceholderDimensions>,
-
     /// Cached layout result.
     pub(super) layout_cache: Option<TextLayoutCache>,
 }
@@ -123,6 +90,9 @@ pub struct TextPainter {
 #[derive(Debug)]
 pub(super) struct TextLayoutCache {
     /// The width constraint used for layout.
+    /// The font database generation the layout was shaped against; a face
+    /// registered since makes the same text shape differently.
+    pub(super) font_generation: u64,
     pub(super) min_width: f32,
     /// The max width constraint used for layout.
     pub(super) max_width: f32,
@@ -137,7 +107,8 @@ pub(super) struct TextLayoutCache {
     /// Computed paint offset based on alignment.
     pub(super) paint_offset: Offset<Pixels>,
     /// The underlying text layout for cursor/hit testing.
-    pub(super) layout: TextLayout,
+    pub(super) layout: Arc<TextLayout>,
+
     /// Precomputed min intrinsic width (narrowest unbreakable run).
     /// Computed once during `layout()` — O(1) access for intrinsics queries.
     /// Parley-inspired: shape-once, query-many.
@@ -173,10 +144,6 @@ impl TextPainter {
             text_scale_factor: 1.0,
             max_lines: None,
             ellipsis: None,
-            strut_style: None,
-            text_width_basis: TextWidthBasis::Parent,
-            text_height_behavior: None,
-            placeholder_dimensions: Vec::new(),
             layout_cache: None,
         }
     }
@@ -222,13 +189,6 @@ impl TextPainter {
     #[must_use]
     pub fn with_ellipsis(mut self, ellipsis: Option<String>) -> Self {
         self.set_ellipsis(ellipsis);
-        self
-    }
-
-    /// Sets the strut style.
-    #[must_use]
-    pub fn with_strut_style(mut self, style: Option<StrutStyle>) -> Self {
-        self.set_strut_style(style);
         self
     }
 
@@ -285,27 +245,6 @@ impl TextPainter {
         self.ellipsis.as_deref()
     }
 
-    /// Returns the strut style.
-    #[inline]
-    #[must_use]
-    pub fn strut_style(&self) -> Option<&StrutStyle> {
-        self.strut_style.as_ref()
-    }
-
-    /// Returns the text width basis.
-    #[inline]
-    #[must_use]
-    pub fn text_width_basis(&self) -> TextWidthBasis {
-        self.text_width_basis
-    }
-
-    /// Returns the text height behavior.
-    #[inline]
-    #[must_use]
-    pub fn text_height_behavior(&self) -> Option<&TextHeightBehavior> {
-        self.text_height_behavior.as_ref()
-    }
-
     // ===== Setters =====
 
     /// Sets the text to paint and reports what the change invalidates.
@@ -324,7 +263,12 @@ impl TextPainter {
             return Invalidation::None;
         }
         let layout_preserved = match (&self.text, &text) {
-            (Some(old), Some(new)) => old.layout_affecting_eq(new),
+            // A span colour is baked into the shaped layout (only the root
+            // colour rides on the paragraph command), so a recolour of one
+            // span is a layout change here even though the geometry is not.
+            (Some(old), Some(new)) => {
+                old.layout_affecting_eq(new) && self.span_colors(old) == self.span_colors(new)
+            }
             // Appearing/disappearing text is always a layout change.
             _ => false,
         };
@@ -392,49 +336,10 @@ impl TextPainter {
         }
     }
 
-    /// Sets the strut style.
-    pub fn set_strut_style(&mut self, style: Option<StrutStyle>) {
-        if self.strut_style != style {
-            self.strut_style = style;
-            self.mark_needs_layout();
-        }
-    }
-
-    /// Sets the text width basis.
-    pub fn set_text_width_basis(&mut self, basis: TextWidthBasis) {
-        if self.text_width_basis != basis {
-            self.text_width_basis = basis;
-            self.mark_needs_layout();
-        }
-    }
-
-    /// Sets the text height behavior.
-    pub fn set_text_height_behavior(&mut self, behavior: Option<TextHeightBehavior>) {
-        if self.text_height_behavior != behavior {
-            self.text_height_behavior = behavior;
-            self.mark_needs_layout();
-        }
-    }
-
-    /// Sets placeholder dimensions for inline widgets.
-    pub fn set_placeholder_dimensions(&mut self, dimensions: Vec<PlaceholderDimensions>) {
-        if self.placeholder_dimensions != dimensions {
-            self.placeholder_dimensions = dimensions;
-            self.mark_needs_layout();
-        }
-    }
-
     // ===== Lifecycle =====
 
     /// Invalidates the layout cache.
     pub fn mark_needs_layout(&mut self) {
         self.layout_cache = None;
-    }
-
-    /// Returns true if layout has been computed.
-    #[inline]
-    #[must_use]
-    pub fn did_layout(&self) -> bool {
-        self.layout_cache.is_some()
     }
 }

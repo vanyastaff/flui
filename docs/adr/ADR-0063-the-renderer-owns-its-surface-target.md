@@ -439,7 +439,7 @@ backoff loop is the mechanism #1043 makes sound.
 **Positive**
 - Net unsafe delta in `renderer.rs`: −1 `unsafe {}` block and −1 manual
   `Send` impl (the old file had exactly one of each; `git show
-  53b04347:crates/flui-engine/src/wgpu/renderer.rs | rg -n 'unsafe impl|unsafe \{'`).
+  53b04347:crates/flui-engine/src/renderer.rs | rg -n 'unsafe impl|unsafe \{'`).
   Two test-only `borrow_raw` blocks arrive with the lease's fake target. The
   crate's remaining production SAFETY stories are ones the code enforces.
 - Android device-loss recovery after a pause/resume cycle rebuilds against

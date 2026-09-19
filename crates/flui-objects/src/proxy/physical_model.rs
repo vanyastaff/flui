@@ -99,68 +99,9 @@ pub trait PhysicalClipShape: Clone + fmt::Debug + Send + Sync + 'static {
     );
 }
 
-/// Point-in-rounded-rect test for [`PhysicalClipShape::contains`] on
-/// [`RRect`]. A fresh implementation — not shared with
-/// `proxy::clip::ClipGeometry`'s own `RRect` impl, matching this module's
-/// deliberate choice not to depend on `clip.rs` (see module doc).
-fn rrect_contains(rrect: &RRect, position: Point<Pixels>) -> bool {
-    let bounds = rrect.bounding_rect();
-    if !bounds.contains(position) {
-        return false;
-    }
-
-    let px = position.x.get();
-    let py = position.y.get();
-    let left = bounds.left().get();
-    let top = bounds.top().get();
-    let right = bounds.right().get();
-    let bottom = bounds.bottom().get();
-
-    // For each corner, a point inside the corner's square sub-region but
-    // outside its inscribed ellipse is outside the rounded rect.
-    let excluded_by_corner = |cx: f32, cy: f32, rx: f32, ry: f32, in_corner: bool| -> bool {
-        if !in_corner || rx <= 0.0 || ry <= 0.0 {
-            return false;
-        }
-        let dx = (px - cx) / rx;
-        let dy = (py - cy) / ry;
-        dx * dx + dy * dy > 1.0
-    };
-
-    let tl_rx = rrect.top_left.x.get();
-    let tl_ry = rrect.top_left.y.get();
-    let in_tl = px < left + tl_rx && py < top + tl_ry;
-    if excluded_by_corner(left + tl_rx, top + tl_ry, tl_rx, tl_ry, in_tl) {
-        return false;
-    }
-
-    let tr_rx = rrect.top_right.x.get();
-    let tr_ry = rrect.top_right.y.get();
-    let in_tr = px > right - tr_rx && py < top + tr_ry;
-    if excluded_by_corner(right - tr_rx, top + tr_ry, tr_rx, tr_ry, in_tr) {
-        return false;
-    }
-
-    let br_rx = rrect.bottom_right.x.get();
-    let br_ry = rrect.bottom_right.y.get();
-    let in_br = px > right - br_rx && py > bottom - br_ry;
-    if excluded_by_corner(right - br_rx, bottom - br_ry, br_rx, br_ry, in_br) {
-        return false;
-    }
-
-    let bl_rx = rrect.bottom_left.x.get();
-    let bl_ry = rrect.bottom_left.y.get();
-    let in_bl = px < left + bl_rx && py > bottom - bl_ry;
-    if excluded_by_corner(left + bl_rx, bottom - bl_ry, bl_rx, bl_ry, in_bl) {
-        return false;
-    }
-
-    true
-}
-
 impl PhysicalClipShape for RRect {
     fn contains(&self, position: Point<Pixels>) -> bool {
-        rrect_contains(self, position)
+        RRect::contains(self, position)
     }
 
     fn shadow_path(&self) -> Path {

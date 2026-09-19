@@ -1,47 +1,53 @@
-//! `DrawCommand` -- the closed-enum vocabulary of paint operations
-//! that `flui-engine`'s wgpu backend pattern-matches for GPU lowering.
-//!
-//! These were extracted from the 2,434-LOC
-//! `display_list.rs` god module as part of a concern-based split. The 29 variants are the entire
-//! compositor draw operation vocabulary; adding a 30th is a
-//! coordinated change in `flui-painting` + `flui-engine`
-//! (+ optionally `flui-rendering`).
-//!
-//! Deliberately the same shape as `flui-layer::Layer` enum
-//! (see the mapping-decision rationale in `flui-layer`). The reason
-//! is identical: arbitrary trait-object commands would force a
-//! `Box<dyn Drawable>` boundary the wgpu backend cannot translate.
+//! `DrawCommand` — one recorded paint operation: the absolute transform it
+//! was recorded under and the [`DrawOp`] itself, the closed vocabulary
+//! `flui-engine` matches exhaustively when lowering to the GPU. Adding a variant is a
+//! coordinated change in both crates: the engine's match has no wildcard,
+//! so a new variant is a compile error there until its `render_*` arm
+//! exists. Same shape and reason as `flui_layer::Layer`: a trait-object
+//! command would be a `Box<dyn Drawable>` the backend cannot translate.
 
 use std::sync::Arc;
 
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect, Size},
+    geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect},
     painting::{Image, Path},
     styling::Color,
-    typography::{InlineSpan, TextStyle},
 };
 
 use super::{ColorFilter, ImageRepeat};
-use crate::display_list::{
-    BlendMode, Clip, ClipOp, DisplayList, FilterQuality, ImageFilter, Paint, PointMode, Shader,
-    TextureId,
-};
+use crate::display_list::{BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId};
+use crate::text_layout::TextLayout;
 
-/// A single drawing command recorded by Canvas.
+/// One recorded paint operation: the canvas transform at recording time
+/// and the operation itself.
 ///
-/// Each variant contains all information needed to execute the
-/// command later, including the transform matrix at the time of
-/// recording.
-///
-/// # Transform Field
-///
-/// Every command stores the active `Matrix4` transform when it was
-/// recorded. The GPU backend applies this transform when executing
-/// the command.
+/// The transform is absolute (the full CTM), so every command is
+/// self-describing — its bounds, a damage query, a snapshot line, and a
+/// re-stamp under another transform (`Canvas::draw_picture`) all read one
+/// command without replaying state. Clips are the one thing that scope:
+/// [`DrawOp::Save`]/[`DrawOp::Restore`] bracket them.
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[non_exhaustive]
-pub enum DrawCommand {
+pub struct DrawCommand {
+    /// The canvas transform at recording time.
+    pub transform: Matrix4,
+    /// The operation.
+    pub op: DrawOp,
+}
+
+impl DrawCommand {
+    /// A command recorded under the identity transform.
+    #[must_use]
+    pub const fn untransformed(op: DrawOp) -> Self {
+        Self {
+            transform: Matrix4::IDENTITY,
+            op,
+        }
+    }
+}
+
+/// The closed vocabulary of paint operations.
+#[derive(Debug, Clone)]
+pub enum DrawOp {
     // === Clipping Commands ===
     /// Clip to a rectangle.
     ClipRect {
@@ -51,8 +57,6 @@ pub enum DrawCommand {
         clip_op: ClipOp,
         /// Anti-aliasing behavior.
         clip_behavior: Clip,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Clip to a rounded rectangle.
@@ -63,8 +67,6 @@ pub enum DrawCommand {
         clip_op: ClipOp,
         /// Anti-aliasing behavior.
         clip_behavior: Clip,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Clip to a rounded superellipse (Flutter `RSuperellipse`).
@@ -89,8 +91,6 @@ pub enum DrawCommand {
         clip_op: ClipOp,
         /// Anti-aliasing behavior.
         clip_behavior: Clip,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Clip to an arbitrary path.
@@ -101,132 +101,91 @@ pub enum DrawCommand {
         clip_op: ClipOp,
         /// Anti-aliasing behavior.
         clip_behavior: Clip,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     // === Primitive Drawing Commands ===
     /// Draw a line.
-    DrawLine {
+    Line {
         /// Start point.
         p1: Point<Pixels>,
         /// End point.
         p2: Point<Pixels>,
         /// Paint style (color, stroke width, etc.).
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw a rectangle.
-    DrawRect {
+    Rect {
         /// Rectangle to draw.
         rect: Rect<Pixels>,
         /// Paint style.
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw a rounded rectangle.
-    DrawRRect {
+    RRect {
         /// Rounded rectangle to draw.
         rrect: RRect,
         /// Paint style.
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw a circle.
-    DrawCircle {
+    Circle {
         /// Center point.
         center: Point<Pixels>,
         /// Radius.
         radius: Pixels,
         /// Paint style.
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw an oval (ellipse).
-    DrawOval {
+    Oval {
         /// Bounding rectangle.
         rect: Rect<Pixels>,
         /// Paint style.
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw an arbitrary path.
-    DrawPath {
+    Path {
         /// Path to draw.
         path: Path,
         /// Paint style.
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     // === Text ===
-    /// Draw text.
-    DrawText {
-        /// Text content.
-        text: String,
-        /// Position offset.
+    /// Draw a shaped paragraph.
+    ///
+    /// The layout is what the recorder measured — `TextPainter::paint` hands
+    /// over the very `Arc` its cache holds — so what the engine rasterises
+    /// is, by identity, what was laid out: line breaks, `max_lines`, the
+    /// ellipsis, per-span faces. `color` is the paragraph's root colour; a
+    /// span whose colour differs carries its own in the layout.
+    Paragraph {
+        /// The shaped text.
+        layout: Arc<TextLayout>,
+        /// Top-left of the paragraph's box.
         offset: Offset<Pixels>,
-        /// Pre-computed size of the text (for bounds calculation).
-        size: Size<Pixels>,
-        /// Text style (font, size, etc.).
-        style: TextStyle,
-        /// Paint style (color, etc.).
-        paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
-    },
-
-    /// Draw rich text with inline spans.
-    DrawTextSpan {
-        /// Rich text span (with nested styles).
-        span: InlineSpan,
-        /// Position offset.
-        offset: Offset<Pixels>,
-        /// Laid-out size of the span, measured by the recorder.
-        ///
-        /// The span alone cannot answer this: computing it means shaping
-        /// the text, which needs the font system, and `bounds()` must stay
-        /// cheap and sync. So the caller — which has just laid the text out
-        /// — carries the measurement in, exactly as [`DrawCommand::DrawText`]
-        /// does. This is the laid-out size, not the ink extent, matching
-        /// Flutter's `RenderBox.paintBounds` (`Offset.zero & size`).
-        size: Size<Pixels>,
-        /// Text scale factor for accessibility.
-        text_scale_factor: f64,
-        /// Wrap width for line breaking. `None` = unbounded (no wrapping).
-        /// Passed to the GPU text renderer so glyphon respects the same
-        /// line-breaking constraints as the cosmic-text layout cache.
-        wrap_width: Option<f32>,
-        /// Transform at recording time.
-        transform: Matrix4,
+        /// The colour of every glyph that has no span colour of its own.
+        color: Color,
     },
 
     // === Image ===
     /// Draw an image.
-    DrawImage {
+    Image {
         /// Image.
         image: Image,
         /// Destination rectangle.
         dst: Rect<Pixels>,
         /// Optional paint (for tinting, etc.).
         paint: Option<Arc<Paint>>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw an image with repeat (tiling).
-    DrawImageRepeat {
+    ImageRepeat {
         /// Image to tile.
         image: Image,
         /// Destination rectangle to fill.
@@ -235,12 +194,10 @@ pub enum DrawCommand {
         repeat: ImageRepeat,
         /// Optional paint (for tinting, opacity, etc.).
         paint: Option<Arc<Paint>>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw an image with 9-slice/9-patch scaling.
-    DrawImageNineSlice {
+    ImageNineSlice {
         /// Image to draw.
         image: Image,
         /// Center slice rectangle within the image (in image coords).
@@ -249,12 +206,10 @@ pub enum DrawCommand {
         dst: Rect<Pixels>,
         /// Optional paint (for tinting, opacity, etc.).
         paint: Option<Arc<Paint>>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw an image with a color filter.
-    DrawImageFiltered {
+    ImageFiltered {
         /// Image to draw.
         image: Image,
         /// Destination rectangle.
@@ -263,13 +218,11 @@ pub enum DrawCommand {
         filter: ColorFilter,
         /// Optional paint (for additional effects).
         paint: Option<Arc<Paint>>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     // === Texture ===
     /// Draw a GPU texture referenced by ID.
-    DrawTexture {
+    Texture {
         /// GPU texture identifier.
         texture_id: TextureId,
         /// Destination rectangle.
@@ -280,75 +233,24 @@ pub enum DrawCommand {
         filter_quality: FilterQuality,
         /// Opacity (0.0 = transparent, 1.0 = opaque).
         opacity: f32,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     // === Effects ===
     /// Draw a shadow.
-    DrawShadow {
+    Shadow {
         /// Path casting shadow.
         path: Path,
         /// Shadow color.
         color: Color,
         /// Elevation (blur amount).
         elevation: f32,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     // === Gradient Drawing Commands ===
-    /// Draw a gradient-filled rectangle.
-    DrawGradient {
-        /// Rectangle to fill.
-        rect: Rect<Pixels>,
-        /// Gradient shader.
-        shader: Shader,
-        /// Transform at recording time.
-        transform: Matrix4,
-    },
-
-    /// Draw a gradient-filled rounded rectangle.
-    DrawGradientRRect {
-        /// Rounded rectangle to fill.
-        rrect: RRect,
-        /// Gradient shader.
-        shader: Shader,
-        /// Transform at recording time.
-        transform: Matrix4,
-    },
-
-    /// Apply a shader as a mask to child content.
-    ShaderMask {
-        /// Child content to be masked (recorded commands).
-        child: Box<DisplayList>,
-        /// Shader specification (gradient type, colors, etc.).
-        shader: Shader,
-        /// Bounds of the masked region.
-        bounds: Rect<Pixels>,
-        /// Blend mode for final compositing.
-        blend_mode: BlendMode,
-        /// Transform at recording time.
-        transform: Matrix4,
-    },
-
-    /// Backdrop filter effect (frosted glass, blur).
-    BackdropFilter {
-        /// Child content to render on top of filtered backdrop.
-        child: Option<Box<DisplayList>>,
-        /// Image filter to apply (blur, color adjustments, etc.).
-        filter: ImageFilter,
-        /// Bounds for backdrop capture.
-        bounds: Rect<Pixels>,
-        /// Blend mode for final compositing.
-        blend_mode: BlendMode,
-        /// Transform at recording time.
-        transform: Matrix4,
-    },
 
     // === Advanced Primitives ===
     /// Draw an arc segment.
-    DrawArc {
+    Arc {
         /// Bounding rectangle for the ellipse.
         rect: Rect<Pixels>,
         /// Start angle in radians.
@@ -359,37 +261,31 @@ pub enum DrawCommand {
         use_center: bool,
         /// Paint style.
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw difference between two rounded rectangles (ring/border).
-    DrawDRRect {
+    DRRect {
         /// Outer rounded rectangle.
         outer: RRect,
         /// Inner rounded rectangle.
         inner: RRect,
         /// Paint style.
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw a sequence of points.
-    DrawPoints {
+    Points {
         /// Point drawing mode.
         mode: PointMode,
         /// Points to draw.
         points: Vec<Point<Pixels>>,
         /// Paint style.
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw custom vertices with optional colors and texture
     /// coordinates.
-    DrawVertices {
+    Vertices {
         /// Vertex positions.
         vertices: Vec<Point<Pixels>>,
         /// Optional vertex colors (must match vertices length).
@@ -400,30 +296,24 @@ pub enum DrawCommand {
         indices: Vec<u16>,
         /// Paint style.
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Fill entire canvas with a color (respects clipping).
-    DrawColor {
+    Color {
         /// Color to fill with.
         color: Color,
         /// Blend mode.
         blend_mode: BlendMode,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Fill entire canvas with a Paint (color, shader, blend mode).
-    DrawPaint {
+    Paint {
         /// Paint to fill with (color, shader, blend mode, etc.).
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Draw multiple sprites from a texture atlas.
-    DrawAtlas {
+    Atlas {
         /// Source image (atlas texture).
         image: Image,
         /// Source rectangles in atlas (sprite locations).
@@ -436,8 +326,6 @@ pub enum DrawCommand {
         blend_mode: BlendMode,
         /// Optional paint for additional effects.
         paint: Option<Arc<Paint>>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     // === Layer Commands ===
@@ -448,20 +336,15 @@ pub enum DrawCommand {
         bounds: Option<Rect<Pixels>>,
         /// Paint to apply when compositing the layer.
         paint: Arc<Paint>,
-        /// Transform at recording time.
-        transform: Matrix4,
     },
 
     /// Restore the canvas state and composite the saved layer.
-    RestoreLayer {
-        /// Transform at recording time (for consistency).
-        transform: Matrix4,
-    },
+    RestoreLayer,
 
     /// Push the backend's transform + clip state.
     ///
-    /// The counterpart to [`DrawCommand::Restore`], and the plain-state
-    /// sibling of [`DrawCommand::SaveLayer`] — no offscreen target, no
+    /// The counterpart to [`DrawOp::Restore`], and the plain-state
+    /// sibling of [`DrawOp::SaveLayer`] — no offscreen target, no
     /// compositing, just a scope marker.
     ///
     /// It exists because a clip has to be *undoable*. `ClipRect`/`ClipRRect`
@@ -469,127 +352,43 @@ pub enum DrawCommand {
     /// saying when that narrowing ends, a clip applied for one subtree keeps
     /// applying to every command recorded after it — including siblings that
     /// never asked to be clipped.
-    ///
-    /// Carries the recording-time transform like every other variant, per this
-    /// enum's stated invariant — the backend's own stack is what actually
-    /// holds the saved state, so this field is for consistency and for
-    /// `transform()`/`transform_mut()`, not a second source of truth.
-    Save {
-        /// Transform at recording time (for consistency).
-        transform: Matrix4,
-    },
+    Save,
 
     /// Pop the transform + clip state pushed by the matching
-    /// [`DrawCommand::Save`].
+    /// [`DrawOp::Save`].
     ///
     /// Emitted by `Canvas::restore` for a plain `save()`. A `save_layer()` is
-    /// closed by [`DrawCommand::RestoreLayer`] instead — that path composites
+    /// closed by [`DrawOp::RestoreLayer`] instead — that path composites
     /// an offscreen target and manages its own state — so exactly one of the
     /// two is recorded per balanced pair, never both.
-    Restore {
-        /// Transform at recording time (for consistency).
-        transform: Matrix4,
-    },
+    Restore,
 }
 
-/// Categories of drawing commands.
-///
-/// Used by `DrawCommand::kind()` for classification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CommandKind {
-    /// Drawing commands (shapes, text, images).
-    Draw,
-    /// Clipping commands.
-    Clip,
-    /// Effect commands (shader mask, backdrop filter).
-    Effect,
-    /// Layer commands (save/restore layer).
-    Layer,
-}
-
-// ============================================================================
-// FROZEN CONTRACT GUARD (Core.0 N11)
-// ============================================================================
-//
-// `DrawCommand` is the frozen wire contract between the producer
-// (`flui-painting` `Canvas`/`DisplayList`) and the consumer (`flui-engine`
-// `CommandRenderer` + `dispatch_command`). It is `#[non_exhaustive]` so
-// downstream crates absorb additive change gracefully — but ADDING, REMOVING,
-// or RENAMING a variant is a coordinated cross-track change, not a local edit.
-//
-// The exhaustive match below is the tripwire. `#[non_exhaustive]` is a no-op
-// inside this defining crate, so the compiler enforces exhaustiveness here:
-//   - add a variant  -> this match fails to compile ("non-exhaustive patterns")
-//   - remove/rename   -> this match fails to compile ("no variant named …")
-// Either way the contract change cannot land silently.
-//
-// CHANGE PROTOCOL (see docs/designs/2026-06-30-scene-drawcommand-contract.md):
-//   1. Update the design doc + bump its contract version + add a changelog line.
-//   2. Add/rename the arm here and update FROZEN_DRAWCOMMAND_VARIANT_COUNT.
-//   3. Add the matching `render_*` method in flui-engine `traits.rs`
-//      (`CommandRenderer`) and a dispatch arm in `flui-engine/src/commands.rs`.
-//   4. Re-run the full gate so any backend missing the new arm fails loudly.
 #[cfg(test)]
-mod contract_freeze {
-    use super::DrawCommand;
+mod tests {
+    use std::mem::size_of;
 
-    /// Frozen count of `DrawCommand` variants. Bump only via the change
-    /// protocol in the module comment above.
-    const FROZEN_DRAWCOMMAND_VARIANT_COUNT: usize = 33;
+    use super::{DrawCommand, DrawOp};
 
-    /// Exhaustive — NO wildcard arm. This is the compile-time freeze guard:
-    /// the function only exists to force the exhaustiveness check; the
-    /// returned discriminant name is a convenience for the count assertion.
-    fn contract_discriminant(cmd: &DrawCommand) -> &'static str {
-        match cmd {
-            DrawCommand::ClipRect { .. } => "ClipRect",
-            DrawCommand::ClipRRect { .. } => "ClipRRect",
-            DrawCommand::ClipRSuperellipse { .. } => "ClipRSuperellipse",
-            DrawCommand::ClipPath { .. } => "ClipPath",
-            DrawCommand::DrawLine { .. } => "DrawLine",
-            DrawCommand::DrawRect { .. } => "DrawRect",
-            DrawCommand::DrawRRect { .. } => "DrawRRect",
-            DrawCommand::DrawCircle { .. } => "DrawCircle",
-            DrawCommand::DrawOval { .. } => "DrawOval",
-            DrawCommand::DrawPath { .. } => "DrawPath",
-            DrawCommand::DrawText { .. } => "DrawText",
-            DrawCommand::DrawTextSpan { .. } => "DrawTextSpan",
-            DrawCommand::DrawImage { .. } => "DrawImage",
-            DrawCommand::DrawImageRepeat { .. } => "DrawImageRepeat",
-            DrawCommand::DrawImageNineSlice { .. } => "DrawImageNineSlice",
-            DrawCommand::DrawImageFiltered { .. } => "DrawImageFiltered",
-            DrawCommand::DrawTexture { .. } => "DrawTexture",
-            DrawCommand::DrawShadow { .. } => "DrawShadow",
-            DrawCommand::DrawGradient { .. } => "DrawGradient",
-            DrawCommand::DrawGradientRRect { .. } => "DrawGradientRRect",
-            DrawCommand::ShaderMask { .. } => "ShaderMask",
-            DrawCommand::BackdropFilter { .. } => "BackdropFilter",
-            DrawCommand::DrawArc { .. } => "DrawArc",
-            DrawCommand::DrawDRRect { .. } => "DrawDRRect",
-            DrawCommand::DrawPoints { .. } => "DrawPoints",
-            DrawCommand::DrawVertices { .. } => "DrawVertices",
-            DrawCommand::DrawColor { .. } => "DrawColor",
-            DrawCommand::DrawPaint { .. } => "DrawPaint",
-            DrawCommand::DrawAtlas { .. } => "DrawAtlas",
-            DrawCommand::SaveLayer { .. } => "SaveLayer",
-            DrawCommand::RestoreLayer { .. } => "RestoreLayer",
-            DrawCommand::Save { .. } => "Save",
-            DrawCommand::Restore { .. } => "Restore",
-        }
-    }
-
+    /// The wire type has a size budget: every recorded command is one of
+    /// these in a `Vec`, and every consumer walks that `Vec` once per frame.
+    ///
+    /// `DrawOp` is two cache lines; the fattest variant is `ImageFiltered`,
+    /// whose inline `ColorFilter::Matrix` is a 5×4 `f32` matrix (80 bytes).
+    /// A new variant or field that pushes past this budget boxes its payload
+    /// instead (as `Paragraph` already carries its layout behind an `Arc`).
+    /// `DrawCommand` adds the 64-byte `Matrix4`.
     #[test]
-    fn drawcommand_contract_is_frozen() {
-        // The exhaustive match in `contract_discriminant` is the real guard
-        // (it fails to compile if the variant set changes). This assertion
-        // pins the count as a second, human-readable signal and keeps the
-        // helper from being dead code.
-        assert_eq!(
-            FROZEN_DRAWCOMMAND_VARIANT_COUNT, 33,
-            "DrawCommand contract count changed — follow the change protocol in \
-             the module comment + docs/designs/2026-06-30-scene-drawcommand-contract.md"
+    fn draw_command_fits_its_budget() {
+        assert!(
+            size_of::<DrawOp>() <= 128,
+            "DrawOp is {} bytes; the budget is 128",
+            size_of::<DrawOp>()
         );
-        // Touch the guard so it is exercised, not merely compiled.
-        let _ = contract_discriminant as fn(&DrawCommand) -> &'static str;
+        assert!(
+            size_of::<DrawCommand>() <= 192,
+            "DrawCommand is {} bytes; the budget is 192",
+            size_of::<DrawCommand>()
+        );
     }
 }

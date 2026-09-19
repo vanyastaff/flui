@@ -69,7 +69,7 @@
 #     line breaks.
 #   * An OUT-OF-LINE `#[cfg(test)] mod NAME;` declaration (no body of its
 #     own -- the real body lives in a sibling file, e.g.
-#     `flui-engine/src/wgpu/mod.rs`'s `mod aa_oracle_tests;`) has no `{` to
+#     `flui-engine/src/mod.rs`'s `mod aa_oracle_tests;`) has no `{` to
 #     find. `find_cfg_test_gated_items` stops at the terminating `;` and
 #     blanks nothing for it -- correct, because the separate whole-module
 #     mechanism below (`find_test_support_modules`/

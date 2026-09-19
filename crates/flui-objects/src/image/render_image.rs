@@ -711,7 +711,7 @@ mod tests {
 
     // ===== Paint pipeline integration (drives the real paint() method) =====
 
-    use flui_painting::{DisplayListCore, DrawCommand};
+    use flui_painting::DrawOp;
     use flui_rendering::context::{FragmentRecorder, PaintCx};
     use flui_types::Offset;
 
@@ -730,7 +730,7 @@ mod tests {
         for op in frag.ops() {
             if let flui_rendering::context::FragmentOp::Run(list) = op {
                 for cmd in list.commands() {
-                    if let DrawCommand::DrawImage { image, dst, .. } = cmd {
+                    if let DrawOp::Image { image, dst, .. } = &cmd.op {
                         out.push((image.byte_count(), *dst));
                     }
                 }

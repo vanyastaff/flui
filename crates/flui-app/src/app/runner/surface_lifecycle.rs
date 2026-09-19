@@ -9,7 +9,7 @@
 // turns that bool into an act on its renderer.
 //
 // It follows `device_recovery.rs`: a `pub(super)` trait narrows the concrete
-// `flui_engine::wgpu::Renderer` to the verbs a runner needs, so the decision
+// `flui_engine::Renderer` to the verbs a runner needs, so the decision
 // is host-testable against a scripted backend while the `Renderer`-side
 // mechanics stay type-checked only (they need a GPU). The module is
 // registered unconditionally — see `mod.rs` — so every host gate compiles it.
@@ -83,16 +83,16 @@ pub(super) trait SurfaceLifecycle {
 }
 
 #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
-impl SurfaceLifecycle for flui_engine::wgpu::Renderer {
+impl SurfaceLifecycle for flui_engine::Renderer {
     fn release_surface(&mut self) {
         // `Renderer::release_surface` is the inherent method of the same
         // name; the qualified path is what keeps this from resolving back to
         // the trait method it implements.
-        flui_engine::wgpu::Renderer::release_surface(self);
+        flui_engine::Renderer::release_surface(self);
     }
 
     fn recreate_surface(&mut self) -> Result<(), EngineError> {
-        flui_engine::wgpu::Renderer::recreate_surface(self)
+        flui_engine::Renderer::recreate_surface(self)
     }
 }
 

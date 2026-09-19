@@ -15,10 +15,12 @@
 //! lazy list — whose main axis is unbounded — must occupy a visible, finite
 //! row, not the whole scroll extent.
 
+use std::sync::Arc;
+
 use flui_foundation::Diagnosticable;
-use flui_painting::Paint;
+use flui_painting::{Paint, TextLayout};
 use flui_tree::Leaf;
-use flui_types::typography::TextStyle;
+use flui_types::typography::{TextDirection, TextStyle};
 use flui_types::{Color, Offset, Point, Rect, Size, geometry::px};
 
 use flui_rendering::{
@@ -35,7 +37,7 @@ const DEBUG_BACKGROUND: Color = Color::from_argb(0xF090_0000);
 const RELEASE_BACKGROUND: Color = Color::from_argb(0xF0C0_C0C0);
 /// Debug text colour — Flutter's `RenderErrorBox.textStyle`.
 const DEBUG_TEXT: Color = Color::from_argb(0xFFFF_FF66);
-const DEBUG_FONT_SIZE: f64 = 14.0;
+const DEBUG_FONT_SIZE: f32 = 14.0;
 
 /// A filled box standing in for a subtree whose build panicked.
 #[derive(Debug, Clone)]
@@ -167,15 +169,18 @@ impl RenderBox for RenderErrorBox {
             // the text from release `ErrorWidget`s.
             let style = TextStyle::new()
                 .with_color(DEBUG_TEXT)
-                .with_font_size(DEBUG_FONT_SIZE)
+                .with_font_size(f64::from(DEBUG_FONT_SIZE))
                 .with_font_family("monospace");
-            ctx.canvas().draw_text(
+            let layout = TextLayout::new(
                 &self.message,
-                Offset::ZERO,
-                size,
-                &style,
-                &Paint::fill(DEBUG_TEXT),
+                Some(&style),
+                DEBUG_FONT_SIZE,
+                Some(size.width.0),
+                None,
+                TextDirection::Ltr,
             );
+            ctx.canvas()
+                .draw_paragraph(&Arc::new(layout), Offset::ZERO, DEBUG_TEXT);
         }
     }
 }

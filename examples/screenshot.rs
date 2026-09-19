@@ -2,7 +2,7 @@
 //!
 //! Mounts a chosen demo's exact widget tree through `HeadlessBinding`, drives
 //! one frame to a `LayerTree`, rasterizes it to an offscreen GPU texture via
-//! [`flui_engine::wgpu::HeadlessRenderer`], reads the pixels back, and writes a
+//! [`flui_engine::HeadlessRenderer`], reads the pixels back, and writes a
 //! PNG. This is the capture path OS screenshot tools cannot provide on a
 //! GNOME/Wayland session (the wgpu surface never lands in the X11 framebuffer).
 //!
@@ -65,7 +65,7 @@ mod text_app;
 #[path = "widgets_gallery.rs"]
 mod widgets_gallery;
 
-use flui_engine::wgpu::HeadlessRenderer;
+use flui_engine::HeadlessRenderer;
 use flui_layer::{Layer, LayerTree, PerformanceOverlayLayer};
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
@@ -162,10 +162,7 @@ fn telemetry_overlay_layers() -> LayerTree {
         "present_p99=16ms input_p99=24ms deferred=3 dropped=1 input_truncated=false".to_string(),
     ));
 
-    let mut tree = LayerTree::new();
-    let root = tree.insert(Layer::PerformanceOverlay(Box::new(overlay)));
-    tree.set_root(Some(root));
-    tree
+    LayerTree::new(Layer::from(overlay))
 }
 
 /// Mount `root_view` headlessly at `width`×`height`, drive its bootstrap frame,

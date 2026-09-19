@@ -436,3 +436,43 @@ fn empty_text_has_the_same_line_height_as_a_single_character_line() {
          empty={empty_height}, one_char={one_char_height}"
     );
 }
+
+/// The paragraph that reaches the composited picture is the one the widget
+/// measured (ADR-0065): under `max_lines(1)` the recorded `Paragraph` op has
+/// exactly one line, so what the engine rasterises cannot carry lines the
+/// layout truncated. Replaces the paint half of the reference's
+/// `rendering/paragraph_test.dart` overflow cases.
+#[test]
+fn max_lines_one_reaches_the_composited_picture_as_one_line() {
+    use flui_painting::DrawOp;
+    use flui_rendering::layer::Layer;
+
+    let text = "one two three four five six seven eight nine ten";
+    let laid = harness::pump_widget(Text::new(text).max_lines(1), fixed_width_loose_height(80.0));
+    let tree = laid
+        .layer_tree()
+        .expect("the pumped widget composites a tree");
+
+    let mut line_counts = Vec::new();
+    let mut stack = vec![tree.root()];
+    while let Some(id) = stack.pop() {
+        if let Some(layer) = tree.get_layer(id) {
+            let commands = match layer {
+                Layer::Picture(picture) => Some(picture.picture()),
+                Layer::Canvas(canvas) => Some(canvas.display_list()),
+                _ => None,
+            };
+            for command in commands.into_iter().flatten() {
+                if let DrawOp::Paragraph { layout, .. } = &command.op {
+                    line_counts.push(layout.metrics().line_count);
+                }
+            }
+        }
+        stack.extend(tree.children(id).iter().flat_map(|ids| ids.iter().copied()));
+    }
+    assert_eq!(
+        line_counts,
+        vec![1],
+        "one paragraph, truncated to the one line the widget measured"
+    );
+}

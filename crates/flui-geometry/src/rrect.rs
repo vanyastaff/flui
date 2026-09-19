@@ -484,6 +484,71 @@ impl RRect {
         )
     }
 
+    /// Whether `point` lies inside the rounded rectangle: inside the base
+    /// rect, and — where it falls in a corner's radius box — inside that
+    /// corner's ellipse. A corner with a zero radius on either axis is a
+    /// square corner.
+    #[must_use]
+    pub fn contains(&self, point: Point<Pixels>) -> bool {
+        if !self.rect.contains(point) {
+            return false;
+        }
+        let (x, y) = (point.x.get(), point.y.get());
+        let (left, top, right, bottom) = (
+            self.left().get(),
+            self.top().get(),
+            self.right().get(),
+            self.bottom().get(),
+        );
+        // Each corner: (its ellipse centre, its radii, whether `point` is in
+        // its radius box). Only the box `point` falls in can exclude it.
+        let corners = [
+            (
+                self.top_left,
+                left,
+                top,
+                x < left + self.top_left.x.get(),
+                y < top + self.top_left.y.get(),
+            ),
+            (
+                self.top_right,
+                right,
+                top,
+                x > right - self.top_right.x.get(),
+                y < top + self.top_right.y.get(),
+            ),
+            (
+                self.bottom_right,
+                right,
+                bottom,
+                x > right - self.bottom_right.x.get(),
+                y > bottom - self.bottom_right.y.get(),
+            ),
+            (
+                self.bottom_left,
+                left,
+                bottom,
+                x < left + self.bottom_left.x.get(),
+                y > bottom - self.bottom_left.y.get(),
+            ),
+        ];
+        for (radius, edge_x, edge_y, in_x, in_y) in corners {
+            let (rx, ry) = (radius.x.get(), radius.y.get());
+            if !(in_x && in_y) || rx <= 0.0 || ry <= 0.0 {
+                continue;
+            }
+            let cx = if edge_x == left {
+                left + rx
+            } else {
+                right - rx
+            };
+            let cy = if edge_y == top { top + ry } else { bottom - ry };
+            let (nx, ny) = ((x - cx) / rx, (y - cy) / ry);
+            return nx * nx + ny * ny <= 1.0;
+        }
+        true
+    }
+
     /// Returns the center points of each corner's radius.
     #[inline]
     #[must_use]

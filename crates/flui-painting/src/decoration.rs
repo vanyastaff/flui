@@ -117,11 +117,10 @@ pub struct DecorationPaintOptions {
     /// off is for a box whose edges are already pixel-aligned, where the
     /// feathered edge is a blur rather than a smoothing.
     ///
-    /// **Reaches the colour fill only.** Borders, shadows and images keep the
-    /// default because the reference says nothing about them here; gradient
-    /// backgrounds keep it because `DrawGradient`/`DrawGradientRRect` carry a
-    /// shader and no `Paint`, leaving nowhere to put the flag. Both limits are
-    /// stated at the call site in `paint_box_decoration`.
+    /// **Reaches the colour fill only.** Borders, shadows, images and
+    /// gradient backgrounds keep the default because the reference says
+    /// nothing about them here (`isAntiAlias` is a `ColoredBox` parameter).
+    /// Stated at the call site in `paint_box_decoration`.
     pub anti_alias: bool,
 }
 
@@ -192,38 +191,23 @@ pub fn paint_box_decoration(
     if paints_no_area {
         // fall through to the border/shadow/image passes
     } else if let Some(gradient) = &decoration.gradient {
-        let shader = resolve_gradient(gradient, rect);
+        // One shader paint for every silhouette, as the reference's
+        // `BoxDecoration` painter builds one `Paint()..shader` and hands it
+        // to whichever `drawRect`/`drawRRect`/`drawCircle` the shape needs.
+        // The fill colour is unreachable except as the backend's fallback
+        // for a stopless shader (`Gradient::new` does not validate that, so
+        // it is reachable from safe input); `Color::TRANSPARENT` makes that
+        // fallback paint nothing, uniformly across the three shapes.
+        //
+        // Deliberately NOT `options.anti_alias`: `isAntiAlias` is a
+        // `ColoredBox` parameter in the reference and a `ColoredBox` has no
+        // gradient, so the flag has no defined meaning here; the shader
+        // paint keeps `Paint`'s default.
+        let paint = Paint::fill(Color::TRANSPARENT).with_shader(resolve_gradient(gradient, rect));
         match &silhouette {
-            Silhouette::Circle(circle) => {
-                // No dedicated `DrawGradientCircle` command exists (unlike
-                // `DrawGradientRRect`); route through `draw_circle`'s
-                // existing shader-paint dispatch instead, which the wgpu
-                // backend already renders as an exact circle (`circle()`'s
-                // `paint.has_shader()` branch calls `dispatch_shader_rect`
-                // with `[radius; 4]` corners — an exact circle through the
-                // same `sdRoundedBox` identity `DrawGradientRRect` uses).
-                // The fill color is unreachable except as the fallback for
-                // a stopless shader (`dispatch_shader_rect` returning
-                // `false` when the gradient has no color stops —
-                // `Gradient::new` does not validate that, so this is
-                // reachable from safe input). `Color::TRANSPARENT` keeps
-                // that fallback consistent with the rect/rrect gradient
-                // paths: `render_gradient`/`render_gradient_rrect`
-                // early-return and paint NOTHING on an empty color list
-                // (`wgpu/backend.rs`); a solid fallback color here would
-                // make the circle the only gradient-silhouette that paints
-                // something visible from a stopless shader.
-                // Deliberately NOT `options.anti_alias`: see the scope note
-                // on the colour arm below. This silhouette could carry it —
-                // it goes through a `Paint` — but its rect and rrect
-                // neighbours cannot, and one gradient shape smoothing
-                // differently from the others is worse than a limitation
-                // that holds uniformly.
-                let paint = Paint::fill(Color::TRANSPARENT).with_shader(shader);
-                canvas.draw_circle(circle.center, circle.radius, &paint);
-            }
-            Silhouette::RRect(rrect) => canvas.draw_gradient_rrect(*rrect, shader),
-            Silhouette::Rect => canvas.draw_gradient(rect, shader),
+            Silhouette::Circle(circle) => canvas.draw_circle(circle.center, circle.radius, &paint),
+            Silhouette::RRect(rrect) => canvas.draw_rrect(*rrect, &paint),
+            Silhouette::Rect => canvas.draw_rect(rect, &paint),
         }
     } else if let Some(color) = decoration.color {
         // `options.anti_alias` reaches THIS arm — the solid colour fill — and
@@ -233,13 +217,9 @@ pub fn paint_box_decoration(
         // `ColoredBox` parameter and a `ColoredBox` has none of those, so
         // nothing in the reference says what they should do when it is off.
         //
-        // Not the gradients either, and that one is a capability limit rather
-        // than a choice: `DrawGradient`/`DrawGradientRRect` carry a shader and
-        // no `Paint`, so there is nowhere to put the flag without widening the
-        // closed `DrawCommand` enum that is the trust boundary with the wgpu
-        // backend. A gradient-filled `ColoredBox` does not exist — the widget
-        // is colour-only — so the only reachable case is a `DecoratedBox`
-        // gradient, where the reference has no anti-alias knob at all.
+        // Not the gradients either: a gradient-filled `ColoredBox` does not
+        // exist — the widget is colour-only — so the only reachable case is a
+        // `DecoratedBox` gradient, where the reference has no anti-alias knob.
         let paint = Paint::fill(color).with_anti_alias(options.anti_alias);
         match &silhouette {
             Silhouette::Circle(circle) => canvas.draw_circle(circle.center, circle.radius, &paint),
@@ -312,7 +292,7 @@ pub fn box_decoration_hit_test(
     }
     match resolve_silhouette(rect, decoration) {
         Silhouette::Circle(circle) => circle.contains(point),
-        Silhouette::RRect(rrect) => rrect_contains(&rrect, point),
+        Silhouette::RRect(rrect) => rrect.contains(point),
         Silhouette::Rect => true,
     }
 }
@@ -487,7 +467,7 @@ fn paint_shadow(
 /// space over the rect; the radial radius is a fraction of the
 /// shortest side (Flutter parity).
 #[must_use]
-pub fn resolve_gradient(gradient: &Gradient, rect: Rect<Pixels>) -> Shader {
+pub(crate) fn resolve_gradient(gradient: &Gradient, rect: Rect<Pixels>) -> Shader {
     let center = rect.center();
     let half_w = rect.width().get() / 2.0;
     let half_h = rect.height().get() / 2.0;
@@ -670,49 +650,4 @@ pub(crate) fn paint_border(
             &Paint::fill(side_color(&border.right)),
         );
     }
-}
-
-/// Point-in-rounded-rect: inside the base rect AND outside none of the
-/// four corner ellipses.
-fn rrect_contains(rrect: &RRect, point: Point<Pixels>) -> bool {
-    let rect = rrect.rect;
-    if !rect.contains(point) {
-        return false;
-    }
-    let (px_, py) = (point.x.get(), point.y.get());
-    let (x0, y0, x1, y1) = (
-        rect.min.x.get(),
-        rect.min.y.get(),
-        rect.max.x.get(),
-        rect.max.y.get(),
-    );
-
-    // For each corner: if the point lies within the corner's radius
-    // box, it must satisfy the ellipse equation.
-    let in_ellipse = |cx: f32, cy: f32, rx: f32, ry: f32| {
-        if rx <= 0.0 || ry <= 0.0 {
-            return true;
-        }
-        let nx = (px_ - cx) / rx;
-        let ny = (py - cy) / ry;
-        nx * nx + ny * ny <= 1.0
-    };
-
-    let tl = rrect.top_left;
-    if px_ < x0 + tl.x.get() && py < y0 + tl.y.get() {
-        return in_ellipse(x0 + tl.x.get(), y0 + tl.y.get(), tl.x.get(), tl.y.get());
-    }
-    let tr = rrect.top_right;
-    if px_ > x1 - tr.x.get() && py < y0 + tr.y.get() {
-        return in_ellipse(x1 - tr.x.get(), y0 + tr.y.get(), tr.x.get(), tr.y.get());
-    }
-    let bl = rrect.bottom_left;
-    if px_ < x0 + bl.x.get() && py > y1 - bl.y.get() {
-        return in_ellipse(x0 + bl.x.get(), y1 - bl.y.get(), bl.x.get(), bl.y.get());
-    }
-    let br = rrect.bottom_right;
-    if px_ > x1 - br.x.get() && py > y1 - br.y.get() {
-        return in_ellipse(x1 - br.x.get(), y1 - br.y.get(), br.x.get(), br.y.get());
-    }
-    true
 }

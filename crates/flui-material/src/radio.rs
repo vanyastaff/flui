@@ -686,7 +686,7 @@ mod tests {
     }
 
     /// Proves the painter is actually invoked (via a real [`Canvas`]/
-    /// [`flui_painting::display_list::DrawCommand`]) and that the inner
+    /// [`flui_painting::DrawOp`]) and that the inner
     /// dot is drawn if and only if `selected` — the oracle's own
     /// `!position.isDismissed` guard (`radio.dart` `:870`), which V1's
     /// non-animated `position ∈ {0.0, 1.0}` collapses to exactly this
@@ -695,7 +695,7 @@ mod tests {
     /// the `unselected` half of this test fail before being reverted.
     #[test]
     fn inner_dot_is_present_only_when_selected() {
-        use flui_painting::display_list::DrawCommand;
+        use flui_painting::DrawOp;
 
         let size = Size::new(px(RADIO_TAP_TARGET_SIZE), px(RADIO_TAP_TARGET_SIZE));
 
@@ -706,7 +706,7 @@ mod tests {
             let circle_count = canvas
                 .display_list()
                 .iter()
-                .filter(|command| matches!(command, DrawCommand::DrawCircle { .. }))
+                .filter(|command| matches!(command.op, DrawOp::Circle { .. }))
                 .count();
             assert_eq!(
                 circle_count, expected_circle_count,

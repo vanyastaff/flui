@@ -91,7 +91,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Why:** per-frame allocations are the largest controllable frame-budget tax. `Arc::clone` is cheap individually but compounds across hundreds of render objects times 60 frames per second. Caller is asked to pass `&Arc<T>` or `&T` rather than clone.
 
-**Regex:** `Arc::clone\(` constrained to `crates/flui-rendering/src/objects/**/*.rs` and `crates/flui-engine/src/wgpu/layer_render.rs` (the per-layer wgpu walk; scope extended in Mythos Step 13 of the `flui-layer` chain as a forward-looking guard).
+**Regex:** `Arc::clone\(` constrained to `crates/flui-rendering/src/objects/**/*.rs` and `crates/flui-engine/src/layer_render.rs` (the per-layer wgpu walk; scope extended in Mythos Step 13 of the `flui-layer` chain as a forward-looking guard).
 
 ### 6. Recursive `Box<dyn View>` stored in element child collections
 
@@ -101,7 +101,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Regex:** `:\s*Vec<\s*Box<\s*dyn\s+View|:\s*Box<\s*dyn\s+View` constrained to `crates/flui-view/src/element/child_storage.rs` and storage struct definitions in `crates/flui-view/src/element/**`.
 
-### 7. `Arc<Mutex<*Renderer | *Pool | wgpu::*>>` field in `flui-engine` wgpu module 🔮
+### 7. `Arc<Mutex<*Renderer | *Pool | wgpu::*>>` field in `flui-engine` 🔮
 
 A renderer, a pool or a raw wgpu handle behind a shared lock invites a second mutator into a single-mutator design. One file is excluded by glob — `!**/texture_pool.rs`, where `Arc<Mutex<TexturePoolInner>>` is still the real shape — and that exclusion must go in the same change as the lock. The exclusions for `renderer.rs` and the dispatcher file have been retired: `Renderer` now owns its `OffscreenRenderer` outright and `LayerDispatcher<'frame>` borrows one, so both files are watched again.
 
@@ -109,7 +109,7 @@ A renderer, a pool or a raw wgpu handle behind a shared lock invites a second mu
 
 **Back-references:** verdict §12 rejected design #2 (`Arc<RwLock<Renderer>>` shared); strategy clause "single owner of wgpu resources."
 
-**Regex:** `^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` constrained to `crates/flui-engine/src/wgpu/`, with file-glob exclusions for the three Friction-log-tracked sites listed above. Anchored to struct-field syntax (leading whitespace + optional `pub` + ident + `:`); inner alternation `((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` is grouped so `wgpu::*` matches only at the outer-type position. Catches both `Arc<...>` and `Option<Arc<...>>` field shapes. Tightened after Copilot review on PR #79.
+**Regex:** `^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` constrained to `crates/flui-engine/src/`, with file-glob exclusions for the three Friction-log-tracked sites listed above. Anchored to struct-field syntax (leading whitespace + optional `pub` + ident + `:`); inner alternation `((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` is grouped so `wgpu::*` matches only at the outer-type position. Catches both `Arc<...>` and `Option<Arc<...>>` field shapes. Tightened after Copilot review on PR #79.
 
 ### 8. `unimplemented!()` / `todo!()` in production `fn` body
 
@@ -135,7 +135,7 @@ A renderer, a pool or a raw wgpu handle behind a shared lock invites a second mu
 
 **Registry addition (2026-07-16, Catalog.1 theming + localizations substrate):** `ErasedLocalizationsDelegate` and `WidgetsLocalizations` are registered. `BoxedLocalizationsDelegate` holds `Arc<dyn ErasedLocalizationsDelegate>` to erase each `LocalizationsDelegate`'s associated `Resources` type, the same heterogeneous-erasure shape `ErasedRoute` already covers for `Navigator`'s route stack — a `Localizations` widget's delegate list cannot be generic over every delegate's resource type and stay `dyn`-storable. `BoxedWidgetsLocalizations` holds `Box<dyn WidgetsLocalizations>` so `Localizations::of`/`BoxedWidgetsLocalizations::of` retrieve the resource by the abstract trait, not the concrete implementor (`DefaultWidgetsLocalizations` in `flui-widgets`, `GlobalWidgetsLocalizations` in `flui-localizations`) — Flutter parity: `Localizations.of<WidgetsLocalizations>` is keyed by the interface, never the runtime class.
 
-**Registry addition (2026-09-14, ADR-0063):** `WindowTarget` is registered for `crates/flui-engine/src/wgpu/{surface_lease,window_target,renderer,fake_window_target}.rs`. `Arc<dyn WindowTarget>` is how `SurfaceLease` and `Renderer` retain an OWNED, `'static` handle source across `Renderer::new`/`recover` (issue #1043) — type erasure is required, not a convenience: the concrete platform window type (`flui_platform::PlatformWindow`) cannot be named in `flui-engine` without inverting the flui-platform → flui-engine edge (`docs/workspace-layers.toml`). The trait is blanket-implemented (`impl<T: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static> WindowTarget for T`), so every construction/reacquire site in `renderer.rs`/`surface_lease.rs` — and this module's own GPU-free unit tests, plus the shared `fake_window_target` test double — names the erased form; roughly 15 sites at registration time, which is why this is a registry entry rather than per-site `// PORT-CHECK-OK-DYN:` markers.
+**Registry addition (2026-09-14, ADR-0063):** `WindowTarget` is registered for `crates/flui-engine/src/{surface_lease,window_target,renderer,fake_window_target}.rs`. `Arc<dyn WindowTarget>` is how `SurfaceLease` and `Renderer` retain an OWNED, `'static` handle source across `Renderer::new`/`recover` (issue #1043) — type erasure is required, not a convenience: the concrete platform window type (`flui_platform::PlatformWindow`) cannot be named in `flui-engine` without inverting the flui-platform → flui-engine edge (`docs/workspace-layers.toml`). The trait is blanket-implemented (`impl<T: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static> WindowTarget for T`), so every construction/reacquire site in `renderer.rs`/`surface_lease.rs` — and this module's own GPU-free unit tests, plus the shared `fake_window_target` test double — names the erased form; roughly 15 sites at registration time, which is why this is a registry entry rather than per-site `// PORT-CHECK-OK-DYN:` markers.
 
 **Allowlist marker:** `// PORT-CHECK-OK-DYN: <one-line justification>` on the same line as the `dyn`-introducing declaration. Multi-line declarations either keep the marker on the `Box<` line (matched by the scan) or refactor to a type alias that fits one line + carries its own marker.
 
@@ -377,21 +377,21 @@ was chosen deliberately over splitting them across two mechanisms.
 
 Importing or accepting `flui_types::Matrix4` on the record/pipeline/replay side leaks the flui-types coordinate abstraction into GPU plumbing, defeats the `GpuStateStack` encapsulation, and couples every record-method caller to both coordinate systems. The replay side must stay glam-only for the same reason: the `Matrix4`↔glam conversion must not migrate into the GPU-emit path. The correct fix is always to extract the needed scalars (translation, scale) at the `painter.rs` or `layer_dispatcher.rs` call site and pass primitives down.
 
-**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files), `crates/flui-engine/src/wgpu/pipeline_set.rs`, and `crates/flui-engine/src/wgpu/replay.rs`. (Extended to `replay.rs` in T10e — the scope tracks the seam contract: wherever the record-IR is consumed, the glam-only rule applies.)
+**Scope:** `crates/flui-engine/src/batches/` (all files), `crates/flui-engine/src/pipeline_set.rs`, and `crates/flui-engine/src/replay.rs`. (Extended to `replay.rs` in T10e — the scope tracks the seam contract: wherever the record-IR is consumed, the glam-only rule applies.)
 
 **Allowlist:** none. Doc-comment lines (`//!`, `///`, `//`) are excluded (the rg filter strips them).
 
 **Back-references:** [`docs/adr/ADR-0006-c-ir-record-replay-seam.md`](adr/ADR-0006-c-ir-record-replay-seam.md) §Decision 4 (C4 rule); engine-overhaul spec `.rust-studio/specs/flui-engine-overhaul/spec.md` acceptance criterion C4; `crates/flui-engine/ARCHITECTURE.md` §Record/replay boundary.
 
-### N-geom.U16. Direct `glam` use outside the wgpu backend
+### N-geom.U16. Direct `glam` use in a GPU-free flui-engine module
 
-**Option D's glam policy is an engine-edge policy.** `glam` is sanctioned for GPU/painter hot-path math under `crates/flui-engine/src/wgpu/`, where typed `flui_geometry` values are converted into SIMD/Pod-friendly GPU primitives. Direct `glam::...` or `use glam...` code outside that backend widens the bridge policy into unrelated engine modules and bypasses the FLUI-owned public geometry surface documented in `crates/flui-types/README.md`.
+**`glam` is the GPU-edge math backend, not the engine's geometry vocabulary.** It is sanctioned wherever typed `flui_geometry` values are converted into SIMD/Pod-friendly GPU primitives — the painter, the batches, replay, the pipelines. The engine's GPU-free modules (the raster protocol, command dispatch, error types, fonts, frame timing, the layer state stack, the superellipse generator) speak FLUI geometry types; a `glam::` there widens the unit barrier past the edge that justifies it.
 
-**Scope:** `crates/flui-engine/src`, excluding `crates/flui-engine/src/wgpu/**`.
+**Scope:** `crates/flui-engine/src/{command_renderer,dispatch,error,fonts,frame_timing,layer_state_stack,raster,raster_owner,superellipse}.rs`.
 
-**Allowlist:** none. Add a documented bridge or move the conversion to the wgpu edge instead of importing `glam` directly in other engine modules.
+**Allowlist:** none. Add a documented bridge or move the conversion to the GPU edge instead of importing `glam` directly in the GPU-free modules (`raster*`, `dispatch`, `error`, `fonts`, `frame_timing`, `layer_state_stack`, `superellipse`).
 
-**Back-references:** `docs/ROADMAP-TRACKER.md` `N-geom.U16`; `crates/flui-engine/src/wgpu/mod.rs` §Math-backend policy; `crates/flui-types/README.md` FAQ "Why not use glam or euclid?".
+**Back-references:** `docs/ROADMAP-TRACKER.md` `N-geom.U16`; `crates/flui-engine/src/lib.rs` §Math-backend policy; `crates/flui-types/README.md` FAQ "Why not use glam or euclid?".
 
 ### Cross.H3. `ElementBuildContext::new_minimal` resurrection
 
@@ -409,7 +409,7 @@ Importing or accepting `flui_types::Matrix4` on the record/pipeline/replay side 
 
 The two sentinel patterns are `"is not supported by the"` and `"rendering as SrcOver"`. Both were exclusive to the deleted warn-fallback blocks; their reappearance on the producer side is unambiguous evidence of regression.
 
-**Scope:** `crates/flui-engine/src/wgpu/batches/` (all files), `crates/flui-engine/src/wgpu/renderer.rs`, `crates/flui-engine/src/wgpu/layer_dispatcher.rs`. `replay.rs` is explicitly excluded — it is the replay/submit side, not a producer, and may legitimately use similar language in its own documentation.
+**Scope:** `crates/flui-engine/src/batches/` (all files), `crates/flui-engine/src/renderer.rs`, `crates/flui-engine/src/layer_dispatcher.rs`. `replay.rs` is explicitly excluded — it is the replay/submit side, not a producer, and may legitimately use similar language in its own documentation.
 
 **Runtime companion:** `PipelineCache::get_or_create` contains a `debug_assert!(!key.blend_mode().is_advanced(), …)` that panics in debug/test builds if any advanced mode reaches the pipeline cache instead of diverting to `DrawItem::AdvancedShape`. This is the runtime half of the gate; the static grep above is the compile-time half. Both must remain active.
 
@@ -417,25 +417,25 @@ The two sentinel patterns are `"is not supported by the"` and `"rendering as Src
 
 **Witnesses — two tiers:**
 
-- **Routing witnesses (CI-runnable, no pixel readback):** CPU unit tests G1-G3 in `crates/flui-engine/src/wgpu/batches/mod.rs` (gradient path); GPU-device structure tests I1-I5 in `crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs` (image/atlas paths — each asserts exactly one `DrawItem::AdvancedShape` per call with the correct `cached_images.len()`). These are the authoritative routing witnesses for condition 3.
+- **Routing witnesses (CI-runnable, no pixel readback):** CPU unit tests G1-G3 in `crates/flui-engine/src/batches/mod.rs` (gradient path); GPU-device structure tests I1-I5 in `crates/flui-engine/src/gradient_image_blend_tests.rs` (image/atlas paths — each asserts exactly one `DrawItem::AdvancedShape` per call with the correct `cached_images.len()`). These are the authoritative routing witnesses for condition 3.
 
-- **Non-panic + non-zero-output witness:** GPU test GI7 (`crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs`) verifies all 15 modes × gradient + image produce valid RGBA output. GI7 does not verify routing (pixel equality alone cannot distinguish an `AdvancedShape` from a lucky SrcOver result); the routing witnesses above provide that guarantee. GI8 covers the atlas producer.
+- **Non-panic + non-zero-output witness:** GPU test GI7 (`crates/flui-engine/src/gradient_image_blend_tests.rs`) verifies all 15 modes × gradient + image produce valid RGBA output. GI7 does not verify routing (pixel equality alone cannot distinguish an `AdvancedShape` from a lucky SrcOver result); the routing witnesses above provide that guarantee. GI8 covers the atlas producer.
 
-**Back-references:** advanced-blend PR-5 (gradient + image + atlas diversion); `crates/flui-engine/src/wgpu/batches/gradients.rs` §dispatch_shader_rect advanced diversion; `crates/flui-engine/src/wgpu/batches/images.rs` §draw_image/draw_image_repeat/draw_image_nine_slice/draw_atlas advanced diversion; `crates/flui-engine/src/wgpu/gradient_image_blend_tests.rs` I1-I5 (routing), GI7 (non-panic + non-zero), GI8 (atlas GPU output).
+**Back-references:** advanced-blend PR-5 (gradient + image + atlas diversion); `crates/flui-engine/src/batches/gradients.rs` §dispatch_shader_rect advanced diversion; `crates/flui-engine/src/batches/images.rs` §draw_image/draw_image_repeat/draw_image_nine_slice/draw_atlas advanced diversion; `crates/flui-engine/src/gradient_image_blend_tests.rs` I1-I5 (routing), GI7 (non-panic + non-zero), GI8 (atlas GPU output).
 
-### 21. `lyon` code used outside `wgpu/tessellator.rs` (RasterBackend seam)
+### 21. `lyon` code used outside `tessellator.rs`
 
-**The rendering-backend swap seam (`CommandRenderer` + the `RasterBackend` driver trait) only stays non-breaking if `lyon` tessellation is an internal detail of the wgpu backend, not a dependency the rest of the engine reaches into.** All `lyon` code use (`lyon::…`, `use lyon …`) must live in `crates/flui-engine/src/wgpu/tessellator.rs`. A future Vello/software backend does not tessellate to triangles at all; any `lyon::` reference outside the tessellator couples the codebase to one rasterization strategy and breaks the seam.
+**`tessellator.rs` is the one adapter over the tessellation crate.** All `lyon` code use (`lyon::…`, `use lyon …`) must live in `crates/flui-engine/src/tessellator.rs`, so a lyon type never leaks into the Command IR, a pipeline layout, or a batch — the same discipline that keeps `etagere` behind `glyph_atlas.rs`. A second site is a second adapter, and two adapters over one library drift.
 
 Doc-comment mentions ("…tessellated by lyon…") are fine and filtered out by the shared doc-comment filter in `check`; only real code constructs (`lyon::`, `use lyon`) match.
 
 **Regex:** `lyon::|use\s+lyon\b`, `--type rust --glob '!**/tessellator.rs'`, scoped to `crates/flui-engine/src`.
 
-**Scope:** `crates/flui-engine/src`, excluding `crates/flui-engine/src/wgpu/tessellator.rs`.
+**Scope:** `crates/flui-engine/src`, excluding `crates/flui-engine/src/tessellator.rs`.
 
 **Allowlist:** none — if a second site ever legitimately needs `lyon`, widen this trigger's glob in the same PR with a documented reason.
 
-**Back-references:** [`docs/designs/2026-06-30-rasterbackend-seam.md`](designs/2026-06-30-rasterbackend-seam.md); `crates/flui-engine/src/wgpu/tessellator.rs`.
+**Back-references:** [`docs/designs/2026-06-30-rasterbackend-seam.md`](designs/2026-06-30-rasterbackend-seam.md); `crates/flui-engine/src/tessellator.rs`.
 
 ### 22. A **lifecycle-only presentation capability** acquired inside a `build` / layout / paint body
 
@@ -593,7 +593,7 @@ Worked examples of the rule, both directions:
 - `RenderObject::parent_data` indirection: an arity-keyed encoding that compile-time-eliminates the indirection is preferred *if* it preserves the contract that parent data is owned by the parent's protocol and survives reparenting the same way — prove that with the ported tests before swapping.
 - `InheritedModel`'s string aspects → field-mask typed aspects (ADR-0008): the same user-visible dependency semantics, a stricter and faster mechanism. This is the shape every improvement should have.
 
-**Carve-out:** a Flutter binding may be **deleted**, not ported, when a Rust-native crate stack already owns the responsibility end-to-end. The canonical precedent is the removal of `PlatformTextSystem` in [`docs/plans/2026-03-31-platform-roadmap.md`](plans/2026-03-31-platform-roadmap.md) Task 1 — cosmic-text + glyphon + flui-assets covers the text-shaping responsibility, so the Flutter abstraction was removed rather than re-implemented. The carve-out applies when:
+**Carve-out:** a Flutter binding may be **deleted**, not ported, when a Rust-native crate stack already owns the responsibility end-to-end. The canonical precedent is the removal of `PlatformTextSystem` in [`docs/plans/2026-03-31-platform-roadmap.md`](plans/2026-03-31-platform-roadmap.md) Task 1 — cosmic-text (shaping, in flui-painting) + the engine's glyph atlas + flui-assets covers the text responsibility, so the Flutter abstraction was removed rather than re-implemented. The carve-out applies when:
 
 - A Rust-native crate (or short crate stack) end-to-end owns the responsibility, not just a dependency of it.
 - The deletion does not break observable Flutter semantics that downstream code depends on.
@@ -1108,7 +1108,7 @@ A Flutter binding may be **deleted**, not ported, when a Rust-native crate stack
 
 | Dart construct | Replaced by | Recorded in |
 |---|---|---|
-| `PlatformTextSystem` (Flutter text-shaping abstraction) | `cosmic-text` + `glyphon` + `flui-assets` text stack | [`docs/plans/2026-03-31-platform-roadmap.md`](plans/2026-03-31-platform-roadmap.md) Task 1 |
+| `PlatformTextSystem` (Flutter text-shaping abstraction) | `cosmic-text` + engine glyph atlas + `flui-assets` text stack | [`docs/plans/2026-03-31-platform-roadmap.md`](plans/2026-03-31-platform-roadmap.md) Task 1 |
 | `LayerHandle<T>` (Flutter cached-layer pointer, 467 LOC + 17 aliases, 0 external callers) | deleted; layer caching handled at the `flui-layer` enum + `LayerId` level | [`crates/flui-layer/ARCHITECTURE.md`](../crates/flui-layer/ARCHITECTURE.md) Mythos Step 1 |
 | `ShaderWarmUp` (Flutter Skia shader pre-compilation hook) | deleted; wgpu compiles pipelines on first use, no warm-up phase | [`crates/flui-painting/ARCHITECTURE.md`](../crates/flui-painting/ARCHITECTURE.md) |
 
@@ -1175,7 +1175,7 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | `flui-scheduler` | Not yet templated | Active |
 | [`flui-layer`](../crates/flui-layer/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
 | `flui-interaction` | `crates/flui-interaction/docs/ARCHITECTURE.md` (pre-template; precedent for `## Thread safety` format) | Active |
-| [`flui-engine`](../crates/flui-engine/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active |
+| [`flui-engine`](../crates/flui-engine/ARCHITECTURE.md) | Templated 2026-05-20; rewritten as a current-state document 2026-09-18 | Active |
 | `flui-hot-reload` | Not yet templated | Active |
 | `flui-objects` | [`ARCHITECTURE.md`](../crates/flui-objects/ARCHITECTURE.md) (partial: Mapping decisions for non-finite sliver scroll windows; full template deferred) | Active |
 | [`flui-view`](../crates/flui-view/ARCHITECTURE.md) | (partial: Mapping decisions for issue #1180's mid-drain absorb budget; full template deferred); `crates/flui-view/UNIFIED_ELEMENT.md` remains a companion appendix | Active |

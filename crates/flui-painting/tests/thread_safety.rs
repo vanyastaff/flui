@@ -5,7 +5,7 @@
 
 use std::{sync::Arc, thread};
 
-use flui_painting::prelude::*;
+use flui_painting::{Canvas, Paint};
 use flui_types::{
     geometry::{Rect, px},
     styling::Color,
@@ -171,16 +171,13 @@ fn test_parallel_build_then_compose() {
         handles.push(handle);
     }
 
-    // Collect children on main thread
-    let mut parent = Canvas::new();
-
+    // Merge the children's lists on the main thread, the way the paint walk
+    // merges adjacent inline runs into one picture.
+    let mut merged = flui_painting::DisplayList::new();
     for handle in handles {
-        let child = handle.join().unwrap();
-        parent.extend_from(child);
+        merged.append(handle.join().unwrap().finish());
     }
-
-    let parent_list = parent.finish();
-    assert_eq!(parent_list.len(), 10);
+    assert_eq!(merged.len(), 10);
 }
 
 #[test]
@@ -227,21 +224,6 @@ fn test_no_data_races() {
     for len in results {
         assert_eq!(len, 100);
     }
-}
-
-#[test]
-fn test_canvas_not_sync() {
-    // This is a compile-time test - uncomment to verify Canvas is !Sync
-    // let canvas = Canvas::new();
-    // let canvas_ref = &canvas;
-    //
-    // This should NOT compile because Canvas is !Sync
-    // let handle = thread::spawn(move || {
-    // canvas_ref.finish();  // ERROR: Canvas is not Sync
-    // });
-
-    // If this test compiles, Canvas is correctly !Sync
-    // No assertion needed - compilation is the test
 }
 
 #[test]

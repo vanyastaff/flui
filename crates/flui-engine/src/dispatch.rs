@@ -1,18 +1,18 @@
 //! `DrawCommand` dispatch.
 //!
-//! The match that routes each `flui_painting::DrawCommand` variant to its
+//! The match that routes each `flui_painting::DrawOp` variant to its
 //! [`CommandRenderer`](crate::command_renderer::CommandRenderer) method — the
 //! two are read together, since the enum and the trait are the two halves of
 //! one contract.
 //!
 //! ```text
-//! DrawCommand (flui_painting)
+//! DrawCommand { transform, op } (flui_painting)
 //!     │
 //!     ▼
-//! dispatch_command() ─────► CommandRenderer::render_*()
+//! dispatch_command() ─────► CommandRenderer::render_*(…, transform)
 //! ```
 
-use flui_painting::DrawCommand;
+use flui_painting::{DrawCommand, DrawOp};
 
 use crate::command_renderer::CommandRenderer;
 
@@ -36,87 +36,47 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
     command: &DrawCommand,
     renderer: &mut R,
 ) {
-    match command {
+    let transform = &command.transform;
+    match &command.op {
         // === Drawing Commands ===
-        DrawCommand::DrawRect {
-            rect,
-            paint,
-            transform,
-        } => {
+        DrawOp::Rect { rect, paint } => {
             renderer.render_rect(*rect, paint, transform);
         }
-        DrawCommand::DrawRRect {
-            rrect,
-            paint,
-            transform,
-        } => {
+        DrawOp::RRect { rrect, paint } => {
             renderer.render_rrect(*rrect, paint, transform);
         }
-        DrawCommand::DrawCircle {
+        DrawOp::Circle {
             center,
             radius,
             paint,
-            transform,
         } => {
             renderer.render_circle(*center, radius.0, paint, transform);
         }
-        DrawCommand::DrawLine {
-            p1,
-            p2,
-            paint,
-            transform,
-        } => {
+        DrawOp::Line { p1, p2, paint } => {
             renderer.render_line(*p1, *p2, paint, transform);
         }
-        DrawCommand::DrawOval {
-            rect,
-            paint,
-            transform,
-        } => {
+        DrawOp::Oval { rect, paint } => {
             renderer.render_oval(*rect, paint, transform);
         }
-        DrawCommand::DrawPath {
-            path,
-            paint,
-            transform,
-        } => {
+        DrawOp::Path { path, paint } => {
             renderer.render_path(path, paint, transform);
         }
-        DrawCommand::DrawText {
-            text,
+        DrawOp::Paragraph {
+            layout,
             offset,
-            size: _,
-            style,
-            paint,
-            transform,
+            color,
         } => {
-            renderer.render_text(text, *offset, style, paint, transform);
+            renderer.render_paragraph(layout, *offset, *color, transform);
         }
-        DrawCommand::DrawTextSpan {
-            span,
-            offset,
-            size: _,
-            text_scale_factor,
-            wrap_width,
-            transform,
-        } => {
-            renderer.render_text_span(span, *offset, *text_scale_factor, *wrap_width, transform);
-        }
-        DrawCommand::DrawImage {
-            image,
-            dst,
-            paint,
-            transform,
-        } => {
+        DrawOp::Image { image, dst, paint } => {
             renderer.render_image(image, *dst, paint.as_deref(), transform);
         }
-        DrawCommand::DrawTexture {
+        DrawOp::Texture {
             texture_id,
             dst,
             src,
             filter_quality,
             opacity,
-            transform,
         } => {
             renderer.render_texture(
                 *texture_id,
@@ -127,21 +87,19 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
                 transform,
             );
         }
-        DrawCommand::DrawShadow {
+        DrawOp::Shadow {
             path,
             color,
             elevation,
-            transform,
         } => {
             renderer.render_shadow(path, *color, *elevation, transform);
         }
-        DrawCommand::DrawArc {
+        DrawOp::Arc {
             rect,
             start_angle,
             sweep_angle,
             use_center,
             paint,
-            transform,
         } => {
             renderer.render_arc(
                 *rect,
@@ -152,29 +110,26 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
                 transform,
             );
         }
-        DrawCommand::DrawDRRect {
+        DrawOp::DRRect {
             outer,
             inner,
             paint,
-            transform,
         } => {
             renderer.render_drrect(*outer, *inner, paint, transform);
         }
-        DrawCommand::DrawPoints {
+        DrawOp::Points {
             mode,
             points,
             paint,
-            transform,
         } => {
             renderer.render_points(*mode, points, paint, transform);
         }
-        DrawCommand::DrawVertices {
+        DrawOp::Vertices {
             vertices,
             colors,
             tex_coords,
             indices,
             paint,
-            transform,
         } => {
             renderer.render_vertices(
                 vertices,
@@ -185,24 +140,19 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
                 transform,
             );
         }
-        DrawCommand::DrawColor {
-            color,
-            blend_mode,
-            transform,
-        } => {
+        DrawOp::Color { color, blend_mode } => {
             renderer.render_color(*color, *blend_mode, transform);
         }
-        DrawCommand::DrawPaint { paint, transform } => {
+        DrawOp::Paint { paint } => {
             renderer.render_paint(paint, transform);
         }
-        DrawCommand::DrawAtlas {
+        DrawOp::Atlas {
             image,
             sprites,
             transforms,
             colors,
             blend_mode,
             paint,
-            transform,
         } => {
             renderer.render_atlas(
                 image,
@@ -215,98 +165,49 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
             );
         }
 
-        // === Gradient Commands ===
-        DrawCommand::DrawGradient {
-            rect,
-            shader,
-            transform,
-        } => {
-            renderer.render_gradient(*rect, shader, transform);
-        }
-        DrawCommand::DrawGradientRRect {
-            rrect,
-            shader,
-            transform,
-        } => {
-            renderer.render_gradient_rrect(*rrect, shader, transform);
-        }
-
-        // === Effects ===
-        DrawCommand::ShaderMask {
-            child,
-            shader,
-            bounds,
-            blend_mode,
-            transform,
-        } => {
-            renderer.render_shader_mask(child, shader, *bounds, *blend_mode, transform);
-        }
-
         // === Clipping Commands ===
-        DrawCommand::ClipRect {
+        DrawOp::ClipRect {
             rect,
             clip_op,
             clip_behavior,
-            transform,
         } => {
             renderer.clip_rect(*rect, *clip_op, *clip_behavior, transform);
         }
-        DrawCommand::ClipRRect {
+        DrawOp::ClipRRect {
             rrect,
             clip_op,
             clip_behavior,
-            transform,
         } => {
             renderer.clip_rrect(*rrect, *clip_op, *clip_behavior, transform);
         }
-        DrawCommand::ClipRSuperellipse {
+        DrawOp::ClipRSuperellipse {
             rsuperellipse,
             clip_op,
             clip_behavior,
-            transform,
         } => {
             renderer.clip_rsuperellipse(*rsuperellipse, *clip_op, *clip_behavior, transform);
         }
-        DrawCommand::ClipPath {
+        DrawOp::ClipPath {
             path,
             clip_op,
             clip_behavior,
-            transform,
         } => {
             renderer.clip_path(path, *clip_op, *clip_behavior, transform);
         }
-        DrawCommand::BackdropFilter {
-            child,
-            filter,
-            bounds,
-            blend_mode,
-            transform,
-        } => {
-            renderer.render_backdrop_filter(
-                child.as_ref().map(std::convert::AsRef::as_ref),
-                filter,
-                *bounds,
-                *blend_mode,
-                transform,
-            );
-        }
-
         // === Image Extensions ===
-        DrawCommand::DrawImageRepeat {
+        DrawOp::ImageRepeat {
             image,
             dst,
             repeat,
             paint,
-            transform,
         } => {
             renderer.render_image_repeat(image, *dst, *repeat, paint.as_deref(), transform);
         }
-        DrawCommand::DrawImageNineSlice {
+        DrawOp::ImageNineSlice {
             image,
             center_slice,
             dst,
             paint,
-            transform,
         } => {
             renderer.render_image_nine_slice(
                 image,
@@ -316,50 +217,27 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
                 transform,
             );
         }
-        DrawCommand::DrawImageFiltered {
+        DrawOp::ImageFiltered {
             image,
             dst,
             filter,
             paint,
-            transform,
         } => {
             renderer.render_image_filtered(image, *dst, *filter, paint.as_deref(), transform);
         }
 
         // === Layer Commands ===
-        DrawCommand::SaveLayer {
-            bounds,
-            paint,
-            transform,
-        } => {
+        DrawOp::SaveLayer { bounds, paint } => {
             renderer.save_layer(*bounds, paint, transform);
         }
-        DrawCommand::RestoreLayer { transform } => {
+        DrawOp::RestoreLayer => {
             renderer.restore_layer(transform);
         }
-        DrawCommand::Save { .. } => {
+        DrawOp::Save => {
             renderer.save_state();
         }
-        DrawCommand::Restore { .. } => {
+        DrawOp::Restore => {
             renderer.restore_state();
-        }
-        // `DrawCommand` is `#[non_exhaustive]` so downstream crates
-        // (this one) must handle the open-set shape. When a new
-        // variant lands in flui-painting before flui-engine grows the
-        // matching `render_*` method, fall through with a warn rather
-        // than crashing the frame.
-        _ => {
-            // Deliberately no `?command` field. Today no unhandled variant
-            // carries text, but `DrawCommand` is `#[non_exhaustive]`: the
-            // moment flui-painting adds a text-bearing variant ahead of
-            // flui-engine, `?command` would print the drawn string into a
-            // `warn` record — and a tracing field is world-readable in the
-            // device log archive. The message already says what to fix, and
-            // the variant is named by the compiler error a developer gets
-            // when they add the matching `render_*` method.
-            tracing::warn!(
-                "dispatch_command: unhandled DrawCommand variant; flui-engine needs an update"
-            );
         }
     }
 }
@@ -382,10 +260,7 @@ where
     }
 }
 
-// `DebugBackend` is only compiled under debug_assertions (it exists only for
-// testing and uses no GPU). The test must carry the same gate so it compiles
-// in release/bench profiles where `debug_assertions` is off.
-#[cfg(all(test, debug_assertions, feature = "wgpu-backend"))]
+#[cfg(test)]
 mod tests {
     //! Regression guard: dispatching an `Arc<Paint>`-carrying
     //! `DrawCommand` reaches the backend identically to the earlier
@@ -395,14 +270,14 @@ mod tests {
     //! introduced by the deref shape.
     //!
     //! No GPU is required; this runs on every CI worker.
-    use flui_painting::{Canvas, DisplayListCore, Paint};
+    use flui_painting::{Canvas, Paint};
     use flui_types::{
         geometry::{Rect, px},
         styling::Color,
     };
 
     use super::dispatch_commands;
-    use crate::wgpu::debug::DebugBackend;
+    use crate::debug::DebugBackend;
 
     #[test]
     fn dispatch_handles_interned_paint() {

@@ -3,5 +3,7 @@ source: tests/demo_layer_snapshots.rs
 expression: "snapshot_of(text_app::App, 1)"
 ---
 Offset dx=0.00 dy=0.00
-  Picture bounds=(0.00,0.00 900.00x57.60)
-    DrawTextSpan offset=(0.00,0.00) "Hello, FLUI!" styles=[#1E1E1EFF size=48.00, #C81E1EFF weight=W700]
+  Picture bounds=(0.00,0.00 239.44x57.60)
+    Save
+    Paragraph offset=(0.00,0.00) "Hello, FLUI!" #1E1E1EFF lines=1 runs=[len=7 family=SansSerif weight=400 style=Normal size=48.00, len=4 family=SansSerif weight=400 style=Normal size=48.00 color=#c81e1eff, len=1 family=SansSerif weight=400 style=Normal size=48.00]
+    Restore

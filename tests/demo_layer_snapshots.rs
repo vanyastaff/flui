@@ -111,9 +111,9 @@ fn pin_fonts() {
     PIN.call_once(|| {
         pin_font_faces(
             &[
-                flui_engine::fonts::ROBOTO_REGULAR,
-                flui_engine::fonts::MATERIAL_ICONS_REGULAR,
-                flui_engine::fonts::CUPERTINO_ICONS,
+                flui_painting::fonts::ROBOTO_REGULAR,
+                flui_painting::fonts::MATERIAL_ICONS_REGULAR,
+                flui_painting::fonts::CUPERTINO_ICONS,
             ],
             "Roboto",
         );

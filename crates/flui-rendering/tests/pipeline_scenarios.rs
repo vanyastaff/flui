@@ -194,7 +194,7 @@ fn mixed_flex_padding_transform_clip_frame() {
             }
         }
         let mut out = Vec::new();
-        walk(tree, tree.root().expect("root"), &mut out);
+        walk(tree, tree.root(), &mut out);
         out
     };
     assert_eq!(
@@ -213,7 +213,7 @@ fn mixed_flex_padding_transform_clip_frame() {
             }
         }
         let mut out = Vec::new();
-        walk(tree, tree.root().expect("root"), &mut out);
+        walk(tree, tree.root(), &mut out);
         out
     };
     assert_eq!(
@@ -398,7 +398,7 @@ fn repaint_boundary_split_survives_relayout_frames() {
     // The boundary's OffsetLayer carries the NEW accumulated offset; the
     // picture inside stays rebased at zero.
     let tree = run.layer_tree().expect("frame 2");
-    let root_id = tree.root().expect("root");
+    let root_id = tree.root();
     let boundary_layer_id = tree.get(root_id).expect("root node").children()[0];
     let boundary_node = tree.get(boundary_layer_id).expect("boundary node");
     let Layer::Offset(offset_layer) = boundary_node.layer() else {

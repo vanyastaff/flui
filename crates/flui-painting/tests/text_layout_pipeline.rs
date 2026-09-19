@@ -4,138 +4,14 @@
 //! and produces correct DrawCommand entries on Canvas. This covers the full
 //! measurement -> layout -> paint pipeline.
 
-use flui_painting::{
-    Canvas, DisplayListCore, TextPainter, detect_text_direction, measure_inline_span, measure_text,
-};
+use flui_painting::{Canvas, TextPainter};
 use flui_types::{
-    geometry::{Offset, px},
-    typography::{
-        FontWeight, InlineSpan, TextAlign, TextDirection, TextPosition, TextSpan, TextStyle,
-    },
+    geometry::Offset,
+    typography::{FontWeight, TextAlign, TextDirection, TextPosition, TextSpan, TextStyle},
 };
 
 // ============================================================================
 // measure_text standalone function
-// ============================================================================
-
-#[test]
-fn measure_text_returns_positive_metrics() {
-    let result = measure_text("Hello, World!", None, 16.0, None, None);
-
-    assert!(result.width > 0.0, "width should be positive");
-    assert!(result.height > 0.0, "height should be positive");
-    assert_eq!(result.line_count, 1);
-    assert!(result.alphabetic_baseline > 0.0);
-}
-
-#[test]
-fn measure_text_wraps_with_constraint() {
-    let text = "This is a long sentence that should wrap when given a narrow constraint";
-
-    let unconstrained = measure_text(text, None, 14.0, None, None);
-    let constrained = measure_text(text, None, 14.0, Some(80.0), None);
-
-    assert!(
-        constrained.line_count > unconstrained.line_count,
-        "constrained text should have more lines: {} vs {}",
-        constrained.line_count,
-        unconstrained.line_count
-    );
-}
-
-#[test]
-fn measure_text_respects_font_size() {
-    let small = measure_text("Hello", None, 10.0, None, None);
-    let large = measure_text("Hello", None, 30.0, None, None);
-
-    assert!(
-        large.width > small.width,
-        "larger font should produce wider text"
-    );
-    assert!(
-        large.height > small.height,
-        "larger font should produce taller text"
-    );
-}
-
-#[test]
-fn measure_text_empty_string() {
-    let result = measure_text("", None, 14.0, None, None);
-
-    // Empty text should still produce a line with height
-    assert_eq!(result.line_count, 1);
-    assert!(result.height > 0.0);
-}
-
-#[test]
-fn measure_text_multiline() {
-    let result = measure_text("Line 1\nLine 2\nLine 3", None, 14.0, None, None);
-
-    assert_eq!(result.line_count, 3);
-}
-
-#[test]
-fn measure_text_result_size() {
-    let result = measure_text("Test", None, 14.0, None, None);
-    let size = result.size();
-
-    assert!((size.width.0 - result.width).abs() < f32::EPSILON);
-    assert!((size.height.0 - result.height).abs() < f32::EPSILON);
-}
-
-// ============================================================================
-// measure_inline_span
-// ============================================================================
-
-#[test]
-fn measure_inline_span_works() {
-    let span = TextSpan::new("Hello, World!");
-    let result = measure_inline_span(&InlineSpan::from(span), 14.0, None, 1.0);
-
-    assert!(result.width > 0.0);
-    assert!(result.height > 0.0);
-    assert_eq!(result.line_count, 1);
-}
-
-#[test]
-fn measure_inline_span_respects_scale() {
-    let normal = measure_inline_span(&InlineSpan::from(TextSpan::new("Hello")), 14.0, None, 1.0);
-    let scaled = measure_inline_span(&InlineSpan::from(TextSpan::new("Hello")), 14.0, None, 2.0);
-
-    assert!(
-        scaled.width > normal.width,
-        "scaled text should be wider: {} vs {}",
-        scaled.width,
-        normal.width
-    );
-}
-
-// ============================================================================
-// detect_text_direction
-// ============================================================================
-
-#[test]
-fn detect_direction_ltr() {
-    assert_eq!(detect_text_direction("Hello"), Some(TextDirection::Ltr));
-}
-
-#[test]
-fn detect_direction_rtl() {
-    // Arabic text
-    assert_eq!(
-        detect_text_direction("\u{0645}\u{0631}\u{062D}\u{0628}\u{0627}"),
-        Some(TextDirection::Rtl)
-    );
-}
-
-#[test]
-fn detect_direction_neutral() {
-    // Pure numbers are neutral
-    assert_eq!(detect_text_direction("123"), None);
-}
-
-// ============================================================================
-// TextPainter -> TextLayout -> Canvas pipeline
 // ============================================================================
 
 #[test]
@@ -147,7 +23,7 @@ fn text_painter_layout_produces_valid_metrics() {
 
     painter.layout(0.0, 300.0);
 
-    assert!(painter.did_layout());
+    assert!(painter.has_layout());
     assert!(painter.width() > 0.0);
     assert!(painter.height() > 0.0);
 }
@@ -166,7 +42,7 @@ fn text_painter_paint_emits_draw_command() {
 
     let display_list = canvas.finish();
     assert!(
-        display_list.len() > 0,
+        !display_list.is_empty(),
         "painting should produce at least one draw command"
     );
 }
@@ -328,7 +204,7 @@ fn text_painter_invalidation_on_setter() {
         .with_text_direction(TextDirection::Ltr);
 
     painter.layout(0.0, 200.0);
-    assert!(painter.did_layout());
+    assert!(painter.has_layout());
 
     // Alignment is a PAINT offset over the shaped lines (the
     // shaped/paint split) — the layout cache survives and only the
@@ -337,7 +213,7 @@ fn text_painter_invalidation_on_setter() {
     let inv = painter.set_text_align(TextAlign::Center);
     assert_eq!(inv, Invalidation::Paint);
     assert!(
-        painter.did_layout(),
+        painter.has_layout(),
         "an alignment change must keep the shaped layout"
     );
 
@@ -349,7 +225,7 @@ fn text_painter_invalidation_on_setter() {
     ));
     assert_eq!(inv, Invalidation::Layout);
     assert!(
-        !painter.did_layout(),
+        !painter.has_layout(),
         "a layout-affecting change must drop the shaped layout"
     );
 }
@@ -357,41 +233,6 @@ fn text_painter_invalidation_on_setter() {
 // ============================================================================
 // Full pipeline: measure -> layout -> paint -> display list
 // ============================================================================
-
-#[test]
-fn full_pipeline_measure_layout_paint() {
-    // Step 1: Measure text to determine size
-    let text = "The quick brown fox jumps over the lazy dog";
-    let metrics = measure_text(text, None, 16.0, Some(200.0), None);
-    assert!(metrics.width > 0.0);
-    assert!(metrics.line_count >= 1);
-
-    // Step 2: Create TextPainter and layout with the same constraints
-    let span = TextSpan::new(text);
-    let mut painter = TextPainter::new()
-        .with_text(span)
-        .with_text_direction(TextDirection::Ltr);
-
-    painter.layout(0.0, 200.0);
-
-    // TextPainter's layout should agree with standalone measure_text
-    // (both use cosmic-text under the hood)
-    let painter_width = painter.width();
-    let painter_height = painter.height();
-    assert!(painter_width > 0.0);
-    assert!(painter_height > 0.0);
-
-    // Step 3: Paint to canvas
-    let mut canvas = Canvas::new();
-    painter.paint(&mut canvas, Offset::new(px(10.0), px(20.0)));
-
-    // Step 4: Verify display list has the text command
-    let display_list = canvas.finish();
-    assert!(
-        display_list.len() >= 1,
-        "display list should contain text draw command"
-    );
-}
 
 #[test]
 fn full_pipeline_with_styled_text() {
@@ -412,5 +253,5 @@ fn full_pipeline_with_styled_text() {
     painter.paint(&mut canvas, Offset::ZERO);
 
     let dl = canvas.finish();
-    assert!(dl.len() >= 1);
+    assert!(!dl.is_empty());
 }

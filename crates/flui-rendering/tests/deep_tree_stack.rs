@@ -56,7 +56,7 @@ fn deep_chain_survives_layout_paint_and_hit_walks() {
     let tree = result
         .expect("deep frame must not error")
         .expect("deep frame must paint");
-    assert!(!tree.is_empty(), "the painted chain produces layers");
+    assert!(tree.len() > 1, "the painted chain produces layers");
 
     // Hit straight through all 2500 paddings into the leaf
     // (leaf-first path, paddings are hit-transparent).

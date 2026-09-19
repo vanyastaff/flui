@@ -35,7 +35,7 @@ slow-timeout = { period = "300s", terminate-after = 4 }
 #
 # CI's dedicated `gpu-test` job already passes `--test-threads 1` for this
 # reason. That flag does not help the `test` job, where these same tests run
-# (they are gated on `cfg(test)` alone, not on `enable-wgpu-tests`) alongside
+# (they are gated on `cfg(test)` alone, not on `testing`) alongside
 # thousands of others that SHOULD stay parallel. A test group is the targeted
 # form of the same rule: these run one at a time, everything else is untouched.
 [test-groups]

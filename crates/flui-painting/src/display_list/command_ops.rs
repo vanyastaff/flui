@@ -1,929 +1,126 @@
-//! `DrawCommand` operations: `with_opacity`, `bounds`, `transform`,
-//! `paint`, `kind`, `is_*` accessors, `apply_transform`.
-//!
-//! These were extracted from the 2,434-LOC
-//! `display_list.rs` god module as part of a concern-based split. This file is the largest in
-//! `display_list/` because each method pattern-matches across all 29
-//! variants. The structure is mechanical -- the 240-LOC
-//! `with_opacity` and 250-LOC `bounds` matches dominate.
-//!
-//! Future Outstanding refactor: collapse the 29-variant patterns via
-//! a hand-written `macro_rules!` `gen_command_accessors!` mirroring
-//! the `flui-layer` Step 4 macro pattern. Not bundled with this chain
-//! because the file is structurally clean despite size.
-//!
-//! # Recursion-depth cap
-//!
-//! Both [`DrawCommand::with_opacity`] and [`DrawCommand::apply_transform`]
-//! recurse into the inner `DisplayList`s carried by [`DrawCommand::ShaderMask`]
-//! and [`DrawCommand::BackdropFilter`]. To bound stack usage on
-//! adversarial input we cap nesting at [`MAX_EFFECT_DEPTH`] = 64.
-//!
-//! Why 64:
-//!
-//! - Each recursive frame holds a [`DrawCommand`] value (~200 B for
-//!   the largest variant) plus the [`DisplayList`](super::DisplayList) iterator state and
-//!   `Box` drop ladder; empirically ~2–4 KB / frame on a release build.
-//! - 64 × 4 KB ≈ 256 KB — well under the default 8 MB thread stack on
-//!   Windows / macOS / Linux.
-//! - Production Flutter `RenderObject` trees rarely nest effects more
-//!   than ~30 levels deep; 64 leaves ≥2× headroom for unusual but
-//!   legitimate UIs.
-//! - Skia historically capped layer nesting around 250
-//!   (`kMaxLayers` in `SkCanvas`), but its heap-allocated `SkRecord`
-//!   tolerates deeper recursion than our value-typed [`DrawCommand`]
-//!   chain.
-//!
-//! On saturation we clone the offending command *without* recursing
-//! into its child (so the subtree keeps its previous opacity /
-//! transform) and emit a `tracing::warn!`. Visual fidelity degrades
-//! gracefully for >64-deep stacks; no crash.
-//!
-//! Engineers tuning this number should profile against the
-//! `nested_shader_mask_opacity_depth` test below and bench the
-//! resulting frame budget.
+//! `DrawCommand::bounds` — the per-op geometry a recorded command
+//! contributes to its [`DisplayList`](super::DisplayList)'s cached extent.
 
-use std::sync::Arc;
+use flui_types::geometry::{Pixels, Rect, Size};
 
-use flui_types::geometry::{Matrix4, Pixels, Rect, Size};
-
-use super::command::{CommandKind, DrawCommand};
-use crate::display_list::Paint;
-
-/// Maximum recursion depth for [`DrawCommand::with_opacity`] and
-/// [`DrawCommand::apply_transform`] into the inner [`DisplayList`](super::DisplayList) of
-/// [`DrawCommand::ShaderMask`] / [`DrawCommand::BackdropFilter`].
-///
-/// See the module-level docs for the rationale behind this value.
-pub const MAX_EFFECT_DEPTH: usize = 64;
+use super::command::{DrawCommand, DrawOp};
 
 impl DrawCommand {
-    /// Apply opacity to the Paint in this command.
+    /// The bounding rectangle of this command in the display list's
+    /// coordinate space: the op's local bounds mapped through the
+    /// command's transform.
     ///
-    /// Creates a new `DrawCommand` with the Paint's opacity multiplied
-    /// by the given value. Used by `DisplayList::to_opacity()` to
-    /// implement opacity effects.
-    ///
-    /// For [`Self::ShaderMask`] / [`Self::BackdropFilter`], opacity
-    /// recurses into the child [`DisplayList`](super::DisplayList). The recursion is
-    /// bounded by [`MAX_EFFECT_DEPTH`]; deeper nesting is clamped to
-    /// avoid stack overflow on adversarial input. See the module
-    /// docs for the rationale.
-    #[must_use = "with_opacity returns a new DrawCommand and does not modify the original"]
-    pub fn with_opacity(&self, opacity: f32) -> Self {
-        self.with_opacity_depth(opacity, 0)
-    }
-
-    /// Depth-counted recursion target for [`Self::with_opacity`].
-    ///
-    /// `depth` is incremented each time we descend into a child
-    /// [`DisplayList`](super::DisplayList). When `depth >= MAX_EFFECT_DEPTH` we clone
-    /// `self` unchanged (the child keeps its existing paint) and emit
-    /// a `tracing::warn!` so observability tooling can surface the
-    /// truncation.
-    pub(crate) fn with_opacity_depth(&self, opacity: f32, depth: usize) -> Self {
-        match self {
-            // Passthrough: Commands without opacity (clips, gradients, etc.)
-            Self::ClipRect { .. }
-            | Self::ClipRRect { .. }
-            | Self::ClipRSuperellipse { .. }
-            | Self::ClipPath { .. }
-            | Self::DrawTextSpan { .. }
-            | Self::DrawGradient { .. }
-            | Self::DrawGradientRRect { .. }
-            | Self::RestoreLayer { .. }
-            | Self::Save { .. }
-            | Self::Restore { .. } => self.clone(),
-
-            // Paint commands: Apply opacity to paint field
-            //
-            // The interned `Arc<Paint>` is unwrapped to a fresh `Paint`
-            // value via `Paint::with_opacity_arc` (a tiny helper that
-            // hides the `(**arc).clone().with_opacity(o)` dance), then
-            // re-wrapped in a new `Arc`. The opacity-mutated result is
-            // a brand-new paint identity by construction — distinct
-            // from the recording-time interning pool — so we cannot
-            // reuse the source `Arc` even on a refcount-bump fast path.
-            Self::DrawRect {
-                rect,
-                paint,
-                transform,
-            } => Self::DrawRect {
-                rect: *rect,
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::DrawRRect {
-                rrect,
-                paint,
-                transform,
-            } => Self::DrawRRect {
-                rrect: *rrect,
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::DrawCircle {
-                center,
-                radius,
-                paint,
-                transform,
-            } => Self::DrawCircle {
-                center: *center,
-                radius: *radius,
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::DrawOval {
-                rect,
-                paint,
-                transform,
-            } => Self::DrawOval {
-                rect: *rect,
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::DrawLine {
-                p1,
-                p2,
-                paint,
-                transform,
-            } => Self::DrawLine {
-                p1: *p1,
-                p2: *p2,
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::DrawPath {
-                path,
-                paint,
-                transform,
-            } => Self::DrawPath {
-                path: path.clone(),
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::DrawArc {
-                rect,
-                start_angle,
-                sweep_angle,
-                use_center,
-                paint,
-                transform,
-            } => Self::DrawArc {
-                rect: *rect,
-                start_angle: *start_angle,
-                sweep_angle: *sweep_angle,
-                use_center: *use_center,
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::DrawDRRect {
-                outer,
-                inner,
-                paint,
-                transform,
-            } => Self::DrawDRRect {
-                outer: *outer,
-                inner: *inner,
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::DrawPoints {
-                mode,
-                points,
-                paint,
-                transform,
-            } => Self::DrawPoints {
-                mode: *mode,
-                points: points.clone(),
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::DrawVertices {
-                vertices,
-                colors,
-                tex_coords,
-                indices,
-                paint,
-                transform,
-            } => Self::DrawVertices {
-                vertices: vertices.clone(),
-                colors: colors.clone(),
-                tex_coords: tex_coords.clone(),
-                indices: indices.clone(),
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::DrawText {
-                text,
-                offset,
-                size,
-                style,
-                paint,
-                transform,
-            } => Self::DrawText {
-                text: text.clone(),
-                offset: *offset,
-                size: *size,
-                style: style.clone(),
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-            Self::SaveLayer {
-                bounds,
-                paint,
-                transform,
-            } => Self::SaveLayer {
-                bounds: *bounds,
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-
-            // Optional paint commands: Map over Option<Arc<Paint>>
-            Self::DrawImage {
-                image,
-                dst,
-                paint,
-                transform,
-            } => Self::DrawImage {
-                image: image.clone(),
-                dst: *dst,
-                paint: paint.as_ref().map(|p| with_opacity_arc(p, opacity)),
-                transform: *transform,
-            },
-            Self::DrawImageRepeat {
-                image,
-                dst,
-                repeat,
-                paint,
-                transform,
-            } => Self::DrawImageRepeat {
-                image: image.clone(),
-                dst: *dst,
-                repeat: *repeat,
-                paint: paint.as_ref().map(|p| with_opacity_arc(p, opacity)),
-                transform: *transform,
-            },
-            Self::DrawImageNineSlice {
-                image,
-                center_slice,
-                dst,
-                paint,
-                transform,
-            } => Self::DrawImageNineSlice {
-                image: image.clone(),
-                center_slice: *center_slice,
-                dst: *dst,
-                paint: paint.as_ref().map(|p| with_opacity_arc(p, opacity)),
-                transform: *transform,
-            },
-            Self::DrawImageFiltered {
-                image,
-                dst,
-                filter,
-                paint,
-                transform,
-            } => Self::DrawImageFiltered {
-                image: image.clone(),
-                dst: *dst,
-                filter: *filter,
-                paint: paint.as_ref().map(|p| with_opacity_arc(p, opacity)),
-                transform: *transform,
-            },
-            Self::DrawAtlas {
-                image,
-                sprites,
-                transforms,
-                colors,
-                blend_mode,
-                paint,
-                transform,
-            } => Self::DrawAtlas {
-                image: image.clone(),
-                sprites: sprites.clone(),
-                transforms: transforms.clone(),
-                colors: colors.clone(),
-                blend_mode: *blend_mode,
-                paint: paint.as_ref().map(|p| with_opacity_arc(p, opacity)),
-                transform: *transform,
-            },
-
-            // Color commands: Apply opacity to color field
-            Self::DrawShadow {
-                path,
-                color,
-                elevation,
-                transform,
-            } => Self::DrawShadow {
-                path: path.clone(),
-                color: color.with_opacity(opacity),
-                elevation: *elevation,
-                transform: *transform,
-            },
-            Self::DrawColor {
-                color,
-                blend_mode,
-                transform,
-            } => Self::DrawColor {
-                color: color.with_opacity(opacity),
-                blend_mode: *blend_mode,
-                transform: *transform,
-            },
-            Self::DrawPaint { paint, transform } => Self::DrawPaint {
-                paint: with_opacity_arc(paint, opacity),
-                transform: *transform,
-            },
-
-            // Child commands: Recursively apply opacity to DisplayList,
-            // bounded by MAX_EFFECT_DEPTH to keep adversarial input
-            // from blowing the stack.
-            Self::ShaderMask {
-                child,
-                shader,
-                bounds,
-                blend_mode,
-                transform,
-            } => {
-                if depth >= MAX_EFFECT_DEPTH {
-                    log_effect_depth_saturation("ShaderMask", "with_opacity", depth);
-                    return self.clone();
-                }
-                Self::ShaderMask {
-                    child: Box::new(child.to_opacity_depth(opacity, depth + 1)),
-                    shader: shader.clone(),
-                    bounds: *bounds,
-                    blend_mode: *blend_mode,
-                    transform: *transform,
-                }
-            }
-            Self::BackdropFilter {
-                child,
-                filter,
-                bounds,
-                blend_mode,
-                transform,
-            } => {
-                if depth >= MAX_EFFECT_DEPTH {
-                    log_effect_depth_saturation("BackdropFilter", "with_opacity", depth);
-                    return self.clone();
-                }
-                Self::BackdropFilter {
-                    child: child
-                        .as_ref()
-                        .map(|c| Box::new(c.to_opacity_depth(opacity, depth + 1))),
-                    filter: filter.clone(),
-                    bounds: *bounds,
-                    blend_mode: *blend_mode,
-                    transform: *transform,
-                }
-            }
-
-            // Texture command: Multiply opacity field
-            Self::DrawTexture {
-                texture_id,
-                dst,
-                src,
-                filter_quality,
-                opacity: tex_opacity,
-                transform,
-            } => Self::DrawTexture {
-                texture_id: *texture_id,
-                dst: *dst,
-                src: *src,
-                filter_quality: *filter_quality,
-                opacity: *tex_opacity * opacity,
-                transform: *transform,
-            },
-        }
-    }
-
-    /// Returns the bounding rectangle of this command (if applicable).
-    ///
-    /// Used to calculate the DisplayList's overall bounds. Returns
-    /// transformed screen-space bounds (local bounds transformed by the
-    /// command's matrix).
+    /// Used to calculate the DisplayList's overall bounds. `None` for ops
+    /// that draw nothing or draw everywhere (clips, scope markers, `Color`,
+    /// `Paint`).
     pub(crate) fn bounds(&self) -> Option<Rect<Pixels>> {
+        self.op
+            .local_bounds()
+            .map(|local| self.transform.transform_rect(&local))
+    }
+}
+
+/// Smallest-enclosing axis-aligned box of a point set, `None` when empty.
+fn point_bounds<'a>(
+    mut points: impl Iterator<Item = &'a flui_types::geometry::Point<Pixels>>,
+) -> Option<Rect<Pixels>> {
+    let first = points.next()?;
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (first.x, first.y, first.x, first.y);
+    for point in points {
+        min_x = min_x.min(point.x);
+        min_y = min_y.min(point.y);
+        max_x = max_x.max(point.x);
+        max_y = max_y.max(point.y);
+    }
+    Some(Rect::from_ltrb(min_x, min_y, max_x, max_y))
+}
+
+impl DrawOp {
+    /// The op's bounds in its own (pre-transform) coordinate space, with
+    /// half the stroke width added where the paint strokes.
+    pub(crate) fn local_bounds(&self) -> Option<Rect<Pixels>> {
         match self {
-            DrawCommand::DrawRect {
-                rect,
-                paint,
-                transform,
-            } => {
+            DrawOp::Rect { rect, paint } | DrawOp::Oval { rect, paint } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = rect.expand(Pixels(outset));
-                Some(transform.transform_rect(&local_bounds))
+                Some(rect.expand(Pixels(outset)))
             }
-            DrawCommand::DrawRRect {
-                rrect,
-                paint,
-                transform,
-            } => {
+            DrawOp::Arc { rect, paint, .. } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = rrect.bounding_rect().expand(Pixels(outset));
-                Some(transform.transform_rect(&local_bounds))
+                Some(rect.expand(Pixels(outset)))
             }
-            DrawCommand::DrawCircle {
+            DrawOp::RRect { rrect, paint } => {
+                let outset = paint.effective_stroke_width() * 0.5;
+                Some(rrect.bounding_rect().expand(Pixels(outset)))
+            }
+            DrawOp::DRRect { outer, paint, .. } => {
+                let outset = paint.effective_stroke_width() * 0.5;
+                Some(outer.bounding_rect().expand(Pixels(outset)))
+            }
+            DrawOp::Circle {
                 center,
                 radius,
                 paint,
-                transform,
             } => {
-                let stroke_outset = paint.effective_stroke_width() * 0.5;
-                let effective_radius = *radius + Pixels(stroke_outset);
+                let effective_radius = *radius + Pixels(paint.effective_stroke_width() * 0.5);
                 let size = Size::new(effective_radius * 2.0, effective_radius * 2.0);
-                let local_bounds = Rect::from_center_size(*center, size);
-                Some(transform.transform_rect(&local_bounds))
+                Some(Rect::from_center_size(*center, size))
             }
-            DrawCommand::DrawOval {
-                rect,
-                paint,
-                transform,
-            } => {
+            DrawOp::Image { dst, .. }
+            | DrawOp::ImageRepeat { dst, .. }
+            | DrawOp::ImageNineSlice { dst, .. }
+            | DrawOp::ImageFiltered { dst, .. }
+            | DrawOp::Texture { dst, .. } => Some(*dst),
+            DrawOp::Line { p1, p2, paint } => {
+                let stroke_half = Pixels(paint.effective_stroke_width() * 0.5);
+                point_bounds([p1, p2].into_iter()).map(|b| b.expand(stroke_half))
+            }
+            DrawOp::Path { path, paint } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = rect.expand(Pixels(outset));
-                Some(transform.transform_rect(&local_bounds))
+                Some(path.compute_bounds().expand(Pixels(outset)))
             }
-            DrawCommand::DrawImage { dst, transform, .. } => Some(transform.transform_rect(dst)),
-            DrawCommand::DrawImageRepeat { dst, transform, .. } => {
-                Some(transform.transform_rect(dst))
+            DrawOp::Shadow {
+                path, elevation, ..
+            } => Some(path.compute_bounds().expand(Pixels(*elevation))),
+            DrawOp::Points { points, paint, .. } => {
+                let stroke_half = Pixels(paint.effective_stroke_width() * 0.5);
+                point_bounds(points.iter()).map(|b| b.expand(stroke_half))
             }
-            DrawCommand::DrawImageNineSlice { dst, transform, .. } => {
-                Some(transform.transform_rect(dst))
-            }
-            DrawCommand::DrawImageFiltered { dst, transform, .. } => {
-                Some(transform.transform_rect(dst))
-            }
-            DrawCommand::DrawTexture { dst, transform, .. } => Some(transform.transform_rect(dst)),
-            DrawCommand::DrawLine {
-                p1,
-                p2,
-                paint,
-                transform,
-            } => {
-                let stroke_half = paint.effective_stroke_width() * 0.5;
-                let min_x = p1.x.0.min(p2.x.0) - stroke_half;
-                let min_y = p1.y.0.min(p2.y.0) - stroke_half;
-                let max_x = p1.x.0.max(p2.x.0) + stroke_half;
-                let max_y = p1.y.0.max(p2.y.0) + stroke_half;
-                let local_bounds =
-                    Rect::from_ltrb(Pixels(min_x), Pixels(min_y), Pixels(max_x), Pixels(max_y));
-                Some(transform.transform_rect(&local_bounds))
-            }
-            DrawCommand::DrawPath {
-                path,
-                paint,
-                transform,
-            } => {
-                let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = path.compute_bounds().expand(Pixels(outset));
-                Some(transform.transform_rect(&local_bounds))
-            }
-            DrawCommand::DrawShadow {
-                path,
-                elevation,
-                transform,
-                ..
-            } => {
-                let local_bounds = path.compute_bounds().expand(Pixels(*elevation));
-                Some(transform.transform_rect(&local_bounds))
-            }
-            DrawCommand::DrawArc {
-                rect,
-                paint,
-                transform,
-                ..
-            } => {
-                let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = rect.expand(Pixels(outset));
-                Some(transform.transform_rect(&local_bounds))
-            }
-            DrawCommand::DrawDRRect {
-                outer,
-                paint,
-                transform,
-                ..
-            } => {
-                let outset = paint.effective_stroke_width() * 0.5;
-                let local_bounds = outer.bounding_rect().expand(Pixels(outset));
-                Some(transform.transform_rect(&local_bounds))
-            }
-            DrawCommand::DrawPoints {
-                points,
-                paint,
-                transform,
-                ..
-            } => {
-                if points.is_empty() {
-                    return None;
-                }
-                let stroke_half = paint.effective_stroke_width() * 0.5;
-                let mut min_x = points[0].x;
-                let mut min_y = points[0].y;
-                let mut max_x = points[0].x;
-                let mut max_y = points[0].y;
-
-                for point in points.iter().skip(1) {
-                    min_x = min_x.min(point.x);
-                    min_y = min_y.min(point.y);
-                    max_x = max_x.max(point.x);
-                    max_y = max_y.max(point.y);
-                }
-
-                let local_bounds = Rect::from_ltrb(
-                    min_x - Pixels(stroke_half),
-                    min_y - Pixels(stroke_half),
-                    max_x + Pixels(stroke_half),
-                    max_y + Pixels(stroke_half),
-                );
-                Some(transform.transform_rect(&local_bounds))
-            }
-            DrawCommand::DrawVertices {
-                vertices,
-                transform,
-                ..
-            } => {
-                if vertices.is_empty() {
-                    return None;
-                }
-                let mut min_x = vertices[0].x;
-                let mut min_y = vertices[0].y;
-                let mut max_x = vertices[0].x;
-                let mut max_y = vertices[0].y;
-
-                for vertex in vertices.iter().skip(1) {
-                    min_x = min_x.min(vertex.x);
-                    min_y = min_y.min(vertex.y);
-                    max_x = max_x.max(vertex.x);
-                    max_y = max_y.max(vertex.y);
-                }
-
-                let local_bounds = Rect::from_ltrb(min_x, min_y, max_x, max_y);
-                Some(transform.transform_rect(&local_bounds))
-            }
-            DrawCommand::DrawAtlas {
+            DrawOp::Vertices { vertices, .. } => point_bounds(vertices.iter()),
+            DrawOp::Atlas {
                 sprites,
                 transforms: sprite_transforms,
-                transform,
                 ..
-            } => {
-                if sprites.is_empty() || sprite_transforms.is_empty() {
-                    return None;
-                }
-
-                let mut combined_bounds: Option<Rect<Pixels>> = None;
-
-                for (sprite_rect, sprite_transform) in sprites.iter().zip(sprite_transforms.iter())
-                {
-                    let local_transformed = sprite_transform.transform_rect(sprite_rect);
-                    let screen_bounds = transform.transform_rect(&local_transformed);
-
-                    combined_bounds = match combined_bounds {
-                        Some(existing) => Some(existing.union(&screen_bounds)),
-                        None => Some(screen_bounds),
-                    };
-                }
-
-                combined_bounds
+            } => sprites
+                .iter()
+                .zip(sprite_transforms.iter())
+                .map(|(sprite_rect, sprite_transform)| sprite_transform.transform_rect(sprite_rect))
+                .reduce(|acc, r| acc.union(&r)),
+            // The laid-out box the recorder measured, not the ink extent of
+            // the glyphs — the `Offset.zero & size` box a paragraph render
+            // object reports. A text op that contributed nothing here would
+            // silently drop visible text from every bounds computation built
+            // on this.
+            DrawOp::Paragraph { layout, offset, .. } => {
+                let size = layout.metrics().size();
+                Some(Rect::from_xywh(
+                    offset.dx,
+                    offset.dy,
+                    size.width,
+                    size.height,
+                ))
             }
-            DrawCommand::DrawColor { .. } | DrawCommand::DrawPaint { .. } => None,
-            DrawCommand::DrawGradient {
-                rect, transform, ..
-            } => Some(transform.transform_rect(rect)),
-            DrawCommand::DrawGradientRRect {
-                rrect, transform, ..
-            } => Some(transform.transform_rect(&rrect.bounding_rect())),
-            DrawCommand::ShaderMask {
-                bounds, transform, ..
-            } => Some(transform.transform_rect(bounds)),
-            DrawCommand::BackdropFilter {
-                bounds, transform, ..
-            } => Some(transform.transform_rect(bounds)),
-            DrawCommand::ClipRect { .. }
-            | DrawCommand::ClipRRect { .. }
-            | DrawCommand::ClipRSuperellipse { .. }
-            | DrawCommand::ClipPath { .. } => None,
-            // Both text commands report the laid-out box the recorder
-            // measured, not the ink extent of the glyphs — the same rect
-            // Flutter's `RenderBox.paintBounds` (`Offset.zero & size`)
-            // reports for a `RenderParagraph`. They must agree: a caller
-            // cannot see which of the two a `Text` widget painted, so a
-            // command that contributed nothing here would silently drop
-            // visible text from every bounds computation built on this.
-            DrawCommand::DrawText {
-                offset,
-                size,
-                transform,
-                ..
-            }
-            | DrawCommand::DrawTextSpan {
-                offset,
-                size,
-                transform,
-                ..
-            } => {
-                let local_bounds = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
-                Some(transform.transform_rect(&local_bounds))
-            }
-            DrawCommand::SaveLayer {
-                bounds, transform, ..
-            } => bounds.map(|b| transform.transform_rect(&b)),
-            // Scope markers draw nothing, so they contribute no bounds.
-            DrawCommand::RestoreLayer { .. }
-            | DrawCommand::Save { .. }
-            | DrawCommand::Restore { .. } => None,
+            DrawOp::SaveLayer { bounds, .. } => *bounds,
+            // Full-target fills, clips, and scope markers contribute no
+            // bounds of their own.
+            DrawOp::Color { .. }
+            | DrawOp::Paint { .. }
+            | DrawOp::ClipRect { .. }
+            | DrawOp::ClipRRect { .. }
+            | DrawOp::ClipRSuperellipse { .. }
+            | DrawOp::ClipPath { .. }
+            | DrawOp::RestoreLayer
+            | DrawOp::Save
+            | DrawOp::Restore => None,
         }
     }
-
-    // ===== Type Discrimination =====
-
-    /// Returns the kind/category of this command.
-    #[inline]
-    pub fn kind(&self) -> CommandKind {
-        match self {
-            DrawCommand::ClipRect { .. }
-            | DrawCommand::ClipRRect { .. }
-            | DrawCommand::ClipRSuperellipse { .. }
-            | DrawCommand::ClipPath { .. } => CommandKind::Clip,
-
-            // The scope markers are `Layer` too: they are the plain-state
-            // siblings of `SaveLayer`/`RestoreLayer`, and the `_ => Draw`
-            // fallback below would otherwise make `is_draw()` true for a
-            // command that draws nothing — skewing `draw_commands()` and
-            // `count_by_kind()` for every recording that uses a scope.
-            DrawCommand::SaveLayer { .. }
-            | DrawCommand::RestoreLayer { .. }
-            | DrawCommand::Save { .. }
-            | DrawCommand::Restore { .. } => CommandKind::Layer,
-
-            DrawCommand::ShaderMask { .. } | DrawCommand::BackdropFilter { .. } => {
-                CommandKind::Effect
-            }
-
-            _ => CommandKind::Draw,
-        }
-    }
-
-    // ===== Type Checking Methods =====
-
-    /// Returns `true` if this is a clipping command.
-    #[inline]
-    pub fn is_clip(&self) -> bool {
-        matches!(self.kind(), CommandKind::Clip)
-    }
-
-    /// Returns `true` if this is a drawing command (shapes, text,
-    /// images).
-    #[inline]
-    pub fn is_draw(&self) -> bool {
-        matches!(self.kind(), CommandKind::Draw)
-    }
-
-    /// Returns `true` if this is an effect command (shader mask,
-    /// backdrop filter).
-    #[inline]
-    pub fn is_effect(&self) -> bool {
-        matches!(self.kind(), CommandKind::Effect)
-    }
-
-    /// Returns `true` if this is a layer command (save/restore layer).
-    #[inline]
-    pub fn is_layer(&self) -> bool {
-        matches!(self.kind(), CommandKind::Layer)
-    }
-
-    /// Returns `true` if this command draws a shape (rect, circle,
-    /// path, etc.).
-    #[inline]
-    pub fn is_shape(&self) -> bool {
-        matches!(
-            self,
-            DrawCommand::DrawRect { .. }
-                | DrawCommand::DrawRRect { .. }
-                | DrawCommand::DrawCircle { .. }
-                | DrawCommand::DrawOval { .. }
-                | DrawCommand::DrawPath { .. }
-                | DrawCommand::DrawArc { .. }
-                | DrawCommand::DrawDRRect { .. }
-                | DrawCommand::DrawLine { .. }
-                | DrawCommand::DrawPoints { .. }
-        )
-    }
-
-    /// Returns `true` if this command draws an image or texture.
-    #[inline]
-    pub fn is_image(&self) -> bool {
-        matches!(
-            self,
-            DrawCommand::DrawImage { .. }
-                | DrawCommand::DrawImageRepeat { .. }
-                | DrawCommand::DrawImageNineSlice { .. }
-                | DrawCommand::DrawImageFiltered { .. }
-                | DrawCommand::DrawTexture { .. }
-                | DrawCommand::DrawAtlas { .. }
-        )
-    }
-
-    /// Returns `true` if this command draws text.
-    #[inline]
-    pub fn is_text(&self) -> bool {
-        matches!(
-            self,
-            DrawCommand::DrawText { .. } | DrawCommand::DrawTextSpan { .. }
-        )
-    }
-
-    // ===== Accessor Methods =====
-
-    /// Returns the transform matrix for this command.
-    #[inline]
-    pub fn transform(&self) -> Matrix4 {
-        match self {
-            DrawCommand::ClipRect { transform, .. }
-            | DrawCommand::ClipRRect { transform, .. }
-            | DrawCommand::ClipRSuperellipse { transform, .. }
-            | DrawCommand::ClipPath { transform, .. }
-            | DrawCommand::DrawLine { transform, .. }
-            | DrawCommand::DrawRect { transform, .. }
-            | DrawCommand::DrawRRect { transform, .. }
-            | DrawCommand::DrawCircle { transform, .. }
-            | DrawCommand::DrawOval { transform, .. }
-            | DrawCommand::DrawPath { transform, .. }
-            | DrawCommand::DrawText { transform, .. }
-            | DrawCommand::DrawTextSpan { transform, .. }
-            | DrawCommand::DrawImage { transform, .. }
-            | DrawCommand::DrawImageRepeat { transform, .. }
-            | DrawCommand::DrawImageNineSlice { transform, .. }
-            | DrawCommand::DrawImageFiltered { transform, .. }
-            | DrawCommand::DrawTexture { transform, .. }
-            | DrawCommand::DrawShadow { transform, .. }
-            | DrawCommand::DrawGradient { transform, .. }
-            | DrawCommand::DrawGradientRRect { transform, .. }
-            | DrawCommand::ShaderMask { transform, .. }
-            | DrawCommand::BackdropFilter { transform, .. }
-            | DrawCommand::DrawArc { transform, .. }
-            | DrawCommand::DrawDRRect { transform, .. }
-            | DrawCommand::DrawPoints { transform, .. }
-            | DrawCommand::DrawVertices { transform, .. }
-            | DrawCommand::DrawColor { transform, .. }
-            | DrawCommand::DrawPaint { transform, .. }
-            | DrawCommand::DrawAtlas { transform, .. }
-            | DrawCommand::SaveLayer { transform, .. }
-            | DrawCommand::RestoreLayer { transform, .. }
-            | DrawCommand::Save { transform, .. }
-            | DrawCommand::Restore { transform, .. } => *transform,
-        }
-    }
-
-    /// Returns a reference to the Paint for this command, if it has
-    /// one.
-    ///
-    /// Variants carry `Arc<Paint>` internally for recording-time
-    /// interning; the accessor
-    /// returns a plain `&Paint` borrow so consumers stay refcount-agnostic.
-    #[inline]
-    pub fn paint(&self) -> Option<&Paint> {
-        match self {
-            DrawCommand::DrawLine { paint, .. }
-            | DrawCommand::DrawRect { paint, .. }
-            | DrawCommand::DrawRRect { paint, .. }
-            | DrawCommand::DrawCircle { paint, .. }
-            | DrawCommand::DrawOval { paint, .. }
-            | DrawCommand::DrawPath { paint, .. }
-            | DrawCommand::DrawText { paint, .. }
-            | DrawCommand::DrawArc { paint, .. }
-            | DrawCommand::DrawDRRect { paint, .. }
-            | DrawCommand::DrawPoints { paint, .. }
-            | DrawCommand::DrawVertices { paint, .. }
-            | DrawCommand::DrawPaint { paint, .. }
-            | DrawCommand::SaveLayer { paint, .. } => Some(paint.as_ref()),
-
-            DrawCommand::DrawImage { paint, .. }
-            | DrawCommand::DrawImageRepeat { paint, .. }
-            | DrawCommand::DrawImageNineSlice { paint, .. }
-            | DrawCommand::DrawImageFiltered { paint, .. }
-            | DrawCommand::DrawAtlas { paint, .. } => paint.as_deref(),
-
-            _ => None,
-        }
-    }
-
-    /// Returns `true` if this command has a Paint that can be
-    /// modified.
-    #[inline]
-    pub fn has_paint(&self) -> bool {
-        self.paint().is_some()
-    }
-
-    /// Returns a mutable reference to the transform matrix.
-    #[inline]
-    pub fn transform_mut(&mut self) -> &mut Matrix4 {
-        match self {
-            DrawCommand::ClipRect { transform, .. }
-            | DrawCommand::ClipRRect { transform, .. }
-            | DrawCommand::ClipRSuperellipse { transform, .. }
-            | DrawCommand::ClipPath { transform, .. }
-            | DrawCommand::DrawLine { transform, .. }
-            | DrawCommand::DrawRect { transform, .. }
-            | DrawCommand::DrawRRect { transform, .. }
-            | DrawCommand::DrawCircle { transform, .. }
-            | DrawCommand::DrawOval { transform, .. }
-            | DrawCommand::DrawPath { transform, .. }
-            | DrawCommand::DrawText { transform, .. }
-            | DrawCommand::DrawTextSpan { transform, .. }
-            | DrawCommand::DrawImage { transform, .. }
-            | DrawCommand::DrawImageRepeat { transform, .. }
-            | DrawCommand::DrawImageNineSlice { transform, .. }
-            | DrawCommand::DrawImageFiltered { transform, .. }
-            | DrawCommand::DrawTexture { transform, .. }
-            | DrawCommand::DrawShadow { transform, .. }
-            | DrawCommand::DrawGradient { transform, .. }
-            | DrawCommand::DrawGradientRRect { transform, .. }
-            | DrawCommand::ShaderMask { transform, .. }
-            | DrawCommand::BackdropFilter { transform, .. }
-            | DrawCommand::DrawArc { transform, .. }
-            | DrawCommand::DrawDRRect { transform, .. }
-            | DrawCommand::DrawPoints { transform, .. }
-            | DrawCommand::DrawVertices { transform, .. }
-            | DrawCommand::DrawColor { transform, .. }
-            | DrawCommand::DrawPaint { transform, .. }
-            | DrawCommand::DrawAtlas { transform, .. }
-            | DrawCommand::SaveLayer { transform, .. }
-            | DrawCommand::RestoreLayer { transform, .. }
-            | DrawCommand::Save { transform, .. }
-            | DrawCommand::Restore { transform, .. } => transform,
-        }
-    }
-
-    /// Applies an additional transform to this command.
-    ///
-    /// The new transform is multiplied with the existing one. For
-    /// container commands (`ShaderMask`, `BackdropFilter`) the
-    /// transform is also pushed into the nested child `DisplayList`
-    /// so the inner commands move with the outer container — mirrors
-    /// the recursive walk in [`Self::with_opacity`].
-    ///
-    /// Recursion into nested children is bounded by
-    /// [`MAX_EFFECT_DEPTH`]. See the module-level docs for the
-    /// rationale and saturation behavior.
-    #[inline]
-    pub fn apply_transform(&mut self, additional: Matrix4) {
-        self.apply_transform_depth(additional, 0);
-    }
-
-    /// Depth-counted recursion target for [`Self::apply_transform`].
-    pub(crate) fn apply_transform_depth(&mut self, additional: Matrix4, depth: usize) {
-        *self.transform_mut() = additional * self.transform();
-
-        match self {
-            DrawCommand::ShaderMask { child, .. } => {
-                if depth >= MAX_EFFECT_DEPTH {
-                    log_effect_depth_saturation("ShaderMask", "apply_transform", depth);
-                    return;
-                }
-                child.apply_transform_depth(additional, depth + 1);
-            }
-            DrawCommand::BackdropFilter { child, .. } => {
-                if let Some(child) = child.as_mut() {
-                    if depth >= MAX_EFFECT_DEPTH {
-                        log_effect_depth_saturation("BackdropFilter", "apply_transform", depth);
-                        return;
-                    }
-                    child.apply_transform_depth(additional, depth + 1);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Produce a fresh `Arc<Paint>` from an interned source carrying the
-/// requested opacity.
-///
-/// `DrawCommand::with_opacity_depth` rewrites every paint-carrying
-/// variant; the per-arm boilerplate around `Arc::new((**arc).clone()
-/// .with_opacity(opacity))` is centralised here so the match stays
-/// readable. The function always allocates a new `Arc` — the opacity
-/// mutation produces a distinct paint identity that the recording-time
-/// interning pool never sees, so we cannot reuse the input refcount.
-#[inline]
-fn with_opacity_arc(paint: &Arc<Paint>, opacity: f32) -> Arc<Paint> {
-    Arc::new((**paint).clone().with_opacity(opacity))
-}
-
-/// Emit a saturation warning when an effect-nesting recursion
-/// reaches [`MAX_EFFECT_DEPTH`]. Extracted so the two call sites in
-/// [`DrawCommand::with_opacity_depth`] and
-/// [`DrawCommand::apply_transform_depth`] stay symmetrical and easy
-/// to grep for in production logs.
-#[cold]
-#[inline(never)]
-fn log_effect_depth_saturation(variant: &'static str, op: &'static str, depth: usize) {
-    tracing::warn!(
-        variant = variant,
-        op = op,
-        depth = depth,
-        max_depth = MAX_EFFECT_DEPTH,
-        "DrawCommand::{op} saturated MAX_EFFECT_DEPTH on {variant}; \
-         inner DisplayList left untouched"
-    );
 }

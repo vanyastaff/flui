@@ -21,8 +21,8 @@
 //! size onto the pushed `Layer::Follower` (mirroring how
 //! `RenderLeaderLayer` publishes its size), and `flui-engine`'s
 //! `render_layer_recursive` resolves the actual pixel offset against the
-//! already-fully-built `LayerTree` and a per-frame `LinkRegistry` — see
-//! `flui_layer::resolve_follower_offset` (Tier 2).
+//! already-fully-built `LayerTree`, which indexes that frame's leaders — see
+//! `flui_layer::resolve_follower_offset`.
 //!
 //! **Hit-testing now consults that same resolved position** (ADR-0015):
 //! `PipelineOwner` retains a `RenderId`-keyed side table of
