@@ -39,7 +39,7 @@ flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
 flui-types = { path = "../flui-types", version = "0.2.0" }
 # The element tree + build owner this binding drives each frame (`build_scope`
 # drains the external inbox an animation/listenable tick fills).
-flui-view = { path = "../flui-view", version = "0.2.0" }
+flui-view = { path = "../flui-view", version = "0.2.0", features = ["runtime-internals"] }
 # The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
 flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
 # The process-wide `FontSystem` text measurement resolves against. `fonts`

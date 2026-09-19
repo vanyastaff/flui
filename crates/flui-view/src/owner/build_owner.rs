@@ -497,6 +497,7 @@ pub struct BuildOwner {
     /// passes its manager through [`Self::with_focus_manager`]; detached owners
     /// created by [`Self::new`] receive a fresh isolated manager.
     focus_manager: Rc<FocusManager>,
+    lifecycle_handle: Option<crate::LifecycleHandle>,
 
     /// The binding's frame-driven async task driver, installed by
     /// whichever binding owns this owner. `None` until then — a tree built with
@@ -658,6 +659,7 @@ impl BuildOwner {
             lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
             build_scope_queues: None,
             focus_manager,
+            lifecycle_handle: None,
             async_driver: None,
             post_frame_handle: None,
             local_post_frame_handle: None,
@@ -667,6 +669,16 @@ impl BuildOwner {
             owner_tag: OwnerTag::fresh(),
             global_key_scope: None,
         }
+    }
+
+    #[doc(hidden)]
+    pub fn set_lifecycle_handle(&mut self, handle: crate::LifecycleHandle) {
+        self.lifecycle_handle = Some(handle);
+    }
+
+    /// Weak presentation lifecycle capability, absent for a bare owner.
+    pub fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
+        self.lifecycle_handle.clone()
     }
 
     /// Return this element tree's focus manager.
@@ -1125,6 +1137,7 @@ impl BuildOwner {
             child_manager_registry: &self.child_manager_registry,
             layout_builder_registry: &self.layout_builder_registry,
             focus_manager: &self.focus_manager,
+            lifecycle_handle: &self.lifecycle_handle,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
             local_post_frame_handle: &self.local_post_frame_handle,
@@ -1633,6 +1646,7 @@ impl BuildOwner {
                     child_manager_registry: &self.child_manager_registry,
                     layout_builder_registry: &self.layout_builder_registry,
                     focus_manager: &self.focus_manager,
+                    lifecycle_handle: &self.lifecycle_handle,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
                     local_post_frame_handle: &self.local_post_frame_handle,
@@ -1788,6 +1802,7 @@ impl BuildOwner {
                     child_manager_registry: &self.child_manager_registry,
                     layout_builder_registry: &self.layout_builder_registry,
                     focus_manager: &self.focus_manager,
+                    lifecycle_handle: &self.lifecycle_handle,
                     async_driver: &self.async_driver,
                     post_frame_handle: &self.post_frame_handle,
                     local_post_frame_handle: &self.local_post_frame_handle,
@@ -2220,6 +2235,7 @@ impl BuildOwner {
                 child_manager_registry: &self.child_manager_registry,
                 layout_builder_registry: &self.layout_builder_registry,
                 focus_manager: &self.focus_manager,
+                lifecycle_handle: &self.lifecycle_handle,
                 async_driver: &self.async_driver,
                 post_frame_handle: &self.post_frame_handle,
                 local_post_frame_handle: &self.local_post_frame_handle,
@@ -2426,6 +2442,7 @@ impl BuildOwner {
             child_manager_registry: &self.child_manager_registry,
             layout_builder_registry: &self.layout_builder_registry,
             focus_manager: &self.focus_manager,
+            lifecycle_handle: &self.lifecycle_handle,
             async_driver: &self.async_driver,
             post_frame_handle: &self.post_frame_handle,
             local_post_frame_handle: &self.local_post_frame_handle,

@@ -69,8 +69,9 @@ input cancellation and resource suspension, while each realm derives its frame
 eligibility from its live presentations. Scoped regressions cover separate and
 shared realms, both focus-event orders, pause/resume, restoration redraw, and
 terminal notification before disposal even when an observer panics. Public
-live-observer registration and native lifecycle transport across every supported
-platform remain separate acceptance work.
+weak lifecycle subscriptions now have mounted app and sole-facade headless
+regressions, including renamed dependencies. Native lifecycle transport across
+every supported platform remains separate acceptance work.
 
 Primary references: [AppKit last-window termination policy](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldterminateafterlastwindowclosed(_:))
 separates window closure from application termination; [winit application lifecycle](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)

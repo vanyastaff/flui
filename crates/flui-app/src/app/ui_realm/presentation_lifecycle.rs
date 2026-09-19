@@ -78,6 +78,7 @@ impl UiRealm {
         self.host_lifecycle.set(HostLifecycle::Stopping);
         for presentation in self.presentations.iter() {
             presentation.closing_requested.set(true);
+            presentation.widgets().lifecycle_source().begin_close();
             // PORT-CHECK-OK-LOCK: plain data: retained pointer events, no Drop
             presentation.held_pointer_input().borrow_mut().clear();
         }
@@ -87,6 +88,7 @@ impl UiRealm {
     pub(crate) fn stop_presentation(&self, id: PresentationId) {
         if let Some(presentation) = self.presentations.get(id) {
             presentation.closing_requested.set(true);
+            presentation.widgets().lifecycle_source().begin_close();
             // PORT-CHECK-OK-LOCK: plain data: retained pointer events, no Drop
             presentation.held_pointer_input().borrow_mut().clear();
             self.reconcile_lifecycle(Vec::new());
@@ -140,10 +142,14 @@ impl UiRealm {
             .map(|presentation| {
                 (
                     presentation,
-                    presentation.reported_lifecycle.get().map_or_else(
-                        || vec![self.execution_lifecycle(presentation)],
-                        |old| lifecycle_ladder(old, self.execution_lifecycle(presentation)),
-                    ),
+                    presentation
+                        .widgets()
+                        .lifecycle_source()
+                        .current()
+                        .map_or_else(
+                            || vec![self.execution_lifecycle(presentation)],
+                            |old| lifecycle_ladder(old, self.execution_lifecycle(presentation)),
+                        ),
                 )
             })
             .collect();
@@ -162,7 +168,17 @@ impl UiRealm {
                 .iter()
                 .filter_map(|(presentation, steps)| {
                     steps.get(round).map(|step| {
-                        let old = presentation.reported_lifecycle.replace(Some(*step));
+                        let source = presentation.widgets().lifecycle_source();
+                        let old = source.current();
+                        let committed = if presentation.closing_requested.get() {
+                            source.commit_terminal(*step)
+                        } else {
+                            source.commit(*step)
+                        };
+                        debug_assert!(
+                            committed.is_ok(),
+                            "live presentation source accepts its owner commit"
+                        );
                         (*presentation, old, *step)
                     })
                 })
@@ -237,9 +253,7 @@ impl UiRealm {
             }
             for (presentation, _, step) in changed {
                 let failure = catch_unwind(AssertUnwindSafe(|| {
-                    presentation
-                        .widgets()
-                        .handle_app_lifecycle_state_changed(step);
+                    presentation.widgets().notify_committed_lifecycle(step);
                 }))
                 .err();
                 preserve_first_lifecycle_panic(
@@ -256,6 +270,15 @@ impl UiRealm {
             .iter()
             .filter(|p| p.closing_requested.get())
         {
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                presentation.widgets().lifecycle_source().finish_close();
+            }))
+            .err();
+            preserve_first_lifecycle_panic(
+                &mut first_panic,
+                failure,
+                "lifecycle subscription close",
+            );
             let failure = catch_unwind(AssertUnwindSafe(|| presentation.close())).err();
             preserve_first_lifecycle_panic(
                 &mut first_panic,
@@ -275,10 +298,150 @@ mod tests {
     use crate::app::{presentation::PresentationLifecycle, window_test_support::TestWindow};
     use flui_view::WidgetsBindingObserver;
     use std::{
-        cell::RefCell,
+        cell::{Cell, RefCell},
         rc::{Rc, Weak},
         sync::{Arc, atomic::AtomicBool},
     };
+
+    #[derive(Clone)]
+    struct SubscriptionView {
+        handle: Rc<RefCell<Option<flui_view::LifecycleHandle>>>,
+        events: Rc<RefCell<Vec<AppLifecycleState>>>,
+        disposed: Rc<Cell<bool>>,
+    }
+    struct SubscriptionState {
+        view: SubscriptionView,
+        token: Option<flui_view::LifecycleSubscription>,
+    }
+    impl flui_view::StatefulView for SubscriptionView {
+        type State = SubscriptionState;
+        fn create_state(&self) -> Self::State {
+            SubscriptionState {
+                view: self.clone(),
+                token: None,
+            }
+        }
+    }
+    impl flui_view::View for SubscriptionView {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
+        }
+    }
+    impl flui_view::ViewState<SubscriptionView> for SubscriptionState {
+        fn init_state(&mut self, context: &dyn flui_view::BuildContext) {
+            let handle = context
+                .lifecycle_handle()
+                .expect("app presentation capability");
+            let events = Rc::clone(&self.view.events);
+            let (_, token) = handle
+                .subscribe(move |state| events.borrow_mut().push(state))
+                .expect("open presentation");
+            self.token = Some(token);
+            self.view.handle.replace(Some(handle));
+        }
+        fn build(
+            &self,
+            _: &SubscriptionView,
+            _: &dyn flui_view::BuildContext,
+        ) -> impl flui_view::IntoView {
+            flui_widgets::SizedBox::new(10.0, 10.0)
+        }
+        fn dispose(&mut self) {
+            assert_eq!(
+                self.view.events.borrow().last(),
+                Some(&AppLifecycleState::Detached)
+            );
+            assert_eq!(
+                self.view
+                    .handle
+                    .borrow()
+                    .as_ref()
+                    .expect("handle")
+                    .snapshot(),
+                Err(flui_view::LifecycleClosed)
+            );
+            self.view.disposed.set(true);
+        }
+    }
+    fn subscription_view() -> SubscriptionView {
+        SubscriptionView {
+            handle: Rc::default(),
+            events: Rc::default(),
+            disposed: Rc::default(),
+        }
+    }
+
+    #[test]
+    fn lifecycle_subscription_app_init_state_is_local_and_terminal_precedes_dispose_despite_legacy_panic()
+     {
+        struct Legacy;
+        impl WidgetsBindingObserver for Legacy {
+            fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
+                assert!(state != AppLifecycleState::Detached, "legacy terminal");
+            }
+        }
+        let (realm, a, b) = two_presentations();
+        let views = [subscription_view(), subscription_view()];
+        for (id, view) in [a, b].into_iter().zip(&views) {
+            realm
+                .attach_root_widget_to_for_test(id, view)
+                .expect("mount captures without locking recursively");
+            realm
+                .presentations
+                .get(id)
+                .expect("presentation")
+                .widgets()
+                .add_observer(Arc::new(Legacy));
+        }
+        let mut backend = crate::app::raster_test_support::TestRasterBackend::always_presents();
+        realm.enter(|realm| {
+            realm.render_frame_entered(&mut backend);
+        });
+        assert!(
+            views.iter().all(|view| view.handle.borrow().is_some()),
+            "first frame ran init_state for both presentations"
+        );
+        realm.update_window_visibility(b, false);
+        assert_eq!(
+            realm.scheduler().lifecycle_state(),
+            AppLifecycleState::Resumed
+        );
+        assert!(views[0].events.borrow().is_empty());
+        assert_eq!(
+            views[1].events.borrow().last(),
+            Some(&AppLifecycleState::Hidden)
+        );
+        let failure = catch_unwind(AssertUnwindSafe(|| {
+            realm.enter(UiRealm::stop_presentations);
+        }))
+        .expect_err("legacy panic");
+        assert_eq!(failure.downcast_ref::<&str>(), Some(&"legacy terminal"));
+        for view in views {
+            assert!(view.disposed.get());
+        }
+    }
+
+    #[test]
+    fn lifecycle_subscription_direct_drop_preserves_outer_unwind_and_invalidates_handle() {
+        let retained = Rc::new(RefCell::new(None));
+        let output = Rc::clone(&retained);
+        let outer = catch_unwind(AssertUnwindSafe(move || {
+            let realm = UiRealm::for_test();
+            let source = realm.presentations.primary().widgets().lifecycle_source();
+            let handle = source.handle();
+            let (_, token) = handle
+                .subscribe(|_| panic!("lifecycle during unwind"))
+                .expect("open");
+            output.replace(Some((handle, token)));
+            panic!("outer panic");
+        }))
+        .expect_err("outer survives");
+        assert_eq!(outer.downcast_ref::<&str>(), Some(&"outer panic"));
+        assert_eq!(
+            retained.borrow().as_ref().expect("retained").0.snapshot(),
+            Err(flui_view::LifecycleClosed)
+        );
+    }
 
     fn two_presentations() -> (UiRealm, PresentationId, PresentationId) {
         let mut realm = UiRealm::for_test();
@@ -485,7 +648,7 @@ mod tests {
             );
             for presentation in realm.presentations.iter() {
                 assert_eq!(
-                    presentation.reported_lifecycle.get(),
+                    presentation.widgets().lifecycle_source().current(),
                     Some(AppLifecycleState::Paused)
                 );
                 assert_eq!(presentation.lifecycle(), PresentationLifecycle::Suspended);
@@ -500,8 +663,9 @@ mod tests {
                     .presentations
                     .get(a)
                     .expect("A")
-                    .reported_lifecycle
-                    .get(),
+                    .widgets()
+                    .lifecycle_source()
+                    .current(),
                 Some(AppLifecycleState::Hidden)
             );
             assert_eq!(
@@ -509,8 +673,9 @@ mod tests {
                     .presentations
                     .get(b)
                     .expect("B")
-                    .reported_lifecycle
-                    .get(),
+                    .widgets()
+                    .lifecycle_source()
+                    .current(),
                 Some(AppLifecycleState::Inactive)
             );
         }
@@ -558,7 +723,10 @@ mod tests {
                 .presentations
                 .get(self.id)
                 .expect("not removed before notification");
-            assert_eq!(presentation.reported_lifecycle.get(), Some(state));
+            assert_eq!(
+                presentation.widgets().lifecycle_source().current(),
+                Some(state)
+            );
             assert_eq!(
                 realm.scheduler().lifecycle_state(),
                 realm.aggregate_lifecycle()

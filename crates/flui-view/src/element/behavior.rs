@@ -106,6 +106,7 @@ where
         core.rebuild_handle(),
         crate::context::BuildCapabilities {
             focus_manager: std::rc::Rc::clone(owner.focus_manager),
+            lifecycle_handle: owner.lifecycle_handle.clone(),
             async_driver: owner.async_driver.clone(),
             post_frame_handle: owner.post_frame_handle.clone(),
             local_post_frame_handle: owner.local_post_frame_handle.clone(),

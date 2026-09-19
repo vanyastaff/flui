@@ -240,6 +240,7 @@ pub struct ElementOwner<'a> {
     /// Cloned into each live `BuildCtx`; it is never looked up through
     /// process-global or thread-local state.
     pub(crate) focus_manager: &'a Rc<FocusManager>,
+    pub(crate) lifecycle_handle: &'a Option<crate::LifecycleHandle>,
 
     /// The binding's async task driver, or `None` when no
     /// binding installed one. Cloned into the live `BuildCtx` so a

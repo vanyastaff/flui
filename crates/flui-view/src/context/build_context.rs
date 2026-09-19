@@ -212,6 +212,13 @@ pub trait BuildContext {
     /// frame phase — enforced by `scripts/check-frame-capability-scope.sh`.
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle;
 
+    /// Presentation-local lifecycle observation. Acquire in `init_state` or
+    /// `did_change_dependencies`, never in build/layout/paint. Bare owners
+    /// without a presentation source return `None`.
+    fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
+        None
+    }
+
     /// This element tree's exact focus manager.
     ///
     /// A build owner always has one focus tree, so this capability is

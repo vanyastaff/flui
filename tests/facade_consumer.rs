@@ -161,6 +161,8 @@ fn external_consumers_extend_and_test_through_the_facade() {
             "lifecycle_capabilities_are_named_and_run_through_the_facade",
             "interaction_callback_vocabulary_is_nameable_through_the_facade",
             "retained_focus_node_uses_context_capabilities_through_the_facade",
+            "presentation_lifecycle_subscription_runs_through_the_facade",
+            "presentation_lifecycle_capability_is_absent_when_not_installed",
         ] {
             assert!(
                 report.contains(&format!("{case} ... ok")),
@@ -329,4 +331,26 @@ fn plugin_macros_use_only_the_facade_including_when_renamed() {
             );
         }
     }
+}
+
+#[test]
+fn external_consumer_names_presentation_lifecycle_capability() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut dependencies = toml::Table::new();
+    dependencies.insert("flui".into(), dependency("flui", root, false));
+    let output = compile_consumer(
+        dependencies,
+        r#"
+use flui::view::{BuildContext, LifecycleHandle, LifecycleSubscription, LifecycleClosed};
+pub fn acquire(ctx: &dyn BuildContext) -> Option<LifecycleHandle> { ctx.lifecycle_handle() }
+pub fn observe(handle: &LifecycleHandle) -> Result<(Option<flui::view::AppLifecycleState>, LifecycleSubscription), LifecycleClosed> {
+    handle.subscribe(|_| {})
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

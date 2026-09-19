@@ -128,13 +128,13 @@ impl Default for MountOwners {
 /// there would silently never poll if the async driver arrived late.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BuildCapabilities {
-    /// The full set — async driver, post-frame, owner-local post-frame, and
-    /// interaction dispatch. What every ordinary harness wants.
+    /// The full set — async driver, post-frame, owner-local post-frame,
+    /// lifecycle observation, and interaction dispatch.
     #[default]
     Installed,
     /// Only the async driver.
     ///
-    /// Withholds the post-frame and interaction handles so a test can assert
+    /// Does not install post-frame, lifecycle, or interaction handles, so a test can assert
     /// how code behaves when `BuildContext::post_frame_handle()` returns
     /// `None` — a real, reachable configuration for an embedder that drives
     /// frames itself. The async driver still goes in: withholding it too

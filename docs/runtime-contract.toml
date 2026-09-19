@@ -381,7 +381,7 @@ Detached ladder; it closes secondary admission before deferred tails drain, \
 cancels unresolved opens, and rejects completions from older loop identities. \
 Observers may reenter or panic without skipping siblings; an already-active \
 dispatch panic remains the first failure. Each realm now applies terminal lifecycle to every live presentation binding; \
-public live-observer registration remains separate work. `ExitPolicy` is \
+public owner-local registration uses weak lifecycle handles. `ExitPolicy` is \
 LIVE-WIRED, not merely mechanism: `flui_platform::traits::Platform:: \
 set_exit_policy_hook` (a new default-no-op trait method, overridden by the \
 winit, AppKit, and headless backends) lets `runner/host.rs::install_exit_policy_hook` \
@@ -596,7 +596,7 @@ local ladder steps; resource and redraw eligibility use the same host/native fac
 reversible. Closing presentations leave the aggregate before notification, \
 deliver Detached before widget disposal, and are removed even when an observer \
 panics. No loop-global visibility/focus authority remains. These are internal \
-binding delivery guarantees; public live-observer registration remains separate.
+binding delivery and scoped weak-subscription guarantees; native platform transport remains separately verified.
 
 `with_owner_platform`'s fence (c) (ADR-0039 §6, trigger #22's runtime \
 backstop) re-points onto this struct: `AppRuntime::installed_realm_phase` \
@@ -3999,3 +3999,63 @@ allow_files = []
 [[forbidden_path]]
 path = "crates/flui-presentation"
 why = "the presentation composition contract: no flui-presentation crate; flui-app privately composes the three owners"
+
+
+[[contract]]
+key = "presentation-lifecycle-subscriptions"
+statement = """
+BuildContext lifecycle_handle exposes optional owner-local weak observation of the \
+presentation's sole local lifecycle ledger. Subscription atomically returns the \
+initial optional snapshot without invoking a callback. Commit captures subscriber \
+identities; cancellation suppresses callbacks not yet started, and new subscribers \
+do not replay queued events. FIFO reentry and per-callback panic containment preserve \
+sibling delivery. Begin-close fences admission, final Detached precedes invalidation \
+and disposal, and retained handles or BuildOwners do not retain the source. \
+Scheduler aggregate state is not the subscription stream.
+"""
+state = "implemented"
+domain = "presentation"
+mechanical = true
+mechanism = "weak ownership, source queue and capability acquisition gate; runtime regression tests"
+evidence = [
+    { kind = "symbol", file = "crates/flui-view/src/lifecycle.rs", contains = "pub struct LifecycleHandle" },
+    { kind = "test", file = "crates/flui-view/src/lifecycle.rs", contains = "fn lifecycle_subscription_terminal_reentry_drains_before_invalidating" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/presentation_lifecycle.rs", contains = "fn lifecycle_subscription_app_init_state_is_local_and_terminal_precedes_dispose_despite_legacy_panic" },
+    { kind = "test", file = "tests/fixtures/facade_extensions.rs", contains = "fn presentation_lifecycle_subscription_runs_through_the_facade" },
+]
+
+[[surface]]
+path = "flui_view::LifecycleHandle"
+crate = "flui-view"
+kind = "type"
+declared_in = "crates/flui-view/src/lifecycle.rs"
+contains = "pub struct LifecycleHandle"
+classification = "stable-candidate"
+thread_affinity = "Clone; owner-local, not Send or Sync"
+owner = "weak reference minted by the presentation source"
+failure_semantics = "snapshot and subscribe return LifecycleClosed after their respective close fences"
+consumers = ["flui::view widget lifecycle hooks", "headless mounted facade consumer"]
+
+[[surface]]
+path = "flui_view::LifecycleSubscription"
+crate = "flui-view"
+kind = "type"
+declared_in = "crates/flui-view/src/lifecycle.rs"
+contains = "pub struct LifecycleSubscription"
+classification = "stable-candidate"
+thread_affinity = "owner-local, not Send or Sync; RAII cancellation"
+owner = "weak callback and source identity"
+failure_semantics = "drop cancels before capture disposal; callback destructor panic does not undo cancellation"
+consumers = ["flui::view widget lifecycle hooks", "headless mounted facade consumer"]
+
+[[surface]]
+path = "flui_view::LifecycleClosed"
+crate = "flui-view"
+kind = "type"
+declared_in = "crates/flui-view/src/lifecycle.rs"
+contains = "pub struct LifecycleClosed"
+classification = "stable-candidate"
+thread_affinity = "Send + Sync; copyable error value"
+owner = "returned by weak lifecycle capability operations"
+failure_semantics = "typed closed capability result"
+consumers = ["flui::view widget lifecycle hooks", "headless mounted facade consumer"]

@@ -85,7 +85,7 @@ PR1 was consolidation + the scheduler-internal parity leg only, with no platform
 - A dedicated Android `MainEvent` → lifecycle callback distinct from the generic window active-status hook `run_android` already has — PR2 fixed the *mapping* (Pause/Resume now ladder to `Paused`/`Resumed`) without splitting the transport apart from plain focus changes (`GainedFocus`/`LostFocus` still share the same `dispatch_active_status_change` call in `flui-platform`'s Android backend); a real split needs its own platform-side change.
 - Multi-window hidden-state aggregation (today's single-window assumption: one window's visibility is the whole app's visibility; a multi-window app needs "all windows hidden" aggregation before reporting `Hidden`).
 - `onExitRequested`-style negotiated-exit (the app getting a chance to veto or delay a platform-initiated exit) — today `Terminating`/`Detached` is a one-way notification.
-- A widget-tree-facing lifecycle capability (a `BuildContext` seam a widget could use to read/observe lifecycle state directly, analogous to the `text_input_handle()` precedent) — no consumer exists yet to justify the seam.
+- The former widget-tree lifecycle capability deferral is superseded by the scoped subscription decision below.
 - A DOM `visibilitychange` occlusion signal for the web backend — `run_web` wires `WindowFocus` only in PR2; `RealmEvent::WindowVisibility` is not constructed on `wasm32` yet.
 
 ## Alternatives rejected
@@ -238,3 +238,51 @@ ladder. The history regression records both streams separately,
 along with frame eligibility and resources at each local callback, including
 initially hidden native windows. This distinction supersedes earlier statements
 that the scheduler itself always synthesizes the complete local ladder.
+
+
+## Weak presentation lifecycle subscriptions
+
+`BuildContext::lifecycle_handle()` returns an optional owner-local capability,
+acquired in `init_state` or `did_change_dependencies`. A bare build owner returns
+None. The presentation binding owns a concrete source outside its element lock;
+BuildOwner and captured build contexts carry weak handles only. The source owns
+the sole optional local history previously stored on PresentationState. The
+scheduler aggregate remains a separate execution decision.
+
+`subscribe` atomically returns the current optional observation and an RAII token,
+without invoking the callback before the caller can store the token. Callbacks
+accept owner-local Rc captures. Commit snapshots subscriber identities; a new
+subscription gets the latest state but no replay of previously committed events.
+Dropping a token cancels not-started callbacks, including in the same dispatch.
+This follows the scoped cancellation approach in
+[GPUI subscriptions](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/subscription.rs),
+using Rust weak ownership instead of
+[Flutter AppLifecycleListener's explicit dispose](https://api.flutter.dev/flutter/widgets/AppLifecycleListener-class.html).
+
+All local snapshots commit before scheduler callbacks. Subscription delivery is
+FIFO and outside source borrows; nested drains defer to the active walk. Callback
+arguments describe their event, while snapshot reads the latest committed state,
+which can be newer after a reentrant commit. Panicking callbacks and capture
+destructors cannot skip siblings: the first panic resumes after delivery and
+cleanup, and secondary payloads are safely forgotten. Legacy binding observers
+retain snapshot iteration and first-panic short-circuiting, but their panic cannot
+skip the new subscription stream.
+
+Explicit begin-close fences subscription admission before cancellation or user
+callbacks. The owner may still commit its authorized terminal ladder; ordinary
+late commits are rejected. Final Detached is delivered before source invalidation
+and widget disposal. Reentrant finalization waits for queued terminal delivery.
+Observed Detached alone is reversible. Source destruction invalidates weak
+handles even if a caller retains a BuildOwner. Direct presentation teardown sends
+final Detached if normal reconciliation has not already done so, invalidates the
+source, and attempts widget disposal despite notification failure; a teardown
+panic cannot replace an already-unwinding outer panic.
+
+HeadlessBinding owns the same source and installs its handle under the Installed
+capability policy. Its explicit observation/close methods are deterministic
+notification oracles, not native transport or realm aggregation simulations;
+close_lifecycle invalidates observation without disposing the mounted tree.
+The sole-facade fixture runs these operations with both flui and renamed ui.
+Application tests mount an init_state subscriber into each shared presentation,
+observe a local hide while the aggregate stays Resumed, and prove terminal
+delivery and handle invalidation precede dispose despite legacy observer panic.

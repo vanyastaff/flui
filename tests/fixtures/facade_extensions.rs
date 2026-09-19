@@ -600,3 +600,73 @@ fn retained_focus_node_uses_context_capabilities_through_the_facade() {
     assert!(!view.node.has_primary_focus());
     assert!(view.changes.borrow().contains(&false));
 }
+
+#[derive(Clone, StatefulView)]
+struct LifecycleProbe {
+    expected: bool,
+    initialized: Rc<std::cell::Cell<bool>>,
+    captured: Rc<RefCell<Option<flui::view::LifecycleHandle>>>,
+    events: Rc<RefCell<Vec<flui::view::AppLifecycleState>>>,
+}
+struct LifecycleProbeState {
+    view: LifecycleProbe,
+    subscription: Option<flui::view::LifecycleSubscription>,
+}
+impl StatefulView for LifecycleProbe {
+    type State = LifecycleProbeState;
+    fn create_state(&self) -> Self::State {
+        LifecycleProbeState { view: self.clone(), subscription: None }
+    }
+}
+impl ViewState<LifecycleProbe> for LifecycleProbeState {
+    fn init_state(&mut self, context: &dyn BuildContext) {
+        self.view.initialized.set(true);
+        let handle = context.lifecycle_handle();
+        assert_eq!(handle.is_some(), self.view.expected);
+        let Some(handle) = handle else { return; };
+        let events = self.view.events.clone();
+        let (initial, subscription) = handle.subscribe(move |state| events.borrow_mut().push(state)).expect("open");
+        assert_eq!(initial, None);
+        assert!(self.view.events.borrow().is_empty(), "no callback before token storage");
+        self.subscription = Some(subscription);
+        *self.view.captured.borrow_mut() = Some(handle);
+    }
+    fn build(&self, _: &LifecycleProbe, _: &dyn BuildContext) -> impl IntoView { SizedBox::new(20.0, 20.0) }
+}
+
+#[test]
+fn presentation_lifecycle_subscription_runs_through_the_facade() {
+    use flui::view::{AppLifecycleState, LifecycleClosed};
+    let view = LifecycleProbe { expected: true, initialized: Rc::default(), captured: Rc::default(), events: Rc::default() };
+    let mut binding = flui::testing::HeadlessBinding::new();
+    binding.mount_root(&view, flui::testing::MountOwners::fresh(), flui::testing::MountOptions::loose(100.0));
+    let handle = view.captured.borrow().as_ref().expect("captured").clone();
+    binding.set_lifecycle_state(AppLifecycleState::Detached).expect("observed detached");
+    binding.set_lifecycle_state(AppLifecycleState::Resumed).expect("reversible");
+    binding.set_lifecycle_state(AppLifecycleState::Hidden).expect("hide");
+    let extra = Rc::new(RefCell::new(Vec::new()));
+    let recorded = extra.clone();
+    let (snapshot, token) = handle.subscribe(move |state| recorded.borrow_mut().push(state)).expect("second subscriber");
+    assert_eq!(snapshot, Some(AppLifecycleState::Hidden));
+    assert!(extra.borrow().is_empty());
+    binding.set_lifecycle_state(AppLifecycleState::Inactive).expect("show unfocused");
+    assert_eq!(handle.snapshot(), Ok(Some(AppLifecycleState::Inactive)));
+    assert_eq!(*extra.borrow(), [AppLifecycleState::Inactive]);
+    drop(token);
+    binding.set_lifecycle_state(AppLifecycleState::Hidden).expect("hide again");
+    binding.close_lifecycle();
+    assert_eq!(*extra.borrow(), [AppLifecycleState::Inactive], "dropped token suppresses later events");
+    assert_eq!(*view.events.borrow(), [AppLifecycleState::Detached, AppLifecycleState::Resumed, AppLifecycleState::Hidden, AppLifecycleState::Inactive, AppLifecycleState::Hidden, AppLifecycleState::Detached]);
+    assert_eq!(handle.snapshot(), Err(LifecycleClosed));
+    assert!(handle.subscribe(|_| {}).is_err());
+}
+
+
+#[test]
+fn presentation_lifecycle_capability_is_absent_when_not_installed() {
+    let view = LifecycleProbe { expected: false, initialized: Rc::default(), captured: Rc::default(), events: Rc::default() };
+    let mut binding = flui::testing::HeadlessBinding::new();
+    binding.mount_root(&view, flui::testing::MountOwners::fresh(), flui::testing::MountOptions::loose(100.0).with_capabilities(flui::testing::BuildCapabilities::AsyncDriverOnly));
+    assert!(view.initialized.get());
+    assert!(view.captured.borrow().is_none());
+}

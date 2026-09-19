@@ -156,6 +156,12 @@ mod test_only_global_key_registry {
 
 // View traits
 // Binding
+mod lifecycle;
+#[cfg(feature = "runtime-internals")]
+#[doc(hidden)]
+pub use lifecycle::LifecycleSource;
+pub use lifecycle::{LifecycleClosed, LifecycleHandle, LifecycleSubscription};
+
 pub use binding::{
     AppExitResponse, AppLifecycleState, AttachError, PredictiveBackEvent, RouteInformation,
     ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,

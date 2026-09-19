@@ -8,7 +8,7 @@
 // without adding a fixture cannot create a false sense of coverage.
 //
 // Prose mentioning rebuild_handle, post_frame_handle, local_post_frame_handle,
-// text_input_handle, focus_manager, keep_alive_lease, keep_alive_handle,
+// text_input_handle, focus_manager, lifecycle_handle, keep_alive_lease, keep_alive_handle,
 // owner_platform, hit_test_handle, or
 // pipeline_owner in a
 // comment must NOT count as a violation; this line proves the comment filter
@@ -28,6 +28,8 @@ impl StatelessView for Loop {
         let text_input = ctx.text_input_handle();
         // Makes imperative focus mutation reachable from build.
         let focus = ctx.focus_manager();
+        // Re-registers lifecycle observation during every build.
+        let lifecycle = ctx.lifecycle_handle();
         // Re-takes the keep-alive hold on every rebuild; the previous lease's
         // Drop releases it, so the child's survival would hinge on rebuild
         // ordering rather than on the state that wants it kept alive.

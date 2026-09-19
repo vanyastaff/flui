@@ -256,6 +256,10 @@ impl BuildContext for ElementBuildContext {
         self.owner.read().hit_test_handle().cloned()
     }
 
+    fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
+        self.owner.read().lifecycle_handle()
+    }
+
     fn focus_manager(&self) -> Rc<FocusManager> {
         self.owner.read().focus_manager()
     }
@@ -650,6 +654,7 @@ pub(crate) struct DependentRecord {
 pub(crate) struct BuildCapabilities {
     /// The exact focus manager owned by the surrounding build owner.
     pub(crate) focus_manager: Rc<FocusManager>,
+    pub(crate) lifecycle_handle: Option<crate::LifecycleHandle>,
     /// The binding's async task driver.
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
     /// The binding's post-frame capability.
@@ -792,6 +797,10 @@ impl BuildContext for BuildCtx<'_> {
 
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
         self.capabilities.keep_alive.handle(self.element_id)
+    }
+
+    fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
+        self.capabilities.lifecycle_handle.clone()
     }
 
     fn focus_manager(&self) -> Rc<FocusManager> {
@@ -1333,6 +1342,7 @@ mod tests {
             crate::RebuildHandle::inert(),
             BuildCapabilities {
                 focus_manager: FocusManager::new(),
+                lifecycle_handle: None,
                 async_driver: None,
                 post_frame_handle: None,
                 local_post_frame_handle: None,
@@ -1358,6 +1368,7 @@ mod tests {
             crate::RebuildHandle::inert(),
             BuildCapabilities {
                 focus_manager: Rc::clone(&focus_manager),
+                lifecycle_handle: None,
                 async_driver: None,
                 post_frame_handle: None,
                 local_post_frame_handle: None,
