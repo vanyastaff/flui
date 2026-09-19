@@ -1369,15 +1369,11 @@ impl UiRealm {
 
     /// A new cross-thread sender into this runtime's inbox.
     #[must_use]
-    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
-    // non-test consumer outside the desktop runner, so the non-desktop lib
-    // checks see this as dead.
+    // Desktop and iOS runners both vend it (iOS for the reload hook); Android
+    // and wasm have no caller, so their lib checks see this as dead.
     #[cfg_attr(
-        all(
-            not(test),
-            any(target_os = "android", target_os = "ios", target_arch = "wasm32")
-        ),
-        expect(dead_code, reason = "consumed only by the desktop runner and tests")
+        all(not(test), any(target_os = "android", target_arch = "wasm32")),
+        expect(dead_code, reason = "no Android/wasm caller outside tests")
     )]
     pub fn command_sender(&self) -> UiCommandSender {
         self.sender_prototype.clone()

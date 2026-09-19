@@ -15,14 +15,21 @@
 //! - `on_surface_status_change` → drop/rebuild the wgpu surface, so a
 //!   `CAMetalLayer`-backed surface is never alive across a suspension.
 //!
-//! # No hot-reload
+//! # Hot-reload
 //!
-//! iOS is the one mobile target with no reload driver: `flui-hot-reload`'s
-//! `dlopen` path is desktop/Android. `AppConfig`'s worker-plugin fields are
-//! therefore never read here, and the frame path has no plugin override.
+//! iOS runs the same host/worker split as desktop and Android: `bootstrap_ios`
+//! loads a worker dylib when one is configured, watches the artifact, and
+//! reassembles on change. The `dlopen` path is the shared `flui-hot-reload`
+//! `DynLib`; on iOS this is usable in the Simulator (and for a dev-signed
+//! build), while a production App Store build has no mutable dylib to load and
+//! simply runs static — `AppConfig`'s worker field is `None` and the whole
+//! capability is inert. See [`super::hot_reload`] for the seam and
+//! `docs/hot-reload.md` for the two-layer model.
 
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use super::device_recovery::{DeviceRecoveryBackoff, render_frame_with_device_recovery};
 use super::frame_pacing::{
@@ -39,6 +46,7 @@ use super::realm_dispatch::{
 };
 use super::surface_lifecycle::{SurfaceLifecycleOutcome, ensure_surface};
 use crate::app::AppConfig;
+use crate::app::hot_reload::{RebuildHookGuard, WorkerReload, WorkerWatcherGuard};
 
 /// Run a FLUI application on iOS with default configuration.
 ///
@@ -65,6 +73,9 @@ fn run_ios<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + 'static,
 {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use flui_platform::{IOSPlatform, Platform};
 
     let platform: Box<dyn Platform> = match IOSPlatform::new() {
@@ -74,6 +85,21 @@ where
             return;
         }
     };
+
+    // Development reload, if this build has it and a worker is configured.
+    // With the `hot-reload` feature off this value is inert and
+    // `flui-hot-reload` is not in the graph.
+    let worker_reload = WorkerReload::from_config(&config);
+
+    // The reload guards can only be created from inside `on_ready` (they need
+    // the realm's `wake`), so — exactly as `run_desktop` does — they are
+    // threaded back out through cells that outlive `platform.run`, which keeps
+    // the rebuild hook attached and the watcher thread alive for the loop's
+    // whole life.
+    let rebuild_registration: Rc<RefCell<Option<RebuildHookGuard>>> = Rc::new(RefCell::new(None));
+    let rebuild_registration_slot = Rc::clone(&rebuild_registration);
+    let worker_watcher: Rc<RefCell<Option<WorkerWatcherGuard>>> = Rc::new(RefCell::new(None));
+    let worker_watcher_slot = Rc::clone(&worker_watcher);
 
     // Armed BEFORE `run(...)`, matching the Android and desktop runners: the
     // guard clears the loop-scoped owner host on the way out, including on
@@ -86,8 +112,24 @@ where
         // error), so the bootstrap's `anyhow::Error` crosses via anyhow's own
         // `From` impl — the same conversion the Android runner's closure
         // relies on.
-        bootstrap_ios(root, config).map_err(Into::into)
+        bootstrap_ios(
+            root,
+            config,
+            worker_reload,
+            rebuild_registration_slot,
+            worker_watcher_slot,
+        )
+        .map_err(Into::into)
     }));
+
+    // Loop exited: detach the hook and stop the watcher before teardown. Take
+    // each value out under its borrow, then drop it AFTER the guard falls — the
+    // watcher's `Drop` joins a thread, and dropping that under the borrow is
+    // the `LockDiscipline/StatementDrop` shape port-check refuses.
+    let hook_guard = rebuild_registration.borrow_mut().take();
+    let watcher_guard = worker_watcher.borrow_mut().take();
+    drop(hook_guard);
+    drop(watcher_guard);
 
     if let Err(error) = result {
         tracing::error!(%error, "iOS platform run returned an error");
@@ -98,7 +140,13 @@ where
 ///
 /// Runs once, synchronously, inside `on_ready` — which the delegate delivers
 /// at `didFinishLaunching`, the first point UIKit permits a window.
-fn bootstrap_ios<V>(root: V, config: AppConfig) -> anyhow::Result<()>
+fn bootstrap_ios<V>(
+    root: V,
+    config: AppConfig,
+    worker_reload: WorkerReload,
+    rebuild_registration_slot: Rc<RefCell<Option<RebuildHookGuard>>>,
+    worker_watcher_slot: Rc<RefCell<Option<WorkerWatcherGuard>>>,
+) -> anyhow::Result<()>
 where
     V: View + StatelessView + Clone + 'static,
 {
@@ -187,7 +235,28 @@ where
         tracing::error!("Root widget attach failed: {:?}", e);
         return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
     }
+    let hot_reload_sender = ui_realm.command_sender();
     let realm_dispatch = install_platform_realm(ui_realm, &window);
+
+    // 3b. Wire development reload, when a worker is configured. The hook turns
+    // a worker-side rebuild request into a queued `HotReload` command; the
+    // watcher wakes the loop when the artifact changes, so an idle app (no
+    // frames arriving) still reloads. Both are inert when no worker is set.
+    {
+        let hook_guard = worker_reload.register_rebuild_hook(hot_reload_sender);
+        let displaced = {
+            let mut slot = rebuild_registration_slot.borrow_mut();
+            slot.replace(hook_guard)
+        };
+        drop(displaced);
+
+        let watcher_guard = worker_reload.spawn_watcher(Arc::clone(&wake));
+        let displaced = {
+            let mut slot = worker_watcher_slot.borrow_mut();
+            std::mem::replace(&mut *slot, watcher_guard)
+        };
+        drop(displaced);
+    }
 
     // 3b. Start config-declared application services (issue #558).
     for service in &config.services {
@@ -229,12 +298,19 @@ where
 
     // 6. Frame callback — the `CADisplayLink` tick lands here.
     let lane_frame = Arc::clone(&lane);
+    let worker_reload_frame = worker_reload.clone();
     window.on_request_frame(Box::new(move || {
         let lane_frame = Arc::clone(&lane_frame);
         let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
+        let worker_reload_frame = worker_reload_frame.clone();
         let _ = dispatch_platform_realm(
             realm_dispatch,
             RealmTask::Frame(Box::new(move |realm| {
+                // Development reload: applies a queued rebuild at the frame
+                // boundary (the `dlopen` stays owner-thread), exactly as the
+                // desktop runner does.
+                worker_reload_frame.poll_and_apply(realm);
+
                 let inbox_redraw = drain_owner_inbox(realm);
 
                 let has_pending = realm.has_pending_work();
