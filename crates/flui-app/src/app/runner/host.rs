@@ -61,7 +61,17 @@ thread_local! {
 /// every realm-hosting backend goes through it, `run_direct` never does.
 pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
     APP_RUNTIME.with(|slot| {
-        slot.borrow_mut().owner_platform = Some(owner);
+        let mut state = slot.borrow_mut();
+        state.owner_platform = Some(owner);
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        {
+            state.quit_notification = crate::app::runtime::QuitNotification::Active;
+            state.loop_identity = Arc::new(());
+        }
     });
 }
 
@@ -133,6 +143,31 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
     }
     #[cfg(target_arch = "wasm32")]
     drop(shared);
+}
+
+/// Install the desktop platform's one quit notification callback.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) fn install_platform_quit_hook() {
+    let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
+    let owner_thread = std::thread::current().id();
+    with_owner_platform(|owner| {
+        owner.shared().on_quit(Box::new(move || {
+            assert_eq!(
+                std::thread::current().id(),
+                owner_thread,
+                "BUG: platform quit must run on its owner"
+            );
+            if !APP_RUNTIME.with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &loop_identity)) {
+                return;
+            }
+            tracing::info!("Platform quit");
+            super::realm_dispatch::request_quit_notification();
+        }));
+    });
 }
 
 /// Installs the wall-clock-wake hook this thread's platform

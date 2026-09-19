@@ -60,10 +60,13 @@ application must be able to reopen its UI and explicitly quit through public
 capabilities. Native activation/reopen and background-launch behavior need their
 own live checks. The macOS shutdown probes below cover only their named cases.
 
-The current audit found that desktop quit dispatch targets the primary realm;
-the secondary-window runner explicitly leaves all-realm quit notification as
-follow-up work. This remains a release gap until a multi-realm regression and
-the implementation prove notification to every hosted realm.
+Desktop quit now has a loop-owned notification walk across surviving realms,
+including when the primary realm was removed. Application seam regressions cover
+shared realms, deferred installs, rejected late secondary completions, reentry,
+and observer/dispatch panic ordering. This closes the primary-only notification
+gap; it does not certify a public lifecycle-observer registration workflow or
+per-presentation observer delivery within a shared realm. Those remain separate
+acceptance work.
 
 Primary references: [AppKit last-window termination policy](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldterminateafterlastwindowclosed(_:))
 separates window closure from application termination; [winit application lifecycle](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)

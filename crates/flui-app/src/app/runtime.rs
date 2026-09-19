@@ -354,14 +354,14 @@ impl RealmRegistry {
     /// Every installed `RealmId`, in insertion (mount) order — the read
     /// `for_each_installed_realm` (`super::runner`) snapshots before it
     /// starts checking realms out one at a time.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "for_each_installed_realm's only production driver is a follow-up; \
-                      exercised by this module's own tests via that function"
+    #[cfg(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
         )
-    )]
+    ))]
     pub(super) fn keys(&self) -> Vec<RealmId> {
         self.slots.iter().map(|(id, _)| *id).collect()
     }
@@ -540,6 +540,20 @@ impl FrameWakeHandle {
     }
 }
 
+/// Owner-loop quit notification progress; reset only when installing a new owner.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum QuitNotification {
+    Active,
+    Requested,
+    Notifying,
+    Notified,
+}
+
 /// The loop-scoped composition root: platform event-loop demux, the single
 /// realm slot, and the once-resolved [`SharedEngineServices`].
 ///
@@ -657,6 +671,18 @@ pub(crate) struct AppRuntime {
     /// so a mutation triggered by a callback running mid-visit never
     /// changes the set of realms that same visit is still walking.
     pub(super) iterating_all_realms: bool,
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) quit_notification: QuitNotification,
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) loop_identity: Arc<()>,
     /// Realm-map mutations requested while
     /// [`Self::request_realm_install`]/[`Self::request_realm_uninstall`]
     /// decided they must defer. Applied, in request order, by
@@ -756,6 +782,18 @@ impl AppRuntime {
             dispatched_scheduler: None,
             dispatched_realm_id: None,
             iterating_all_realms: false,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            quit_notification: QuitNotification::Active,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            loop_identity: Arc::new(()),
             pending_realm_mutations: Vec::new(),
             services: OnceCell::new(),
             execution: OnceCell::new(),

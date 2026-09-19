@@ -125,3 +125,47 @@ PR1 was consolidation + the scheduler-internal parity leg only, with no platform
   - `handle_app_lifecycle_state_changed_observer_can_remove_itself_mid_dispatch` (`flui-view/src/binding.rs`): removing the observer's `remove_observer` call made the post-dispatch `observer_count() == 0` assertion fail; restoring it turned it green.
   - `every_runner_frame_site_uses_the_shared_drive_frame_helper` (`flui-app/tests/runner_frame_ordering.rs`): inserting a direct `handle_begin_frame` call into `run_desktop`'s production body made the "banned call" assertion fail, confirming the production-only scan (excludes `#[cfg(test)]` regions, needed because unit tests legitimately call `Scheduler::drive_frame`/`drive_async_tasks` directly) still catches a real regression.
   - `test_on_visibility_status_change` (`flui-platform`): removing `MockWindow::simulate_visibility`'s `dispatch_visibility_status_change` call made the assertion fail; restoring it turned it green.
+
+## Desktop quit across installed realms
+
+A platform quit belongs to the application loop, not the primary window's
+presentation address. The desktop callback therefore visits every surviving
+installed realm once, including after the original primary realm has closed.
+Each realm receives the existing transition ladder to `Detached`, disabling
+frames and completing its existing gesture and lifecycle cleanup. A shared realm
+with several presentations is visited once. This does not add per-presentation
+`WidgetsBinding` observer fanout: the existing realm transition still uses its
+primary binding, and public live observer registration remains separate work.
+
+This is a deliberate multi-realm extension of the single lifecycle stream in
+Flutter, consistent with ADR-0027's runtime ownership model. Window closure and
+application termination remain distinct, as in AppKit's
+[`applicationShouldTerminateAfterLastWindowClosed`](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldterminateafterlastwindowclosed(_:)).
+No new public lifecycle enum or process-wide singleton is introduced.
+
+Quit closes secondary-window admission immediately. Notification waits until an
+active realm dispatch or realm visitor restores its checked-out state. Realm
+installs already accepted into that dispatch's deferred mutation queue join the
+notification; unresolved secondary requests are cancelled and resolved but
+uninstalled windows are closed outside runtime borrows. Every asynchronous
+completion and the registered quit callback carry the identity of their loop,
+so a callback or completion from an earlier
+loop cannot affect a later one. Only installing a new loop owner resets
+admission; generic realm teardown does not.
+
+A panicking observer cannot skip sibling realms or leave notification in
+progress. The first panic resumes only after realm restoration and notification
+completion. If the triggering dispatch was already panicking, its original
+payload wins. Removed realms are dropped individually outside runtime borrows;
+a destructor panic cannot skip notification or unwind through another removed
+realm. Secondary panic payloads are safely forgotten before protected
+diagnostics. Reentrant quit requests cannot restart the notification walk.
+
+Regression evidence lives in the `quit_notification_*` tests in
+`runner/realm_dispatch.rs` and `runner/secondary_window.rs`, plus
+`explicit_platform_quit_detaches_every_installed_realm`. They drive the registered
+desktop `on_quit` callback through the headless platform's exit reevaluation
+handle, without holding the owner accessor's runtime borrow. The primary-only
+callback fails the latter test with a surviving secondary realm still `Resumed`.
+These are application wiring tests, not native keyboard/menu or complete public
+lifecycle-consumer certification.

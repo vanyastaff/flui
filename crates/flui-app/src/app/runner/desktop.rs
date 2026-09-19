@@ -10,8 +10,8 @@ use super::frame_pacing::{
 };
 use super::host::{
     APP_RUNTIME, OwnerHostClearGuard, desktop_secondary_wake_deadline, install_exit_policy_hook,
-    install_owner_platform, install_wake_deadline_hook, merge_wake_deadlines,
-    runtime_needs_redraw_handle, runtime_wake_callback, with_owner_platform,
+    install_owner_platform, install_platform_quit_hook, install_wake_deadline_hook,
+    merge_wake_deadlines, runtime_needs_redraw_handle, runtime_wake_callback, with_owner_platform,
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmTask, close_this_window, dispatch_platform_realm, drain_owner_inbox,
@@ -682,42 +682,10 @@ where
         // cancel any pointer sequence whose platform Up/Cancel will never
         // arrive before lifecycle observers run.
 
-        // Platform quit -> Detached (frames disabled, listeners notified).
-        // Fallback path, not the primary one any more: the ORDINARY
-        // "close the last window -> exit" sequence now delivers Detached
-        // earlier, from `close_this_window`'s own `RealmTask::
-        // ClosePresentation` handling (the sole-presentation branch), before
-        // this realm is even uninstalled -- so by the time `on_quit` fires
-        // moments later, this dispatch routinely finds the realm already
-        // gone. This callback stays registered for the case that path does
-        // NOT cover: a quit requested with no preceding window close at all
-        // (an OS-level quit signal, e.g. macOS Cmd+Q, or an embedder calling
-        // `owner.quit()` directly).
-        owner_platform_installed(|owner| {
-            owner.shared().on_quit(Box::new(move || {
-                tracing::info!("Platform quit");
-                debug_assert_eq!(
-                    std::thread::current().id(),
-                    realm_dispatch.owner_thread,
-                    "platform on_quit must fire on the realm's owner thread"
-                );
-                if let Err(error) = dispatch_platform_realm(
-                    realm_dispatch,
-                    RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Detached)),
-                ) {
-                    // Debug-only, not warn: the ordinary window-close-then-
-                    // quit sequence above ALWAYS reaches this dispatch after
-                    // the realm is already gone (Detached already delivered,
-                    // the realm already uninstalled) -- an error here is the
-                    // routine case, not a signal something went wrong.
-                    tracing::debug!(
-                        ?error,
-                        "realm unavailable during Detached lifecycle dispatch (routine when a \
-                         window close already delivered it)"
-                    );
-                }
-            }));
-        });
+        // Explicit quit also reaches realms whose windows never closed. The
+        // loop-owned callback visits surviving realms rather than capturing
+        // this primary dispatch address, which may already be uninstalled.
+        install_platform_quit_hook();
 
         // Window close -> close THIS window's own presentation before the
         // platform decides whether to exit. Load-bearing ordering, not just

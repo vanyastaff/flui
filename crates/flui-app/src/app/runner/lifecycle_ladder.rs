@@ -194,7 +194,7 @@ pub(super) fn emit_lifecycle_transition(
     }
 }
 
-fn preserve_first_lifecycle_panic(
+pub(super) fn preserve_first_lifecycle_panic(
     first: &mut Option<Box<dyn std::any::Any + Send>>,
     candidate: Option<Box<dyn std::any::Any + Send>>,
     phase: &'static str,
@@ -205,14 +205,16 @@ fn preserve_first_lifecycle_panic(
     if first.is_none() {
         *first = Some(candidate);
     } else {
-        tracing::error!(
-            phase,
-            "lifecycle phase panicked after an earlier phase; only the first panic is resumed"
-        );
-        // A secondary user panic may carry a payload whose destructor also
-        // panics. Leaking that exceptional payload prevents it from replacing
-        // the first lifecycle failure or aborting while the first unwinds.
+        // Arbitrary payload destruction or diagnostics must not replace the first failure.
         std::mem::forget(candidate);
+        if let Err(payload) = std::panic::catch_unwind(|| {
+            tracing::error!(
+                phase,
+                "lifecycle phase panicked after an earlier phase; only the first panic is resumed"
+            );
+        }) {
+            std::mem::forget(payload);
+        }
     }
 }
 

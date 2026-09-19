@@ -375,7 +375,14 @@ installs it under the caller's policy -- `SeparateRealms` through \
 nothing`), `SharedRealm` through `install_presentation_alongside` (a second \
 presentation of the FIRST realm hosted on this thread, real forest \
 membership and a real `WindowRegistry` mapping; \
-`one_realm_two_windows_policy_routes_by_presentation`). `ExitPolicy` is \
+`one_realm_two_windows_policy_routes_by_presentation`). Explicit desktop quit \
+notifies every surviving installed realm once, using each realm's existing \
+Detached ladder; it closes secondary admission before deferred tails drain, \
+cancels unresolved opens, and rejects completions from older loop identities. \
+Observers may reenter or panic without skipping siblings; an already-active \
+dispatch panic remains the first failure. This is realm-level notification, \
+not new per-presentation WidgetsBinding observer fanout or public observer \
+registration. `ExitPolicy` is \
 LIVE-WIRED, not merely mechanism: `flui_platform::traits::Platform:: \
 set_exit_policy_hook` (a new default-no-op trait method, overridden by the \
 winit, AppKit, and headless backends) lets `runner/host.rs::install_exit_policy_hook` \
@@ -663,6 +670,10 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub enum WindowPolicy" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "pub fn open_secondary_window" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/host.rs", contains = "fn install_exit_policy_hook" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/host.rs", contains = "fn install_platform_quit_hook" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn explicit_platform_quit_detaches_every_installed_realm" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn quit_notification_preserves_dispatch_panic_and_finishes_siblings_after_observer_panic" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "fn quit_notification_old_completion_cannot_enter_a_new_loop" },
     { kind = "symbol", file = "crates/flui-platform/src/traits/platform.rs", contains = "fn set_exit_policy_hook" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn complete_window_close" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "fn request_close_window" },

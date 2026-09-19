@@ -4,7 +4,9 @@ use flui_foundation::RealmId;
 use flui_scheduler::AppLifecycleState;
 
 use super::host::APP_RUNTIME;
-use super::lifecycle_ladder::{derive_lifecycle_state, emit_lifecycle_transition};
+use super::lifecycle_ladder::{
+    derive_lifecycle_state, emit_lifecycle_transition, preserve_first_lifecycle_panic,
+};
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -1280,12 +1282,14 @@ pub(super) fn dispatch_platform_realm(
     let (removed, reevaluate_exit) = removed;
     // Destructors may re-enter platform/framework code — drop only after the
     // TLS borrow above has released.
-    drop(removed);
+    let mut first_panic = result.err();
+    drop_removed_realms(removed, &mut first_panic);
     // Fired after the borrow AND after those destructors: the hook this wakes
     // borrows `APP_RUNTIME`, and a realm dropped by `removed` must be gone
     // before the policy is asked whether anything is left.
     if let Some(reevaluate) = reevaluate_exit {
-        reevaluate();
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reevaluate())).err();
+        preserve_first_lifecycle_panic(&mut first_panic, failure, "exit policy reevaluation");
     }
     // Applies any `open_secondary_window` Pending-arm completion this
     // realm's own task resolved (see `drain_pending_secondary_window_
@@ -1304,11 +1308,36 @@ pub(super) fn dispatch_platform_realm(
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    drain_pending_secondary_window_completions();
-    if let Err(payload) = result {
+    {
+        let notification =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(drain_quit_notification)).err();
+        preserve_first_lifecycle_panic(
+            &mut first_panic,
+            notification,
+            "deferred quit notification",
+        );
+        let completions = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            drain_pending_secondary_window_completions,
+        ))
+        .err();
+        preserve_first_lifecycle_panic(&mut first_panic, completions, "secondary completion drain");
+    }
+    if let Some(payload) = first_panic {
         std::panic::resume_unwind(payload);
     }
     Ok(())
+}
+
+/// Release each removed realm independently: one user destructor must not
+/// unwind through another removed realm or skip the deferred quit notification.
+fn drop_removed_realms(
+    removed: Vec<RealmSlot>,
+    first_panic: &mut Option<Box<dyn std::any::Any + Send>>,
+) {
+    for realm in removed {
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(realm))).err();
+        preserve_first_lifecycle_panic(first_panic, failure, "removed realm cleanup");
+    }
 }
 
 /// Hot-restart's own iteration primitive (issue #555): visits every
@@ -1353,19 +1382,16 @@ pub(super) fn dispatch_platform_realm(
 /// visit is nominally still in flight, would silently defer every future
 /// realm-map mutation for the rest of the process.
 ///
-/// No production driver calls this yet — hot-restart's real trigger (the
-/// `flui-hot-reload` file-watcher path) still only ever polls the single
-/// dispatched realm through its own frame callback; a driver that visits
-/// every hosted realm is this issue's follow-up. Exercised directly by this
-/// module's own tests in the meantime.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "design-for-N hot-restart iteration primitive; no production driver visits \
-                  every hosted realm yet -- exercised by this module's own tests"
+/// Quit notification reuses this checkout discipline. Its visitor catches each
+/// realm's lifecycle panic so all siblings still receive the notification.
+#[cfg(any(
+    test,
+    all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
     )
-)]
+))]
 fn for_each_installed_realm(mut f: impl FnMut(&crate::app::ui_realm::UiRealm)) {
     let ids = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
@@ -1427,24 +1453,105 @@ fn for_each_installed_realm(mut f: impl FnMut(&crate::app::ui_realm::UiRealm)) {
         state.iterating_all_realms = false;
         state.drain_pending_realm_mutations()
     });
-    drop(removed);
+    drop_removed_realms(removed, &mut panic_payload);
     // Same rationale as `dispatch_platform_realm`'s own tail: a visited
     // realm's frame callback may have resolved an `open_secondary_window`
     // Pending completion via `UpdateScheduler::drive_async_tasks`, which cannot
     // complete mid-visit for the same reason it cannot complete
     // mid-dispatch (`iterating_all_realms` holds this thread's checkout
-    // state just as `dispatched_realm_id` does). This function itself
-    // compiles on every backend (only `not(target_os = "ios")`) -- gate the
-    // call site to the desktop-only `open_secondary_window` family's own
-    // cfg, not the function.
+    // state just as `dispatched_realm_id` does). The visitor is available
+    // in desktop builds and tests; secondary completion is desktop-only.
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    drain_pending_secondary_window_completions();
+    {
+        let notification =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(drain_quit_notification)).err();
+        preserve_first_lifecycle_panic(
+            &mut panic_payload,
+            notification,
+            "visited quit notification",
+        );
+        let completions = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            drain_pending_secondary_window_completions,
+        ))
+        .err();
+        preserve_first_lifecycle_panic(
+            &mut panic_payload,
+            completions,
+            "visited secondary completion drain",
+        );
+    }
 
     if let Some(payload) = panic_payload {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+/// Close admission now; notify once all currently checked-out realm state returns.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) fn request_quit_notification() {
+    APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        if state.quit_notification == crate::app::runtime::QuitNotification::Active {
+            state.quit_notification = crate::app::runtime::QuitNotification::Requested;
+        }
+    });
+    drain_quit_notification();
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn drain_quit_notification() {
+    use crate::app::runtime::QuitNotification;
+    let ready = APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        if state.quit_notification != QuitNotification::Requested
+            || state.dispatched_realm_id.is_some()
+            || state.iterating_all_realms
+        {
+            return false;
+        }
+        state.quit_notification = QuitNotification::Notifying;
+        true
+    });
+    if !ready {
+        return;
+    }
+    let mut first_panic = None;
+    let cancel = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        super::secondary_window::cancel_pending_secondary_windows,
+    ))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, cancel, "pending window cancellation");
+    let visit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for_each_installed_realm(|realm| {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                realm.enter(|realm| {
+                    emit_lifecycle_transition(
+                        realm,
+                        realm.scheduler().lifecycle_state(),
+                        AppLifecycleState::Detached,
+                    );
+                });
+            }))
+            .err();
+            preserve_first_lifecycle_panic(&mut first_panic, result, "realm quit notification");
+        });
+    }))
+    .err();
+    preserve_first_lifecycle_panic(&mut first_panic, visit, "quit visitor cleanup");
+    APP_RUNTIME.with(|slot| slot.borrow_mut().quit_notification = QuitNotification::Notified);
+    if let Some(payload) = first_panic {
         std::panic::resume_unwind(payload);
     }
 }
@@ -1651,6 +1758,374 @@ mod realm_dispatch_tests {
 
     fn install_test_realm() -> RealmDispatcher {
         install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &test_window())
+    }
+
+    #[test]
+    fn explicit_platform_quit_detaches_every_installed_realm() {
+        let _clear = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let reevaluation = platform.exit_reevaluation();
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+        platform
+            .run(Box::new(move |owner| {
+                let shared = owner.shared();
+                install_owner_platform(owner);
+                let primary = install_test_realm();
+                let secondary = install_realm_alongside(
+                    crate::app::ui_realm::UiRealm::for_test(),
+                    &test_window(),
+                )
+                .expect("secondary realm");
+                for dispatcher in [primary, secondary] {
+                    dispatch_platform_realm(
+                        dispatcher,
+                        RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+                    )
+                    .expect("resume realm");
+                }
+                super::super::host::install_platform_quit_hook();
+                shared.set_exit_policy_hook(Box::new(|| true));
+                shared.request_exit_policy_reevaluation();
+                assert!(reevaluation.drive(), "registered on_quit callback ran");
+                APP_RUNTIME.with(|slot| {
+                    for (_, installed) in slot.borrow().realms.iter() {
+                        let realm = installed.realm.as_ref().expect("realm restored");
+                        assert_eq!(
+                            realm.scheduler().lifecycle_state(),
+                            AppLifecycleState::Detached,
+                            "every realm must detach through the installed quit callback"
+                        );
+                        assert!(!realm.scheduler().frames_enabled());
+                    }
+                });
+                teardown_platform_realm();
+                Ok(())
+            }))
+            .expect("headless run");
+    }
+
+    fn with_quit_notification_loop(
+        test: impl FnOnce(flui_platform::SharedPlatform, Rc<flui_platform::HeadlessExitReevaluation>)
+        + 'static,
+    ) {
+        let _clear = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let reevaluation = Rc::new(platform.exit_reevaluation());
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+        platform
+            .run(Box::new(move |owner| {
+                let shared = owner.shared();
+                install_owner_platform(owner);
+                shared.set_exit_policy_hook(Box::new(|| true));
+                super::super::host::install_platform_quit_hook();
+                test(shared, reevaluation);
+                teardown_platform_realm();
+                Ok(())
+            }))
+            .expect("headless loop");
+    }
+
+    #[test]
+    fn quit_notification_old_platform_hook_cannot_detach_a_new_loop() {
+        let old_handles = Rc::new(RefCell::new(None));
+        let saved = Rc::clone(&old_handles);
+        with_quit_notification_loop(move |shared, reevaluation| {
+            let previous = saved.borrow_mut().replace((shared, reevaluation));
+            drop(previous);
+        });
+        let (old_shared, old_reevaluation) = old_handles
+            .borrow_mut()
+            .take()
+            .expect("retained old platform");
+        with_quit_notification_loop(move |shared, reevaluation| {
+            let primary = install_test_realm();
+            resume_for_quit(primary);
+            old_shared.request_exit_policy_reevaluation();
+            assert!(old_reevaluation.drive());
+            APP_RUNTIME.with(|slot| {
+                let state = slot.borrow();
+                assert_eq!(
+                    state.quit_notification,
+                    crate::app::runtime::QuitNotification::Active
+                );
+                assert_eq!(
+                    state
+                        .realms
+                        .iter()
+                        .next()
+                        .expect("primary")
+                        .1
+                        .realm
+                        .as_ref()
+                        .expect("restored")
+                        .scheduler()
+                        .lifecycle_state(),
+                    AppLifecycleState::Resumed
+                );
+            });
+            shared.request_exit_policy_reevaluation();
+            assert!(reevaluation.drive());
+            assert_quit_notification_restored();
+        });
+    }
+
+    #[test]
+    fn quit_notification_removed_realm_drop_preserves_dispatch_panic_and_notifies_survivor() {
+        struct PanickingDrop;
+        impl Drop for PanickingDrop {
+            fn drop(&mut self) {
+                panic!("removed realm listener drop");
+            }
+        }
+        for visit in [false, true] {
+            with_quit_notification_loop(move |shared, reevaluation| {
+                let primary = install_test_realm();
+                let doomed = install_realm_alongside(
+                    crate::app::ui_realm::UiRealm::for_test(),
+                    &test_window(),
+                )
+                .expect("second removed realm");
+                let secondary = install_realm_alongside(
+                    crate::app::ui_realm::UiRealm::for_test(),
+                    &test_window(),
+                )
+                .expect("survivor");
+                resume_for_quit(secondary);
+                for dispatcher in [primary, doomed] {
+                    dispatch_platform_realm(
+                        dispatcher,
+                        RealmTask::Frame(Box::new(|realm| {
+                            let captured = PanickingDrop;
+                            realm.focus_manager().add_listener(Rc::new(move |_, _| {
+                                let _keep_capture = &captured;
+                            }));
+                        })),
+                    )
+                    .expect("listener registered");
+                }
+                let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let task = move |_: &crate::app::ui_realm::UiRealm| {
+                        uninstall_platform_realm(primary.address.realm_id);
+                        uninstall_platform_realm(doomed.address.realm_id);
+                        shared.request_exit_policy_reevaluation();
+                        assert!(reevaluation.drive());
+                        panic!("original dispatch failure");
+                    };
+                    if visit {
+                        let mut task = Some(task);
+                        for_each_installed_realm(|realm| {
+                            if let Some(task) = task.take() {
+                                task(realm);
+                            }
+                        });
+                    } else {
+                        dispatch_platform_realm(primary, RealmTask::Frame(Box::new(task)))
+                            .expect("dispatch admitted");
+                    }
+                }))
+                .expect_err("first panic resumed");
+                assert_quit_notification_restored();
+                assert_eq!(
+                    failure.downcast_ref::<&str>(),
+                    Some(&"original dispatch failure")
+                );
+            });
+        }
+    }
+
+    fn resume_for_quit(dispatcher: RealmDispatcher) {
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+        )
+        .expect("resume realm");
+    }
+
+    fn assert_quit_notification_restored() {
+        APP_RUNTIME.with(|slot| {
+            let state = slot.borrow();
+            assert_eq!(
+                state.quit_notification,
+                crate::app::runtime::QuitNotification::Notified
+            );
+            assert!(state.dispatched_realm_id.is_none());
+            assert!(!state.iterating_all_realms);
+            for (_, installed) in state.realms.iter() {
+                let realm = installed.realm.as_ref().expect("restored realm");
+                assert_eq!(
+                    realm.scheduler().lifecycle_state(),
+                    AppLifecycleState::Detached
+                );
+                assert!(!realm.scheduler().frames_enabled());
+            }
+        });
+    }
+
+    #[test]
+    fn quit_notification_survives_primary_removal_and_visits_shared_realm_once() {
+        with_quit_notification_loop(|shared, reevaluation| {
+            let primary = install_test_realm();
+            let secondary =
+                install_realm_alongside(crate::app::ui_realm::UiRealm::for_test(), &test_window())
+                    .expect("secondary");
+            let _other_presentation = install_presentation_alongside(secondary, &test_window())
+                .expect("shared realm presentation");
+            resume_for_quit(secondary);
+            let detached = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let observed = Arc::clone(&detached);
+            dispatch_platform_realm(
+                secondary,
+                RealmTask::Frame(Box::new(move |realm| {
+                    realm
+                        .scheduler()
+                        .add_lifecycle_state_listener(Arc::new(move |state| {
+                            if state == AppLifecycleState::Detached {
+                                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            }
+                        }));
+                })),
+            )
+            .expect("listener installed");
+            uninstall_platform_realm(primary.address.realm_id);
+            shared.request_exit_policy_reevaluation();
+            assert!(reevaluation.drive());
+            assert_eq!(detached.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_quit_notification_restored();
+        });
+    }
+
+    #[test]
+    fn quit_notification_preserves_dispatch_panic_and_finishes_siblings_after_observer_panic() {
+        with_quit_notification_loop(|shared, reevaluation| {
+            let primary = install_test_realm();
+            let secondary =
+                install_realm_alongside(crate::app::ui_realm::UiRealm::for_test(), &test_window())
+                    .expect("secondary");
+            for dispatcher in [primary, secondary] {
+                resume_for_quit(dispatcher);
+            }
+            dispatch_platform_realm(
+                primary,
+                RealmTask::Frame(Box::new(|realm| {
+                    realm
+                        .scheduler()
+                        .add_lifecycle_state_listener(Arc::new(|state| {
+                            assert_ne!(state, AppLifecycleState::Detached, "observer panic");
+                        }));
+                })),
+            )
+            .expect("listener installed");
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                dispatch_platform_realm(
+                    primary,
+                    RealmTask::Frame(Box::new(move |_| {
+                        shared.request_exit_policy_reevaluation();
+                        assert!(reevaluation.drive());
+                        APP_RUNTIME.with(|slot| {
+                            assert_eq!(
+                                slot.borrow().quit_notification,
+                                crate::app::runtime::QuitNotification::Requested
+                            );
+                        });
+                        panic!("original dispatch panic");
+                    })),
+                )
+                .expect("dispatch admitted");
+            }));
+            let payload = result.expect_err("original panic resumes after restoration");
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&"original dispatch panic")
+            );
+            assert_quit_notification_restored();
+        });
+    }
+
+    #[test]
+    fn quit_notification_includes_install_accepted_before_request_and_fences_new_opens() {
+        with_quit_notification_loop(|shared, reevaluation| {
+            let primary = install_test_realm();
+            resume_for_quit(primary);
+            let accepted = Rc::new(Cell::new(None));
+            let installed = Rc::clone(&accepted);
+            dispatch_platform_realm(
+                primary,
+                RealmTask::Frame(Box::new(move |_| {
+                    let new_realm = crate::app::ui_realm::UiRealm::for_test();
+                    new_realm.enter(|realm| {
+                        emit_lifecycle_transition(
+                            realm,
+                            AppLifecycleState::Detached,
+                            AppLifecycleState::Resumed,
+                        );
+                    });
+                    let secondary = install_realm_alongside(new_realm, &test_window())
+                        .expect("pre-request deferred install accepted");
+                    installed.set(Some(secondary.address.realm_id));
+                    shared.request_exit_policy_reevaluation();
+                    assert!(reevaluation.drive());
+                    let refused =
+                        open_secondary_window(AppConfig::default(), WindowPolicy::SeparateRealms);
+                    assert!(
+                        refused.is_err(),
+                        "quit fences native window creation immediately"
+                    );
+                })),
+            )
+            .expect("dispatch completes");
+            APP_RUNTIME.with(|slot| {
+                assert!(
+                    slot.borrow()
+                        .realms
+                        .contains_key(&accepted.get().expect("accepted realm"))
+                );
+                assert_eq!(slot.borrow().realms.iter().count(), 2);
+            });
+            assert_quit_notification_restored();
+        });
+    }
+
+    #[test]
+    fn quit_notification_observer_reentry_is_once_and_observer_panic_does_not_skip_siblings() {
+        with_quit_notification_loop(|shared, reevaluation| {
+            let primary = install_test_realm();
+            let secondary =
+                install_realm_alongside(crate::app::ui_realm::UiRealm::for_test(), &test_window())
+                    .expect("secondary");
+            for dispatcher in [primary, secondary] {
+                resume_for_quit(dispatcher);
+            }
+            let observed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let observed_in_listener = Arc::clone(&observed);
+            dispatch_platform_realm(
+                primary,
+                RealmTask::Frame(Box::new(move |realm| {
+                    realm
+                        .scheduler()
+                        .add_lifecycle_state_listener(Arc::new(move |state| {
+                            if state == AppLifecycleState::Detached {
+                                observed_in_listener
+                                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                request_quit_notification();
+                                panic!("first observer panic");
+                            }
+                        }));
+                })),
+            )
+            .expect("listener installed");
+            shared.request_exit_policy_reevaluation();
+            let payload =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reevaluation.drive()))
+                    .expect_err("observer panic preserved");
+            assert_eq!(
+                payload.downcast_ref::<&str>(),
+                Some(&"first observer panic")
+            );
+            assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_quit_notification_restored();
+            request_quit_notification();
+            assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
+        });
     }
 
     /// Installing a realm resolves the loop-scoped execution services

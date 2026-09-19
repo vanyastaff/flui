@@ -202,6 +202,7 @@ pub fn open_secondary_window(config: AppConfig, policy: WindowPolicy) -> anyhow:
     not(target_arch = "wasm32")
 ))]
 struct SecondaryWindowInstallConfig {
+    loop_identity: Arc<()>,
     policy: WindowPolicy,
     close_request_handler: Option<CloseRequestHandler>,
     frame_failure_detail: FrameFailureDetail,
@@ -258,6 +259,54 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Cancel only uninstalled secondary windows; user/native cleanup runs outside TLS borrows.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) fn cancel_pending_secondary_windows() {
+    let tokens =
+        PENDING_SECONDARY_WINDOW_OPENS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
+    let completions =
+        PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
+    let mut panic = None;
+    for token in tokens {
+        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(token))).err();
+        super::lifecycle_ladder::preserve_first_lifecycle_panic(
+            &mut panic,
+            error,
+            "pending open cancellation",
+        );
+    }
+    for completion in completions {
+        let error =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| completion.window.close()))
+                .err();
+        super::lifecycle_ladder::preserve_first_lifecycle_panic(
+            &mut panic,
+            error,
+            "uninstalled window close",
+        );
+    }
+    if let Some(payload) = panic {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn secondary_install_admitted(identity: &Arc<()>) -> bool {
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        state.quit_notification == crate::app::runtime::QuitNotification::Active
+            && Arc::ptr_eq(identity, &state.loop_identity)
+    })
+}
+
 /// Applies every `open_secondary_window` `Pending`-arm completion queued by
 /// [`spawn_pending_secondary_window_completion`]'s own future, in request
 /// order. Call only from a point where this thread's dispatch/hot-restart-
@@ -281,6 +330,12 @@ thread_local! {
     not(target_arch = "wasm32")
 ))]
 pub(super) fn drain_pending_secondary_window_completions() {
+    if APP_RUNTIME.with(|slot| {
+        slot.borrow().quit_notification != crate::app::runtime::QuitNotification::Active
+    }) {
+        cancel_pending_secondary_windows();
+        return;
+    }
     let pending =
         PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
     for completion in pending {
@@ -329,6 +384,11 @@ pub(super) fn open_secondary_window_impl(
     )>,
 > {
     use flui_platform::{WindowOpen, WindowOptions};
+    let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
+    anyhow::ensure!(
+        secondary_install_admitted(&loop_identity),
+        "secondary window admission is closed: application is quitting"
+    );
 
     let options: WindowOptions = (&config).into();
     let open = with_owner_platform(|owner| owner.open_window(options))
@@ -343,6 +403,7 @@ pub(super) fn open_secondary_window_impl(
         })?;
 
     let install_config = SecondaryWindowInstallConfig {
+        loop_identity,
         policy,
         close_request_handler: config.close_request_handler.clone(),
         frame_failure_detail: config.frame_failure_detail,
@@ -439,6 +500,13 @@ fn spawn_pending_secondary_window_completion(
     let future: flui_scheduler::BoxedTask = Box::pin(async move {
         match pending.await {
             Ok(window) => {
+                if !secondary_install_admitted(&config.loop_identity) {
+                    window.close();
+                    tracing::debug!(
+                        "discarding secondary window completion from a stopped or replaced loop"
+                    );
+                    return;
+                }
                 // Enqueue, never call `finish_open_secondary_window`
                 // directly here -- see this function's own doc for why
                 // (this poll always runs mid-dispatch).
@@ -492,8 +560,13 @@ fn finish_open_secondary_window(
     Arc<dyn flui_platform::traits::PlatformWindow>,
 )> {
     use flui_platform::traits::{DispatchEventResult, PlatformInput};
+    if !secondary_install_admitted(&config.loop_identity) {
+        window.close();
+        anyhow::bail!("secondary window completion belongs to a stopped or replaced loop");
+    }
 
     let SecondaryWindowInstallConfig {
+        loop_identity: _,
         policy,
         close_request_handler,
         frame_failure_detail,
@@ -591,9 +664,8 @@ fn finish_open_secondary_window(
     // (`Platform::on_quit`/`SharedPlatform::on_quit` replace, never stack);
     // registering a second one here would silently steal the first window's
     // Detached-lifecycle notification on process quit instead of adding to
-    // it. Generalizing quit notification to visit every hosted realm
-    // (`for_each_installed_realm`) is follow-up work, named here, not
-    // silently skipped.
+    // it. The loop-owned quit callback visits every installed realm once,
+    // including this window's realm, after any active dispatch restores it.
     window.on_close(Box::new(move || {
         tracing::info!(?realm_dispatch, "Secondary window closed");
         close_this_window(realm_dispatch);
@@ -619,4 +691,214 @@ fn finish_open_secondary_window(
     );
 
     Ok((realm_dispatch, window))
+}
+
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod quit_notification_tests {
+    use super::super::host::{
+        OwnerHostClearGuard, install_owner_platform, install_platform_quit_hook,
+    };
+    use super::super::realm_dispatch::{install_platform_realm, teardown_platform_realm};
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn completion_config(policy: WindowPolicy) -> SecondaryWindowInstallConfig {
+        SecondaryWindowInstallConfig {
+            loop_identity: APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity)),
+            policy,
+            close_request_handler: None,
+            frame_failure_detail: FrameFailureDetail::Redacted,
+        }
+    }
+
+    #[test]
+    fn quit_notification_closes_queued_completions_before_the_dispatch_tail_can_install_them() {
+        for policy in [WindowPolicy::SeparateRealms, WindowPolicy::SharedRealm] {
+            let _clear = OwnerHostClearGuard::arm();
+            let platform = flui_platform::HeadlessPlatform::new();
+            let reevaluation = platform.exit_reevaluation();
+            let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+            platform
+                .run(Box::new(move |owner| {
+                    let shared = owner.shared();
+                    install_owner_platform(owner);
+                    let primary = install_platform_realm(
+                        crate::app::ui_realm::UiRealm::for_test(),
+                        &crate::app::window_test_support::headless_test_window(),
+                    );
+                    install_platform_quit_hook();
+                    shared.set_exit_policy_hook(Box::new(|| true));
+                    let closed = Arc::new(AtomicUsize::new(0));
+                    let observed = Arc::clone(&closed);
+                    let window = crate::app::window_test_support::headless_test_window();
+                    window.on_close(Box::new(move || {
+                        APP_RUNTIME.with(|slot| {
+                            assert!(
+                                slot.try_borrow_mut().is_ok(),
+                                "native cleanup must run outside runtime borrow"
+                            );
+                        });
+                        PENDING_SECONDARY_WINDOW_COMPLETIONS
+                            .with(|queue| assert!(queue.try_borrow_mut().is_ok()));
+                        observed.fetch_add(1, Ordering::SeqCst);
+                    }));
+                    let config = completion_config(policy);
+                    dispatch_platform_realm(
+                        primary,
+                        RealmTask::Frame(Box::new(move |_| {
+                            PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                                queue
+                                    .borrow_mut()
+                                    .push(PendingCompletion { config, window });
+                            });
+                            shared.request_exit_policy_reevaluation();
+                            assert!(reevaluation.drive());
+                        })),
+                    )
+                    .expect("dispatch");
+                    assert_eq!(closed.load(Ordering::SeqCst), 1);
+                    assert!(
+                        PENDING_SECONDARY_WINDOW_COMPLETIONS
+                            .with(|queue| queue.borrow().is_empty())
+                    );
+                    APP_RUNTIME.with(|slot| {
+                        let state = slot.borrow();
+                        assert_eq!(state.realms.iter().count(), 1);
+                        let (_, installed) = state.realms.iter().next().expect("primary");
+                        assert_eq!(
+                            installed
+                                .realm
+                                .as_ref()
+                                .expect("restored")
+                                .presentation_count(),
+                            1
+                        );
+                    });
+                    teardown_platform_realm();
+                    Ok(())
+                }))
+                .expect("headless run");
+        }
+    }
+
+    #[test]
+    fn quit_notification_cancels_unresolved_open_without_a_late_realm_install() {
+        let _clear = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let deferred = platform.enable_deferred_window_open();
+        let reevaluation = platform.exit_reevaluation();
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+        platform
+            .run(Box::new(move |owner| {
+                let shared = owner.shared();
+                install_owner_platform(owner);
+                let primary = install_platform_realm(
+                    crate::app::ui_realm::UiRealm::for_test(),
+                    &crate::app::window_test_support::headless_test_window(),
+                );
+                install_platform_quit_hook();
+                shared.set_exit_policy_hook(Box::new(|| true));
+                assert!(
+                    open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                        .expect("pending accepted")
+                        .is_none()
+                );
+                assert_eq!(
+                    PENDING_SECONDARY_WINDOW_OPENS.with(|tasks| tasks.borrow().len()),
+                    1
+                );
+                shared.request_exit_policy_reevaluation();
+                assert!(reevaluation.drive());
+                assert!(PENDING_SECONDARY_WINDOW_OPENS.with(|tasks| tasks.borrow().is_empty()));
+                let late = deferred
+                    .resolve_next()
+                    .expect("platform can still deliver abandoned request");
+                dispatch_platform_realm(
+                    primary,
+                    RealmTask::Frame(Box::new(|realm| {
+                        realm.scheduler().drive_async_tasks();
+                    })),
+                )
+                .expect("pump cancellation");
+                assert!(
+                    PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| queue.borrow().is_empty())
+                );
+                APP_RUNTIME.with(|slot| assert_eq!(slot.borrow().realms.iter().count(), 1));
+                late.close(); // The headless resolver intentionally returns its own retained handle.
+                teardown_platform_realm();
+                Ok(())
+            }))
+            .expect("headless run");
+    }
+
+    #[test]
+    fn quit_notification_old_completion_cannot_enter_a_new_loop() {
+        let _clear = OwnerHostClearGuard::arm();
+        let old = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let saved = std::rc::Rc::clone(&old);
+        flui_platform::headless_platform()
+            .run(Box::new(move |owner| {
+                install_owner_platform(owner);
+                let previous = saved
+                    .borrow_mut()
+                    .replace(completion_config(WindowPolicy::SharedRealm));
+                drop(previous);
+                super::super::realm_dispatch::request_quit_notification();
+                teardown_platform_realm();
+                APP_RUNTIME.with(|slot| {
+                    assert_eq!(
+                        slot.borrow().quit_notification,
+                        crate::app::runtime::QuitNotification::Notified,
+                        "generic teardown must not reopen admission"
+                    );
+                });
+                Ok(())
+            }))
+            .expect("old loop");
+        flui_platform::headless_platform()
+            .run(Box::new(move |owner| {
+                install_owner_platform(owner);
+                install_platform_realm(
+                    crate::app::ui_realm::UiRealm::for_test(),
+                    &crate::app::window_test_support::headless_test_window(),
+                );
+                let window = crate::app::window_test_support::headless_test_window();
+                let closed = Arc::new(AtomicUsize::new(0));
+                let observed = Arc::clone(&closed);
+                window.on_close(Box::new(move || {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                }));
+                let stale = old.borrow_mut().take().expect("old completion");
+                assert!(finish_open_secondary_window(stale, window).is_err());
+                assert_eq!(closed.load(Ordering::SeqCst), 1);
+                assert!(secondary_install_admitted(
+                    &completion_config(WindowPolicy::SharedRealm).loop_identity
+                ));
+                APP_RUNTIME.with(|slot| {
+                    let state = slot.borrow();
+                    assert_eq!(state.realms.iter().count(), 1);
+                    assert_eq!(
+                        state
+                            .realms
+                            .iter()
+                            .next()
+                            .expect("primary")
+                            .1
+                            .realm
+                            .as_ref()
+                            .expect("restored")
+                            .presentation_count(),
+                        1
+                    );
+                });
+                teardown_platform_realm();
+                Ok(())
+            }))
+            .expect("new loop");
+    }
 }
