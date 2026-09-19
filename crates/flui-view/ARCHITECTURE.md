@@ -192,3 +192,28 @@ audit (the clone is a local gitignored checkout, so the tag's version file
 is gitignored/absent and the tag is read from the clone's refs); a fresh
 clone must re-run `git describe --tags` inside `.flutter` before citing
 further.
+
+
+### Lifecycle capability types are nameable through the facade
+
+`BuildContext` returns async and post-frame handles whose canonical public paths
+are also exported by `flui-view`, and therefore by `flui::view`. This includes
+`TaskToken`, `BoxedTask`, local scheduling errors, and the timing value types
+used by post-frame callbacks, including the cross-platform `Instant`. Widget
+authors can store explicitly typed capabilities acquired in `init_state` without
+adding scheduler dependencies. These are reexports of the existing types, not
+new wrappers or duplicated scheduler state: task-token cancellation and weak
+post-frame ownership keep their existing contracts.
+
+The external facade-extension fixture acquires the handles from a live binding,
+polls a task to completion, cancels a pending task, and executes local and shared
+post-frame callbacks using named timing types. It runs with both `flui` and a
+renamed dependency. Scheduler construction and local lane implementation remain
+outside this view-level capability vocabulary.
+
+The facade's `flui::interaction` likewise names the focus, hit-test, and text-input
+capabilities returned by `BuildContext`, together with their callback/result and
+keyboard value vocabulary. The external fixture retains a focus node, mounts
+`Focus`, and observes focus and unfocus notifications. Its headless IME check
+only verifies typed capability access with no native owner; it does not claim
+platform IME behavior. Runtime owners and adapter constructors are not exported.

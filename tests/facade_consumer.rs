@@ -158,6 +158,9 @@ fn external_consumers_extend_and_test_through_the_facade() {
             "pointer_input_schedules_a_widget_rebuild",
             "typed_drag_down_callback_is_available_from_the_widget_surface",
             "downstream_custom_recognizer_competes_in_the_arena",
+            "lifecycle_capabilities_are_named_and_run_through_the_facade",
+            "interaction_callback_vocabulary_is_nameable_through_the_facade",
+            "retained_focus_node_uses_context_capabilities_through_the_facade",
         ] {
             assert!(
                 report.contains(&format!("{case} ... ok")),

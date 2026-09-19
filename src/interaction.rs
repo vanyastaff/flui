@@ -1,8 +1,11 @@
-//! Gesture recognition and pointer vocabulary for custom interactive widgets.
+//! Gesture, focus, keyboard, hit-test, and text-input capabilities for widgets.
 //!
 //! Ordinary handlers remain on [`crate::widgets::GestureDetector`]. Use these
 //! contracts when naming callback payloads or integrating a recognizer with
-//! the presentation's [`crate::widgets::GestureArenaScope`].
+//! the presentation's [`crate::widgets::GestureArenaScope`]. Lifecycle hooks can
+//! also retain the focus, hit-test, and text-input handles provided by
+//! [`crate::view::BuildContext`], using the callback and result types below.
+//! Owners and backend adapter construction remain internal to the runtime.
 
 pub use flui_interaction::arena::{
     GestureArena, GestureArenaEntry, GestureArenaMember, GestureArenaTeam, GestureDisposition,
@@ -34,4 +37,19 @@ pub use flui_interaction::{
 pub use flui_types::gestures::{
     ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
     TapUpDetails, Velocity, VelocityEstimate,
+};
+
+pub use flui_interaction::events::KeyEvent;
+pub use flui_interaction::events::keyboard::{
+    Code, Key, KeyState, KeyboardEvent, Location, Modifiers, NamedKey,
+};
+pub use flui_interaction::routing::{
+    FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusManager, FocusNode,
+    FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration, FocusRequestOutcome,
+    FocusScopeNode, FocusTraversalPolicy, FocusTreeError, HitTestEntry, HitTestHandle,
+    HitTestSnapshot, InteractionDispatchError, KeyEventCallback, KeyEventHandler, KeyEventResult,
+    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalEdgeBehavior,
+};
+pub use flui_interaction::text_input::{
+    ClientToken, DetachOutcome, ImeEventCallback, TextInputError, TextInputHandle,
 };

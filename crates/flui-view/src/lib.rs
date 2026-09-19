@@ -188,6 +188,13 @@ pub use element::{StatefulBehavior, StatelessBehavior};
 // Re-export from flui-foundation
 pub use flui_foundation::{ElementId, RenderId};
 pub use flui_rendering::RenderUpdateImpact;
+
+// Nameable lifecycle capabilities and callback values for widget authors.
+pub use flui_scheduler::{
+    AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FramePhase, FrameTiming, Instant,
+    LocalPostFrameHandle, LocalPostFrameScheduleError, Microseconds, Milliseconds, PostFrameHandle,
+    Seconds, TaskToken, duration::InvalidDurationConfig,
+};
 // Keys
 pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
 // Legacy test-only handle for `GlobalKey::current_*` lookup. Production code
@@ -224,6 +231,7 @@ pub mod prelude {
     // opinion about where they go, so nothing here reaches the backend.
     pub use flui_foundation::{ElementId, RenderId};
     pub use flui_rendering::RenderUpdateImpact;
+
     pub use tracing::{debug, error, info, trace, warn};
     // The proc-macro derives ship from `flui-macros` but are surfaced
     // here so a single `use flui_view::prelude::*;` picks them up
