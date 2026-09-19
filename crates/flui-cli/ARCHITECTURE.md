@@ -76,3 +76,22 @@ to 2. A parent rebuild preserves 2; a separate app starts at 0. The external CLI
 regression executes that named generated test and checks a normal build whose
 dependency graph excludes `flui-testing`. The sole framework dependency remains
 `flui`; its `testing` feature is enabled only in development dependencies.
+
+
+### Run admission uses Cargo package identity
+
+`flui run` asks `cargo metadata --no-deps --format-version 1` for the current
+manifest and selects that package by canonical manifest path. Cargo resolves
+renamed dependencies and workspace inheritance; a normal declaration of `flui`
+identifies an application. Legacy `flui-app` and `flui-widgets` declarations
+remain accepted. Comments, similarly named packages, dev/build dependencies and
+unrelated workspace members cannot admit a project. A virtual workspace root
+needs an application package directory, except for the existing configured
+worker hot-reload path. Metadata is declaration evidence; Cargo's subsequent
+run still determines whether the selected application builds and executes.
+
+This follows [Cargo's metadata contract](https://doc.rust-lang.org/cargo/commands/cargo-metadata.html).
+Integration fixtures use real Cargo metadata and marker-printing binaries with
+minimal local dependency identities. They verify admission and execution without
+opening a window; they do not substitute for the generated application's own
+interaction regression or live platform verification.

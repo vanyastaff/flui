@@ -759,14 +759,53 @@ fn find_workspace_root(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Whether a `Cargo.toml` declares a FLUI dependency.
-///
-/// The package names are hyphenated (`flui-app`) — that is what the templates
-/// emit and what Cargo expects. The underscore spelling is accepted too, since
-/// a hand-written manifest may rename the dependency to its crate name.
-fn has_flui_dependency(cargo_toml: &str) -> bool {
-    let normalized = cargo_toml.replace('-', "_");
-    normalized.contains("flui_app") || normalized.contains("flui_widgets")
+#[derive(serde::Deserialize)]
+struct ProjectMetadata {
+    packages: Vec<ProjectPackage>,
+}
+
+#[derive(serde::Deserialize)]
+struct ProjectPackage {
+    manifest_path: PathBuf,
+    dependencies: Vec<ProjectDependency>,
+}
+
+#[derive(serde::Deserialize)]
+struct ProjectDependency {
+    name: String,
+    kind: Option<String>,
+}
+
+/// Cargo resolves aliases and workspace inheritance; only normal declarations
+/// identify an application, not its test or build tooling.
+fn has_flui_dependency(dependencies: &[ProjectDependency]) -> bool {
+    dependencies.iter().any(|dependency| {
+        dependency.kind.is_none()
+            && matches!(
+                dependency.name.as_str(),
+                "flui" | "flui-app" | "flui-widgets"
+            )
+    })
+}
+
+fn metadata_identifies_project(bytes: &[u8], manifest: &Path) -> CliResult<bool> {
+    let metadata: ProjectMetadata = serde_json::from_slice(bytes)
+        .context("Could not decode Cargo metadata; expected --format-version 1 JSON")?;
+    let manifest = manifest
+        .canonicalize()
+        .context("Could not resolve project Cargo.toml")?;
+    for package in metadata.packages {
+        let package_manifest = package
+            .manifest_path
+            .canonicalize()
+            .context("Could not resolve a package manifest reported by Cargo")?;
+        if package_manifest == manifest {
+            return Ok(has_flui_dependency(&package.dependencies));
+        }
+    }
+    Err(CliError::NotFluiProject {
+        reason: "Cargo metadata contains no package for this Cargo.toml; run from an application package directory, not a virtual workspace root".into(),
+    })
 }
 
 /// Ensure we're in a FLUI project directory.
@@ -783,10 +822,28 @@ fn ensure_flui_project() -> CliResult<()> {
         });
     }
 
-    let content = std::fs::read_to_string(cargo_toml)?;
-    if !has_flui_dependency(&content) {
+    let output = Command::new("cargo")
+        .args([
+            "metadata",
+            "--no-deps",
+            "--format-version",
+            "1",
+            "--manifest-path",
+        ])
+        .arg(cargo_toml)
+        .output()
+        .context("Could not run cargo metadata; ensure Cargo is installed and on PATH")?;
+    if !output.status.success() {
         return Err(CliError::NotFluiProject {
-            reason: "flui-app or flui-widgets dependency not found in Cargo.toml".to_string(),
+            reason: format!(
+                "cargo metadata failed; fix the project manifest: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        });
+    }
+    if !metadata_identifies_project(&output.stdout, cargo_toml)? {
+        return Err(CliError::NotFluiProject {
+            reason: "normal dependency on flui (or legacy flui-app/flui-widgets) not found in this package".into(),
         });
     }
 
@@ -942,15 +999,53 @@ fn select_default_device() -> CliResult<String> {
 mod tests {
     use super::{fnv1a, has_flui_dependency, stage_worker_artifact};
 
-    /// `flui create` emits hyphenated dep names; `flui run` must recognise the
-    /// project it just generated.
     #[test]
-    fn generated_manifest_is_recognised_as_a_flui_project() {
-        assert!(has_flui_dependency(
-            r#"flui-app = { path = "../../crates/flui-app" }"#
-        ));
-        assert!(has_flui_dependency(r#"flui_widgets = "0.2.0""#));
-        assert!(!has_flui_dependency(r#"serde = "1.0""#));
+    fn project_identity_requires_exact_normal_framework_dependencies() {
+        for name in [
+            "flui",
+            "flui-app",
+            "flui-widgets",
+            "flui-extra",
+            "flui_widgets",
+            "serde",
+        ] {
+            for kind in [None, Some("dev"), Some("build")] {
+                let dependencies = [super::ProjectDependency {
+                    name: name.into(),
+                    kind: kind.map(str::to_owned),
+                }];
+                assert_eq!(
+                    has_flui_dependency(&dependencies),
+                    kind.is_none() && matches!(name, "flui" | "flui-app" | "flui-widgets")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_metadata_has_decode_context() {
+        let error =
+            super::metadata_identifies_project(b"not JSON", std::path::Path::new("Cargo.toml"))
+                .expect_err("invalid metadata");
+        assert!(
+            error
+                .to_string()
+                .contains("Could not decode Cargo metadata")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn metadata_matches_canonical_manifest_identity() {
+        let tmp = tempfile::TempDir::new().expect("temporary manifest");
+        let manifest = tmp.path().join("Cargo.toml");
+        std::fs::write(&manifest, "").expect("manifest file");
+        let alias = tmp.path().join("alias.toml");
+        std::os::unix::fs::symlink(&manifest, &alias).expect("manifest alias");
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "packages": [{"manifest_path": manifest, "dependencies": [{"name": "flui", "kind": null}]}]
+        })).expect("metadata JSON");
+        assert!(super::metadata_identifies_project(&bytes, &alias).expect("canonical identity"));
     }
 
     /// The staging name must change when the built bytes change — that is what

@@ -277,3 +277,12 @@ unavailable, invokes the callback, bypasses the veto, and permits immediate
 wrapper drop. The probe uses a non-visible real window and exits the process
 explicitly; it does not certify ordinary GUI shutdown or complete autorelease
 pool teardown.
+
+
+The CLI run admission check now recognizes the sole-facade applications it
+creates. It uses Cargo-resolved normal dependency identities, including aliases
+and workspace inheritance, rather than searching manifest text for internal
+crate names. Headless CLI fixtures execute marker binaries and reject unrelated
+members, dev/build-only dependencies, comments and prefix lookalikes. This tests
+admission, not live UI behavior. Evidence: `/tmp/flui-run-admission-red.log`
+(original sole-facade rejection) and `/tmp/flui-run-admission-suite.log`.
