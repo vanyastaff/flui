@@ -114,7 +114,10 @@ pub(super) enum RealmDispatchError {
 #[cfg_attr(
     all(
         not(test),
-        any(target_os = "android", target_os = "ios", target_arch = "wasm32")
+        // Only android and iOS drop the window-event variants: the web runner
+        // constructs `WindowFocus`/`WindowHover` through the browser's
+        // visibility/focus signals, so on wasm32 they are live.
+        any(target_os = "android", target_os = "ios")
     ),
     expect(
         dead_code,

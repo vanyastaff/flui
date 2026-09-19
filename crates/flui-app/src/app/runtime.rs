@@ -482,11 +482,14 @@ pub enum ExitPolicy {
 /// `RealmId` grows a public handle) must not break an exhaustive match.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+// iOS is the only target where this is genuinely dead: its public re-export
+// is gated out there (see `lib.rs`), while android and wasm32 keep the
+// re-export and therefore a reachable path.
 #[cfg_attr(
-    all(not(test), any(target_os = "ios", target_arch = "wasm32")),
+    all(not(test), target_os = "ios"),
     expect(
         dead_code,
-        reason = "secondary-window policy; only the desktop runner opens a second window"
+        reason = "secondary-window policy; its iOS re-export is gated out"
     )
 )]
 pub enum WindowPolicy {

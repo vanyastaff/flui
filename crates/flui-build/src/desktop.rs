@@ -403,7 +403,10 @@ impl DesktopBuilder {
 
 /// Total size of every file under `dir`, recursively.
 ///
-/// Used to report a staged macOS `.app`'s on-disk size to the caller.
+/// Used to report a staged macOS `.app`'s on-disk size to the caller; gated
+/// with its only caller, [`DesktopBuilder::stage_macos_app`], so a non-macOS
+/// build does not carry it as dead code.
+#[cfg(target_os = "macos")]
 fn calculate_dir_size(dir: &Path) -> BuildResult<u64> {
     let mut total = 0u64;
     for entry in std::fs::read_dir(dir)? {
