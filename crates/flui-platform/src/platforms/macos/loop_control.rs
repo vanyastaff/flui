@@ -38,6 +38,9 @@ struct State {
     queued: bool,
     requested: bool,
     explicit_quit: bool,
+    pending_reopens: usize,
+    reopen_queued: bool,
+    reopen_active: bool,
 }
 
 /// Contains only thread-safe Rust state. AppKit objects never cross the queue.
@@ -58,6 +61,9 @@ impl LoopControl {
                 queued: false,
                 requested: false,
                 explicit_quit: false,
+                pending_reopens: 0,
+                reopen_queued: false,
+                reopen_active: false,
             }),
             windows,
             handlers,
@@ -65,7 +71,110 @@ impl LoopControl {
     }
 
     pub(super) fn accepts_windows(&self) -> bool {
-        !matches!(self.state.lock().phase, Phase::Stopping | Phase::Stopped)
+        let state = self.state.lock();
+        !state.explicit_quit && !matches!(state.phase, Phase::Stopping | Phase::Stopped)
+    }
+
+    /// Replacements and rejected registrations are destroyed outside both locks.
+    pub(super) fn set_reopen(&self, callback: Box<dyn FnMut() + Send>) {
+        let mut callback = Some(callback);
+        let previous = {
+            let mut handlers = self.handlers.lock();
+            if self.accepts_windows() {
+                std::mem::replace(&mut handlers.reopen, callback.take())
+            } else {
+                None
+            }
+        };
+        cleanup_step(|| drop(previous));
+        cleanup_step(|| drop(callback));
+    }
+
+    fn request_reopen(self: &Arc<Self>) {
+        {
+            let mut state = self.state.lock();
+            if state.explicit_quit || matches!(state.phase, Phase::Stopping | Phase::Stopped) {
+                return;
+            }
+            state.pending_reopens = state
+                .pending_reopens
+                .checked_add(1)
+                .expect("BUG: more pending reopen signals than addressable memory");
+        }
+        self.schedule_reopens();
+    }
+
+    fn schedule_reopens(self: &Arc<Self>) {
+        let enqueue = {
+            let mut state = self.state.lock();
+            if state.phase == Phase::Running
+                && !state.explicit_quit
+                && state.pending_reopens != 0
+                && !state.reopen_active
+                && !state.reopen_queued
+            {
+                state.reopen_queued = true;
+                true
+            } else {
+                false
+            }
+        };
+        if enqueue {
+            let weak = Arc::downgrade(self);
+            exec_async_guarded(owner_queue(), move || {
+                // The outer GCD helper predates hostile panic payload handling.
+                // Contain the complete delivery here before its trampoline sees it.
+                cleanup_step(|| {
+                    if let Some(control) = weak.upgrade() {
+                        control.drain_reopens();
+                    }
+                });
+            });
+        }
+    }
+
+    fn drain_reopens(self: &Arc<Self>) {
+        {
+            let mut state = self.state.lock();
+            state.reopen_queued = false;
+            if state.phase != Phase::Running || state.explicit_quit {
+                state.pending_reopens = 0;
+                return;
+            }
+            if state.reopen_active {
+                return;
+            }
+            state.reopen_active = true;
+        }
+        // Active includes callback destruction: either can pump a nested AppKit
+        // loop. Such signals stay pending until this callback lease has ended.
+        let _active = ReopenDrain(self);
+        loop {
+            {
+                let mut state = self.state.lock();
+                if state.phase != Phase::Running || state.explicit_quit {
+                    state.pending_reopens = 0;
+                    return;
+                }
+                if state.pending_reopens == 0 {
+                    return;
+                }
+                state.pending_reopens -= 1;
+            }
+            let mut callback = self.handlers.lock().reopen.take();
+            cleanup_step(|| {
+                if let Some(callback) = callback.as_mut() {
+                    callback();
+                }
+            });
+            {
+                let mut handlers = self.handlers.lock();
+                if self.accepts_windows() && handlers.reopen.is_none() {
+                    handlers.reopen = callback.take();
+                }
+            }
+            cleanup_step(|| drop(callback));
+        }
     }
 
     /// Always deferred: reentrant requests cannot observe an absent leased hook.
@@ -77,6 +186,9 @@ impl LoopControl {
             }
             state.requested = true;
             state.explicit_quit |= explicit_quit;
+            if explicit_quit {
+                state.pending_reopens = 0;
+            }
             if state.phase == Phase::Running && !state.queued {
                 state.queued = true;
                 true
@@ -102,6 +214,7 @@ impl LoopControl {
             }
             let running = state.phase == Phase::Running;
             state.phase = Phase::Stopping;
+            state.pending_reopens = 0;
             running
         };
         if running {
@@ -117,7 +230,7 @@ impl LoopControl {
                 return;
             }
             state.requested = false;
-            std::mem::take(&mut state.explicit_quit)
+            state.explicit_quit
         };
         if explicit {
             self.quit();
@@ -168,6 +281,7 @@ impl LoopControl {
         if requested {
             self.request(false);
         }
+        self.schedule_reopens();
         true
     }
 
@@ -178,6 +292,7 @@ impl LoopControl {
                 return;
             }
             state.phase = Phase::Stopping;
+            state.pending_reopens = 0;
         }
         // No queued cleanup: these resources must be released while main is alive.
         let windows: Vec<_> = self.windows.lock().values().cloned().collect();
@@ -194,9 +309,20 @@ impl LoopControl {
         if let Some(callback) = callback {
             cleanup_step(callback);
         }
+        let reopen = self.handlers.lock().reopen.take();
+        cleanup_step(|| drop(reopen));
         let handlers = std::mem::take(&mut *self.handlers.lock());
         cleanup_step(|| drop(handlers));
         self.state.lock().phase = Phase::Stopped;
+    }
+}
+
+struct ReopenDrain<'a>(&'a Arc<LoopControl>);
+
+impl Drop for ReopenDrain<'_> {
+    fn drop(&mut self) {
+        self.0.state.lock().reopen_active = false;
+        cleanup_step(|| self.0.schedule_reopens());
     }
 }
 
@@ -218,12 +344,22 @@ define_class!(
     #[unsafe(super = NSObject)]
     #[thread_kind = MainThreadOnly]
     #[ivars = Weak<LoopControl>]
-    /// Private, loop-scoped delegate routing native quit requests.
+    /// Private, loop-scoped delegate routing native quit and reopen requests.
     struct LoopDelegate;
     // SAFETY: NSObjectProtocol has no additional requirements.
     unsafe impl NSObjectProtocol for LoopDelegate {}
     // SAFETY: this delegate is retained for its entire installation on main.
     unsafe impl NSApplicationDelegate for LoopDelegate {
+        #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        fn should_reopen(&self, _app: &NSApplication, _has_visible_windows: bool) -> bool {
+            cleanup_step(|| {
+                if let Some(control) = self.ivars().upgrade() { control.request_reopen(); }
+            });
+            // FLUI owns window policy. Suppress AppKit's default untitled
+            // document creation, regardless of its visible-window classification.
+            false
+        }
+
         #[unsafe(method(applicationShouldTerminate:))]
         fn should_terminate(&self, _app: &NSApplication) -> NSApplicationTerminateReply {
             // Never run user teardown inside the Objective-C callback. Guard the
@@ -305,5 +441,69 @@ impl Drop for LoopOwnership {
             }
             self.app.setDelegate(None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn control() -> Arc<LoopControl> {
+        LoopControl::new(
+            Arc::new(Mutex::new(HashMap::new())),
+            Arc::new(Mutex::new(PlatformHandlers::default())),
+        )
+    }
+
+    #[test]
+    fn reopen_nested_delivery_preserves_pending_and_uses_replacement_after_lease() {
+        let control = control();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let owner = Arc::clone(&control);
+        let observed = Arc::clone(&calls);
+        control.set_reopen(Box::new(move || {
+            assert_eq!(observed.fetch_add(1, Ordering::SeqCst), 0);
+            let next = Arc::clone(&observed);
+            owner.set_reopen(Box::new(move || {
+                assert_eq!(next.fetch_add(1, Ordering::SeqCst), 1);
+            }));
+            owner.request_reopen();
+            owner.drain_reopens();
+            assert_eq!(observed.load(Ordering::SeqCst), 1);
+            assert!(owner.state.lock().reopen_active);
+        }));
+        control.request_reopen(); // Starting/dormant does not enqueue native work.
+        control.state.lock().phase = Phase::Running;
+        control.drain_reopens();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(control.state.lock().pending_reopens, 0);
+        assert!(!control.state.lock().reopen_active);
+        control.finish();
+    }
+
+    #[test]
+    fn reopen_explicit_quit_fences_delivery_registration_and_window_admission() {
+        let control = control();
+        control.set_reopen(Box::new(|| panic!("quit-fenced event delivered")));
+        control.request_reopen();
+        control.request(true); // Dormant request fences without scheduling AppKit.
+        assert!(!control.accepts_windows());
+        control.state.lock().phase = Phase::Running;
+        control.drain_reopens();
+        let dropped = Arc::new(AtomicUsize::new(0));
+        struct Marker(Arc<AtomicUsize>);
+        impl Drop for Marker {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let marker = Marker(Arc::clone(&dropped));
+        control.set_reopen(Box::new(move || {
+            let _ = &marker;
+        }));
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert_eq!(control.state.lock().pending_reopens, 0);
+        control.finish();
     }
 }

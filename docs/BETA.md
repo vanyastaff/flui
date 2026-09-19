@@ -73,6 +73,25 @@ weak lifecycle subscriptions now have mounted app and sole-facade headless
 regressions, including renamed dependencies. Native lifecycle transport across
 every supported platform remains separate acceptance work.
 
+The native macOS `on_reopen` transport now routes both visible-window and
+no-window reopen events through the owned application delegate. The bounded
+`reopen_probe` separates direct selector tests from actual `open -a` AppleEvents;
+the latter require callback delivery and normal return in the original process.
+Its direct cases cover starting-phase delivery, nested pumping, callback
+replacement and destruction, hostile panic payloads, quit fences and stale
+per-run delegates. AppKit's default untitled-document creation is suppressed;
+the callback receives a signal and owns the decision to show or create UI.
+
+This closes the native signal prerequisite, not resident application acceptance.
+The app runtime still needs a loop-owned root factory and public resident
+control, rendered secondary-window integration, and pending window creation
+that does not require a surviving realm. Desktop bootstrap currently combines
+once-per-loop services/executors/watchers with per-window renderer, mount,
+input and frame setup; reopening must separate those responsibilities without
+restarting application services. Native background-launch rendering remains a
+separate unresolved workflow. No broader backend rewrite is implied by these
+prerequisites.
+
 Primary references: [AppKit last-window termination policy](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldterminateafterlastwindowclosed(_:))
 separates window closure from application termination; [winit application lifecycle](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)
 documents platform-specific suspend/resume and redundant notifications. These

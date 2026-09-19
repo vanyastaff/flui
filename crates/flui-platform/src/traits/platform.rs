@@ -489,7 +489,16 @@ pub trait Platform: Send + Sync + 'static {
     /// Register a callback for when the application should quit
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
 
-    /// Register a callback for when the application is reopened (macOS)
+    /// Register the macOS application's reopen signal callback.
+    ///
+    /// AppKit delivers this signal for both visible-window and no-window reopen
+    /// events. FLUI suppresses AppKit's default untitled-document creation; the
+    /// callback decides whether to show or create UI. Delivery is deferred to the
+    /// owner lane and uses the registration current at that turn. Nested events
+    /// wait until the active callback and its cleanup finish. Replacement is safe
+    /// from inside a callback. Explicit quit rejects pending signals and later
+    /// registrations; callbacks are released when the native run ends.
+    /// Other backends may leave this optional native transport unsupported.
     fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
     }

@@ -304,6 +304,10 @@ impl Platform for MacOSPlatform {
         handlers.quit = Some(callback);
     }
 
+    fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
+        self.loop_control.set_reopen(callback);
+    }
+
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
         let mut handlers = self.handlers.lock();
         handlers.window_event = Some(callback);

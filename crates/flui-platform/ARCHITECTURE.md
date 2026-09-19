@@ -9,6 +9,44 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### AppKit reopen signals use a loop-owned serialized callback pump
+
+The owned application delegate implements
+[`applicationShouldHandleReopen:hasVisibleWindows:`](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldhandlereopen(_:hasvisiblewindows:)).
+It always returns false: FLUI owns window policy and does not ask AppKit to create
+an untitled document. Both visible-window flag values deliver the same existing
+`on_reopen` signal. Apple's flag counts miniaturized windows as visible; it is
+not a substitute for presentation visibility or frame eligibility.
+
+The Objective-C method only records a signal and schedules weak loop control.
+A pending count, queued flag and active guard serialize owner-lane delivery,
+including callbacks that pump nested native events. Starting-phase signals wait
+until the loop runs. The registration current at delivery receives each signal;
+a replacement installed before that turn receives it. During delivery, callbacks
+are leased outside locks and restored only if no replacement exists and quit has
+not been requested. Active remains set through callback destruction, so a nested
+signal is retained until its predecessor's lease and cleanup finish.
+
+Explicit quit fences registration, delivery, restoration and window admission
+immediately, including before deferred termination evaluation. Old delegates
+reference only their old loop; stopped loops cannot act on a later run. Handler
+replacement/destruction happens outside locks, preserving the existing
+handlers-then-state lock order. Callback, destructor and native/dispatch boundary
+panics use hostile-payload-safe containment; a panicking registration does not
+prevent another pending signal from reaching its replacement or restored slot.
+
+`reopen_probe` and `scripts/check-macos-reopen.py` separate direct delegate
+routing from actual LaunchServices reopen AppleEvents. The latter invokes
+`open -a` on the exact running temporary bundle and requires callback and normal
+return in the original PID. These checks cover the platform signal, not a
+rendered resident application or a framework root-window creation API.
+Run the native matrix on macOS with an active GUI session:
+
+```sh
+cargo build -p flui-platform --locked --example reopen_probe
+python3 scripts/check-macos-reopen.py target/debug/examples/reopen_probe
+```
+
 ### Headless explicit quit consumes its callback outside platform state
 
 `HeadlessPlatform::quit` uses the same take-then-invoke discipline as its window
