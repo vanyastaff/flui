@@ -100,7 +100,7 @@ standard. It covers naming, API design, ownership, errors and panics, unsafe
 proofs, concurrency, async code, lifecycle, performance, diagnostics,
 documentation, testing, features, and security.
 
-`rustfmt.toml`, `clippy.toml`, workspace lints, crate-local `AGENTS.md` files,
+`rustfmt.toml`, `clippy.toml`, workspace lints, the architecture contract that ships with each crate,
 and accepted ADRs provide the mechanically enforced and subsystem-specific
 parts of that contract. Do not copy a subset into a crate and let it drift.
 

@@ -33,8 +33,7 @@
 //! FLUI bounds the panic to the one element whose hook threw and lets the
 //! rest of the frame continue: see `StatefulBehavior::{on_unmount,
 //! on_deactivate, on_activate}` and `RenderBehavior::on_unmount`
-//! (`crates/flui-view/src/element/behavior.rs`) and the containment bullet
-//! in `crates/flui-view/AGENTS.md`.
+//! (`crates/flui-view/src/element/behavior.rs`).
 //!
 //! `AnimatedView::listenable()` is different: it is the only handle to the
 //! listenable an `AnimatedBehavior` subscribed to, so a `catch_unwind`

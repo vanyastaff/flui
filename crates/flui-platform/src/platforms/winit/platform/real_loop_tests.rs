@@ -116,7 +116,7 @@ fn wait_for_map_len(platform: &WinitPlatform, expected: usize, what: &str) {
 /// `cargo nextest run` gives each test one by default; plain
 /// `cargo test` runs the whole binary in one process and WILL fail
 /// whichever of these tests happens to run second. CI runs this crate's
-/// suite with nextest under `xvfb-run` (see `crates/flui-platform/AGENTS.md`),
+/// suite with nextest under `xvfb-run` (see `docs/testing.md`),
 /// which is what gives these tests their X11 connection there.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn build_test_event_loop() -> EventLoop<()> {

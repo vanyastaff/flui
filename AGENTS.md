@@ -8,7 +8,7 @@
 
 Three rules, in priority order. They override convenience, never each other.
 
-1. **We take inspiration from Flutter; we do not match it.** The three-tree model (View → Element → Render), lifecycle, and the layout/paint/hit-test protocol are Flutter's ideas, and where they are good we start from them — but nothing is inherited wholesale. *Structure, architecture, and code style* are designed for Rust as it is now (Arity system, `NonZeroUsize` IDs, Slab arenas, `Result`/`thiserror`, and the divergences the ADRs record — ADR-0008, ADR-0018/21/30/37). Where we follow a Flutter contract, name which one and prove it with a test; where we improve on it — more type-safe, faster, safer, more ergonomic — the improvement is what the test asserts. Anything we improve on gets its reasoning written down: an ADR for a protocol-level contract, a `## Mapping decisions` entry in the crate's `ARCHITECTURE.md` for a local one. What is never acceptable is losing a behavior by accident — dropping one is a decision, recorded in the same place. What this rule protects unconditionally is the *framework user's* mental model: declarative widget composition over a retained three-tree, keys, lifecycle. See [`STRATEGY.md`](STRATEGY.md) and [`docs/PORT.md`](docs/PORT.md) §Mapping rules.
+1. **We take inspiration from Flutter; we do not match it.** The three-tree model (View → Element → Render), lifecycle, and the layout/paint/hit-test protocol are Flutter's ideas, and where they are good we start from them — but nothing is inherited wholesale. *Structure, architecture, and code style* are designed for Rust as it is now (Arity system, `NonZeroUsize` IDs, Slab arenas, `Result`/`thiserror`, and the divergences the ADRs record — ADR-0008, ADR-0018/21/30/37). Where we follow a Flutter contract, name which one and prove it with a test; where we improve on it — more type-safe, faster, safer, more ergonomic — the improvement is what the test asserts. Anything we improve on gets its reasoning written down: an ADR for a protocol-level contract, a `## Mapping decisions` entry in the crate's `ARCHITECTURE.md` for a local one. What is never acceptable is losing a behavior by accident — dropping one is a decision, recorded in the same place. What this rule protects unconditionally is the *framework user's* mental model: declarative widget composition over a retained three-tree, keys, lifecycle. See [`STRATEGY.md`](STRATEGY.md) and [`docs/PORT.md`](docs/PORT.md) §Mapping rules. Flutter source is optional reading, not a build dependency: `.flutter/` and `.gpui/` (Zed) are gitignored local clones, and a checkout at whatever revision you have beats none — but state the revision you actually read rather than implying a check you did not run.
 2. **Search the market before settling.** Before adopting a design — Flutter's or your own — check what the current ecosystem does (Compose, SwiftUI, and the Rust frameworks: egui, Iced, Xilem/Masonry, Bevy UI, GPUI, Dioxus, Slint) and what the current Rust toolchain and crates offer, and pick the best-known shape, citing where it comes from. This applies to functionality, architecture, *and* code style alike: an idiom that is stable in today's Rust replaces the older pattern it supersedes. Breaking changes are cheap today and ossify once consumers exist; do not defer a better shape to "later". Where Flutter has *no strong contract* — animation curves, velocity prediction, color interpolation, input smoothing — Flutter is not even the baseline: propose the market-best abstraction directly. **Sanctioned leapfrog zones (ADR-0027):** multi-window ownership, runtime/scheduling topology, concurrency architecture, and presentation architecture — Flutter's widget-tree semantics are a starting point there, not a constraint; a review must not reject `UiRealm`-model divergence (realm-scoped GlobalKey/focus, per-realm schedulers) as forbidden drift.
 3. **Done means the behavior is verified and the reasoning is written down.** Before claiming completion, the change has a test that would fail without it, and any contract we chose over Flutter's is recorded (ADR / `## Mapping decisions`). "Better than Flutter" without that accounting is an unverified claim, exactly as "same as Flutter" would be. [Definition of Done](#definition-of-done-anti-cheating) is the checklist.
 
@@ -16,10 +16,10 @@ Three rules, in priority order. They override convenience, never each other.
 
 ## Quick Start for AI Agents
 
-**Read this first.** Then read `crates/<crate>/AGENTS.md` for the crate you're working on, and pick your entry point from [Documentation](#documentation) below.
+**Read this first.** Then pick your entry point from [Documentation](#documentation) below.
 
 - **Create a PR** — run `just ci` first and fix any failures before committing. A PR body may say `close(s)`/`fix(es)`/`resolve(s)` `#N` only when the merge is meant to close that issue: GitHub's linker ignores negation and surrounding prose ("PR4 closes #N" closed #N), so write `Refs #N` otherwise.
-- **Path-scoped reference lives in `.claude/rules/`** — `ci.md` (`.github/**`), `testing.md` (test files), `build-config.md` (`Cargo.toml` / `.cargo/**` / `rust-toolchain.toml`). Each loads only when you work with matching files, so it is *not* in context until then: open them deliberately when working near CI, tests, or build config. Same for `.claude/skills/` (e.g. `flutter-reference`), which loads on invocation.
+- **Path-scoped reference lives in `.claude/rules/`** — `ci.md` (`.github/**`), `testing.md` (test files), `build-config.md` (`Cargo.toml` / `.cargo/**` / `rust-toolchain.toml`). Each loads only when you work with matching files, so it is *not* in context until then: open them deliberately when working near CI, tests, or build config.
 
 ---
 
@@ -79,28 +79,22 @@ These are enforced by `scripts/port-check.sh` in CI and locally via `just port-c
 | **No `println!`/`eprintln!`/`dbg!`** in foundation/tree/macros crates | Use `tracing` macros |
 | **No lifecycle-only presentation capability inside `build`/`perform_layout`/`paint`** — `rebuild_handle()` (ADR-0018), `post_frame_handle()` (ADR-0021), `text_input_handle()` (ADR-0030), and `focus_manager()` (ADR-0037) are acquired in `ViewState::init_state` / `did_change_dependencies` and used later | Trigger #22: mutation or scheduling from a frame phase can create an unbounded rebuild loop, re-enter the frame transaction, or leak ownership across presentations. Adding a capability to `BuildContext` means adding its token to `scripts/check-frame-capability-scope.sh` in the same change |
 
-## Where Flutter Is Consulted
-
-Flutter is where we look first when designing widget-tree behavior — render tree, slivers, layout, paint, hit-test, semantics, scheduling, parent data — because it has solved problems we have not met yet. Read it for *what* and *why*, then design in Rust: nothing is owed to Dart's structure, naming, file layout, or 2015-era constraints (single isolate, nullable references, exceptions, string-keyed aspects). Two things are owed. **One:** when we deliberately do something better — more type-safe, faster, safer — that is a decision, not drift, and it is recorded in `docs/adr/` or the crate's `ARCHITECTURE.md` `## Mapping decisions`; a reviewer must not reject it as drift. **Two:** never lose a behavior by accident — dropping one is a decision, written down in the same place. Adapt patterns to FLUI idioms (Arity system, Ambassador delegation, no nullability).
-
-The reference clones (`.flutter/`, and `.gpui/` from the Zed repository) are gitignored local copies and are optional reading, not a build dependency — a checkout at whatever revision you have is better than none, but state the revision you actually read rather than implying a check you did not run.
-
 ## Documentation
 
 Entry points by task, then the reference documents with no task of their own.
 
 | Need | Read | Then / notes |
 |------|------|-------------|
-| Add a new feature | `docs/ROADMAP.md` (is it planned?) | `crates/<crate>/AGENTS.md`, `docs/FOUNDATIONS.md` |
-| Change render/layout/paint | `crates/flui-rendering/AGENTS.md` | `.flutter/` reference, `docs/PORT.md` (translation rules, refusal triggers, type map) |
-| Understand error handling | `crates/flui-foundation/AGENTS.md` | `thiserror` in libs, `anyhow` in bins |
-| Touch logging setup or a log backend | `crates/flui-log/AGENTS.md` | Subscriber policies, native sinks, who may depend on the backend; `docs/workspace-layers.toml` (only composition roots may depend on it) |
-| Write or review Rust code | `STYLE.md` | Crate `AGENTS.md`, relevant architecture contract |
+| Add a new feature | `docs/ROADMAP.md` (is it planned?) | `docs/FOUNDATIONS.md` |
+| Change render/layout/paint | `docs/PORT.md` (translation rules, refusal triggers, type map) | `.flutter/` reference |
+| Understand error handling | `thiserror` in libs, `anyhow` in bins | |
+| Touch logging setup or a log backend | Subscriber policies, native sinks, who may depend on the backend | `docs/workspace-layers.toml` (only composition roots may depend on it) |
+| Write or review Rust code | `STYLE.md` | Relevant architecture contract |
 | Add a cross-crate dep | `docs/workspace-layers.toml` (the checked layer policy) | Root `Cargo.toml` `[workspace.dependencies]`, `docs/FOUNDATIONS.md` Part IV |
 | Add a new crate | `docs/workspace-layers.toml` — classify it *first*; `[[planned]]` records gated extractions | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
 | Catch up on recent changes | `CHANGELOG.md` | `docs/ROADMAP.md` |
-| Understand GPU rendering | `crates/flui-engine/AGENTS.md` | `crates/flui-engine/ARCHITECTURE.md` |
-| Write a test that drives a frame, or add test support | `docs/testing.md` — the map of the tiers; pick the shallowest one that can fail | `crates/flui-testing/AGENTS.md`, `crates/flui-rendering/docs/TESTING.md` (RenderTester API, catalog rules) |
+| Understand GPU rendering | `crates/flui-engine/ARCHITECTURE.md` | Compositor, glyph atlas, pipeline topology |
+| Write a test that drives a frame, or add test support | `docs/testing.md` — the map of the tiers; pick the shallowest one that can fail | `crates/flui-rendering/docs/TESTING.md` (RenderTester API, catalog rules) |
 | **Foundations** | `docs/FOUNDATIONS.md` | Architecture contract, locked contracts (C1–C9) |
 | **Architecture** | `docs/architecture.md` | Three-tree pipeline overview |
 | **Panic policy** | `docs/PANIC-POLICY.md` | When `expect("BUG: …")` is allowed vs. `Result`; `clippy::unwrap_used` gate |
@@ -133,21 +127,10 @@ An agent reporting "done" makes a claim that later work is built on. A green gat
 
 **Before reporting a render/layout/paint/lifecycle change done:**
 
-1. **Verify the behavior — and if we chose a different contract, verify that choice is recorded.** Open the Flutter source for the behavior you are claiming and confirm every case is either matched or *deliberately* different, with the difference recorded (ADR / `## Mapping decisions`) and covered by a test that asserts the contract we actually ship. An audit finding with no cross-check is a hypothesis, not a fact; a divergence with no record and no test is a regression until proven otherwise.
-2. **No fake-passing.** Never satisfy a gate by:
-   - special-casing the test/harness input instead of implementing the behavior;
-   - returning a stub / `Size::ZERO` / empty value that happens to pass;
-   - narrowing a test to only what the partial impl handles;
-   - reporting intrinsics, baselines, or hit-test as working when they return defaults.
-
-   If a behavior is not implemented, **say so explicitly** — do not paper over it.
-3. **Harness evidence.** Every concrete `RenderBox`/`RenderSliver` carries harness tests (catalog CI guard). New behavior needs a test that would *fail* without the change.
-4. **Report scope honestly.** "X done" from a prior session ≠ parity — re-verify. State what is implemented vs deferred and *why*; never imply completeness you did not check.
+1. **The behavior is verified, and a chosen divergence is recorded.** Every case is either matched or *deliberately* different, with the difference recorded (ADR / `## Mapping decisions`) and covered by a test that asserts the contract we actually ship. An audit finding with no cross-check is a hypothesis, not a fact; a divergence with no record and no test is a regression until proven otherwise.
+2. **Every concrete `RenderBox`/`RenderSliver` carries harness tests** (catalog CI guard), and new behavior needs a test that would *fail* without the change.
+3. **Scope is reported honestly.** "X done" from a prior session is not done — re-verify. State what is implemented vs deferred and *why*; never imply completeness you did not check. If a behavior is not implemented, say so explicitly rather than satisfying a gate with a stub, a narrowed test, or a default-returning intrinsic.
 
 ## Agent Rules
 
-- **Decompose chained shell commands** — run each step separately so failures are inspectable
-- **Never run destructive git operations** without explicit user permission
-- **Honor the architecture contract** — cross-check against `docs/FOUNDATIONS.md` and `docs/ROADMAP.md`
-- **Verify before committing** — run `just ci`; for a narrower loop, the crate's own test/fmt/clippy invocations
 - **No internal process-ID markers in code** — the studio's core rules carry the prohibition and most of its examples (`Cycle N`, `PR #NNN review`, `Phase B`). Repo-specific are two families it does not name — bare `U##` step-citations and spec `SC-NNN` success-criteria numbers — plus the exception and the sweep's denominator. A marker is acceptable only when its meaning is defined beside its use (a test-case ID in the same file's legend) or is mechanically load-bearing (`FR-NNN`/`ADR-NNNN` references a checker greps). Sweeps may exclude only archival roots — `docs/{audits,brainstorms,ideation,plans,research,superpowers}`, `.rust-studio/specs`, `specs`, `openspec`; shipped docs such as crate `ARCHITECTURE.md` and `docs/ROADMAP-TRACKER.md` stay in scope. This defines the denominator, not a claim that every in-scope hit is gone; known residue is tracked in issue #644.

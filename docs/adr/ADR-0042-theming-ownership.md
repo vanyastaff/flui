@@ -7,7 +7,7 @@
 - **Status:** Accepted (2026-08-02)
 - **Date:** 2026-08-02
 - **Deciders:** @vanyastaff
-- **Scope:** removal of `crates/flui-app/src/theme/` (`AppTheme`, `AppThemeBuilder`, `AppColorScheme`, `ThemeMode`); the ownership rule recorded in `crates/flui-app/AGENTS.md`; the target app-shell split (`WidgetsApp` / `MaterialApp` / `CupertinoApp`) that implements it
+- **Scope:** removal of `crates/flui-app/src/theme/` (`AppTheme`, `AppThemeBuilder`, `AppColorScheme`, `ThemeMode`); the ownership rule this ADR records; the target app-shell split (`WidgetsApp` / `MaterialApp` / `CupertinoApp`) that implements it
 - **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (design-system decoupling — Material and Cupertino are independent siblings above the widget catalog); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (one realm per window — why appearance is per-presentation, and why package/ownership topology is a sanctioned leapfrog zone); [ADR-0037](ADR-0037-presentation-ownership-domains.md) (per-presentation owner state); [ADR-0041](ADR-0041-workspace-topology-contract.md) (layer policy — `flui-app` is L9, the design systems are L7)
 - **Issue:** [#569](https://github.com/vanyastaff/flui/issues/569) — public package surface cleanup, the third Runtime.1 pre-sprint structural task
 
@@ -61,7 +61,7 @@ An application with no Material and no Cupertino must still get navigation, loca
 
 **6. `flui-app` owns no design tokens.**
 
-`AppTheme` and `AppColorScheme` are deleted outright — no compatibility alias, no re-export, no move to another crate. They were an incorrect public contract; carrying a shim forward would preserve exactly the confusion the removal exists to end. `crates/flui-app/AGENTS.md` records the rule so the surface cannot drift back: colours, typography, spacing, radius, motion, and any other design token are L7 concerns, and a token type appearing under `crates/flui-app/src/` is a review failure regardless of what it is named.
+`AppTheme` and `AppColorScheme` are deleted outright — no compatibility alias, no re-export, no move to another crate. They were an incorrect public contract; carrying a shim forward would preserve exactly the confusion the removal exists to end. This ADR records the rule so the surface cannot drift back: colours, typography, spacing, radius, motion, and any other design token are L7 concerns, and a token type appearing under `crates/flui-app/src/` is a review failure regardless of what it is named.
 
 ## Consequences
 
