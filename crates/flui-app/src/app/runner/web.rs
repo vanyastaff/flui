@@ -352,7 +352,7 @@ where
                 );
                 if let Err(error) = dispatch_platform_realm(
                     realm_dispatch,
-                    RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Detached)),
+                    RealmTask::Event(PlatformToUi::Shutdown),
                 ) {
                     // Trace-only: the scheduler died WITH the realm now (each
                     // realm owns its own), so there is no process-global

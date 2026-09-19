@@ -64,9 +64,13 @@ Desktop quit now has a loop-owned notification walk across surviving realms,
 including when the primary realm was removed. Application seam regressions cover
 shared realms, deferred installs, rejected late secondary completions, reentry,
 and observer/dispatch panic ordering. This closes the primary-only notification
-gap; it does not certify a public lifecycle-observer registration workflow or
-per-presentation observer delivery within a shared realm. Those remain separate
-acceptance work.
+gap. Presentation-owned focus/visibility now drive local binding notifications,
+input cancellation and resource suspension, while each realm derives its frame
+eligibility from its live presentations. Scoped regressions cover separate and
+shared realms, both focus-event orders, pause/resume, restoration redraw, and
+terminal notification before disposal even when an observer panics. Public
+live-observer registration and native lifecycle transport across every supported
+platform remain separate acceptance work.
 
 Primary references: [AppKit last-window termination policy](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldterminateafterlastwindowclosed(_:))
 separates window closure from application termination; [winit application lifecycle](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)

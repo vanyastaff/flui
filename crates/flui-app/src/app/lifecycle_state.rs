@@ -11,7 +11,7 @@ use flui_scheduler::AppLifecycleState;
 /// `(visible, focused)` pair, never on which of the two changed most
 /// recently — occlusion-before-focus-loss and focus-loss-before-occlusion
 /// converge to the same derived state once both signals have landed.
-pub(super) fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecycleState {
+pub(crate) fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecycleState {
     if !visible {
         AppLifecycleState::Hidden
     } else if focused {
@@ -59,7 +59,10 @@ pub(super) fn derive_lifecycle_state(visible: bool, focused: bool) -> AppLifecyc
 /// for the whole re-derivation lives: a wake that doesn't change the derived
 /// state emits nothing, to neither the scheduler nor `WidgetsBinding`
 /// observers.
-fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLifecycleState> {
+pub(crate) fn lifecycle_ladder(
+    old: AppLifecycleState,
+    new: AppLifecycleState,
+) -> Vec<AppLifecycleState> {
     if old == new {
         return Vec::new();
     }
@@ -85,116 +88,7 @@ fn lifecycle_ladder(old: AppLifecycleState, new: AppLifecycleState) -> Vec<AppLi
     }
 }
 
-/// Emits the full ladder from `old` to `new` (see [`lifecycle_ladder`]), one
-/// step at a time, to both the realm's own `UpdateScheduler` and its
-/// `WidgetsBinding` observers — mirroring Flutter's single platform-message
-/// stream driving both `SchedulerBinding` and `WidgetsBinding` from the same
-/// synthesized sequence of states.
-///
-/// Installed as a direct call in the same `PlatformToUi` handler (never an
-/// `UpdateScheduler`-listener closure): a listener captured at bootstrap time
-/// would have to resolve `realm`/`WidgetsBinding` lazily at fire time,
-/// which is unsound here specifically because every production caller of
-/// this function runs from inside `dispatch_platform_realm`'s dispatch
-/// window — the window during which the realm is taken OUT of
-/// `APP_RUNTIME` and only restored once the dispatched task returns. A
-/// listener resolving `APP_RUNTIME` at fire time would see `None` on every
-/// real transition and silently no-op (this shipped once and was caught by
-/// `frames_reenable_redirties_root_when_dispatched_through_the_realm_queue`
-/// in `realm_dispatch_tests`, which reproduces via a real dispatched
-/// `PlatformToUi::Lifecycle` sequence rather than driving `UpdateScheduler`
-/// directly). `realm` is already in scope here (`PlatformToUi::run`'s
-/// parameter), so no such resolution is ever needed — the frames-reenable
-/// redirty below reads and writes it directly, in the same stack frame
-/// that owns it for the whole call.
-pub(super) fn emit_lifecycle_transition(
-    realm: &crate::app::ui_realm::UiRealm,
-    old: AppLifecycleState,
-    new: AppLifecycleState,
-) {
-    let mut first_panic = None;
-    for step in lifecycle_ladder(old, new) {
-        let presentation_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            realm.handle_presentation_lifecycle(step);
-        }))
-        .err();
-        preserve_first_lifecycle_panic(
-            &mut first_panic,
-            presentation_panic,
-            "presentation lifecycle transition",
-        );
-
-        let gesture_cleanup_panic = if matches!(
-            step,
-            AppLifecycleState::Hidden | AppLifecycleState::Paused | AppLifecycleState::Detached
-        ) {
-            // A hidden or suspended platform is not required to send the Up
-            // or Cancel matching an in-flight Down. Drain this realm's input
-            // transaction before lifecycle observers can retain stale gesture
-            // state into the next visible frame.
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                realm.gestures().handle_lifecycle_pause();
-            }))
-            .err()
-        } else {
-            None
-        };
-        preserve_first_lifecycle_panic(&mut first_panic, gesture_cleanup_panic, "gesture cleanup");
-
-        // Frames-disabled->enabled re-dirty: FLUI has no retained-scene
-        // re-present, so an app that was `Hidden`/`Paused`/`Detached` and
-        // comes back to `Resumed`/`Inactive` needs the root explicitly
-        // re-dirtied, or the next frame finds nothing dirty and silently
-        // stays Idle instead of repainting the stale window. Read
-        // `frames_enabled()` immediately before and after the scheduler
-        // call below so this observes exactly the edge THIS step produced,
-        // whichever named state it is — `handle_app_lifecycle_state_change`
-        // flips the flag via one atomic swap per call, so bracketing a
-        // single call this way cannot miss or double-count an edge.
-        let frames_were_enabled = realm.scheduler().frames_enabled();
-
-        let scheduler_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            realm.scheduler().handle_app_lifecycle_state_change(step);
-        }))
-        .err();
-        preserve_first_lifecycle_panic(
-            &mut first_panic,
-            scheduler_panic,
-            "scheduler lifecycle dispatch",
-        );
-
-        if !frames_were_enabled && realm.scheduler().frames_enabled() {
-            let redirty_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                realm.redirty_root_for_frames_reenable();
-                realm.wake_frame();
-            }))
-            .err();
-            preserve_first_lifecycle_panic(
-                &mut first_panic,
-                redirty_panic,
-                "frames-reenable redirty",
-            );
-        }
-
-        let widgets_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            realm.widgets().handle_app_lifecycle_state_changed(step);
-        }))
-        .err();
-        preserve_first_lifecycle_panic(
-            &mut first_panic,
-            widgets_panic,
-            "widgets lifecycle dispatch",
-        );
-    }
-
-    // Every sink has now observed (or attempted) the complete synthesized
-    // ladder. The earliest payload keeps transaction ordering deterministic.
-    if let Some(payload) = first_panic {
-        std::panic::resume_unwind(payload);
-    }
-}
-
-pub(super) fn preserve_first_lifecycle_panic(
+pub(crate) fn preserve_first_lifecycle_panic(
     first: &mut Option<Box<dyn std::any::Any + Send>>,
     candidate: Option<Box<dyn std::any::Any + Send>>,
     phase: &'static str,
@@ -235,9 +129,7 @@ mod lifecycle_derivation_tests {
     use flui_types::geometry::{Offset, Pixels};
     use flui_view::WidgetsBindingObserver;
 
-    use super::{
-        AppLifecycleState, derive_lifecycle_state, emit_lifecycle_transition, lifecycle_ladder,
-    };
+    use super::{AppLifecycleState, derive_lifecycle_state, lifecycle_ladder};
 
     struct GestureStateObserver {
         cleanup_committed: Arc<AtomicBool>,
@@ -495,11 +387,7 @@ mod lifecycle_derivation_tests {
                 assert_eq!(realm.gestures().active_resampler_count(), 1);
                 assert_eq!(realm.gestures().pending_move_count(), 1);
 
-                emit_lifecycle_transition(
-                    realm,
-                    AppLifecycleState::Resumed,
-                    AppLifecycleState::Hidden,
-                );
+                realm.update_host_lifecycle(AppLifecycleState::Hidden);
 
                 assert_eq!(realm.gestures().active_pointer_count(), 0);
                 assert_eq!(realm.gestures().active_resampler_count(), 0);
@@ -514,11 +402,7 @@ mod lifecycle_derivation_tests {
                 // not required for isolation (each realm owns its own
                 // scheduler now, so there is nothing left to leak between
                 // tests).
-                emit_lifecycle_transition(
-                    realm,
-                    AppLifecycleState::Hidden,
-                    AppLifecycleState::Resumed,
-                );
+                realm.update_host_lifecycle(AppLifecycleState::Resumed);
             });
         });
         realm.widgets().remove_observer(&observer_handle);
@@ -527,6 +411,7 @@ mod lifecycle_derivation_tests {
     #[test]
     fn multi_step_lifecycle_commits_the_target_before_the_first_panic_resumes() {
         let realm = crate::app::ui_realm::UiRealm::for_test();
+        realm.synchronize_window_lifecycle();
         let lane = InteractionLane::try_new().expect("test interaction lane");
         let handle = lane.dispatch_handle();
         let observer = Arc::new(LifecycleSeen(Mutex::new(Vec::new())));
@@ -538,7 +423,7 @@ mod lifecycle_derivation_tests {
             realm
                 .scheduler()
                 .add_lifecycle_state_listener(Arc::new(move |state| {
-                    if state == AppLifecycleState::Hidden {
+                    if state == AppLifecycleState::Paused {
                         scheduler_probe.store(true, Ordering::Release);
                         panic!("scheduler lifecycle listener panic");
                     }
@@ -567,11 +452,7 @@ mod lifecycle_derivation_tests {
                     .expect("cached route retains lifecycle target");
 
                 let unwind = catch_unwind(AssertUnwindSafe(|| {
-                    emit_lifecycle_transition(
-                        realm,
-                        AppLifecycleState::Resumed,
-                        AppLifecycleState::Paused,
-                    );
+                    realm.update_host_lifecycle(AppLifecycleState::Paused);
                 }));
                 let payload = unwind.expect_err("route cleanup panic must propagate");
 
@@ -611,11 +492,7 @@ mod lifecycle_derivation_tests {
                 );
                 realm.widgets().remove_observer(&panicking_observer);
                 realm.widgets().remove_observer(&observer_handle);
-                emit_lifecycle_transition(
-                    realm,
-                    AppLifecycleState::Paused,
-                    AppLifecycleState::Resumed,
-                );
+                realm.update_host_lifecycle(AppLifecycleState::Resumed);
             });
         });
     }

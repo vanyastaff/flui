@@ -39,7 +39,6 @@ use super::host::{
     APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_needs_redraw_handle,
     runtime_wake_callback, with_owner_platform,
 };
-use super::lifecycle_ladder::emit_lifecycle_transition;
 use super::realm_dispatch::{
     PlatformToUi, RealmTask, dispatch_platform_realm, drain_owner_inbox, install_platform_realm,
     install_surface_applier, teardown_platform_realm,
@@ -420,8 +419,7 @@ where
         let _ = dispatch_platform_realm(
             realm_dispatch,
             RealmTask::Frame(Box::new(move |realm| {
-                let old = realm.scheduler().lifecycle_state();
-                emit_lifecycle_transition(realm, old, target);
+                realm.update_host_lifecycle(target);
             })),
         );
     }));
@@ -435,10 +433,8 @@ where
     // desktop and Android runners call after their loops exit.
     owner_platform_installed(|owner| {
         owner.shared().on_quit(Box::new(move || {
-            let _ = dispatch_platform_realm(
-                realm_dispatch,
-                RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Detached)),
-            );
+            let _ =
+                dispatch_platform_realm(realm_dispatch, RealmTask::Event(PlatformToUi::Shutdown));
             teardown_platform_realm();
         }));
     });

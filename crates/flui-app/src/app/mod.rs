@@ -71,3 +71,5 @@ pub use runtime::{ExitPolicy, WindowPolicy};
 // Re-export RootRenderView and RootRenderElement from flui-view
 pub use flui_view::{LifecycleHook, RecoveredAt};
 pub use flui_view::{RootRenderElement, RootRenderView};
+
+mod lifecycle_state;

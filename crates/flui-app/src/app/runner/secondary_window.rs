@@ -10,13 +10,6 @@ use std::sync::Arc;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use flui_scheduler::AppLifecycleState;
-
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
 use crate::app::close_request::CloseRequestHandler;
 
 #[cfg(all(
@@ -273,7 +266,7 @@ pub(super) fn cancel_pending_secondary_windows() {
     let mut panic = None;
     for token in tokens {
         let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(token))).err();
-        super::lifecycle_ladder::preserve_first_lifecycle_panic(
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut panic,
             error,
             "pending open cancellation",
@@ -283,7 +276,7 @@ pub(super) fn cancel_pending_secondary_windows() {
         let error =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| completion.window.close()))
                 .err();
-        super::lifecycle_ladder::preserve_first_lifecycle_panic(
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut panic,
             error,
             "uninstalled window close",
@@ -687,7 +680,7 @@ fn finish_open_secondary_window(
 
     let _ = dispatch_platform_realm(
         realm_dispatch,
-        RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
+        RealmTask::Event(PlatformToUi::SynchronizeLifecycle),
     );
 
     Ok((realm_dispatch, window))

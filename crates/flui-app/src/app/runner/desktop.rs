@@ -796,13 +796,10 @@ where
         // no-op instead of waking the loop.
         APP_RUNTIME.with(|slot| slot.borrow().set_redraw_window(window));
 
-        // Mark lifecycle as started (Resumed). Routed through the same
-        // dispatch every other lifecycle signal uses -- one fact, one place
-        // (`emit_lifecycle_transition` reads the realm's own scheduler) --
-        // rather than reaching for a process-global one that no longer
-        // exists. A fresh realm's scheduler already starts at `Resumed`
-        // (`BindingState::lifecycle_state`'s default), so this ladder is
-        // empty and the call is a documented no-op, matching prior behavior.
+        // Start the host through the shared lifecycle dispatch. Each
+        // presentation derives its initial state from observed native facts,
+        // so a hidden or unfocused window starts Hidden or Inactive even
+        // though the host itself is running.
         debug_assert_eq!(
             std::thread::current().id(),
             realm_dispatch.owner_thread,

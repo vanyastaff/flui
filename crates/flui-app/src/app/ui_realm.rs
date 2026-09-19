@@ -22,6 +22,9 @@
 //! gets a fresh generational [`RealmId`], so results stamped for a dead
 //! runtime are droppable by identity, not by convention.
 
+mod presentation_lifecycle;
+use presentation_lifecycle::HostLifecycle;
+
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -51,7 +54,7 @@ use flui_scheduler::{
 };
 use flui_semantics::SemanticsActionRequest;
 use flui_types::{HapticFeedback, Size, geometry::px};
-use flui_view::{GlobalKeyRegistryComposite, GlobalKeyScope, WidgetsBinding};
+use flui_view::{GlobalKeyRegistryComposite, GlobalKeyScope};
 use flui_widgets::{FocusRoot, GestureArenaScope, NavigatorCommand, VsyncScope};
 #[cfg(test)]
 use parking_lot::RwLock;
@@ -502,6 +505,7 @@ pub(crate) struct UiRealm {
     /// keyboard focus (ADR-0043 §4, issue #555's addressed-routing slice). See
     /// [`FocusCoordinator`]'s own doc.
     focus_coordinator: FocusCoordinator,
+    host_lifecycle: Cell<HostLifecycle>,
     /// Wall-clock origin for the production `now_secs` computation, moved
     /// here from the retired `AppBinding`: frame times are realm-relative.
     /// `now_secs()` = `start.elapsed().as_secs_f64()`, stored once here so
@@ -873,6 +877,7 @@ impl UiRealm {
             global_key_scope,
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),
+            host_lifecycle: Cell::new(HostLifecycle::Observed(AppLifecycleState::Resumed)),
             start: web_time::Instant::now(),
             needs_redraw,
             wake: Arc::clone(&wake),
@@ -1155,7 +1160,10 @@ impl UiRealm {
     /// `pub(crate)` for the same cross-module reason as
     /// [`Self::install_second_presentation_for_test`] above.
     #[cfg(test)]
-    pub(crate) fn presentation_widgets_for_test(&self, id: PresentationId) -> &WidgetsBinding {
+    pub(crate) fn presentation_widgets_for_test(
+        &self,
+        id: PresentationId,
+    ) -> &flui_view::WidgetsBinding {
         self.presentations
             .get(id)
             .expect("BUG: presentation_widgets_for_test called with an unknown id")
@@ -1281,6 +1289,12 @@ impl UiRealm {
         presentation: PresentationState,
     ) -> PresentationId {
         let presentation_id = presentation.id();
+        if presentation.window_focused.get() && presentation.window_visible.get() {
+            for previous in self.presentations.iter() {
+                previous.window_focused.set(false);
+            }
+            self.focus_coordinator.note_focus_gained(presentation_id);
+        }
         self.presentations.install(presentation);
         presentation_id
     }
@@ -1296,7 +1310,7 @@ impl UiRealm {
     /// forest membership, never registry routing, can still use it.
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
-        let window = super::presentation::test_platform_window(None);
+        let window = Arc::new(super::window_test_support::TestWindow::new().focused(false));
         let presentation = self.assemble_presentation(window);
         self.install_presentation(presentation)
     }
@@ -1329,22 +1343,8 @@ impl UiRealm {
         self.presentations.primary().clock().produced_count()
     }
 
-    /// Whether `id` is this realm's currently ACTIVE presentation
-    /// ([`FocusCoordinator`]). Production reader:
-    /// `runner.rs`'s `PlatformToUi::WindowFocus` handling uses this to tell
-    /// an authoritative focus-loss (the active presentation's own window
-    /// losing OS focus) apart from a stale one (a DIFFERENT, non-active
-    /// presentation of this same realm reporting focus loss, a normal
-    /// consequence of focus having already moved elsewhere within this
-    /// realm) — see that call site's own doc for why the distinction
-    /// matters for the realm-wide lifecycle aggregate.
-    #[must_use]
-    pub(crate) fn is_active_presentation(&self, id: PresentationId) -> bool {
-        self.focus_coordinator.active() == id
-    }
-
     /// This realm's own scheduler — the strong root. `runner.rs`'s
-    /// realm-scoped lifecycle sites (`emit_lifecycle_transition`, the
+    /// realm-scoped lifecycle sites (`UiRealm::update_host_lifecycle`, the
     /// per-backend frame pumps) read through here instead of a process-global
     /// singleton; see [`Self::scheduler`]'s field doc for the ownership
     /// story.
@@ -1440,14 +1440,14 @@ impl UiRealm {
 
     /// Owner-local widgets binding. Crate-private so callers cannot bypass the
     /// guarded realm entry boundary.
-    pub(crate) fn widgets(&self) -> &WidgetsBinding {
+    #[cfg(any(
+        test,
+        not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
+    ))]
+    pub(crate) fn widgets(&self) -> &flui_view::WidgetsBinding {
         self.presentations.primary().widgets()
     }
 
-    /// Gesture state for the realm's current single presentation.
-    ///
-    /// Crate-private so platform input can only reach it through the entered
-    /// realm dispatch path rather than exposing a second public owner seam.
     /// The live root media-query source (see the field doc).
     pub(crate) fn media_query(&self) -> &crate::app::media_query_root::MediaQuerySource {
         &self.media_query
@@ -1507,22 +1507,6 @@ impl UiRealm {
         self.presentations.primary().text_input_handle()
     }
 
-    /// Keep presentation-owned resources aligned with the synthesized
-    /// application lifecycle delivered by the platform runner.
-    pub(crate) fn handle_presentation_lifecycle(&self, state: AppLifecycleState) {
-        match state {
-            AppLifecycleState::Resumed | AppLifecycleState::Inactive => {
-                self.presentations.primary().resume();
-            }
-            AppLifecycleState::Hidden | AppLifecycleState::Paused => {
-                self.presentations.primary().suspend();
-            }
-            AppLifecycleState::Detached => {
-                self.presentations.primary().close();
-            }
-        }
-    }
-
     /// Reassemble EVERY presentation this realm hosts, in mount order —
     /// under the whole-frame composite `enter()` already activates, so a
     /// key resolved mid-fan-out still finds any presentation's tree, not
@@ -1579,24 +1563,6 @@ impl UiRealm {
     )]
     pub(crate) fn renderer(&self) -> &RenderingFlutterBinding {
         self.presentations.primary().renderer()
-    }
-
-    /// Re-dirty this realm's root so the next frame actually produces
-    /// content instead of finding nothing to do — called directly from
-    /// `runner.rs`'s `emit_lifecycle_transition` on the frames-disabled->
-    /// enabled edge (that call site already has this realm in scope; see
-    /// its own doc for why the redirty lives there and not in an `UpdateScheduler`
-    /// lifecycle listener). FLUI has no retained-scene layer to fall back
-    /// on, so a `Hidden`/`Paused` -> `Resumed`/`Inactive` transition needs
-    /// the same explicit re-dirty `allow_first_frame` needs after a
-    /// deferral lifts.
-    pub(crate) fn redirty_root_for_frames_reenable(&self) {
-        crate::bindings::redirty_pipeline_root(
-            self.presentations
-                .primary()
-                .renderer()
-                .root_pipeline_owner(),
-        );
     }
 
     /// A clone of the PRIMARY presentation's own controller registry for
@@ -3398,7 +3364,10 @@ impl UiRealm {
             );
             return;
         };
-        if input_dropped_by_lifecycle(presentation.lifecycle(), &input) {
+        if presentation.closing_requested.get()
+            || self.host_lifecycle.get() == HostLifecycle::Observed(AppLifecycleState::Detached)
+            || input_dropped_by_lifecycle(presentation.lifecycle(), &input)
+        {
             tracing::debug!(
                 { flui_foundation::diagnostics::PRESENTATION_ID } = presentation.id().as_u64(),
                 lifecycle = ?presentation.lifecycle(),
@@ -3785,53 +3754,37 @@ impl UiRealm {
     /// `enter_for_close` itself or give `PresentationForest` interior
     /// mutability.
     pub(crate) fn close_presentation_entered(&mut self, id: PresentationId) -> bool {
-        let existed = self.enter_for_close(id, |realm| {
-            let Some(presentation) = realm.presentations.get(id) else {
-                return false;
-            };
-            // Re-stamp the active presentation to the survivor BEFORE
-            // dispose hooks run, if `id` is the realm's currently ACTIVE
-            // one (`FocusCoordinator`) -- mirrors `runner.rs`'s
-            // `RealmSlot::address` re-stamp ordering (dispose-time
-            // reentrancy safety: re-stamp before disposal, never after) and
-            // closes the keyboard-blackhole gap a naive close would leave:
-            // without this, `FocusCoordinator` keeps pointing at `id` after
-            // steps 4-6 remove it from the forest, so `handle_input_
-            // addressed`'s `Keyboard` arm resolves a presentation the
-            // forest no longer has and every keyboard event drops traced
-            // until a fresh `WindowFocus(true)` names a live presentation --
-            // `primary_id_excluding` always returns `Some` here since
-            // `close_presentation_entered` is never called for a realm's
-            // sole presentation (that case routes through a full realm
-            // uninstall instead, in `runner.rs`).
-            if realm.focus_coordinator.active() == id
-                && let Some(surviving) = realm.primary_id_excluding(id)
-            {
-                realm.focus_coordinator.note_focus_gained(surviving);
-            }
-            // Steps 2 + 3, composite (minus `id` itself) + capabilities active.
-            // PORT-CHECK-OK-LOCK: plain data: held pointer events (pointer data), no Drop
-            presentation.held_pointer_input().borrow_mut().clear();
-            presentation.close();
-            true
-        });
-        if !existed {
+        if self.presentations.get(id).is_none() {
             return false;
         }
-        // Steps 4-6: `self.enter_for_close(...)` above has already returned,
-        // so this is a plain, non-nested `&mut self.presentations` access.
-        // Dropping `removed` here (end of statement) is both the
-        // `GlobalKeyScope` reclaim trigger (step 5, via `BuildOwner::Drop`)
-        // and the disposal itself (step 6) — no active registry needed for
-        // either, since `GlobalKeyScope::reclaim_owner` is a plain
-        // data-structure operation.
+        let mut first_panic = catch_unwind(AssertUnwindSafe(|| {
+            self.enter_for_close(id, |realm| {
+                if realm.focus_coordinator.active() == id
+                    && let Some(surviving) = realm.primary_id_excluding(id)
+                {
+                    realm.focus_coordinator.note_focus_gained(surviving);
+                }
+                realm.stop_presentation(id);
+            });
+        }))
+        .err();
+        // Membership removal must complete even when an observer or disposer panics.
         let removed = self.presentations.remove(id);
-        debug_assert!(
-            removed.is_some(),
-            "BUG: presentation existed a moment ago (checked via self.enter_for_close above) \
-             and nothing between here and there could have removed it -- \
-             enter_for_close's closure only reads the forest"
+        let failure = catch_unwind(AssertUnwindSafe(|| drop(removed))).err();
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first_panic,
+            failure,
+            "removed presentation cleanup",
         );
+        let failure = catch_unwind(AssertUnwindSafe(|| self.synchronize_window_lifecycle())).err();
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first_panic,
+            failure,
+            "surviving presentation lifecycle",
+        );
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
+        }
         true
     }
 }
@@ -5989,7 +5942,9 @@ mod tests {
             use flui_interaction::events::{PointerType, make_down_event};
 
             let realm = UiRealm::for_test();
-            realm.handle_presentation_lifecycle(AppLifecycleState::Hidden);
+            realm.synchronize_window_lifecycle();
+            realm.mark_rendered();
+            realm.update_host_lifecycle(AppLifecycleState::Hidden);
 
             let position = flui_types::Offset::new(px(50.0), px(50.0));
             realm.enter(|realm| {
@@ -6024,7 +5979,7 @@ mod tests {
 
             // Resume: pointer flows again.
             realm.mark_rendered();
-            realm.handle_presentation_lifecycle(AppLifecycleState::Resumed);
+            realm.update_host_lifecycle(AppLifecycleState::Resumed);
             realm.enter(|realm| {
                 realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
                     position,
@@ -6049,7 +6004,7 @@ mod tests {
             use flui_interaction::events::{PointerType, make_down_event};
 
             let realm = UiRealm::for_test();
-            realm.handle_presentation_lifecycle(AppLifecycleState::Detached);
+            realm.stop_presentations();
 
             let position = flui_types::Offset::new(px(50.0), px(50.0));
             realm.enter(|realm| {

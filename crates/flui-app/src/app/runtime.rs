@@ -20,7 +20,7 @@
 //!
 //! `AppRuntime` absorbs the transitional `RealmHost`'s fields (realm slot,
 //! queue, draining flag, owner thread, address cache, window registry,
-//! surface applier, visible/focused) plus the loop-scoped
+//! surface applier) plus the loop-scoped
 //! `OwnerPlatform` capability (formerly a second, separate thread-local) and
 //! [`SharedEngineServices`]. The single-threaded dispatch machinery that
 //! operates on this struct — `install_platform_realm`,
@@ -558,7 +558,7 @@ pub(super) enum QuitNotification {
 /// realm slot, and the once-resolved [`SharedEngineServices`].
 ///
 /// Absorbs the former `RealmHost` (realm slot, queue, draining flag, owner
-/// thread, address cache, window registry, surface applier, visible/focused)
+/// thread, address cache, window registry, surface applier)
 /// wholesale, plus the loop-scoped `OwnerPlatform` capability (formerly the
 /// separate `OWNER_PLATFORM_HOST` thread-local) and `services`. One struct,
 /// one thread-local slot (`runner.rs`'s `APP_RUNTIME`) — the same two
@@ -599,29 +599,6 @@ pub(crate) struct AppRuntime {
     /// [`CloseRequestRouter`](super::close_request::CloseRequestRouter)'s
     /// own doc.
     close_requests: Arc<super::close_request::CloseRequestRouter>,
-    /// Single-window `(visible, focused)` tracking for the
-    /// `AppLifecycleState` derivation (ADR-0035). Both default `true`.
-    ///
-    /// **Known limitation, stated rather than silently overclaimed:** this
-    /// pair is still loop-scoped, not per-realm — with more than one
-    /// hosted REALM, a focus/visibility change on any one window's OS
-    /// signal drives the SAME derivation for every realm on this loop.
-    /// Issue #555's addressed-routing slice narrowed this for the
-    /// WITHIN-one-realm case (more than one PRESENTATION of the same
-    /// realm): `runner.rs`'s `PlatformToUi::WindowFocus` handling now
-    /// checks `UiRealm::is_active_presentation` before applying a `false`
-    /// signal to this field, so a non-active presentation's own window
-    /// losing OS focus (a normal consequence of focus having already moved
-    /// to a sibling presentation of that SAME realm) no longer suspends it
-    /// — only the realm's currently active presentation's own focus-loss
-    /// is authoritative. The remaining, unaddressed gap is strictly
-    /// cross-REALM: this field has no realm identity at all, so a focus
-    /// change on realm A's window still drives realm B's own lifecycle
-    /// derivation too. A genuinely per-realm `(visible, focused)` pair
-    /// (moving these fields onto `RealmSlot`) is the fix for that
-    /// remainder, out of this slice's scope.
-    pub(super) visible: bool,
-    pub(super) focused: bool,
     /// The loop-scoped owner-thread platform capability (ADR-0039 §6).
     /// Deliberately *not* cleared by realm teardown — the loop may host
     /// another realm before it exits (hot-restart does exactly this).
@@ -776,8 +753,6 @@ impl AppRuntime {
             owner_thread: None,
             registry: WindowRegistry::new(),
             close_requests: Arc::new(super::close_request::CloseRequestRouter::new()),
-            visible: true,
-            focused: true,
             owner_platform: None,
             dispatched_scheduler: None,
             dispatched_realm_id: None,
@@ -1670,8 +1645,6 @@ mod app_runtime_tests {
             runtime.owner_platform.is_none(),
             "a freshly constructed AppRuntime hosts no owner platform yet"
         );
-        assert!(runtime.visible, "a fresh runtime assumes a visible window");
-        assert!(runtime.focused, "a fresh runtime assumes a focused window");
         assert!(
             runtime.registry.is_empty(),
             "AppRuntime owns the WindowRegistry directly -- a fresh one has no mappings"
@@ -2013,10 +1986,8 @@ mod wake_and_clipboard_tests {
     /// ORIGINAL runtime anyway. A hook built by re-resolving `APP_RUNTIME` at
     /// fire time instead of capturing this `Send` handle would see an empty
     /// thread-local on the foreign thread and never flip this flag — the
-    /// revert recipe for this test. (A real instance of exactly this mistake
-    /// shipped once, in the frames-reenable-redirty logic — see
-    /// `emit_lifecycle_transition`'s doc in `runner.rs` for that story and
-    /// its fix.)
+    /// revert recipe for this test. Presentation lifecycle reconciliation
+    /// uses the same captured wake path when restoring frame eligibility.
     #[test]
     fn frame_wake_callback_survives_a_cross_thread_fire_once_wired_to_a_scheduler() {
         use std::sync::mpsc;

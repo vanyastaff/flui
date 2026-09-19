@@ -20,7 +20,7 @@ mod frame_pacing;
 mod host;
 #[cfg(target_os = "ios")]
 mod ios;
-mod lifecycle_ladder;
+
 mod realm_dispatch;
 mod secondary_window;
 // Unconditional, like `device_recovery` above: the seam's trait and outcome

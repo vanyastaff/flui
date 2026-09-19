@@ -156,6 +156,10 @@ struct SegmentProbe {
 /// this presentation's generational identity.
 pub(crate) struct PresentationState {
     id: PresentationId,
+    pub(super) window_visible: Cell<bool>,
+    pub(super) window_focused: Cell<bool>,
+    pub(super) reported_lifecycle: Cell<Option<flui_scheduler::AppLifecycleState>>,
+    pub(super) closing_requested: Cell<bool>,
     lifecycle: Cell<PresentationLifecycle>,
     pipeline: PipelineCell,
     /// This presentation's liveness, as a token others may watch weakly.
@@ -579,6 +583,10 @@ impl PresentationState {
 
         let state = Self {
             id,
+            window_visible: Cell::new(window.is_visible()),
+            window_focused: Cell::new(window.is_focused()),
+            reported_lifecycle: Cell::new(None),
+            closing_requested: Cell::new(false),
             lifecycle: Cell::new(PresentationLifecycle::Created),
             pipeline,
             alive,
@@ -608,6 +616,7 @@ impl PresentationState {
             flush_count: Cell::new(0),
         };
         state.attach_surface();
+        state.clock.set_hidden(!state.window_visible.get());
         state
     }
 
@@ -644,6 +653,10 @@ impl PresentationState {
 
         let state = Self {
             id,
+            window_visible: Cell::new(window.is_visible()),
+            window_focused: Cell::new(window.is_focused()),
+            reported_lifecycle: Cell::new(None),
+            closing_requested: Cell::new(false),
             lifecycle: Cell::new(PresentationLifecycle::Created),
             pipeline,
             alive,
@@ -673,6 +686,7 @@ impl PresentationState {
             flush_count: Cell::new(0),
         };
         state.attach_surface();
+        state.clock.set_hidden(!state.window_visible.get());
         state
     }
 
@@ -1247,10 +1261,12 @@ impl PresentationState {
         &self,
         request: SemanticsActionRequest,
     ) -> Result<(), SemanticsActionError> {
-        if matches!(
-            self.lifecycle.get(),
-            PresentationLifecycle::Closing | PresentationLifecycle::Closed
-        ) {
+        if self.closing_requested.get()
+            || matches!(
+                self.lifecycle.get(),
+                PresentationLifecycle::Closing | PresentationLifecycle::Closed
+            )
+        {
             return Err(SemanticsActionError::PresentationClosed);
         }
         let invocation = self

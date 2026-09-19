@@ -31,6 +31,7 @@ pub(crate) struct TestWindow {
     physical_size: Size<DevicePixels>,
     logical_size: Size<Pixels>,
     focused: bool,
+    visible: bool,
     /// Incremented by every [`PlatformWindow::request_redraw`]; hand the
     /// [`Self::redraw_calls_handle`] to the asserting side.
     redraw_calls: Arc<AtomicU32>,
@@ -73,6 +74,7 @@ impl TestWindow {
             physical_size: Size::default(),
             logical_size: Size::default(),
             focused: false,
+            visible: true,
             redraw_calls: Arc::new(AtomicU32::new(0)),
             redraw_threads: Arc::new(parking_lot::Mutex::new(Vec::new())),
             pre_present_notifies: Arc::new(AtomicU32::new(0)),
@@ -99,6 +101,11 @@ impl TestWindow {
     ) -> Self {
         self.physical_size = physical;
         self.logical_size = logical;
+        self
+    }
+
+    pub(crate) fn visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
         self
     }
 
@@ -181,7 +188,7 @@ impl PlatformWindow for TestWindow {
     }
 
     fn is_visible(&self) -> bool {
-        true
+        self.visible
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {

@@ -380,9 +380,8 @@ notifies every surviving installed realm once, using each realm's existing \
 Detached ladder; it closes secondary admission before deferred tails drain, \
 cancels unresolved opens, and rejects completions from older loop identities. \
 Observers may reenter or panic without skipping siblings; an already-active \
-dispatch panic remains the first failure. This is realm-level notification, \
-not new per-presentation WidgetsBinding observer fanout or public observer \
-registration. `ExitPolicy` is \
+dispatch panic remains the first failure. Each realm now applies terminal lifecycle to every live presentation binding; \
+public live-observer registration remains separate work. `ExitPolicy` is \
 LIVE-WIRED, not merely mechanism: `flui_platform::traits::Platform:: \
 set_exit_policy_hook` (a new default-no-op trait method, overridden by the \
 winit, AppKit, and headless backends) lets `runner/host.rs::install_exit_policy_hook` \
@@ -585,20 +584,19 @@ is the real native embedder call site that drives both \
 `install_realm_alongside` and `install_presentation_alongside` in \
 production, closing the native-lifecycle gap named above for both paths.
 
-**Named residual, now durable here rather than only in a private field's \
-own doc comment:** `AppRuntime.visible`/`.focused` (`runtime.rs`) are still \
-LOOP-scoped, not per-realm -- with more than one hosted REALM, a \
-focus/visibility change on any one window's OS signal drives the SAME \
-`AppLifecycleState` derivation for every realm on this loop. Issue #555's \
-addressed-routing slice (#608) narrowed this for the WITHIN-one-realm \
-case (`WindowPolicy::SharedRealm`'s more-than-one-presentation shape): a \
-non-active presentation's own window losing OS focus no longer suspends its \
-realm (`UiRealm::is_active_presentation` gates it). The remaining gap is \
-strictly cross-REALM (`WindowPolicy::SeparateRealms`): this field pair has \
-no realm identity at all, so realm A's window gaining/losing focus still \
-drives realm B's own lifecycle derivation too. The fix is a genuinely \
-per-realm `(visible, focused)` pair (moving these fields onto `RealmSlot`), \
-out of this slice's scope; not attempted here.
+Window focus and visibility facts now belong to each `PresentationState`, \
+initialized from the native window snapshot. Local lifecycle transitions notify \
+the addressed binding and clean up its input independently of the realm's \
+scheduler aggregate. The aggregate folds live presentations: Resumed when any \
+is visible and focused, Inactive when any is visible, otherwise Hidden; an \
+empty forest is Detached. Host Paused retains window facts and dominates them \
+until resume. Unobserved presentations notify their first effective target \
+directly. Scheduler listeners report executable aggregate changes, not synthetic \
+local ladder steps; resource and redraw eligibility use the same host/native facts. Explicit stop is terminal; an observed Detached state remains \
+reversible. Closing presentations leave the aggregate before notification, \
+deliver Detached before widget disposal, and are removed even when an observer \
+panics. No loop-global visibility/focus authority remains. These are internal \
+binding delivery guarantees; public live-observer registration remains separate.
 
 `with_owner_platform`'s fence (c) (ADR-0039 §6, trigger #22's runtime \
 backstop) re-points onto this struct: `AppRuntime::installed_realm_phase` \
@@ -930,7 +928,7 @@ owner_issue = 556
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn set_presentation_hidden(&self, presentation_id: PresentationId, hidden: bool)" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "realm.set_presentation_hidden(presentation_id, !visible);" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/presentation_lifecycle.rs", contains = "self.set_presentation_hidden(id, !visible);" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn window_visibility_gates_exactly_the_addressed_presentations_clock" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_and_animating_presentation_does_not_spin" },

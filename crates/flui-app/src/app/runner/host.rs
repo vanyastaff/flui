@@ -27,7 +27,7 @@ thread_local! {
     /// wasm. Absorbs what were, before the `AppRuntime` skeleton existed, two
     /// separate thread-locals: the transitional realm host (realm slot, queue,
     /// draining, owner thread, address cache, window registry, surface
-    /// applier, visible/focused) and the loop-scoped `OwnerPlatform` host —
+    /// applier) and the loop-scoped `OwnerPlatform` host —
     /// see [`AppRuntime`]'s own module doc for why one struct correctly
     /// carries both invariants. The platform callback surface still
     /// requires `Send`, so the `!Send` realm this holds remains in owner TLS
@@ -262,9 +262,9 @@ pub(super) fn merge_wake_deadlines(
 /// instant on every idle iteration once it comes due, which is
 /// `WinitApp::new_events`'s own named `WaitUntil(past)` busy-spin, forced by
 /// this hook instead of a stale realm deadline. The deadline is not lost by
-/// staying unreported while disabled: frames re-enabling already redirties
-/// the root unconditionally (`UiRealm::redirty_root_for_frames_reenable`),
-/// which wakes the loop through the ordinary `needs_redraw` channel and
+/// staying unreported while disabled: presentation lifecycle reconciliation
+/// redirties the restored root and wakes the loop through the ordinary
+/// `needs_redraw` channel, which
 /// lets a real `WakeAction::Render` resume the retry then.
 // Desktop-only, like its sole caller `bootstrap_desktop`: the mobile backends
 // have no `ControlFlow`/`WaitUntil` to feed and wasm has no loop, so compiling
