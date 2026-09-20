@@ -191,6 +191,14 @@ enum Commands {
         #[arg(long)]
         optimize_wasm: bool,
 
+        /// iOS: Build a static library/XCFramework rather than an application
+        #[arg(long = "lib", conflicts_with = "example")]
+        library: bool,
+
+        /// iOS: Build for this exact available simulator UDID
+        #[arg(long, conflicts_with = "universal")]
+        simulator: Option<String>,
+
         /// iOS: Build device + simulator libraries (XCFramework without an Xcode project)
         #[arg(long)]
         universal: bool,
@@ -719,6 +727,8 @@ fn main() {
             universal,
             example,
             package,
+            library,
+            simulator,
         } => commands::build::execute(
             platform,
             release,
@@ -728,6 +738,8 @@ fn main() {
             universal,
             example,
             package,
+            library,
+            simulator,
         ),
 
         Commands::Test {

@@ -95,3 +95,15 @@ Integration fixtures use real Cargo metadata and marker-printing binaries with
 minimal local dependency identities. They verify admission and execution without
 opening a window; they do not substitute for the generated application's own
 interaction regression or live platform verification.
+
+### Native iOS selection and launch
+
+`build ios` means a native executable application; `--lib` opts into static-library
+XCFramework delivery. Exact simulator UDIDs are resolved before Cargo. The booted
+device's `SIMULATOR_ARCHS` must be one recognized architecture, consistent with
+runtime supportedArchitectures when present. There is no host-run fallback.
+Commands have deadlines and drain both output streams. Install and launch use
+the validated bundle's identity and selected UDID, without shutting down devices.
+Config SemVer maps to numeric Apple keys while the full value remains in FLUIVersion.
+The unavailable-device integration test guards against accidental host execution;
+SDK-required flui-build tests verify actual application bundle delivery.

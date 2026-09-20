@@ -294,6 +294,7 @@ async fn bundle_names_cannot_escape_the_output_directory() {
             .with_bundle(flui_build::AppBundle {
                 name,
                 identifier: "org.example.fixture".into(),
+                version: "0.1.0".into(),
             })
             .build();
         let artifacts = flui_build::BuildArtifacts {
@@ -333,6 +334,7 @@ async fn unicode_bundle_names_work_and_existing_symlinks_are_not_followed() {
         .with_bundle(flui_build::AppBundle {
             name: name.into(),
             identifier: "org.example.fixture".into(),
+            version: "0.1.0".into(),
         })
         .build();
     let artifacts = flui_build::BuildArtifacts {

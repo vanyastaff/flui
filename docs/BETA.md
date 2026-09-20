@@ -448,3 +448,19 @@ This covers one designated rendered main window. `open_secondary_window` still
 has no widget-content/renderer API. Full mobile lifecycle, live Windows runtime
 behavior, and native OS-suspend transport remain separate work; these desktop
 results do not imply beta release readiness by themselves.
+
+## Native iOS application delivery
+
+`flui build ios` now selects a Rust executable and stages an unsigned native UIKit
+`.app`. Static-library consumers opt into `--lib`, including `--lib --universal`
+for XCFramework delivery. Simulator builds use `--simulator <exact UDID>`;
+`flui run --device <exact UDID>` builds, installs and launches once without a
+host-executable fallback or desktop watcher. A missing simulator is a failure.
+
+The SDK fixture verifies real simulator Mach-O architecture/platform/minimum OS,
+canonical bundle identity, numeric Apple versions plus full SemVer metadata,
+legacy Flutter project bypass and preservation of previous output on mismatch.
+The verified SDK is Xcode 26.2. Device signing/distribution and UIKit UIScene
+migration are not implemented by packaging. The existing UIKit runner's full
+background scheduling/lifecycle semantics remain separate beta work; launching
+an application alone does not prove them.

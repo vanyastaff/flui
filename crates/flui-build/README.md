@@ -171,6 +171,7 @@ let ctx = BuilderContextBuilder::new(PathBuf::from("."))
             "aarch64-apple-ios-sim".to_string(),  // Simulator (M1/M2)
         ],
     })
+    .with_target(BuildUnit::Library { package: None })
     .with_profile(Profile::Release)
     .build();
 
@@ -453,3 +454,27 @@ cargo fmt --check
 ## License
 
 MIT OR Apache-2.0
+
+### Native iOS applications from the CLI
+
+`flui build ios` selects the application's Cargo binary and stages an unsigned
+`.app`; `flui build ios --lib --universal` explicitly selects library/XCFramework
+delivery. Use `--example NAME` for an executable example. Applications accept one
+target, so `--universal` requires `--lib`.
+
+```sh
+xcrun simctl list devices available
+flui build ios --simulator <exact-UDID>
+flui run --device <exact-UDID>
+```
+
+The CLI validates an available iOS runtime, boots that exact device if needed,
+and reads its `SIMULATOR_ARCHS` environment. Missing, ambiguous or conflicting
+architecture metadata fails rather than choosing the host architecture. It then
+builds, validates the runtime deployment minimum, installs and launches that
+bundle. Run defaults to debug; `--release` selects release. Simulator runs are
+one-shot and do not install the desktop hot-reload watcher. Successful launch
+does not mean that the application has finished.
+
+Verified with Xcode 26.2. Device signing/install and the UIKit UIScene migration
+needed for newer SDKs remain separate work. No Flutter project is required.

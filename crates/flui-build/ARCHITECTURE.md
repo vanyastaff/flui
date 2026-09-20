@@ -56,8 +56,9 @@ only an absent file enables the example-directory fallback.
 ### iOS Rust artifacts use the same Cargo protocol
 
 `IOSBuilder` is stateless and uses `BuilderContext.workspace_root` for every
-operation. Default/package iOS selections mean a library target declaring
-`staticlib`; executable examples use the existing executable selection. Library
+operation. Default/package/example selections mean executables on every platform.
+Explicit `BuildUnit::Library { package }` selects an iOS library declaring
+`staticlib` (other platforms reject this mode). Library
 selection ignores `default-run` and excludes example-library targets. Cargo
 metadata supplies the package and target identity, including custom `[lib].name`.
 The shared message collector additionally matches crate type and excludes test
@@ -134,3 +135,30 @@ merging, wrong-variant rejection, replacement, and a single slice whose input
 is inside the old output. It does not certify signing, simulator launch, C
 headers/module maps, or the existing consumer Xcode-project branch. Executable
 examples retain their separate single-triple staging behavior.
+
+### Native iOS application delivery
+
+Executable selection stages a native UIKit `.app`, independent of any legacy
+Flutter Runner or consumer Xcode project. One executable requires one target.
+`lipo -archs` and `vtool -show-build` must agree with the requested architecture
+and device/simulator platform; missing or conflicting metadata is rejected.
+The actual linked minimum OS is written to `MinimumOSVersion`. Executable
+permissions are required. Validation precedes the shared transactional publication
+worker, so failed packaging retains the previous bundle.
+
+AppBundle carries the full SemVer. Apple version keys use numeric major.minor.patch
+(including zero); `FLUIVersion` preserves prerelease/build metadata. This mapping
+makes beta versions usable without claiming unique distribution build numbers.
+Canonical CLI config supplies name, organization and version; absent config uses
+the selected Cargo package name/version. Identifier validation is shared across
+the delivered plist and simulator install/launch. Device output is unsigned.
+
+The native fixture uses Xcode 26.2 and the installed Rust simulator target:
+
+```sh
+cargo test -p flui-build --test ios_artifacts simulator_application_uses_actual_executable_metadata_and_native_bundle -- --ignored --exact
+```
+
+It proves executable discovery, real Mach-O inspection, native bundle metadata,
+legacy-project bypass and previous-output preservation on platform mismatch.
+It does not certify signing, UIKit scene migration or simulator interaction.

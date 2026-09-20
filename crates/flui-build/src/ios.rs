@@ -64,14 +64,14 @@ impl PlatformBuilder for IOSBuilder {
                 "at least one target triple is required",
             ));
         }
-        let example = matches!(ctx.target, BuildUnit::Example(_));
-        if example && targets.len() != 1 {
+        let application = !matches!(ctx.target, BuildUnit::Library { .. });
+        if application && targets.len() != 1 {
             return Err(BuildError::invalid_config(
                 "iOS targets",
-                "executable examples require exactly one target; multi-triple example staging is not supported",
+                "iOS applications require exactly one target; use explicit library delivery for multiple slices",
             ));
         }
-        let selected = if example {
+        let selected = if application {
             crate::util::cargo::select_target(&ctx.workspace_root, &ctx.target).await?
         } else {
             crate::util::cargo::select_static_library(&ctx.workspace_root, &ctx.target).await?
@@ -84,17 +84,17 @@ impl PlatformBuilder for IOSBuilder {
                 crate::util::cargo::build_artifact(&ctx.workspace_root, &args, &selected).await?,
             );
         }
-        if example {
+        if application {
             Ok(BuildArtifacts {
                 rust_libs: Vec::new(),
                 executable: outputs.pop(),
-                metadata: serde_json::json!({}),
+                metadata: selected.metadata(),
             })
         } else {
             Ok(BuildArtifacts {
                 rust_libs: outputs,
                 executable: None,
-                metadata: serde_json::json!({}),
+                metadata: selected.metadata(),
             })
         }
     }
@@ -104,29 +104,20 @@ impl PlatformBuilder for IOSBuilder {
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
     ) -> BuildResult<FinalArtifacts> {
-        // An example build produces a bare executable, not a static library an
-        // Xcode project links: there is nothing for `xcodebuild` to consume.
-        // Stage the executable itself as the artifact.
         if let Some(executable) = &artifacts.executable {
-            tracing::info!("Staging iOS example executable: {}", executable.display());
-            let output = ctx.output_dir.join(executable.file_name().ok_or_else(|| {
-                BuildError::invalid_config(
-                    "executable",
-                    format!("{} has no file name", executable.display()),
-                )
-            })?);
-            if output.exists() {
-                std::fs::remove_file(&output)?;
+            if matches!(ctx.target, BuildUnit::Library { .. }) || !artifacts.rust_libs.is_empty() {
+                return Err(BuildError::invalid_config(
+                    "iOS artifacts",
+                    "executable delivery conflicts with library selection or archives",
+                ));
             }
-            if let Some(parent) = output.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(executable, &output)?;
-            let size_bytes = std::fs::metadata(&output)?.len();
-            return Ok(FinalArtifacts {
-                app_binary: output,
-                size_bytes,
-            });
+            return crate::ios_package::package_application(ctx, artifacts, executable).await;
+        }
+        if !matches!(ctx.target, BuildUnit::Library { .. }) {
+            return Err(BuildError::invalid_config(
+                "iOS application",
+                "missing executable artifact",
+            ));
         }
 
         tracing::info!("Building iOS app with Xcode...");

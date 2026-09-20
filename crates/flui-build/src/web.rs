@@ -52,6 +52,12 @@ impl PlatformBuilder for WebBuilder {
     }
 
     async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
+        if matches!(ctx.target, crate::platform::BuildUnit::Library { .. }) {
+            return Err(BuildError::invalid_config(
+                "build unit",
+                "explicit static-library delivery is supported only on iOS",
+            ));
+        }
         let crate::platform::Platform::Web { target } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected Web platform".to_string(),

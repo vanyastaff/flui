@@ -19,3 +19,5 @@ pub(crate) mod platform;
 pub(crate) mod run;
 pub(crate) mod test;
 pub(crate) mod upgrade;
+
+pub(crate) mod ios;

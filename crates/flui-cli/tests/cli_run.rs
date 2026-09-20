@@ -128,3 +128,69 @@ fn legacy_dependency_alias_remains_supported() {
         .success()
         .stdout(predicate::str::contains("FLUI_ADMISSION_MARKER"));
 }
+
+#[test]
+fn unavailable_simulator_never_runs_the_host_application() {
+    let tmp = TempDir::new().expect("simulator routing fixture");
+    let dependency = tmp.path().join("facade");
+    package(&dependency, "flui", "");
+    std::fs::write(dependency.join("src/lib.rs"), "").expect("facade identity");
+    let app = tmp.path().join("app");
+    package(
+        &app,
+        "simulator-routing-app",
+        "[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
+    );
+    let mut command = cargo_bin_cmd!("flui");
+    command
+        .current_dir(&app)
+        .env("CARGO_NET_OFFLINE", "true")
+        .timeout(std::time::Duration::from_secs(30))
+        .args([
+            "run",
+            "--release",
+            "--device",
+            "00000000-0000-0000-0000-000000000000",
+        ]);
+    let output = command.output().expect("bounded CLI invocation");
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("FLUI_ADMISSION_MARKER"),
+        "a simulator request executed the host binary: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(!output.status.success(), "unavailable simulator must fail");
+}
+
+#[test]
+fn conflicting_ios_delivery_modes_fail_before_cargo() {
+    let empty = TempDir::new().expect("empty directory");
+    for arguments in [
+        vec!["build", "ios", "--universal"],
+        vec!["build", "ios", "--lib", "--example", "demo"],
+        vec!["build", "ios", "--universal", "--simulator", "chosen"],
+        vec!["build", "desktop", "--lib"],
+        vec!["build", "desktop", "--simulator", "chosen"],
+    ] {
+        let output = cargo_bin_cmd!("flui")
+            .current_dir(empty.path())
+            .args(&arguments)
+            .output()
+            .expect("CLI");
+        assert!(!output.status.success(), "{arguments:?}");
+        let diagnostic = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !diagnostic.contains("could not find `Cargo.toml`"),
+            "must validate selectors before Cargo: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("conflict")
+                || diagnostic.contains("cannot be used")
+                || diagnostic.contains("iOS-only"),
+            "{diagnostic}"
+        );
+    }
+}

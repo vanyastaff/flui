@@ -38,6 +38,9 @@ fn fixture(case: &str, targets: &str) {
         "pub fn fixture_value() -> u32 { 42 }\n",
     );
     write(&root, "examples/demo.rs", "fn main() {}\n");
+    if case == "application" {
+        write(&root, "src/main.rs", "fn main() {}\n");
+    }
     write(
         &root,
         "build.rs",
@@ -147,9 +150,12 @@ fn worker(root: PathBuf, case: &str) {
         targets.clone()
     };
     let unit = match case {
-        "workspace-package" => BuildUnit::Package("other-app".into()),
+        "workspace-package" => BuildUnit::Library {
+            package: Some("other-app".into()),
+        },
         "example" | "multi-example" => BuildUnit::Example("demo".into()),
-        _ => BuildUnit::DefaultBinary,
+        "application" => BuildUnit::DefaultBinary,
+        _ => BuildUnit::Library { package: None },
     };
     let cwd = if case == "workspace-current" {
         root.join("apps/other")
@@ -202,7 +208,7 @@ fn worker(root: PathBuf, case: &str) {
     }
     let artifacts = result.expect("Cargo artifact");
     let external = PathBuf::from(std::env::var_os("FLUI_IOS_EXPECTED_TARGET").expect("target"));
-    if case == "example" {
+    if case == "example" || case == "application" {
         assert!(artifacts.rust_libs.is_empty());
         let path = artifacts.executable.expect("example executable");
         assert!(path.is_file() && path.starts_with(&external));
@@ -375,6 +381,7 @@ fn ios_cargo_artifact_fixtures() {
         "missing-staticlib",
         "staticlib-example-only",
         "example",
+        "application",
         "empty",
         "multi-example",
     ] {
@@ -395,5 +402,81 @@ fn ios_delivers_device_and_simulator_xcframework() {
     fixture(
         "xcframework",
         "aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios",
+    );
+}
+
+/// Native tools and Rust simulator standard library are explicit prerequisites.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires Xcode and aarch64-apple-ios-sim; run with --ignored"]
+fn simulator_application_uses_actual_executable_metadata_and_native_bundle() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    let root = fixture.path();
+    write(
+        root,
+        "Cargo.toml",
+        "[workspace]\n[package]\nname='native-counter'\nversion='0.1.0-beta.2+probe'\nedition='2024'\n[[bin]]\nname='custom-executable'\npath='src/main.rs'\n",
+    );
+    write(root, "src/main.rs", "fn main() {}\n");
+    write(
+        root,
+        "platforms/ios/Runner.xcodeproj/project.pbxproj",
+        "stale Flutter project must not select packaging",
+    );
+    write(root, "platforms/ios/Frameworks/keep.txt", "untouched");
+    let context = BuilderContextBuilder::new(root.to_path_buf())
+        .with_platform(Platform::IOS {
+            targets: vec!["aarch64-apple-ios-sim".into()],
+        })
+        .with_target(BuildUnit::DefaultBinary)
+        .with_profile(Profile::Debug)
+        .with_output_dir(root.join("delivered"))
+        .build();
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let builder = IOSBuilder::new();
+    let artifacts = runtime
+        .block_on(builder.build_rust(&context))
+        .expect("simulator executable");
+    let delivered = runtime
+        .block_on(builder.build_platform(&context, &artifacts))
+        .expect("native app");
+    assert_eq!(
+        delivered.app_binary,
+        root.join("delivered/native-counter.app")
+    );
+    assert!(delivered.app_binary.join("flui_app").is_file());
+    let output = Command::new("plutil")
+        .args(["-convert", "json", "-o", "-"])
+        .arg(delivered.app_binary.join("Info.plist"))
+        .output()
+        .expect("plist");
+    assert!(output.status.success());
+    let plist: serde_json::Value = serde_json::from_slice(&output.stdout).expect("json");
+    assert_eq!(plist["CFBundleIdentifier"], "dev.flui.native-counter");
+    assert_eq!(plist["CFBundleShortVersionString"], "0.1.0");
+    assert_eq!(plist["CFBundleVersion"], "0.1.0");
+    assert_eq!(plist["FLUIVersion"], "0.1.0-beta.2+probe");
+    assert_eq!(
+        plist["CFBundleSupportedPlatforms"],
+        serde_json::json!(["iPhoneSimulator"])
+    );
+    assert!(plist["MinimumOSVersion"].as_str().is_some());
+    assert_eq!(
+        std::fs::read_to_string(root.join("platforms/ios/Frameworks/keep.txt")).expect("sentinel"),
+        "untouched"
+    );
+    write(&delivered.app_binary, "old-sentinel", "prior bundle");
+    let mut wrong_platform = context.clone();
+    wrong_platform.platform = Platform::IOS {
+        targets: vec!["aarch64-apple-ios".into()],
+    };
+    assert!(
+        runtime
+            .block_on(builder.build_platform(&wrong_platform, &artifacts))
+            .is_err()
+    );
+    assert!(
+        delivered.app_binary.join("old-sentinel").is_file(),
+        "metadata mismatch preserves previous output"
     );
 }

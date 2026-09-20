@@ -25,7 +25,7 @@ const ANDROID_GRADLE_PROPERTIES: &str =
 const ANDROID_GITIGNORE: &str = include_str!("../templates/platforms/android/.gitignore");
 
 // iOS
-const IOS_INFO_PLIST: &str = include_str!("../templates/platforms/ios/Runner/Info.plist");
+const IOS_README: &str = include_str!("../templates/platforms/ios/README.md");
 const IOS_GITIGNORE: &str = include_str!("../templates/platforms/ios/.gitignore");
 
 // Web
@@ -78,8 +78,8 @@ fn platform_templates(platform: &str) -> &'static [TemplateFile] {
         ],
         "ios" => &[
             TemplateFile {
-                rel_path: "Runner/Info.plist",
-                content: IOS_INFO_PLIST,
+                rel_path: "README.md",
+                content: IOS_README,
             },
             TemplateFile {
                 rel_path: ".gitignore",
@@ -302,7 +302,7 @@ mod tests {
     fn test_platform_templates_ios() {
         let templates = platform_templates("ios");
         assert_eq!(templates.len(), 2);
-        assert!(templates.iter().any(|t| t.rel_path == "Runner/Info.plist"));
+        assert!(templates.iter().any(|t| t.rel_path == "README.md"));
     }
 
     #[test]
@@ -390,9 +390,9 @@ mod tests {
 
         scaffold_platform("ios", dir.path(), &params).expect("scaffold_platform should succeed");
 
-        let plist = dir.path().join("platforms/ios/Runner/Info.plist");
-        assert!(plist.exists(), "Info.plist should exist");
-        let content = std::fs::read_to_string(&plist).expect("read Info.plist");
-        assert!(content.contains("Test App"), "app_name in Info.plist");
+        let readme = dir.path().join("platforms/ios/README.md");
+        let content = std::fs::read_to_string(readme).expect("read native iOS instructions");
+        assert!(content.contains("flui build ios"));
+        assert!(!dir.path().join("platforms/ios/Runner").exists());
     }
 }

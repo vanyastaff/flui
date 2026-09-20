@@ -42,6 +42,10 @@ pub fn execute(
     let target_device = device.map_or_else(select_default_device, Ok)?;
     cliclack::log::info(format!("Target device: {}", style(&target_device).cyan()))?;
 
+    if target_device != "desktop" && target_device != std::env::consts::OS {
+        return super::ios::run(&target_device, release, profile.as_deref());
+    }
+
     if hot_reload && !release {
         if let Some(project) = find_worker_hot_reload_project()? {
             cliclack::log::success(format!(

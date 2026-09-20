@@ -45,6 +45,8 @@ pub struct AppBundle {
     pub name: String,
     /// Reverse-DNS bundle identifier (`CFBundleIdentifier`).
     pub identifier: String,
+    /// Full application SemVer. Apple bundles store its numeric core separately.
+    pub version: String,
 }
 
 impl AppBundle {
@@ -69,6 +71,7 @@ impl AppBundle {
         Self {
             name: name.to_string(),
             identifier: format!("{identifier_prefix}.{slug}"),
+            version: "0.1.0".into(),
         }
     }
 }
@@ -82,15 +85,19 @@ impl AppBundle {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum BuildUnit {
-    /// Build the current package's default binary (`cargo build` in
-    /// `workspace_root`). iOS instead selects its static library.
+    /// Build the current package's default binary (`cargo build` in `workspace_root`).
     #[default]
     DefaultBinary,
-    /// Build the named workspace package's binary, or its static library on iOS.
+    /// Build the named workspace package's binary.
     Package(String),
     /// Build the named example of the current package
     /// (`cargo build --example NAME`).
     Example(String),
+    /// Build a static library for iOS XCFramework delivery.
+    Library {
+        /// Workspace package name, or current/default package selection.
+        package: Option<String>,
+    },
 }
 
 impl BuildUnit {
@@ -101,6 +108,13 @@ impl BuildUnit {
             Self::DefaultBinary => Vec::new(),
             Self::Package(name) => vec!["-p".to_string(), name.clone()],
             Self::Example(name) => vec!["--example".to_string(), name.clone()],
+            Self::Library { package } => {
+                let mut args = vec!["--lib".into()];
+                if let Some(package) = package {
+                    args.extend(["--package".into(), package.clone()]);
+                }
+                args
+            }
         }
     }
 }

@@ -16,9 +16,13 @@ pub(crate) struct CargoTarget {
     name: String,
     kind: TargetKind,
     crate_type: CrateType,
+    version: String,
 }
 
 impl CargoTarget {
+    pub(crate) fn metadata(&self) -> serde_json::Value {
+        serde_json::json!({"package_name": self.package_name, "package_version": self.version})
+    }
     pub(crate) fn cargo_args(&self) -> Vec<String> {
         let mut args = vec![
             "--package".into(),
@@ -71,6 +75,11 @@ async fn cargo_output(dir: &Path, args: &[&str]) -> BuildResult<Vec<u8>> {
 }
 
 pub(crate) async fn select_target(dir: &Path, unit: &BuildUnit) -> BuildResult<CargoTarget> {
+    if matches!(unit, BuildUnit::Library { .. }) {
+        return Err(invalid(
+            "library selection is supported only for iOS library delivery",
+        ));
+    }
     select_target_for(dir, unit, false).await
 }
 
@@ -100,7 +109,10 @@ async fn select_target_for(
     )
     .map_err(|error| invalid(format!("invalid Cargo metadata: {error}")))?;
     let packages: Vec<_> = match unit {
-        BuildUnit::Package(name) => metadata
+        BuildUnit::Package(name)
+        | BuildUnit::Library {
+            package: Some(name),
+        } => metadata
             .packages
             .iter()
             .filter(|package| {
@@ -163,6 +175,7 @@ async fn select_target_for(
             candidates.push(CargoTarget {
                 package: package.id.clone(),
                 package_name: package.name.to_string(),
+                version: package.version.to_string(),
                 name: target.name.clone(),
                 kind: kind.clone(),
                 crate_type: if staticlib {
@@ -355,6 +368,7 @@ mod tests {
         let target = CargoTarget {
             package: serde_json::from_str(r#""fixture-id""#).expect("opaque package id"),
             package_name: "fixture".into(),
+            version: "0.1.0".into(),
             name: "app".into(),
             kind: TargetKind::Bin,
             crate_type: CrateType::Bin,

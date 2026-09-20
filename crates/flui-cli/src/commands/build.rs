@@ -21,6 +21,10 @@ pub struct BuildOptions {
     pub optimize_wasm: bool,
     /// iOS: Build device and simulator libraries (XCFramework without an Xcode project).
     pub universal: bool,
+    /// Select iOS static-library/XCFramework delivery instead of an application.
+    pub library: bool,
+    /// Exact iOS simulator UDID (resolved before compilation).
+    pub simulator: Option<String>,
     /// Use verbose output with progress bars.
     pub verbose: bool,
     /// Build a named example rather than the current package's binary.
@@ -36,6 +40,11 @@ impl BuildOptions {
     /// more specific instruction), and neither given is the generated-project
     /// default: the current directory's own binary.
     fn cargo_target(&self) -> CargoBuildUnit {
+        if self.library {
+            return CargoBuildUnit::Library {
+                package: self.package.clone(),
+            };
+        }
         match (&self.example, &self.package) {
             (Some(example), _) => CargoBuildUnit::Example(example.clone()),
             (None, Some(package)) => CargoBuildUnit::Package(package.clone()),
@@ -63,6 +72,8 @@ pub fn execute(
     universal: bool,
     example: Option<String>,
     package: Option<String>,
+    library: bool,
+    simulator: Option<String>,
 ) -> CliResult<()> {
     let options = BuildOptions {
         release,
@@ -72,8 +83,22 @@ pub fn execute(
         verbose: false,
         example,
         package,
+        library,
+        simulator,
     };
 
+    if (options.library || options.simulator.is_some()) && target != BuildTarget::Ios {
+        return Err(crate::error::CliError::Missing(
+            "--lib and --simulator are iOS-only options".into(),
+        ));
+    }
+    if (options.library && options.example.is_some())
+        || (options.example.is_some() && options.package.is_some())
+        || (options.universal && !options.library && target == BuildTarget::Ios)
+        || (options.universal && options.simulator.is_some())
+    {
+        return Err(crate::error::CliError::Missing("conflicting build selectors: iOS --universal requires --lib, --lib excludes --example, and --simulator excludes --universal".into()));
+    }
     let mode = if release { "release" } else { "debug" };
     cliclack::intro(style(format!(" flui build {target} ")).on_cyan().black())?;
     cliclack::log::info(format!("Mode: {}", style(mode).cyan()))?;
@@ -179,6 +204,8 @@ pub fn execute_with_progress(
         verbose: true,
         example: None,
         package: None,
+        library: false,
+        simulator: None,
     };
 
     let progress_manager = ProgressManager::new();
@@ -323,7 +350,7 @@ fn build_android_with_progress(
 
 fn build_ios(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
     let spinner = cliclack::spinner();
-    spinner.start("Building iOS libraries...");
+    spinner.start("Building iOS Rust target...");
 
     let workspace_root = std::env::current_dir()?;
     let profile = if options.release {
@@ -335,7 +362,14 @@ fn build_ios(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
     // Default is the device arm64 slice; `--universal` adds the simulator
     // slice as a separate library; this does not create a universal binary.
     // Executable examples require one triple and reject --universal.
-    let targets = if options.universal {
+    let simulator = options
+        .simulator
+        .as_deref()
+        .map(super::ios::resolve_simulator)
+        .transpose()?;
+    let targets = if let Some(simulator) = &simulator {
+        vec![simulator.triple.clone()]
+    } else if options.universal {
         vec![
             "aarch64-apple-ios".to_string(),
             "aarch64-apple-ios-sim".to_string(),
@@ -346,15 +380,19 @@ fn build_ios(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
 
     let ios_builder = IOSBuilder::new();
 
+    let bundle = super::ios::configured_bundle(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::IOS { targets })
         .with_target(options.cargo_target())
         .with_profile(profile);
-
+    if !options.library
+        && let Some(bundle) = bundle
+    {
+        builder = builder.with_bundle(bundle);
+    }
     if let Some(out) = output {
         builder = builder.with_output_dir(out.clone());
     }
-
     let ctx = builder.build();
 
     spinner.set_message("Validating iOS environment...");
@@ -362,14 +400,17 @@ fn build_ios(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
         .validate_environment()
         .context("iOS environment validation failed")?;
 
-    spinner.set_message("Building iOS libraries...");
+    spinner.set_message("Building iOS Rust target...");
     let artifacts = pollster::block_on(ios_builder.build_rust(&ctx))
-        .context("Failed to build iOS libraries")?;
+        .context("Failed to build iOS Rust target")?;
 
     spinner.set_message("Building iOS app...");
     let final_artifacts = pollster::block_on(ios_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build iOS app")?;
 
+    if let Some(simulator) = simulator {
+        super::ios::check_runtime(&simulator, &final_artifacts.app_binary)?;
+    }
     spinner.stop(format!("{} iOS build finished", style("✓").green()));
 
     cliclack::log::success(format!(
