@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Build the sole-facade scene fixture and run its bounded native protocol check.
+"""Build the sole-facade safe-area fixture and run its bounded native check.
 
-Requires an explicitly selected, already booted arm64 simulator. Uses native SDK
-bindings only to drive the owned delegate; normal framework code depends on flui.
-The existing runner stages/terminates only its probe app on that exact simulator.
+Requires an explicitly selected, already booted arm64 simulator. The fixture
+mounts a real application through `flui` alone, wraps half of a Stack in
+`SafeArea`, and reports the ambient MediaQuery padding alongside both laid-out
+geometries; the runner launches it and reads that marker.
+
+The fixture consumes the framework's own iOS runner, so a pass covers the whole
+path: UIKit's `safeAreaInsets` -> the window's owner-thread sample -> the
+addressed presentation's `MediaQuery` -> `SafeArea`'s padding. It is a layout
+check on the selected simulator, not a claim about any other device class.
 """
 import argparse
 import json
@@ -21,18 +27,19 @@ def main():
     parser.add_argument("udid")
     parser.add_argument("directory", type=pathlib.Path)
     parser.add_argument("--target-dir", type=pathlib.Path, default=ROOT / "target")
-    parser.add_argument("--case", choices=["scene-app-retention", "scene-app-fresh", "scene-app-quit"], default="scene-app-retention")
     options = parser.parse_args()
     directory = options.directory.resolve()
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "src").mkdir(exist_ok=True)
-    shutil.copy2(ROOT / "tests/fixtures/ios_scene_app.rs", directory / "src/main.rs")
+    shutil.copy2(ROOT / "tests/fixtures/ios_safe_area.rs", directory / "src/main.rs")
     (directory / "Cargo.toml").write_text(
-        '[workspace]\n[package]\nname="flui-ios-scene-app"\nversion="0.0.0"\nedition="2024"\n'
+        '[workspace]\n[package]\nname="flui-ios-safe-area"\nversion="0.0.0"\nedition="2024"\n'
         '[dependencies]\nflui={path=' + json.dumps(str(ROOT)) + '}\n'
-        'tracing="0.1"\ntracing-subscriber="0.3"\nobjc2="0.6.4"\ndispatch2="0.3.1"\n'
-        'objc2-ui-kit={version="0.3.2",default-features=false,features=["UIApplication","UIScene","UISceneSession","UISceneOptions","UIResponder"]}\n'
-        'block2="0.6"\nobjc2-foundation="0.3.2"\n')
+        'objc2="0.6.4"\ndispatch2="0.3.1"\n'
+        'objc2-ui-kit={version="0.3.2",default-features=false,features=['
+        '"UIApplication","UIScene","UISceneSession","UIResponder",'
+        '"UIView","UIViewController","UIWindow","UIWindowScene"]}\n'
+        'objc2-foundation="0.3.2"\n')
     shutil.copy2(ROOT / "Cargo.lock", directory / "Cargo.lock")
     # Apple's python3 injects SDKROOT pointing at the Command Line Tools SDK.
     # When the installed CLT SDK is newer than the selected Xcode, the host
@@ -46,9 +53,10 @@ def main():
         subprocess.run(["cargo", "build", "--offline", "--manifest-path", str(directory / "Cargo.toml"),
                         "--target", "aarch64-apple-ios-sim", "--target-dir", str(target)],
                        env=env, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
-    binary = target / "aarch64-apple-ios-sim/debug/flui-ios-scene-app"
+    binary = target / "aarch64-apple-ios-sim/debug/flui-ios-safe-area"
     return subprocess.run([sys.executable, str(ROOT / "scripts/check-ios-execution.py"),
-                           options.udid, str(binary), "--case", options.case], check=False, timeout=180).returncode
+                           options.udid, str(binary), "--case", "safe-area-layout"],
+                          check=False, timeout=180).returncode
 
 
 if __name__ == "__main__":

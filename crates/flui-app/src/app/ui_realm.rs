@@ -471,10 +471,6 @@ pub(crate) struct UiRealm {
     local_post_frame: LocalPostFrameLane,
     /// Owner-local interaction callback storage, activated with the realm scope.
     interaction_lane: InteractionLane,
-    /// The live source behind the root `MediaQuery` — the platform's resize
-    /// and appearance signals write it, the root wrapper republishes it.
-    /// Primary-presentation-scoped, like `attach_root_widget` itself.
-    media_query: std::rc::Rc<crate::app::media_query_root::MediaQuerySource>,
     /// This realm's cross-tree `GlobalKey` uniqueness domain (ADR-0043 §1),
     /// installed into every presentation's `BuildOwner` at assembly time
     /// (`PresentationState::new`). Retained here (not just handed off once)
@@ -873,7 +869,6 @@ impl UiRealm {
             realm_id,
             local_post_frame,
             interaction_lane,
-            media_query: std::rc::Rc::new(crate::app::media_query_root::MediaQuerySource::default()),
             global_key_scope,
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),
@@ -1101,12 +1096,6 @@ impl UiRealm {
     /// resolves — closing the last presentation is closing the REALM, and
     /// must route there instead (see that match arm's own doc).
     #[must_use]
-    /// Whether `id` addresses this realm's primary presentation — the one
-    /// whose widget tree hosts the root `MediaQuery`.
-    pub(crate) fn is_primary_presentation(&self, id: PresentationId) -> bool {
-        self.presentations.primary().id() == id
-    }
-
     pub(crate) fn is_sole_presentation(&self, id: PresentationId) -> bool {
         self.presentations.len() == 1 && self.presentations.get(id).is_some()
     }
@@ -1448,9 +1437,42 @@ impl UiRealm {
         self.presentations.primary().widgets()
     }
 
-    /// The live root media-query source (see the field doc).
-    pub(crate) fn media_query(&self) -> &crate::app::media_query_root::MediaQuerySource {
-        &self.media_query
+    /// The PRIMARY presentation's live root media-query source (see the field
+    /// doc).
+    ///
+    /// Infallible by this realm's own invariant: a realm always hosts at least
+    /// one presentation, and [`Self::presentation_id`] is that primary — so
+    /// the root-attach paths that wrap a tree in `MediaQueryRoot` can call
+    /// this directly. An event ADDRESSED to a particular presentation (a
+    /// resize, safe-area or appearance report stamped at enqueue time) must
+    /// use [`Self::media_query_for`] instead: that id travels through a queue
+    /// shared by every presentation the realm hosts, so it can name a
+    /// presentation that was closed before the event was delivered.
+    pub(crate) fn media_query(
+        &self,
+    ) -> &std::rc::Rc<crate::app::media_query_root::MediaQuerySource> {
+        &self.presentations.primary().media_query
+    }
+
+    /// The ADDRESSED presentation's live root media-query source, or `None`
+    /// when this realm no longer hosts it.
+    ///
+    /// `None` is an ordinary outcome of addressed delivery, not a bug: an
+    /// event is admitted when it is ENQUEUED (its dispatcher's address is in
+    /// the registry then) and delivered later, in FIFO order, behind whatever
+    /// was already queued. A close for that same presentation enqueued in
+    /// between therefore runs first and removes it, leaving this lookup with
+    /// nothing to write to. Every sibling addressed handler in this realm
+    /// ([`Self::handle_input_addressed`], [`Self::update_window_focus`],
+    /// [`Self::update_window_execution`]) treats that same interleaving the
+    /// same way: drop the addressed effect, keep the realm-wide one.
+    pub(crate) fn media_query_for(
+        &self,
+        id: PresentationId,
+    ) -> Option<&std::rc::Rc<crate::app::media_query_root::MediaQuerySource>> {
+        self.presentations
+            .get(id)
+            .map(|presentation| &presentation.media_query)
     }
 
     pub(crate) fn gestures(&self) -> &GestureBinding {
@@ -2150,7 +2172,7 @@ impl UiRealm {
         // the realm's resize/appearance arms write the shared source and the
         // wrapper republishes.
         let with_media_query = crate::app::media_query_root::MediaQueryRoot::new(
-            std::rc::Rc::clone(&self.media_query),
+            std::rc::Rc::clone(self.media_query()),
             flui_view::view::ViewExt::boxed(view.clone()),
         );
         let focused = FocusRoot::new(with_media_query);
@@ -2239,7 +2261,7 @@ impl UiRealm {
         // Same root MediaQuery as the production attach path — the sized
         // variant must not present a different ambient environment.
         let with_media_query = crate::app::media_query_root::MediaQueryRoot::new(
-            std::rc::Rc::clone(&self.media_query),
+            std::rc::Rc::clone(self.media_query()),
             flui_view::view::ViewExt::boxed(view.clone()),
         );
         let focused = FocusRoot::new(with_media_query);

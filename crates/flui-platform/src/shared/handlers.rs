@@ -283,6 +283,8 @@ pub struct WindowCallbacks {
     /// `false` is not.
     pub on_surface_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
+    safe_area_dispatch: Mutex<DispatchState<flui_types::geometry::EdgeInsets>>,
+    on_safe_area_change: Mutex<Option<Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>>>,
     on_execution_state_change: Mutex<Option<Box<dyn FnMut(WindowExecutionState) + Send>>>,
     event_dispatch: Mutex<DispatchState<WindowCallbackEvent>>,
     should_close_dispatching: Mutex<bool>,
@@ -470,6 +472,8 @@ impl WindowCallbacks {
     pub fn new() -> Self {
         Self {
             on_execution_state_change: Mutex::new(None),
+            on_safe_area_change: Mutex::new(None),
+            safe_area_dispatch: Mutex::new(DispatchState::new()),
             on_input: Mutex::new(None),
             on_request_frame: Mutex::new(None),
             on_resize: Mutex::new(None),
@@ -578,6 +582,7 @@ impl WindowCallbacks {
         // way to stop it from restoring itself into a slot this call is
         // about to empty. See `CallbackLease::drop`.
         self.cleared.store(true, Ordering::SeqCst);
+        let on_safe_area_change = self.on_safe_area_change.lock().take();
         let on_execution_state_change = self.on_execution_state_change.lock().take();
         let on_input = self.on_input.lock().take();
         let on_request_frame = self.on_request_frame.lock().take();
@@ -592,6 +597,7 @@ impl WindowCallbacks {
         let on_surface_status_change = self.on_surface_status_change.lock().take();
         // Each slot retires independently: distinct panicking destructors must
         // never meet during the same unwind. No slot lock is held here.
+        super::panic_boundary::contain_owner_callback(|| drop(on_safe_area_change));
         super::panic_boundary::contain_owner_callback(|| drop(on_execution_state_change));
         super::panic_boundary::contain_owner_callback(|| drop(on_input));
         super::panic_boundary::contain_owner_callback(|| drop(on_request_frame));
@@ -627,6 +633,13 @@ impl WindowCallbacks {
                     }
                 }
                 WindowCallbackEvent::Resize(size, scale_factor) => {
+                    // Queued delivery is already fenced by `clear_now` having
+                    // emptied this slot before the event runs, so this lease
+                    // answers to `cleared`. The immediate iOS
+                    // `dispatch_metrics_resize` leases the same slot against
+                    // `lifecycle_closed` instead: its fence has to close at the
+                    // close REQUEST, which can arrive while a drain is still
+                    // holding `clear_now` back.
                     let mut lease = CallbackLease::take(&self.on_resize, &self.cleared);
                     if let Some(callback) = lease.callback_mut() {
                         callback(size, scale_factor);
@@ -787,7 +800,6 @@ impl WindowCallbacks {
         }
     }
 
-    #[cfg(any(target_os = "ios", test))]
     fn invoke_lifecycle<T, F: FnMut(T)>(&self, slot: &Mutex<Option<F>>, value: T) {
         use super::panic_boundary::contain_owner_callback;
         if self.lifecycle_closed.load(Ordering::SeqCst) {
@@ -822,6 +834,55 @@ impl WindowCallbacks {
             return;
         };
         self.drain_events(drain);
+    }
+
+    /// Replace a safe-area observer without holding storage through capture Drop.
+    pub fn set_safe_area_callback(
+        &self,
+        callback: Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>,
+    ) {
+        let old = {
+            let mut slot = self.on_safe_area_change.lock();
+            if self.lifecycle_closed.load(Ordering::SeqCst) {
+                drop(slot);
+                super::panic_boundary::contain_owner_callback(|| drop(callback));
+                return;
+            }
+            slot.replace(callback)
+        };
+        super::panic_boundary::contain_owner_callback(|| drop(old));
+    }
+
+    /// Immediate metrics delivery, independently leased from the input FIFO.
+    pub fn dispatch_safe_area_change(&self, insets: flui_types::geometry::EdgeInsets) {
+        if self.lifecycle_closed.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(mut drain) = DispatchDrain::begin(&self.safe_area_dispatch, insets) else {
+            return;
+        };
+        while let Some(insets) = drain.next() {
+            self.invoke_lifecycle(&self.on_safe_area_change, insets);
+        }
+    }
+
+    #[cfg(target_os = "ios")]
+    pub(crate) fn dispatch_metrics_resize(&self, size: Size<Pixels>, scale: f32) {
+        if self.lifecycle_closed.load(Ordering::SeqCst) {
+            return;
+        }
+        // Latched on `lifecycle_closed`, deliberately not the `cleared` flag
+        // the queued Resize arm leases against (see `drain_events`'s own arm):
+        // this is an IMMEDIATE delivery, so it is fenced the moment a close is
+        // requested — `clear()` sets this latch on entry — rather than at slot
+        // teardown, which can sit behind a still-running drain.
+        let mut lease = CallbackLease::take(&self.on_resize, &self.lifecycle_closed);
+        super::panic_boundary::contain_owner_callback(|| {
+            if let Some(callback) = lease.callback_mut() {
+                callback(size, scale);
+            }
+        });
+        super::panic_boundary::contain_owner_callback(|| drop(lease));
     }
 
     /// Replace an execution observer, disposing captures outside the storage lock.
@@ -950,6 +1011,13 @@ macro_rules! impl_window_callback_setters {
 
         fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
             *self.$callbacks_field.on_should_close.lock() = Some(callback);
+        }
+
+        fn on_safe_area_change(
+            &self,
+            callback: Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>,
+        ) {
+            self.$callbacks_field.set_safe_area_callback(callback);
         }
 
         fn on_execution_state_change(
@@ -1133,6 +1201,64 @@ mod tests {
         callbacks.dispatch_request_frame();
         assert_eq!(*seen.lock(), [WindowExecutionState::Suspended]);
         assert!(callbacks.on_execution_state_change.lock().is_none());
+    }
+
+    /// The safe-area seam's own closed-latch guard, reached the one way it can
+    /// be: a reentrant `clear()` from inside a running event drain sets the
+    /// latch immediately, while `clear_now` — and so the observer's removal —
+    /// waits for that same loop. A safe-area report arriving inside that
+    /// window goes through its own dispatch cell, so the drain's reentrancy
+    /// check does not refuse it, and the latch is the only thing between it
+    /// and an observer whose owner is disposing.
+    ///
+    /// The headless window cannot pin this: it refuses a report on a closed
+    /// window before ever calling the seam, so no backend-facing path reaches
+    /// the latch with the slot still populated.
+    ///
+    /// If reverted: delete the `lifecycle_closed` early return from
+    /// `dispatch_safe_area_change` and the delivery assertion below fails
+    /// while the slot precondition still holds.
+    #[test]
+    fn safe_area_report_inside_a_closing_drain_is_dropped_by_the_latch() {
+        use flui_types::geometry::{EdgeInsets, px};
+
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let seen = Arc::new(AtomicU32::new(0));
+        let seen_in_observer = Arc::clone(&seen);
+        callbacks.set_safe_area_callback(Box::new(move |_| {
+            seen_in_observer.fetch_add(1, Ordering::SeqCst);
+        }));
+        callbacks.dispatch_safe_area_change(EdgeInsets::new(px(44.0), px(0.0), px(34.0), px(0.0)));
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            1,
+            "an open window delivers the report"
+        );
+
+        let slot_still_filled = Arc::new(AtomicU32::new(0));
+        let filled_in_input = Arc::clone(&slot_still_filled);
+        let inner = Arc::clone(&callbacks);
+        *callbacks.on_input.lock() = Some(Box::new(move |_| {
+            inner.clear();
+            if inner.on_safe_area_change.lock().is_some() {
+                filled_in_input.store(1, Ordering::SeqCst);
+            }
+            inner.dispatch_safe_area_change(EdgeInsets::new(px(1.0), px(1.0), px(1.0), px(1.0)));
+            DispatchEventResult::default()
+        }));
+        let _ = callbacks.dispatch_input(keyboard_event());
+
+        assert_eq!(
+            slot_still_filled.load(Ordering::SeqCst),
+            1,
+            "precondition: the report is dropped by the latch, not by an emptied slot"
+        );
+        assert_eq!(
+            seen.load(Ordering::SeqCst),
+            1,
+            "a report arriving after the latch closed must not reach the observer"
+        );
+        assert!(callbacks.on_safe_area_change.lock().is_none());
     }
 
     #[test]

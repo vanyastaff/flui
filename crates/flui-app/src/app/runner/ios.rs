@@ -406,6 +406,15 @@ where
         );
     }));
 
+    // Safe-area intrusions: addressed to this window's presentation, which
+    // republishes the root `MediaQuery` without touching renderer geometry.
+    window.on_safe_area_change(Box::new(move |insets| {
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::SafeAreaChanged(insets)),
+        );
+    }));
+
     // 8. Lifecycle.
     //
     // Surface availability: release the wgpu surface before the

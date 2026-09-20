@@ -500,7 +500,59 @@ not a claim of OS-driven scene reclamation or SDK 27 certification.
 Shipping bundles declare one scene at a time. Programmatic destruction and new
 activation are not universally available under UIKit's single-scene policy;
 real OS delivery and deterministic controller coverage must be reported
-separately. Safe-area layout, full multiwindow rendering, background execution
+separately. Full multiwindow rendering, background execution
 grants and automatic retry after failed surface recreation remain beta work.
 The scene-ownership increment passed its scoped gates and independent reviews;
 see ADR-0073. Full beta release validation remains pending.
+
+## iOS safe-area layout
+
+The native content-view inset now reaches the widget tree. `PlatformWindow`
+exposes `safe_area_insets()` and an `on_safe_area_change` observer; the UIKit
+content view samples `safeAreaInsets` on the owner thread — at attach, after a
+resize, and from `safeAreaInsetsDidChange`, which forwards to the superclass
+implementation — and reports changes to the presentation its window was opened
+for. Each presentation owns its root `MediaQuery`, seeded from the live window
+when the presentation is created, so a consumer that mounts after a change reads
+the current value instead of a default. `SafeArea` now consumes the edges it
+selects in the descendant `MediaQuery` (Flutter's `removePadding` behaviour),
+which removes the divergence its own docs previously carried — nested safe areas
+over-padded because nothing reduced the ambient padding. Consuming exactly the
+selected edges is verified headless; `Scaffold`'s own slot padding removal
+operates on the same fields and is unaffected.
+
+Live check on the iPhone 16e simulator (`iOS 26.2`, portrait), built from the
+revision carrying this record:
+`python3 -B scripts/check-ios-safe-area.py <UDID> /tmp/flui-ios-safe-area`. The
+fixture is a sole-`flui` application whose Stack holds one bare leaf and one
+`SafeArea`-wrapped leaf; it compares both laid-out geometries against the view's
+own `safeAreaInsets`, read inside the running application, so the oracle is the
+platform's value rather than a recorded constant
+(`/tmp/flui-ios-safe-area-check.log`). Native and ambient padding agreed at
+`[47, 0, 34, 0]`; the wrapped leaf landed at `(0, 47)` with size `390x763` and
+the bare leaf filled `390x844`. Backends without inset reporting keep the zero
+default, so no other platform's behavior changes.
+
+This is simulator evidence for one device class in one orientation. Landscape,
+keyboard occlusion, other device classes, physical devices, window resize while
+mounted, and the equivalent work on the Android and web backends remain
+unverified. The iOS-gated code is also outside what the Linux CI job compiles,
+so these checks are local-only until the release-candidate pass re-runs them.
+
+Two limits of the addressing half, stated rather than implied. First, the root
+`MediaQueryRoot` is installed on the `primary()` attach path — the only path
+that carries content today — so a non-primary presentation's source is written
+but not yet read. What this change fixes is the write side: a secondary window's
+resize or appearance change used to land in the primary presentation's tree and
+no longer does. Consuming a secondary window's own source belongs with
+secondary-window content, which is separate work. Every iOS build is unaffected,
+because the scene policy admits one logical session at a time; so is any
+single-window application on other backends.
+
+Second, the iOS-gated modules are invisible to the host-target lint job, so
+`just cross-typecheck`'s iOS line is their only compile gate. Clean on this
+revision: `cargo clippy -p flui-platform --locked --all-targets --features a11y
+--target aarch64-apple-ios -- -D warnings` (and, for the addressed realm arms,
+`cargo clippy -p flui-app -p flui-platform -p flui-widgets -p flui-cli
+--all-targets --locked -- -D warnings`). `just ios-safe-area-check` runs the
+live check above against a booted simulator.

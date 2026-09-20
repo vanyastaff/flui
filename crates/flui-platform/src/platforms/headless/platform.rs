@@ -765,6 +765,7 @@ struct MockWindowState {
     focused: bool,
     visible: bool,
     execution: crate::WindowExecutionState,
+    safe_area: flui_types::geometry::EdgeInsets,
     maximized: bool,
     minimized: bool,
     closed: bool,
@@ -784,6 +785,7 @@ impl Clone for MockWindowState {
             scale_factor: self.scale_factor,
             focused: self.focused,
             execution: self.execution,
+            safe_area: self.safe_area,
             visible: self.visible,
             maximized: self.maximized,
             minimized: self.minimized,
@@ -815,6 +817,7 @@ impl MockWindow {
                 scale_factor: 1.0,
                 focused: true,
                 execution: crate::WindowExecutionState::Running,
+                safe_area: flui_types::geometry::EdgeInsets::ZERO,
                 visible: options.visible,
                 maximized: false,
                 minimized: false,
@@ -1045,6 +1048,22 @@ impl MockWindow {
         self.callbacks.dispatch_active_status_change(focused);
     }
 
+    /// Simulate an owner-thread safe-area report; the callback fires without
+    /// holding window state. Closed and detached windows ignore the report.
+    pub fn simulate_safe_area(&self, insets: flui_types::geometry::EdgeInsets) {
+        {
+            let mut state = self.state.lock();
+            if state.closed
+                || state.execution == crate::WindowExecutionState::Detached
+                || state.safe_area == insets
+            {
+                return;
+            }
+            state.safe_area = insets;
+        }
+        self.callbacks.dispatch_safe_area_change(insets);
+    }
+
     /// Simulate reversible native execution eligibility; terminal close stays terminal.
     pub fn simulate_execution_state(&self, execution: crate::WindowExecutionState) {
         {
@@ -1156,6 +1175,10 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn is_focused(&self) -> bool {
         self.state.lock().focused
+    }
+
+    fn safe_area_insets(&self) -> flui_types::geometry::EdgeInsets {
+        self.state.lock().safe_area
     }
 
     fn execution_state(&self) -> crate::WindowExecutionState {
@@ -2431,6 +2454,84 @@ mod tests {
         assert!(
             has_surface.load(Ordering::SeqCst),
             "the rebuild edge must reach the same closure"
+        );
+    }
+
+    /// The wire test for `on_safe_area_change` / `safe_area_insets`:
+    /// registration goes through the `PlatformWindow` trait method, the
+    /// `simulate_*` affordance drives the platform's own dispatch, and the
+    /// accessor the app runner seeds its root `MediaQuery` from reports the
+    /// same value.
+    ///
+    /// Three edges beyond delivery, at this window's own boundary. An
+    /// unchanged report must NOT re-dispatch: the runner turns each callback
+    /// into a root-tree rebuild, and the native backend re-samples on every
+    /// resize and layout pass, so "always dispatch" would rebuild on every
+    /// pass. A closed window must drop the report. And the accessor must agree
+    /// with the callback, because a consumer that mounts after the change
+    /// reads it instead of replaying the callback.
+    ///
+    /// These are the mock's own admissions, which is what a backend adapter
+    /// has to get right before the seam is ever reached; the seam's own
+    /// closed-latch guard is pinned where it is reachable
+    /// (`shared::handlers::tests::safe_area_report_inside_a_closing_drain_is_dropped_by_the_latch`),
+    /// since no window-facing path can arrive there with its observer still
+    /// installed.
+    #[test]
+    fn test_on_safe_area_change() {
+        use flui_types::geometry::{EdgeInsets, px};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
+
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let last = Arc::new(Mutex::new(EdgeInsets::ZERO));
+        let dispatches_clone = dispatches.clone();
+        let last_clone = last.clone();
+
+        window.on_safe_area_change(Box::new(move |insets| {
+            dispatches_clone.fetch_add(1, Ordering::SeqCst);
+            let mut recorded = last_clone.lock();
+            *recorded = insets;
+        }));
+
+        assert_eq!(
+            window.safe_area_insets(),
+            EdgeInsets::ZERO,
+            "a window without native inset reporting starts at zero"
+        );
+
+        let insets = EdgeInsets::new(px(44.0), px(0.0), px(34.0), px(0.0));
+        window.simulate_safe_area(insets);
+        assert_eq!(
+            dispatches.load(Ordering::SeqCst),
+            1,
+            "the report must reach the closure registered through the trait method"
+        );
+        assert_eq!(
+            *last.lock(),
+            insets,
+            "the closure observes the reported insets"
+        );
+        assert_eq!(
+            window.safe_area_insets(),
+            insets,
+            "a consumer mounting after the change reads what the callback saw"
+        );
+
+        window.simulate_safe_area(insets);
+        assert_eq!(
+            dispatches.load(Ordering::SeqCst),
+            1,
+            "re-reporting unchanged insets must not rebuild the root tree again"
+        );
+
+        assert!(window.simulate_close(), "nothing vetoes this close");
+        window.simulate_safe_area(EdgeInsets::new(px(1.0), px(1.0), px(1.0), px(1.0)));
+        assert_eq!(
+            dispatches.load(Ordering::SeqCst),
+            1,
+            "a closed window drops the report instead of reaching a disposing owner"
         );
     }
 

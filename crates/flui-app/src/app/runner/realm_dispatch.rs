@@ -145,6 +145,19 @@ pub(in crate::app) enum PlatformToUi {
         )
     )]
     WindowExecution(flui_platform::WindowExecutionState),
+    /// Addressed logical content-view safe area.
+    ///
+    /// The iOS runner is the only producer; this module's own tests construct
+    /// it directly to pin the addressed-write contract (a report for a
+    /// presentation closed before delivery is dropped, not a panic).
+    #[cfg_attr(
+        not(any(test, target_os = "ios")),
+        expect(
+            dead_code,
+            reason = "safe-area reports are produced only by the UIKit runner"
+        )
+    )]
+    SafeAreaChanged(flui_types::geometry::EdgeInsets),
     /// Window visibility/occlusion changed (winit's `WindowEvent::Occluded`,
     /// negated — see `PlatformWindow::on_visibility_status_change`).
     ///
@@ -319,20 +332,35 @@ impl PlatformToUi {
                     }
                 }
                 realm.set_device_pixel_ratio(scale_factor);
-                // The root MediaQuery lives in the PRIMARY presentation's
-                // tree; a secondary window's resize must not republish its
-                // size there (SharedRealm hosts several windows). The
-                // realm-wide ratio/surface handling above keeps its
-                // pre-existing behavior — only the media-query write is
-                // addressed.
-                if realm.is_primary_presentation(presentation_id) {
-                    realm.media_query().update(|data| {
+                // Addressed write: dropped when the presentation this resize
+                // was stamped for is gone by delivery time — see
+                // `UiRealm::media_query_for`. Everything else in this arm
+                // (surface applier, device pixel ratio, redraw) is realm-wide
+                // and runs either way.
+                if let Some(source) = realm.media_query_for(presentation_id) {
+                    source.update(|data| {
                         data.size = size;
                         data.device_pixel_ratio = scale_factor;
                     });
+                } else {
+                    tracing::debug!(
+                        ?presentation_id,
+                        "realm resize: addressed presentation is gone; no media query to resize"
+                    );
                 }
                 realm.request_redraw();
                 tracing::trace!(?size, scale_factor, "realm resize committed");
+            }
+            Self::SafeAreaChanged(insets) => {
+                if let Some(source) = realm.media_query_for(presentation_id) {
+                    source.update(|data| data.padding = insets);
+                } else {
+                    tracing::debug!(
+                        ?presentation_id,
+                        "safe-area report: addressed presentation is gone; no media query to pad"
+                    );
+                }
+                realm.request_redraw();
             }
             Self::WindowFocus(focused) => realm.update_window_focus(presentation_id, focused),
             Self::WindowExecution(state) => realm.update_window_execution(presentation_id, state),
@@ -349,12 +377,18 @@ impl PlatformToUi {
                         flui_types::platform::Brightness::Light
                     }
                 };
-                if realm.is_primary_presentation(presentation_id) {
-                    realm.media_query().update(|data| {
+                if let Some(source) = realm.media_query_for(presentation_id) {
+                    source.update(|data| {
                         data.platform_brightness = brightness;
                     });
-                    realm.request_redraw();
+                } else {
+                    tracing::debug!(
+                        ?presentation_id,
+                        "appearance change: addressed presentation is gone; no media query to \
+                         brighten"
+                    );
                 }
+                realm.request_redraw();
             }
             Self::WindowVisibility(visible) => {
                 realm.update_window_visibility(presentation_id, visible);
@@ -1124,9 +1158,14 @@ pub(super) fn dispatch_platform_realm(
                         // misaddressed rather than refused. See
                         // `UiRealm::primary_id_excluding`'s own doc for why
                         // this is computable before the removal happens.
-                        // `None` is unreachable here: this branch runs only
-                        // when `is_sole_presentation(id)` was `false` above,
-                        // so at least one other presentation always exists.
+                        // Kept as an `if let` rather than an unwrap: this
+                        // branch runs only when `is_sole_presentation(id)` was
+                        // `false` above, which rules out a forest holding just
+                        // `id` but not an EMPTY one — `is_sole_presentation`
+                        // is `false` for a forest of none as well. A `None`
+                        // here is therefore not reachable for a realm that
+                        // still hosts something, and the arm simply skips the
+                        // re-stamp for one that does not.
                         if let Some(surviving_primary_id) = realm.primary_id_excluding(id) {
                             APP_RUNTIME.with(|slot| {
                                 if let Some(realm_slot) =
@@ -3066,6 +3105,82 @@ mod realm_dispatch_tests {
         assert!(
             !*applier_invoked.borrow(),
             "the surface applier must not fire for a queued resize after teardown"
+        );
+        teardown_platform_realm();
+    }
+
+    /// The FIFO inversion every addressed media-query write has to survive: a
+    /// close for a sibling presentation and an event ADDRESSED to that same
+    /// presentation are both admitted at enqueue time (the registry still
+    /// holds it for each), so both reach the shared queue and are delivered in
+    /// order — the close removes the presentation first, and the report then
+    /// arrives for one this realm no longer hosts.
+    ///
+    /// The realm-wide half of the event must still run, and the drain must
+    /// finish: an addressed write that panicked on the missing presentation
+    /// would abort the rest of that realm's queue, not just its own arm.
+    ///
+    /// If reverted: look the presentation up infallibly in the safe-area arm
+    /// (`expect`) and this panics out of the dispatch instead of running the
+    /// task queued behind it.
+    #[test]
+    fn queued_safe_area_for_a_closed_sibling_presentation_is_dropped() {
+        let platform = flui_platform::headless_platform();
+        let window_a = platform
+            .open_window(flui_platform::WindowOptions::default())
+            .expect("headless platform should create window a");
+        let window_b: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::new(
+            crate::app::window_test_support::TestWindow::new()
+                .with_id(2)
+                .focused(false),
+        );
+
+        let dispatcher_a =
+            install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
+        let dispatcher_b = install_presentation_alongside(dispatcher_a, &window_b)
+            .expect("B installs alongside A with a real window mapping");
+        let b_id = dispatcher_b.address.presentation_id;
+
+        // Queue the close and the report BEHIND it from inside one dispatched
+        // task — the realm is mid-drain, so both go through the REAL admission
+        // path (the registry still holds B for each) and land in the shared
+        // queue in that order. The marker dispatched last proves the drain
+        // reached the end of the queue.
+        let drained = Rc::new(RefCell::new(false));
+        let drained_in_task = Rc::clone(&drained);
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |_| {
+                dispatch_platform_realm(dispatcher_b, RealmTask::ClosePresentation(b_id))
+                    .expect("B's close is admitted while B is still registered");
+                dispatch_platform_realm(
+                    dispatcher_b,
+                    RealmTask::Event(PlatformToUi::SafeAreaChanged(
+                        flui_types::geometry::EdgeInsets::new(
+                            flui_types::geometry::px(47.0),
+                            flui_types::geometry::px(0.0),
+                            flui_types::geometry::px(34.0),
+                            flui_types::geometry::px(0.0),
+                        ),
+                    )),
+                )
+                .expect(
+                    "the report is still admitted: B's address outlives it until the close runs",
+                );
+                dispatch_platform_realm(
+                    dispatcher_a,
+                    RealmTask::Frame(Box::new(move |_| {
+                        *drained_in_task.borrow_mut() = true;
+                    })),
+                )
+                .expect("the drain marker is admitted");
+            })),
+        )
+        .expect("the queued close, addressed report and drain marker all dispatch");
+
+        assert!(
+            *drained.borrow(),
+            "the drain must continue past an addressed report for the closed presentation"
         );
         teardown_platform_realm();
     }

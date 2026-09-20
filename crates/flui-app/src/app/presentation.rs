@@ -156,6 +156,7 @@ struct SegmentProbe {
 /// this presentation's generational identity.
 pub(crate) struct PresentationState {
     id: PresentationId,
+    pub(super) media_query: Rc<crate::app::media_query_root::MediaQuerySource>,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
     pub(super) window_execution: Cell<flui_platform::WindowExecutionState>,
@@ -583,6 +584,9 @@ impl PresentationState {
 
         let state = Self {
             id,
+            media_query: Rc::new(crate::app::media_query_root::MediaQuerySource::from_window(
+                window.as_ref(),
+            )),
             window_visible: Cell::new(window.is_visible()),
             window_focused: Cell::new(window.is_focused()),
             window_execution: Cell::new(window.execution_state()),
@@ -653,6 +657,9 @@ impl PresentationState {
 
         let state = Self {
             id,
+            media_query: Rc::new(crate::app::media_query_root::MediaQuerySource::from_window(
+                window.as_ref(),
+            )),
             window_visible: Cell::new(window.is_visible()),
             window_focused: Cell::new(window.is_focused()),
             window_execution: Cell::new(window.execution_state()),

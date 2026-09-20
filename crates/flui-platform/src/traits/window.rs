@@ -509,6 +509,22 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
+    /// Safe-area intrusions in logical pixels, relative to the content view.
+    /// Backends without native inset reporting return zero. Detached windows
+    /// retain their last accepted geometry; this is not keyboard occlusion.
+    fn safe_area_insets(&self) -> flui_types::geometry::EdgeInsets {
+        flui_types::geometry::EdgeInsets::ZERO
+    }
+
+    /// Observe safe-area changes on the owner thread. Register, then resample
+    /// `safe_area_insets` to cover changes before callback installation.
+    fn on_safe_area_change(
+        &self,
+        callback: Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>,
+    ) {
+        let _ = callback;
+    }
+
     /// Current native execution eligibility. Backends without suspension use Running.
     fn execution_state(&self) -> WindowExecutionState {
         WindowExecutionState::Running

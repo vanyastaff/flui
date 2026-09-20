@@ -86,3 +86,31 @@ and this increment must not be described as complete mobile lifecycle support.
 - [Apple temporary inactivity](https://developer.apple.com/documentation/uikit/uiapplicationdelegate/applicationwillresignactive(_:))
 - [Apple scene migration](https://developer.apple.com/documentation/uikit/transitioning-to-the-uikit-scene-based-life-cycle)
 - [Flutter scene migration](https://docs.flutter.dev/release/breaking-changes/uiscenedelegate)
+
+## Amendment (2026-09-20): safe-area geometry has a first implementation
+
+The "Verification and limits" list above is unchanged except for safe-area
+geometry, which now has an implementation rather than remaining separate work:
+the content-view inset is reported to the presentation it belongs to, and the
+root `MediaQuery` became presentation-owned on the way in. That second part is
+this ADR's own thesis applied to inherited data — the realm used to hold one
+`MediaQuery` scoped to its PRIMARY presentation, so a secondary window's resize
+or appearance change landed in the primary presentation's tree. Size, device
+pixel ratio, brightness and padding are now written through the addressed
+presentation, so a shared realm with several live presentations no longer
+misroutes them onto the primary.
+
+The addressing stops at the write side: the root `MediaQueryRoot` is installed
+from the `primary()` attach path, the only path that carries content today, so a
+non-primary presentation's source is written but not yet read. Consuming each
+presentation's own source is part of secondary-window content and remains
+separate work; `docs/BETA.md` records the split as a stated limit. Nothing here
+is visible to a single-window application, which is every iOS build today, since
+the scene policy admits one logical session at a time.
+
+Verified on the iPhone 16e simulator in portrait against the view's own
+`safeAreaInsets`; the acceptance record and its stated limits are in
+[docs/BETA.md](../BETA.md) § "iOS safe-area layout". Scene
+ownership/disconnect/reattach, windowless owner waking, and complete mobile
+quit/background behavior remain separate work, and OS termination still does not
+guarantee a callback.

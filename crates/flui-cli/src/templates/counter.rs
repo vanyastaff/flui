@@ -79,7 +79,7 @@ fn generate_main(dir: &Path) -> CliResult<()> {
 
 use flui::prelude::*;
 use flui::view::{RebuildHandle, RebuildReason};
-use flui::widgets::column;
+use flui::widgets::{SafeArea, column};
 
 fn main() {
     run_app(CounterApp);
@@ -90,7 +90,7 @@ struct CounterApp;
 
 impl StatelessView for CounterApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        Theme::new(ThemeData::light(), CounterView)
+        Theme::new(ThemeData::light(), SafeArea::new().child(CounterView))
     }
 }
 

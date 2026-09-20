@@ -312,6 +312,15 @@ ios-sim:
 } }}
 
 [group("test")]
+[doc("Live iOS safe-area layout check: builds the sole-facade fixture for aarch64-apple-ios-sim through scripts/check-ios-safe-area.py and runs it on the ALREADY BOOTED simulator named by <udid>, asserting the marker the application writes after comparing both laid-out geometries against the view's own safeAreaInsets. Evidence belongs in docs/BETA.md § 'iOS safe-area layout'. Needs a macOS host with Xcode, the aarch64-apple-ios-sim target and a booted arm64 simulator; on a Mac run: just ios-safe-area-check <udid>")]
+ios-safe-area-check udid:
+    {{ if os() == "macos" {
+"python3 -B scripts/check-ios-safe-area.py " + quote(udid) + " target/ios-safe-area-check"
+} else {
+"echo 'Skipping ios-safe-area-check on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-safe-area-check <udid>'"
+} }}
+
+[group("test")]
 [doc("Run the workspace test scope used by CI (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci:
     cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast

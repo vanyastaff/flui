@@ -97,3 +97,25 @@ termination callbacks after an OS kill. It does not claim validation on SDK 27.
 - [Flutter UIScene migration](https://docs.flutter.dev/release/breaking-changes/uiscenedelegate), checked during design; FLUI does not copy its runtime topology.
 - Installed `dispatch2` 0.3.1 `MainThreadBound` and `objc2-ui-kit` 0.3.2 sources; Xcode 26.2 SDK.
 - `raw-window-handle` 0.6.2 borrowed handle validity contract.
+
+## Amendment (2026-09-20): safe-area layout is implemented
+
+The "Verification and limits" list above still stands except for its first item.
+Safe-area layout is no longer unimplemented: the content view samples
+`safeAreaInsets` on the owner thread and reports it to the presentation its
+window was opened for, each presentation owns the root `MediaQuery` that carries
+it, and `SafeArea` consumes the edges it selects in the descendant `MediaQuery`
+— Flutter's `removePadding` behaviour, which is what the widget's own docs
+previously recorded as a missing feature rather than a decision.
+
+The ownership boundary this ADR set is unchanged: the scene still owns the
+window, the view still samples on the owner thread, and nothing here transfers
+work across threads or claims OS-driven scene reclamation. What changed is that
+the inset is now a value the presentation can publish rather than one it
+discards. Verified on the iPhone 16e simulator in portrait against the view's own
+`safeAreaInsets`; the acceptance record and its stated limits are in
+[docs/BETA.md](../BETA.md) § "iOS safe-area layout".
+
+Background execution grants, unrestricted multiple-scene UI, the termination
+callbacks after an OS kill, and any SDK 27 claim remain exactly as limited as
+they were when this ADR was written.

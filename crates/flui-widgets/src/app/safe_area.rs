@@ -24,19 +24,13 @@ use crate::layout::Padding;
 ///
 /// Flutter parity: `widgets/safe_area.dart` `SafeArea`.
 ///
-/// **Divergence:** Flutter's `SafeArea` also wraps its child in
-/// `MediaQuery.removePadding` to zero-out consumed edges in the subtree's
-/// ambient [`MediaQueryData`](crate::MediaQueryData). FLUI defers
-/// `MediaQuery.removePadding` (not yet implemented); nested `SafeArea`s
-/// therefore over-pad. This divergence is documented and will be resolved when
-/// `MediaQuery.removePadding` lands.
+/// Selected OS padding is consumed in the descendant `MediaQuery`, so nested
+/// safe areas do not apply it again. Unselected edges and all other media data
+/// remain available. The app runner installs the root `MediaQuery`; detached
+/// widget trees must supply one explicitly.
 ///
 /// # Panics
-///
-/// Panics in `build` if there is no [`MediaQuery`] ancestor. Wrap the
-/// subtree in a [`MediaQuery`] near the root —
-/// `MediaQuery::new(MediaQueryData { .. }, child)` — since nothing installs
-/// one automatically.
+/// Panics in `build` if no `MediaQuery` ancestor exists.
 // Four independent per-edge toggle bools mirror Flutter's `SafeArea` API
 // (left/top/right/bottom as separate constructor params). There is no semantic
 // grouping that warrants a state machine or enum — each edge is truly
@@ -134,7 +128,8 @@ impl StatelessView for SafeArea {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // Flutter oracle: `safe_area.dart` lines 121-135.
         // Effective inset per edge: max(toggle ? media_side : 0, minimum_side).
-        let media_padding = MediaQuery::of(ctx).padding;
+        let mut media = MediaQuery::of(ctx);
+        let media_padding = media.padding;
 
         let effective_left = if self.left {
             media_padding.left.max(self.minimum.left)
@@ -165,6 +160,18 @@ impl StatelessView for SafeArea {
             effective_bottom,
             effective_left,
         );
-        Padding::new(insets).child(self.child.clone())
+        if self.left {
+            media.padding.left = flui_geometry::px(0.0);
+        }
+        if self.top {
+            media.padding.top = flui_geometry::px(0.0);
+        }
+        if self.right {
+            media.padding.right = flui_geometry::px(0.0);
+        }
+        if self.bottom {
+            media.padding.bottom = flui_geometry::px(0.0);
+        }
+        Padding::new(insets).child(MediaQuery::new(media, self.child.clone()))
     }
 }

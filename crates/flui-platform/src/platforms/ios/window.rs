@@ -29,7 +29,7 @@ use objc2_foundation::{NSDefaultRunLoopMode, NSObjectProtocol, NSRunLoop, NSSet}
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{UITouch, UIView, UIViewController, UIWindow, UIWindowScene};
 
-use flui_types::geometry::{DevicePixels, Pixels, Size, device_px, px};
+use flui_types::geometry::{DevicePixels, EdgeInsets, Pixels, Size, device_px, px};
 
 use super::events::touch_to_pointer_events;
 use super::native_owner::NativeOwner;
@@ -42,11 +42,23 @@ use crate::traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId}
 /// callback storage is reached through a `Retained` held in an ivar rather
 /// than a raw pointer ivar as the macOS backend does, so the view owns its
 /// callbacks and there is no separate deallocation step.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SamplingAdmission {
+    Detached,
+    Constructing,
+    Active { token: u64, window: usize },
+    Retiring,
+}
+
 pub struct FluiViewIvars {
     callbacks: Arc<WindowCallbacks>,
-    /// The most recent logical size, so a resize dispatch compares against it
-    /// and does not re-announce an unchanged size on every layout pass.
-    last_size: std::cell::Cell<Size<Pixels>>,
+    /// Where this view stands in the attach/detach lifecycle: whether it may
+    /// report metrics at all, and which window a report belongs to, so a
+    /// callback arriving after a detach is dropped instead of announcing the
+    /// metrics of a window this view no longer serves.
+    sampling: std::cell::Cell<SamplingAdmission>,
+    sampling_active: std::cell::Cell<bool>,
+    sampling_pending: std::cell::Cell<bool>,
     /// The per-frame tick source, created once and paused/resumed around the
     /// app's background transitions. `RefCell` because the view's methods
     /// reach it through a shared `&self`.
@@ -101,7 +113,22 @@ define_class!(
             // The annotation pins the return type, which `msg_send!` cannot
             // infer for a `void` super call.
             let _: () = unsafe { msg_send![super(self), layoutSubviews] };
-            self.dispatch_resize_if_changed();
+            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_metrics());
+        }
+
+        #[unsafe(method(safeAreaInsetsDidChange))]
+        fn safe_area_insets_did_change(&self) {
+            self.pin_for_native_callback();
+            // SAFETY: `super` resolves to the superclass named in the
+            // `#[unsafe(super(UIView))]` declaration above at compile time, so
+            // this runs UIKit's implementation rather than re-entering this
+            // override — which a plain `self` send would do without bound. The
+            // receiver is a live `&FluiView` because the pinning call above
+            // retains it first; the annotation pins the `void` return that
+            // `msg_send!` cannot infer. `UIView` gained this selector in
+            // iOS 11, and no lower deployment target is configured here.
+            let _: () = unsafe { msg_send![super(self), safeAreaInsetsDidChange] };
+            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_metrics());
         }
 
         /// The `CADisplayLink` target: one tick per refresh requests a frame.
@@ -138,7 +165,9 @@ impl FluiView {
         let this = mtm.alloc::<Self>();
         let this = this.set_ivars(FluiViewIvars {
             callbacks,
-            last_size: std::cell::Cell::new(Size::new(px(0.0), px(0.0))),
+            sampling: std::cell::Cell::new(SamplingAdmission::Detached),
+            sampling_active: std::cell::Cell::new(false),
+            sampling_pending: std::cell::Cell::new(false),
             display_link: RefCell::new(None),
             metrics,
         });
@@ -235,20 +264,92 @@ impl FluiView {
         }
     }
 
-    /// Announce a resize when the view's logical size actually changed.
-    fn dispatch_resize_if_changed(&self) {
-        let bounds = self.bounds();
-        let size = Size::new(px(bounds.size.width as f32), px(bounds.size.height as f32));
-        *self.ivars().metrics.lock() = WindowMetrics {
-            size,
-            scale: self.contentScaleFactor(),
-        };
-        if self.ivars().last_size.get() == size || size.width.0 <= 0.0 || size.height.0 <= 0.0 {
+    /// Commit one coherent native snapshot, then emit changed fields without
+    /// holding storage. Every emission rechecks admission after foreign callbacks.
+    fn sample_metrics(&self) {
+        self.ivars().sampling_pending.set(true);
+        if self.ivars().sampling_active.replace(true) {
             return;
         }
-        self.ivars().last_size.set(size);
-        self.callbacks()
-            .dispatch_resize(size, self.contentScaleFactor() as f32);
+        struct Lease<'a>(&'a std::cell::Cell<bool>);
+        impl Drop for Lease<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let _lease = Lease(&self.ivars().sampling_active);
+        while self.ivars().sampling_pending.replace(false) {
+            self.sample_metrics_once();
+        }
+    }
+
+    fn sample_metrics_once(&self) {
+        let admission = self.ivars().sampling.get();
+        // Only `window` is destructured out: the attachment `token` rides
+        // along in `admission` and is validated by the whole-variant equality
+        // re-checks below (before the commit, and again after the resize
+        // dispatch), which is what makes an attachment swap mid-sample drop
+        // this snapshot. The address compare that follows covers a different
+        // case the token cannot see — UIKit re-hosting this view into another
+        // window without going through `attach`, which leaves `admission`
+        // untouched while `self.window()` no longer agrees with it.
+        let SamplingAdmission::Active {
+            window: identity, ..
+        } = admission
+        else {
+            return;
+        };
+        let Some(window) = self.window() else {
+            return;
+        };
+        if std::ptr::from_ref::<UIWindow>(&window) as usize != identity {
+            return;
+        }
+        let bounds = self.bounds();
+        let insets = self.safeAreaInsets();
+        let next = WindowMetrics {
+            size: Size::new(px(bounds.size.width as f32), px(bounds.size.height as f32)),
+            scale: self.contentScaleFactor(),
+            safe_area: EdgeInsets::new(
+                px(insets.top as f32),
+                px(insets.right as f32),
+                px(insets.bottom as f32),
+                px(insets.left as f32),
+            ),
+        };
+        if self.ivars().sampling.get() != admission
+            || next.size.width.0 <= 0.0
+            || next.size.height.0 <= 0.0
+        {
+            return;
+        }
+        let previous = {
+            let mut metrics = self.ivars().metrics.lock();
+            std::mem::replace(&mut *metrics, next)
+        };
+        if previous.size != next.size || previous.scale != next.scale {
+            self.callbacks()
+                .dispatch_metrics_resize(next.size, next.scale as f32);
+        }
+        if self.ivars().sampling.get() != admission {
+            // The resize dispatch above retired this view, so this snapshot's
+            // safe-area half must not be announced either. Roll the snapshot
+            // back before returning: leaving un-announced insets committed as
+            // the baseline would make every later sample compare equal and
+            // never report them at all, whereas rolled back they are still
+            // seen by a later sample — or by the reattach's own
+            // `sample_metrics`. The equality guard keeps the rollback to this
+            // very snapshot, so a newer one committed by a callback that
+            // re-entered sampling during the dispatch above is left alone.
+            let mut metrics = self.ivars().metrics.lock();
+            if *metrics == next {
+                *metrics = previous;
+            }
+            return;
+        }
+        if previous.safe_area != next.safe_area {
+            self.callbacks().dispatch_safe_area_change(next.safe_area);
+        }
     }
 }
 
@@ -281,10 +382,11 @@ pub(super) enum LifecycleObservation {
     Detached,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct WindowMetrics {
     size: Size<Pixels>,
     scale: f64,
+    safe_area: EdgeInsets,
 }
 
 struct NativeAttachment {
@@ -329,6 +431,7 @@ impl IOSWindow {
         let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
             size: Size::new(px(0.0), px(0.0)),
             scale: 1.0,
+            safe_area: EdgeInsets::ZERO,
         }));
         let view = FluiView::new(mtm, Arc::clone(&callbacks), Arc::clone(&metrics));
         Self {
@@ -357,6 +460,11 @@ impl IOSWindow {
     pub(super) fn attach(&self, scene: &UIWindowScene, token: u64, marker: MainThreadMarker) {
         let native = self.native.get(marker);
         self.detach_native(marker);
+        native
+            .view
+            .ivars()
+            .sampling
+            .set(SamplingAdmission::Constructing);
         let controller = UIViewController::new(marker);
         controller.setView(Some(&native.view));
         let window = UIWindow::initWithWindowScene(marker.alloc(), scene);
@@ -368,8 +476,12 @@ impl IOSWindow {
             published: false,
             retiring: false,
         });
+        native.view.ivars().sampling.set(SamplingAdmission::Active {
+            token,
+            window: std::ptr::from_ref::<UIWindow>(&window) as usize,
+        });
         window.layoutIfNeeded();
-        native.view.dispatch_resize_if_changed();
+        native.view.sample_metrics();
         self.lifecycle.lock().execution = WindowExecutionState::Suspended;
         native.view.start_display_link();
         native.view.set_display_link_paused(true);
@@ -391,6 +503,8 @@ impl IOSWindow {
             });
         if let Some(window) = window {
             window.makeKeyAndVisible();
+            window.layoutIfNeeded();
+            self.native.get(marker).view.sample_metrics();
             if self.attachment_matches(token, marker)
                 && self.execution_state() == WindowExecutionState::Running
             {
@@ -416,6 +530,11 @@ impl IOSWindow {
 
     fn detach_native(&self, marker: MainThreadMarker) {
         let native = self.native.get(marker);
+        native
+            .view
+            .ivars()
+            .sampling
+            .set(SamplingAdmission::Retiring);
         native.view.invalidate_display_link();
         native.view.removeFromSuperview();
         let retired = native.attachment.borrow_mut().take();
@@ -424,6 +543,11 @@ impl IOSWindow {
             retired.window.setRootViewController(None);
             drop(retired.controller);
         }
+        native
+            .view
+            .ivars()
+            .sampling
+            .set(SamplingAdmission::Detached);
     }
 
     /// Pause or resume the per-frame tick (delegates to the content view's
@@ -577,6 +701,12 @@ impl IOSWindow {
     /// A callback may pump UIKit or the remaining lifecycle queue in between.
     pub(super) fn begin_retirement(&self) {
         let marker = MainThreadMarker::new().expect("BUG: scene retirement runs on main");
+        self.native
+            .get(marker)
+            .view
+            .ivars()
+            .sampling
+            .set(SamplingAdmission::Retiring);
         if let Some(attachment) = self.native.get(marker).attachment.borrow_mut().as_mut() {
             attachment.retiring = true;
         }
@@ -592,7 +722,7 @@ impl IOSWindow {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.set_frame_tick_paused(true);
+        self.begin_retirement();
         use crate::shared::LifecycleEvent;
         self.callbacks
             .dispatch_lifecycle_immediate(LifecycleEvent::Execution(
@@ -671,6 +801,10 @@ impl PlatformWindow for IOSWindow {
     /// this backend has.
     fn request_redraw(&self) {
         tracing::trace!("request_redraw: demand recorded; the CADisplayLink delivers the frame");
+    }
+
+    fn safe_area_insets(&self) -> EdgeInsets {
+        self.metrics.lock().safe_area
     }
 
     fn execution_state(&self) -> WindowExecutionState {
