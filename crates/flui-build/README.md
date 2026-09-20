@@ -174,7 +174,7 @@ let ctx = BuilderContextBuilder::new(PathBuf::from("."))
     .with_profile(Profile::Release)
     .build();
 
-let builder = IOSBuilder::new(&ctx.workspace_root)?;
+let builder = IOSBuilder::new();
 builder.validate_environment()?;
 
 let artifacts = builder.build_rust(&ctx)?;

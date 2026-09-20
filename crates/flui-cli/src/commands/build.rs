@@ -333,8 +333,8 @@ fn build_ios(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
     };
 
     // Default is the device arm64 slice; `--universal` adds the simulator
-    // slice so one artifact serves both. A caller that wants only one names
-    // it here rather than the builder guessing.
+    // slice as a separate library; this does not create a universal binary.
+    // Executable examples require one triple and reject --universal.
     let targets = if options.universal {
         vec![
             "aarch64-apple-ios".to_string(),
@@ -344,8 +344,7 @@ fn build_ios(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
         vec!["aarch64-apple-ios".to_string()]
     };
 
-    let ios_builder =
-        IOSBuilder::new(&workspace_root).context("Failed to initialize iOS builder")?;
+    let ios_builder = IOSBuilder::new();
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::IOS { targets })

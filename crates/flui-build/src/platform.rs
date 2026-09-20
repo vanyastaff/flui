@@ -83,10 +83,10 @@ impl AppBundle {
 #[non_exhaustive]
 pub enum BuildUnit {
     /// Build the current package's default binary (`cargo build` in
-    /// `workspace_root`).
+    /// `workspace_root`). iOS instead selects its static library.
     #[default]
     DefaultBinary,
-    /// Build the named workspace package's binary (`cargo build -p NAME`).
+    /// Build the named workspace package's binary, or its static library on iOS.
     Package(String),
     /// Build the named example of the current package
     /// (`cargo build --example NAME`).
@@ -222,11 +222,11 @@ impl TryFrom<&str> for Platform {
 /// Build artifacts produced by Rust compilation
 #[derive(Debug)]
 pub struct BuildArtifacts {
-    /// Paths to compiled Rust libraries (.so, .dll, .dylib, .wasm)
+    /// Paths to compiled Rust libraries (.a, .so, .dll, .dylib, .wasm)
     pub rust_libs: Vec<PathBuf>,
     /// Path to a compiled executable, when the target produces one.
     ///
-    /// Desktop builds produce an executable; mobile/web builds produce
+    /// Desktop builds and executable iOS examples produce an executable. Other mobile/web builds produce
     /// libraries consumed by a platform bundle step and leave this `None`.
     pub executable: Option<PathBuf>,
     /// Platform-specific metadata (JSON)
@@ -245,7 +245,7 @@ pub struct FinalArtifacts {
 /// Platform-specific builder trait.
 ///
 /// This trait is sealed and cannot be implemented outside of `flui_build`.
-/// Only the built-in builders (`AndroidBuilder`, `WebBuilder`, `DesktopBuilder`)
+/// Only the built-in builders (`AndroidBuilder`, `IOSBuilder`, `WebBuilder`, `DesktopBuilder`)
 /// implement this trait.
 ///
 /// # Sealed Trait

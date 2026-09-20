@@ -52,3 +52,38 @@ visible diagnostics. Staging fixtures preserve external sentinels for invalid na
 and symlinks. The CLI loads present `flui.toml` files through its existing typed
 configuration loader and reports invalid files instead of silently changing identity;
 only an absent file enables the example-directory fallback.
+
+### iOS Rust artifacts use the same Cargo protocol
+
+`IOSBuilder` is stateless and uses `BuilderContext.workspace_root` for every
+operation. Default/package iOS selections mean a library target declaring
+`staticlib`; executable examples use the existing executable selection. Library
+selection ignores `default-run` and excludes example-library targets. Cargo
+metadata supplies the package and target identity, including custom `[lib].name`.
+The shared message collector additionally matches crate type and excludes test
+artifacts, then accepts only an existing reported file after successful Cargo exit.
+Configured and environment-selected target directories need no reconstruction.
+
+Each requested library triple is built separately, and `rust_libs` retains the
+requested order. Empty target lists fail before building. Executable examples
+require exactly one triple: the current result model has only one executable,
+so multi-triple examples (including CLI `--example` with `--universal`) are rejected
+instead of silently discarding outputs. Supporting multiple executable slices is
+a separate artifact-model decision. Rust compilation does not delete or populate
+`platforms/ios/Frameworks`. The existing no-Xcode fallback returns only the first
+library; this increment does not produce an XCFramework, stage every slice, sign
+an application, or verify Xcode packaging.
+
+This follows Cargo's [artifact message contract](https://doc.rust-lang.org/cargo/reference/external-tools.html#artifact-messages),
+not filesystem naming conventions. Host fixtures exercise custom names, mixed
+crate types, package/default-member selection, examples, configured output paths,
+cached builds and failed recompilation with an old archive still present. The
+SDK-required device/simulator test is explicit:
+
+```sh
+cargo test -p flui-build --test ios_artifacts ios_device_and_simulator_static_libraries -- --ignored --exact
+```
+
+It requires macOS/Xcode and both `aarch64-apple-ios` and
+`aarch64-apple-ios-sim` Rust targets. Its success proves real Rust static-library
+compilation and discovery for both triples, not simulator execution.

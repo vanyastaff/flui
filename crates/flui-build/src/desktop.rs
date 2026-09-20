@@ -96,7 +96,7 @@ impl PlatformBuilder for DesktopBuilder {
             args.push(ctx.features.join(","));
         }
 
-        let executable = cargo::build_executable(&ctx.workspace_root, &args, &selected).await?;
+        let executable = cargo::build_artifact(&ctx.workspace_root, &args, &selected).await?;
 
         Ok(BuildArtifacts {
             rust_libs: Vec::new(),

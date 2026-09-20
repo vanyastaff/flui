@@ -10,26 +10,32 @@ use tokio::process::{Child, Command};
 use crate::error::{BuildError, BuildResult};
 use crate::platform::BuildUnit;
 
-pub(crate) struct ExecutableTarget {
+pub(crate) struct CargoTarget {
     package: PackageId,
     package_name: String,
     name: String,
     kind: TargetKind,
+    crate_type: CrateType,
 }
 
-impl ExecutableTarget {
+impl CargoTarget {
     pub(crate) fn cargo_args(&self) -> Vec<String> {
-        vec![
+        let mut args = vec![
             "--package".into(),
             self.package_name.clone(),
-            if self.kind == TargetKind::Example {
+            if self.crate_type == CrateType::StaticLib {
+                "--lib"
+            } else if self.kind == TargetKind::Example {
                 "--example"
             } else {
                 "--bin"
             }
             .into(),
-            self.name.clone(),
-        ]
+        ];
+        if self.crate_type != CrateType::StaticLib {
+            args.push(self.name.clone());
+        }
+        args
     }
 }
 
@@ -64,7 +70,22 @@ async fn cargo_output(dir: &Path, args: &[&str]) -> BuildResult<Vec<u8>> {
     Ok(output.stdout)
 }
 
-pub(crate) async fn select_target(dir: &Path, unit: &BuildUnit) -> BuildResult<ExecutableTarget> {
+pub(crate) async fn select_target(dir: &Path, unit: &BuildUnit) -> BuildResult<CargoTarget> {
+    select_target_for(dir, unit, false).await
+}
+
+pub(crate) async fn select_static_library(
+    dir: &Path,
+    unit: &BuildUnit,
+) -> BuildResult<CargoTarget> {
+    select_target_for(dir, unit, true).await
+}
+
+async fn select_target_for(
+    dir: &Path,
+    unit: &BuildUnit,
+    staticlib: bool,
+) -> BuildResult<CargoTarget> {
     let located: serde_json::Value = serde_json::from_slice(
         &cargo_output(dir, &["locate-project", "--message-format=json"]).await?,
     )
@@ -109,7 +130,9 @@ pub(crate) async fn select_target(dir: &Path, unit: &BuildUnit) -> BuildResult<E
     }
     let mut candidates = Vec::new();
     for package in packages {
-        let kind = if matches!(unit, BuildUnit::Example(_)) {
+        let kind = if staticlib {
+            TargetKind::StaticLib
+        } else if matches!(unit, BuildUnit::Example(_)) {
             TargetKind::Example
         } else {
             TargetKind::Bin
@@ -118,22 +141,35 @@ pub(crate) async fn select_target(dir: &Path, unit: &BuildUnit) -> BuildResult<E
             .targets
             .iter()
             .filter(|target| {
-                target.kind.contains(&kind) && target.crate_types.contains(&CrateType::Bin)
+                target.kind.contains(&kind)
+                    && target.crate_types.contains(if staticlib {
+                        &CrateType::StaticLib
+                    } else {
+                        &CrateType::Bin
+                    })
             })
-            .filter(|target| match unit {
-                BuildUnit::Example(name) => target.name == *name,
-                _ => package
-                    .default_run
-                    .as_ref()
-                    .is_none_or(|name| target.name == *name),
+            .filter(|target| {
+                staticlib
+                    || match unit {
+                        BuildUnit::Example(name) => target.name == *name,
+                        _ => package
+                            .default_run
+                            .as_ref()
+                            .is_none_or(|name| target.name == *name),
+                    }
             })
             .collect();
         for target in targets {
-            candidates.push(ExecutableTarget {
+            candidates.push(CargoTarget {
                 package: package.id.clone(),
                 package_name: package.name.to_string(),
                 name: target.name.clone(),
                 kind: kind.clone(),
+                crate_type: if staticlib {
+                    CrateType::StaticLib
+                } else {
+                    CrateType::Bin
+                },
             });
         }
     }
@@ -143,14 +179,24 @@ pub(crate) async fn select_target(dir: &Path, unit: &BuildUnit) -> BuildResult<E
             .map(|target| format!("{}::{}", target.package_name, target.name))
             .collect::<Vec<_>>()
             .join(", ");
+        let artifact = if staticlib {
+            "static library"
+        } else {
+            "executable"
+        };
+        let advice = if staticlib {
+            "select one package whose [lib] crate-type includes 'staticlib'"
+        } else {
+            "select a package/example or set package.default-run"
+        };
         return Err(invalid(format!(
-            "expected one executable for {unit:?}, found {} ({names}); select a package/example or set package.default-run",
+            "expected one {artifact} for {unit:?}, found {} ({names}); {advice}",
             candidates.len()
         )));
     }
     candidates
         .pop()
-        .ok_or_else(|| invalid("Cargo target selection produced no executable"))
+        .ok_or_else(|| invalid("Cargo target selection produced no target"))
 }
 
 /// Unknown messages and non-JSON output are permitted by Cargo's public protocol.
@@ -179,7 +225,7 @@ async fn stop_child(child: &mut Child) -> BuildResult<()> {
         .map_err(|error| command_error("stopping cargo", error))
 }
 
-async fn collect_artifacts(child: &mut Child, target: &ExecutableTarget) -> BuildResult<PathBuf> {
+async fn collect_artifacts(child: &mut Child, target: &CargoTarget) -> BuildResult<PathBuf> {
     let stdout = child
         .stdout
         .take()
@@ -196,15 +242,25 @@ async fn collect_artifacts(child: &mut Child, target: &ExecutableTarget) -> Buil
                 if artifact.package_id == target.package
                     && artifact.target.name == target.name
                     && artifact.target.kind.contains(&target.kind)
+                    && artifact.target.crate_types.contains(&target.crate_type)
                     && !artifact.profile.test =>
             {
-                if let Some(path) = artifact.executable {
+                let paths: Vec<_> = if target.crate_type == CrateType::StaticLib {
+                    artifact
+                        .filenames
+                        .into_iter()
+                        .filter(|path| matches!(path.extension(), Some("a" | "lib")))
+                        .collect()
+                } else {
+                    artifact.executable.into_iter().collect()
+                };
+                for path in paths {
                     let path = path.into_std_path_buf();
                     if executable
                         .as_ref()
                         .is_some_and(|previous| previous != &path)
                     {
-                        return Err(invalid("Cargo reported conflicting executable paths"));
+                        return Err(invalid("Cargo reported conflicting artifact paths"));
                     }
                     executable = Some(path);
                 }
@@ -230,23 +286,23 @@ async fn collect_artifacts(child: &mut Child, target: &ExecutableTarget) -> Buil
     }
     let path = executable.ok_or_else(|| {
         invalid(format!(
-            "Cargo produced no executable for {}::{}",
+            "Cargo produced no requested artifact for {}::{}",
             target.package_name, target.name
         ))
     })?;
     if !path.is_file() {
         return Err(BuildError::path_not_found(
             path,
-            "Cargo's reported executable is absent",
+            "Cargo's reported artifact is absent",
         ));
     }
     Ok(path)
 }
 
-pub(crate) async fn build_executable(
+pub(crate) async fn build_artifact(
     dir: &Path,
     args: &[String],
-    target: &ExecutableTarget,
+    target: &CargoTarget,
 ) -> BuildResult<PathBuf> {
     let mut child = Command::new("cargo")
         .args(args)
@@ -261,7 +317,7 @@ pub(crate) async fn build_executable(
     finish_child(&mut child, target).await
 }
 
-async fn finish_child(child: &mut Child, target: &ExecutableTarget) -> BuildResult<PathBuf> {
+async fn finish_child(child: &mut Child, target: &CargoTarget) -> BuildResult<PathBuf> {
     let result = collect_artifacts(child, target).await;
     if result.is_err()
         && child
@@ -296,11 +352,12 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn invalid_protocol_and_read_errors_kill_and_reap_the_child() {
-        let target = ExecutableTarget {
+        let target = CargoTarget {
             package: serde_json::from_str(r#""fixture-id""#).expect("opaque package id"),
             package_name: "fixture".into(),
             name: "app".into(),
             kind: TargetKind::Bin,
+            crate_type: CrateType::Bin,
         };
         for script in [
             "printf '%s\n' '{\"reason\":\"compiler-artifact\"}'; exec sleep 60",
