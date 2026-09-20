@@ -467,6 +467,15 @@ an application alone does not prove them.
 
 ## iOS execution lifecycle foundation
 
+The CLI rebuilt from `52c0a03a` subsequently built, installed and launched the
+external generated sole-`flui` counter on the dedicated iOS 26.2 simulator. The
+installed bundle's identifier, executable permissions, SHA-256 equality with
+the Cargo executable, and single-scene `FluiSceneDelegate` manifest passed
+direct checks. The run log is `/tmp/flui-ios-counter-final-run.log`.
+Simulator UI automation timed out, so real touch input and retained displayed
+counter state after Home/return remain unverified for this candidate. This does
+not complete native application acceptance or its final code-quality review.
+
 Window execution eligibility is independent of focus, visibility and GPU surface
 availability. Temporary UIKit inactivity preserves the surface and frame delivery;
 true background suspension caps the addressed presentation. Public presentation
