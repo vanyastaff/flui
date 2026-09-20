@@ -578,21 +578,32 @@ impl WindowCallbacks {
         // way to stop it from restoring itself into a slot this call is
         // about to empty. See `CallbackLease::drop`.
         self.cleared.store(true, Ordering::SeqCst);
-        let dropped = (
-            self.on_execution_state_change.lock().take(),
-            self.on_input.lock().take(),
-            self.on_request_frame.lock().take(),
-            self.on_resize.lock().take(),
-            self.on_moved.lock().take(),
-            self.on_close.lock().take(),
-            self.on_should_close.lock().take(),
-            self.on_active_status_change.lock().take(),
-            self.on_visibility_status_change.lock().take(),
-            self.on_hover_status_change.lock().take(),
-            self.on_appearance_changed.lock().take(),
-            self.on_surface_status_change.lock().take(),
-        );
-        drop(dropped);
+        let on_execution_state_change = self.on_execution_state_change.lock().take();
+        let on_input = self.on_input.lock().take();
+        let on_request_frame = self.on_request_frame.lock().take();
+        let on_resize = self.on_resize.lock().take();
+        let on_moved = self.on_moved.lock().take();
+        let on_close = self.on_close.lock().take();
+        let on_should_close = self.on_should_close.lock().take();
+        let on_active_status_change = self.on_active_status_change.lock().take();
+        let on_visibility_status_change = self.on_visibility_status_change.lock().take();
+        let on_hover_status_change = self.on_hover_status_change.lock().take();
+        let on_appearance_changed = self.on_appearance_changed.lock().take();
+        let on_surface_status_change = self.on_surface_status_change.lock().take();
+        // Each slot retires independently: distinct panicking destructors must
+        // never meet during the same unwind. No slot lock is held here.
+        super::panic_boundary::contain_owner_callback(|| drop(on_execution_state_change));
+        super::panic_boundary::contain_owner_callback(|| drop(on_input));
+        super::panic_boundary::contain_owner_callback(|| drop(on_request_frame));
+        super::panic_boundary::contain_owner_callback(|| drop(on_resize));
+        super::panic_boundary::contain_owner_callback(|| drop(on_moved));
+        super::panic_boundary::contain_owner_callback(|| drop(on_close));
+        super::panic_boundary::contain_owner_callback(|| drop(on_should_close));
+        super::panic_boundary::contain_owner_callback(|| drop(on_active_status_change));
+        super::panic_boundary::contain_owner_callback(|| drop(on_visibility_status_change));
+        super::panic_boundary::contain_owner_callback(|| drop(on_hover_status_change));
+        super::panic_boundary::contain_owner_callback(|| drop(on_appearance_changed));
+        super::panic_boundary::contain_owner_callback(|| drop(on_surface_status_change));
     }
 
     fn drain_events(
@@ -1012,6 +1023,57 @@ mod tests {
     use std::sync::atomic::AtomicU32;
 
     use super::*;
+
+    fn clear_multiple_panicking_captures(queued: bool) {
+        struct Capture(Arc<AtomicU32>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                panic!("distinct callback capture");
+            }
+        }
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let drops = Arc::new(AtomicU32::new(0));
+        let first = Capture(drops.clone());
+        let second = Capture(drops.clone());
+        *callbacks.on_resize.lock() = Some(Box::new(move |_, _| {
+            let _ = &first;
+        }));
+        *callbacks.on_moved.lock() = Some(Box::new(move || {
+            let _ = &second;
+        }));
+        let closed = Arc::new(AtomicU32::new(0));
+        let seen = closed.clone();
+        *callbacks.on_close.lock() = Some(Box::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }));
+        let inner = callbacks.clone();
+        if queued {
+            *callbacks.on_request_frame.lock() = Some(Box::new(move || {
+                inner.dispatch_close();
+                inner.clear();
+            }));
+            callbacks.dispatch_request_frame();
+        } else {
+            callbacks.dispatch_close();
+            callbacks.clear();
+        }
+        assert_eq!(closed.load(Ordering::SeqCst), 1);
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
+        assert!(callbacks.cleared.load(Ordering::SeqCst));
+        assert!(callbacks.on_resize.lock().is_none());
+        assert!(callbacks.on_moved.lock().is_none());
+    }
+
+    #[test]
+    fn direct_clear_contains_each_capture_panic() {
+        clear_multiple_panicking_captures(false);
+    }
+
+    #[test]
+    fn queued_clear_preserves_close_and_contains_each_capture_panic() {
+        clear_multiple_panicking_captures(true);
+    }
 
     /// A keyboard event: the cheapest concrete `PlatformInput` to construct
     /// for a test that only cares about triggering the `on_input` drain.

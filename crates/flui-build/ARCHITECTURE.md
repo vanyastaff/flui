@@ -161,4 +161,7 @@ cargo test -p flui-build --test ios_artifacts simulator_application_uses_actual_
 
 It proves executable discovery, real Mach-O inspection, native bundle metadata,
 legacy-project bypass and previous-output preservation on platform mismatch.
-It does not certify signing, UIKit scene migration or simulator interaction.
+The scene manifest names the implemented FluiSceneDelegate and single-scene
+policy (ADR-0073), matching dynamic UIKit configuration. This packaging fixture
+does not certify signing or simulator interaction; native scene behavior has
+separate protocol and GPU fixtures.

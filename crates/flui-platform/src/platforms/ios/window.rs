@@ -24,16 +24,15 @@ use std::sync::{
 use cursor_icon::CursorIcon;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
-use objc2_foundation::{NSDefaultRunLoopMode, NSObjectProtocol, NSRunLoop, NSSet, NSString};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
+use objc2_foundation::{NSDefaultRunLoopMode, NSObjectProtocol, NSRunLoop, NSSet};
 use objc2_quartz_core::CADisplayLink;
-use objc2_ui_kit::{
-    UIApplication, UIApplicationState, UITouch, UIView, UIViewController, UIWindow,
-};
+use objc2_ui_kit::{UITouch, UIView, UIViewController, UIWindow, UIWindowScene};
 
 use flui_types::geometry::{DevicePixels, Pixels, Size, device_px, px};
 
 use super::events::touch_to_pointer_events;
+use super::native_owner::NativeOwner;
 use crate::shared::WindowCallbacks;
 use crate::traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
 
@@ -52,6 +51,7 @@ pub struct FluiViewIvars {
     /// app's background transitions. `RefCell` because the view's methods
     /// reach it through a shared `&self`.
     display_link: RefCell<Option<Retained<CADisplayLink>>>,
+    metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
 }
 
 define_class!(
@@ -71,26 +71,31 @@ define_class!(
     impl FluiView {
         #[unsafe(method(touchesBegan:withEvent:))]
         fn touches_began(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
+            self.pin_for_native_callback();
             self.dispatch_touches(touches, TouchPhase::Began);
         }
 
         #[unsafe(method(touchesMoved:withEvent:))]
         fn touches_moved(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
+            self.pin_for_native_callback();
             self.dispatch_touches(touches, TouchPhase::Moved);
         }
 
         #[unsafe(method(touchesEnded:withEvent:))]
         fn touches_ended(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
+            self.pin_for_native_callback();
             self.dispatch_touches(touches, TouchPhase::Ended);
         }
 
         #[unsafe(method(touchesCancelled:withEvent:))]
         fn touches_cancelled(&self, touches: &NSSet<UITouch>, _event: Option<&AnyObject>) {
+            self.pin_for_native_callback();
             self.dispatch_touches(touches, TouchPhase::Cancelled);
         }
 
         #[unsafe(method(layoutSubviews))]
         fn layout_subviews(&self) {
+            self.pin_for_native_callback();
             // SAFETY: `super` is the `UIView` implementation of
             // `layoutSubviews`; calling it is what a correct override does.
             // The annotation pins the return type, which `msg_send!` cannot
@@ -101,8 +106,11 @@ define_class!(
 
         /// The `CADisplayLink` target: one tick per refresh requests a frame.
         #[unsafe(method(onDisplayLink:))]
-        fn on_display_link(&self, _link: &CADisplayLink) {
-            self.callbacks().dispatch_request_frame();
+        fn on_display_link(&self, link: &CADisplayLink) {
+            self.pin_for_native_callback();
+            let current = self.ivars().display_link.borrow().as_ref()
+                .is_some_and(|active| std::ptr::eq::<CADisplayLink>(&raw const **active, link));
+            if current && !link.isPaused() { self.callbacks().dispatch_request_frame(); }
         }
     }
 
@@ -121,13 +129,18 @@ enum TouchPhase {
 
 impl FluiView {
     /// Build the content view for one window, sized to the screen's bounds.
-    pub(super) fn new(mtm: MainThreadMarker, callbacks: Arc<WindowCallbacks>) -> Retained<Self> {
+    fn new(
+        mtm: MainThreadMarker,
+        callbacks: Arc<WindowCallbacks>,
+        metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
+    ) -> Retained<Self> {
         let bounds = objc2_ui_kit::UIScreen::mainScreen(mtm).bounds();
         let this = mtm.alloc::<Self>();
         let this = this.set_ivars(FluiViewIvars {
             callbacks,
             last_size: std::cell::Cell::new(Size::new(px(0.0), px(0.0))),
             display_link: RefCell::new(None),
+            metrics,
         });
         // SAFETY: `initWithFrame:` is `UIView`'s designated initializer; the
         // `super(this)` receiver is the partially-initialized allocation with
@@ -139,7 +152,6 @@ impl FluiView {
         // A GPU-rendered surface is opaque, so tell UIKit not to composite
         // anything behind it.
         this.setOpaque(true);
-        this.start_display_link();
         this
     }
 
@@ -169,13 +181,33 @@ impl FluiView {
     /// Pause or resume the tick — driven by the app's background/foreground
     /// transitions so a suspended app does no work.
     pub(super) fn set_display_link_paused(&self, paused: bool) {
-        if let Some(link) = self.ivars().display_link.borrow().as_ref() {
+        let link = self.ivars().display_link.borrow().clone();
+        if let Some(link) = link {
             link.setPaused(paused);
+        }
+    }
+
+    fn invalidate_display_link(&self) {
+        let link = self.ivars().display_link.borrow_mut().take();
+        if let Some(link) = link {
+            link.invalidate();
         }
     }
 
     fn callbacks(&self) -> &Arc<WindowCallbacks> {
         &self.ivars().callbacks
+    }
+
+    fn pin_for_native_callback(&self) {
+        // UIKit can keep using the receiver after a Rust observer terminally
+        // closes its logical window. Hold it through the outer autorelease pool.
+        let _ = Retained::autorelease_ptr(self.retain());
+        if let Some(window) = self.window() {
+            if let Some(controller) = window.rootViewController() {
+                let _ = Retained::autorelease_ptr(controller);
+            }
+            let _ = Retained::autorelease_ptr(window);
+        }
     }
 
     /// Convert a UIKit touch batch and dispatch each event, then request a
@@ -185,6 +217,14 @@ impl FluiView {
         let scale = self.contentScaleFactor();
         let mut any = false;
         for touch in touches {
+            let Some(current_window) = self.window() else {
+                break;
+            };
+            if !touch.window().as_ref().is_some_and(|origin| {
+                std::ptr::eq::<UIWindow>(&raw const **origin, &raw const *current_window)
+            }) {
+                continue;
+            }
             for event in touch_to_pointer_events(&touch, phase.as_pointer_phase(), scale) {
                 let result = self.callbacks().dispatch_input(event);
                 any |= result.default_prevented;
@@ -199,6 +239,10 @@ impl FluiView {
     fn dispatch_resize_if_changed(&self) {
         let bounds = self.bounds();
         let size = Size::new(px(bounds.size.width as f32), px(bounds.size.height as f32));
+        *self.ivars().metrics.lock() = WindowMetrics {
+            size,
+            scale: self.contentScaleFactor(),
+        };
         if self.ivars().last_size.get() == size || size.width.0 <= 0.0 || size.height.0 <= 0.0 {
             return;
         }
@@ -234,102 +278,182 @@ pub(super) enum LifecycleObservation {
     Inactive,
     Background,
     Foreground,
+    Detached,
 }
 
-/// iOS window wrapping a `UIWindow` and its content view.
-pub struct IOSWindow {
+#[derive(Clone, Copy)]
+struct WindowMetrics {
+    size: Size<Pixels>,
+    scale: f64,
+}
+
+struct NativeAttachment {
     window: Retained<UIWindow>,
-    view_controller: Retained<UIViewController>,
+    controller: Retained<UIViewController>,
+    token: u64,
+    published: bool,
+    retiring: bool,
+}
+
+struct NativeWindow {
     view: Retained<FluiView>,
+    attachment: RefCell<Option<NativeAttachment>>,
+}
+
+impl Drop for NativeWindow {
+    fn drop(&mut self) {
+        self.view.invalidate_display_link();
+        self.view.removeFromSuperview();
+        if let Some(attachment) = self.attachment.get_mut().take() {
+            attachment.window.setHidden(true);
+            attachment.window.setRootViewController(None);
+        }
+    }
+}
+
+/// One logical iOS window. Its stable view outlives scene attachments and any
+/// raw handle borrowed by a retained renderer. Native access/release is main-only.
+pub struct IOSWindow {
+    native: NativeOwner<NativeWindow>,
     callbacks: Arc<WindowCallbacks>,
-    closed: Arc<AtomicBool>,
-    lifecycle: Arc<parking_lot::Mutex<IOSLifecycle>>,
-    /// The window is only meaningfully sized once the screen is attached;
-    /// `logical_size` reads the view live, so this is not cached beyond the
-    /// resize comparison above.
+    closed: AtomicBool,
+    lifecycle: parking_lot::Mutex<IOSLifecycle>,
+    metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
     id: WindowId,
 }
 
-// SAFETY: `retain`/`release` on the underlying Objective-C objects are
-// atomic, and every `UIWindow`/`UIView` message this backend sends is routed
-// through the main thread by construction: `run` blocks the main thread in
-// `UIApplicationMain`, and the platform's `open_window` is only reachable
-// from `on_ready`, which runs there. The `Arc<WindowCallbacks>` is itself
-// `Send + Sync`. This mirrors `MacOSWindow`'s own reasoning (ADR-0039).
-unsafe impl Send for IOSWindow {}
-unsafe impl Sync for IOSWindow {}
-
 impl IOSWindow {
-    /// Create the window. Must run on the main thread.
-    pub(super) fn new(mtm: MainThreadMarker) -> Self {
+    /// Allocate a stable view; a scene connection supplies its native container.
+    pub(super) fn new(mtm: MainThreadMarker, id: WindowId) -> Self {
         let callbacks = Arc::new(WindowCallbacks::new());
-        let view = FluiView::new(mtm, Arc::clone(&callbacks));
-
-        let view_controller = UIViewController::new(mtm);
-        view_controller.setView(Some(&view));
-
-        let window: Retained<UIWindow> = unsafe {
-            msg_send![mtm.alloc::<UIWindow>(), initWithFrame: objc2_ui_kit::UIScreen::mainScreen(mtm).bounds()]
-        };
-        window.setRootViewController(Some(&view_controller));
-        // Order the window in and make it key. Doing this at construction
-        // matches what a single-window iPhone app wants: the FLUI window is
-        // the application's only window.
-        window.makeKeyAndVisible();
-
-        let this = Self {
-            window,
-            view_controller,
-            view,
-            callbacks,
-            closed: Arc::new(AtomicBool::new(false)),
-            lifecycle: Arc::new(parking_lot::Mutex::new(IOSLifecycle {
-                execution: if UIApplication::sharedApplication(mtm).applicationState()
-                    == UIApplicationState::Background
-                {
-                    WindowExecutionState::Suspended
-                } else {
-                    WindowExecutionState::Running
+        let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
+            size: Size::new(px(0.0), px(0.0)),
+            scale: 1.0,
+        }));
+        let view = FluiView::new(mtm, Arc::clone(&callbacks), Arc::clone(&metrics));
+        Self {
+            native: NativeOwner::new(
+                NativeWindow {
+                    view,
+                    attachment: RefCell::new(None),
                 },
-                focused: UIApplication::sharedApplication(mtm).applicationState()
-                    == UIApplicationState::Active,
-                visible: UIApplication::sharedApplication(mtm).applicationState()
-                    != UIApplicationState::Background,
+                mtm,
+            ),
+            callbacks,
+            metrics,
+            id,
+            closed: AtomicBool::new(false),
+            lifecycle: parking_lot::Mutex::new(IOSLifecycle {
+                execution: WindowExecutionState::Detached,
+                focused: false,
+                visible: false,
                 generation: 0,
                 pending: VecDeque::new(),
                 dispatching: false,
-            })),
-            id: WindowId(1),
-        };
-        this.set_frame_tick_paused(this.execution_state() != WindowExecutionState::Running);
-        this
+            }),
+        }
     }
 
-    /// The callback storage, for the platform's input/frame dispatch.
-    pub(super) fn callbacks(&self) -> &Arc<WindowCallbacks> {
-        &self.callbacks
+    pub(super) fn attach(&self, scene: &UIWindowScene, token: u64, marker: MainThreadMarker) {
+        let native = self.native.get(marker);
+        self.detach_native(marker);
+        let controller = UIViewController::new(marker);
+        controller.setView(Some(&native.view));
+        let window = UIWindow::initWithWindowScene(marker.alloc(), scene);
+        window.setRootViewController(Some(&controller));
+        *native.attachment.borrow_mut() = Some(NativeAttachment {
+            window: window.clone(),
+            controller,
+            token,
+            published: false,
+            retiring: false,
+        });
+        window.layoutIfNeeded();
+        native.view.dispatch_resize_if_changed();
+        self.lifecycle.lock().execution = WindowExecutionState::Suspended;
+        native.view.start_display_link();
+        native.view.set_display_link_paused(true);
+    }
+
+    pub(super) fn publish(&self, token: u64, marker: MainThreadMarker) {
+        let window = self
+            .native
+            .get(marker)
+            .attachment
+            .borrow_mut()
+            .as_mut()
+            .filter(|attachment| {
+                attachment.token == token && !attachment.published && !attachment.retiring
+            })
+            .map(|attachment| {
+                attachment.published = true;
+                attachment.window.clone()
+            });
+        if let Some(window) = window {
+            window.makeKeyAndVisible();
+            if self.attachment_matches(token, marker)
+                && self.execution_state() == WindowExecutionState::Running
+            {
+                self.set_frame_tick_paused(false);
+            }
+        }
+    }
+
+    pub(super) fn resource_generation(&self) -> u64 {
+        self.lifecycle.lock().generation
+    }
+
+    pub(super) fn attachment_matches(&self, token: u64, marker: MainThreadMarker) -> bool {
+        !self.closed.load(Ordering::SeqCst)
+            && self
+                .native
+                .get(marker)
+                .attachment
+                .borrow()
+                .as_ref()
+                .is_some_and(|attachment| attachment.token == token)
+    }
+
+    fn detach_native(&self, marker: MainThreadMarker) {
+        let native = self.native.get(marker);
+        native.view.invalidate_display_link();
+        native.view.removeFromSuperview();
+        let retired = native.attachment.borrow_mut().take();
+        if let Some(retired) = retired {
+            retired.window.setHidden(true);
+            retired.window.setRootViewController(None);
+            drop(retired.controller);
+        }
     }
 
     /// Pause or resume the per-frame tick (delegates to the content view's
     /// `CADisplayLink`). Driven by the app's background/foreground edges.
     pub(super) fn set_frame_tick_paused(&self, paused: bool) {
-        self.view.set_display_link_paused(paused);
+        if let Some(marker) = MainThreadMarker::new() {
+            let native = self.native.get(marker);
+            let published = native
+                .attachment
+                .borrow()
+                .as_ref()
+                .is_some_and(|attachment| attachment.published && !attachment.retiring);
+            native.view.set_display_link_paused(paused || !published);
+        }
     }
 
     /// Serialize native observations independently of the input/frame FIFO.
     pub(super) fn observe_lifecycle(&self, observation: LifecycleObservation) {
-        use LifecycleObservation::{Background, Foreground};
+        use LifecycleObservation::{Background, Detached, Foreground};
         if self.closed.load(Ordering::SeqCst) {
             return;
         }
         // A callback may pump a nested UIKit run loop before our queue drains.
         // Suspend the physical link immediately, even for a queued observation.
-        if matches!(observation, Background) {
+        if matches!(observation, Background | Detached) {
             self.set_frame_tick_paused(true);
         }
         {
             let mut state = self.lifecycle.lock();
-            if matches!(observation, Background | Foreground) {
+            if matches!(observation, Background | Foreground | Detached) {
                 state.generation = state.generation.wrapping_add(1);
             }
             let generation = state.generation;
@@ -361,10 +485,12 @@ impl IOSWindow {
 
     fn apply_lifecycle(&self, observation: LifecycleObservation, generation: u64) {
         use crate::shared::LifecycleEvent;
-        use LifecycleObservation::{Active, Background, Foreground, Inactive};
+        use LifecycleObservation::{Active, Background, Detached, Foreground, Inactive};
         {
             let mut state = self.lifecycle.lock();
-            if matches!(observation, Background | Foreground) && state.generation != generation {
+            if matches!(observation, Background | Foreground | Detached)
+                && state.generation != generation
+            {
                 return;
             }
             match observation {
@@ -375,8 +501,12 @@ impl IOSWindow {
                     state.focused = true;
                 }
                 Inactive => state.focused = false,
-                Background => {
-                    state.execution = WindowExecutionState::Suspended;
+                Background | Detached => {
+                    state.execution = if matches!(observation, Detached) {
+                        WindowExecutionState::Detached
+                    } else {
+                        WindowExecutionState::Suspended
+                    };
                     state.visible = false;
                     state.focused = false;
                 }
@@ -401,8 +531,8 @@ impl IOSWindow {
                     self.request_redraw();
                 }
             }
-            Background => {
-                emit(LifecycleEvent::Execution(WindowExecutionState::Suspended));
+            Background | Detached => {
+                emit(LifecycleEvent::Execution(self.execution_state()));
                 if !current() {
                     return;
                 }
@@ -443,14 +573,38 @@ impl IOSWindow {
         }
     }
 
-    /// Detach the root view controller and hide the window. Idempotent.
+    /// Fence the physical link before a queued ownership retirement can run.
+    /// A callback may pump UIKit or the remaining lifecycle queue in between.
+    pub(super) fn begin_retirement(&self) {
+        let marker = MainThreadMarker::new().expect("BUG: scene retirement runs on main");
+        if let Some(attachment) = self.native.get(marker).attachment.borrow_mut().as_mut() {
+            attachment.retiring = true;
+        }
+        self.set_frame_tick_paused(true);
+    }
+
+    pub(super) fn disconnect(&self, marker: MainThreadMarker) {
+        self.observe_lifecycle(LifecycleObservation::Detached);
+        self.detach_native(marker);
+    }
+
     pub(super) fn close_inner(&self) {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
         self.set_frame_tick_paused(true);
-        self.window.setHidden(true);
-        self.window.setRootViewController(None);
+        use crate::shared::LifecycleEvent;
+        self.callbacks
+            .dispatch_lifecycle_immediate(LifecycleEvent::Execution(
+                WindowExecutionState::Detached,
+            ));
+        self.callbacks
+            .dispatch_lifecycle_immediate(LifecycleEvent::Surface(false));
+        crate::shared::panic_boundary::contain_owner_callback(|| self.callbacks.dispatch_close());
+        crate::shared::panic_boundary::contain_owner_callback(|| self.callbacks.clear());
+        if let Some(marker) = MainThreadMarker::new() {
+            self.detach_native(marker);
+        }
     }
 }
 
@@ -464,26 +618,27 @@ impl std::fmt::Debug for IOSWindow {
 }
 
 impl PlatformWindow for IOSWindow {
+    fn close(&self) {
+        super::platform::request_close(self.id);
+    }
+
     fn id(&self) -> WindowId {
         self.id
     }
 
     fn physical_size(&self) -> Size<DevicePixels> {
-        let bounds = self.view.bounds();
-        let scale = self.view.contentScaleFactor();
+        let metrics = *self.metrics.lock();
         Size::new(
-            device_px((bounds.size.width * scale).round() as i32),
-            device_px((bounds.size.height * scale).round() as i32),
+            device_px((f64::from(metrics.size.width.0) * metrics.scale).round() as i32),
+            device_px((f64::from(metrics.size.height.0) * metrics.scale).round() as i32),
         )
     }
 
     fn logical_size(&self) -> Size<Pixels> {
-        let bounds = self.view.bounds();
-        Size::new(px(bounds.size.width as f32), px(bounds.size.height as f32))
+        self.metrics.lock().size
     }
-
     fn scale_factor(&self) -> f64 {
-        self.view.contentScaleFactor()
+        self.metrics.lock().scale
     }
 
     /// Ask for a frame.
@@ -541,7 +696,7 @@ impl PlatformWindow for IOSWindow {
 
     fn get_title(&self) -> String {
         // `UIWindow` has no title; the bundle display name is the app's name.
-        NSString::from_str("FLUI iOS").to_string()
+        "FLUI iOS".to_owned()
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -559,7 +714,11 @@ impl PlatformWindow for IOSWindow {
         if self.closed.load(Ordering::SeqCst) {
             return Err(raw_window_handle::HandleError::Unavailable);
         }
-        let view_ptr = Retained::as_ptr(&self.view);
+        let marker = MainThreadMarker::new().ok_or(raw_window_handle::HandleError::Unavailable)?;
+        if self.execution_state() == WindowExecutionState::Detached {
+            return Err(raw_window_handle::HandleError::Unavailable);
+        }
+        let view_ptr = Retained::as_ptr(&self.native.get(marker).view);
         let handle = raw_window_handle::UiKitWindowHandle::new(
             std::ptr::NonNull::new(view_ptr as *mut std::ffi::c_void)
                 .ok_or(raw_window_handle::HandleError::Unavailable)?,
@@ -583,29 +742,5 @@ impl PlatformWindow for IOSWindow {
                 raw_window_handle::RawDisplayHandle::UiKit(handle),
             )
         })
-    }
-}
-
-impl Clone for IOSWindow {
-    fn clone(&self) -> Self {
-        Self {
-            window: self.window.clone(),
-            view_controller: self.view_controller.clone(),
-            view: self.view.clone(),
-            callbacks: Arc::clone(&self.callbacks),
-            closed: Arc::clone(&self.closed),
-            lifecycle: Arc::clone(&self.lifecycle),
-            id: self.id,
-        }
-    }
-}
-
-impl Drop for IOSWindow {
-    fn drop(&mut self) {
-        // Only the last clone closes the native window.
-        if Arc::strong_count(&self.callbacks) == 1 && !self.closed.load(Ordering::SeqCst) {
-            tracing::debug!("iOS window dropped; hiding last native window");
-            self.close_inner();
-        }
     }
 }

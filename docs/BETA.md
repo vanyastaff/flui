@@ -474,11 +474,24 @@ lifecycle subscriptions observe the derived state while a shared realm can retai
 an eligible sibling. See ADR-0072 for precedence, initial snapshots and reentrancy.
 
 The dedicated UIKit protocol probe reproduces resign-active/active without a
-foreground notification using the actual owned delegate and CADisplayLink. It is
-not a real OS lifecycle or GPU rendering acceptance test. UIScene migration,
-safe-area layout, background owner waking, mobile quit semantics and automatic
-surface recreation retry remain uncompleted work. No new scene plist is shipped.
+foreground notification using the actual owned delegate and CADisplayLink. This
+original foundation probe tests protocol delivery rather than OS lifecycle or
+GPU rendering. The scene migration below adds native ownership, terminal cleanup,
+window-independent owner signaling, matching bundle configuration and separate
+GPU evidence.
 
-Native UIKit close is not implemented: the window inherits the default no-op
-close, and the runner has no close teardown. Its current quit flag does not gate
-callbacks. This foundation's terminal-close evidence is headless/app-only.
+## UIKit scene ownership
+
+The native scene delegate now drives presentation-local execution, focus and
+visibility. A controlled owned-delegate probe has verified disconnect without
+frames and reconnect with actual GPU submission/presentation, retained local
+widget state and a single service start. These are protocol tests on Xcode 26.2,
+not a claim of OS-driven scene reclamation or SDK 27 certification.
+
+Shipping bundles declare one scene at a time. Programmatic destruction and new
+activation are not universally available under UIKit's single-scene policy;
+real OS delivery and deterministic controller coverage must be reported
+separately. Safe-area layout, full multiwindow rendering, background execution
+grants and automatic retry after failed surface recreation remain beta work.
+The scene-ownership increment passed its scoped gates and independent reviews;
+see ADR-0073. Full beta release validation remains pending.

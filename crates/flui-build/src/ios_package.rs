@@ -727,6 +727,15 @@ pub(crate) async fn package_application(
             "MinimumOSVersion":minimum, "LSRequiresIPhoneOS":true,
             "CFBundleSupportedPlatforms":[if platform == "IOS" {"iPhoneOS"} else {"iPhoneSimulator"}],
             "UIDeviceFamily":[1,2], "UILaunchScreen":{},
+            "UIApplicationSceneManifest": {
+                "UIApplicationSupportsMultipleScenes": false,
+                "UISceneConfigurations": {
+                    "UIWindowSceneSessionRoleApplication": [{
+                        "UISceneConfigurationName": "FLUI",
+                        "UISceneDelegateClassName": "FluiSceneDelegate"
+                    }]
+                }
+            },
             "UISupportedInterfaceOrientations":["UIInterfaceOrientationPortrait","UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"]
         });
         let info = staged.join("Info.plist"); fs::write(&info, serde_json::to_vec(&plist).map_err(|error| invalid(error.to_string()))?)?;

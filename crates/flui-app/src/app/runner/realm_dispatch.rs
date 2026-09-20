@@ -430,7 +430,7 @@ pub(super) fn install_surface_applier(
 /// all. A second, non-displacing realm (a genuinely independent window
 /// alongside this one) is installed through
 /// [`install_realm_alongside`] instead.
-#[cfg(any(test, target_os = "android", target_os = "ios", target_arch = "wasm32"))]
+#[cfg(any(test, target_os = "android", target_arch = "wasm32"))]
 pub(super) fn install_platform_realm(
     realm: crate::app::ui_realm::UiRealm,
     window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
@@ -545,14 +545,7 @@ pub(super) fn install_platform_realm(
 /// tests.
 ///
 #[cfg_attr(
-    not(any(
-        test,
-        all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )
-    )),
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
     expect(
         dead_code,
         reason = "open_secondary_window (its production caller) is desktop-only -- android/wasm32 \
@@ -851,14 +844,7 @@ fn uninstall_platform_realm(realm_id: RealmId) {
 /// #555 closes with this slice; there is no further slice deferring this.
 /// Also exercised directly by this module's own tests.
 #[cfg_attr(
-    not(any(
-        test,
-        all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )
-    )),
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
     expect(
         dead_code,
         reason = "close_this_window (its one production caller) is desktop-only -- \
@@ -884,14 +870,7 @@ fn close_presentation(
 /// would tear down an ENTIRE `SharedRealm` group out from under a still-open
 /// sibling window.
 #[cfg_attr(
-    not(any(
-        test,
-        all(
-            not(target_os = "android"),
-            not(target_os = "ios"),
-            not(target_arch = "wasm32")
-        )
-    )),
+    not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
     expect(
         dead_code,
         reason = "its production callers (run_desktop, open_secondary_window) are desktop-only \

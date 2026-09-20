@@ -23,7 +23,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("udid")
     parser.add_argument("binary", type=pathlib.Path)
-    parser.add_argument("--case", choices=["transient", "foreground-reentered-background", "background-reentered-foreground", "duplicate-foreground", "foreground-callback-panic", "background-nested-active", "background-nested-inactive", "foreground-nested-active", "foreground-nested-inactive", "nested-foreground-then-panic", "superseded-foreground", "background-nested-run-loop"], default="transient")
+    parser.add_argument("--case", choices=["scene-install-close-failure", "scene-install-retry", "scene-destruction-error-panic", "scene-close-reconnect", "scene-close-nested-loop", "scene-close-two-capture-panics", "scene-disconnect-reentrant", "scene-disconnect-foreground", "transient", "scene-owned", "scene-disconnect", "scene-worker-quit", "scene-worker-drop", "bootstrap-panic", "scene-close-panic", "scene-foreign-link", "scene-install-failure", "scene-install-panic", "scene-install-close", "scene-install-quit", "scene-app-retention", "scene-app-fresh", "scene-app-quit", "foreground-reentered-background", "background-reentered-foreground", "duplicate-foreground", "foreground-callback-panic", "background-nested-active", "background-nested-inactive", "foreground-nested-active", "foreground-nested-inactive", "nested-foreground-then-panic", "superseded-foreground", "background-nested-run-loop"], default="transient")
     options = parser.parse_args()
     inventory = json.loads(command("xcrun", "simctl", "list", "devices", "--json"))
     selected = [device for devices in inventory["devices"].values() for device in devices
@@ -40,7 +40,7 @@ def main():
                           "CFBundleName": "ExecutionProbe", "CFBundlePackageType": "APPL",
                           "CFBundleVersion": "1", "CFBundleShortVersionString": "1.0.0",
                           "MinimumOSVersion": "14.0", "LSRequiresIPhoneOS": True,
-                          "UIDeviceFamily": [1, 2], "UILaunchScreen": {}}, file)
+                          "UIDeviceFamily": [1, 2], "UIApplicationSceneManifest": {"UIApplicationSupportsMultipleScenes": False, "UISceneConfigurations": {"UIWindowSceneSessionRoleApplication": [{"UISceneConfigurationName": "FLUI", "UISceneDelegateClassName": "FluiSceneDelegate"}]}}, "UILaunchScreen": {}}, file)
         command("xcrun", "simctl", "install", options.udid, str(bundle), timeout=120)
         container = pathlib.Path(command("xcrun", "simctl", "get_app_container", options.udid, identifier, "data"))
         result = container / "tmp/flui-execution-result.txt"

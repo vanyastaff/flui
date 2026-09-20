@@ -1,7 +1,8 @@
 //! iOS runner — the native `run_app` path on UIKit.
 //!
 //! Mirrors the Android runner: `IOSPlatform::run` enters `UIApplicationMain`,
-//! the app delegate runs [`bootstrap_ios`] at `didFinishLaunching`, and every
+//! the app delegate starts process services once, the scene consumer calls
+//! [`bootstrap_ios`] for each fresh session, and every
 //! later frame is a `CADisplayLink` tick that reaches the same
 //! `dispatch_platform_realm` frame path the other backends use.
 //!
@@ -26,9 +27,10 @@
 //! capability is inert. See [`super::hot_reload`] for the seam and
 //! `docs/hot-reload.md` for the two-layer model.
 
+use flui_platform::PlatformWindow;
+use flui_platform::platforms::ios::{IOSSceneEvent, IOSSceneSessionId};
 use flui_view::{StatelessView, View};
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use super::device_recovery::{DeviceRecoveryBackoff, render_frame_with_device_recovery};
 use super::frame_pacing::{
@@ -39,17 +41,16 @@ use super::host::{
     runtime_wake_callback, with_owner_platform,
 };
 use super::realm_dispatch::{
-    PlatformToUi, RealmTask, dispatch_platform_realm, drain_owner_inbox, install_platform_realm,
-    install_surface_applier, teardown_platform_realm,
+    PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
+    drain_owner_inbox, install_realm_alongside, install_surface_applier, teardown_platform_realm,
 };
 use super::surface_lifecycle::{SurfaceLifecycleOutcome, ensure_surface};
 use crate::app::AppConfig;
-use crate::app::hot_reload::{RebuildHookGuard, WorkerReload, WorkerWatcherGuard};
+use crate::app::hot_reload::WorkerReload;
 
 /// Run a FLUI application on iOS with default configuration.
 ///
-/// Call this from the app's Swift/ObjC entry point (the `FluiAppDelegate`
-/// installs it via `flui_ios_main`).
+/// Call this from the Rust application entry point. UIKit owns the process loop.
 pub fn run_app_ios<V>(root: V)
 where
     V: View + StatelessView + Clone + 'static,
@@ -67,103 +68,167 @@ where
     run_ios(root, config);
 }
 
+use super::session_controller::{SessionController, contain};
+pub(in crate::app) type IOSController = SessionController<IOSSceneSessionId>;
+
+fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError> {
+    let controller = APP_RUNTIME
+        .with(|slot| slot.borrow_mut().ios_controller.take())
+        .ok_or_else(|| anyhow::anyhow!("iOS process controller is unavailable"))?;
+    struct Lease(Option<IOSController>);
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            let controller = self.0.take();
+            let retired = APP_RUNTIME.with(|slot| {
+                let mut runtime = slot.borrow_mut();
+                if runtime.ios_running {
+                    std::mem::replace(&mut runtime.ios_controller, controller)
+                } else {
+                    controller
+                }
+            });
+            contain(|| drop(retired));
+            // A nested owner turn may have arrived while the controller was
+            // leased. Re-arm after restoration instead of losing that wake.
+            if APP_RUNTIME.with(|slot| slot.borrow().ios_controller.is_some()) {
+                let _ = with_owner_platform(|owner| owner.proxy().wake());
+            }
+        }
+    }
+    let mut lease = Lease(Some(controller));
+    let controller = lease.0.as_mut().expect("BUG: live controller lease");
+    match event {
+        IOSSceneEvent::Connected {
+            session,
+            window,
+            reconnect,
+            ..
+        } => {
+            controller.connect(session.clone(), window, reconnect)?;
+            if !APP_RUNTIME.with(|slot| slot.borrow().ios_running) {
+                controller.discard(&session);
+                return Err(anyhow::anyhow!("iOS process stopped during installation").into());
+            }
+        }
+        IOSSceneEvent::Disconnected { .. } => {}
+        IOSSceneEvent::Discarded { session }
+        | IOSSceneEvent::InstallationAborted { session, .. } => {
+            controller.discard(&session);
+            let old = APP_RUNTIME.with(|slot| slot.borrow().clear_redraw_window());
+            drop(old);
+        }
+    }
+    Ok(())
+}
+
+fn drive_owner() {
+    let dispatchers = APP_RUNTIME.with(|slot| {
+        slot.borrow()
+            .ios_controller
+            .as_ref()
+            .map(SessionController::dispatchers)
+            .unwrap_or_default()
+    });
+    for dispatcher in dispatchers {
+        let _ = dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(|realm| {
+                drain_owner_inbox(realm);
+                let scheduler = realm.scheduler();
+                scheduler.finish_async_pump();
+                scheduler.drive_async_tasks();
+            })),
+        );
+    }
+}
+
+fn stop_process() {
+    let controller = APP_RUNTIME.with(|slot| {
+        let mut runtime = slot.borrow_mut();
+        runtime.ios_running = false;
+        runtime.ios_controller.take()
+    });
+    contain(|| drop(controller));
+    teardown_platform_realm();
+}
+
 fn run_ios<V>(root: V, config: AppConfig)
 where
     V: View + StatelessView + Clone + 'static,
 {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
     use flui_platform::{IOSPlatform, Platform};
-
-    let platform: Box<dyn Platform> = match IOSPlatform::new() {
-        Ok(platform) => Box::new(platform),
+    let platform = match IOSPlatform::new() {
+        Ok(platform) => platform,
         Err(error) => {
-            tracing::error!(%error, "Failed to initialize iOS platform");
+            tracing::error!(%error, "iOS initialization failed");
             return;
         }
     };
-
-    // Development reload, if this build has it and a worker is configured.
-    // With the `hot-reload` feature off this value is inert and
-    // `flui-hot-reload` is not in the graph.
-    let worker_reload = WorkerReload::from_config(&config);
-
-    // The reload guards can only be created from inside `on_ready` (they need
-    // the realm's `wake`), so — exactly as `run_desktop` does — they are
-    // threaded back out through cells that outlive `platform.run`, which keeps
-    // the rebuild hook attached and the watcher thread alive for the loop's
-    // whole life.
-    let rebuild_registration: Rc<RefCell<Option<RebuildHookGuard>>> = Rc::new(RefCell::new(None));
-    let rebuild_registration_slot = Rc::clone(&rebuild_registration);
-    let worker_watcher: Rc<RefCell<Option<WorkerWatcherGuard>>> = Rc::new(RefCell::new(None));
-    let worker_watcher_slot = Rc::clone(&worker_watcher);
-
-    // Armed BEFORE `run(...)`, matching the Android and desktop runners: the
-    // guard clears the loop-scoped owner host on the way out, including on
-    // unwind.
+    if let Err(error) = platform.on_scene_event(Box::new(scene_event)) {
+        tracing::error!(%error, "iOS scene registration failed");
+        return;
+    }
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
-
-    let result = platform.run(Box::new(move |owner| {
+    let result = Box::new(platform).run(Box::new(move |owner| {
         install_owner_platform(owner)?;
-        // `on_ready` returns `Result<(), BootstrapError>` (an opaque boxed
-        // error), so the bootstrap's `anyhow::Error` crosses via anyhow's own
-        // `From` impl — the same conversion the Android runner's closure
-        // relies on.
-        bootstrap_ios(
-            root,
-            config,
-            worker_reload,
-            rebuild_registration_slot,
-            worker_watcher_slot,
-        )
-        .map_err(Into::into)
+        with_owner_platform(|owner| {
+            owner.on_wake(Box::new(drive_owner))?;
+            owner.shared().on_quit(Box::new(stop_process));
+            Ok::<_, flui_platform::WakeRegistrationError>(())
+        })
+        .expect("BUG: owner installed above")?;
+        let clipboard = with_owner_platform(|owner| owner.shared().clipboard())
+            .expect("BUG: owner installed above");
+        APP_RUNTIME.with(|slot| {
+            let mut runtime = slot.borrow_mut();
+            runtime.ios_running = true;
+            if let Some(executors) = config.executors.clone() {
+                runtime.install_host_executors(executors);
+            }
+            runtime.reopen_lifecycles();
+            runtime.ensure_execution();
+            runtime.set_platform_clipboard(clipboard);
+        });
+        for service in &config.services {
+            APP_RUNTIME.with(|slot| slot.borrow_mut().start_service(service))?;
+        }
+        let reload = WorkerReload::from_config(&config);
+        let watcher = reload.spawn_watcher(runtime_wake_callback());
+        let installer = Box::new(move |window| {
+            bootstrap_ios(root.clone(), config.clone(), reload.clone(), window)
+        });
+        APP_RUNTIME.with(|slot| {
+            slot.borrow_mut().ios_controller = Some(IOSController::new(installer, watcher));
+        });
+        Ok(())
     }));
-
-    // Loop exited: detach the hook and stop the watcher before teardown. Take
-    // each value out under its borrow, then drop it AFTER the guard falls — the
-    // watcher's `Drop` joins a thread, and dropping that under the borrow is
-    // the `LockDiscipline/StatementDrop` shape port-check refuses.
-    let hook_guard = rebuild_registration.borrow_mut().take();
-    let watcher_guard = worker_watcher.borrow_mut().take();
-    drop(hook_guard);
-    drop(watcher_guard);
-
     if let Err(error) = result {
-        tracing::error!(%error, "iOS platform run returned an error");
+        tracing::error!(%error, "iOS platform failed");
     }
 }
 
 /// The iOS bootstrap: window, GPU renderer, realm, and callback wiring.
 ///
-/// Runs once, synchronously, inside `on_ready` — which the delegate delivers
-/// at `didFinishLaunching`, the first point UIKit permits a window.
+/// Runs once per fresh logical scene session, before native publication. A
+/// reconnect retains this realm and does not call the installer again.
 fn bootstrap_ios<V>(
     root: V,
     config: AppConfig,
     worker_reload: WorkerReload,
-    rebuild_registration_slot: Rc<RefCell<Option<RebuildHookGuard>>>,
-    worker_watcher_slot: Rc<RefCell<Option<WorkerWatcherGuard>>>,
-) -> anyhow::Result<()>
+    window: Arc<dyn PlatformWindow>,
+) -> anyhow::Result<RealmDispatcher>
 where
     V: View + StatelessView + Clone + 'static,
 {
     use std::sync::Arc;
 
     use flui_engine::Renderer;
-    use flui_platform::{
-        WindowOptions,
-        traits::{DispatchEventResult, PlatformInput},
-    };
+    use flui_platform::traits::{DispatchEventResult, PlatformInput};
     use parking_lot::Mutex;
 
     fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
         with_owner_platform(f).expect("BUG: bootstrap_ios runs only after install_owner_platform")
     }
-
-    // 0. Wire the platform clipboard (ADR-0034).
-    let clipboard = owner_platform_installed(|owner| owner.shared().clipboard());
-    APP_RUNTIME.with(|slot| slot.borrow().set_platform_clipboard(clipboard));
 
     // 0b. This window's device-recovery backoff, constructed before the
     // wake-deadline hook below so the hook can carry its deadline.
@@ -178,18 +243,6 @@ where
             .shared()
             .set_wake_deadline_hook(Box::new(move || device_recovery_backoff.next_attempt_at()));
     });
-
-    // 1. Open the window. `Ready` is guaranteed inside `on_ready`.
-    let options: WindowOptions = (&config).into();
-    let window = match owner_platform_installed(|owner| owner.open_window(options))
-        .and_then(flui_platform::WindowOpen::try_ready)
-    {
-        Ok(window) => window,
-        Err(error) => {
-            tracing::error!(%error, "Failed to create iOS window");
-            return Err(anyhow::Error::from(error).context("Failed to create iOS window"));
-        }
-    };
 
     // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes its own
     // strong `Arc` of the window as the surface target (issue #1043).
@@ -227,45 +280,26 @@ where
 
     let logical = window.logical_size();
     let attach = ui_realm.enter(|realm| {
-        realm.attach_root_widget_with_size(&root, logical.width.0 as f32, logical.height.0 as f32)
+        realm.attach_root_widget_with_size(&root, logical.width.0, logical.height.0)
     });
     if let Err(e) = attach {
         tracing::error!("Root widget attach failed: {:?}", e);
         return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
     }
     let hot_reload_sender = ui_realm.command_sender();
-    let realm_dispatch = install_platform_realm(ui_realm, &window);
-
-    // 3b. Wire development reload, when a worker is configured. The hook turns
-    // a worker-side rebuild request into a queued `HotReload` command; the
-    // watcher wakes the loop when the artifact changes, so an idle app (no
-    // frames arriving) still reloads. Both are inert when no worker is set.
-    {
-        let hook_guard = worker_reload.register_rebuild_hook(hot_reload_sender);
-        let displaced = {
-            let mut slot = rebuild_registration_slot.borrow_mut();
-            slot.replace(hook_guard)
-        };
-        drop(displaced);
-
-        let watcher_guard = worker_reload.spawn_watcher(Arc::clone(&wake));
-        let displaced = {
-            let mut slot = worker_watcher_slot.borrow_mut();
-            std::mem::replace(&mut *slot, watcher_guard)
-        };
-        drop(displaced);
-    }
-
-    // 3b. Start config-declared application services (issue #558).
-    for service in &config.services {
-        if let Err(error) = APP_RUNTIME.with(|slot| slot.borrow_mut().start_service(service)) {
-            tracing::error!(service = service.name(), %error, "service start failed");
-            return Err(anyhow::Error::from(error).context(format!(
-                "failed to start application service `{}`",
-                service.name()
-            )));
+    let realm_dispatch = install_realm_alongside(ui_realm, &window)?;
+    struct ProvisionalRealm(Option<RealmDispatcher>);
+    impl Drop for ProvisionalRealm {
+        fn drop(&mut self) {
+            if let Some(dispatcher) = self.0.take() {
+                contain(|| close_this_window(dispatcher));
+            }
         }
     }
+    let mut provisional = ProvisionalRealm(Some(realm_dispatch));
+
+    let rebuild_guard: crate::app::hot_reload::RebuildHookGuard =
+        worker_reload.register_rebuild_hook(hot_reload_sender);
 
     // 4. Adopt the raster mailbox (ADR-0045's inline lane).
     let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
@@ -441,23 +475,9 @@ where
         })),
     );
 
-    // Platform quit -> Detached (frames disabled, listeners notified).
-    //
-    // `UIApplicationMain` never returns, so there is no "after `run`" on this
-    // backend: the loop-exit signal arrives as `on_quit`, which the delegate
-    // fires from `applicationWillTerminate:`. That makes this handler the
-    // place the full teardown runs — the same `teardown_platform_realm` the
-    // desktop and Android runners call after their loops exit.
-    owner_platform_installed(|owner| {
-        owner.shared().on_quit(Box::new(move || {
-            let _ =
-                dispatch_platform_realm(realm_dispatch, RealmTask::Event(PlatformToUi::Shutdown));
-            teardown_platform_realm();
-        }));
-    });
-
     window.on_close(Box::new(move || {
-        tracing::info!("iOS window closed");
+        contain(|| drop(rebuild_guard));
+        close_this_window(realm_dispatch);
     }));
 
     // 9. Store the window in the redraw-poke slot BEFORE the initial redraw.
@@ -473,5 +493,6 @@ where
     wake();
 
     tracing::info!("iOS platform initialized with callbacks");
-    Ok(())
+    provisional.0 = None;
+    Ok(realm_dispatch)
 }

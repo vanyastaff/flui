@@ -777,7 +777,7 @@ pub(crate) struct DirectOwnerHooks {
 impl DirectOwnerHooks {
     /// Captures the calling thread as the permanent owner — call this from
     /// the backend's `on_ready` (or wherever it mints its `OwnerPlatform`).
-    #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
+    #[cfg(any(target_os = "android", target_arch = "wasm32"))]
     pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
         Self {
             platform,

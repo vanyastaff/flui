@@ -4072,3 +4072,39 @@ thread_affinity = "desktop application owner; AppHandle and request replies are 
 owner = "AppRuntime designated main-window controller"
 failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
 consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_platform::platforms::ios::IOSSceneEvent"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/platforms/ios/scene.rs"
+contains = "pub enum IOSSceneEvent"
+classification = "stable-candidate"
+thread_affinity = "UIKit main-thread consumer; logical window capability may be retained across disconnect"
+owner = "IOSPlatform process and logical scene session"
+failure_semantics = "fallible connection acknowledgment before native publication; InstallationAborted permits same-session retry; Discarded permanently rejects that identity; reversible disconnect retains UI; native Running is not GPU readiness"
+consumers = ["flui-app UIKit runner", "native owned-scene protocol probe"]
+
+[[surface]]
+path = "flui_platform::platforms::ios::IOSSceneSessionId"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/platforms/ios/scene.rs"
+contains = "pub struct IOSSceneSessionId"
+classification = "stable-candidate"
+thread_affinity = "UIKit main-thread consumer; logical window capability may be retained across disconnect"
+owner = "IOSPlatform process and logical scene session"
+failure_semantics = "fallible connection acknowledgment before native publication; InstallationAborted permits same-session retry; Discarded permanently rejects that identity; reversible disconnect retains UI; native Running is not GPU readiness"
+consumers = ["flui-app UIKit runner", "native owned-scene protocol probe"]
+
+[[surface]]
+path = "flui_platform::platforms::ios::IOSSceneAttachmentId"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/platforms/ios/scene.rs"
+contains = "pub struct IOSSceneAttachmentId"
+classification = "stable-candidate"
+thread_affinity = "UIKit main-thread consumer; logical window capability may be retained across disconnect"
+owner = "IOSPlatform process and logical scene session"
+failure_semantics = "fallible connection acknowledgment before native publication; InstallationAborted permits same-session retry; Discarded permanently rejects that identity; reversible disconnect retains UI; native Running is not GPU readiness"
+consumers = ["flui-app UIKit runner", "native owned-scene protocol probe"]

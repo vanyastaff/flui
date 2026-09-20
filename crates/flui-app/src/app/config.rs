@@ -197,8 +197,8 @@ pub struct AppConfig {
     ///
     /// Only the winit, Win32 and AppKit backends consult the underlying
     /// platform seam; on web and Android a registered handler is inert.
-    /// Not present on iOS, where the realm-hosting machinery this rides on
-    /// is not compiled at all.
+    /// Not present on iOS; UIKit scene destruction does not use the desktop
+    /// close-request veto policy.
     pub close_request_handler: Option<CloseRequestHandler>,
 
     /// Application services to start at bootstrap (issue #558) — durable,
@@ -213,9 +213,10 @@ pub struct AppConfig {
     /// no exit-policy hook, so [`ServiceLifetime`](super::lifecycle::ServiceLifetime)
     /// has no observable effect on process lifetime there yet — the
     /// services themselves still run and get the staged teardown.
-    /// Native-only today — the lifecycle layer has no wasm32 slice yet,
-    /// and the iOS entry point is a stub that reads no config field at all
-    /// (see `run_ios`'s own doc).
+    /// On iOS services start once during process bootstrap and survive scene
+    /// disconnection; framework quit cancels and joins them. Their lifetime
+    /// does not grant background execution time from the operating system.
+    /// Native-only today — the lifecycle layer has no wasm32 slice yet.
     #[cfg(not(target_arch = "wasm32"))]
     pub services: Vec<ServiceDefinition>,
 }

@@ -247,6 +247,13 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
 objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "objc2-core-foundation",
     "UIApplication",
+    "UIScene",
+    "UISceneDefinitions",
+    "block2",
+    "UISceneSession",
+    "UISceneConfiguration",
+    "UISceneOptions",
+    "UIWindowScene",
     "UIEvent",
     "UIGeometry",
     "UIKey",
@@ -344,3 +351,7 @@ path = "tests/headless.rs"
 # Re-export dependencies that might be needed by consumers
 [package.metadata.docs.rs]
 all-features = true
+
+# Exercise the exact asynchronous UIKit error block on an Apple host.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+block2 = "0.6.2"

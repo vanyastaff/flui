@@ -457,6 +457,14 @@ fn simulator_application_uses_actual_executable_metadata_and_native_bundle() {
     assert_eq!(plist["CFBundleVersion"], "0.1.0");
     assert_eq!(plist["FLUIVersion"], "0.1.0-beta.2+probe");
     assert_eq!(
+        plist["UIApplicationSceneManifest"]["UIApplicationSupportsMultipleScenes"],
+        false
+    );
+    let scene = &plist["UIApplicationSceneManifest"]["UISceneConfigurations"]["UIWindowSceneSessionRoleApplication"]
+        [0];
+    assert_eq!(scene["UISceneConfigurationName"], "FLUI");
+    assert_eq!(scene["UISceneDelegateClassName"], "FluiSceneDelegate");
+    assert_eq!(
         plist["CFBundleSupportedPlatforms"],
         serde_json::json!(["iPhoneSimulator"])
     );

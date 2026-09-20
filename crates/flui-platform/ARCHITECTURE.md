@@ -820,3 +820,19 @@ frames before the observer pumps a nested native run loop.
 The runner terminates only its owned probe after marker completion; this is not a
 claim of normal UIKit loop return or a real OS background transition. Xcode 26.2
 is the verified SDK. UIScene ownership and migration remain separate work.
+
+### UIKit scene attachments
+
+UIKit process bootstrap and scene connection are separate ownership boundaries
+(ADR-0073). `IOSPlatform::on_scene_event` registers the fallible, owner-thread
+consumer before UIKit connections. A stable logical view backs a session; native
+windows/controllers and display links belong to individual attachments. A
+reversible disconnect retains the logical owner but denies new raw handles.
+Terminal close fences callbacks and retires the attachment before disposal.
+
+`MainThreadBound` protects native storage. Final worker drops enqueue retirement
+on main rather than synchronously waiting for it. Plain cached metrics remain
+readable without touching UIKit. The native weak-view probe verifies both
+retention through logical close and eventual release after a worker's final drop.
+OwnerSignal/GCD carries typed process wake/quit independently of display links;
+it grants no operating-system background execution entitlement.

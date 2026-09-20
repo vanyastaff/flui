@@ -385,14 +385,7 @@ enum RealmMapMutation {
     /// queueing it) from paying that size for every entry regardless of
     /// variant.
     #[cfg_attr(
-        not(any(
-            test,
-            all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            )
-        )),
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
         expect(
             dead_code,
             reason = "constructed only by request_realm_install, whose one production caller \
@@ -669,6 +662,10 @@ pub(crate) struct AppRuntime {
         not(target_arch = "wasm32")
     ))]
     pub(super) main_controller: Option<super::runner::main_window::MainController>,
+    #[cfg(target_os = "ios")]
+    pub(super) ios_controller: Option<super::runner::ios::IOSController>,
+    #[cfg(target_os = "ios")]
+    pub(super) ios_running: bool,
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -802,6 +799,10 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             main_controller: None,
+            #[cfg(target_os = "ios")]
+            ios_controller: None,
+            #[cfg(target_os = "ios")]
+            ios_running: false,
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
@@ -874,14 +875,7 @@ impl AppRuntime {
     // Its one production caller (bootstrap_desktop's config wiring) is
     // desktop-only; android/wasm have no host-injection entry point yet.
     #[cfg_attr(
-        not(any(
-            test,
-            all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            )
-        )),
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
         expect(
             dead_code,
             reason = "host executors are injected via AppConfig on the desktop bootstrap \
@@ -1249,14 +1243,7 @@ impl AppRuntime {
     /// itself inside a live `APP_RUNTIME` borrow) must drop it only after
     /// that borrow releases.
     #[cfg_attr(
-        not(any(
-            test,
-            all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            )
-        )),
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
         expect(
             dead_code,
             reason = "runner.rs::install_realm_alongside (its one production caller) is \
@@ -1457,7 +1444,16 @@ impl AppRuntime {
     /// none of which may resolve this thread-local `AppRuntime` at fire time
     /// (see [`FrameWakeHandle`]'s doc).
     pub(super) fn frame_wake_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
-        self.wake_handle().into_callback()
+        let wake = self.wake_handle().into_callback();
+        #[cfg(target_os = "ios")]
+        if let Some(owner) = &self.owner_platform {
+            let proxy = owner.proxy();
+            return Arc::new(move || {
+                wake();
+                let _ = proxy.wake();
+            });
+        }
+        wake
     }
 
     /// Wake the platform event loop so the next frame is rendered: sets
