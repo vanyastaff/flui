@@ -905,8 +905,9 @@ pub fn service_events<E: Send>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceLifetime {
     /// Editor-like: the service does not hold the application open — when
-    /// the last window closes, the loop exits and the service is cancelled
-    /// and joined by the staged teardown.
+    /// the last window closes under the default exit policy, the loop exits
+    /// and staged teardown cancels and joins this service. ExplicitQuit keeps
+    /// the loop and service alive until an explicit quit request.
     StopsWithLastWindow,
     /// Messenger-like: while this service is running, closing the last
     /// window does not exit the loop (`AppRuntime::should_exit` consults

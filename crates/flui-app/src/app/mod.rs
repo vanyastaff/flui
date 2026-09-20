@@ -73,3 +73,28 @@ pub use flui_view::{LifecycleHook, RecoveredAt};
 pub use flui_view::{RootRenderElement, RootRenderView};
 
 mod lifecycle_state;
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod application;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) mod application_control;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use application::{AppRunError, Application, StartupWindow};
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use application_control::{AppControlError, AppHandle, AppWindowError, MainWindowRequest};

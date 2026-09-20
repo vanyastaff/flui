@@ -1938,6 +1938,7 @@ impl WinitApp {
         window: Option<&Arc<WinitWindow>>,
     ) {
         if let Some(win) = window {
+            win.mark_closed();
             win.inner().set_visible(false);
             win.set_visible(false);
             win.callbacks().dispatch_close();
@@ -2046,6 +2047,7 @@ impl WinitApp {
             .platform
             .with_state(|state| state.windows.values().cloned().collect::<Vec<_>>());
         for window in windows {
+            window.mark_closed();
             window.callbacks().clear();
         }
     }

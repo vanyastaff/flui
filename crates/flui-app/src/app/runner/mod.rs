@@ -727,36 +727,57 @@ mod tests {
         );
     }
 
-    /// Regression pin for the "No host re-entry" rule on `with_owner_platform`'s
-    /// own rustdoc: since `AppRuntime` folded the realm-facing state and
-    /// `owner_platform` into one `RefCell`, a closure that calls back into
-    /// any function touching that same cell while `with_owner_platform`
-    /// still holds its immutable borrow is a guaranteed `BorrowMutError`
-    /// panic. `dispatch_platform_realm` is the stand-in host op here; the
-    /// same panic would fire for `install_platform_realm`,
-    /// `teardown_platform_realm`, or `install_surface_applier` instead, for
-    /// the identical reason (all of them `borrow_mut()` the same cell).
     #[test]
-    // Substring match, not the full message: `RefCell`'s panic wording
-    // ("already borrowed: BorrowMutError" vs. "already mutably borrowed:
-    // BorrowError" depending on which side re-enters) has varied across
-    // Rust versions and could vary again; "borrow" is the one substring
-    // present in every variant, so this still fails on an unrelated panic
-    // while staying stable across toolchains.
-    #[should_panic(expected = "borrow")]
-    fn with_owner_platform_reentering_dispatch_panics() {
+    fn owner_accessor_and_old_cleanup_do_not_clobber_replacement_host() {
+        let old_guard = OwnerHostClearGuard::arm();
+        flui_platform::headless_platform()
+            .run(Box::new(|owner| {
+                install_owner_platform(owner)?;
+                with_owner_platform(|_old_owner| {
+                    flui_platform::headless_platform()
+                        .run(Box::new(|owner| {
+                            install_owner_platform(owner)?;
+                            Ok(())
+                        }))
+                        .expect("replacement");
+                    APP_RUNTIME.with(|slot| {
+                        let _runtime = slot.borrow_mut();
+                    });
+                });
+                Ok(())
+            }))
+            .expect("first owner");
+        let replacement = APP_RUNTIME.with(|slot| {
+            slot.borrow()
+                .owner_platform
+                .clone()
+                .expect("replacement present")
+        });
+        drop(old_guard);
+        assert!(APP_RUNTIME.with(|slot| {
+            std::rc::Rc::ptr_eq(
+                slot.borrow()
+                    .owner_platform
+                    .as_ref()
+                    .expect("old guard preserved replacement"),
+                &replacement,
+            )
+        }));
+        let removed = APP_RUNTIME.with(|slot| slot.borrow_mut().owner_platform.take());
+        drop(removed);
+    }
+
+    /// Native operations may synchronously dispatch lifecycle events back into
+    /// the runtime. The scoped owner reference must hold no TLS borrow.
+    #[test]
+    fn with_owner_platform_allows_reentrant_dispatch() {
         use flui_platform::headless_platform;
 
         let _clear_guard = OwnerHostClearGuard::arm();
         let platform = headless_platform();
-        let _ = platform.run(Box::new(|owner| {
+        let result = platform.run(Box::new(|owner| {
             install_owner_platform(owner).expect("install owner wake transport");
             with_owner_platform(|_owner| {
-                // Any host op re-entering here panics: `with_owner_platform`
-                // still holds `APP_RUNTIME.borrow()` for the duration of
-                // this closure, and `dispatch_platform_realm` immediately
-                // tries `slot.borrow_mut()` on the very first line of its
-                // own TLS access.
                 let dispatcher = RealmDispatcher {
                     owner_thread: std::thread::current().id(),
                     address: flui_foundation::PresentationAddress {
@@ -774,5 +795,19 @@ mod tests {
             });
             Ok(())
         }));
+        assert!(result.is_ok());
     }
 }
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(in crate::app) mod main_window;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(in crate::app) use main_window::run_application;

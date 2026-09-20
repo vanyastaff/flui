@@ -762,3 +762,29 @@ External counters assert owner affinity, nonrecursive delivery, shutdown capture
 release and rejected work after quit. Windows evidence is cross-compilation,
 not native runtime verification. Mobile/web registration remains explicitly
 unsupported; proxy window creation support is separate from wake/quit support.
+
+### Reveal without changing window mode
+
+`PlatformWindow::show` is distinct from `restore`: restoring also removes
+maximization, while revealing a resident application's existing main window must
+preserve maximized/fullscreen mode and geometry. The operation reveals and
+requests focus; operating-system focus policy still decides whether focus moves.
+AppKit deminiaturizes then orders the window forward. Win32 queries
+`WINDOWPLACEMENT` fallibly and interprets `WPF_RESTORETOMAXIMIZED` only for minimized
+placement, using `SW_SHOW` for non-minimized windows. Winit 0.30.13 Wayland reveal
+is rejected as `WindowShowError::Unsupported` before mutation because unminimize
+and focus are unsupported there. Closed retained windows return `Closed`.
+
+Sources: [winit Window](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html),
+[Win32 WINDOWPLACEMENT](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-windowplacement).
+Headless tests model minimized independently from maximized/fullscreen. Native
+macOS `window_show_probe` covers visible, hidden, minimized, maximized,
+minimized-after-maximized and observed fullscreen transitions; Windows evidence
+is strict cross-compilation, not a native runtime claim.
+
+Win32 show verifies retained callback-Arc identity under the owner context guard
+before reveal and again after callback-capable show/foreground calls. Recycled
+HWND or context addresses cannot redirect a retained wrapper's show operation.
+The portable operation-sequence test asserts that stale identity causes neither
+reveal nor focus. This does not change the separate legacy teardown route or
+claim native Windows runtime verification.

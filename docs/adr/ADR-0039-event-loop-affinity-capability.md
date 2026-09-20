@@ -572,3 +572,100 @@ priority and failed-bootstrap cleanup. It does not certify native Windows or
 Linux delivery. Secondary windows still lack mounted content and a renderer;
 a rendered resident root factory is a separate layer, not implied by this wake
 transport.
+
+## Rendered resident main window
+
+`Application<V, F>` separates the application lifetime from a particular root
+widget tree. Its owner-local `FnMut(&AppHandle) -> V` factory may capture `Rc`
+application data; each invocation creates fresh view state. `StartupWindow::None`
+starts execution services without fonts or a GPU. `ExitPolicy::ExplicitQuit`
+keeps an empty loop alive; the existing last-window policy remains the default.
+The startup-open reservation is installed before services and `on_ready`, so an
+early service completion cannot race initial creation. An `on_ready` quit skips
+the factory.
+
+`AppHandle` sends only show and quit intents. The ingress mutex serializes show
+admission, bounded coalesced result receivers, checked-out installation and the
+automatic-exit fence. `MainWindowRequest` uses `ClaimSlot` for a reply, not native
+resource ownership: dropping the receiver does not cancel accepted show intent.
+Native reopen enters the same controller without creating a result receiver.
+Beginning close supersedes an active reveal batch. Show requests admitted during
+disposal, including after native close returns but before the old reveal settles,
+reserve the next generation. Cancelling the old batch cannot consume those
+requests. The close fence ends only after addressed disposal actually removes
+the old presentation; quit cancels both active and queued generations.
+A successful reply proves installation and a redraw request, not GPU presentation
+or permission to take keyboard focus.
+
+The desktop wrapper and resident controller share `install_desktop_window`.
+Renderer, realm, root mount, input/frame callbacks and rebuild registration belong
+to each window. Clipboard, execution services, configured application services,
+exit hooks and the artifact watcher belong to the loop. The main redraw target
+and deadline/recovery hook are rebound on recreation. Secondary-window content
+and rendering remain a separate API gap.
+
+Factory and installer unwinds become typed window failures after rollback. A
+later failed request leaves the controller available for another show; startup
+failure returns `AppRunError`. Reply delivery and user error observers run outside
+runtime and ingress borrows. A panicking error observer is retired; invocation
+and captured-value destruction have separate boundaries. The first host phase
+is recorded at loop readiness, and new roots inherit subsequent host observations
+rather than inventing a resume because a window opened. This is not evidence of
+new native OS-suspend event wiring.
+
+The model follows the separation of window lifetime from application lifetime in
+[Iced's daemon](https://docs.rs/iced/0.14.0/iced/fn.daemon.html) and owner-context
+window creation in [GPUI](https://docs.rs/gpui/0.2.2/gpui/struct.App.html#method.open_window).
+FLUI uses a closed command vocabulary and retained declarative root trees rather
+than sending arbitrary UI closures between threads.
+
+Verification combines headless admission/pending/failure tests, facade-only
+consumers under both dependency names, and `scripts/check-resident-reopen.py`.
+The native fixture requires actual rendered counter input, native close,
+LaunchServices reopen in the same PID, fresh local state over persistent data,
+second-window input, and ordinary explicit quit. Its cleanup signal on a failed
+probe is never counted as a successful shutdown.
+
+### Scoped owner access and native re-entry
+
+The earlier no-host-re-entry rule is superseded: creating or revealing a native
+window can synchronously deliver focus/close callbacks, so holding the runtime
+`RefCell` borrow across an owner operation is incorrect. The runtime privately
+stores `Rc<OwnerPlatform>`; the accessor clones that internal reference, ends the
+borrow, then calls a closure receiving only `&OwnerPlatform`. This follows
+[std::rc](https://doc.rust-lang.org/std/rc/index.html): shared owner-local lifetime,
+not cross-thread capability or a public Clone implementation. The existing
+frame-phase admission check still runs before acquisition.
+
+The strong reference protects memory, not loop validity. A controller rechecks
+its loop identity and quit admission after native calls and user callbacks, and
+closes an obsolete native result rather than publishing it. Scoped host cleanup
+owns the first successful installation after it was armed; a later installation
+has another checked generation, so an old cleanup guard cannot erase it. Replaced
+and cleared owner references are dropped outside runtime borrows. Tests cover
+reentrant dispatch, replacement during installation and stale cleanup guards.
+
+### Pending-main failure and callback teardown
+
+Each pending native creation has an immutable batch identity and a completion
+state. Owner claiming and worker notification failure serialize on that state:
+a failed post cannot retroactively cancel an already claimed payload or a later
+batch. A failed post settles its replies and releases admission accounting on the
+worker, outside locks. One bounded recovery post and an independent exit-policy
+reevaluation request arrange owner cleanup; permanently failing native delivery
+still requires a later owner event or shutdown for native resource cleanup.
+Queued next-generation requests remain distinct. Final reply success is decided
+under the same ingress lock as quit, so a previously admitted quit wins.
+
+Controller teardown independently takes and destroys factory and error-observer
+captures under separate containment boundaries. A factory capture unwind cannot
+make an observer capture unwind abort the process. The subprocess regression
+requires both destructors to run and ordinary windowless shutdown to return.
+
+An already recorded pending failure retains its owner-local error notification
+through quit. Cancellation consumes that notification once, fences admission,
+closes and drops any delivered native payload, then calls the error observer.
+Reporting is separate from reply settlement: terminal cleanup cannot settle a
+replacement batch or replay a failure already reported during normal recovery.
+An observer may reenter or panic without skipping native cleanup or reopening
+the terminal controller.

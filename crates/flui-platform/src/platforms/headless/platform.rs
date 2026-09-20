@@ -765,6 +765,8 @@ struct MockWindowState {
     focused: bool,
     visible: bool,
     maximized: bool,
+    minimized: bool,
+    closed: bool,
     fullscreen: bool,
     hovered: bool,
     modifiers: keyboard_types::Modifiers,
@@ -782,6 +784,8 @@ impl Clone for MockWindowState {
             focused: self.focused,
             visible: self.visible,
             maximized: self.maximized,
+            minimized: self.minimized,
+            closed: self.closed,
             fullscreen: self.fullscreen,
             hovered: self.hovered,
             modifiers: self.modifiers,
@@ -810,6 +814,8 @@ impl MockWindow {
                 focused: true,
                 visible: options.visible,
                 maximized: false,
+                minimized: false,
+                closed: false,
                 fullscreen: false,
                 hovered: false,
                 modifiers: keyboard_types::Modifiers::empty(),
@@ -894,7 +900,11 @@ impl MockWindow {
     /// Reached from both routes — [`crate::traits::PlatformWindow::close`] and
     /// [`Self::simulate_close`] — so the two cannot drift apart.
     fn complete_close(&self) {
-        self.state.lock().visible = false;
+        {
+            let mut state = self.state.lock();
+            state.visible = false;
+            state.closed = true;
+        }
         self.callbacks.dispatch_close();
         self.notify_closed();
         // After the global `Closed`, never before: a handler that inspects the
@@ -1212,14 +1222,25 @@ impl crate::traits::PlatformWindow for MockWindow {
         self.state.lock().title = title.to_string();
     }
 
+    fn show(&self) -> Result<(), crate::WindowShowError> {
+        let mut state = self.state.lock();
+        if state.closed {
+            return Err(crate::WindowShowError::Closed);
+        }
+        state.minimized = false;
+        state.visible = true;
+        state.focused = true;
+        Ok(())
+    }
+
     fn activate(&self) {
         self.state.lock().focused = true;
     }
 
     fn minimize(&self) {
         let mut state = self.state.lock();
-        state.maximized = false;
-        state.fullscreen = false;
+        state.minimized = true;
+        state.focused = false;
     }
 
     fn maximize(&self) {
@@ -1230,6 +1251,7 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn restore(&self) {
         let mut state = self.state.lock();
+        state.minimized = false;
         state.maximized = false;
         state.fullscreen = false;
     }
@@ -1591,6 +1613,45 @@ impl Clipboard for MockClipboard {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn show_preserves_window_modes_and_rejects_closed_windows() {
+        let platform = HeadlessPlatform::new();
+        for (maximized, fullscreen, minimized, visible) in [
+            (false, false, false, true),
+            (false, false, false, false),
+            (false, false, true, true),
+            (true, false, false, true),
+            (true, false, true, true),
+            (false, true, false, true),
+        ] {
+            let window = platform
+                .open_window(WindowOptions::default())
+                .expect("window");
+            let mock = window.as_any().downcast_ref::<MockWindow>().expect("mock");
+            if maximized {
+                window.maximize();
+            }
+            if fullscreen {
+                window.toggle_fullscreen();
+            }
+            if minimized {
+                window.minimize();
+            }
+            mock.state.lock().visible = visible;
+            let bounds = window.bounds();
+            window.show().expect("show");
+            window.show().expect("repeated show");
+            assert!(window.is_visible());
+            assert!(window.is_focused());
+            assert!(!mock.state.lock().minimized);
+            assert_eq!(window.bounds(), bounds);
+            assert_eq!(mock.state.lock().maximized, maximized);
+            assert_eq!(mock.state.lock().fullscreen, fullscreen);
+            window.close();
+            assert!(matches!(window.show(), Err(crate::WindowShowError::Closed)));
+        }
+    }
+
     #[test]
     fn automatic_exit_closes_retained_owner_signal_before_quit_callback() {
         for close_window in [false, true] {

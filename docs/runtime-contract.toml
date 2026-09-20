@@ -113,6 +113,7 @@ declarations = [
     "pub use flui_log::{AppIdentity, AppleBundleId};",
     "pub use flui_view::{ BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView, StatelessElement, StatelessView, View, };",
     "pub mod prelude {",
+    "pub use app::{ AppControlError, AppHandle, AppRunError, AppWindowError, Application, MainWindowRequest, StartupWindow, };",
 ]
 
 [[export_root]]
@@ -133,6 +134,8 @@ declarations = [
     "pub use runtime::{ExitPolicy, WindowPolicy};",
     "pub use flui_view::{LifecycleHook, RecoveredAt};",
     "pub use flui_view::{RootRenderElement, RootRenderView};",
+    "pub use application::{AppRunError, Application, StartupWindow};",
+    "pub use application_control::{AppControlError, AppHandle, AppWindowError, MainWindowRequest};",
 ]
 
 [[export_root]]
@@ -162,7 +165,7 @@ declarations = [
     "pub use platforms::WinitPlatform;",
     "pub use shared::{PlatformHandlers, WindowCallbacks};",
     "pub use task::{Task, TaskLabel};",
-    "pub use traits::{ AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions, };",
+    "pub use traits::{ AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions, WindowShowError, };",
     "pub use traits::{ OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform, WaitError, WakeRegistrationError, WindowOpen, };",
     "pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {",
     "pub fn headless_platform() -> Box<dyn Platform> {",
@@ -491,8 +494,8 @@ Headless tests drive the public owner-turn transport after worker resolution \
 with zero realms and after the originating window closes.
 
 Secondary windows still have no widget root, renderer or frame callback. \
-A resident root factory and rendered secondary-window installer remain work \
-beyond this transport. Native macOS owner delivery is separately exercised \
+The resident Application now owns a rendered designated main-window factory; \
+rendered secondary windows remain separate work. Native macOS owner delivery is separately exercised \
 by the bounded owner_wake_probe; Windows has compile-only evidence here.
 
 It remains one TLS-scoped instance per owner thread (`APP_RUNTIME` in \
@@ -2731,7 +2734,7 @@ contains = "pub fn run_app_impl"
 classification = "stable-candidate"
 thread_affinity = "call on the process main thread; blocks until the event loop exits; standalone AppKit returns through Rust teardown"
 owner = "application composition root (runner)"
-failure_semantics = "returns unit; bootstrap failures are logged and the loop exits — no Result surface today"
+failure_semantics = "legacy desktop wrapper delegates Application and panics after cleanup on fatal startup error; Application::run exposes a typed Result"
 consumers = ["flui facade re-export", "examples"]
 
 [[surface]]
@@ -2743,7 +2746,7 @@ contains = "pub fn run_app_with_config_impl"
 classification = "stable-candidate"
 thread_affinity = "call on the process main thread; blocks until the event loop exits"
 owner = "application composition root (runner)"
-failure_semantics = "returns unit; bootstrap failures are logged and the loop exits — no Result surface today"
+failure_semantics = "legacy desktop wrapper delegates Application and panics after cleanup on fatal startup error; Application::run exposes a typed Result"
 consumers = ["flui facade re-export", "examples"]
 
 [[surface]]
@@ -2854,7 +2857,7 @@ thread_affinity = "TaskSpawner/ServicePublisher/CancellationSignal are Clone + S
 owner = "the lifecycle layer over the execution lanes (issue #558, ADR-0049): every unit of background work has a named owner — tasks/workers are owned by #[must_use] cancel-on-drop handles (no detach; work that must outlive its owner is a named Service), services are owned by AppRuntime's registry, started from AppConfig::with_service and shut down cancel-first with a shared deadline BEFORE the pools close"
 failure_semantics = "spawns return Result<_, SpawnError>; join evidence is TaskOutcome (Completed | Cancelled | Panicked) on a dedicated capacity-one channel per unit, joins are deadline-bounded (join_within returns the still-owning handle on timeout); publishing into a dead receiver is PublishError::OwnerGone (late results are inert, never a wake); panics are contained at the lifecycle boundary and reported as evidence"
 consumers = [
-    "AppConfig::with_service -> bootstrap_desktop -> AppRuntime::start_service (production wiring)",
+    "AppConfig::with_service -> run_application loop bootstrap -> AppRuntime::start_service (production wiring)",
     "teardown_platform_realm (staged shutdown before pool shutdown)",
     "AppRuntime::should_exit (KeepsAppAlive veto)",
 ]
@@ -3985,3 +3988,87 @@ thread_affinity = "Send + Sync; copyable error value"
 owner = "returned by weak lifecycle capability operations"
 failure_semantics = "typed closed capability result"
 consumers = ["flui::view widget lifecycle hooks", "headless mounted facade consumer"]
+
+[[surface]]
+path = "flui_app::Application"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application.rs"
+contains = "pub struct Application"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::StartupWindow"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application.rs"
+contains = "pub enum StartupWindow"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::AppRunError"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application.rs"
+contains = "pub enum AppRunError"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::AppHandle"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application_control.rs"
+contains = "pub struct AppHandle"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::MainWindowRequest"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application_control.rs"
+contains = "pub struct MainWindowRequest"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::AppControlError"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application_control.rs"
+contains = "pub enum AppControlError"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::AppWindowError"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application_control.rs"
+contains = "pub enum AppWindowError"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]

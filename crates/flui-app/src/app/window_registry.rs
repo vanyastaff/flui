@@ -97,6 +97,7 @@ impl WindowRegistry {
     /// [`WindowId`] themselves. Performs the install-time self-check read
     /// immediately after inserting: the very next [`Self::resolve`] must
     /// see exactly what was just written.
+    #[cfg(any(test, target_os = "android", target_os = "ios", target_arch = "wasm32"))]
     pub(crate) fn register_window(
         &mut self,
         window: &Arc<dyn PlatformWindow>,

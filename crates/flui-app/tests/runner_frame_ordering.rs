@@ -27,6 +27,7 @@ const RUNNER_SOURCES: &[&str] = &[
     include_str!("../src/app/runner/mod.rs"),
     include_str!("../src/app/runner/android.rs"),
     include_str!("../src/app/runner/desktop.rs"),
+    include_str!("../src/app/runner/main_window.rs"),
     include_str!("../src/app/runner/device_recovery.rs"),
     include_str!("../src/app/runner/frame_pacing.rs"),
     include_str!("../src/app/runner/host.rs"),

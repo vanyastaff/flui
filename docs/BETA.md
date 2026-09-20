@@ -82,15 +82,10 @@ replacement and destruction, hostile panic payloads, quit fences and stale
 per-run delegates. AppKit's default untitled-document creation is suppressed;
 the callback receives a signal and owns the decision to show or create UI.
 
-This closes the native signal prerequisite, not resident application acceptance.
-The app runtime still needs a loop-owned root factory and public resident
-control, rendered secondary-window integration, and pending window creation
-that does not require a surviving realm. Desktop bootstrap currently combines
-once-per-loop services/executors/watchers with per-window renderer, mount,
-input and frame setup; reopening must separate those responsibilities without
-restarting application services. Native background-launch rendering remains a
-separate unresolved workflow. No broader backend rewrite is implied by these
-prerequisites.
+The native signal is one part of resident application support. The rendered
+main-window factory, public control and window-independent pending creation are
+now covered by the resident validation below. Rendered secondary-window content
+and native background-launch rendering remain separate workflow gaps.
 
 Primary references: [AppKit last-window termination policy](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldterminateafterlastwindowclosed(_:))
 separates window closure from application termination; [winit application lifecycle](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)
@@ -415,7 +410,41 @@ The owner callback is fallibly registered, signals are coalesced, and quit fence
 new work immediately. Physical posting failure remains an explicit progress
 limit, with cancellation and reservation release rather than spinning retries.
 
-This does not complete resident UI: a reusable rendered root installer, loop-root
-factory, and public resident controller remain required. Secondary windows still
-have no mounted content or frame renderer. Once-per-loop services, executors and
-watchers must remain separate from per-window renderer/mount/input setup.
+The subsequent Application increment supplies a rendered designated main-window
+factory and public control handle through `flui::app`. Secondary windows still
+have no mounted content or frame renderer. Full mobile lifecycle and native
+OS-suspend transport are not established by this desktop result.
+
+
+### Resident main-window validation
+
+Desktop `flui::app::Application` owns a reusable rendered main-window factory.
+`StartupWindow::None` and `ExitPolicy::ExplicitQuit` support a windowless owner
+loop; a Send + Sync `AppHandle` admits show/quit commands without transferring UI
+closures between threads. A new main window has fresh widget state while captured
+application data persists. Existing-window show preserves maximized/fullscreen
+mode; unsupported Wayland reveal returns a typed error rather than silent success.
+
+The sole-facade native counter passed two modes: startup with a window, and a
+worker-requested first window after windowless startup. Real input changed its
+counter, native close disposed the root, and OS reopen recreated rendered content
+in the original PID. Local state reset while application state persisted. Both
+runs ended through AppHandle quit with ordinary exit 0 and cooperative service
+cancellation/drop. The windowless case dropped the show receiver immediately,
+proving admitted intent survives receiver abandonment. A non-keeping service did
+not mask the explicit exit policy. Feature-enabled tests separately verify a real
+artifact watcher retains its thread across failed reopen attempts and stops with
+the loop. Windows show has strict cross-compilation evidence; live mode tests are
+macOS-only.
+
+Run `python3.12 -B scripts/check-resident-reopen.py prepare /tmp/flui-resident-probe`,
+then `python3.12 -B scripts/check-resident-reopen.py run /tmp/flui-resident-probe`
+with an active macOS GUI and CUA interaction. Add `--windowless` to run the worker
+startup scenario. The driver requires GPU presentation after each initialization,
+input and disposal witnesses, same-process OS reopen and normal return. Failure
+cleanup signals never count as success.
+
+This covers one designated rendered main window. `open_secondary_window` still
+has no widget-content/renderer API. Full mobile lifecycle, live Windows runtime
+behavior, and native OS-suspend transport remain separate work; these desktop
+results do not imply beta release readiness by themselves.

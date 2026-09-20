@@ -358,6 +358,12 @@ impl PlatformToUi {
             #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
             Self::Shutdown => realm.stop_presentations(),
             Self::Lifecycle(new) => {
+                #[cfg(all(
+                    not(target_os = "android"),
+                    not(target_os = "ios"),
+                    not(target_arch = "wasm32")
+                ))]
+                APP_RUNTIME.with(|slot| slot.borrow_mut().main_host_lifecycle = new);
                 realm.update_host_lifecycle(new);
             }
         }
@@ -414,6 +420,7 @@ pub(super) fn install_surface_applier(
 /// all. A second, non-displacing realm (a genuinely independent window
 /// alongside this one) is installed through
 /// [`install_realm_alongside`] instead.
+#[cfg(any(test, target_os = "android", target_os = "ios", target_arch = "wasm32"))]
 pub(super) fn install_platform_realm(
     realm: crate::app::ui_realm::UiRealm,
     window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
@@ -1255,6 +1262,11 @@ pub(super) fn dispatch_platform_realm(
         ))
         .err();
         preserve_first_lifecycle_panic(&mut first_panic, completions, "secondary completion drain");
+        let main = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            super::main_window::drive_main_window,
+        ))
+        .err();
+        preserve_first_lifecycle_panic(&mut first_panic, main, "main window drain");
     }
     if let Some(payload) = first_panic {
         std::panic::resume_unwind(payload);

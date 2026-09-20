@@ -444,6 +444,8 @@ pub enum ExitPolicy {
     /// The default policy.
     #[default]
     OnLastWindowClosed,
+    /// Remain alive without windows until explicitly asked to quit.
+    ExplicitQuit,
 }
 
 /// Governs what a SECOND top-level window becomes, relative to the realm(s)
@@ -602,7 +604,8 @@ pub(crate) struct AppRuntime {
     /// The loop-scoped owner-thread platform capability (ADR-0039 §6).
     /// Deliberately *not* cleared by realm teardown — the loop may host
     /// another realm before it exits (hot-restart does exactly this).
-    pub(super) owner_platform: Option<OwnerPlatform>,
+    pub(super) owner_platform: Option<std::rc::Rc<OwnerPlatform>>,
+    pub(super) owner_install_generation: u64,
     /// A clone of the currently-dispatched realm's scheduler, held ONLY
     /// while `dispatch_platform_realm` (in `runner.rs`) has taken that
     /// realm's slot out of `realms` above for the duration of a queued task.
@@ -660,6 +663,24 @@ pub(crate) struct AppRuntime {
         not(target_arch = "wasm32")
     ))]
     pub(super) loop_identity: Arc<()>,
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) main_controller: Option<super::runner::main_window::MainController>,
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) main_ingress: Option<Arc<super::application_control::Ingress>>,
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) main_host_lifecycle: flui_scheduler::AppLifecycleState,
     /// Accepted loop-owned window requests, including currently polled/installing entries.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) pending_window_reservations: Arc<std::sync::atomic::AtomicUsize>,
@@ -757,6 +778,7 @@ impl AppRuntime {
             registry: WindowRegistry::new(),
             close_requests: Arc::new(super::close_request::CloseRequestRouter::new()),
             owner_platform: None,
+            owner_install_generation: 0,
             dispatched_scheduler: None,
             dispatched_realm_id: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -774,6 +796,24 @@ impl AppRuntime {
                 not(target_arch = "wasm32")
             ))]
             loop_identity: Arc::new(()),
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            main_controller: None,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            main_ingress: None,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            main_host_lifecycle: flui_scheduler::AppLifecycleState::Detached,
             pending_realm_mutations: Vec::new(),
             services: OnceCell::new(),
             execution: OnceCell::new(),
@@ -1377,6 +1417,7 @@ impl AppRuntime {
     pub(super) fn should_exit(&mut self, policy: ExitPolicy) -> (bool, Vec<RealmSlot>) {
         let removed = self.drain_pending_realm_mutations();
         let exit = match policy {
+            ExitPolicy::ExplicitQuit => false,
             // A running service that declared `ServiceLifetime::KeepsAppAlive`
             // (issue #558) vetoes exit the same way a queued install does:
             // messenger-like applications survive their last window closing

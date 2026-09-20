@@ -355,3 +355,40 @@ pub fn observe(handle: &LifecycleHandle) -> Result<(Option<flui::view::AppLifecy
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn external_consumer_names_resident_application_and_renamed_facade() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = r#"
+use flui::app::{Application, AppHandle, AppRunError, AppControlError, AppWindowError, MainWindowRequest, StartupWindow, ExitPolicy, AppConfig};
+use std::{cell::Cell, rc::Rc, future::Future};
+fn send_sync<T: Send + Sync>() {}
+pub fn application() {
+    send_sync::<AppHandle>();
+    let model = Rc::new(Cell::new(0));
+    let _app = Application::new(move |_handle: &AppHandle| {
+        model.set(model.get() + 1);
+        flui::widgets::Text::new("fresh root")
+    }).with_startup_window(StartupWindow::None)
+      .with_config(AppConfig::new().with_exit_policy(ExitPolicy::ExplicitQuit))
+      .on_ready(|handle| { let _request = handle.request_show_main_window(); })
+      .on_window_error(|error: &AppWindowError| { let _ = std::error::Error::source(error); });
+}
+pub fn request(handle: &AppHandle) -> Result<MainWindowRequest, AppControlError> { handle.request_show_main_window() }
+pub async fn result(request: MainWindowRequest) -> Result<flui::foundation::PresentationAddress, AppWindowError> { request.await }
+pub fn run_error(error: AppRunError) { let _ = error; }
+"#;
+    for alias in ["flui", "ui"] {
+        let mut dependencies = toml::Table::new();
+        dependencies.insert(alias.into(), dependency("flui", root, false));
+        let output = compile_consumer(
+            dependencies,
+            &source.replace("flui::", &format!("{alias}::")),
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

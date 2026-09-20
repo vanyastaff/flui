@@ -18,6 +18,24 @@ use super::{
     text_input::PlatformTextInput,
 };
 
+/// Failure to show an existing window without changing its display mode.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum WindowShowError {
+    /// This backend cannot show and request focus for an existing window.
+    #[error("showing an existing window is unsupported")]
+    Unsupported,
+    /// The native window has closed.
+    #[error("the window is closed")]
+    Closed,
+    /// A native operation failed.
+    #[error("could not show the window: {message}")]
+    Native {
+        /// Native failure description.
+        message: String,
+    },
+}
+
 // ==================== Value Types ====================
 
 /// Window appearance (light/dark theme)
@@ -331,7 +349,18 @@ pub trait PlatformWindow: Send + Sync {
         let _ = title;
     }
 
-    /// Activate (bring to front / focus) the window
+    /// Show this window, unminimizing it and requesting foreground focus.
+    /// Preserves maximized/fullscreen mode and the existing widget tree.
+    /// Focus is a request: the window manager may decline to grant it.
+    ///
+    /// # Errors
+    /// Returns unsupported when the backend cannot perform this operation,
+    /// closed after native teardown, or a native operation failure.
+    fn show(&self) -> Result<(), WindowShowError> {
+        Err(WindowShowError::Unsupported)
+    }
+
+    /// Activate (bring to front / focus) the window.
     fn activate(&self) {}
 
     /// Minimize the window
@@ -779,5 +808,6 @@ mod tests {
         assert_eq!(window.scale_factor(), 2.0);
         assert!(window.is_focused());
         assert!(window.is_visible());
+        assert_eq!(window.show(), Err(WindowShowError::Unsupported));
     }
 }

@@ -31,6 +31,7 @@ pub(crate) struct TestWindow {
     physical_size: Size<DevicePixels>,
     logical_size: Size<Pixels>,
     focused: bool,
+    on_show: Option<Arc<dyn Fn() + Send + Sync>>,
     visible: bool,
     /// Incremented by every [`PlatformWindow::request_redraw`]; hand the
     /// [`Self::redraw_calls_handle`] to the asserting side.
@@ -74,6 +75,7 @@ impl TestWindow {
             physical_size: Size::default(),
             logical_size: Size::default(),
             focused: false,
+            on_show: None,
             visible: true,
             redraw_calls: Arc::new(AtomicU32::new(0)),
             redraw_threads: Arc::new(parking_lot::Mutex::new(Vec::new())),
@@ -101,6 +103,11 @@ impl TestWindow {
     ) -> Self {
         self.physical_size = physical;
         self.logical_size = logical;
+        self
+    }
+
+    pub(crate) fn with_show_callback(mut self, callback: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.on_show = Some(callback);
         self
     }
 
@@ -158,6 +165,13 @@ impl TestWindow {
 }
 
 impl PlatformWindow for TestWindow {
+    fn show(&self) -> Result<(), flui_platform::WindowShowError> {
+        if let Some(callback) = &self.on_show {
+            callback();
+        }
+        Ok(())
+    }
+
     fn id(&self) -> WindowId {
         self.id
     }

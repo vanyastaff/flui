@@ -1015,6 +1015,31 @@ impl PlatformWindow for MacOSWindow {
         });
     }
 
+    fn show(&self) -> Result<(), crate::WindowShowError> {
+        route_on_owner(self.owner, self.owner_is_main, || {
+            if self.closed.load(Ordering::SeqCst) {
+                return Err(crate::WindowShowError::Closed);
+            }
+            // SAFETY: self retains the native window; routing establishes its
+            // owner lane. Deminiaturizing and ordering do not toggle zoom/fullscreen.
+            unsafe {
+                let minimized: bool = msg_send![self.ns_window, isMiniaturized];
+                if minimized {
+                    let _: () = msg_send![self.ns_window, deminiaturize: NIL];
+                }
+                if self.closed.load(Ordering::SeqCst) {
+                    return Err(crate::WindowShowError::Closed);
+                }
+                let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
+            }
+            if self.closed.load(Ordering::SeqCst) {
+                Err(crate::WindowShowError::Closed)
+            } else {
+                Ok(())
+            }
+        })
+    }
+
     fn activate(&self) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
