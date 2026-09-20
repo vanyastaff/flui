@@ -396,9 +396,25 @@ loops, or foreign-loop embedding. Full CI remains a final-release gate.
 A generated counter built through `flui build desktop` was also launched directly
 from its produced macOS bundle: native UI interaction advanced 0 → 1 → 2, then
 closing the window logged both window close and platform quit and returned exit
-code 0 without a signal. A separate LaunchServices/background launch still showed
-a blank window; that rendering/startup issue remains open and is not covered by
-the direct-launch result.
+code 0 without a signal.
+
+A separate LaunchServices/background launch was recorded here as showing a blank
+window. Re-measured, it does not reproduce. `just macos-launch-render` launches
+one bundled artifact three ways — direct exec, `open`, and `open -g`, which does
+not activate the app — five times each, finds each launch's window by owning PID,
+and photographs it by window number, because a window can hold a live frame pump
+and still show nothing. All fifteen launches rendered the fixture's red, and the
+counter bundle rendered on both LaunchServices routes as well: 10 distinct
+colour buckets in its window content on each of the three routes, the ink being
+the counter's own label (a 107×34 cluster inside a window that is otherwise
+99.94 % one colour). The sentence is therefore not carried forward. The gate is
+validated against a control that draws nothing — an empty AppKit window fails
+three of three launches under both oracles — which is what makes a pass a
+discrimination rather than an absence of measurement. A host that has not
+granted Screen Recording exits "cannot verify" instead of reporting a blank
+window it never saw. The original observation's cause stays unattributed: this is
+a non-reproduction, not an explanation. The gate needs a GUI session, so it
+remains a local manual check like the other native probes.
 
 ### Window-independent owner turns
 

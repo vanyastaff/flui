@@ -303,6 +303,15 @@ macos-ime:
 } }}
 
 [group("test")]
+[doc("Executable launch-route render coverage on a real Mac: builds the colored_box_app example and runs it through scripts/check-macos-launch-render.py, which launches the SAME bundled artifact three ways (direct exec, `open` / LaunchServices, `open -g` / LaunchServices without activation), 5 launches each, finds each launch's window by owning PID in the CoreGraphics window list, and photographs it by window number. The oracle is the pixels of that window, not frames or survival: the fixture paints pure red, and every launch must show it, because a window can exist, hold a live frame pump, and still be blank. A genuinely blank window is the control and fails (see the checker's own validation) — so the gate discriminates instead of merely passing. Needs Screen Recording, which is preflighted: without it the checker exits 2 (CANNOT VERIFY) rather than reporting a blank window it never saw. This closes the LaunchServices half of the blank-window observation in docs/BETA.md. macOS-only by construction; skips with a message on other hosts")]
+macos-launch-render:
+    {{ if os() == "macos" {
+"cargo build -p flui --locked --example colored_box_app\nrc=0\npython3 scripts/check-macos-launch-render.py target/debug/examples/colored_box_app --runs 5 --expect 240,0,0 || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'macos-launch-render CANNOT VERIFY: this host could not take the measurement (Screen Recording not granted, or swiftc missing) — a denied capture is NOT a blank window, so nothing was decided; details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'macos-launch-render FAILED: a launch route was refused, put no window on screen, or put up a window with nothing drawn in it — details and images above'\nfi\nexit \"$rc\""
+} else {
+"echo 'Skipping macos-launch-render on this host: the gate photographs a real window on a real display, so it needs macOS with an active GUI session; on a Mac run: just macos-launch-render'"
+} }}
+
+[group("test")]
 [doc("Runs the iOS demo on an iOS Simulator (the only executing coverage of the native UIKit backend). Builds examples/ios_demo for aarch64-apple-ios-sim, stages it into a minimal .app, boots a simulator, installs and launches it, captures a screenshot, and asserts the app got as far as a created Metal device and a rendered frame — read out of the simulator's unified log, since UIApplicationMain owns the process and no test harness can. macOS-host only (needs Xcode + simctl); skips with a message elsewhere.")]
 ios-sim:
     {{ if os() == "macos" {
