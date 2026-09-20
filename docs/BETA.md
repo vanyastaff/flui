@@ -362,11 +362,29 @@ separately when performed. No new cross-platform runtime or shutdown claim follo
 from artifact discovery alone.
 
 The retained generated counter subsequently passed `flui build desktop` with its
-external `CARGO_TARGET_DIR` (`/tmp/flui-beta-counter-desktop-fixed.log`). Launching
-the resulting bundle through the UI automation service showed a white window;
-directly launching the same bundled executable rendered the counter, and two
-observed pointer clicks changed 18 to 19 to 20. The initial value of that live
-observation was already 18, so it does not establish the initial zero state.
+external `CARGO_TARGET_DIR` (`/tmp/flui-beta-counter-desktop-fixed.log`). The
+launch sequence recorded there showed a white window through the UI automation
+service while a direct launch of the same bundled executable rendered the
+counter; two observed pointer clicks changed 18 to 19 to 20. The initial value of
+that live observation was already 18, so it does not establish the initial zero
+state.
+
+That white window is now attributed, and it is not a launch-route difference: a
+macOS window is ordered front before its first frame is presented
+(`crates/flui-platform/src/platforms/macos/window.rs:359` runs inside
+`open_window`, ahead of the GPU stack and the first `queue.present`), so until a
+frame reaches the compositor the window shows its own background. Measured on a
+3440x1440 display, a window with nothing drawn fills 99.78 % of its rect with
+`rgb(240,240,240)`, against 98.70 % for the same window once the counter is drawn
+— one near-white field either way, separated only by the content. The two
+observations are consistent with warmth rather than with route: a cold launch's
+first frame was still undrawn 2.81 s after its window appeared, while on every
+warm launch since, the window was already drawn at its first sighting; the three
+launch routes were also measured directly and rendered 15/15 and 9/9 across all of
+them. What remains is the fix and not the cause — the first show should be
+deferred until a frame has been presented, and no such deferral exists today:
+`visible` is hardcoded true (`crates/flui-app/src/app/config.rs:384`) and nothing
+reports the first present.
 The close action reached the `Window closed` callback, but the process remained
 inside `NSApplication.run` (`/tmp/flui-beta-counter-bundle-direct.log` and
 `/tmp/flui-beta-counter-close-sample.txt`). At that point, bundle launch and ordinary shutdown
