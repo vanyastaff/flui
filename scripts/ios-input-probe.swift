@@ -91,6 +91,24 @@ private func tapPoint(_ variable: String, _ fallback: String) -> CGVector {
 private let targetTap = tapPoint("FLUI_IOS_PROBE_TARGET_TAP", defaultTargetTap)
 private let emptyTap = tapPoint("FLUI_IOS_PROBE_EMPTY_TAP", defaultEmptyTap)
 
+/// Whether the resume stage must prove the application was still *live* after
+/// the round trip, by advancing its state with a second tap.
+///
+/// Equality of two screenshots cannot carry a retention claim on its own: iOS
+/// keeps a snapshot of the pre-Home frame and displays it again on return, so
+/// "the pixels after Home/return equal the pixels before it" holds whether the
+/// application retained anything or was killed and silently relaunched onto its
+/// own snapshot. The snapshot is, by construction, the frame taken before Home.
+/// What a snapshot cannot do is *advance*: a second tap after the return only
+/// changes the display if a live widget received it, and only leaves the
+/// initial state again if the process is the one that was already running
+/// rather than a fresh launch. Subjects whose target tap advances state (an
+/// incrementing counter) can opt into that stronger oracle; subjects whose tap
+/// is idempotent (selecting an already-selected row) cannot, and their report
+/// says so instead of implying a liveness proof they never made.
+private let postReturnTap = ["1", "true", "yes"].contains(
+    (ProcessInfo.processInfo.environment["FLUI_IOS_PROBE_POST_RETURN_TAP"] ?? "").lowercased())
+
 /// Names this run's evidence directory. The runner's container survives
 /// reinstallation, so evidence written to a fixed path is read back as the next
 /// run's own — a stale screenshot of a stage that never happened is
@@ -184,6 +202,23 @@ final class FluiIOSInputProbe: XCTestCase {
             return finish("CANNOT_VERIFY", "the screen never stopped changing after the return")
         }
 
+        // The liveness half of the round trip, for subjects whose tap advances
+        // state. A system snapshot is the pre-Home frame, so it satisfies an
+        // equality comparison while proving nothing about the process; a touch
+        // that changes the display *and* leaves the initial state again cannot
+        // be a snapshot, and cannot be a fresh launch either — a relaunch would
+        // have reset the state the tap is about to change.
+        var resumedTapped: Measurement?
+        if postReturnTap {
+            app.coordinate(withNormalizedOffset: targetTap).tap()
+            let advanced = measure("resumed-tapped")
+            guard advanced.settled else {
+                return finish("CANNOT_VERIFY", "the screen never stopped changing after the "
+                              + "post-return tap")
+            }
+            resumedTapped = advanced
+        }
+
         app.terminate()
         app.launch()
         guard app.wait(for: .runningForeground, timeout: 30) else {
@@ -218,9 +253,29 @@ final class FluiIOSInputProbe: XCTestCase {
             failures.append("the displayed state after Home/return differs from the displayed state "
                             + "before it: state did not survive the round trip")
         }
+        if let advanced = resumedTapped {
+            // A snapshot of the pre-Home frame cannot respond to a new touch,
+            // and a fresh launch would be showing the initial state the tap is
+            // meant to move away from — so both halves together are the
+            // liveness proof the equality comparison above cannot give.
+            if advanced.crc == resumed.crc {
+                failures.append("a touch after Home/return changed nothing on screen: whatever is "
+                                + "displayed is not a live widget (a system snapshot of the "
+                                + "pre-Home frame satisfies the comparison above)")
+            }
+            if advanced.crc == initial.crc {
+                failures.append("the post-return tap left the screen in the initial state, so the "
+                                + "application was relaunched rather than resumed and the retained "
+                                + "state proved nothing")
+            }
+        }
         if relaunched.crc == tapped.crc {
             failures.append("a fresh launch still displays the tapped state, so the return comparison "
                             + "above cannot fail and proves nothing")
+        }
+        if relaunched.crc != initial.crc {
+            failures.append("a fresh launch did not display the initial state, so it is not the "
+                            + "baseline the return comparison is measured against")
         }
         if emptyTapped.crc != relaunched.crc {
             failures.append("a tap at a point with no target changed the screen, so the tap comparison "
@@ -230,8 +285,13 @@ final class FluiIOSInputProbe: XCTestCase {
         record("tap=\(initial.crc == tapped.crc ? "no-change" : "changed") "
                + "initial=\(hex(initial.crc)) tapped=\(hex(tapped.crc))")
         record("resume=\(resumed.crc == tapped.crc ? "retained" : "lost") "
-               + "resumed=\(hex(resumed.crc))")
-        record("relaunch=\(relaunched.crc == tapped.crc ? "still-tapped" : "reset") "
+               + "resumed=\(hex(resumed.crc)) "
+               + "oracle=\(postReturnTap ? "display+live-touch" : "display-equality-only")")
+        if let advanced = resumedTapped {
+            record("resume-tap=\(advanced.crc == resumed.crc ? "no-change" : "changed") "
+                   + "resumedTapped=\(hex(advanced.crc))")
+        }
+        record("relaunch=\(relaunched.crc == initial.crc ? "reset" : "not-initial") "
                + "relaunched=\(hex(relaunched.crc))")
         record("no-tap=\(emptyTapped.crc == relaunched.crc ? "unchanged" : "changed") "
                + "emptyTapped=\(hex(emptyTapped.crc))")
@@ -242,8 +302,16 @@ final class FluiIOSInputProbe: XCTestCase {
         record("tapPoints=target(\(targetTap.dx),\(targetTap.dy)) empty(\(emptyTap.dx),\(emptyTap.dy))")
 
         if failures.isEmpty {
-            finish("PASS", "real touch changed the display, the change survived Home/return, and both "
-                   + "controls behaved: a fresh launch reset it and a tap on no target did not")
+            // The parenthetical is not decoration: equality alone cannot
+            // exclude a system snapshot of the pre-Home frame, so a pass that
+            // rests on equality must say which oracle carried it rather than
+            // letting the sentence read as a liveness proof.
+            let carried = postReturnTap
+                ? "a touch after the return still reached a live widget"
+                : "the display matched, by equality alone"
+            finish("PASS", "real touch changed the display, the change survived Home/return "
+                   + "(\(carried)), and both controls behaved: a fresh launch showed the initial "
+                   + "state and a tap on no target did not")
         } else {
             finish("FAIL", failures.joined(separator: "; "))
         }

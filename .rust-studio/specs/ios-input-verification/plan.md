@@ -7,8 +7,11 @@ lifecycle foundation"). What was missing was not a fix but an *instrument*: noth
 could put a `UITouch` into an iOS application, and nothing could tell whether a touch had reached a
 widget. This task adds both (`scripts/check-ios-input.py`, `scripts/ios-input-probe.swift`,
 `just ios-input-check`), measures the candidate the sentence names, validates the gate against
-subjects that must fail, and rewrites the record to what was measured. The residual is stated in §6,
-not hidden — including a layout observation the images surfaced that this gate does **not** close.
+subjects that must fail, and rewrites the record to what was measured. It also closes a hole in the
+first version of the gate: the `resume` stage's display comparison is satisfied by the system's own
+snapshot of the pre-Home frame, so retention now requires a post-return touch to *advance* the display
+where the subject can support it (§2.5). The residual is stated in §6, not hidden — including a layout
+observation the images surfaced that this gate does **not** close.
 
 ## 1. Task and where it comes from
 
@@ -70,15 +73,44 @@ a moving one is comparing noise. The probe polls two consecutive screenshots 0.4
 stage when they agree byte-for-byte, with a 25 s deadline; a screen that never stabilises is
 CANNOT_VERIFY, not a verdict. §4.1 shows that arm reached.
 
+### 2.5 Display equality cannot carry a retention claim (measured 2026-09-20)
+
+The `resume` stage compares the frame after Home/return with the frame before it. **That comparison is
+satisfiable by a screen that is not running at all**: iOS keeps a snapshot of the pre-Home frame and a
+returning application is shown that snapshot until it draws, so an application that was killed and
+never resumed satisfies "the display is unchanged". Equality therefore measures the *pixels*, not the
+*process*, and the claim the sentence in §1 asks about — retained state — needs the process.
+
+Two oracles were considered for the process half. A PID read back from the device is not available: the
+probe cannot ask the simulator for the application's process identity, and `XCUIApplication.state`
+reports what the automation channel believes, not what the display shows. The oracle chosen is a
+**second real touch after the return that must advance the display**: tapping the target again must
+move the screen to a state it was not in, which a snapshot cannot do, and which a relaunched
+application would reach from the wrong starting point.
+
+The oracle needs a subject whose display *advances* per tap, and the two subjects differ on exactly
+that. The generated counter's `Increment` button accumulates (0 → 1 → 2), so it can carry the oracle.
+The Material demo's list rows are idempotent — tapping the selected row again is a correct application
+doing nothing — so requiring an advance there would fail a correct application. The oracle is therefore
+opt-in (`--post-return-tap`), the run's report names which oracle carried the claim
+(`oracle=display+live-touch` / `oracle=display-equality-only`), and the demo is measured by equality
+with that fact stated rather than hidden.
+
 ## 3. The gate
 
 `scripts/check-ios-input.py` driving `scripts/ios-input-probe.swift`, via `just ios-input-check <udid>`
 (the in-repo demo) or `just ios-input-check-app <app> <udid> …` (any staged `.app`).
 
-- **Four stages in one launch**, two of them controls: a real tap must change the display; Home then
-  return must still display the change; a fresh launch must reset it (otherwise the return comparison
-  could not have failed and proves nothing); a real tap at a point with no target must change nothing
-  (otherwise the tap comparison does not distinguish a hit from any touch).
+- **Five stages in one launch**, two of them controls: a real tap must change the display; Home then
+  return must still display the change; a real tap at a point with no target must change nothing
+  (otherwise the tap comparison does not distinguish a hit from any touch); a fresh launch must reset
+  it (otherwise the return comparison could not have failed and proves nothing); and — with
+  `--post-return-tap`, when the subject's display advances per tap — a second real tap after the return
+  must advance it again (otherwise the resumed screen is the system's snapshot and not a live
+  application, see §2.5).
+- **Every tap must lie inside the compared region**, and this is enforced, not documented: a no-target
+  control measured outside the window it is a control for cannot fail. §4.2 is why the default point
+  moved.
 - **The instrument is built, not linked.** A `.xctest` bundle is compiled with `swiftc` against the
   simulator SDK's XCTest, the test host is Apple's `XCTRunner.app`, and the two are joined by a
   hand-written version-2 `.xctestrun` run with `xcodebuild test-without-building`. No Xcode project
@@ -114,17 +146,27 @@ CANNOT_VERIFY, not a verdict. §4.1 shows that arm reached.
 
 | subject | expected | measured |
 |---|---|---|
-| `dev.flui.ios-demo`, Material, interactive | PASS | exit 0, all four stages |
-| `dev.flui.beta-counter`, generated, interactive | PASS | exit 0, all four stages |
+| `dev.flui.ios-demo`, Material, interactive | PASS | exit 0, four stages, `oracle=display-equality-only` |
+| `dev.flui.beta-counter`, generated, interactive | PASS | exit 0, four stages |
 | a UIKit app that draws and installs **no** touch handling | FAIL | exit 1, "the tap changed nothing on screen", and its own relaunch control adds "so the return comparison above cannot fail and proves nothing" |
 | an animating app, whose screen never stops changing | CANNOT VERIFY | exit 2, "the screen never stopped changing at 'initial'" |
 | an unknown simulator | CANNOT VERIFY | exit 2, "not one available simulator" |
+| a malformed `--region`, or a tap outside it | CANNOT VERIFY | exit 2, rejected before anything is launched |
+| `dev.flui.ios-demo` **with** `--post-return-tap` | FAIL | exit 1, "a touch after Home/return changed nothing on screen" — the oracle refusing an idempotent subject, which is why it is opt-in and not the default |
+| a UIKit app that **accumulates** per tap, with `--post-return-tap` | PASS | exit 0, `dfc58830 → 855a4776 → 855a4776 → becbf2bf (advanced) → dfc58830 (reset) → dfc58830 (no tap)`, `oracle=display+live-touch` |
 
 The touch-ignoring control draws a coloured field and a label (ink 11.05 %), so its failure is
 attributable to the touch and not to a screen that was blank to begin with. Each failure mode the gate
-can reach was reached.
+can reach was reached, and the last two arms are what make the stronger resume oracle a discrimination
+rather than an assertion: it rejects the subject that cannot carry it and passes the subject that can.
 
-### 4.2 Three defects the validation exposed, each of which had produced a confident wrong answer
+The accumulating subject is a UIKit application (`/private/tmp/flui-ios-accum`, source kept for the
+session), not a flui one, and that is deliberate: what the arm validates is a *harness* property — a
+live widget still responds after the round trip — and the accumulating flui artifact, the generated
+counter, could not be rebuilt on this host (§6). The framework property the gate claims for the counter
+remains carried by the equality oracle plus the relaunch control.
+
+### 4.2 Four defects the validation exposed, each of which had produced a confident wrong answer
 
 - **A predecessor run's evidence was read as this run's.** The test host's container survives
   reinstallation and the probe wrote to a fixed path inside it, so screenshots from an earlier subject
@@ -144,18 +186,28 @@ can reach was reached.
   there was no widget to reach. A first stage below 0.05 % ink is now CANNOT VERIFY — the same "was
   anything drawn at all" distinction the macOS gate draws with its colour oracle, and the reason that
   gate's blank control fails both of its oracles rather than one.
+- **The no-target control was measured outside its own window.** The demo's default empty tap sat at
+  y 0.035, above the compared region's 6 % top edge, so a touch that *had* changed the display there
+  would still have been reported as an unchanged one: the control could only ever pass. This was found
+  by asking where on the demo's home screen a touch has no target at all and answering it from the
+  frame — a band-by-band profile shows the app bar (top 11 %, colour `#fef7ff`) is the only target-free
+  area, and the app bar's centre is now the default point. The invariant is enforced in the checker, so
+  the same mistake cannot be made silently with a different subject: a tap outside the region is
+  refused before anything is launched.
 
-Two of the three would have shipped as false claims about the framework if the validation had only
-been run against subjects expected to pass.
+Two of the first three would have shipped as false claims about the framework if the validation had only
+been run against subjects expected to pass; the fourth would have shipped a control that could not fail
+in the record that cites it as what makes the pass falsifiable.
 
 ## 5. The record, corrected
 
 `docs/BETA.md` § "iOS execution lifecycle foundation" now carries the measurement instead of the open
 gap: the instrument and why it must be XCUITest, the per-stage hashes and inks for both subjects, the
-pixel counts and bounding boxes, the controls that make the pass falsifiable, the arms that fail, and
-the three harness defects. The old sentence is not deleted — it is quoted as the state the task opened
-from, so a reader can see what changed and why. The two items this gate does not close (§6) are stated
-in the same paragraph rather than left to be inferred.
+pixel counts and bounding boxes, the controls that make the pass falsifiable, which resume oracle
+carried the retention claim for each subject, the arms that fail, and the four harness defects. The old
+sentence is not deleted — it is quoted as the state the task opened from, so a reader can see what
+changed and why. The two items this gate does not close (§6) are stated in the same paragraph rather
+than left to be inferred.
 
 `just ios-input-check` and `just ios-input-check-app` carry the operational detail; the
 counter-specific tap geometry lives in the latter's doc, because it is a property of that artifact and
@@ -167,13 +219,30 @@ not of the gate.
   produced on 2026-09-19. This is the candidate as it exists; it is not a fresh build of the current
   revision. Rebuilding it needs a `flui create` + iOS build that the host's free space could not take
   during this work.
-- **A layout observation this gate does not close.** Both subjects draw under the system chrome: the
-  counter's column and the demo's app bar title sit beneath the status-bar clock rather than below it,
-  and the counter — whose template asks for `Center` — lays its column at the top of the screen
-  (content at y 0-305 of 2532) instead of the middle. The committed macOS record for the same
-  generated artifact describes its only ink cluster at y[103,137] of an 800×632 window, the same
-  top-anchored position, so it appears shared across backends rather than an iOS property. **No cause
-  has been measured** and nothing was changed; it is recorded as an observation with images.
+- **The stronger resume oracle was validated on a UIKit subject, not on the counter.** The
+  accumulating subject that carries `--post-return-tap` to a PASS is a UIKit application built for the
+  purpose (§4.1), because the counter's bundle is gone from this host and rebuilding it for
+  `aarch64-apple-ios-sim` did not fit in the free space (554 MiB). What the counter's own record still
+  rests on is the equality oracle plus the relaunch control; upgrading it to the live-touch oracle
+  needs a counter bundle and is not done.
+- **A layout observation this gate does not close, and one correction to it.** The counter — whose
+  template asks for `Center` — lays its column at the top of the screen (content at y 0-305 of 2532)
+  rather than the middle, and the measured bundle draws its count under the status-bar clock. The
+  top-anchoring is a template misuse, not a backend property: `FlexStyle::default()` is
+  `MainAxisSize::Max` with `MainAxisAlignment::Start` (`crates/flui-widgets/src/flex/flex.rs:35-45`),
+  and `positioned_box_size` mirrors Flutter's `RenderPositionedBox` by shrinking only when a factor is
+  set (`crates/flui-objects/src/layout/align.rs:39-59`) — so `Center(child: Column(...))` behaves
+  exactly as it does in Flutter, where the column fills the height and packs its children at the top.
+  Flutter's own counter sample passes `MainAxisAlignment.center`; the misuse also appears at
+  `examples/material_demo/tree.rs:532` and `examples/cupertino_demo/tree.rs:107,163`, and
+  `MainAxisAlignment::Center` is used nowhere under `examples/` or in the templates. **Nothing about it
+  was changed by this task** — it is recorded, with the fix left to the template work it belongs to.
+  The earlier form of this observation also claimed the *demo's* app bar title sits beneath the clock
+  and that the layout therefore appears "shared across backends"; both halves are **withdrawn**. A
+  band-by-band profile of the demo's current frame puts its app bar title at y 177-253 of 2532, wholly
+  below the clock's y 50-127, and the counter's overlap is a property of the stale pre-safe-area bundle
+  it was measured from, not of the revision. The macOS citation did not support the cross-backend claim
+  either: that frame has one ink cluster at 0.06 % against the iOS frame's four at 1.06 %.
 - **This gate cannot run in CI.** It needs macOS, Xcode, a booted simulator and a compiled Swift test
   bundle — a local, manual gate like `macos-frame-pump`, `macos-launch-render` and `macos-ime`, not a
   regression net.

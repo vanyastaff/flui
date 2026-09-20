@@ -521,15 +521,36 @@ and the exact region hashed for every stage, is under `target/ios-input*/<run>/`
 Two of those stages are controls, so the pass is a discrimination rather than an
 absence of measurement: the fresh launch resets, which is what makes the return
 comparison falsifiable, and a real tap at a point with no target changes nothing,
-which is what separates a hit from any touch. The gate was also run against
-subjects that must not pass, and each failure mode was reached: a UIKit
-application that draws and installs no touch handling at all fails with "the tap
-changed nothing on screen" and its relaunch control reports that it therefore
-proves nothing (exit 1); an animating application, whose screen never stops
-changing, is CANNOT_VERIFY rather than a verdict (exit 2); an unknown simulator
-is CANNOT_VERIFY (exit 2).
+which is what separates a hit from any touch. Both tap points are required to lie
+inside the compared region — enforced by the checker, not a convention — because
+a no-target control measured outside the window it is a control for cannot fail.
+The gate was also run against subjects that must not pass, and each failure mode
+was reached: a UIKit application that draws and installs no touch handling at all
+fails with "the tap changed nothing on screen" and its relaunch control reports
+that it therefore proves nothing (exit 1); an animating application, whose screen
+never stops changing, is CANNOT_VERIFY rather than a verdict (exit 2); an unknown
+simulator is CANNOT_VERIFY (exit 2); a malformed `--region` or a tap outside it is
+CANNOT_VERIFY before anything is launched (exit 2).
 
-Three defects surfaced while validating the gate, all in the harness and all
+**The return comparison alone does not prove the application was running.** iOS
+keeps a snapshot of the pre-Home frame and shows it while an application returns,
+so "the display is unchanged" is satisfied by a screen that never resumed — the
+pixels cannot carry a claim about the process. The stronger oracle is a second
+real touch after the return that must *advance* the display, which a snapshot
+cannot do; it is opt-in (`--post-return-tap`) because it needs a subject whose
+display advances per tap, and the run's report names which oracle carried the
+claim. The counter's `Increment` button accumulates, so it can carry it; the
+demo's list rows are idempotent, so it is measured by equality with that stated
+rather than hidden. The oracle itself is validated in both directions: it refuses
+the demo, whose second tap on the selected row correctly changes nothing (exit 1,
+"a touch after Home/return changed nothing on screen"), and it passes an
+accumulating subject built for the purpose — a UIKit application, since the
+counter's bundle was no longer on the host and rebuilding it did not fit the free
+space — whose hashes ran
+`dfc58830 → 855a4776 → 855a4776 → becbf2bf → dfc58830 → dfc58830`, the fourth
+term being the post-return tap's advance.
+
+Four defects surfaced while validating the gate, all in the harness and all
 fixed — each had silently produced a confident wrong answer first:
 
 - **A predecessor run's evidence was read as this run's.** The test host's
@@ -549,21 +570,38 @@ fixed — each had silently produced a confident wrong answer first:
   not reach a widget; there was no widget. A first stage below 0.05 % ink is now
   CANNOT_VERIFY, the same "was anything drawn at all" distinction the macOS
   launch-route gate draws with its colour oracle.
+- **The no-target control was measured outside its own window.** Its default
+  point sat at y 0.035, above the compared region's 6 % top edge, so a touch that
+  had changed the display there would still have been reported as an unchanged
+  one: the control could only ever pass. A band-by-band profile of the demo's
+  frame answers where a touch has no target at all — the app bar (top 11 %,
+  `#fef7ff`) is the only such area — and the app bar's centre is the default
+  point now. The invariant is enforced, so the mistake cannot recur silently on
+  another subject.
 
-Two observations from this measurement are **not** closed by it. First, the
-bundle measured for the counter is the one the CLI produced on 2026-09-19; the
-gate re-measured that artifact rather than rebuilding it, so this is the
-candidate as it exists, not a fresh build of the current revision. Second, both
-subjects draw under the system chrome: the counter's column and the demo's app
-bar title sit beneath the status-bar clock rather than below it, and the counter
-— whose template asks for `Center` — lays its column out at the top of the
-screen instead of the middle (its content occupies y 0-305 of 2532). The
-committed macOS record for the same generated artifact describes its only ink
-cluster at y[103,137] of an 800×632 window, the same top-anchored position, so
-this appears to be shared across backends rather than an iOS property. It is
-recorded here as an observation with images, not a diagnosis: no cause has been
-measured, and nothing about it was changed. This does not complete native
-application acceptance or its final code-quality review.
+The observations this measurement does **not** close. First, the bundle measured
+for the counter is the one the CLI produced on 2026-09-19; the gate re-measured
+that artifact rather than rebuilding it, so this is the candidate as it exists,
+not a fresh build of the current revision, and the counter's own run still rests
+on the equality oracle rather than the live-touch one. Second, the counter —
+whose template asks for `Center` — lays its column at the top of the screen
+(content at y 0-305 of 2532) instead of the middle. That is a template misuse and
+not a backend property: `FlexStyle::default()` is `MainAxisSize::Max` with
+`MainAxisAlignment::Start` (`crates/flui-widgets/src/flex/flex.rs:35-45`) and
+`Center` shrink-wraps only when a factor is set
+(`crates/flui-objects/src/layout/align.rs:39-59`), so `Center(child: Column(...))`
+lays out exactly as it does in Flutter — the column fills the height and packs
+its children at the top. Flutter's own counter sample passes
+`MainAxisAlignment.center`; the same misuse appears in the Material and Cupertino
+demo counter tabs, and `MainAxisAlignment::Center` is used nowhere under
+`examples/`. **Nothing about it was changed here**; it is recorded for the
+template work it belongs to. An earlier form of this paragraph also claimed the
+demo's app bar title sits beneath the status-bar clock and that the layout
+therefore appears shared across backends — both halves are withdrawn. A band
+profile of the demo's current frame puts its title at y 177-253, wholly below the
+clock's y 50-127, and the counter's overlap comes from the stale pre-safe-area
+bundle it was measured from. This does not complete native application acceptance
+or its final code-quality review.
 
 Window execution eligibility is independent of focus, visibility and GPU surface
 availability. Temporary UIKit inactivity preserves the surface and frame delivery;
