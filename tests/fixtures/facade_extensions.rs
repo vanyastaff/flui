@@ -670,3 +670,14 @@ fn presentation_lifecycle_capability_is_absent_when_not_installed() {
     assert!(view.initialized.get());
     assert!(view.captured.borrow().is_none());
 }
+
+#[test]
+fn secondary_window_entry_point_requires_a_running_application() {
+    assert!(
+        flui::app::open_secondary_window(
+            flui::app::AppConfig::default(),
+            flui::app::WindowPolicy::SeparateRealms,
+        )
+        .is_err()
+    );
+}

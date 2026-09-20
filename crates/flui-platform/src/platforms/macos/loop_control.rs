@@ -45,6 +45,7 @@ struct State {
 
 /// Contains only thread-safe Rust state. AppKit objects never cross the queue.
 pub(super) struct LoopControl {
+    pub(super) owner_signal: Arc<crate::shared::owner_signal::OwnerSignal>,
     state: Mutex<State>,
     windows: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
     handlers: Arc<Mutex<PlatformHandlers>>,
@@ -55,24 +56,43 @@ impl LoopControl {
         windows: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
         handlers: Arc<Mutex<PlatformHandlers>>,
     ) -> Arc<Self> {
-        Arc::new(Self {
-            state: Mutex::new(State {
-                phase: Phase::Dormant,
-                queued: false,
-                requested: false,
-                explicit_quit: false,
-                pending_reopens: 0,
-                reopen_queued: false,
-                reopen_active: false,
-            }),
-            windows,
-            handlers,
+        Arc::new_cyclic(|weak: &Weak<Self>| {
+            let weak = weak.clone();
+            let owner_signal = crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+                let weak = weak.clone();
+                exec_async_guarded(owner_queue(), move || {
+                    cleanup_step(|| {
+                        if let Some(control) = weak.upgrade()
+                            && control.owner_signal.drive()
+                        {
+                            control.quit();
+                        }
+                    });
+                });
+                Ok(())
+            }));
+            Self {
+                owner_signal,
+                state: Mutex::new(State {
+                    phase: Phase::Dormant,
+                    queued: false,
+                    requested: false,
+                    explicit_quit: false,
+                    pending_reopens: 0,
+                    reopen_queued: false,
+                    reopen_active: false,
+                }),
+                windows,
+                handlers,
+            }
         })
     }
 
     pub(super) fn accepts_windows(&self) -> bool {
         let state = self.state.lock();
-        !state.explicit_quit && !matches!(state.phase, Phase::Stopping | Phase::Stopped)
+        !state.explicit_quit
+            && !matches!(state.phase, Phase::Stopping | Phase::Stopped)
+            && self.owner_signal.accepting()
     }
 
     /// Replacements and rejected registrations are destroyed outside both locks.
@@ -93,7 +113,10 @@ impl LoopControl {
     fn request_reopen(self: &Arc<Self>) {
         {
             let mut state = self.state.lock();
-            if state.explicit_quit || matches!(state.phase, Phase::Stopping | Phase::Stopped) {
+            if !self.owner_signal.accepting()
+                || state.explicit_quit
+                || matches!(state.phase, Phase::Stopping | Phase::Stopped)
+            {
                 return;
             }
             state.pending_reopens = state
@@ -108,6 +131,7 @@ impl LoopControl {
         let enqueue = {
             let mut state = self.state.lock();
             if state.phase == Phase::Running
+                && self.owner_signal.accepting()
                 && !state.explicit_quit
                 && state.pending_reopens != 0
                 && !state.reopen_active
@@ -137,7 +161,10 @@ impl LoopControl {
         {
             let mut state = self.state.lock();
             state.reopen_queued = false;
-            if state.phase != Phase::Running || state.explicit_quit {
+            if state.phase != Phase::Running
+                || state.explicit_quit
+                || !self.owner_signal.accepting()
+            {
                 state.pending_reopens = 0;
                 return;
             }
@@ -152,7 +179,10 @@ impl LoopControl {
         loop {
             {
                 let mut state = self.state.lock();
-                if state.phase != Phase::Running || state.explicit_quit {
+                if state.phase != Phase::Running
+                    || state.explicit_quit
+                    || !self.owner_signal.accepting()
+                {
                     state.pending_reopens = 0;
                     return;
                 }
@@ -179,6 +209,9 @@ impl LoopControl {
 
     /// Always deferred: reentrant requests cannot observe an absent leased hook.
     pub(super) fn request(self: &Arc<Self>, explicit_quit: bool) {
+        if explicit_quit {
+            self.owner_signal.fence();
+        }
         let enqueue = {
             let mut state = self.state.lock();
             if matches!(state.phase, Phase::Stopping | Phase::Stopped) {
@@ -217,6 +250,7 @@ impl LoopControl {
             state.pending_reopens = 0;
             running
         };
+        self.owner_signal.close();
         if running {
             stop_application();
         }
@@ -282,6 +316,9 @@ impl LoopControl {
             self.request(false);
         }
         self.schedule_reopens();
+        if let Err(error) = self.owner_signal.start() {
+            tracing::error!(%error, "could not start owner signals");
+        }
         true
     }
 
@@ -294,6 +331,7 @@ impl LoopControl {
             state.phase = Phase::Stopping;
             state.pending_reopens = 0;
         }
+        self.owner_signal.close();
         // No queued cleanup: these resources must be released while main is alive.
         let windows: Vec<_> = self.windows.lock().values().cloned().collect();
         for window in &windows {

@@ -106,7 +106,7 @@ where
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
 
     let result = platform.run(Box::new(move |owner| {
-        install_owner_platform(owner);
+        install_owner_platform(owner)?;
         // `on_ready` returns `Result<(), BootstrapError>` (an opaque boxed
         // error), so the bootstrap's `anyhow::Error` crosses via anyhow's own
         // `From` impl — the same conversion the Android runner's closure

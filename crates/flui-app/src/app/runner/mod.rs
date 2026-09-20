@@ -454,7 +454,7 @@ mod tests {
             let _clear_guard = OwnerHostClearGuard::arm();
             let platform = headless_platform();
             let result = platform.run(Box::new(move |owner| {
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 let observed = with_owner_platform(|_owner| true);
                 seen_while_installed_for_closure.set(observed == Some(true));
                 Ok(())
@@ -486,7 +486,7 @@ mod tests {
         let _clear_guard = OwnerHostClearGuard::arm();
         let platform = headless_platform();
         let result = platform.run(Box::new(|owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             assert!(
                 !APP_RUNTIME.with(|slot| slot.borrow().services_resolved()),
                 "install_owner_platform alone must not resolve SharedEngineServices"
@@ -504,7 +504,7 @@ mod tests {
             let _clear_guard = OwnerHostClearGuard::arm();
             let platform = headless_platform();
             let _ = platform.run(Box::new(|owner| {
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 panic!("exercise on_ready panic cleanup");
             }));
         }));
@@ -532,7 +532,7 @@ mod tests {
             let _clear_guard = OwnerHostClearGuard::arm();
             let platform = headless_platform();
             platform.run(Box::new(|owner| {
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 assert!(
                     with_owner_platform(|_| ()).is_some(),
                     "the host is installed while on_ready runs, even on the \
@@ -699,7 +699,7 @@ mod tests {
         let _clear_guard = OwnerHostClearGuard::arm();
         let platform = headless_platform();
         let result = platform.run(Box::new(move |owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             let before_teardown = with_owner_platform(|_owner| true) == Some(true);
 
             // Simulate hot-restart: a realm's teardown runs on this owner
@@ -750,7 +750,7 @@ mod tests {
         let _clear_guard = OwnerHostClearGuard::arm();
         let platform = headless_platform();
         let _ = platform.run(Box::new(|owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             with_owner_platform(|_owner| {
                 // Any host op re-entering here panics: `with_owner_platform`
                 // still holds `APP_RUNTIME.borrow()` for the duration of

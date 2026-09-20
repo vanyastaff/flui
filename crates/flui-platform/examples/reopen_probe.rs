@@ -122,6 +122,7 @@ mod native {
                     | "before-delivery"
                     | "quit-inside"
                     | "quit-pending"
+                    | "proxy-quit-pending"
                     | "panic"
                     | "drop-reentry"
                     | "drop-panic"
@@ -235,6 +236,17 @@ mod native {
                             println!("REOPEN_LATEST_REGISTRATION");
                             quit();
                         }));
+                    } else if mode == "proxy-quit-pending" {
+                        signal(true);
+                        OWNER.with(|slot| {
+                            slot.borrow()
+                                .as_ref()
+                                .expect("owner")
+                                .proxy()
+                                .request_quit()
+                                .expect("proxy quit");
+                        });
+                        signal(false);
                     } else if mode == "quit-pending" {
                         signal(true);
                         app().terminate(None);
@@ -259,7 +271,8 @@ mod native {
         );
         let expected = match case.as_str() {
             "nested" | "replacement" | "panic" => 2,
-            "quit-pending" | "drop-reentry" | "drop-panic" | "before-delivery" => 0,
+            "quit-pending" | "proxy-quit-pending" | "drop-reentry" | "drop-panic"
+            | "before-delivery" => 0,
             _ => 1,
         };
         assert_eq!(calls.load(Ordering::SeqCst), expected);

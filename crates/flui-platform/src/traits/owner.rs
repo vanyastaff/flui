@@ -89,6 +89,15 @@ impl OwnerPlatform {
         }
     }
 
+    /// Install the loop's owner-turn callback. Worker proxies send only wake signals.
+    ///
+    /// Delivery is deferred, coalesced and independent of visible windows.
+    /// # Errors
+    /// Returns unsupported on backends without this transport, or owner-gone after quit.
+    pub fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
+        self.hooks.on_wake(callback)
+    }
+
     /// Open a window. `Ready` is guaranteed inside `on_ready`; afterwards
     /// the backend may defer through its owner lane (where one exists),
     /// returning `Pending`.
@@ -486,6 +495,13 @@ impl PlatformProxy {
         Self { transport }
     }
 
+    /// Request a coalesced owner turn without requiring a window.
+    /// # Errors
+    /// Returns a closed/unsupported transport or native wake-posting failure.
+    pub fn wake(&self) -> Result<(), ProxySendError<()>> {
+        self.transport.wake()
+    }
+
     /// Enqueues a window-open request. Never blocks — on any thread,
     /// including the owner (deferral replaces the old owner-side refusal;
     /// the blocking hazard lives in [`PendingWindow::wait`], which is where
@@ -501,18 +517,14 @@ impl PlatformProxy {
         self.transport.open_window(options)
     }
 
-    /// Coalesced, non-starvable quit flag — bypasses queue capacity.
-    ///
-    /// The `Result` return is already `#[must_use]` (clippy's
-    /// `double_must_use` rejects a redundant fn-level attribute on top of
-    /// it) — discarding it silently swallows exactly the
-    /// permanent-`Unsupported` signal below.
+    /// Coalesced quit signal, independent of window-command queue capacity.
+    /// Immediately fences new wake/window admission. A failed native post may
+    /// be retried; admission remains fenced until the owner stops.
     ///
     /// # Errors
-    /// See [`ProxySendError`]. [`ProxySendError::Unsupported`] is
-    /// **permanent** on lane-less backends (windows/macos/web/android/
-    /// headless) until slice 3 lane adoption — not a transient condition;
-    /// do not retry.
+    /// `Unsupported` on mobile/web transports, `OwnerGone` after shutdown,
+    /// or `WakeFailed` when physical notification fails. Native desktop and
+    /// headless implement this independently of proxy window creation support.
     pub fn request_quit(&self) -> Result<(), ProxySendError<()>> {
         self.transport.request_quit()
     }
@@ -528,14 +540,35 @@ impl PlatformProxy {
 
 assert_impl_all!(PlatformProxy: Clone, Send, Sync);
 
+/// Failure to install a loop-owned wake callback.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum WakeRegistrationError {
+    /// This backend does not implement owner turns.
+    #[error("owner wake callbacks are unsupported on this backend")]
+    Unsupported,
+    /// The loop has stopped accepting owner work.
+    #[error("event-loop owner is gone")]
+    OwnerGone,
+}
+
 /// Failure to enqueue a cross-thread request through [`PlatformProxy`].
 ///
 /// Exhaustive: a deliberately closed cross-thread vocabulary (ADR-0027 §4,
 /// ADR-0037 §3) — `Unsupported` completes it (ADR-0039 slice-2 amendment b
-/// revision) rather than reopening it; every lane-less backend today maps
-/// onto this one variant instead of overloading `OwnerGone`.
+/// revision). Support is operation-specific; absent window creation does not
+/// imply absent wake or quit transport.
 #[derive(Debug, thiserror::Error)]
 pub enum ProxySendError<T: fmt::Debug> {
+    /// Native wake submission failed while admitting this request.
+    #[error("native owner wake failed: {source}")]
+    WakeFailed {
+        /// The request whose wake could not be submitted.
+        rejected: T,
+        /// The backend's posting failure.
+        #[source]
+        source: PlatformError,
+    },
     /// The owner lane is at capacity.
     #[error("platform owner lane is full (capacity {capacity})")]
     Full {
@@ -714,14 +747,18 @@ pub enum WaitError {
 /// slice-3 `OwnerOps` seed (ADR-0039 §2/§8) — stays `pub(crate)` until then,
 /// alongside [`OwnerPlatform`]'s own third private field.
 pub(crate) trait OwnerHooks: Send + Sync {
+    fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
+        drop(callback);
+        Err(WakeRegistrationError::Unsupported)
+    }
+
     /// Creates or enqueues a window from the owner thread. Backends with an
     /// owner lane (winit) enqueue when called outside `on_ready`; every
     /// other backend creates directly and always returns `Ready`.
     fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError>;
 
-    /// The cross-thread transport backing [`PlatformProxy`]. Backends
-    /// without an owner lane return [`ClosedTransport`] — permanently,
-    /// until slice 3 gives them one (ADR amendment b).
+    /// The cross-thread transport backing [`PlatformProxy`]. Operation support
+    /// is independent: a signal-only transport need not support window creation.
     fn transport(&self) -> Arc<dyn ProxyTransport>;
 }
 
@@ -732,6 +769,7 @@ pub(crate) trait OwnerHooks: Send + Sync {
 /// [`Platform::open_window`] itself returns the typed [`OpenWindowError`]
 /// taxonomy, so its failure passes through unmapped.
 pub(crate) struct DirectOwnerHooks {
+    signal: Option<Arc<crate::shared::owner_signal::OwnerSignal>>,
     platform: Arc<dyn Platform>,
     owner_thread: ThreadId,
 }
@@ -739,28 +777,63 @@ pub(crate) struct DirectOwnerHooks {
 impl DirectOwnerHooks {
     /// Captures the calling thread as the permanent owner — call this from
     /// the backend's `on_ready` (or wherever it mints its `OwnerPlatform`).
+    #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
     pub(crate) fn new(platform: Arc<dyn Platform>) -> Self {
         Self {
             platform,
+            signal: None,
+            owner_thread: std::thread::current().id(),
+        }
+    }
+    pub(crate) fn with_signal(
+        platform: Arc<dyn Platform>,
+        signal: Arc<crate::shared::owner_signal::OwnerSignal>,
+    ) -> Self {
+        Self {
+            platform,
+            signal: Some(signal),
             owner_thread: std::thread::current().id(),
         }
     }
 }
 
 impl OwnerHooks for DirectOwnerHooks {
+    fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
+        match &self.signal {
+            Some(signal) => signal.register(callback),
+            None => Err(WakeRegistrationError::Unsupported),
+        }
+    }
+
     fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
+        if self
+            .signal
+            .as_ref()
+            .is_some_and(|signal| !signal.accepting())
+        {
+            return Err(OpenWindowError::OwnerGone {
+                rejected: Some(options),
+            });
+        }
         self.platform.open_window(options).map(WindowOpen::Ready)
     }
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {
-        Arc::new(ClosedTransport::new(self.owner_thread))
+        match &self.signal {
+            Some(signal) => Arc::new(crate::shared::owner_signal::SignalTransport::new(signal)),
+            None => Arc::new(ClosedTransport::new(self.owner_thread)),
+        }
     }
 }
 
-/// Cross-thread transport behind [`PlatformProxy`]. Backends with an owner
-/// lane (winit) implement this over their lane; lane-less backends use
-/// [`ClosedTransport`].
+/// Cross-thread transport behind [`PlatformProxy`]. Winit supports window
+/// requests and signals; other desktop/headless backends support signals only.
+/// Mobile/web use [`ClosedTransport`].
 pub(crate) trait ProxyTransport: Send + Sync {
+    fn wake(&self) -> Result<(), ProxySendError<()>> {
+        Err(ProxySendError::Unsupported { rejected: () })
+    }
+
     /// Enqueues a window-open request from a worker thread.
     fn open_window(
         &self,
@@ -831,6 +904,30 @@ mod tests {
     use flui_foundation::claim_slot;
 
     use super::*;
+
+    #[test]
+    fn unsupported_registration_releases_callback_capture() {
+        struct Capture(Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let capture = Capture(Arc::clone(&drops));
+        let hooks = DirectOwnerHooks {
+            signal: None,
+            platform: Arc::new(crate::HeadlessPlatform::new()),
+            owner_thread: thread::current().id(),
+        };
+        assert!(matches!(
+            hooks.on_wake(Box::new(move || {
+                let _ = &capture;
+            })),
+            Err(WakeRegistrationError::Unsupported)
+        ));
+        assert_eq!(drops.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn try_ready_on_pending_yields_not_ready() {

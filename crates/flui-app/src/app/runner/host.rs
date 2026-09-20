@@ -59,7 +59,26 @@ thread_local! {
 /// and full system-font enumeration on a path that can never consume
 /// either. `install_platform_realm` is the one call site that resolves —
 /// every realm-hosting backend goes through it, `run_direct` never does.
-pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
+pub(crate) fn install_owner_platform(
+    owner: flui_platform::OwnerPlatform,
+) -> Result<(), flui_platform::WakeRegistrationError> {
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    let identity = {
+        let identity = Arc::new(());
+        let installed_identity = Arc::clone(&identity);
+        owner.on_wake(Box::new(move || {
+            if APP_RUNTIME
+                .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &installed_identity))
+            {
+                super::secondary_window::drain_pending_secondary_window_completions();
+            }
+        }))?;
+        identity
+    };
     APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         state.owner_platform = Some(owner);
@@ -70,9 +89,11 @@ pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
         ))]
         {
             state.quit_notification = crate::app::runtime::QuitNotification::Active;
-            state.loop_identity = Arc::new(());
+            state.loop_identity = identity;
+            state.pending_window_reservations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         }
     });
+    Ok(())
 }
 
 /// Installs the exit-policy hook this thread's `AppRuntime` consults instead

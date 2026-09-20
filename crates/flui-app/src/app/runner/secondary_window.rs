@@ -75,92 +75,31 @@ use crate::app::{AppConfig, FrameFailureDetail};
 /// `one_realm_two_windows_policy_routes_by_presentation` pins that this
 /// really is forest-membership routing, not a second realm in disguise.
 ///
-/// # Completion timing: `Ready` vs `Pending`
+/// # Completion and ownership
 ///
-/// `OwnerPlatform::open_window` resolves synchronously (`WindowOpen::Ready`)
-/// only inside `on_ready`, or on a backend with no owner lane at all
-/// (headless). The real winit backend defers any call after `on_ready`
-/// (`WindowOpen::Pending`) — exactly the calling convention this function's
-/// own doc names as its intended use (a callback the FIRST window already
-/// registered). This function handles both: `Ready` installs and wires the
-/// window inline; `Pending` accepts the request and completes it once the
-/// owner lane resolves it, by spawning the completion on the first realm
-/// hosted on this thread's own [`flui_scheduler::AsyncDriver`] (never a
-/// hand-rolled busy-loop). Either way the installed topology, wiring, and
-/// this doc's own guarantees are identical — only the timing differs, and a
-/// `Pending` completion's own failure is traced
-/// (`drain_pending_secondary_window_completions`), not silently dropped.
+/// `Ready` installs inline. `Pending` reserves loop liveness before native
+/// creation and is polled on window-independent owner turns. Worker completion
+/// wakes that loop through its stamped `PlatformProxy`; no realm scheduler or
+/// visible window is needed. Unwoken futures are not polled on unrelated turns.
+/// An accepted separate-realm request survives closure of its originating realm.
+/// Shared-realm requests capture the exact target identity at admission and fail
+/// if that realm disappears; they never retarget another realm.
 ///
-/// The completion itself never runs from inside the spawned future's own
-/// poll: `UpdateScheduler::drive_async_tasks` (which polls that future) always
-/// runs from INSIDE a dispatched `RealmTask::Frame`, and `WindowPolicy::
-/// SharedRealm`'s own `install_presentation_alongside` has no defer-to-idle
-/// queue of its own — it hard-refuses (`InstallPresentationError::
-/// DispatchInFlight`) while a dispatch is in flight, which is exactly what
-/// running the completion mid-poll would always trigger for that policy.
-/// The future itself only enqueues the resolved window; the ACTUAL
-/// install-and-wire call happens at `dispatch_platform_realm`'s own tail,
-/// once this thread's checkout state clears — the same point-in-time
-/// `AppRuntime`'s own deferred realm-map mutations already apply at. One
-/// completion path, `finish_open_secondary_window`, for both `WindowPolicy`
-/// variants; only the trigger point differs between `Ready` (inline) and
-/// `Pending` (deferred to the enclosing dispatch's tail).
+/// Polling and installation run outside runtime borrows. Installation waits for
+/// any active realm checkout to finish. Quit and loop replacement invalidate
+/// outstanding requests, including a batch currently being polled. Resolved but
+/// uninstalled windows are closed and reservations released on every failure.
+/// Asynchronous creation failures are traced. A failed physical wake releases
+/// the reservation and marks the request failed; owner-local cleanup requires a
+/// subsequent successful owner turn or shutdown. OS posting failure cannot
+/// guarantee progress and is not retried in a busy loop.
 ///
-/// Tested on the headless backend's own deferred-open probe
-/// (`HeadlessPlatform::enable_deferred_window_open`) for BOTH policies:
-/// `open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_owner_lane`
-/// (`SeparateRealms`) and
-/// `shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane`
-/// (`SharedRealm` — the harder case, since its target realm IS the one
-/// whose dispatch checkout the completion's own poll runs inside of) each
-/// drive Pending -> resolved -> both-window close/exit end-to-end.
-/// `dead_driver_realm_before_pending_resolution_disclaims_cleanly_without_zombie_installing`
-/// additionally pins the fail-closed path: a driver realm torn down before
-/// its own pending completion resolves drops the captured `PendingWindow`
-/// along with the realm's `AsyncDriver`, disclaiming the request
-/// (`flui_foundation::claim_slot`'s own `Abandoned` transition) rather than
-/// zombie-installing anything later. Named residual: this proves the
-/// completion seam generically, not a full winit event-loop integration
-/// test (no CI gate exercises the real winit backend end-to-end at all —
-/// see `flui-platform`'s own "evidence must live outside the test gate"
-/// constraint) — the winit-specific gap still open is confidence that
-/// `WinitOwnerHooks::open_owner_window`'s own `Pending` construction and
-/// `control.rs`'s reply-delivery path compose correctly with this
-/// completion, not merely that the generic completion mechanism itself
-/// works.
+/// # Rendering limitation
 ///
-/// # Named limitation (both policies): no widget content, no rendering
-///
-/// This window shows nothing — no root widget is mounted, no GPU renderer
-/// is constructed, `window.on_request_frame` is never registered. Two
-/// independent gaps, neither papered over:
-///
-/// - **Rendering is one-canonical-closure-per-BACKEND today, not
-///   per-window.** `runner_frame_ordering.rs`'s own mechanical guards
-///   (`every_runner_frame_site_uses_the_shared_drive_frame_helper`,
-///   `every_pump_async_arm_calls_finish_then_drive_async_tasks`) pin
-///   exactly three production `UpdateScheduler::drive_frame`/`finish_async_pump`/
-///   `drive_async_tasks` call sites — desktop, Android, web — precisely to
-///   catch a hand-rolled fourth copy drifting from the canonical ordering.
-///   Adding a real, independently-rendering second window means
-///   generalizing those three sites into one shared per-window frame-tick
-///   helper (touching every existing backend's bootstrap, and this guard's
-///   own pinned count) — real, scoped work belonging to its own reviewed
-///   slice, not folded silently into this one under time pressure.
-/// - **`UiRealm::attach_root_widget` is wired to a realm's PRIMARY
-///   presentation only** (gesture arena, focus root, vsync scope all read
-///   `self.presentations.primary()`); extending it to an arbitrary
-///   addressed presentation is follow-up work neither the forest slice
-///   (#607) nor the routing slice (#608) added — relevant to
-///   `SharedRealm` specifically, `SeparateRealms`' own new presentation
-///   IS its realm's primary, so that half doesn't block it, but the
-///   rendering gap above still does.
-///
-/// What IS real and independently verifiable regardless of this gap: the
-/// window opens, is live-addressed, and its registry/forest membership and
-/// event dispatch (input/close/focus/visibility/resize) are genuine,
-/// policy-driven, and exactly as isolated (or shared) as [`WindowPolicy`]'s
-/// own doc claims.
+/// These windows have real registry membership and addressed native event
+/// routing, but no mounted widget content or per-window renderer/frame callback.
+/// Rendering secondary windows and exposing a resident root factory remain
+/// separate work; this completion transport does not provide those features.
 ///
 /// # Errors
 ///
@@ -197,6 +136,8 @@ pub fn open_secondary_window(config: AppConfig, policy: WindowPolicy) -> anyhow:
 struct SecondaryWindowInstallConfig {
     loop_identity: Arc<()>,
     policy: WindowPolicy,
+    shared_with: Option<flui_foundation::RealmId>,
+    reservation: WindowReservation,
     close_request_handler: Option<CloseRequestHandler>,
     frame_failure_detail: FrameFailureDetail,
 }
@@ -212,37 +153,182 @@ struct PendingCompletion {
     window: Arc<dyn flui_platform::traits::PlatformWindow>,
 }
 
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+struct WindowReservation(Arc<PendingRequestState>);
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+enum PendingPhase {
+    Waiting,
+    Installing,
+    Settled,
+    Failed,
+}
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+struct PendingRequestState {
+    state: parking_lot::Mutex<(PendingPhase, bool)>,
+    count: Arc<std::sync::atomic::AtomicUsize>,
+    platform: flui_platform::SharedPlatform,
+}
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl PendingRequestState {
+    fn release(&self) {
+        let previous = self.count.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        debug_assert!(
+            previous > 0,
+            "BUG: pending window reservation released twice"
+        );
+        self.platform.request_exit_policy_reevaluation();
+    }
+    fn fail(&self) -> bool {
+        let failed = {
+            let mut state = self.state.lock();
+            if state.0 == PendingPhase::Waiting {
+                state.0 = PendingPhase::Failed;
+                true
+            } else {
+                false
+            }
+        };
+        if failed {
+            self.release();
+        }
+        failed
+    }
+    fn settle(&self) {
+        let release = {
+            let mut state = self.state.lock();
+            let release = matches!(state.0, PendingPhase::Waiting | PendingPhase::Installing);
+            state.0 = PendingPhase::Settled;
+            release
+        };
+        if release {
+            self.release();
+        }
+    }
+    fn begin_install(&self) -> bool {
+        let mut state = self.state.lock();
+        if state.0 != PendingPhase::Waiting {
+            return false;
+        }
+        state.0 = PendingPhase::Installing;
+        true
+    }
+    fn mark_ready(&self) -> bool {
+        let mut state = self.state.lock();
+        if state.0 != PendingPhase::Waiting {
+            return false;
+        }
+        state.1 = true;
+        true
+    }
+    fn take_ready(&self) -> bool {
+        let mut state = self.state.lock();
+        state.0 == PendingPhase::Waiting && std::mem::take(&mut state.1)
+    }
+    fn failed(&self) -> bool {
+        self.state.lock().0 == PendingPhase::Failed
+    }
+}
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl Drop for WindowReservation {
+    fn drop(&mut self) {
+        self.0.settle();
+    }
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn reserve_window() -> anyhow::Result<WindowReservation> {
+    let platform = with_owner_platform(flui_platform::OwnerPlatform::shared)
+        .ok_or_else(|| anyhow::anyhow!("no owner platform"))?;
+    let count = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().pending_window_reservations));
+    count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    Ok(WindowReservation(Arc::new(PendingRequestState {
+        state: parking_lot::Mutex::new((PendingPhase::Waiting, true)),
+        count,
+        platform,
+    })))
+}
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+struct PendingOpen {
+    request_id: Arc<()>,
+    config: SecondaryWindowInstallConfig,
+    pending: flui_platform::PendingWindow,
+    waker: std::task::Waker,
+}
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+struct PendingOpenWake {
+    proxy: flui_platform::PlatformProxy,
+    request: Arc<PendingRequestState>,
+}
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl std::task::Wake for PendingOpenWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        if !self.request.mark_ready() {
+            return;
+        }
+        if let Err(error) = self.proxy.wake() {
+            let report = matches!(
+                &error,
+                flui_platform::ProxySendError::WakeFailed { .. }
+                    | flui_platform::ProxySendError::Unsupported { .. }
+            );
+            if self.request.fail() && report {
+                tracing::error!(%error, "pending window wake failed; request cancelled, native cleanup awaits an owner turn or shutdown");
+            }
+        }
+    }
+}
+
 thread_local! {
-    /// The pending-completion registry for `open_secondary_window`'s
-    /// `Pending` arm (see [`spawn_pending_secondary_window_completion`]) —
-    /// keeps each spawned [`flui_scheduler::TaskToken`] alive so its
-    /// cancel-on-drop semantics don't cancel the in-flight completion the
-    /// instant the spawning call returns. Append-only: an honest, documented
-    /// simplification (there is no natural per-request owner to key removal
-    /// on) rather than a silent unbounded-growth claim — `TaskToken::drop`
-    /// still cancels cleanly on realm/thread teardown, this registry just
-    /// does not proactively prune settled entries mid-run.
-    static PENDING_SECONDARY_WINDOW_OPENS: std::cell::RefCell<Vec<flui_scheduler::TaskToken>> =
+    #[cfg(all(not(target_os = "android"), not(target_os = "ios"), not(target_arch = "wasm32")))]
+    static POLLING_PENDING_WINDOWS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Loop-owned requests. Each finite drain removes settled entries and
+    /// returns only unresolved requests to this registry.
+    #[cfg(all(not(target_os = "android"), not(target_os = "ios"), not(target_arch = "wasm32")))]
+    static PENDING_SECONDARY_WINDOW_OPENS: std::cell::RefCell<Vec<PendingOpen>> =
         const { std::cell::RefCell::new(Vec::new()) };
 
-    /// Windows resolved from `open_secondary_window`'s `Pending` arm, awaiting
-    /// `finish_open_secondary_window` at the next point this thread's
-    /// dispatch/hot-restart-visit checkout state is clear (see
-    /// [`drain_pending_secondary_window_completions`]). Never drained
-    /// in-place inside the spawned future itself: that future is polled by
-    /// `UpdateScheduler::drive_async_tasks`, which always runs INSIDE a dispatched
-    /// `RealmTask::Frame` (`dispatched_realm_id` is `Some` for the whole
-    /// checkout) — `install_presentation_alongside`'s own
-    /// `DispatchInFlight` refusal (it has no defer-to-idle queue of its own)
-    /// means `WindowPolicy::SharedRealm` could never complete from inside
-    /// that poll. Queuing here and draining once the checkout restores
-    /// applies to BOTH policies uniformly, one completion path rather than a
-    /// policy-specific carve-out.
-    ///
-    /// Gated exactly like [`PendingCompletion`] itself: the type does not
-    /// exist on the targets that have no secondary-window path (Android,
-    /// iOS, wasm32), and a `thread_local!` naming it there is a build error
-    /// only the wasm-check job ever sees.
+    /// Resolved windows awaiting installation after realm checkout clears.
+    /// Polling never installs inline; both policies share this completion path.
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -250,6 +336,19 @@ thread_local! {
     ))]
     static PENDING_SECONDARY_WINDOW_COMPLETIONS: std::cell::RefCell<Vec<PendingCompletion>> =
         const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn discard_pending_open(mut request: PendingOpen) {
+    if let Some(Ok(window)) = request.pending.try_take() {
+        window.close();
+    }
+    // An unresolved handle is disclaimed; a delivered handle is explicitly
+    // closed above, since dropping an Arc alone need not destroy a native window.
 }
 
 /// Cancel only uninstalled secondary windows; user/native cleanup runs outside TLS borrows.
@@ -265,7 +364,9 @@ pub(super) fn cancel_pending_secondary_windows() {
         PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
     let mut panic = None;
     for token in tokens {
-        let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(token))).err();
+        let error =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| discard_pending_open(token)))
+                .err();
         crate::app::lifecycle_state::preserve_first_lifecycle_panic(
             &mut panic,
             error,
@@ -323,24 +424,95 @@ fn secondary_install_admitted(identity: &Arc<()>) -> bool {
     not(target_arch = "wasm32")
 ))]
 pub(super) fn drain_pending_secondary_window_completions() {
+    use std::future::Future;
     if APP_RUNTIME.with(|slot| {
         slot.borrow().quit_notification != crate::app::runtime::QuitNotification::Active
     }) {
         cancel_pending_secondary_windows();
         return;
     }
-    let pending =
-        PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
-    for completion in pending {
-        let policy = completion.config.policy;
-        if let Err(error) = finish_open_secondary_window(completion.config, completion.window) {
-            tracing::error!(
-                ?policy,
-                %error,
-                "open_secondary_window: a Pending-arm completion resolved to a window, but \
-                 installing it failed"
-            );
+    if APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        state.dispatched_realm_id.is_some() || state.iterating_all_realms
+    }) || POLLING_PENDING_WINDOWS.with(|active| active.replace(true))
+    {
+        return;
+    }
+    struct PollGuard;
+    impl Drop for PollGuard {
+        fn drop(&mut self) {
+            POLLING_PENDING_WINDOWS.with(|active| active.set(false));
         }
+    }
+    let _guard = PollGuard;
+    let pending =
+        PENDING_SECONDARY_WINDOW_OPENS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
+    let mut first_panic = None;
+    for mut request in pending {
+        if !secondary_install_admitted(&request.config.loop_identity)
+            || request.config.reservation.0.failed()
+        {
+            let error = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                discard_pending_open(request);
+            }))
+            .err();
+            crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first_panic,
+                error,
+                "failed pending window cleanup",
+            );
+            continue;
+        }
+        if !request.config.reservation.0.take_ready() {
+            PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow_mut().push(request));
+            continue;
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            std::pin::Pin::new(&mut request.pending)
+                .poll(&mut std::task::Context::from_waker(&request.waker))
+        }));
+        match result {
+            Ok(std::task::Poll::Pending)
+                if secondary_install_admitted(&request.config.loop_identity)
+                    && !request.config.reservation.0.failed() =>
+            {
+                PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow_mut().push(request));
+            }
+            Ok(std::task::Poll::Pending) => {}
+            Ok(std::task::Poll::Ready(Ok(window))) => {
+                PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                    queue.borrow_mut().push(PendingCompletion {
+                        config: request.config,
+                        window,
+                    });
+                });
+            }
+            Ok(std::task::Poll::Ready(Err(error))) => {
+                tracing::error!(%error, "pending secondary window creation failed");
+            }
+            Err(payload) => crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first_panic,
+                Some(payload),
+                "pending window poll",
+            ),
+        }
+    }
+    let completed =
+        PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
+    for completion in completed {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Err(error) = finish_open_secondary_window(completion.config, completion.window) {
+                tracing::error!(%error, "installing resolved secondary window failed");
+            }
+        }));
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first_panic,
+            result.err(),
+            "pending window installation",
+        );
+    }
+    if let Some(payload) = first_panic {
+        std::panic::resume_unwind(payload);
     }
 }
 
@@ -383,6 +555,16 @@ pub(super) fn open_secondary_window_impl(
         "secondary window admission is closed: application is quitting"
     );
 
+    let shared_with = if policy == WindowPolicy::SharedRealm {
+        Some(
+            APP_RUNTIME
+                .with(|slot| slot.borrow().realms.iter().next().map(|(id, _)| *id))
+                .ok_or_else(|| anyhow::anyhow!("SharedRealm requires an existing target realm"))?,
+        )
+    } else {
+        None
+    };
+    let reservation = reserve_window()?;
     let options: WindowOptions = (&config).into();
     let open = with_owner_platform(|owner| owner.open_window(options))
         .ok_or_else(|| {
@@ -398,6 +580,8 @@ pub(super) fn open_secondary_window_impl(
     let install_config = SecondaryWindowInstallConfig {
         loop_identity,
         policy,
+        shared_with,
+        reservation,
         close_request_handler: config.close_request_handler.clone(),
         frame_failure_detail: config.frame_failure_detail,
     };
@@ -411,59 +595,11 @@ pub(super) fn open_secondary_window_impl(
     }
 }
 
-/// Drives `open_secondary_window`'s `Pending` arm to completion once the
-/// owner lane resolves it — the fix for the P1 gap where
-/// `open_secondary_window` assumed `OwnerPlatform::open_window` always
-/// returns `Ready`, which the real winit owner lane never does for a call
-/// after `on_ready` (`WinitOwnerHooks::open_owner_window`), the exact
-/// calling convention this function's own caller documents as its intended
-/// use.
-///
-/// Schedules the completion on a "driver realm" — the first realm hosted on
-/// this thread, independent of which policy governs the NEW window (the
-/// same lookup [`WindowPolicy::SharedRealm`]'s own `shared_with` uses in
-/// [`open_secondary_window_impl`]) — because completing the install needs a
-/// live [`flui_scheduler::UpdateScheduler`] to poll the awaited `PendingWindow` on
-/// the framework's own frame-cycle-integrated async driver
-/// (`AsyncDriver::spawn_local`), never a hand-rolled busy-loop: the
-/// `PendingWindow`'s own wake (fired when the owner lane delivers) requests
-/// a fresh frame, and that frame's `UpdateScheduler::drive_async_tasks` polls the
-/// task to completion — the same mechanism any other framework-spawned
-/// async task completes through.
-///
-/// The spawned future itself never calls [`finish_open_secondary_window`]
-/// directly on success — it only enqueues the policy, window, and deferred
-/// configuration onto
-/// [`PENDING_SECONDARY_WINDOW_COMPLETIONS`]. `UpdateScheduler::drive_async_tasks`
-/// (which polls this future to completion) always runs from INSIDE a
-/// dispatched `RealmTask::Frame`, so `dispatched_realm_id` is `Some` for the
-/// poll's entire duration; `WindowPolicy::SharedRealm`'s own
-/// `install_presentation_alongside` has no defer-to-idle queue of its own
-/// and hard-refuses (`InstallPresentationError::DispatchInFlight`) when
-/// called while a dispatch is in flight. Deferring the WHOLE completion (not
-/// just the presentation-install half) to
-/// [`drain_pending_secondary_window_completions`] — run once the enclosing
-/// dispatch's own checkout state clears — sidesteps that wall for both
-/// policies uniformly, through the one completion path
-/// [`finish_open_secondary_window`] already is.
-///
-/// # Errors
-/// If no realm is hosted on this thread to drive the completion on, or if
-/// dispatching to it fails — the pending window is then left unresolved;
-/// the caller decides what that means for their app (this function does not
-/// drop `pending` itself on that path, so the owner lane still eventually
-/// observes disclaim-on-drop through the returned `anyhow::Error`'s own
-/// caller, not a silent leak).
-///
-/// # Named residual
-/// [`finish_open_secondary_window`]'s own failure, and the pending open's
-/// own resolve-to-`Err` outcome, are both traced (`tracing::error!`) rather
-/// than propagated — by the time the spawned future completes (or the
-/// deferred drain runs) there is no synchronous caller left to return either
-/// to. A richer completion signal (a callback, or a `Future` the original
-/// caller can itself await) is real, scoped follow-up work, named here
-/// rather than silently assumed; today's contract is "traced, never
-/// silently dropped", which this function keeps.
+/// Registers a loop-owned pending request and requests its first owner poll.
+/// No realm or frame is required. Synchronous posting failure returns an error
+/// and removes the request; later errors are traced because the accepting caller
+/// has already returned. A future resident controller may expose completion to
+/// callers, but this existing public entry point remains fire-and-report.
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -473,64 +609,33 @@ fn spawn_pending_secondary_window_completion(
     config: SecondaryWindowInstallConfig,
     pending: flui_platform::PendingWindow,
 ) -> anyhow::Result<()> {
-    let driver = APP_RUNTIME
-        .with(|slot| {
-            let state = slot.borrow();
-            let (_, first_slot) = state.realms.iter().next()?;
-            let owner_thread = state.owner_thread?;
-            Some(RealmDispatcher {
-                owner_thread,
-                address: first_slot.address,
-            })
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "open_secondary_window's Pending arm requires an already-hosted realm to drive \
-                 its completion; none is installed on this thread"
-            )
-        })?;
-
-    let future: flui_scheduler::BoxedTask = Box::pin(async move {
-        match pending.await {
-            Ok(window) => {
-                if !secondary_install_admitted(&config.loop_identity) {
-                    window.close();
-                    tracing::debug!(
-                        "discarding secondary window completion from a stopped or replaced loop"
-                    );
-                    return;
-                }
-                // Enqueue, never call `finish_open_secondary_window`
-                // directly here -- see this function's own doc for why
-                // (this poll always runs mid-dispatch).
-                PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
-                    queue
-                        .borrow_mut()
-                        .push(PendingCompletion { config, window });
-                });
-            }
-            Err(error) => {
-                tracing::error!(
-                    policy = ?config.policy,
-                    %error,
-                    "open_secondary_window: the Pending arm failed to resolve to a window"
-                );
-            }
-        }
+    let proxy = with_owner_platform(flui_platform::OwnerPlatform::proxy)
+        .ok_or_else(|| anyhow::anyhow!("no platform owner"))?;
+    let waker = std::task::Waker::from(Arc::new(PendingOpenWake {
+        proxy: proxy.clone(),
+        request: Arc::clone(&config.reservation.0),
+    }));
+    let request_id = Arc::new(());
+    PENDING_SECONDARY_WINDOW_OPENS.with(|queue| {
+        queue.borrow_mut().push(PendingOpen {
+            request_id: Arc::clone(&request_id),
+            config,
+            pending,
+            waker,
+        });
     });
-
-    dispatch_platform_realm(
-        driver,
-        RealmTask::Frame(Box::new(move |realm| {
-            let token = realm.scheduler().spawn_local(future);
-            PENDING_SECONDARY_WINDOW_OPENS.with(|registry| registry.borrow_mut().push(token));
-        })),
-    )
-    .map_err(|error| {
-        anyhow::anyhow!(
-            "open_secondary_window: dispatching the Pending-arm completion task failed: {error:?}"
-        )
-    })
+    if let Err(error) = proxy.wake() {
+        let rejected = PENDING_SECONDARY_WINDOW_OPENS.with(|queue| {
+            let mut queue = queue.borrow_mut();
+            queue
+                .iter()
+                .position(|request| Arc::ptr_eq(&request.request_id, &request_id))
+                .map(|position| queue.remove(position))
+        });
+        drop(rejected);
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 /// [`open_secondary_window_impl`]'s shared completion path — installs the
@@ -552,15 +657,28 @@ fn finish_open_secondary_window(
     RealmDispatcher,
     Arc<dyn flui_platform::traits::PlatformWindow>,
 )> {
+    struct Uninstalled(Option<Arc<dyn flui_platform::PlatformWindow>>);
+    impl Drop for Uninstalled {
+        fn drop(&mut self) {
+            if let Some(window) = self.0.take()
+                && let Err(payload) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| window.close()))
+            {
+                std::mem::forget(payload);
+            }
+        }
+    }
+    let mut uninstalled = Uninstalled(Some(Arc::clone(&window)));
     use flui_platform::traits::{DispatchEventResult, PlatformInput};
-    if !secondary_install_admitted(&config.loop_identity) {
-        window.close();
+    if !secondary_install_admitted(&config.loop_identity) || !config.reservation.0.begin_install() {
         anyhow::bail!("secondary window completion belongs to a stopped or replaced loop");
     }
 
     let SecondaryWindowInstallConfig {
         loop_identity: _,
         policy,
+        shared_with,
+        reservation: _reservation,
         close_request_handler,
         frame_failure_detail,
     } = config;
@@ -573,11 +691,14 @@ fn finish_open_secondary_window(
             let shared_with = APP_RUNTIME
                 .with(|slot| {
                     let state = slot.borrow();
-                    let (_, first_slot) = state.realms.iter().next()?;
-                    let owner_thread = state.owner_thread?;
+                    let realm_id = shared_with?;
+                    let realm = state.realms.get(&realm_id)?.realm.as_ref()?;
                     Some(RealmDispatcher {
-                        owner_thread,
-                        address: first_slot.address,
+                        owner_thread: state.owner_thread?,
+                        address: flui_foundation::PresentationAddress {
+                            realm_id,
+                            presentation_id: realm.presentation_id(),
+                        },
                     })
                 })
                 .ok_or_else(|| {
@@ -683,6 +804,7 @@ fn finish_open_secondary_window(
         RealmTask::Event(PlatformToUi::SynchronizeLifecycle),
     );
 
+    uninstalled.0 = None;
     Ok((realm_dispatch, window))
 }
 
@@ -700,10 +822,237 @@ mod quit_notification_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[test]
+    fn pending_secondary_open_is_accepted_without_a_driver_realm() {
+        let _clear = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let deferred = platform.enable_deferred_window_open();
+        let owner_turns = platform.owner_turns();
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+        platform
+            .run(Box::new(|owner| {
+                install_owner_platform(owner).expect("install owner wake transport");
+                assert!(APP_RUNTIME.with(|slot| slot.borrow().realms.iter().next().is_none()));
+                assert!(
+                    open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                        .expect("a loop-owned pending open must not require a driver realm")
+                        .is_none()
+                );
+                Ok(())
+            }))
+            .expect("headless run");
+        owner_turns.drive(); // Initial poll installs a real PendingWindow waker.
+        let window =
+            std::thread::spawn(move || deferred.resolve_next().expect("resolve accepted request"))
+                .join()
+                .expect("worker completion");
+        assert!(APP_RUNTIME.with(|slot| slot.borrow().realms.iter().next().is_none()));
+        owner_turns.drive(); // The worker waker parked a window-independent owner turn.
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
+            1
+        );
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot
+                .borrow()
+                .pending_window_reservations
+                .load(Ordering::Acquire)),
+            0
+        );
+        window.close();
+        teardown_platform_realm();
+    }
+
+    #[test]
+    fn failed_worker_post_releases_reservation_and_closes_delivered_window_on_next_turn() {
+        let _clear = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let deferred = platform.enable_deferred_window_open();
+        let turns = platform.owner_turns();
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+        platform
+            .run(Box::new(|owner| {
+                install_owner_platform(owner).expect("install");
+                open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                    .expect("accept");
+                Ok(())
+            }))
+            .expect("run");
+        turns.drive();
+        turns.fail_next_wake();
+        let window = std::thread::spawn(move || deferred.resolve_next().expect("resolve"))
+            .join()
+            .expect("worker");
+        let closed = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&closed);
+        window.on_close(Box::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot
+                .borrow()
+                .pending_window_reservations
+                .load(Ordering::Acquire)),
+            0
+        );
+        assert!(
+            PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow()[0]
+                .config
+                .reservation
+                .0
+                .failed())
+        );
+        with_owner_platform(|owner| owner.proxy().wake())
+            .expect("owner")
+            .expect("later successful wake");
+        turns.drive();
+        assert_eq!(
+            closed.load(Ordering::SeqCst),
+            1,
+            "delivered uninstalled window explicitly closes"
+        );
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
+            0
+        );
+        assert!(PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow().is_empty()));
+    }
+
+    #[test]
+    fn explicit_quit_closes_delivered_but_unpolled_pending_window() {
+        let _clear = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let deferred = platform.enable_deferred_window_open();
+        let turns = platform.owner_turns();
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+        platform
+            .run(Box::new(|owner| {
+                install_owner_platform(owner).expect("install");
+                install_platform_quit_hook();
+                open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
+                    .expect("accept");
+                Ok(())
+            }))
+            .expect("run");
+        turns.drive();
+        let window = std::thread::spawn(move || deferred.resolve_next().expect("resolve"))
+            .join()
+            .expect("worker");
+        let closed = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&closed);
+        window.on_close(Box::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+        let proxy = with_owner_platform(flui_platform::OwnerPlatform::proxy).expect("owner");
+        proxy.request_quit().expect("quit");
+        turns.drive();
+        assert_eq!(closed.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot
+                .borrow()
+                .pending_window_reservations
+                .load(Ordering::Acquire)),
+            0
+        );
+        assert!(PENDING_SECONDARY_WINDOW_OPENS.with(|queue| queue.borrow().is_empty()));
+    }
+
+    #[test]
+    fn shared_pending_target_loss_does_not_retarget_surviving_realm() {
+        let _clear = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let deferred = platform.enable_deferred_window_open();
+        let turns = platform.owner_turns();
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+        platform
+            .run(Box::new(|owner| {
+                install_owner_platform(owner).expect("install");
+                let window_a = crate::app::window_test_support::headless_test_window();
+                let target =
+                    install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
+                open_secondary_window_impl(AppConfig::default(), WindowPolicy::SharedRealm)
+                    .expect("accept");
+                let window_b = crate::app::window_test_support::headless_test_window();
+                install_realm_alongside(crate::app::ui_realm::UiRealm::for_test(), &window_b)
+                    .expect("other realm");
+                close_this_window(target);
+                Ok(())
+            }))
+            .expect("run");
+        turns.drive();
+        let window = std::thread::spawn(move || deferred.resolve_next().expect("resolve"))
+            .join()
+            .expect("worker");
+        let closed = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&closed);
+        window.on_close(Box::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        }));
+        turns.drive();
+        assert_eq!(closed.load(Ordering::SeqCst), 1);
+        APP_RUNTIME.with(|slot| {
+            let runtime = slot.borrow();
+            assert_eq!(runtime.realms.iter().count(), 1);
+            let (_, slot) = runtime.realms.iter().next().expect("survivor");
+            assert_eq!(
+                slot.realm.as_ref().expect("restored").presentation_count(),
+                1
+            );
+            assert_eq!(
+                runtime.pending_window_reservations.load(Ordering::Acquire),
+                0
+            );
+        });
+        teardown_platform_realm();
+    }
+
+    #[test]
+    fn pending_request_readiness_and_failure_install_race_release_once() {
+        let platform: Box<dyn flui_platform::Platform> =
+            Box::new(flui_platform::HeadlessPlatform::new());
+        platform
+            .run(Box::new(|owner| {
+                for _ in 0..64 {
+                    let count = Arc::new(AtomicUsize::new(1));
+                    let request = Arc::new(PendingRequestState {
+                        state: parking_lot::Mutex::new((PendingPhase::Waiting, true)),
+                        count: Arc::clone(&count),
+                        platform: owner.shared(),
+                    });
+                    assert!(request.take_ready());
+                    assert!(!request.take_ready(), "unrelated turns cannot repoll");
+                    assert!(request.mark_ready());
+                    assert!(request.take_ready(), "wake during poll is retained");
+                    let barrier = Arc::new(std::sync::Barrier::new(2));
+                    let worker_request = Arc::clone(&request);
+                    let worker_barrier = Arc::clone(&barrier);
+                    let worker = std::thread::spawn(move || {
+                        worker_barrier.wait();
+                        worker_request.fail()
+                    });
+                    barrier.wait();
+                    let installed = request.begin_install();
+                    let failed = worker.join().expect("failure worker");
+                    assert_ne!(installed, failed, "one linearized winner");
+                    assert_eq!(count.load(Ordering::Acquire), usize::from(installed));
+                    assert!(!request.mark_ready());
+                    request.settle();
+                    request.settle();
+                    assert!(!request.fail());
+                    assert_eq!(count.load(Ordering::Acquire), 0);
+                }
+                Ok(())
+            }))
+            .expect("headless run");
+    }
+
     fn completion_config(policy: WindowPolicy) -> SecondaryWindowInstallConfig {
         SecondaryWindowInstallConfig {
             loop_identity: APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity)),
             policy,
+            shared_with: APP_RUNTIME
+                .with(|slot| slot.borrow().realms.iter().next().map(|(id, _)| *id)),
+            reservation: reserve_window().expect("reserve test completion"),
             close_request_handler: None,
             frame_failure_detail: FrameFailureDetail::Redacted,
         }
@@ -719,7 +1068,7 @@ mod quit_notification_tests {
             platform
                 .run(Box::new(move |owner| {
                     let shared = owner.shared();
-                    install_owner_platform(owner);
+                    install_owner_platform(owner).expect("install owner wake transport");
                     let primary = install_platform_realm(
                         crate::app::ui_realm::UiRealm::for_test(),
                         &crate::app::window_test_support::headless_test_window(),
@@ -789,7 +1138,7 @@ mod quit_notification_tests {
         platform
             .run(Box::new(move |owner| {
                 let shared = owner.shared();
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 let primary = install_platform_realm(
                     crate::app::ui_realm::UiRealm::for_test(),
                     &crate::app::window_test_support::headless_test_window(),
@@ -836,7 +1185,7 @@ mod quit_notification_tests {
         let saved = std::rc::Rc::clone(&old);
         flui_platform::headless_platform()
             .run(Box::new(move |owner| {
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 let previous = saved
                     .borrow_mut()
                     .replace(completion_config(WindowPolicy::SharedRealm));
@@ -855,7 +1204,7 @@ mod quit_notification_tests {
             .expect("old loop");
         flui_platform::headless_platform()
             .run(Box::new(move |owner| {
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 install_platform_realm(
                     crate::app::ui_realm::UiRealm::for_test(),
                     &crate::app::window_test_support::headless_test_window(),

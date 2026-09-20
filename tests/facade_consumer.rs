@@ -163,6 +163,7 @@ fn external_consumers_extend_and_test_through_the_facade() {
             "retained_focus_node_uses_context_capabilities_through_the_facade",
             "presentation_lifecycle_subscription_runs_through_the_facade",
             "presentation_lifecycle_capability_is_absent_when_not_installed",
+            "secondary_window_entry_point_requires_a_running_application",
         ] {
             assert!(
                 report.contains(&format!("{case} ... ok")),

@@ -206,8 +206,10 @@ impl Platform for MacOSPlatform {
 
         let ownership =
             super::loop_control::LoopOwnership::acquire(&app, Arc::clone(&self.loop_control))?;
+        let signal = Arc::clone(&self.loop_control.owner_signal);
         let platform: Arc<dyn Platform> = Arc::new(*self);
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)));
+        let hooks: Arc<dyn OwnerHooks> =
+            Arc::new(DirectOwnerHooks::with_signal(Arc::clone(&platform), signal));
         on_finish_launching(OwnerPlatform::new(platform, hooks))
             .map_err(PlatformError::bootstrap)?;
         ownership.run();

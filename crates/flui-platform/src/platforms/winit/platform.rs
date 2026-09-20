@@ -201,6 +201,7 @@ impl WinitRunState {
 /// }))?;
 /// ```
 pub struct WinitPlatform {
+    owner_signal: Mutex<Option<Arc<crate::shared::owner_signal::OwnerSignal>>>,
     /// Platform capabilities descriptor. `DesktopCapabilities` is a
     /// zero-sized, immutable-after-construction marker, so it lives directly
     /// on `WinitPlatform` (not inside the `Mutex`-guarded state) — that lets
@@ -426,6 +427,7 @@ impl WinitPlatform {
     /// Create a new winit platform
     pub fn new() -> Self {
         Self {
+            owner_signal: Mutex::new(None),
             capabilities: DesktopCapabilities,
             state: Arc::new(Mutex::new(WinitPlatformState::new())),
         }
@@ -462,6 +464,16 @@ impl WinitPlatform {
                     message: error.to_string(),
                 })?;
         let event_loop_proxy = event_loop.create_proxy();
+        let owner_proxy = event_loop_proxy.clone();
+        let signal = crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+            owner_proxy
+                .send_event(())
+                .map_err(|error| PlatformError::EventLoop {
+                    message: error.to_string(),
+                })
+        }));
+        let previous_signal = self.owner_signal.lock().replace(signal);
+        drop(previous_signal);
         let wake_owner = Arc::new(move || {
             if event_loop_proxy.send_event(()).is_err() {
                 tracing::trace!("winit event loop closed before its wake was delivered");
@@ -1033,6 +1045,13 @@ impl ApplicationHandler for WinitApp {
         }
 
         self.platform.mark_running();
+        let signal = self.platform.owner_signal.lock().clone();
+        if let Some(signal) = signal
+            && let Err(error) = signal.start()
+        {
+            tracing::error!(%error, "owner wake start failed");
+            self.request_exit(event_loop);
+        }
     }
 
     fn window_event(
@@ -1640,6 +1659,11 @@ impl WinitApp {
     }
 
     fn process_control(&mut self, event_loop: &ActiveEventLoop) {
+        let signal = self.platform.owner_signal.lock().clone();
+        if signal.as_ref().is_some_and(|signal| signal.quitting()) {
+            self.request_exit(event_loop);
+            return;
+        }
         if self.control.take_quit_requested() {
             self.complete_pending_closes(event_loop);
             self.request_exit(event_loop);
@@ -1695,6 +1719,12 @@ impl WinitApp {
             }
         }
 
+        if let Some(signal) = signal
+            && signal.drive()
+        {
+            self.request_exit(event_loop);
+            return;
+        }
         self.complete_pending_closes(event_loop);
 
         // Sweep entries whose requester claimed delivery and then dropped
@@ -1980,6 +2010,10 @@ impl WinitApp {
     }
 
     fn finish_shutdown(&mut self) {
+        let signal = self.platform.owner_signal.lock().clone();
+        if let Some(signal) = signal {
+            signal.close();
+        }
         self.release_open_window_callbacks();
         self.close_owner_lane();
         self.notify_quit_once();
@@ -2076,6 +2110,11 @@ impl Platform for WinitPlatform {
     }
 
     fn quit(&self) {
+        let signal = self.owner_signal.lock().clone();
+        if let Some(signal) = signal {
+            signal.fence();
+        }
+
         tracing::info!("Quit requested");
 
         let control = self.with_state(|state| match &mut state.run_state {
@@ -2380,7 +2419,32 @@ struct WinitOwnerHooks {
 }
 
 impl OwnerHooks for WinitOwnerHooks {
+    fn on_wake(
+        &self,
+        callback: Box<dyn FnMut() + Send>,
+    ) -> Result<(), crate::WakeRegistrationError> {
+        let signal = self
+            .platform
+            .owner_signal
+            .lock()
+            .clone()
+            .ok_or(crate::WakeRegistrationError::OwnerGone)?;
+        signal.register(callback)
+    }
+
     fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
+        if self
+            .platform
+            .owner_signal
+            .lock()
+            .as_ref()
+            .is_some_and(|signal| !signal.accepting())
+        {
+            return Err(OpenWindowError::OwnerGone {
+                rejected: Some(options),
+            });
+        }
+
         if let Some(event_loop_ptr) = ACTIVE_EVENT_LOOP.with(Cell::get) {
             // SAFETY: identical justification to `Platform::open_window`'s
             // same-thread fast path above — this call is reached only from
@@ -2421,6 +2485,13 @@ impl OwnerHooks for WinitOwnerHooks {
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {
         Arc::new(WinitProxyTransport {
+            signal: self
+                .platform
+                .owner_signal
+                .lock()
+                .as_ref()
+                .map(Arc::downgrade)
+                .unwrap_or_default(),
             platform: Arc::clone(&self.platform),
             owner_thread: self.owner_thread,
         })
@@ -2431,6 +2502,7 @@ impl OwnerHooks for WinitOwnerHooks {
 /// lane exactly as the pre-ADR-0039 cross-thread `Platform::open_window`
 /// path already did — enqueue-and-wake, claim-slot reply.
 struct WinitProxyTransport {
+    signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
     platform: Arc<WinitPlatform>,
     owner_thread: ThreadId,
 }
@@ -2447,10 +2519,25 @@ impl WinitProxyTransport {
 }
 
 impl ProxyTransport for WinitProxyTransport {
+    fn wake(&self) -> Result<(), ProxySendError<()>> {
+        let signal = self
+            .signal
+            .upgrade()
+            .ok_or(ProxySendError::OwnerGone { rejected: () })?;
+        signal.wake()
+    }
+
     fn open_window(
         &self,
         options: WindowOptions,
     ) -> Result<PendingWindow, ProxySendError<WindowOptions>> {
+        if self
+            .signal
+            .upgrade()
+            .is_none_or(|signal| !signal.accepting())
+        {
+            return Err(ProxySendError::OwnerGone { rejected: options });
+        }
         let Some(control) = self.control() else {
             return Err(ProxySendError::OwnerGone { rejected: options });
         };
@@ -2466,17 +2553,11 @@ impl ProxyTransport for WinitProxyTransport {
     }
 
     fn request_quit(&self) -> Result<(), ProxySendError<()>> {
-        match self.control() {
-            Some(control) => {
-                control.request_quit();
-                Ok(())
-            }
-            // A lane existed (winit always has one) but the loop already
-            // stopped -- `OwnerGone`, not `Unsupported`: this backend does
-            // support cross-thread quit requests in general, this
-            // particular loop instance is just gone.
-            None => Err(ProxySendError::OwnerGone { rejected: () }),
-        }
+        let signal = self
+            .signal
+            .upgrade()
+            .ok_or(ProxySendError::OwnerGone { rejected: () })?;
+        signal.request_quit()
     }
 
     fn owner_thread(&self) -> ThreadId {

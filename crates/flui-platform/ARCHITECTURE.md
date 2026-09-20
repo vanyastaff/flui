@@ -732,3 +732,33 @@ The newer macro is a stricter oracle; that is part of the migration's value.
 they assert and all PASS on `objc2`, driving the migrated `msg_send!` sites
 through the production launch path; the five real-`NSPasteboard` tests and the
 `display.rs` arithmetic run in the normal suite.
+
+### Window-independent owner turns
+
+`shared::owner_signal` owns coalescing, callback leases and quit admission for
+native desktop and headless. Physical posting is serialized with queued-state
+acknowledgement: a concurrent sender cannot receive success for another sender's
+failed post. Callbacks and capture drops execute outside locks; active delivery
+covers both, so nested owner dispatch cannot recursively invoke a replacement.
+Quit fences admission before posting and remains retryable after posting failure.
+Per-run weak proxy stamps retain the original owner thread even after expiry.
+
+macOS posts through GCD, winit through its existing EventLoopProxy, and Win32
+through a dedicated message-only class with its own typed userdata. Headless
+provides `HeadlessOwnerTurns`, an owner-local driver and one-shot posting failure
+injection for deterministic app recovery tests. Successful headless run return
+leaves the retained logical owner alive; failed bootstrap, quit and destruction
+close it. The app uses this transport for pending-window completion without a
+window or realm frame. It is not a generic closure executor.
+
+Run the live macOS oracle with a GUI session:
+
+```sh
+cargo build -p flui-platform --locked --example owner_wake_probe
+python3 scripts/check-owner-wake.py target/debug/examples/owner_wake_probe
+```
+
+External counters assert owner affinity, nonrecursive delivery, shutdown capture
+release and rejected work after quit. Windows evidence is cross-compilation,
+not native runtime verification. Mobile/web registration remains explicitly
+unsupported; proxy window creation support is separate from wake/quit support.

@@ -1292,6 +1292,7 @@ fn winit_proxy_reports_owner_gone_not_unsupported_after_loop_stop() {
     let transport = WinitProxyTransport {
         platform: Arc::clone(&platform),
         owner_thread,
+        signal: std::sync::Weak::new(),
     };
     let error = transport
         .open_window(options("post-shutdown"))

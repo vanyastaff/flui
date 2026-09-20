@@ -204,7 +204,7 @@ pub use platforms::LinuxPlatform;
 pub use platforms::MacOSPlatform;
 pub use platforms::{
     FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
-    HeadlessExitReevaluation, HeadlessPlatform, MockWindow,
+    HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]
@@ -233,7 +233,7 @@ pub use traits::{
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use traits::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
-    WaitError, WindowOpen,
+    WaitError, WakeRegistrationError, WindowOpen,
 };
 
 /// Get the current platform implementation

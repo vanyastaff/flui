@@ -527,3 +527,48 @@ previously only a documented convention.
 - **Win32 message-only-HWND wake + AppKit `CFRunLoopSource` wake** — the slice-3 lane adoptions; each is its own PR carrying the ADR-0027 §3 wake contract and the §4 drain-gate test.
 - **flui-platform CI test re-inclusion** — the honest gap in slice 1's verification story closes only when the STATUS_HEAP_CORRUPTION investigation lands; tracked there, not here.
 - **wasm posture** — single-threaded: `OwnerPlatform` is trivially constructible by the RAF loop; `PlatformProxy` is inert (`OwnerGone` after teardown never occurs because teardown never runs — ADR-0027 §7 notes web keeps its owner host for the page lifetime). No special casing required, but the web backend's `OwnerOps` impl should assert nothing rather than emulate marshaling.
+
+## Window-independent owner signals and pending opens
+
+Owner turns are independent of presentations. `OwnerPlatform::on_wake` installs
+an owner-thread callback and returns a typed registration error; workers carry
+only `PlatformProxy::wake` and `request_quit` signals. A shared pump coalesces
+bursts and leases callbacks outside locks, remaining active through capture
+cleanup. Reentrant wakes run on a later turn. Quit immediately fences wake and
+window admission; a failed physical post remains retryable without reopening
+admission. Callback and cleanup panics are contained at this native boundary.
+
+This extends the existing [winit EventLoopProxy](https://docs.rs/winit/0.30.13/winit/event_loop/struct.EventLoopProxy.html)
+shape with per-run weak identity and explicit posting errors. AppKit uses GCD;
+Win32 uses a dedicated message-only window and class, following
+[Microsoft's message-only window contract](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#message-only-windows).
+It does not reuse the visible-window procedure's userdata type. Headless exposes
+an owner-local manual driver: successful `run` return retains the logical owner,
+while quit, owner destruction and failed bootstrap close it. Mobile/web report
+unsupported registration. Proxy window creation support remains independent.
+
+Pending secondary-window requests now belong to the loop, replacing the prior
+first-realm AsyncDriver ownership. Reserve liveness before native creation; poll
+only initially-ready or explicitly-woken requests in finite batches outside TLS
+borrows. Shared requests capture an exact RealmId, never a later replacement.
+Separate requests survive their originating realm. Checkout restoration drains
+ready work; quit and replacement-loop identity fence even checked-out batches.
+Failures release reservations once and close resolved, uninstalled windows.
+Physical wake failure is traced and cancels the request; releasing owner-local
+payloads still needs a successful owner turn or shutdown. OS failure cannot
+promise progress. No spinning retry is introduced.
+
+Verification uses app headless worker-driven completion tests, shared pump race
+and panic tests, Windows cross-compilation, and the native macOS probe:
+
+```sh
+cargo build -p flui-platform --locked --example owner_wake_probe
+python3 scripts/check-owner-wake.py target/debug/examples/owner_wake_probe
+```
+
+The native command requires a macOS GUI session and proves normal return,
+windowless live-worker delivery, owner affinity, finite reentrant turns, quit
+priority and failed-bootstrap cleanup. It does not certify native Windows or
+Linux delivery. Secondary windows still lack mounted content and a renderer;
+a rendered resident root factory is a separate layer, not implied by this wake
+transport.

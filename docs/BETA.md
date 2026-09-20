@@ -404,3 +404,18 @@ closing the window logged both window close and platform quit and returned exit
 code 0 without a signal. A separate LaunchServices/background launch still showed
 a blank window; that rendering/startup issue remains open and is not covered by
 the direct-launch result.
+
+### Window-independent owner turns
+
+The app's pending native-window completion no longer depends on the first
+realm's frame driver. Headless coverage includes acceptance with no realms and
+worker completion after the originating realm closes. Native macOS probes verify
+windowless worker delivery and ordinary return; Windows is cross-compiled only.
+The owner callback is fallibly registered, signals are coalesced, and quit fences
+new work immediately. Physical posting failure remains an explicit progress
+limit, with cancellation and reservation release rather than spinning retries.
+
+This does not complete resident UI: a reusable rendered root installer, loop-root
+factory, and public resident controller remain required. Secondary windows still
+have no mounted content or frame renderer. Once-per-loop services, executors and
+watchers must remain separate from per-window renderer/mount/input setup.

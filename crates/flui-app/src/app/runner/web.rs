@@ -420,7 +420,7 @@ where
     // ownership hook is deferred until the platform exposes a callback
     // whose lifetime encloses the RAF registration.
     let result = platform.run(Box::new(move |owner| {
-        install_owner_platform(owner);
+        install_owner_platform(owner)?;
         bootstrap_web(root, config)?;
         tracing::info!("Web platform ready");
         Ok(())

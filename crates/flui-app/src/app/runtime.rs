@@ -660,6 +660,9 @@ pub(crate) struct AppRuntime {
         not(target_arch = "wasm32")
     ))]
     pub(super) loop_identity: Arc<()>,
+    /// Accepted loop-owned window requests, including currently polled/installing entries.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) pending_window_reservations: Arc<std::sync::atomic::AtomicUsize>,
     /// Realm-map mutations requested while
     /// [`Self::request_realm_install`]/[`Self::request_realm_uninstall`]
     /// decided they must defer. Applied, in request order, by
@@ -756,6 +759,8 @@ impl AppRuntime {
             owner_platform: None,
             dispatched_scheduler: None,
             dispatched_realm_id: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_window_reservations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             iterating_all_realms: false,
             #[cfg(all(
                 not(target_os = "android"),
@@ -1381,7 +1386,12 @@ impl AppRuntime {
             // exits anyway.
             #[cfg(not(target_arch = "wasm32"))]
             ExitPolicy::OnLastWindowClosed => {
-                self.realms.is_empty() && !self.service_registry.keeps_app_alive()
+                self.realms.is_empty()
+                    && self
+                        .pending_window_reservations
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        == 0
+                    && !self.service_registry.keeps_app_alive()
             }
             #[cfg(target_arch = "wasm32")]
             ExitPolicy::OnLastWindowClosed => self.realms.is_empty(),

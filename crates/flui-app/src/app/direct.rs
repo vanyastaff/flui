@@ -281,7 +281,7 @@ pub fn run_direct(
     // (ADR-0039 §6/§7) — see `run_desktop`'s matching comment.
     let _owner_host_clear_guard = crate::app::runner::OwnerHostClearGuard::arm();
     platform.run(Box::new(move |owner| {
-        crate::app::runner::install_owner_platform(owner);
+        crate::app::runner::install_owner_platform(owner)?;
         bootstrap_direct(config, render_fn)?;
         tracing::info!("FLUI direct render mode ready");
         Ok(())

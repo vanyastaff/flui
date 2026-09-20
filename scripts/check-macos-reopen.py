@@ -10,7 +10,7 @@ import tempfile
 import time
 
 CASES = ["visible", "empty", "starting", "nested", "replacement", "before-delivery", "quit-inside",
-         "quit-pending", "panic", "drop-reentry", "drop-panic", "stale", "os-visible", "os-empty"]
+         "quit-pending", "proxy-quit-pending", "panic", "drop-reentry", "drop-panic", "stale", "os-visible", "os-empty"]
 
 
 def run_case(binary, bundle, case):
@@ -48,7 +48,7 @@ def run_case(binary, bundle, case):
     print(stdout, end="")
     print(stderr, end="", file=sys.stderr)
     markers = [f"REOPEN_RETURNED_PID={process.pid}", f"REOPEN_CASE={case}"]
-    if case not in ("quit-pending", "drop-reentry", "drop-panic", "before-delivery"):
+    if case not in ("quit-pending", "proxy-quit-pending", "drop-reentry", "drop-panic", "before-delivery"):
         markers += ["REOPEN_DELIVERED=0"]
     if case in ("nested", "panic"):
         markers += ["REOPEN_DELIVERED=1"]

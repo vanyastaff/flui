@@ -837,7 +837,7 @@ where
     // (ADR-0039 §6).
     let _owner_host_clear_guard = OwnerHostClearGuard::arm();
     let result = platform.run(Box::new(move |owner| {
-        install_owner_platform(owner);
+        install_owner_platform(owner)?;
         // `?` converts `bootstrap_desktop`'s `anyhow::Error` into the
         // callback's opaque `BootstrapError` (anyhow's own `From` impl).
         bootstrap_desktop(

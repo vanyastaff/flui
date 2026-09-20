@@ -30,7 +30,7 @@ use crate::{
         PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput, PlatformReadyCallback,
         PlatformTextInput, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
         WindowBounds, WindowEvent, WindowId, WindowOpen, WindowOptions,
-        owner::{ClosedTransport, DirectOwnerHooks, OwnerHooks, ProxyTransport},
+        owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport},
     },
 };
 
@@ -65,11 +65,14 @@ fn next_headless_window_id() -> WindowId {
 /// - CI environments without display servers
 /// - Benchmarking without rendering overhead
 pub struct HeadlessPlatform {
+    signal: Arc<crate::shared::owner_signal::OwnerSignal>,
+    wake_failure: Arc<std::sync::atomic::AtomicBool>,
     capabilities: DesktopCapabilities,
     state: Arc<Mutex<HeadlessState>>,
 }
 
 struct HeadlessState {
+    owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
     clipboard: Arc<MockClipboard>,
@@ -105,6 +108,7 @@ impl HeadlessPlatform {
     /// Create a new headless platform
     pub fn new() -> Self {
         let state = HeadlessState {
+            owner_signal: Weak::new(),
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
             clipboard: Arc::new(MockClipboard::new()),
@@ -119,9 +123,37 @@ impl HeadlessPlatform {
             exit_reevaluation_requested: false,
         };
 
-        Self {
+        let wake_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let failure = Arc::clone(&wake_failure);
+        let platform = Self {
+            wake_failure,
+            signal: crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+                if failure.swap(false, Ordering::AcqRel) {
+                    Err(PlatformError::EventLoop {
+                        message: "injected headless owner wake failure".into(),
+                    })
+                } else {
+                    Ok(())
+                }
+            })),
             capabilities: DesktopCapabilities,
             state: Arc::new(Mutex::new(state)),
+        };
+        {
+            let mut state = platform.state.lock();
+            state.owner_signal = Arc::downgrade(&platform.signal);
+        }
+        platform
+    }
+
+    /// Obtain the manual owner-turn driver before `run` consumes this platform.
+    #[must_use]
+    pub fn owner_turns(&self) -> HeadlessOwnerTurns {
+        HeadlessOwnerTurns {
+            signal: Arc::downgrade(&self.signal),
+            wake_failure: Arc::downgrade(&self.wake_failure),
+            state: Arc::downgrade(&self.state),
+            owner_affinity: std::marker::PhantomData,
         }
     }
 
@@ -186,6 +218,17 @@ impl Platform for HeadlessPlatform {
         // underlying `Mutex<HeadlessState>`, just a durable handle to it
         // that survives the move.
         let state_handle = Arc::clone(&self.state);
+        let signal = Arc::clone(&self.signal);
+        signal.bind_owner();
+        struct BootstrapGuard(Option<Arc<crate::shared::owner_signal::OwnerSignal>>);
+        impl Drop for BootstrapGuard {
+            fn drop(&mut self) {
+                if let Some(signal) = self.0.take() {
+                    signal.close();
+                }
+            }
+        }
+        let mut bootstrap_guard = BootstrapGuard(Some(Arc::clone(&signal)));
 
         self.with_state(|state| {
             state.is_running = true;
@@ -206,23 +249,35 @@ impl Platform for HeadlessPlatform {
         let hooks: Arc<dyn OwnerHooks> = if deferred_window_open {
             Arc::new(HeadlessDeferredOwnerHooks {
                 state: state_handle,
+                signal: Arc::clone(&signal),
                 owner_thread,
             })
         } else {
-            Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)))
+            Arc::new(DirectOwnerHooks::with_signal(
+                Arc::clone(&platform),
+                Arc::clone(&signal),
+            ))
         };
 
         // In headless mode, just call on_ready and return immediately. A
         // fallible bootstrap has nowhere else to go on this backend since
         // there is no loop to keep running with a half-built app --
         // propagate straight out of `run`.
-        on_ready(OwnerPlatform::new(platform, hooks)).map_err(PlatformError::bootstrap)?;
+        if let Err(error) = on_ready(OwnerPlatform::new(platform, hooks)) {
+            signal.close();
+            return Err(PlatformError::bootstrap(error));
+        }
+        signal.start().map_err(|error| PlatformError::EventLoop {
+            message: error.to_string(),
+        })?;
 
+        bootstrap_guard.0 = None;
         tracing::info!("Headless platform ready");
         Ok(())
     }
 
     fn quit(&self) {
+        self.signal.close();
         tracing::info!("Quitting headless platform");
 
         // Consume before calling: callback bodies and captured-data destructors
@@ -379,16 +434,29 @@ fn create_mock_window(
 /// [`HeadlessDeferredWindowOpens::resolve_next`] completes the oldest one on
 /// demand.
 struct HeadlessDeferredOwnerHooks {
+    signal: Arc<crate::shared::owner_signal::OwnerSignal>,
     state: Arc<Mutex<HeadlessState>>,
     owner_thread: ThreadId,
 }
 
 impl OwnerHooks for HeadlessDeferredOwnerHooks {
+    fn on_wake(
+        &self,
+        callback: Box<dyn FnMut() + Send>,
+    ) -> Result<(), crate::WakeRegistrationError> {
+        self.signal.register(callback)
+    }
+
     fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
         // No wake-worthy event loop to notify on abandonment (this backend
         // never parks a real loop on the request) -- see `claim_slot`'s own
         // doc for why a no-op wake is the correct choice for a generic
         // caller like this one.
+        if !self.signal.accepting() {
+            return Err(OpenWindowError::OwnerGone {
+                rejected: Some(options),
+            });
+        }
         let (slot, handle) = claim_slot::<OpenWindowResult>(Arc::new(|| {}));
         self.state.lock().pending_opens.push((slot, options));
         Ok(WindowOpen::Pending(PendingWindow::new(
@@ -398,10 +466,57 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
     }
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {
-        // This test mode defers window creation only; it does not add a
-        // cross-thread request lane, so `PlatformProxy` stays permanently
-        // unsupported here exactly as it is under `DirectOwnerHooks`.
-        Arc::new(ClosedTransport::new(self.owner_thread))
+        Arc::new(crate::shared::owner_signal::SignalTransport::new(
+            &self.signal,
+        ))
+    }
+}
+
+/// Deterministic headless owner-turn driver. `run` returning does not close it.
+#[derive(Clone)]
+pub struct HeadlessOwnerTurns {
+    wake_failure: Weak<std::sync::atomic::AtomicBool>,
+    owner_affinity: std::marker::PhantomData<std::rc::Rc<()>>,
+    signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    state: Weak<Mutex<HeadlessState>>,
+}
+static_assertions::assert_not_impl_any!(HeadlessOwnerTurns: Send, Sync);
+impl std::fmt::Debug for HeadlessOwnerTurns {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessOwnerTurns").finish_non_exhaustive()
+    }
+}
+impl HeadlessOwnerTurns {
+    /// Inject one physical notification failure for deterministic recovery tests.
+    /// The following post succeeds normally; this does not close the owner.
+    pub fn fail_next_wake(&self) {
+        if let Some(failure) = self.wake_failure.upgrade() {
+            failure.store(true, Ordering::Release);
+        }
+    }
+    /// Perform one owner turn, including a pending explicit quit. No worker callback execution.
+    pub fn drive(&self) {
+        let Some(signal) = self.signal.upgrade() else {
+            return;
+        };
+        assert_eq!(
+            signal.owner(),
+            thread::current().id(),
+            "headless owner turn must run on its owner"
+        );
+        if signal.drive() {
+            signal.close();
+            if let Some(state) = self.state.upgrade() {
+                let callback = {
+                    let mut state = state.lock();
+                    state.is_running = false;
+                    state.handlers.quit.take()
+                };
+                if let Some(mut callback) = callback {
+                    callback();
+                }
+            }
+        }
     }
 }
 
@@ -501,11 +616,14 @@ impl HeadlessExitReevaluation {
             return false;
         }
 
-        let quit_callback = {
+        let (quit_callback, signal) = {
             let mut state = platform_state.lock();
             state.is_running = false;
-            state.handlers.quit.take()
+            (state.handlers.quit.take(), state.owner_signal.upgrade())
         };
+        if let Some(signal) = signal {
+            signal.close();
+        }
         if let Some(mut callback) = quit_callback {
             callback();
         }
@@ -856,11 +974,14 @@ impl MockWindow {
             return;
         }
 
-        let quit_callback = {
+        let (quit_callback, signal) = {
             let mut state = platform_state.lock();
             state.is_running = false;
-            state.handlers.quit.take()
+            (state.handlers.quit.take(), state.owner_signal.upgrade())
         };
+        if let Some(signal) = signal {
+            signal.close();
+        }
         if let Some(mut callback) = quit_callback {
             callback();
         }
@@ -1470,6 +1591,129 @@ impl Clipboard for MockClipboard {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn automatic_exit_closes_retained_owner_signal_before_quit_callback() {
+        for close_window in [false, true] {
+            let platform = HeadlessPlatform::new();
+            let turns = platform.owner_turns();
+            let reevaluation = platform.exit_reevaluation();
+            let saved = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let retained = std::rc::Rc::clone(&saved);
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let observed = Arc::clone(&calls);
+            let callback_fenced = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let fenced = Arc::clone(&callback_fenced);
+            Box::new(platform)
+                .run(Box::new(move |owner| {
+                    owner
+                        .on_wake(Box::new(move || {
+                            observed.fetch_add(1, Ordering::SeqCst);
+                        }))
+                        .expect("register");
+                    let proxy = owner.proxy();
+                    owner.shared().on_quit(Box::new(move || {
+                        fenced.store(
+                            matches!(proxy.wake(), Err(crate::ProxySendError::OwnerGone { .. })),
+                            Ordering::SeqCst,
+                        );
+                    }));
+                    owner.shared().set_exit_policy_hook(Box::new(|| true));
+                    let window = if close_window {
+                        Some(
+                            owner
+                                .open_window(WindowOptions::default())
+                                .expect("open")
+                                .try_ready()
+                                .expect("ready"),
+                        )
+                    } else {
+                        None
+                    };
+                    retained.replace(Some(owner));
+                    if let Some(window) = window {
+                        window.close();
+                    }
+                    Ok(())
+                }))
+                .expect("run");
+            if !close_window {
+                saved
+                    .borrow()
+                    .as_ref()
+                    .expect("owner")
+                    .shared()
+                    .request_exit_policy_reevaluation();
+                assert!(reevaluation.drive());
+            }
+            let owner = saved.borrow();
+            let owner = owner.as_ref().expect("retained owner");
+            assert!(callback_fenced.load(Ordering::SeqCst));
+            assert!(matches!(
+                owner.proxy().wake(),
+                Err(crate::ProxySendError::OwnerGone { .. })
+            ));
+            assert!(matches!(
+                owner.on_wake(Box::new(|| {})),
+                Err(crate::WakeRegistrationError::OwnerGone)
+            ));
+            turns.drive();
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn moved_platform_binds_manual_driver_to_run_thread_and_failed_bootstrap_closes_proxy() {
+        let platform = HeadlessPlatform::new();
+        std::thread::spawn(move || {
+            let turns = platform.owner_turns();
+            let saved = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let saved_callback = std::rc::Rc::clone(&saved);
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let recorded = Arc::clone(&calls);
+            Box::new(platform)
+                .run(Box::new(move |owner| {
+                    owner
+                        .on_wake(Box::new(move || {
+                            recorded.fetch_add(1, Ordering::SeqCst);
+                        }))
+                        .expect("registration");
+                    owner.proxy().wake().expect("wake");
+                    saved_callback.replace(Some(owner));
+                    Ok(())
+                }))
+                .expect("run");
+            turns.drive();
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            saved.borrow().as_ref().expect("owner").quit();
+            assert!(
+                saved
+                    .borrow()
+                    .as_ref()
+                    .expect("owner")
+                    .proxy()
+                    .wake()
+                    .is_err()
+            );
+
+            let retained = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let retained_callback = std::rc::Rc::clone(&retained);
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Box::new(HeadlessPlatform::new()).run(Box::new(move |owner| {
+                    retained_callback.replace(Some(owner));
+                    panic!("bootstrap panic");
+                }))
+            }));
+            assert!(panic.is_err());
+            let proxy = retained.borrow().as_ref().expect("retained owner").proxy();
+            assert!(matches!(
+                proxy.wake(),
+                Err(crate::ProxySendError::OwnerGone { .. })
+            ));
+        })
+        .join()
+        .expect("owner thread");
+    }
+
     use std::sync::atomic::AtomicUsize;
 
     use super::*;

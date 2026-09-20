@@ -156,14 +156,14 @@ declarations = [
     "pub use platforms::IOSPlatform;",
     "pub use platforms::LinuxPlatform;",
     "pub use platforms::MacOSPlatform;",
-    "pub use platforms::{ FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessPlatform, MockWindow, };",
+    "pub use platforms::{ FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow, };",
     "pub use platforms::WebPlatform;",
     "pub use platforms::WindowsPlatform;",
     "pub use platforms::WinitPlatform;",
     "pub use shared::{PlatformHandlers, WindowCallbacks};",
     "pub use task::{Task, TaskLabel};",
     "pub use traits::{ AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions, };",
-    "pub use traits::{ OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform, WaitError, WindowOpen, };",
+    "pub use traits::{ OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform, WaitError, WakeRegistrationError, WindowOpen, };",
     "pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {",
     "pub fn headless_platform() -> Box<dyn Platform> {",
 ]
@@ -478,98 +478,22 @@ tested by sending `terminate:`, not by asserting physical Cmd+Q/menu wiring. \
 No keep-alive enum variant is added; the native veto case uses the platform \
 hook and the existing app service-completion test verifies notifier wiring.
 
-**A second product gap this required fixing: `open_secondary_window` \
-assumed `OwnerPlatform::open_window` always resolves `Ready`.** It does, \
-inside `on_ready`, and on the headless backend (no owner lane at all) -- but \
-the real winit backend defers any call after `on_ready` \
-(`WinitOwnerHooks::open_owner_window`), which is exactly the calling \
-convention this function's own doc names as its intended use (a callback the \
-FIRST window already registered). An earlier revision called `WindowOpen::\
-try_ready` directly and surfaced `Pending` as a hard error, so the advertised \
-"open a second window at runtime" flow could never work on the real desktop \
-backend it is meant for. `open_secondary_window_impl` now matches both arms: \
-`Ready` installs inline (unchanged, calling `finish_open_secondary_window` \
-directly); `Pending` is accepted and its completion is spawned on the first \
-realm hosted on this thread's own `flui_scheduler::AsyncDriver` \
-(`spawn_pending_secondary_window_completion`) -- never a hand-rolled \
-busy-loop: the `PendingWindow`'s own wake (fired when the owner lane \
-delivers) requests a fresh frame, and that frame's `UpdateScheduler::\
-drive_async_tasks` polls the task to completion.
+Secondary-window creation handles Ready inline and Pending through a loop-owned \
+finite polling batch. A reservation exists before native creation and while a \
+batch is checked out. Separate-realm requests survive origin-realm closure; \
+shared requests retain the exact target RealmId and never retarget. Worker \
+completion sends a stamped owner wake independent of windows and realm frames. \
+Only ready futures are polled; installation waits for realm checkouts to clear. \
+Quit and loop replacement fence completion admission. Failed physical posting \
+releases the reservation and records an error; owner-local payload cleanup \
+requires a later successful owner turn or shutdown, without busy retries. \
+Headless tests drive the public owner-turn transport after worker resolution \
+with zero realms and after the originating window closes.
 
-A first revision of this fix had the spawned future call \
-`finish_open_secondary_window` directly from inside its own poll -- which \
-review caught as broken for `WindowPolicy::SharedRealm` specifically: \
-`UpdateScheduler::drive_async_tasks` always runs from INSIDE a dispatched \
-`RealmTask::Frame` (`dispatched_realm_id` is `Some` for the whole checkout), \
-and `install_presentation_alongside` (SharedRealm's own install primitive) \
-has no defer-to-idle queue of its own -- it hard-refuses \
-(`InstallPresentationError::DispatchInFlight`, a `debug_assert!` panic in \
-debug builds) while a dispatch is in flight, which a `Pending` completion \
-always is. `SeparateRealms` happened to work anyway (`install_realm_\
-alongside` already defers through `AppRuntime::request_realm_install`'s own \
-queue), masking that `SharedRealm` could never complete on the real desktop \
-backend this whole fix targets. The corrected shape: the spawned future \
-never calls `finish_open_secondary_window` itself -- it only enqueues the \
-resolved `(WindowPolicy, window)` pair onto a new thread-local queue \
-(`PENDING_SECONDARY_WINDOW_COMPLETIONS`), drained only once this thread's \
-dispatch/hot-restart-visit checkout state clears (`dispatch_platform_realm`'s \
-own tail, mirroring where `AppRuntime`'s own deferred realm-map mutations \
-already apply; `for_each_installed_realm`'s tail drains it too, for \
-symmetry, though no production driver visits every realm yet). One \
-completion path (`finish_open_secondary_window`) for both `WindowPolicy` \
-variants -- only the trigger point differs between `Ready` (inline) and \
-`Pending` (deferred to the enclosing dispatch's own tail) -- so "both arms \
-install and wire identically" is genuinely true now, not merely for the \
-policy that happened to already have a queue.
-
-Tested end-to-end -- Pending -> resolved -> both-window close/exit -- on \
-the headless backend's own deferred-open test seam (`HeadlessPlatform::\
-enable_deferred_window_open`, `HeadlessDeferredWindowOpens::resolve_next`) \
-for BOTH policies: `crates/flui-platform`'s own `deferred_window_open_\
-resolves_via_the_pending_arm_like_the_real_winit_owner_lane` pins the \
-mechanism in isolation; `crates/flui-app`'s `open_secondary_window_\
-completes_through_the_pending_arm_like_the_real_winit_owner_lane` \
-(`SeparateRealms`) and `shared_realm_completes_through_the_pending_arm_\
-like_the_real_winit_owner_lane` (`SharedRealm` -- the harder case this \
-correction targets, since its own install target IS the realm whose \
-dispatch checkout the completion's poll runs inside of) each pin the full \
-embedder-seam flow; `dead_driver_realm_before_pending_resolution_\
-disclaims_cleanly_without_zombie_installing` additionally pins the \
-fail-closed path when the driver realm dies before its own pending \
-completion resolves (the captured `PendingWindow` drops along with the \
-realm's `AsyncDriver`, disclaiming the request rather than zombie-installing \
-anything later). A `Pending` completion's own failure (the resolve itself \
-failing, or `finish_open_secondary_window` failing on the resolved window) \
-is traced, never silently dropped. Named residual: this proves the \
-completion seam generically, not a full winit event-loop integration test \
--- no CI gate exercises the real winit backend end-to-end at all (see \
-`flui-platform`'s own evidence-must-live-outside-the-test-gate constraint), \
-so confidence that `WinitOwnerHooks::open_owner_window`'s own `Pending` \
-construction and its lane's reply-delivery path compose correctly with this \
-completion is still design-level, not test-level -- named honestly rather \
-than silently assumed covered.
-
-**Named, deliberately out-of-scope residual:** a window `open_secondary_ \
-window` opens shows no widget content and never renders a frame. Two \
-distinct reasons, neither papered over. First, rendering in this crate is \
-one canonical frame-pump closure PER BACKEND (desktop/Android/web), pinned \
-by `runner_frame_ordering.rs`'s own mechanical guards \
-(`every_runner_frame_site_uses_the_shared_drive_frame_helper`, \
-`every_pump_async_arm_calls_finish_then_drive_async_tasks`) at exactly three \
-call sites -- giving a second window its own independently-rendering frame \
-pump means generalizing those three sites (and this guard's own pinned \
-count) into one shared per-window helper, real work belonging to its own \
-reviewed slice, not folded silently in here. Second, `UiRealm:: \
-attach_root_widget` (and everything built on it -- gesture arena, focus \
-root, vsync scope) reads a realm's PRIMARY presentation only, so mounting a \
-tree into a `SharedRealm` window's non-primary presentation has no capability \
-to call yet -- neither the forest slice (#607) nor the routing slice (#608) \
-added one. What IS real regardless: the window opens, is live-addressed, and \
-its registry/forest membership and input/close/focus/visibility/resize \
-dispatch are genuine and exactly as isolated (or shared) as `WindowPolicy`'s \
-own doc claims -- `hot_restart_with_two_realms_and_with_two_presentations` \
-pins that hot-restart's own visit primitive sees exactly what each policy \
-installed.
+Secondary windows still have no widget root, renderer or frame callback. \
+A resident root factory and rendered secondary-window installer remain work \
+beyond this transport. Native macOS owner delivery is separately exercised \
+by the bounded owner_wake_probe; Windows has compile-only evidence here.
 
 It remains one TLS-scoped instance per owner thread (`APP_RUNTIME` in \
 `runner/host.rs`), not one per process -- unchanged by this slice, and not this \
@@ -699,7 +623,7 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "fn drain_pending_secondary_window_completions" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
-    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn dead_driver_realm_before_pending_resolution_disclaims_cleanly_without_zombie_installing" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn pending_open_survives_origin_realm_close_and_worker_resolution" },
 ]
 
 [[contract]]
@@ -2652,17 +2576,13 @@ claim-slot at-most-once replies. The winit lane's `ControlSender` composes \
 `flui-foundation`'s `ClaimSlot`/`ClaimHandle` for its reply protocol \
 (bounded, typed `Full`/`OwnerGone` at enqueue; claimed-or-abandoned at \
 resolution) and is `PlatformProxy`'s public transport on that backend. \
-macOS/Windows/web/Android/headless transports are `ClosedTransport`, which \
-returns `ProxySendError::Unsupported` (PERMANENTLY, until slice 3 gives \
-them a lane) for both `open_window` and `request_quit` -- a maintainer fix \
-round correction: the vocabulary originally overloaded `OwnerGone` for this \
-(a name that means "a lane existed and died"), which `Unsupported` now \
-replaces on every lane-less backend; `OwnerGone` is reserved for the winit \
-lane after its loop has actually stopped. `request_quit` itself is now \
-fallible (`Result<(), ProxySendError<()>>`, `#[must_use]`): winit returns \
-`Ok(())` (coalesced, as before) or `OwnerGone` if the loop already stopped; \
-lane-less backends return `Unsupported`. The drain-anchor gate contract \
-(ADR-0039 §4) is scoped to slice 3's lane generalization. \
+macOS, Win32 and headless support window-independent wake and quit signals; \
+winit uses the same coalesced signal pump over its existing EventLoopProxy. \
+Signals carry no UI closures. OwnerPlatform::on_wake is fallible with typed \
+Unsupported/OwnerGone. ProxySendError::WakeFailed reports physical posting \
+failure separately from owner death. Quit fences new wake and native window \
+admission immediately. Direct native/headless proxy open_window remains \
+Unsupported; mobile/web owner wake remains Unsupported. \
 Registry-occupancy bound is honest, not admission-time: queued entries ≤ \
 lane capacity (256); delivered-but-unclaimed entries persist as the \
 requester's pinned liability until claim or drop. `ClaimHandle<T>` also \
@@ -3022,8 +2942,14 @@ contains = "pub struct PlatformProxy"
 classification = "experimental"
 thread_affinity = "Clone + Send + Sync; callable from any thread, including the owner (is_owner_thread() is diagnostic only)"
 owner = "OwnerPlatform::proxy() mint; carried by workers/realms/tasks that need to reach the owner"
-failure_semantics = "open_window returns Result<PendingWindow, ProxySendError<WindowOptions>>; request_quit returns Result<(), ProxySendError<()>> (#[must_use]). ProxySendError::Unsupported is permanent on lane-less backends (windows/macos/web/android/headless) until slice 3; ProxySendError::OwnerGone is reserved for the winit lane after its loop has actually stopped."
-consumers = ["winit lane (real transport)", "windows/macos/headless/web/android (ClosedTransport)"]
+failure_semantics = "open_window returns typed Unsupported on direct native/headless/mobile/web transports; winit supports claim-slot requests. wake/request_quit return typed Unsupported, OwnerGone or WakeFailed. Quit fences admission even when posting fails and remains retryable."
+consumers = [
+    "winit control lane",
+    "macOS GCD owner signal",
+    "Win32 message-only owner signal",
+    "headless manual owner turns",
+    "app pending-window completion wakers",
+]
 owner_issue = 551
 
 [[surface]]

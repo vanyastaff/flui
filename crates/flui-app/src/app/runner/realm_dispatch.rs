@@ -1699,7 +1699,7 @@ mod realm_dispatch_tests {
         platform
             .run(Box::new(move |owner| {
                 let shared = owner.shared();
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 let primary = install_test_realm();
                 let secondary = install_realm_alongside(
                     crate::app::ui_realm::UiRealm::for_test(),
@@ -1745,7 +1745,7 @@ mod realm_dispatch_tests {
         platform
             .run(Box::new(move |owner| {
                 let shared = owner.shared();
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 shared.set_exit_policy_hook(Box::new(|| true));
                 super::super::host::install_platform_quit_hook();
                 test(shared, reevaluation);
@@ -2385,7 +2385,7 @@ mod realm_dispatch_tests {
         let installed_slot_for_on_ready = Rc::clone(&installed_slot);
         platform
             .run(Box::new(move |owner| {
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 // Installs BOTH halves of the production wiring: the
                 // exit-policy hook and the keep-alive completion notifier.
                 install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
@@ -2646,7 +2646,7 @@ mod realm_dispatch_tests {
         let _clear_guard = OwnerHostClearGuard::arm();
         let platform = headless_platform();
         let result = platform.run(Box::new(|owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             assert!(
                 with_owner_platform(|_| ()).is_some(),
                 "owner_platform must be installed before the first realm install"
@@ -3861,7 +3861,7 @@ mod realm_dispatch_tests {
         let dispatcher_a_slot: Rc<Cell<Option<RealmDispatcher>>> = Rc::new(Cell::new(None));
         let dispatcher_a_slot_for_on_ready = Rc::clone(&dispatcher_a_slot);
         let ready = platform.run(Box::new(move |owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             let window_a = with_owner_platform(|owner| {
                 owner.open_window(flui_platform::WindowOptions::default())
             })
@@ -4026,7 +4026,7 @@ mod realm_dispatch_tests {
         let quit_calls = Arc::new(AtomicUsize::new(0));
         let quit_calls_for_on_ready = Arc::clone(&quit_calls);
         let ready = platform.run(Box::new(move |owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
 
             let quit_calls_for_handler = Arc::clone(&quit_calls_for_on_ready);
@@ -4187,7 +4187,7 @@ mod realm_dispatch_tests {
         let installed_slot: Rc<RefCell<Option<Installed>>> = Rc::new(RefCell::new(None));
         let installed_slot_for_on_ready = Rc::clone(&installed_slot);
         let ready = platform.run(Box::new(move |owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
 
             let quit_calls_for_handler = Arc::clone(&quit_calls_for_on_ready);
@@ -4481,7 +4481,7 @@ mod realm_dispatch_tests {
         let quit_calls_for_on_ready = Arc::clone(&quit_calls);
 
         let ready = Box::new(platform).run(Box::new(move |owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
 
             let quit_calls_for_handler = Arc::clone(&quit_calls_for_on_ready);
@@ -4664,7 +4664,7 @@ mod realm_dispatch_tests {
         let quit_calls_for_on_ready = Arc::clone(&quit_calls);
 
         let ready = Box::new(platform).run(Box::new(move |owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
 
             let quit_calls_for_handler = Arc::clone(&quit_calls_for_on_ready);
@@ -4827,31 +4827,20 @@ mod realm_dispatch_tests {
         drop(clear_guard);
     }
 
-    /// Non-blocking correctness lead (not a merge-blocking finding): if the
-    /// driver realm dies BEFORE its own `open_secondary_window` `Pending`
-    /// request ever resolves, the fail-closed path must run cleanly. The
-    /// spawned completion future is owned by the driver realm's own
-    /// `UpdateScheduler`/`AsyncDriver`; tearing that realm down (its sole
-    /// presentation closing) drops the `AsyncDriver`'s task map, which drops
-    /// the future, which drops the `PendingWindow` it captured --
-    /// `ClaimHandle`'s own disclaim-on-drop transitions the request to
-    /// `Abandoned` (see `flui_foundation::claim_slot`'s module doc), never a
-    /// panic or a wedged owner lane. `HeadlessDeferredWindowOpens::
-    /// resolve_next`, called AFTER the realm is gone, still builds and hands
-    /// back a window (nobody was left to deliver it to matters at the
-    /// `ClaimSlot::deliver` level, traced as a debug message, not here) --
-    /// what this test actually pins is that an abandoned request never
-    /// zombie-installs a realm/presentation nobody asked for anymore.
+    /// An accepted separate-realm request survives its originating window and
+    /// completes on a window-independent owner turn after the worker resolves it.
     #[test]
-    fn dead_driver_realm_before_pending_resolution_disclaims_cleanly_without_zombie_installing() {
+    fn pending_open_survives_origin_realm_close_and_worker_resolution() {
         use flui_platform::traits::Platform;
 
         let clear_guard = OwnerHostClearGuard::arm();
         let platform = flui_platform::HeadlessPlatform::new();
-        let deferred = platform.enable_deferred_window_open();
+        let deferred = Arc::new(platform.enable_deferred_window_open());
+        let turns = platform.owner_turns();
+        let worker_deferred = Arc::clone(&deferred);
 
         let ready = Box::new(platform).run(Box::new(move |owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
 
             let mut pending_a = match with_owner_platform(|owner| {
                 owner.open_window(flui_platform::WindowOptions::default())
@@ -4879,18 +4868,12 @@ mod realm_dispatch_tests {
                 close_this_window(dispatcher_a);
             }));
 
-            // Request window B -- Pending, spawns its completion onto realm
-            // A's own AsyncDriver -- but never resolve it.
+            // The accepted request belongs to the loop, not realm A.
             let opened =
                 open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
                     .expect("the Pending arm must be accepted, not treated as an error");
             assert!(opened.is_none());
 
-            // Kill the driver realm BEFORE window B's open ever resolves --
-            // `window_a` is the realm's sole presentation, so this
-            // uninstalls the whole realm, dropping its UpdateScheduler/
-            // AsyncDriver and, with it, the still-pending completion
-            // future.
             window_a.close();
             assert_eq!(
                 APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
@@ -4898,29 +4881,31 @@ mod realm_dispatch_tests {
                 "the driver realm must be gone before window B's open ever resolves"
             );
 
-            // Resolving now must not panic: the ClaimSlot's `deliver` sees
-            // the handle already abandoned (traced, discarded) --
-            // and, crucially, this must never zombie-install a
-            // realm/presentation nobody is left to claim.
-            let resolved = deferred.resolve_next();
-            assert!(
-                resolved.is_some(),
-                "resolve_next still builds and hands back the window even though the request \
-                 was abandoned in the meantime -- abandonment is observed at the ClaimSlot \
-                 level, not by resolve_next refusing to run"
-            );
-            assert_eq!(
-                APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
-                0,
-                "an abandoned Pending request must never zombie-install a realm/presentation \
-                 after the fact -- the completion future that would have done so was dropped \
-                 along with the driver realm's own AsyncDriver, never polled again"
-            );
-
             Ok(())
         }));
         ready.expect("on_ready must not fail");
-
+        turns.drive();
+        let resolved =
+            std::thread::spawn(move || worker_deferred.resolve_next().expect("accepted request"))
+                .join()
+                .expect("worker");
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
+            0
+        );
+        turns.drive();
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
+            1
+        );
+        assert_eq!(
+            APP_RUNTIME.with(|slot| slot
+                .borrow()
+                .pending_window_reservations
+                .load(std::sync::atomic::Ordering::Acquire)),
+            0
+        );
+        resolved.close();
         teardown_platform_realm();
         drop(clear_guard);
     }
