@@ -321,6 +321,24 @@ ios-sim:
 } }}
 
 [group("test")]
+[doc("Executable iOS touch-and-resume coverage on the ALREADY BOOTED simulator named by <udid>: builds the Material demo for aarch64-apple-ios-sim, stages it into a minimal .app, and drives it through scripts/check-ios-input.py. The instrument is XCUITest, because nothing else can put a UITouch into the application: simctl has no touch subcommand, and host UI automation needs the Accessibility grant (and photographs the host's desktop) - XCUITest synthesizes the touch inside the simulator through the platform's own automation channel. The oracle is pixels, and has to be: the iOS backend publishes no accessibility tree, so a widget cannot be read by identifier. A real tap on a list row must change the displayed selection, Home-then-return must still display it, and two controls must behave - a fresh launch resets it (so the return comparison could have failed) and a tap on no target changes nothing (so the tap comparison distinguishes a hit from any touch). Exit 2 (CANNOT VERIFY) when the host cannot take the measurement. This closes the 'simulator UI automation timed out' gap in docs/BETA.md. macOS-host only; on a Mac run: just ios-input-check <udid>")]
+ios-input-check udid:
+    {{ if os() == "macos" {
+"set -e\nBUNDLE=dev.flui.ios-demo\nAPP=target/ios-input/IosDemo.app\ncargo build -p flui --locked --features material --example ios_demo --target aarch64-apple-ios-sim\nrm -rf \"$APP\"\nmkdir -p \"$APP\"\ncp examples/Info.plist.ios_demo \"$APP/Info.plist\"\ncp target/aarch64-apple-ios-sim/debug/examples/ios_demo \"$APP/ios_demo\"\n\n# Remove any previous install before the run. xcodebuild installs the artifact\n# it was pointed at, and XCUIApplication launches whatever is installed under\n# that bundle id - so a stale copy left here could be the binary actually\n# measured. With it gone, a failed install means nothing launches and the probe\n# reports CANNOT VERIFY instead of testing the wrong build.\nxcrun simctl uninstall " + quote(udid) + " \"$BUNDLE\" 2>/dev/null || true\nrc=0\npython3 -B scripts/check-ios-input.py " + quote(udid) + " \"$APP\" || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'ios-input-check CANNOT VERIFY: this host could not take the measurement (no Xcode toolchain, the simulator was not booted, or the probe produced no report) - nothing was decided about the framework; details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'ios-input-check FAILED: a real touch did not reach a widget, or the state it changed did not survive Home/return, or a control did not behave - details and per-stage screenshots above'\nfi\nexit \"$rc\""
+} else {
+"echo 'Skipping ios-input-check on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-input-check <udid>'"
+} }}
+
+[group("test")]
+[doc("Runs the same iOS touch-and-resume gate against an arbitrary staged .app, for candidates the CLI built rather than the in-repo demo. <app> is an already-staged .app directory (xcodebuild installs it) and <udid> an already booted simulator; extra arguments go to scripts/check-ios-input.py. Tap geometry is a property of the application, so a candidate whose widgets are not the demo's needs it: for the generated sole-flui counter, whose Increment button is at normalized y 0.097 and whose only changing text sits directly under the status-bar clock (so the region must be a centre band, or it crops out exactly what the tap changes): just ios-input-check-app <app> <udid> --target-tap 0.5,0.097 --empty-tap 0.5,0.5 --region 0.25,0.0,0.75,0.96. See scripts/check-ios-input.py for why each of those three arguments exists. macOS-host only")]
+ios-input-check-app app udid +ARGS:
+    {{ if os() == "macos" {
+"python3 -B scripts/check-ios-input.py " + quote(udid) + " " + quote(app) + " " + ARGS
+} else {
+"echo 'Skipping ios-input-check-app on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-input-check-app <app> <udid>'"
+} }}
+
+[group("test")]
 [doc("Live iOS safe-area layout check: builds the sole-facade fixture for aarch64-apple-ios-sim through scripts/check-ios-safe-area.py and runs it on the ALREADY BOOTED simulator named by <udid>, asserting the marker the application writes after comparing both laid-out geometries against the view's own safeAreaInsets. Evidence belongs in docs/BETA.md § 'iOS safe-area layout'. Needs a macOS host with Xcode, the aarch64-apple-ios-sim target and a booted arm64 simulator; on a Mac run: just ios-safe-area-check <udid>")]
 ios-safe-area-check udid:
     {{ if os() == "macos" {

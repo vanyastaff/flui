@@ -488,9 +488,82 @@ external generated sole-`flui` counter on the dedicated iOS 26.2 simulator. The
 installed bundle's identifier, executable permissions, SHA-256 equality with
 the Cargo executable, and single-scene `FluiSceneDelegate` manifest passed
 direct checks. The run log is `/tmp/flui-ios-counter-final-run.log`.
-Simulator UI automation timed out, so real touch input and retained displayed
-counter state after Home/return remain unverified for this candidate. This does
-not complete native application acceptance or its final code-quality review.
+Simulator UI automation timed out in that attempt, so real touch input and
+retained displayed counter state after Home/return were unverified **by it**.
+Both are now measured, on that same candidate and on the in-repo Material demo,
+by `just ios-input-check <udid>` (`scripts/check-ios-input.py` driving
+`scripts/ios-input-probe.swift`).
+
+The instrument is XCUITest, because nothing else can put a `UITouch` into the
+application: `xcrun simctl` has no touch subcommand, and driving the Simulator
+window through host UI automation needs the Accessibility grant and photographs
+the host's desktop instead of the device. XCUITest synthesises the touch inside
+the simulator through the platform's own automation channel, so the host needs
+no desktop permission. The oracle is pixels, and has to be: this backend
+publishes no accessibility tree, so a widget cannot be read by identifier.
+
+On the iPhone 16e simulator (iOS 26.2), both subjects carried all four stages:
+
+| subject | tap | Home / return | fresh launch | tap on no target |
+|---|---|---|---|---|
+| `dev.flui.beta-counter` (the generated sole-`flui` candidate) | `0` → `1` | `1` retained | reset to `0` | unchanged |
+| `dev.flui.ios-demo` (in-repo Material demo) | `Selected: none` → `Selected: Item 0` | retained | reset | unchanged |
+
+The changed pixels are one glyph and one line and nothing else. The counter's
+tap moved 817 pixels, all inside a 25×34 box at x[572,597] y[101,135] of
+1170×2532 — its own digit — and the demo's moved 8 383 across the single 301×34
+status line at x[434,735] y[197,231]. The compared content-region hashes ran
+`75a445c4 → a341befd → a341befd → 75a445c4 → 75a445c4` (counter) and
+`7512336b → f0f7afd5 → f0f7afd5 → 7512336b → 7512336b` (demo) for
+initial → tap → return → relaunch → empty tap. Evidence, including the screen
+and the exact region hashed for every stage, is under `target/ios-input*/<run>/`.
+
+Two of those stages are controls, so the pass is a discrimination rather than an
+absence of measurement: the fresh launch resets, which is what makes the return
+comparison falsifiable, and a real tap at a point with no target changes nothing,
+which is what separates a hit from any touch. The gate was also run against
+subjects that must not pass, and each failure mode was reached: a UIKit
+application that draws and installs no touch handling at all fails with "the tap
+changed nothing on screen" and its relaunch control reports that it therefore
+proves nothing (exit 1); an animating application, whose screen never stops
+changing, is CANNOT_VERIFY rather than a verdict (exit 2); an unknown simulator
+is CANNOT_VERIFY (exit 2).
+
+Three defects surfaced while validating the gate, all in the harness and all
+fixed — each had silently produced a confident wrong answer first:
+
+- **A predecessor run's evidence was read as this run's.** The test host's
+  container survives reinstallation, and the probe wrote to a fixed path in it,
+  so screenshots of a stage that never happened were copied into the next run's
+  record and were byte-identical across stages that its own report said had
+  changed. Evidence now goes to a directory named for the run, and the checker
+  clears the probe's `tmp/` before starting. This is the same defect class the
+  macOS launch-route gate records for owner-name window matching.
+- **The compared region cropped out the only pixels the tap was meant to
+  change.** The counter draws its count immediately below the status-bar clock,
+  and the region's 6 % top inset excluded it, so a delivered touch and a lost
+  one looked identical. The region is now a rectangle — `--region` — and the
+  caller must ensure it covers what the tap changes.
+- **A blank screen was read as a lost touch.** One run caught the application
+  before it had drawn anything (ink 0.00 %) and reported that a real touch did
+  not reach a widget; there was no widget. A first stage below 0.05 % ink is now
+  CANNOT_VERIFY, the same "was anything drawn at all" distinction the macOS
+  launch-route gate draws with its colour oracle.
+
+Two observations from this measurement are **not** closed by it. First, the
+bundle measured for the counter is the one the CLI produced on 2026-09-19; the
+gate re-measured that artifact rather than rebuilding it, so this is the
+candidate as it exists, not a fresh build of the current revision. Second, both
+subjects draw under the system chrome: the counter's column and the demo's app
+bar title sit beneath the status-bar clock rather than below it, and the counter
+— whose template asks for `Center` — lays its column out at the top of the
+screen instead of the middle (its content occupies y 0-305 of 2532). The
+committed macOS record for the same generated artifact describes its only ink
+cluster at y[103,137] of an 800×632 window, the same top-anchored position, so
+this appears to be shared across backends rather than an iOS property. It is
+recorded here as an observation with images, not a diagnosis: no cause has been
+measured, and nothing about it was changed. This does not complete native
+application acceptance or its final code-quality review.
 
 Window execution eligibility is independent of focus, visibility and GPU surface
 availability. Temporary UIKit inactivity preserves the surface and frame delivery;
