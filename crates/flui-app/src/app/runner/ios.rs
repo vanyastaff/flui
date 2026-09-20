@@ -8,10 +8,10 @@
 //! # Lifecycle
 //!
 //! The backend already translates UIKit's transitions into the framework's
-//! two signals (`platforms/ios/platform.rs`), and this runner consumes them
-//! exactly as Android consumes its `MainEvent`s:
+//! independent observations (`platforms/ios/platform.rs`):
 //!
-//! - `on_active_status_change` → the `Resumed`/`Paused` lifecycle ladder.
+//! - focus and visibility → addressed presentation facts.
+//! - execution → a per-presentation suspension cap, independent of host lifecycle.
 //! - `on_surface_status_change` → drop/rebuild the wgpu surface, so a
 //!   `CAMetalLayer`-backed surface is never alive across a suspension.
 //!
@@ -26,7 +26,6 @@
 //! capability is inert. See [`super::hot_reload`] for the seam and
 //! `docs/hot-reload.md` for the two-layer model.
 
-use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -407,22 +406,40 @@ where
         }
     }));
 
-    // Active status -> Resumed/Paused ladder. iOS's ladder is the same one
-    // Android's backgrounding signal needs (a real pause, not just
-    // Inactive/Hidden).
-    window.on_active_status_change(Box::new(move |resumed| {
-        let target = if resumed {
-            AppLifecycleState::Resumed
-        } else {
-            AppLifecycleState::Paused
-        };
+    window.on_active_status_change(Box::new(move |focused| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Frame(Box::new(move |realm| {
-                realm.update_host_lifecycle(target);
-            })),
+            RealmTask::Event(PlatformToUi::WindowFocus(focused)),
         );
     }));
+    window.on_visibility_status_change(Box::new(move |visible| {
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::WindowVisibility(visible)),
+        );
+    }));
+    window.on_execution_state_change(Box::new(move |state| {
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::WindowExecution(state)),
+        );
+    }));
+    // Register before sampling, so native facts changed during renderer bootstrap
+    // cannot be replaced by a synthetic Resumed observation.
+    let execution = window.execution_state();
+    let focused = window.is_focused();
+    let visible = window.is_visible();
+    let _ = dispatch_platform_realm(
+        realm_dispatch,
+        RealmTask::Frame(Box::new(move |realm| {
+            realm.synchronize_window_snapshot(
+                realm_dispatch.address.presentation_id,
+                execution,
+                focused,
+                visible,
+            );
+        })),
+    );
 
     // Platform quit -> Detached (frames disabled, listeners notified).
     //
@@ -450,10 +467,6 @@ where
         std::thread::current().id(),
         realm_dispatch.owner_thread,
         "iOS bootstrap must run on the realm's owner thread"
-    );
-    let _ = dispatch_platform_realm(
-        realm_dispatch,
-        RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
     );
 
     // 10. Request the initial redraw.

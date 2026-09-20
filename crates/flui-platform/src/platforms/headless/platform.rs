@@ -764,6 +764,7 @@ struct MockWindowState {
     scale_factor: f64,
     focused: bool,
     visible: bool,
+    execution: crate::WindowExecutionState,
     maximized: bool,
     minimized: bool,
     closed: bool,
@@ -782,6 +783,7 @@ impl Clone for MockWindowState {
             bounds: self.bounds,
             scale_factor: self.scale_factor,
             focused: self.focused,
+            execution: self.execution,
             visible: self.visible,
             maximized: self.maximized,
             minimized: self.minimized,
@@ -812,6 +814,7 @@ impl MockWindow {
                 },
                 scale_factor: 1.0,
                 focused: true,
+                execution: crate::WindowExecutionState::Running,
                 visible: options.visible,
                 maximized: false,
                 minimized: false,
@@ -1042,6 +1045,18 @@ impl MockWindow {
         self.callbacks.dispatch_active_status_change(focused);
     }
 
+    /// Simulate reversible native execution eligibility; terminal close stays terminal.
+    pub fn simulate_execution_state(&self, execution: crate::WindowExecutionState) {
+        {
+            let mut state = self.state.lock();
+            if state.closed {
+                return;
+            }
+            state.execution = execution;
+        }
+        self.callbacks.dispatch_execution_state_change(execution);
+    }
+
     /// Simulate a visibility/occlusion change for testing.
     /// Fires the registered `on_visibility_status_change` callback.
     pub fn simulate_visibility(&self, visible: bool) {
@@ -1141,6 +1156,15 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn is_focused(&self) -> bool {
         self.state.lock().focused
+    }
+
+    fn execution_state(&self) -> crate::WindowExecutionState {
+        let state = self.state.lock();
+        if state.closed {
+            crate::WindowExecutionState::Detached
+        } else {
+            state.execution
+        }
     }
 
     fn is_visible(&self) -> bool {
@@ -2273,6 +2297,65 @@ mod tests {
         // No on_should_close registered → defaults to allow
         assert!(window.simulate_close());
         assert!(closed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn execution_snapshot_is_committed_before_callbacks_and_close_is_terminal() {
+        let window = Arc::new(MockWindow::new(
+            WindowId(0),
+            WindowOptions::default(),
+            Weak::new(),
+        ));
+        window.simulate_execution_state(crate::WindowExecutionState::Suspended);
+        assert_eq!(
+            window.execution_state(),
+            crate::WindowExecutionState::Suspended
+        );
+        let observer = Arc::clone(&window);
+        let history = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&history);
+        window.on_execution_state_change(Box::new(move |state| {
+            assert_eq!(observer.execution_state(), state);
+            observed.lock().push(state);
+        }));
+        for state in [
+            crate::WindowExecutionState::Detached,
+            crate::WindowExecutionState::Running,
+        ] {
+            window.simulate_execution_state(state);
+        }
+        assert_eq!(history.lock().len(), 2);
+        assert!(window.simulate_close());
+        window.simulate_execution_state(crate::WindowExecutionState::Running);
+        assert_eq!(
+            window.execution_state(),
+            crate::WindowExecutionState::Detached
+        );
+        assert_eq!(history.lock().len(), 2);
+    }
+
+    #[test]
+    fn execution_callback_can_close_without_resurrection_or_late_delivery() {
+        let window = Arc::new(MockWindow::new(
+            WindowId(0),
+            WindowOptions::default(),
+            Weak::new(),
+        ));
+        let inner = Arc::clone(&window);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        window.on_execution_state_change(Box::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            assert!(inner.simulate_close());
+            inner.simulate_execution_state(crate::WindowExecutionState::Running);
+        }));
+        window.simulate_execution_state(crate::WindowExecutionState::Suspended);
+        window.simulate_execution_state(crate::WindowExecutionState::Running);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            window.execution_state(),
+            crate::WindowExecutionState::Detached
+        );
     }
 
     #[test]

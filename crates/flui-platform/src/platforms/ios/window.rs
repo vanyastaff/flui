@@ -15,6 +15,7 @@
 
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -26,13 +27,15 @@ use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_foundation::{NSDefaultRunLoopMode, NSObjectProtocol, NSRunLoop, NSSet, NSString};
 use objc2_quartz_core::CADisplayLink;
-use objc2_ui_kit::{UITouch, UIView, UIViewController, UIWindow};
+use objc2_ui_kit::{
+    UIApplication, UIApplicationState, UITouch, UIView, UIViewController, UIWindow,
+};
 
 use flui_types::geometry::{DevicePixels, Pixels, Size, device_px, px};
 
 use super::events::touch_to_pointer_events;
 use crate::shared::WindowCallbacks;
-use crate::traits::{CursorError, PlatformWindow, WindowId};
+use crate::traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId};
 
 /// The content view: a `UIView` subclass that forwards touches.
 ///
@@ -216,6 +219,23 @@ impl TouchPhase {
     }
 }
 
+struct IOSLifecycle {
+    execution: WindowExecutionState,
+    focused: bool,
+    visible: bool,
+    generation: u64,
+    pending: VecDeque<(LifecycleObservation, u64)>,
+    dispatching: bool,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum LifecycleObservation {
+    Active,
+    Inactive,
+    Background,
+    Foreground,
+}
+
 /// iOS window wrapping a `UIWindow` and its content view.
 pub struct IOSWindow {
     window: Retained<UIWindow>,
@@ -223,6 +243,7 @@ pub struct IOSWindow {
     view: Retained<FluiView>,
     callbacks: Arc<WindowCallbacks>,
     closed: Arc<AtomicBool>,
+    lifecycle: Arc<parking_lot::Mutex<IOSLifecycle>>,
     /// The window is only meaningfully sized once the screen is attached;
     /// `logical_size` reads the view live, so this is not cached beyond the
     /// resize comparison above.
@@ -256,14 +277,32 @@ impl IOSWindow {
         // the application's only window.
         window.makeKeyAndVisible();
 
-        Self {
+        let this = Self {
             window,
             view_controller,
             view,
             callbacks,
             closed: Arc::new(AtomicBool::new(false)),
+            lifecycle: Arc::new(parking_lot::Mutex::new(IOSLifecycle {
+                execution: if UIApplication::sharedApplication(mtm).applicationState()
+                    == UIApplicationState::Background
+                {
+                    WindowExecutionState::Suspended
+                } else {
+                    WindowExecutionState::Running
+                },
+                focused: UIApplication::sharedApplication(mtm).applicationState()
+                    == UIApplicationState::Active,
+                visible: UIApplication::sharedApplication(mtm).applicationState()
+                    != UIApplicationState::Background,
+                generation: 0,
+                pending: VecDeque::new(),
+                dispatching: false,
+            })),
             id: WindowId(1),
-        }
+        };
+        this.set_frame_tick_paused(this.execution_state() != WindowExecutionState::Running);
+        this
     }
 
     /// The callback storage, for the platform's input/frame dispatch.
@@ -277,11 +316,139 @@ impl IOSWindow {
         self.view.set_display_link_paused(paused);
     }
 
+    /// Serialize native observations independently of the input/frame FIFO.
+    pub(super) fn observe_lifecycle(&self, observation: LifecycleObservation) {
+        use LifecycleObservation::{Background, Foreground};
+        if self.closed.load(Ordering::SeqCst) {
+            return;
+        }
+        // A callback may pump a nested UIKit run loop before our queue drains.
+        // Suspend the physical link immediately, even for a queued observation.
+        if matches!(observation, Background) {
+            self.set_frame_tick_paused(true);
+        }
+        {
+            let mut state = self.lifecycle.lock();
+            if matches!(observation, Background | Foreground) {
+                state.generation = state.generation.wrapping_add(1);
+            }
+            let generation = state.generation;
+            state.pending.push_back((observation, generation));
+            if state.dispatching {
+                return;
+            }
+            state.dispatching = true;
+        }
+        struct Drain<'a>(&'a parking_lot::Mutex<IOSLifecycle>);
+        impl Drop for Drain<'_> {
+            fn drop(&mut self) {
+                self.0.lock().dispatching = false;
+            }
+        }
+        let _drain = Drain(&self.lifecycle);
+        loop {
+            let next = self.lifecycle.lock().pending.pop_front();
+            let Some((observation, generation)) = next else {
+                break;
+            };
+            if self.closed.load(Ordering::SeqCst) {
+                self.lifecycle.lock().pending.clear();
+                break;
+            }
+            self.apply_lifecycle(observation, generation);
+        }
+    }
+
+    fn apply_lifecycle(&self, observation: LifecycleObservation, generation: u64) {
+        use crate::shared::LifecycleEvent;
+        use LifecycleObservation::{Active, Background, Foreground, Inactive};
+        {
+            let mut state = self.lifecycle.lock();
+            if matches!(observation, Background | Foreground) && state.generation != generation {
+                return;
+            }
+            match observation {
+                Active => {
+                    if state.execution != WindowExecutionState::Running {
+                        return;
+                    }
+                    state.focused = true;
+                }
+                Inactive => state.focused = false,
+                Background => {
+                    state.execution = WindowExecutionState::Suspended;
+                    state.visible = false;
+                    state.focused = false;
+                }
+                Foreground => {
+                    state.visible = true;
+                    if state.execution != WindowExecutionState::Running {
+                        state.focused = false;
+                    }
+                }
+            }
+        }
+        let current = || {
+            !self.closed.load(Ordering::SeqCst) && self.lifecycle.lock().generation == generation
+        };
+        let emit = |event| self.callbacks.dispatch_lifecycle_immediate(event);
+        match observation {
+            Inactive => emit(LifecycleEvent::Focus(false)),
+            Active => {
+                emit(LifecycleEvent::Focus(true));
+                if current() {
+                    self.set_frame_tick_paused(false);
+                    self.request_redraw();
+                }
+            }
+            Background => {
+                emit(LifecycleEvent::Execution(WindowExecutionState::Suspended));
+                if !current() {
+                    return;
+                }
+                emit(LifecycleEvent::Focus(false));
+                if !current() {
+                    return;
+                }
+                emit(LifecycleEvent::Visibility(false));
+                if !current() {
+                    return;
+                }
+                emit(LifecycleEvent::Surface(false));
+            }
+            Foreground => {
+                emit(LifecycleEvent::Surface(true));
+                if !current() {
+                    return;
+                }
+                let focused = {
+                    let mut state = self.lifecycle.lock();
+                    state.execution = WindowExecutionState::Running;
+                    state.focused
+                };
+                emit(LifecycleEvent::Focus(focused));
+                if !current() {
+                    return;
+                }
+                emit(LifecycleEvent::Visibility(true));
+                if !current() {
+                    return;
+                }
+                emit(LifecycleEvent::Execution(WindowExecutionState::Running));
+                if current() {
+                    self.set_frame_tick_paused(false);
+                    self.request_redraw();
+                }
+            }
+        }
+    }
+
     /// Detach the root view controller and hide the window. Idempotent.
     pub(super) fn close_inner(&self) {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
+        self.set_frame_tick_paused(true);
         self.window.setHidden(true);
         self.window.setRootViewController(None);
     }
@@ -351,12 +518,20 @@ impl PlatformWindow for IOSWindow {
         tracing::trace!("request_redraw: demand recorded; the CADisplayLink delivers the frame");
     }
 
+    fn execution_state(&self) -> WindowExecutionState {
+        if self.closed.load(Ordering::SeqCst) {
+            WindowExecutionState::Detached
+        } else {
+            self.lifecycle.lock().execution
+        }
+    }
+
     fn is_focused(&self) -> bool {
-        self.window.isKeyWindow()
+        self.lifecycle.lock().focused && !self.closed.load(Ordering::SeqCst)
     }
 
     fn is_visible(&self) -> bool {
-        !self.window.isHidden()
+        self.lifecycle.lock().visible && !self.closed.load(Ordering::SeqCst)
     }
 
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
@@ -419,6 +594,7 @@ impl Clone for IOSWindow {
             view: self.view.clone(),
             callbacks: Arc::clone(&self.callbacks),
             closed: Arc::clone(&self.closed),
+            lifecycle: Arc::clone(&self.lifecycle),
             id: self.id,
         }
     }

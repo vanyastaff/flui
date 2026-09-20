@@ -136,6 +136,15 @@ pub(in crate::app) enum PlatformToUi {
     /// `AppLifecycleState` derivation below, alongside
     /// [`WindowVisibility`](Self::WindowVisibility).
     WindowFocus(bool),
+    /// Reversible native execution eligibility for one presentation.
+    #[cfg_attr(
+        any(target_arch = "wasm32", target_os = "android"),
+        expect(
+            dead_code,
+            reason = "these runners retain their existing host lifecycle transport"
+        )
+    )]
+    WindowExecution(flui_platform::WindowExecutionState),
     /// Window visibility/occlusion changed (winit's `WindowEvent::Occluded`,
     /// negated — see `PlatformWindow::on_visibility_status_change`).
     ///
@@ -326,6 +335,7 @@ impl PlatformToUi {
                 tracing::trace!(?size, scale_factor, "realm resize committed");
             }
             Self::WindowFocus(focused) => realm.update_window_focus(presentation_id, focused),
+            Self::WindowExecution(state) => realm.update_window_execution(presentation_id, state),
             Self::WindowHover(inside) => {
                 realm.handle_window_hover_addressed(presentation_id, inside);
             }
@@ -1873,6 +1883,130 @@ mod realm_dispatch_tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn window_execution_is_local_reversible_and_cannot_override_host_or_terminal_stop() {
+        use flui_platform::WindowExecutionState::{Detached, Running, Suspended};
+        with_quit_notification_loop(|_, _| {
+            let a = install_test_realm();
+            let b = install_presentation_alongside(a, &test_window()).expect("shared presentation");
+            resume_for_quit(a);
+            dispatch_platform_realm(
+                a,
+                RealmTask::Event(PlatformToUi::WindowExecution(Suspended)),
+            )
+            .expect("suspend A");
+            dispatch_platform_realm(
+                b,
+                RealmTask::Frame(Box::new(move |realm| {
+                    assert_eq!(
+                        realm.scheduler().lifecycle_state(),
+                        AppLifecycleState::Resumed
+                    );
+                    assert!(realm.scheduler().frames_enabled());
+                    assert_eq!(
+                        realm
+                            .presentation_widgets_for_test(a.address.presentation_id)
+                            .lifecycle_source()
+                            .current(),
+                        Some(AppLifecycleState::Paused)
+                    );
+                })),
+            )
+            .expect("sibling survives");
+            for (execution, expected) in [
+                (Detached, AppLifecycleState::Detached),
+                (Running, AppLifecycleState::Inactive),
+            ] {
+                dispatch_platform_realm(
+                    a,
+                    RealmTask::Event(PlatformToUi::WindowExecution(execution)),
+                )
+                .expect("observation");
+                dispatch_platform_realm(
+                    a,
+                    RealmTask::Frame(Box::new(move |realm| {
+                        assert_eq!(
+                            realm
+                                .presentation_widgets_for_test(a.address.presentation_id)
+                                .lifecycle_source()
+                                .current(),
+                            Some(expected)
+                        );
+                    })),
+                )
+                .expect("local stream");
+            }
+            dispatch_platform_realm(
+                a,
+                RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Paused)),
+            )
+            .expect("host pause");
+            dispatch_platform_realm(a, RealmTask::Event(PlatformToUi::WindowExecution(Running)))
+                .expect("late running");
+            dispatch_platform_realm(
+                a,
+                RealmTask::Frame(Box::new(move |realm| {
+                    assert_eq!(
+                        realm.scheduler().lifecycle_state(),
+                        AppLifecycleState::Paused
+                    );
+                    assert!(!realm.scheduler().frames_enabled());
+                    realm.stop_presentation(a.address.presentation_id);
+                    realm.update_window_execution(a.address.presentation_id, Running);
+                    realm.update_window_focus(a.address.presentation_id, true);
+                    assert_eq!(
+                        realm
+                            .presentation_widgets_for_test(a.address.presentation_id)
+                            .lifecycle_source()
+                            .current(),
+                        Some(AppLifecycleState::Detached)
+                    );
+                })),
+            )
+            .expect("host and terminal fences");
+        });
+    }
+
+    #[test]
+    fn window_execution_snapshot_notifies_paused_without_transient_resumed() {
+        with_quit_notification_loop(|_, _| {
+            let a = install_test_realm();
+            dispatch_platform_realm(
+                a,
+                RealmTask::Frame(Box::new(move |realm| {
+                    let history = Rc::new(RefCell::new(Vec::new()));
+                    let observed = Rc::clone(&history);
+                    let handle = realm
+                        .presentation_widgets_for_test(a.address.presentation_id)
+                        .lifecycle_source()
+                        .handle();
+                    let (_, _subscription) = handle
+                        .subscribe(move |state| observed.borrow_mut().push(state))
+                        .expect("subscription");
+                    realm.synchronize_window_snapshot(
+                        a.address.presentation_id,
+                        flui_platform::WindowExecutionState::Suspended,
+                        true,
+                        true,
+                    );
+                    assert_eq!(
+                        handle.snapshot().expect("live"),
+                        Some(AppLifecycleState::Paused)
+                    );
+                    assert!(!realm.scheduler().frames_enabled());
+                    assert!(!history.borrow().contains(&AppLifecycleState::Resumed));
+                    realm.update_host_lifecycle(AppLifecycleState::Inactive);
+                    realm.update_window_focus(a.address.presentation_id, true);
+                    assert_eq!(
+                        handle.snapshot().expect("live"),
+                        Some(AppLifecycleState::Paused)
+                    );
+                })),
+            )
+            .expect("initial suspended snapshot");
+        });
     }
 
     #[test]

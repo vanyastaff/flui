@@ -7,22 +7,20 @@
 //! # Architecture
 //!
 //! ```text
-//! flui_ios_main()  (called from the Xcode app's Swift/ObjC entry point)
+//! Rust main() / flui::run_app()
 //!   -> IOSPlatform::new()
 //!   -> Platform::run()                 [UIApplicationMain]
 //!     -> AppDelegate.didFinishLaunching    -> on_ready(): window + GPU + realm
-//!     -> didBecomeActive / willResignActive -> active + surface signals
-//!     -> didEnterBackground / willEnterForeground -> surface signals
+//!     -> didBecomeActive / willResignActive -> focus observations
+//!     -> didEnterBackground / willEnterForeground -> execution, visibility, surface
 //!     -> CADisplayLink tick                -> dispatch_request_frame()
 //! ```
 //!
 //! # Binding stack
 //!
-//! `objc2` + `objc2-ui-kit` + `objc2-foundation`, not the `objc` 0.2 /
-//! `cocoa` pair the macOS backend still carries: `objc` has not released since
-//! 2019 and `cocoa` has no UIKit surface at all, while `objc2` is what every
-//! shipping Rust macOS/iOS stack uses today (winit, wgpu, egui, slint, gpui).
-//! The versions here are the ones already in the lock via `wgpu-hal` 30.0.1.
+//! `objc2` + `objc2-ui-kit` + `objc2-foundation`, sharing the modern Objective-C
+//! binding stack with the native AppKit backend. UIKit object ownership stays on
+//! the main thread.
 //!
 //! # Threading
 //!
@@ -38,12 +36,9 @@
 //! an availability gate above 13 — a claim to re-check the moment a call is
 //! added that the SDK marks newer.
 
-// `UIScreen.mainScreen` and a handful of UIKit accessors are marked deprecated
-// in the multi-scene era (the replacements route through a `UIWindowScene`).
-// This backend presents exactly one full-screen window and never adopts
-// scenes, so the app-wide accessors remain the honest spelling; `UIScene` is
-// a separate, larger feature (multi-window on iPadOS) and is not implemented.
-// Adopting scenes would make every `mainScreen` call site scene-relative.
+// Legacy UIApplicationDelegate and screen access remain during the scene migration.
+// This path was verified with Xcode 26.2. UIScene is required for newer SDK-linked
+// applications; this allowance is not a claim that scene adoption is optional.
 #![expect(deprecated)]
 // This module (and its submodules) is the workspace's sanctioned `unsafe` FFI
 // island for UIKit — direct Objective-C calls have no safe wrapper. The

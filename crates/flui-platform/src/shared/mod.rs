@@ -32,5 +32,7 @@ pub mod scroll;
 // `hwnd_affinity` above (consumers: the Win32 and AppKit backends).
 pub mod visibility;
 
+#[cfg(target_os = "ios")]
+pub(crate) use handlers::LifecycleEvent;
 pub(crate) use handlers::impl_window_callback_setters;
 pub use handlers::{PlatformHandlers, WindowCallbacks};

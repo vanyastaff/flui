@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use flui_types::geometry::{Pixels, Size};
 use parking_lot::Mutex;
 
-use crate::traits::{DispatchEventResult, PlatformInput, WindowEvent};
+use crate::traits::{DispatchEventResult, PlatformInput, WindowEvent, WindowExecutionState};
 
 /// Platform callback handlers registry
 ///
@@ -283,6 +283,7 @@ pub struct WindowCallbacks {
     /// `false` is not.
     pub on_surface_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
 
+    on_execution_state_change: Mutex<Option<Box<dyn FnMut(WindowExecutionState) + Send>>>,
     event_dispatch: Mutex<DispatchState<WindowCallbackEvent>>,
     should_close_dispatching: Mutex<bool>,
 
@@ -298,6 +299,8 @@ pub struct WindowCallbacks {
     /// window's own `Arc`) whose window no longer exists. Every lease reads
     /// the flag on drop instead of restoring unconditionally.
     cleared: AtomicBool,
+    // Immediate lifecycle delivery cannot overtake a queued general-FIFO clear.
+    lifecycle_closed: AtomicBool,
 }
 
 enum WindowCallbackEvent {
@@ -307,6 +310,7 @@ enum WindowCallbackEvent {
     Moved,
     Close,
     Active(bool),
+    Execution(WindowExecutionState),
     Visibility(bool),
     Hover(bool),
     AppearanceChanged,
@@ -394,6 +398,14 @@ impl Drop for BooleanDispatchGuard<'_> {
     }
 }
 
+#[cfg(any(target_os = "ios", test))]
+pub(crate) enum LifecycleEvent {
+    Execution(WindowExecutionState),
+    Focus(bool),
+    Visibility(bool),
+    Surface(bool),
+}
+
 /// Temporarily removes one `FnMut` callback without holding its mutex while
 /// user code runs, then restores it even if that code unwinds — unless the
 /// window closed while the callback was out (see `cleared`'s doc), in which
@@ -457,6 +469,7 @@ impl WindowCallbacks {
     /// Create a new empty callback set
     pub fn new() -> Self {
         Self {
+            on_execution_state_change: Mutex::new(None),
             on_input: Mutex::new(None),
             on_request_frame: Mutex::new(None),
             on_resize: Mutex::new(None),
@@ -471,6 +484,7 @@ impl WindowCallbacks {
             event_dispatch: Mutex::new(DispatchState::new()),
             should_close_dispatching: Mutex::new(false),
             cleared: AtomicBool::new(false),
+            lifecycle_closed: AtomicBool::new(false),
         }
     }
 
@@ -538,6 +552,7 @@ impl WindowCallbacks {
     /// window that reopens must construct a fresh `WindowCallbacks`, never
     /// reuse one that has already been cleared.
     pub fn clear(&self) {
+        self.lifecycle_closed.store(true, Ordering::SeqCst);
         let Some(drain) = DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Clear)
         else {
             // Already draining: the running drain's own loop will reach
@@ -564,6 +579,7 @@ impl WindowCallbacks {
         // about to empty. See `CallbackLease::drop`.
         self.cleared.store(true, Ordering::SeqCst);
         let dropped = (
+            self.on_execution_state_change.lock().take(),
             self.on_input.lock().take(),
             self.on_request_frame.lock().take(),
             self.on_resize.lock().take(),
@@ -615,6 +631,13 @@ impl WindowCallbacks {
                     let callback = self.on_close.lock().take();
                     if let Some(callback) = callback {
                         callback();
+                    }
+                }
+                WindowCallbackEvent::Execution(state) => {
+                    let mut lease =
+                        CallbackLease::take(&self.on_execution_state_change, &self.cleared);
+                    if let Some(callback) = lease.callback_mut() {
+                        callback(state);
                     }
                 }
                 WindowCallbackEvent::Active(is_active) => {
@@ -739,6 +762,36 @@ impl WindowCallbacks {
         }
     }
 
+    /// Deliver iOS lifecycle effects in its own serialized transaction, even when
+    /// an input/frame callback currently owns the general event FIFO. The caller
+    /// must serialize these effects, including callback capture destruction.
+    #[cfg(any(target_os = "ios", test))]
+    pub(crate) fn dispatch_lifecycle_immediate(&self, event: LifecycleEvent) {
+        use LifecycleEvent::{Execution, Focus, Surface, Visibility};
+        match event {
+            Execution(value) => self.invoke_lifecycle(&self.on_execution_state_change, value),
+            Focus(value) => self.invoke_lifecycle(&self.on_active_status_change, value),
+            Visibility(value) => self.invoke_lifecycle(&self.on_visibility_status_change, value),
+            Surface(value) => self.invoke_lifecycle(&self.on_surface_status_change, value),
+        }
+    }
+
+    #[cfg(any(target_os = "ios", test))]
+    fn invoke_lifecycle<T, F: FnMut(T)>(&self, slot: &Mutex<Option<F>>, value: T) {
+        use super::panic_boundary::contain_owner_callback;
+        if self.lifecycle_closed.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut lease = CallbackLease::take(slot, &self.lifecycle_closed);
+        contain_owner_callback(|| {
+            if let Some(callback) = lease.callback_mut() {
+                callback(value);
+            }
+        });
+        // Invocation has finished unwinding before a retired capture can panic.
+        contain_owner_callback(|| drop(lease));
+    }
+
     /// Dispatch active status change (focus gained/lost).
     pub fn dispatch_active_status_change(&self, is_active: bool) {
         let Some(drain) =
@@ -755,6 +808,33 @@ impl WindowCallbacks {
             &self.event_dispatch,
             WindowCallbackEvent::Visibility(is_visible),
         ) else {
+            return;
+        };
+        self.drain_events(drain);
+    }
+
+    /// Replace an execution observer, disposing captures outside the storage lock.
+    pub fn set_execution_state_callback(
+        &self,
+        callback: Box<dyn FnMut(WindowExecutionState) + Send>,
+    ) {
+        let old = {
+            let mut slot = self.on_execution_state_change.lock();
+            if self.cleared.load(Ordering::SeqCst) {
+                drop(slot);
+                drop(callback);
+                return;
+            }
+            slot.replace(callback)
+        };
+        drop(old);
+    }
+
+    /// Deliver an owner-thread execution observation through the window FIFO.
+    pub fn dispatch_execution_state_change(&self, state: WindowExecutionState) {
+        let Some(drain) =
+            DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Execution(state))
+        else {
             return;
         };
         self.drain_events(drain);
@@ -861,6 +941,12 @@ macro_rules! impl_window_callback_setters {
             *self.$callbacks_field.on_should_close.lock() = Some(callback);
         }
 
+        fn on_execution_state_change(
+            &self,
+            callback: Box<dyn FnMut($crate::WindowExecutionState) + Send>,
+        ) {
+            self.$callbacks_field.set_execution_state_callback(callback);
+        }
         fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
             *self.$callbacks_field.on_active_status_change.lock() = Some(callback);
         }
@@ -939,6 +1025,134 @@ mod tests {
             repeat: false,
             is_composing: false,
         })
+    }
+
+    #[test]
+    fn lifecycle_delivery_survives_frame_origin_unwind_and_clear() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let history = Arc::clone(&seen);
+        callbacks.set_execution_state_callback(Box::new(move |state| history.lock().push(state)));
+        let inner = Arc::clone(&callbacks);
+        *callbacks.on_request_frame.lock() = Some(Box::new(move || {
+            inner.dispatch_lifecycle_immediate(LifecycleEvent::Execution(
+                WindowExecutionState::Suspended,
+            ));
+            panic!("frame caller panic after lifecycle notification");
+        }));
+        assert!(catch_unwind(AssertUnwindSafe(|| callbacks.dispatch_request_frame())).is_err());
+        assert_eq!(*seen.lock(), [WindowExecutionState::Suspended]);
+        callbacks.clear();
+        callbacks
+            .dispatch_lifecycle_immediate(LifecycleEvent::Execution(WindowExecutionState::Running));
+        assert_eq!(*seen.lock(), [WindowExecutionState::Suspended]);
+    }
+
+    #[test]
+    fn lifecycle_clear_inside_frame_fences_immediate_followups() {
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::clone(&callbacks);
+        let history = Arc::clone(&seen);
+        callbacks.set_execution_state_callback(Box::new(move |state| {
+            history.lock().push(state);
+            inner.clear();
+        }));
+        let inner = Arc::clone(&callbacks);
+        *callbacks.on_request_frame.lock() = Some(Box::new(move || {
+            inner.dispatch_lifecycle_immediate(LifecycleEvent::Execution(
+                WindowExecutionState::Suspended,
+            ));
+            inner.dispatch_lifecycle_immediate(LifecycleEvent::Execution(
+                WindowExecutionState::Running,
+            ));
+        }));
+        callbacks.dispatch_request_frame();
+        assert_eq!(*seen.lock(), [WindowExecutionState::Suspended]);
+        assert!(callbacks.on_execution_state_change.lock().is_none());
+    }
+
+    #[test]
+    fn lifecycle_invocation_and_retired_capture_panics_are_separate() {
+        use std::sync::atomic::AtomicUsize;
+        struct Capture(Arc<AtomicUsize>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                panic!("retired capture panic");
+            }
+        }
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let replacement = Arc::new(AtomicUsize::new(0));
+        let capture = Capture(Arc::clone(&dropped));
+        let inner = Arc::clone(&callbacks);
+        let seen = Arc::clone(&replacement);
+        callbacks.set_execution_state_callback(Box::new(move |_| {
+            let _ = &capture;
+            let seen = Arc::clone(&seen);
+            inner.set_execution_state_callback(Box::new(move |_| {
+                seen.fetch_add(1, Ordering::SeqCst);
+            }));
+            panic!("observer panic");
+        }));
+        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Execution(
+            WindowExecutionState::Suspended,
+        ));
+        callbacks
+            .dispatch_lifecycle_immediate(LifecycleEvent::Execution(WindowExecutionState::Running));
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        assert_eq!(replacement.load(Ordering::SeqCst), 1);
+        // Exercise all immediate effect slots with the same clear/lease contract.
+        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Focus(false));
+        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Visibility(false));
+        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Surface(false));
+    }
+
+    #[test]
+    fn execution_callback_replacement_and_reentrant_delivery_keep_fifo_and_close_fence() {
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let history = Arc::new(Mutex::new(Vec::new()));
+        let inner = Arc::clone(&callbacks);
+        let observed = Arc::clone(&history);
+        callbacks.set_execution_state_callback(Box::new(move |state| {
+            observed.lock().push(state);
+            let replacement_history = Arc::clone(&observed);
+            inner.set_execution_state_callback(Box::new(move |state| {
+                replacement_history.lock().push(state);
+            }));
+            inner.dispatch_execution_state_change(WindowExecutionState::Running);
+        }));
+        callbacks.dispatch_execution_state_change(WindowExecutionState::Suspended);
+        assert_eq!(
+            *history.lock(),
+            [
+                WindowExecutionState::Suspended,
+                WindowExecutionState::Running
+            ]
+        );
+        callbacks.clear();
+        callbacks.set_execution_state_callback(Box::new(|_| panic!("closed callback admitted")));
+        callbacks.dispatch_execution_state_change(WindowExecutionState::Detached);
+        assert_eq!(history.lock().len(), 2);
+    }
+
+    #[test]
+    fn replacing_execution_callback_drops_capture_outside_storage_lock() {
+        struct Reenter(Arc<WindowCallbacks>);
+        impl Drop for Reenter {
+            fn drop(&mut self) {
+                self.0.set_execution_state_callback(Box::new(|_| {}));
+            }
+        }
+        let callbacks = Arc::new(WindowCallbacks::new());
+        let capture = Reenter(Arc::clone(&callbacks));
+        callbacks.set_execution_state_callback(Box::new(move |_| {
+            let _retain = &capture;
+        }));
+        callbacks.set_execution_state_callback(Box::new(|_| {}));
+        callbacks.clear();
     }
 
     /// A close requested from inside a callback the FIFO is already

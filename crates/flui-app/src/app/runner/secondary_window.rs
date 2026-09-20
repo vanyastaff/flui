@@ -792,12 +792,32 @@ fn finish_open_secondary_window(
             RealmTask::Event(PlatformToUi::WindowFocus(focused)),
         );
     }));
+    window.on_execution_state_change(Box::new(move |state| {
+        let _ = dispatch_platform_realm(
+            realm_dispatch,
+            RealmTask::Event(PlatformToUi::WindowExecution(state)),
+        );
+    }));
     window.on_visibility_status_change(Box::new(move |visible| {
         let _ = dispatch_platform_realm(
             realm_dispatch,
             RealmTask::Event(PlatformToUi::WindowVisibility(visible)),
         );
     }));
+    let execution = window.execution_state();
+    let focused = window.is_focused();
+    let visible = window.is_visible();
+    let _ = dispatch_platform_realm(
+        realm_dispatch,
+        RealmTask::Frame(Box::new(move |realm| {
+            realm.synchronize_window_snapshot(
+                realm_dispatch.address.presentation_id,
+                execution,
+                focused,
+                visible,
+            );
+        })),
+    );
 
     let _ = dispatch_platform_realm(
         realm_dispatch,

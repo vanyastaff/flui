@@ -69,5 +69,5 @@ pub use platform::{
 pub use text_input::PlatformTextInput;
 pub use window::{
     CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowShowError,
+    WindowExecutionState, WindowShowError,
 };

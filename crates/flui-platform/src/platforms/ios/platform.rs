@@ -9,13 +9,13 @@
 //! # Lifecycle
 //!
 //! UIKit's application transitions map onto the framework's active/surface
-//! signals exactly as Android's `MainEvent`s do:
+//! signals independently:
 //!
 //! ```text
-//! didBecomeActive    → active(true)  + surface(true)
-//! willResignActive   → surface(false) + active(false)
-//! didEnterBackground → surface(false)
-//! willEnterForeground→ surface(true)
+//! didBecomeActive    → focus(true), eligible display-link resume
+//! willResignActive   → focus(false), surface retained
+//! didEnterBackground → suspended + hidden + surface(false)
+//! willEnterForeground→ surface(true), running while unfocused
 //! ```
 //!
 //! The surface edges are what let the presentation drop and rebuild its
@@ -56,7 +56,7 @@ use crate::traits::{
 use super::clipboard::IOSClipboard;
 use super::display::IOSDisplay;
 use super::executor::IOSExecutor;
-use super::window::IOSWindow;
+use super::window::{IOSWindow, LifecycleObservation};
 
 /// The one window this backend hosts. iOS presents a single full-screen
 /// window for the life of the app; a second `open_window` returns the same
@@ -191,8 +191,8 @@ impl Platform for IOSPlatform {
 
     fn quit(&self) {
         // Apple discourages programmatic termination; the honest iOS behavior
-        // is to mark the loop stopped so callbacks stop being serviced, and
-        // let the OS decide when the process ends.
+        // currently records a stop request only; callback admission/teardown is
+        // not yet wired to this flag. Scene/quit ownership remains pending.
         tracing::info!("iOS quit requested (process exit is the OS's call)");
         self.running.store(false, Ordering::Relaxed);
     }
@@ -328,54 +328,23 @@ define_class!(
 
         #[unsafe(method(applicationDidBecomeActive:))]
         fn did_become_active(&self, _application: &UIApplication) {
-            Self::with_platform(|p| {
-                if let Some(w) = p.active() {
-                    w.callbacks().dispatch_active_status_change(true);
-                    w.callbacks().dispatch_surface_status_change(true);
-                    w.request_redraw();
-                }
-            });
+            Self::with_platform(|p| { if let Some(w) = p.active() { w.observe_lifecycle(LifecycleObservation::Active); } });
         }
-
         #[unsafe(method(applicationWillResignActive:))]
         fn will_resign_active(&self, _application: &UIApplication) {
-            Self::with_platform(|p| {
-                if let Some(w) = p.active() {
-                    // Pause the tick first: a link that fires while the
-                    // surface is being torn down would request a frame the
-                    // presentation can no longer present.
-                    w.set_frame_tick_paused(true);
-                    // Release the surface BEFORE deactivating — the same
-                    // ordering Android's `Pause` arm uses, because
-                    // `on_active_status_change` runs embedder code.
-                    w.callbacks().dispatch_surface_status_change(false);
-                    w.callbacks().dispatch_active_status_change(false);
-                }
-            });
+            Self::with_platform(|p| { if let Some(w) = p.active() { w.observe_lifecycle(LifecycleObservation::Inactive); } });
         }
-
         #[unsafe(method(applicationDidEnterBackground:))]
         fn did_enter_background(&self, _application: &UIApplication) {
-            Self::with_platform(|p| {
-                if let Some(w) = p.active() {
-                    w.set_frame_tick_paused(true);
-                    w.callbacks().dispatch_surface_status_change(false);
-                }
-            });
+            Self::with_platform(|p| { if let Some(w) = p.active() { w.observe_lifecycle(LifecycleObservation::Background); } });
         }
-
         #[unsafe(method(applicationWillEnterForeground:))]
         fn will_enter_foreground(&self, _application: &UIApplication) {
-            Self::with_platform(|p| {
-                if let Some(w) = p.active() {
-                    w.callbacks().dispatch_surface_status_change(true);
-                    w.set_frame_tick_paused(false);
-                }
-            });
+            Self::with_platform(|p| { if let Some(w) = p.active() { w.observe_lifecycle(LifecycleObservation::Foreground); } });
         }
 
-        /// The process is about to exit. This is the one pre-exit
-        /// notification iOS sends, and the only place the framework can run
+        /// If UIKit sends termination, notify the loop. OS termination is not
+        /// guaranteed to deliver this callback. This is currently where we run
         /// its loop-exit signal: `UIApplicationMain`'s loop never returns, so
         /// there is no "after `run`" for the runner to use.
         #[unsafe(method(applicationWillTerminate:))]
@@ -398,10 +367,9 @@ impl FluiAppDelegate {
         // Reached through the session slot, which `run` installs before
         // `UIApplicationMain` and which outlives the one-shot `on_ready`
         // take: the lifecycle callbacks keep arriving for the whole session.
-        DELEGATE_STATE.with(|state| {
-            if let Some(platform) = state.borrow().platform.as_ref() {
-                body(platform);
-            }
-        });
+        let platform = DELEGATE_STATE.with(|state| state.borrow().platform.clone());
+        if let Some(platform) = platform {
+            crate::shared::panic_boundary::contain_owner_callback(|| body(&platform));
+        }
     }
 }

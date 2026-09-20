@@ -464,3 +464,21 @@ The verified SDK is Xcode 26.2. Device signing/distribution and UIKit UIScene
 migration are not implemented by packaging. The existing UIKit runner's full
 background scheduling/lifecycle semantics remain separate beta work; launching
 an application alone does not prove them.
+
+## iOS execution lifecycle foundation
+
+Window execution eligibility is independent of focus, visibility and GPU surface
+availability. Temporary UIKit inactivity preserves the surface and frame delivery;
+true background suspension caps the addressed presentation. Public presentation
+lifecycle subscriptions observe the derived state while a shared realm can retain
+an eligible sibling. See ADR-0072 for precedence, initial snapshots and reentrancy.
+
+The dedicated UIKit protocol probe reproduces resign-active/active without a
+foreground notification using the actual owned delegate and CADisplayLink. It is
+not a real OS lifecycle or GPU rendering acceptance test. UIScene migration,
+safe-area layout, background owner waking, mobile quit semantics and automatic
+surface recreation retry remain uncompleted work. No new scene plist is shipped.
+
+Native UIKit close is not implemented: the window inherits the default no-op
+close, and the runner has no close teardown. Its current quit flag does not gate
+callbacks. This foundation's terminal-close evidence is headless/app-only.

@@ -26,6 +26,66 @@ impl UiRealm {
         self.reconcile_lifecycle(Vec::new());
     }
 
+    #[cfg(any(test, not(any(target_arch = "wasm32", target_os = "android"))))]
+    pub(crate) fn synchronize_window_snapshot(
+        &self,
+        id: PresentationId,
+        execution: flui_platform::WindowExecutionState,
+        focused: bool,
+        visible: bool,
+    ) {
+        if self.host_lifecycle.get() == HostLifecycle::Stopping {
+            return;
+        }
+        let Some(presentation) = self.presentations.get(id) else {
+            return;
+        };
+        if presentation.closing_requested.get() {
+            return;
+        }
+        presentation.window_execution.set(execution);
+        presentation.window_visible.set(visible);
+        presentation.window_focused.set(focused);
+        let mut cancel = Vec::new();
+        if focused {
+            for other in self.presentations.iter() {
+                if other.id() != id && other.window_focused.replace(false) {
+                    cancel.push(other.id());
+                }
+            }
+            self.notify_presentation_focus_gained(id);
+        }
+        if !focused || !visible || execution != flui_platform::WindowExecutionState::Running {
+            cancel.push(id);
+        }
+        self.set_presentation_hidden(id, !visible);
+        self.reconcile_lifecycle(cancel);
+    }
+
+    pub(crate) fn update_window_execution(
+        &self,
+        id: PresentationId,
+        state: flui_platform::WindowExecutionState,
+    ) {
+        if self.host_lifecycle.get() == HostLifecycle::Stopping {
+            return;
+        }
+        let Some(presentation) = self.presentations.get(id) else {
+            return;
+        };
+        if presentation.closing_requested.get() {
+            return;
+        }
+        let changed = presentation.window_execution.replace(state) != state;
+        self.reconcile_lifecycle(
+            if changed && state != flui_platform::WindowExecutionState::Running {
+                vec![id]
+            } else {
+                Vec::new()
+            },
+        );
+    }
+
     pub(crate) fn update_window_focus(&self, id: PresentationId, focused: bool) {
         if self.host_lifecycle.get() == HostLifecycle::Stopping {
             return;
@@ -102,6 +162,19 @@ impl UiRealm {
         use AppLifecycleState::{Detached, Hidden, Inactive, Paused, Resumed};
         if presentation.closing_requested.get() {
             return Detached;
+        }
+        let execution = presentation.window_execution.get();
+        if matches!(
+            self.host_lifecycle.get(),
+            HostLifecycle::Stopping | HostLifecycle::Observed(Detached)
+        ) || execution == flui_platform::WindowExecutionState::Detached
+        {
+            return Detached;
+        }
+        if self.host_lifecycle.get() == HostLifecycle::Observed(Paused)
+            || execution == flui_platform::WindowExecutionState::Suspended
+        {
+            return Paused;
         }
         let window = derive_lifecycle_state(
             presentation.window_visible.get(),
@@ -705,6 +778,70 @@ mod tests {
         assert_eq!(
             realm.scheduler().lifecycle_state(),
             AppLifecycleState::Hidden
+        );
+    }
+
+    #[test]
+    fn window_execution_suspension_cancels_real_pointer_before_public_notification() {
+        let (realm, _a, b) = two_presentations();
+        realm
+            .attach_root_widget_to_for_test(b, &flui_widgets::SizedBox::new(10.0, 10.0))
+            .expect("root");
+        let realm = Rc::new(realm);
+        realm.enter(|realm| {
+            realm.handle_input_addressed(
+                b,
+                flui_platform::traits::PlatformInput::Pointer(
+                    flui_interaction::events::make_down_event(
+                        flui_types::Offset::new(flui_types::Pixels(1.0), flui_types::Pixels(1.0)),
+                        flui_interaction::events::PointerType::Mouse,
+                    ),
+                ),
+            );
+        });
+        assert_eq!(
+            realm
+                .presentations
+                .get(b)
+                .expect("B")
+                .gestures()
+                .active_pointer_count(),
+            1
+        );
+        let handle = realm
+            .presentations
+            .get(b)
+            .expect("B")
+            .widgets()
+            .lifecycle_source()
+            .handle();
+        let weak = Rc::downgrade(&realm);
+        let history = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&history);
+        let (_, _subscription) = handle
+            .subscribe(move |state| {
+                let realm = weak.upgrade().expect("live realm");
+                assert_eq!(
+                    realm
+                        .presentations
+                        .get(b)
+                        .expect("B")
+                        .gestures()
+                        .active_pointer_count(),
+                    0
+                );
+                seen.borrow_mut().push(state);
+            })
+            .expect("subscription");
+        realm.update_window_execution(b, flui_platform::WindowExecutionState::Suspended);
+        assert_eq!(
+            handle.snapshot().expect("live"),
+            Some(AppLifecycleState::Paused)
+        );
+        assert_eq!(history.borrow().last(), Some(&AppLifecycleState::Paused));
+        assert!(
+            realm.scheduler().frames_enabled(),
+            "visible sibling remains eligible"
         );
     }
 

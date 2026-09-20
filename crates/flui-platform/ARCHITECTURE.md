@@ -788,3 +788,35 @@ HWND or context addresses cannot redirect a retained wrapper's show operation.
 The portable operation-sequence test asserts that stale identity causes neither
 reveal nor focus. This does not change the separate legacy teardown route or
 claim native Windows runtime verification.
+
+### Per-window execution eligibility
+
+`WindowExecutionState` separates native execution permission from focus, visibility
+and GPU readiness (ADR-0072). The callback slot is private. iOS serializes native
+observations in a separate queue and delivers effects through immediate callback
+leases, independently of the general input/frame FIFO. Invocation and capture
+destruction are contained separately, outside storage locks. Only resource intents
+advance the generation: focus reentry cannot cancel a resource transition, while
+superseded resource continuations and queued restorations are rejected. A queued
+background pauses native ticks immediately, including during nested UIKit loops. Temporary inactivity preserves the surface;
+true background suspension pauses the display link and releases it. Foreground
+restores execution while unfocused; duplicate foreground preserves established
+focus. Headless simulation exercises the same observation contract.
+
+The iOS protocol probe is reproducible with a dedicated booted simulator:
+
+```sh
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo build -p flui-platform --example ios_execution_probe --target aarch64-apple-ios-sim --no-default-features
+python3.12 scripts/check-ios-execution.py <UDID> target/aarch64-apple-ios-sim/debug/examples/ios_execution_probe
+```
+
+Use `--case foreground-reentered-background`, `background-reentered-foreground`,
+`duplicate-foreground`, or `foreground-callback-panic` for the original cases.
+Additional cases cover `background-nested-active`, `background-nested-inactive`,
+`foreground-nested-active`, `foreground-nested-inactive`,
+`nested-foreground-then-panic`, `superseded-foreground`, and
+`background-nested-run-loop`. The latter verifies that a queued background stops
+frames before the observer pumps a nested native run loop.
+The runner terminates only its owned probe after marker completion; this is not a
+claim of normal UIKit loop return or a real OS background transition. Xcode 26.2
+is the verified SDK. UIScene ownership and migration remain separate work.

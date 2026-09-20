@@ -18,6 +18,22 @@ use super::{
     text_input::PlatformTextInput,
 };
 
+/// Native execution eligibility, independent of focus, visibility and GPU surface readiness.
+///
+/// `Detached` is a reversible native attachment observation. Terminal window
+/// closure is a separate lifetime event and cannot be reversed with this state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WindowExecutionState {
+    /// The platform permits UI execution; this does not guarantee a usable GPU surface.
+    #[default]
+    Running,
+    /// UI execution is suspended, even if stale native focus/visibility remain true.
+    Suspended,
+    /// The native presentation is detached, but may subsequently attach again.
+    Detached,
+}
+
 /// Failure to show an existing window without changing its display mode.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -493,6 +509,18 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
+    /// Current native execution eligibility. Backends without suspension use Running.
+    fn execution_state(&self) -> WindowExecutionState {
+        WindowExecutionState::Running
+    }
+
+    /// Observe native execution changes on the window's owner thread.
+    /// Registration does not emit a snapshot; register first, then read execution_state.
+    /// This does not signal focus or GPU surface success. Detached is reversible.
+    fn on_execution_state_change(&self, callback: Box<dyn FnMut(WindowExecutionState) + Send>) {
+        let _ = callback;
+    }
+
     /// Register a callback for visibility (occlusion) changes.
     ///
     /// Called with `true` when the window becomes visible/unoccluded,
@@ -557,11 +585,12 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// # Delivery is backend-conditional, and the asymmetry costs
     ///
-    /// **Android** is the only emitter today: `MainEvent::TerminateWindow`
+    /// **Android** emits: `MainEvent::TerminateWindow`
     /// and `MainEvent::Pause` produce `false`, `MainEvent::InitWindow` and
     /// `MainEvent::Resume` produce `true`. Winit's own Android support
     /// forwards `suspended()`/`resumed()` for the same pair, so a second
-    /// emitter is available to the winit backend.
+    /// emitter is available to the winit backend. Native **iOS** emits on true
+    /// background/foreground transitions, never on temporary focus loss.
     ///
     /// A backend that never emits either signal is harmless: the surface is
     /// never released and the window is always treated as available. A
