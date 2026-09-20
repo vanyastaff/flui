@@ -529,13 +529,21 @@ impl ViewState<CounterTab> for CounterTabState {
         let displayed_count = self.count.get();
         let count_for_tap = Rc::clone(&self.count);
 
-        Center::new().child(Column::new(column![
-            Text::new(format!("{COUNTER_LABEL_PREFIX}{displayed_count}")),
-            ElevatedButton::new(Text::new(COUNTER_INCREMENT_LABEL)).on_pressed(move || {
-                count_for_tap.set(count_for_tap.get() + 1);
-                rebuild.schedule(flui_view::RebuildReason::StateChange);
-            }),
-        ]))
+        // `Center` alone centres nothing here: a `Column` fills the height it
+        // is given (`MainAxisSize::Max` is the default) and packs its children
+        // at the top, so the alignment is what actually puts the counter in the
+        // middle of the tab. Flutter's own counter sample passes the same
+        // thing for the same reason.
+        Center::new().child(
+            Column::new(column![
+                Text::new(format!("{COUNTER_LABEL_PREFIX}{displayed_count}")),
+                ElevatedButton::new(Text::new(COUNTER_INCREMENT_LABEL)).on_pressed(move || {
+                    count_for_tap.set(count_for_tap.get() + 1);
+                    rebuild.schedule(flui_view::RebuildReason::StateChange);
+                }),
+            ])
+            .main_axis_alignment(MainAxisAlignment::Center),
+        )
     }
 }
 

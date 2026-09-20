@@ -104,12 +104,20 @@ fn details_route() -> PageRoute<()> {
         let navigator_for_leading = navigator.clone();
         let navigator_for_button = navigator;
 
-        CupertinoPageScaffold::new(Center::new().child(Column::new(column![
-            Text::new(DETAILS_ROUTE_TEXT),
-            CupertinoButton::new(Text::new(BACK_BUTTON_LABEL)).on_pressed(move || {
-                navigator_for_button.pop();
-            }),
-        ])))
+        // As in `home_page`: the column fills the height it is given, so the
+        // alignment is what centres the route's content — `Center` around it
+        // has no slack to use.
+        CupertinoPageScaffold::new(
+            Center::new().child(
+                Column::new(column![
+                    Text::new(DETAILS_ROUTE_TEXT),
+                    CupertinoButton::new(Text::new(BACK_BUTTON_LABEL)).on_pressed(move || {
+                        navigator_for_button.pop();
+                    }),
+                ])
+                .main_axis_alignment(MainAxisAlignment::Center),
+            ),
+        )
         .navigation_bar(
             CupertinoNavigationBar::new()
                 .middle(Text::new(DETAILS_NAV_TITLE))
@@ -160,13 +168,21 @@ fn home_page(ctx: &dyn BuildContext) -> BoxedView {
     let navigator = NavigatorHandle::maybe_of(ctx)
         .expect("BUG: home_page only builds inside HomeTab's own Navigator");
 
-    CupertinoPageScaffold::new(Center::new().child(Column::new(column![
-        CupertinoButton::new(Text::new("Item 1")),
-        CupertinoButton::filled(Text::new(PUSH_BUTTON_LABEL)).on_pressed(move || {
-            navigator.push(details_route());
-        }),
-        CupertinoButton::new(Text::new("Item 2")),
-    ])))
+    // The three buttons are centred by the alignment, not by the `Center`
+    // around them: a `Column` fills the height it is given
+    // (`MainAxisSize::Max` is the default) and packs its children at the top.
+    CupertinoPageScaffold::new(
+        Center::new().child(
+            Column::new(column![
+                CupertinoButton::new(Text::new("Item 1")),
+                CupertinoButton::filled(Text::new(PUSH_BUTTON_LABEL)).on_pressed(move || {
+                    navigator.push(details_route());
+                }),
+                CupertinoButton::new(Text::new("Item 2")),
+            ])
+            .main_axis_alignment(MainAxisAlignment::Center),
+        ),
+    )
     .navigation_bar(CupertinoNavigationBar::new().middle(Text::new(HOME_NAV_TITLE)))
     .into_view()
     .boxed()
@@ -215,13 +231,20 @@ impl ViewState<SettingsTab> for SettingsTabState {
             .expect("BUG: init_state runs before build (ViewState lifecycle order)");
         let count_for_tap = Rc::clone(&self.count);
 
-        CupertinoPageScaffold::new(Center::new().child(Column::new(column![
-            Text::new(format!("Count: {}", self.count.get())),
-            CupertinoButton::new(Text::new(INCREMENT_BUTTON_LABEL)).on_pressed(move || {
-                count_for_tap.set(count_for_tap.get() + 1);
-                rebuild.schedule(flui_view::RebuildReason::StateChange);
-            }),
-        ])))
+        // As in the two routes above: the column fills the height it is given,
+        // so the alignment is what centres the counter.
+        CupertinoPageScaffold::new(
+            Center::new().child(
+                Column::new(column![
+                    Text::new(format!("Count: {}", self.count.get())),
+                    CupertinoButton::new(Text::new(INCREMENT_BUTTON_LABEL)).on_pressed(move || {
+                        count_for_tap.set(count_for_tap.get() + 1);
+                        rebuild.schedule(flui_view::RebuildReason::StateChange);
+                    }),
+                ])
+                .main_axis_alignment(MainAxisAlignment::Center),
+            ),
+        )
         .navigation_bar(CupertinoNavigationBar::new().middle(Text::new(SETTINGS_NAV_TITLE)))
     }
 }

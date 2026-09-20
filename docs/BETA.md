@@ -592,10 +592,27 @@ not a backend property: `FlexStyle::default()` is `MainAxisSize::Max` with
 (`crates/flui-objects/src/layout/align.rs:39-59`), so `Center(child: Column(...))`
 lays out exactly as it does in Flutter — the column fills the height and packs
 its children at the top. Flutter's own counter sample passes
-`MainAxisAlignment.center`; the same misuse appears in the Material and Cupertino
-demo counter tabs, and `MainAxisAlignment::Center` is used nowhere under
-`examples/`. **Nothing about it was changed here**; it is recorded for the
-template work it belongs to. An earlier form of this paragraph also claimed the
+`MainAxisAlignment.center`; the same misuse appears at four sites — the generated
+template, `examples/material_demo/tree.rs`'s counter tab, and
+`examples/cupertino_demo/tree.rs`'s home page, details route and settings counter
+(the earlier citation named only the first two of those) — with
+`MainAxisAlignment::Center` used nowhere under `examples/` before this.
+**Nothing about it was changed by this task** — it was recorded here first and
+fixed in the template work that followed, which is where it belongs. All four
+sites now pass `main_axis_alignment(MainAxisAlignment::Center)`, and the fix is
+confirmed against committed geometry rather than asserted: the Cupertino layer
+snapshot moved by exactly the translation that implies (four lines, each +279.40
+in y, x and size and colour and font unchanged), and the generated project gained
+the `counter_content_is_centred` regression test, which fails without the
+alignment — content at y 0..105.6 of a 320pt surface, centre 52.8 rather than
+160. Closing that test's hole is what exposed the second defect: the CLI's
+template harness ran the generated binary with a `--exact` filter naming only
+`counter_responds_to_pointer_input`, so the new generated test was compiled,
+never executed, and the harness reported a pass either way — which is how the
+first version of the test appeared to pass with the fix removed. It now runs the
+whole binary and asserts both the per-test lines and the `test result` count, so
+a template test that does not run fails the harness. An earlier form of this
+paragraph also claimed the
 demo's app bar title sits beneath the status-bar clock and that the layout
 therefore appears shared across backends — both halves are withdrawn. A band
 profile of the demo's current frame puts its title at y 177-253, wholly below the

@@ -66,10 +66,16 @@ fn assert_generated_project_compiles(template: &str) {
     if template == "counter" {
         let source =
             std::fs::read_to_string(project.join("src/main.rs")).expect("generated source");
-        assert!(
-            source.contains("fn counter_responds_to_pointer_input"),
-            "the generated counter must ship its real pointer-input regression test"
-        );
+        for test in GENERATED_COUNTER_TESTS {
+            let function = test
+                .rsplit("::")
+                .next()
+                .expect("BUG: a test name always has a trailing segment");
+            assert!(
+                source.contains(&format!("fn {function}")),
+                "the generated counter must ship `{function}`, its `{test}` regression test"
+            );
+        }
         let manifest: toml::Table = std::fs::read_to_string(project.join("Cargo.toml"))
             .expect("manifest")
             .parse()
@@ -137,31 +143,62 @@ fn assert_generated_project_compiles(template: &str) {
             "{graph}"
         );
 
-        let output = std::process::Command::new(&cargo)
-            .args([
-                "test",
-                "--offline",
-                "--bin",
-                &name,
-                "tests::counter_responds_to_pointer_input",
-            ])
-            .arg("--target-dir")
-            .arg(target.join("cli-template-check"))
-            .args(["--", "--exact", "--nocapture"])
-            .current_dir(&project)
-            .output()
-            .expect("generated pointer regression");
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        run_generated_counter_tests(&cargo, &project, &name, &target);
+    }
+}
+
+/// Every test the generated counter is contracted to ship, by name.
+///
+/// The whole binary runs and each name must appear as passed, so a test that
+/// exists in the template but is not listed here cannot hide: the run's own
+/// `test result` line is asserted against this list's length. That count is why
+/// the list has to be extended whenever the template gains a test — and why a
+/// generated test that silently never executed, which is how a layout
+/// regression once passed this harness, now fails it.
+const GENERATED_COUNTER_TESTS: &[&str] = &[
+    "tests::counter_responds_to_pointer_input",
+    "tests::counter_content_is_centred",
+];
+
+/// Run the generated counter's own test binary and require every test in it.
+///
+/// The binary runs whole — no `--exact`, no test-name filter — so the harness
+/// cannot pin itself to a subset of the template's tests and report a pass for
+/// the rest.
+fn run_generated_counter_tests(cargo: &str, project: &Path, name: &str, target: &Path) {
+    let output = std::process::Command::new(cargo)
+        .args(["test", "--offline", "--bin", name])
+        .arg("--target-dir")
+        .arg(target.join("cli-template-check"))
+        .args(["--", "--nocapture"])
+        .current_dir(project)
+        .output()
+        .expect("generated counter regression suite");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for test in GENERATED_COUNTER_TESTS {
         assert!(
-            output.status.success(),
-            "{stdout}\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            stdout.contains("test tests::counter_responds_to_pointer_input ... ok"),
-            "named generated test did not execute: {stdout}"
+            stdout.contains(&format!("test {test} ... ok")),
+            "generated test `{test}` did not execute and pass: {stdout}"
         );
     }
+    // The test binary is the only thing this invocation runs, so its result
+    // line is the template's test count. A `#[test]` added to the template
+    // without being added to GENERATED_COUNTER_TESTS lands here.
+    let expected = format!(
+        "test result: ok. {} passed; 0 failed",
+        GENERATED_COUNTER_TESTS.len()
+    );
+    assert!(
+        stdout.contains(&expected),
+        "the generated counter did not run exactly the {} tests this harness \
+         accounts for (`{expected}` absent): {stdout}",
+        GENERATED_COUNTER_TESTS.len()
+    );
 }
 
 #[test]
