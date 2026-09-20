@@ -890,7 +890,7 @@ presentation's unhide correctly does NOT wake (no demand to retain). \
 overclaimed):** occlusion delivery comes from winit's \
 `WindowEvent::Occluded`, whose own documentation lists \
 `Android / Wayland / Windows / Orbital: Unsupported` \
-(`traits/window.rs:309-329`). The only emitters are X11 (on \
+(the `on_visibility_status_change` documentation in `traits/window.rs`). The only emitters are X11 (on \
 `VisibilityFullyObscured`), macOS, iOS and Web — **Wayland delivers nothing \
 today**, so on a Wayland session this presentation's clock is never hidden \
 and behavior is unchanged from before this slice; on X11 it requires FULL \
@@ -3128,7 +3128,7 @@ consumers = [
     "examples",
 ]
 owner_issue = 552
-notes = "PlatformWindow gained a required id() -> WindowId accessor across all 11 implementors. traits/platform.rs is the canonical (and only) definition; src/window.rs and platforms/macos/window_manager.rs consume it via `use crate::traits::WindowId;` — no backend defines a parallel WindowId type."
+notes = "PlatformWindow gained a required id() -> WindowId accessor on every implementor of the trait. traits/platform.rs is the canonical (and only) definition; src/window.rs and platforms/macos/window_manager.rs consume it via `use crate::traits::WindowId;` — no backend defines a parallel WindowId type."
 
 [[surface]]
 path = "flui_platform::{WindowCallbacks, PlatformHandlers}"
