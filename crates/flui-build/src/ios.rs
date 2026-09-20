@@ -136,22 +136,7 @@ impl PlatformBuilder for IOSBuilder {
         // Check if Xcode project exists
         let xcodeproj = ios_dir.join("flui.xcodeproj");
         if !xcodeproj.exists() {
-            tracing::warn!("Xcode project not found, skipping app build");
-            tracing::info!(
-                "Returning the first Cargo static library; multi-slice packaging requires an Xcode project"
-            );
-
-            // Return the .a file as the artifact
-            let lib_file = artifacts
-                .rust_libs
-                .first()
-                .ok_or_else(|| BuildError::Other("No native libraries found".to_string()))?;
-            let size_bytes = std::fs::metadata(lib_file)?.len();
-
-            return Ok(FinalArtifacts {
-                app_binary: lib_file.clone(),
-                size_bytes,
-            });
+            return crate::ios_package::package(ctx, artifacts).await;
         }
 
         // Determine scheme and configuration

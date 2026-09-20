@@ -60,6 +60,7 @@ pub mod desktop;
 pub mod error;
 /// iOS platform build support
 pub mod ios;
+mod ios_package;
 /// Output parsers for build tools (cargo, gradle, wasm-pack)
 pub mod output_parser;
 /// Platform abstractions and core types

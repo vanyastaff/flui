@@ -233,12 +233,14 @@ pub struct BuildArtifacts {
     pub metadata: serde_json::Value,
 }
 
-/// Final artifacts after platform-specific build
+/// Delivered file or bundle directory after a platform-specific build.
 #[derive(Debug)]
 pub struct FinalArtifacts {
-    /// Path to the final application binary (APK, WASM, executable, etc.)
+    /// Path to the delivered artifact: a file (APK, WASM, executable, etc.) or
+    /// a bundle directory (`.app` or `.xcframework`). iOS library delivery
+    /// without a consumer Xcode project returns an XCFramework directory.
     pub app_binary: PathBuf,
-    /// Size of the final artifact in bytes
+    /// File size, or the sum of contained file sizes for a bundle, in bytes.
     pub size_bytes: u64,
 }
 

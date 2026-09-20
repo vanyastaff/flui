@@ -191,7 +191,7 @@ enum Commands {
         #[arg(long)]
         optimize_wasm: bool,
 
-        /// iOS: Build universal binary (arm64 + simulator)
+        /// iOS: Build device + simulator libraries (XCFramework without an Xcode project)
         #[arg(long)]
         universal: bool,
 

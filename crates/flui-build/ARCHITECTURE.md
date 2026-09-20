@@ -70,9 +70,9 @@ require exactly one triple: the current result model has only one executable,
 so multi-triple examples (including CLI `--example` with `--universal`) are rejected
 instead of silently discarding outputs. Supporting multiple executable slices is
 a separate artifact-model decision. Rust compilation does not delete or populate
-`platforms/ios/Frameworks`. The existing no-Xcode fallback returns only the first
-library; this increment does not produce an XCFramework, stage every slice, sign
-an application, or verify Xcode packaging.
+`platforms/ios/Frameworks`. With no consumer Xcode project, delivery packages all
+requested libraries into an XCFramework as described below. This does not sign
+an application or verify the existing Xcode-project integration.
 
 This follows Cargo's [artifact message contract](https://doc.rust-lang.org/cargo/reference/external-tools.html#artifact-messages),
 not filesystem naming conventions. Host fixtures exercise custom names, mixed
@@ -87,3 +87,50 @@ cargo test -p flui-build --test ios_artifacts ios_device_and_simulator_static_li
 It requires macOS/Xcode and both `aarch64-apple-ios` and
 `aarch64-apple-ios-sim` Rust targets. Its success proves real Rust static-library
 compilation and discovery for both triples, not simulator execution.
+
+
+### iOS library delivery preserves platform variants
+
+Without `platforms/ios/flui.xcodeproj`, `build_platform` returns
+`output_dir/flui.xcframework`, including a single-library request. It maps each
+ordered archive to its requested triple, rejects unsupported/duplicate slices,
+and queries actual archive architectures. `lipo` combines architectures only
+inside the simulator variant; device and simulator ARM64 never share one fat
+archive. This follows Apple's [multi-platform binary framework guidance](https://developer.apple.com/documentation/xcode/creating-a-multi-platform-binary-framework-bundle).
+`xcodebuild -create-xcframework` remains the authority for Mach-O platform
+classification. Generated plist entries must exactly match expected variants and
+architectures, contain safe relative nonsymlink file references, and reference
+bytes identical to each corresponding staged input group. The byte comparison
+also rejects swapped device/simulator archives with identical ARM64 architecture.
+No input filename is treated as architecture or platform evidence.
+
+The private blocking operation owns both tools and temporary staging. Dropping
+the async result requests cancellation; the worker requests child termination
+and waits before removing scratch. A five-minute tool deadline bounds when a
+kill is requested, not operating-system wait latency. If terminal status cannot
+be established, including on unwind, scratch is retained and its path logged.
+There are no undrained output pipes. No packaging tool writes into the final
+output or user Frameworks directory.
+
+Validation and size calculation finish before publication. Cancellation and
+commit compete through one atomic state; after commit wins, synchronous
+publication can complete even if the receiver disappears. Staging is on the
+output filesystem. Existing/dangling final symlinks are refused; replacing a
+previous directory uses a backup and rollback. If rollback itself fails, the
+backup is preserved and the returned error supplies its recovery path. This is
+not a concurrent-writer atomicity or crash-durability guarantee. Input archives
+inside the old output are copied before replacement.
+
+Portable tests cover slice planning, unsafe plist references, cancellation,
+publication failure and preserved recovery backups. Explicit native verification:
+
+```sh
+cargo test -p flui-build --test ios_artifacts ios_delivers_device_and_simulator_xcframework -- --ignored --exact
+```
+
+Requires Xcode and `aarch64-apple-ios`, `aarch64-apple-ios-sim`, and
+`x86_64-apple-ios` Rust targets. It verifies three real slices, same-platform
+merging, wrong-variant rejection, replacement, and a single slice whose input
+is inside the old output. It does not certify signing, simulator launch, C
+headers/module maps, or the existing consumer Xcode-project branch. Executable
+examples retain their separate single-triple staging behavior.

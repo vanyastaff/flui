@@ -19,14 +19,14 @@ cargo_metadata.workspace = true
 # Platform scaffolding reads project manifest configuration.
 toml = "1.1"
 tracing.workspace = true
-tokio = { workspace = true, features = ["process", "io-util"] }
+tokio = { workspace = true, features = ["process", "io-util", "rt"] }
+tempfile.workspace = true
 which.workspace = true
-indicatif.workspace = true                                      # Progress bars for build status
+indicatif.workspace = true                                            # Progress bars for build status
 
 [dev-dependencies]
-tempfile.workspace = true
 # The `progress_demo` example runs an async main + spawns tasks; these features
-# are example/test-only so the library itself stays minimal (process + io-util).
+# are example/test-only so the library includes the runtime support needed by its packaging worker.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]

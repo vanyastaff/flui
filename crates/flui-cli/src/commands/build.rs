@@ -19,7 +19,7 @@ pub struct BuildOptions {
     pub split_per_abi: bool,
     /// Web: Optimize WASM size.
     pub optimize_wasm: bool,
-    /// iOS: Build universal binary.
+    /// iOS: Build device and simulator libraries (XCFramework without an Xcode project).
     pub universal: bool,
     /// Use verbose output with progress bars.
     pub verbose: bool,

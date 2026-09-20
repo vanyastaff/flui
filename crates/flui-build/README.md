@@ -177,11 +177,18 @@ let ctx = BuilderContextBuilder::new(PathBuf::from("."))
 let builder = IOSBuilder::new();
 builder.validate_environment()?;
 
-let artifacts = builder.build_rust(&ctx)?;
-let final_artifacts = builder.build_platform(&ctx, &artifacts)?;
+let artifacts = builder.build_rust(&ctx).await?;
+let final_artifacts = builder.build_platform(&ctx, &artifacts).await?;
 
-println!(".app bundle: {:?}", final_artifacts.app_binary);
+println!("iOS artifact: {:?}", final_artifacts.app_binary);
 ```
+
+Without `platforms/ios/flui.xcodeproj`, library builds deliver
+`output_dir/flui.xcframework`, including every requested device/simulator slice.
+Install the listed Rust targets and Xcode SDKs first. Device and simulator
+variants remain separate; simulator architectures are merged within their variant.
+The existing Xcode-project branch builds an application separately and is not
+validated by the library-delivery tests.
 
 ### Web
 

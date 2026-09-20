@@ -229,6 +229,106 @@ fn worker(root: PathBuf, case: &str) {
             };
             assert_eq!(path.file_name().expect("filename"), expected.as_str());
         }
+        if case == "xcframework" {
+            let delivered = runtime
+                .block_on(builder.build_platform(&ctx, &artifacts))
+                .expect("deliver native library bundle");
+            assert_eq!(
+                delivered.app_binary,
+                ctx.output_dir.join("flui.xcframework"),
+                "all variants belong in requested output directory"
+            );
+            assert!(delivered.app_binary.is_dir());
+            let plist = Command::new("plutil")
+                .args(["-convert", "json", "-o", "-"])
+                .arg(delivered.app_binary.join("Info.plist"))
+                .output()
+                .expect("inspect XCFramework");
+            assert!(plist.status.success());
+            let metadata: serde_json::Value =
+                serde_json::from_slice(&plist.stdout).expect("plist JSON");
+            let libraries = metadata["AvailableLibraries"].as_array().expect("variants");
+            assert_eq!(libraries.len(), 2);
+            assert!(
+                libraries
+                    .iter()
+                    .any(|entry| entry["SupportedPlatform"] == "ios"
+                        && entry.get("SupportedPlatformVariant").is_none())
+            );
+            assert!(
+                libraries
+                    .iter()
+                    .any(|entry| entry["SupportedPlatform"] == "ios"
+                        && entry["SupportedPlatformVariant"] == "simulator")
+            );
+            let simulator = libraries
+                .iter()
+                .find(|entry| entry["SupportedPlatformVariant"] == "simulator")
+                .expect("simulator");
+            assert_eq!(
+                simulator["SupportedArchitectures"]
+                    .as_array()
+                    .expect("arches")
+                    .len(),
+                targets.len() - 1
+            );
+            let prior = delivered.app_binary.join("previous-sentinel");
+            std::fs::write(&prior, "old output").expect("old sentinel");
+            let mut two = ctx.clone();
+            two.platform = Platform::IOS {
+                targets: targets[..2].to_vec(),
+            };
+            let swapped = flui_build::BuildArtifacts {
+                rust_libs: vec![
+                    artifacts.rust_libs[1].clone(),
+                    artifacts.rust_libs[0].clone(),
+                ],
+                executable: None,
+                metadata: serde_json::json!({}),
+            };
+            assert!(
+                runtime
+                    .block_on(builder.build_platform(&two, &swapped))
+                    .is_err(),
+                "swapped ARM64 device/simulator inputs must not validate"
+            );
+            assert_eq!(
+                std::fs::read(&prior).expect("old bundle retained"),
+                b"old output"
+            );
+            let rebuilt = runtime
+                .block_on(builder.build_platform(&ctx, &artifacts))
+                .expect("replace valid bundle");
+            assert!(
+                !prior.exists(),
+                "successful replacement removes obsolete contents"
+            );
+            assert_eq!(rebuilt.app_binary, delivered.app_binary);
+            let device = libraries
+                .iter()
+                .find(|entry| entry.get("SupportedPlatformVariant").is_none())
+                .expect("device");
+            // Source aliases the prior destination. Staging must read it before replacement.
+            let inside = delivered
+                .app_binary
+                .join(device["LibraryIdentifier"].as_str().expect("id"))
+                .join(device["LibraryPath"].as_str().expect("path"));
+            let mut single = ctx.clone();
+            single.platform = Platform::IOS {
+                targets: vec![targets[0].clone()],
+            };
+            let one = flui_build::BuildArtifacts {
+                rust_libs: vec![inside],
+                executable: None,
+                metadata: serde_json::json!({}),
+            };
+            let delivered_one = runtime
+                .block_on(builder.build_platform(&single, &one))
+                .expect("single slice with aliased input");
+            assert!(delivered_one.app_binary.is_dir());
+            assert!(delivered_one.size_bytes > 0);
+            sentinel();
+        }
         if case == "cached-failure" {
             let cached = runtime
                 .block_on(builder.build_rust(&ctx))
@@ -286,4 +386,14 @@ fn ios_cargo_artifact_fixtures() {
 #[ignore = "requires Xcode SDK and installed aarch64-apple-ios/aarch64-apple-ios-sim targets; run explicitly"]
 fn ios_device_and_simulator_static_libraries() {
     fixture("external", "aarch64-apple-ios,aarch64-apple-ios-sim");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires Xcode SDK and installed device/simulator Rust targets; run explicitly"]
+fn ios_delivers_device_and_simulator_xcframework() {
+    fixture(
+        "xcframework",
+        "aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios",
+    );
 }
