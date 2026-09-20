@@ -15,6 +15,14 @@
 // Owner name is matched by the caller; `layer=0` is a normal application
 // window (`layer>0` is chrome — the Dock, the menu bar, notification centres),
 // so a caller scanning for its own app should require layer 0.
+//
+// `origin` is printed alongside `size` because a window's *number* is only good
+// for `screencapture -l`, which reads the window's own backing store — and a
+// window that has been ordered front but has not yet drawn has none, so that
+// capture returns a flat dark image whatever the display actually shows. Seeing
+// what a person sees with an unpainted window therefore needs a screen capture
+// of the window's rectangle, and that needs the origin. Both are in the global
+// display coordinate space, which is also the space `screencapture -R` takes.
 
 import CoreGraphics
 import Foundation
@@ -28,7 +36,10 @@ for window in windows {
     let number = window[kCGWindowNumber as String] as? Int ?? -1
     let layer = window[kCGWindowLayer as String] as? Int ?? -1
     let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
+    let x = bounds["X"] as? Double ?? 0
+    let y = bounds["Y"] as? Double ?? 0
     let width = bounds["Width"] as? Double ?? 0
     let height = bounds["Height"] as? Double ?? 0
-    print("pid=\(pid) win=\(number) layer=\(layer) size=\(Int(width))x\(Int(height)) owner=\(owner)")
+    print("pid=\(pid) win=\(number) layer=\(layer) size=\(Int(width))x\(Int(height)) "
+        + "origin=\(Int(x)),\(Int(y)) owner=\(owner)")
 }

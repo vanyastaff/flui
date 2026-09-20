@@ -18,6 +18,26 @@ window is still read from its own backing store; a full-screen grab would
 photograph whatever is on top of it and turn the background arm into a
 tautology.
 
+The oracle is asked of every capture, not only of the first one. A macOS window
+is ordered front before its first frame is presented — the first show happens
+ahead of the GPU stack — so a cold launch has its window on screen for seconds
+with nothing drawn in it, and a gate that captures once calls that startup a
+rendering defect. Each launch is therefore given a bounded settle: the oracle is
+retried until it holds, and the time from the window appearing to the capture
+that passed is reported as `first frame after`. "Never drew" and "has not drawn
+yet" stop being the same reading, and a window that is genuinely blank now fails
+as one that stayed blank for the whole bound.
+
+That retry has a converse worth stating, because it is easy to misread a
+failing capture. `screencapture -l` on an ordered-front window that has no
+backing store yet returns a flat dark image whatever the display shows, so the
+window-scoped capture cannot say what a person had on screen during the gap.
+When a launch fails, this check therefore takes one *screen* capture of the
+window's rectangle as well — only when that window is the frontmost one, so the
+pixels belong to it — and reports it as what a viewer saw. It decides nothing:
+the window-scoped capture stays the oracle, because a region capture photographs
+whatever is on top of the rectangle.
+
 That capture is the one part of this gate the host can revoke: reading another
 application's window needs Screen Recording. The permission is preflighted
 (`CGPreflightScreenCaptureAccess`) and its absence is reported as
@@ -55,6 +75,17 @@ ARMS = ("direct", "launchservices", "launchservices-background")
 
 # How long a launched application gets to put a window on screen.
 WINDOW_TIMEOUT = 20.0
+
+# How long a window that has appeared gets to hold content before it is called
+# blank, and how long to wait between attempts. The retry exists because the
+# window is ordered front ahead of its first frame: a cold launch has it on
+# screen, unpainted, for seconds. The bound is generous next to that measured
+# 2.81 s so the gate decides "never drew" rather than "was slow once", and an
+# application that renders normally passes on its first attempt and pays
+# nothing. The interval is small because each attempt already costs a
+# `screencapture` and a `sips`.
+SETTLE_TIMEOUT = 10.0
+SETTLE_INTERVAL = 0.25
 
 # Colour buckets are 32-wide per channel, so antialiasing and gradients inside
 # one flat fill do not inflate the count. A blank window is one bucket.
@@ -135,6 +166,22 @@ def app_pids(binary):
     return {int(pid) for pid in listing.stdout.split()}
 
 
+def window_listing(window_list):
+    """Every on-screen window, front to back, as parsed `key=value` fields.
+
+    The helper prints in `CGWindowListCopyWindowInfo` order, which is front to
+    back, and that order is load-bearing: it is how the frontmost window is
+    identified without asking the window server for anything more.
+    """
+    listing = subprocess.run([str(window_list)], capture_output=True, text=True, timeout=60)
+    rows = []
+    for line in listing.stdout.splitlines():
+        fields = dict(part.split("=", 1) for part in line.split() if "=" in part)
+        if fields:
+            rows.append(fields)
+    return rows
+
+
 def windows_for_app(binary, window_list, timeout):
     """Poll the window list until this launch has a normal window on screen.
 
@@ -144,19 +191,52 @@ def windows_for_app(binary, window_list, timeout):
     tautology — a launch route that started nothing would be reported as
     rendering, on the strength of a window the previous arm opened. PIDs are
     exact for the process this call is watching.
+
+    The sighting carries the moment the window was first seen, because that and
+    not the launch is the honest start of the "it has not drawn yet" interval:
+    an application is free to take its time before there is any window at all,
+    and that delay is not a blank window.
     """
     deadline = time.monotonic() + timeout
     while True:
         pids = app_pids(binary)
-        listing = subprocess.run([str(window_list)], capture_output=True,
-                                 text=True, timeout=60)
-        for line in listing.stdout.splitlines():
-            fields = dict(part.split("=", 1) for part in line.split() if "=" in part)
+        for fields in window_listing(window_list):
             if fields.get("layer") == "0" and int(fields.get("pid", -1)) in pids:
-                return int(fields["win"]), fields.get("size", "?"), fields.get("owner", "?")
+                return {"number": int(fields["win"]),
+                        "size": fields.get("size", "?"),
+                        "origin": fields.get("origin", "?"),
+                        "owner": fields.get("owner", "?"),
+                        "appeared": time.monotonic()}
         if time.monotonic() >= deadline:
-            return None, None, None
+            return None
         time.sleep(0.5)
+
+
+def frontmost_window(window_list):
+    """The number of the frontmost normal window, or None if there is none."""
+    for fields in window_listing(window_list):
+        if fields.get("layer") == "0":
+            return int(fields["win"])
+    return None
+
+
+def viewer_rect(sighting):
+    """The window's on-screen rectangle, in the form `screencapture -R` takes.
+
+    `CGWindowListCopyWindowInfo` reports bounds in the global display space and
+    `-R` reads that same space, so the numbers pass through unchanged — both are
+    points on the display, not pixels of a capture.
+
+    A sighting with no bounds yet yields no rectangle. A region built from a
+    missing bound would photograph a corner of the desktop and be filed as the
+    window's appearance, which is worse than reporting that nothing was taken.
+    """
+    size, origin = sighting.get("size", "?"), sighting.get("origin", "?")
+    if "x" not in size or "," not in origin:
+        return None
+    width, height = (int(part) for part in size.split("x"))
+    left, top = (int(part) for part in origin.split(","))
+    return f"{left},{top},{width},{height}"
 
 
 def capture_window(number, png):
@@ -170,13 +250,35 @@ def capture_window(number, png):
     return bmp
 
 
+def capture_viewer(region, bmp):
+    """Photograph the pixels a viewer sees inside the window's rectangle.
+
+    Deliberately not the oracle. The window-scoped capture reads the window's
+    own backing store, which is what lets an occluded or never-activated window
+    be measured at all — the background arm depends on it. Its converse is that
+    an ordered-front window with no backing store reports a flat dark image
+    whatever the display shows, so the one thing it cannot say is what a person
+    had on screen. This capture says only that, and decides nothing: it
+    photographs whatever is on top of the rectangle.
+    """
+    subprocess.run(["screencapture", "-x", "-R", region, "-t", "bmp", str(bmp)],
+                   check=True, capture_output=True, timeout=60)
+    if not bmp.exists():
+        raise RuntimeError("screencapture produced no image")
+    return bmp
+
+
 def content_histogram(bmp):
-    """Bucket a window capture's content region, excluding title bar and shadow.
+    """Bucket a capture's content region, excluding title bar and shadow.
 
     The capture is the window *including* chrome, so a flat content area would
     otherwise be hidden behind the title bar's text and traffic lights. The
     insets are proportional: the title bar is a fixed ~32 points while the
     capture is in device pixels, so its share of the image shrinks on Retina.
+
+    The same insets are correct for both instruments, because both frame the
+    window the same way: `-l` captures the window with its chrome, and the
+    region capture is handed exactly the window's rectangle with no shadow.
     """
     data = bmp.read_bytes()
     offset = struct.unpack_from("<I", data, 10)[0]
@@ -198,6 +300,61 @@ def content_histogram(bmp):
 
 def matches(observed, expected):
     return all(abs(channel - wanted) <= BUCKET for channel, wanted in zip(observed, expected))
+
+
+def judge(counts, expected):
+    """Why this capture is not a rendered window, or None when it is one.
+
+    The whole oracle lives here because it is now asked of every attempt in the
+    settle loop rather than once: the loop has to decide, at each attempt, the
+    same question the final verdict asks, and two copies of it could drift.
+    """
+    samples = sum(counts.values())
+    if expected is not None:
+        matched = sum(count for colour, count in counts.items() if matches(colour, expected))
+        share = 100 * matched / samples
+        if share < MIN_EXPECT_SHARE:
+            return (f"content holds {share:.2f}% of the expected colour rgb{expected} "
+                    f"(needs {MIN_EXPECT_SHARE:g}%) — the window drew something other than the "
+                    f"fixture")
+        return None
+    buckets = len(counts)
+    if buckets < MIN_BUCKETS:
+        share = 100 * counts.most_common(1)[0][1] / samples
+        return (f"content region is flat ({buckets} colour bucket(s), {share:.1f}% one colour) "
+                f"— the window is blank")
+    return None
+
+
+def viewer_report(sighting, window_list, scratch):
+    """One sentence on what a viewer had on screen in the window's rectangle.
+
+    Taken only when this window is the frontmost normal window. A region capture
+    reads whatever is on top of the rectangle, so with the window behind
+    something — the normal case for the background launch arm, which never
+    activates — the pixels would belong to that other window and the sentence
+    would describe it. Saying nothing was taken is the honest answer there, and
+    it keeps this diagnostic from ever contradicting the oracle.
+    """
+    frontmost = frontmost_window(window_list)
+    if frontmost != sighting["number"]:
+        return (f"A screen capture of the window's rectangle was not taken: window "
+                f"{sighting['number']} is not the frontmost window (that is {frontmost}), so the "
+                f"region would hold whatever covers it.")
+    region = viewer_rect(sighting)
+    if region is None:
+        return "A screen capture of the window's rectangle was not taken: no bounds were reported."
+    try:
+        bmp = capture_viewer(region, scratch)
+    except (subprocess.CalledProcessError, RuntimeError) as error:
+        return f"A screen capture of the window's rectangle could not be taken: {error}"
+    _, _, counts = content_histogram(bmp)
+    samples = sum(counts.values())
+    top = counts.most_common(1)[0]
+    return (f"A screen capture of the same rectangle shows rgb{top[0]} over "
+            f"{100 * top[1] / samples:.2f}% of it ({len(counts)} bucket(s)) — what a viewer had on "
+            f"screen, which the window-scoped capture above cannot show for a window with no "
+            f"backing store.")
 
 
 def launch(arm, bundle, binary, log):
@@ -304,18 +461,45 @@ def main():
                     print(f"FAIL {arm} run {run}: {refused}")
                     stop(process, binary)
                     continue
-                number, size, seen_owner = windows_for_app(binary, window_list, WINDOW_TIMEOUT)
-                if number is None:
+                sighting = windows_for_app(binary, window_list, WINDOW_TIMEOUT)
+                if sighting is None:
                     alive = len(app_pids(binary))
                     stop(process, binary)
                     failures.append(f"{arm} run {run}: no window within {WINDOW_TIMEOUT:g}s "
                                     f"({alive} matching process(es) alive)")
                     print(f"FAIL {arm} run {run}: no on-screen window appeared")
                     continue
+                number = sighting["number"]
                 png = options.output / f"{arm}-{run}.png"
+                drawn_at = None
                 try:
-                    bmp = capture_window(number, png)
-                    width, height, counts = content_histogram(bmp)
+                    # The window goes on screen ahead of its first frame, so the
+                    # first capture of a cold launch is of a window with nothing
+                    # drawn in it. Retry the oracle instead of deciding on one
+                    # look: "never drew" and "has not drawn yet" are the same
+                    # reading, and only a second attempt tells them apart.
+                    deadline = sighting["appeared"] + SETTLE_TIMEOUT
+                    attempt = 0
+                    while True:
+                        attempt += 1
+                        bmp = capture_window(number, png)
+                        width, height, counts = content_histogram(bmp)
+                        reason = judge(counts, expected)
+                        if reason is None:
+                            drawn_at = time.monotonic()
+                            break
+                        if attempt == 1:
+                            # The one artefact worth keeping out of the gap, and
+                            # one to read carefully: it is a window-scoped
+                            # capture, so on an unpainted window it is the
+                            # flat-dark capture artifact rather than the
+                            # near-white screen — see `capture_viewer`.
+                            shutil.copy2(png, options.output / f"{arm}-{run}-undrawn.png")
+                        if time.monotonic() >= deadline:
+                            break
+                        print(f"    attempt {attempt} at "
+                              f"{time.monotonic() - sighting['appeared']:.2f}s: {reason}; retrying")
+                        time.sleep(SETTLE_INTERVAL)
                 finally:
                     exited = stop(process, binary)
                 if not exited:
@@ -325,24 +509,32 @@ def main():
                 buckets = len(counts)
                 top = counts.most_common(1)[0]
                 share = 100 * top[1] / samples
-                print(f"  {arm} run {run}: window {number} owner={seen_owner} {size} "
-                      f"captured {width}x{height} buckets={buckets} "
+                print(f"  {arm} run {run}: window {number} owner={sighting['owner']} "
+                      f"{sighting['size']} captured {width}x{height} buckets={buckets} "
                       f"dominant={top[0]} ({share:.2f}%) ink={100 - share:.2f}%")
-                reason = None
+                if drawn_at is None:
+                    print(f"    first frame: not within {SETTLE_TIMEOUT:g}s of the window "
+                          f"appearing ({attempt} capture(s))")
+                else:
+                    print(f"    first frame after {drawn_at - sighting['appeared']:.2f}s "
+                          f"({attempt} capture(s))")
+                reason = judge(counts, expected)
                 if expected is not None:
+                    # Printed from the capture that decided, because the number
+                    # the oracle compared against is the one worth showing even
+                    # when it passed.
                     matched = sum(count for colour, count in counts.items() if matches(colour, expected))
-                    share_expected = 100 * matched / samples
-                    print(f"    expected rgb{expected} present in {share_expected:.1f}% of samples")
-                    if share_expected < MIN_EXPECT_SHARE:
-                        reason = (f"content holds {share_expected:.2f}% of the expected colour "
-                                  f"rgb{expected} (needs {MIN_EXPECT_SHARE:g}%) — the window drew "
-                                  f"something other than the fixture")
-                elif buckets < MIN_BUCKETS:
-                    reason = (f"content region is flat ({buckets} colour bucket(s), "
-                              f"{share:.1f}% one colour) — the window is blank")
+                    print(f"    expected rgb{expected} present in "
+                          f"{100 * matched / samples:.1f}% of samples")
                 if reason is None:
                     print(f"PASS {arm} run {run}")
                 else:
+                    if drawn_at is None:
+                        reason += (f", and it looked the same on every capture for {SETTLE_TIMEOUT:g}s "
+                                   f"after the window appeared — this is a window that never drew, "
+                                   f"not one caught before its first frame")
+                    viewer_bmp = options.output / f"{arm}-{run}-viewer.bmp"
+                    print(f"    {viewer_report(sighting, window_list, viewer_bmp)}")
                     failures.append(f"{arm} run {run}: {reason}")
                     print(f"FAIL {arm} run {run}: {reason}")
 
