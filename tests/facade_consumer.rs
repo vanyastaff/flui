@@ -341,13 +341,13 @@ fn external_consumer_names_presentation_lifecycle_capability() {
     dependencies.insert("flui".into(), dependency("flui", root, false));
     let output = compile_consumer(
         dependencies,
-        r#"
+        r"
 use flui::view::{BuildContext, LifecycleHandle, LifecycleSubscription, LifecycleClosed};
 pub fn acquire(ctx: &dyn BuildContext) -> Option<LifecycleHandle> { ctx.lifecycle_handle() }
 pub fn observe(handle: &LifecycleHandle) -> Result<(Option<flui::view::AppLifecycleState>, LifecycleSubscription), LifecycleClosed> {
     handle.subscribe(|_| {})
 }
-"#,
+",
     );
     assert!(
         output.status.success(),
