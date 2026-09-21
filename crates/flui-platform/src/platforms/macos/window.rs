@@ -198,6 +198,22 @@ struct MacOSWindowState {
     /// `true` — a freshly created window is treated as visible until AppKit
     /// says otherwise, matching every other backend's initial state.
     occlusion_visible: bool,
+
+    /// The window was opened `visible: true` and is ordered front, but at
+    /// `alphaValue` 0: the first reveal — alpha back to 1 — is deferred
+    /// until the embedder reports a presented frame
+    /// ([`PlatformWindow::reveal_after_first_frame`]) or asks for the window
+    /// explicitly (`show`/`set_visible(true)`/`activate`).
+    ///
+    /// Ordered-but-transparent rather than hidden, and measured rather than
+    /// assumed: a window that is not ordered on screen gets no Metal
+    /// drawable — wgpu reports the surface occluded and every frame comes
+    /// back `NotShown` — so a reveal that waited for a present into a hidden
+    /// window would wait for something that cannot happen (observed
+    /// 2026-09-21: 30+ withheld frames, then the embedder's fallback). A
+    /// transparent window is composited normally, so the first frame
+    /// presents into it, and nothing is on screen until it has.
+    first_reveal_pending: bool,
 }
 
 impl std::fmt::Debug for MacOSWindow {
@@ -213,6 +229,14 @@ impl std::fmt::Debug for MacOSWindow {
 }
 
 impl MacOSWindow {
+    /// Clear the deferred-first-reveal flag, returning whether it was set:
+    /// the one call that decides which caller performs the reveal. Taken
+    /// under the state lock and never inside an owner route, so it cannot
+    /// be held across an AppKit message.
+    fn take_pending_first_reveal(&self) -> bool {
+        std::mem::replace(&mut self.state.lock().first_reveal_pending, false)
+    }
+
     /// Create a new macOS window
     ///
     /// # Errors
@@ -378,8 +402,20 @@ impl MacOSWindow {
             // Get backing scale factor
             let scale: f64 = msg_send![ns_window, backingScaleFactor];
 
-            // Make window visible if requested
+            // A window opened `visible: true` is ordered front now but fully
+            // transparent. AppKit shows a window the moment it is ordered,
+            // and the first frame reaches the compositor only after the GPU
+            // stack behind it is built and the first present lands —
+            // measured at 2.81 s on a cold launch — so an opaque window
+            // here shows its bare background for that whole gap (the launch
+            // blank-window observation in `docs/BETA.md`). It cannot simply
+            // stay hidden either: an un-ordered window gets no Metal
+            // drawable (see `MacOSWindowState::first_reveal_pending`). Alpha
+            // 0 gives the surface a window to present into while the viewer
+            // sees nothing; `reveal_after_first_frame` restores alpha 1.
+            // `visible: false` stays hidden until asked, as before.
             if options.visible {
+                let _: () = msg_send![ns_window, setAlphaValue: 0.0f64];
                 let _: () = msg_send![ns_window, makeKeyAndOrderFront: NIL];
             }
 
@@ -414,6 +450,7 @@ impl MacOSWindow {
                     refresh_period,
                     cursor: CursorIcon::default(),
                     occlusion_visible: true,
+                    first_reveal_pending: options.visible,
                 })),
                 windows_map: Arc::clone(&windows_map),
                 callbacks,
@@ -1039,6 +1076,9 @@ impl PlatformWindow for MacOSWindow {
     }
 
     fn show(&self) -> Result<(), crate::WindowShowError> {
+        // An explicit show settles a deferred first reveal: the window is
+        // made opaque along with being ordered.
+        let settle_reveal = self.take_pending_first_reveal();
         route_on_owner(self.owner, self.owner_is_main, || {
             if self.closed.load(Ordering::SeqCst) {
                 return Err(crate::WindowShowError::Closed);
@@ -1046,6 +1086,9 @@ impl PlatformWindow for MacOSWindow {
             // SAFETY: self retains the native window; routing establishes its
             // owner lane. Deminiaturizing and ordering do not toggle zoom/fullscreen.
             unsafe {
+                if settle_reveal {
+                    let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+                }
                 let minimized: bool = msg_send![self.ns_window, isMiniaturized];
                 if minimized {
                     let _: () = msg_send![self.ns_window, deminiaturize: NIL];
@@ -1063,7 +1106,13 @@ impl PlatformWindow for MacOSWindow {
         })
     }
 
-    fn activate(&self) {
+    fn reveal_after_first_frame(&self) {
+        // The flag is settled under the state lock and outside the owner
+        // route, so a second caller racing this one sees `false`: the
+        // window becomes opaque exactly once for its deferred reveal.
+        if !self.take_pending_first_reveal() || self.closed.load(Ordering::SeqCst) {
+            return;
+        }
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         route_on_owner(owner, owner_is_main, || unsafe {
@@ -1071,6 +1120,23 @@ impl PlatformWindow for MacOSWindow {
             // body runs on the owner thread — inline on the OS main thread for a main-lane
             // owner, or dispatched onto the lane under the reentrancy guard — before the
             // message is sent.
+            let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+        });
+        tracing::debug!("macOS: window revealed after its first presented frame");
+    }
+
+    fn activate(&self) {
+        let settle_reveal = self.take_pending_first_reveal();
+        let owner = self.owner;
+        let owner_is_main = self.owner_is_main;
+        route_on_owner(owner, owner_is_main, || unsafe {
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
+            // body runs on the owner thread — inline on the OS main thread for a main-lane
+            // owner, or dispatched onto the lane under the reentrancy guard — before the
+            // message is sent.
+            if settle_reveal {
+                let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+            }
             let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
         });
     }
@@ -1598,10 +1664,17 @@ impl WindowTrait for MacOSWindow {
     }
 
     fn set_visible(&mut self, visible: bool) {
+        // Either direction settles a deferred first reveal: a show makes the
+        // window opaque along with ordering it, a hide orders it out and
+        // restores alpha so a later show is an ordinary one.
+        let settle_reveal = self.take_pending_first_reveal();
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         let this = &*self;
         route_on_owner(owner, owner_is_main, || unsafe {
+            if settle_reveal {
+                let _: () = msg_send![this.ns_window, setAlphaValue: 1.0f64];
+            }
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
             // `this` reborrows), and the body runs on the owner thread — inline on
             // the OS main thread for a main-lane owner, or dispatched onto the

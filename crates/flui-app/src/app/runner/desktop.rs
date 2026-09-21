@@ -9,6 +9,7 @@ use std::sync::Arc;
 use super::device_recovery::{
     FrameRecoveryOutcome, new_device_recovery_backoff, render_frame_with_device_recovery,
 };
+use super::first_reveal::FirstReveal;
 use super::frame_pacing::{
     DEFAULT_DISPLAY_PERIOD, FallbackWake, WakeAction, frame_is_dirty, install_pre_present_hook,
     keeps_frame_gate_open, wake_action,
@@ -69,6 +70,13 @@ where
     // builds while the underlying counters/deadline must persist. See
     // `DeviceRecoveryBackoff`'s own doc.
     let device_recovery_backoff = Arc::new(new_device_recovery_backoff());
+
+    // 0d. The window's deferred first reveal (see `FirstReveal`): the
+    // platform opened it hidden-but-intended-visible, and the frame closure
+    // below hands it the reveal on the first presented frame, or at the
+    // policy's fallback bound. Its deadline joins the wake hook and the
+    // dirty predicate like every other wake-deadline source here.
+    let first_reveal = Arc::new(FirstReveal::new());
 
     // 2. Create GPU renderer directly (no DesktopEmbedder). `Renderer::new`
     // takes ownership of a `WindowTarget` (issue #1043) — `Arc::clone`
@@ -236,6 +244,7 @@ where
     install_wake_deadline_hook({
         let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
         let fallback = Arc::clone(&fallback);
+        let first_reveal = Arc::clone(&first_reveal);
         let realm_id = realm_dispatch.address.realm_id;
         move || {
             // The frames-enabled gate itself is `desktop_secondary_
@@ -261,8 +270,11 @@ where
             // gets (a hidden Wayland surface withholds redraws) cannot
             // be re-reported in the past forever.
             let deadlines = merge_wake_deadlines(
-                device_recovery_backoff.next_attempt_at(),
-                fallback.next_wake(web_time::Instant::now()),
+                merge_wake_deadlines(
+                    device_recovery_backoff.next_attempt_at(),
+                    fallback.next_wake(web_time::Instant::now()),
+                ),
+                first_reveal.next_deadline(),
             );
             desktop_secondary_wake_deadline(deadlines, frames_enabled)
         }
@@ -321,11 +333,18 @@ where
     // Reuses the SAME backoff constructed at step 0c (already wired
     // into the wake-deadline hook above) — not a fresh one.
     let frame_fallback = Arc::clone(&fallback);
+    let frame_first_reveal = Arc::clone(&first_reveal);
+    // Weak: this closure lives inside the window's own handler table, and
+    // a strong capture would cycle it alive past close (the same shape
+    // `on_appearance_changed` below uses).
+    let frame_reveal_window = Arc::downgrade(&window);
     window.on_request_frame(Box::new(move || {
         let lane_frame = Arc::clone(&lane_frame);
         let worker_reload_frame = worker_reload_frame.clone();
         let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
         let fallback = Arc::clone(&frame_fallback);
+        let first_reveal = Arc::clone(&frame_first_reveal);
+        let reveal_window = frame_reveal_window.clone();
         let _ = dispatch_platform_realm(
             realm_dispatch,
             RealmTask::Frame(Box::new(move |realm| {
@@ -392,7 +411,12 @@ where
                     inbox_redraw,
                     realm.needs_redraw(),
                     realm.has_pending_work(),
-                    device_recovery_backoff.next_attempt_at(),
+                    // The reveal fallback joins the device-recovery deadline
+                    // here for the same reason that one must be present.
+                    merge_wake_deadlines(
+                        device_recovery_backoff.next_attempt_at(),
+                        first_reveal.next_deadline(),
+                    ),
                     fallback_gate,
                 );
                 match wake_action(
@@ -516,6 +540,14 @@ where
                     realm.has_pending_work(),
                 );
                 let pace_now = web_time::Instant::now();
+                // The deferred first reveal: handed to the window on the
+                // first presented frame, or at the fallback bound after a
+                // frame that ran and presented nothing (`FirstReveal`).
+                if first_reveal.after_frame(outcome.presented, pace_now)
+                    && let Some(window) = reveal_window.upgrade()
+                {
+                    window.reveal_after_first_frame();
+                }
                 if outcome.presented {
                     fallback.record_present(pace_now);
                 } else if keeps_gate_open {

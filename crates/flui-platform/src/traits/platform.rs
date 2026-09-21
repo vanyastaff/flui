@@ -31,7 +31,17 @@ pub struct WindowOptions {
     pub size: Size<Pixels>,
     /// Whether window is resizable
     pub resizable: bool,
-    /// Whether window should be visible initially
+    /// Whether the window should be visible initially.
+    ///
+    /// `true` is the INTENDED state, not a promise that the window is on
+    /// screen the moment `open_window` returns: a backend may defer the
+    /// physical reveal until the embedder reports its first presented frame
+    /// through [`PlatformWindow::reveal_after_first_frame`], so the window
+    /// never shows a bare background while the GPU stack behind it is
+    /// built. Such a backend answers `is_visible() == true` meanwhile.
+    /// `false` stays hidden until shown explicitly.
+    ///
+    /// [`PlatformWindow::reveal_after_first_frame`]: crate::traits::PlatformWindow::reveal_after_first_frame
     pub visible: bool,
     /// Whether window is decorated (has title bar)
     pub decorated: bool,

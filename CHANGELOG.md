@@ -13,6 +13,16 @@ file records the repo-consumer-visible summary.
 
 ### Added
 
+- **No blank window at launch on macOS** (`flui-platform`, `flui-app`): a window
+  opened `visible: true` is ordered front fully transparent and made opaque only
+  once the first frame has been presented into it (new
+  `PlatformWindow::reveal_after_first_frame`, default no-op; `flui-app`'s
+  desktop runner calls it on the first presented frame or after a one-second
+  fallback when a frame ran and presented nothing). Before, the bare window
+  background was on screen for as long as the GPU stack took to build — 2.81 s
+  on a cold launch. `WindowOptions::visible` now documents itself as the intended
+  state. Explicit `show`/`set_visible(true)`/`activate` reveal immediately.
+  Other backends are unchanged.
 - **Grapheme-cluster text editing** (`flui-widgets`): `TextEditingController`'s
   `backspace`, `delete_forward`, `move_caret_left`/`right` and
   `extend_selection_left`/`right` step by extended grapheme cluster (UAX #29)

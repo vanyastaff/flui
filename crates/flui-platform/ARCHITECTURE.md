@@ -789,6 +789,45 @@ The portable operation-sequence test asserts that stale identity causes neither
 reveal nor focus. This does not change the separate legacy teardown route or
 claim native Windows runtime verification.
 
+### The first reveal waits for the first presented frame, behind alpha 0
+
+AppKit shows a window the moment it is ordered front, and the first frame
+reaches the compositor only once the GPU stack behind it exists and the first
+present lands — 2.81 s on a measured cold launch — so ordering an opaque window
+at open shows its bare background for that whole gap (the launch blank-window
+observation in `docs/BETA.md`). `WindowOptions::visible` is therefore the
+*intended* state: macOS orders a `visible: true` window front at `alphaValue`
+0 and restores alpha 1 when the embedder reports the first presented frame
+through `PlatformWindow::reveal_after_first_frame`, or when the window is shown
+explicitly (`show`, `set_visible(true)`, `activate`). The flag is settled under
+the window's state lock, never inside an owner route, so exactly one caller
+performs the reveal.
+
+Transparent rather than hidden, because a hidden alternative was tried and
+measured on 2026-09-21: an un-ordered window gets no Metal drawable — wgpu
+reports the surface occluded on every acquire (30+ withheld frames in the log)
+— so a reveal that waited for a present into a hidden window waited for
+something that cannot happen and fell through to the embedder's 1 s fallback.
+Ordered at alpha 0, the first acquire still comes back occluded once (a
+post-configure quirk of the Metal surface) and the second presents; the reveal
+followed the first frame by 85 ms, and the window's first on-screen sighting
+through the CoreGraphics window list was already painted.
+
+The embedder's half is `flui-app`'s `FirstReveal` policy: the first presented
+frame earns the reveal, and a frame that ran and presented nothing arms a
+bounded fallback (one second from that outcome, not from install, so a slow
+cold frame still inside its render arms nothing) after which the window is
+revealed regardless — a surface that never presents yields a window the user
+can see and close rather than a process with no window. The fallback deadline
+joins the desktop wake-deadline hook and the frame closure's dirty predicate
+like every other wake-deadline source there.
+
+The winit backend reveals at open, unchanged: whether a hidden X11 or Win32
+window hands out swapchain images could not be verified here, and a wrong guess
+would cost every Linux launch the fallback's second. Wayland maps a surface at
+its first commit, which is the first present, so the deferral there is the
+protocol's own. Win32's native backend is likewise unchanged.
+
 ### Per-window execution eligibility
 
 `WindowExecutionState` separates native execution permission from focus, visibility

@@ -376,6 +376,23 @@ pub trait PlatformWindow: Send + Sync {
         Err(WindowShowError::Unsupported)
     }
 
+    /// The embedder has presented the first frame into this window's
+    /// surface — or has waited as long as it is willing to for one.
+    ///
+    /// A backend that defers the physical reveal of a window opened
+    /// [`WindowOptions::visible`](crate::traits::WindowOptions::visible)
+    /// `== true` performs it now, exactly once; a window opened hidden, one
+    /// already shown explicitly (`show`/`set_visible(true)`/`activate`),
+    /// or a backend that reveals at open, ignores the call. Calling it
+    /// again is harmless.
+    ///
+    /// The embedder calls this after the first frame whose present
+    /// succeeded, and at a bounded fallback after a frame that ran and
+    /// presented nothing, so a surface that never presents still yields a
+    /// window the user can see and close rather than a process with no
+    /// window at all.
+    fn reveal_after_first_frame(&self) {}
+
     /// Activate (bring to front / focus) the window.
     fn activate(&self) {}
 

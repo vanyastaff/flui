@@ -385,10 +385,19 @@ observations are consistent with warmth rather than with route: a cold launch's
 first frame was still undrawn 2.81 s after its window appeared, while on every
 warm launch since, the window was already drawn at its first sighting; the three
 launch routes were also measured directly and rendered 15/15 and 9/9 across all of
-them. What remains is the fix and not the cause — the first show should be
-deferred until a frame has been presented, and no such deferral exists today:
-`visible` is hardcoded true (`crates/flui-app/src/app/config.rs:384`) and nothing
-reports the first present.
+them. The fix now exists: a macOS window opened visible is ordered front at
+`alphaValue` 0 and made opaque when the desktop runner reports the first
+presented frame (`PlatformWindow::reveal_after_first_frame`, driven by
+`flui-app`'s `FirstReveal` policy with a one-second fallback measured from the
+first frame that ran and presented nothing). Hidden-then-shown was tried first
+and refuted live: an un-ordered window gets no Metal drawable, so every frame
+came back withheld until the fallback. With the transparent window the log
+reads create → one withheld acquire → present → reveal 85 ms after the first
+frame, and the CoreGraphics window list's first sighting of the bundled
+example (`open`, 1.41 s after launch on a warm cache) was already painted
+(`/tmp/flui-reveal-live5.log`, computer-use window capture). The winit and
+Win32 backends still reveal at open; see the platform architecture document
+for why the deferral is macOS-only for now.
 
 The early observation that the process remained inside `NSApplication.run` after
 that same close was recorded against a pre-`0ae979fd` binary, and is not

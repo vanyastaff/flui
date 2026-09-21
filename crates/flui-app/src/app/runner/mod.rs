@@ -16,6 +16,12 @@ mod android;
 ))]
 mod desktop;
 mod device_recovery;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod first_reveal;
 mod frame_pacing;
 mod host;
 #[cfg(target_os = "ios")]
