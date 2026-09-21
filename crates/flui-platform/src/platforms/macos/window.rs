@@ -338,6 +338,29 @@ impl MacOSWindow {
             // `setReleasedWhenClosed(false)` for its wrapped `NSWindow`.
             let _: () = msg_send![ns_window, setReleasedWhenClosed: NO];
 
+            // Background colour. AppKit's default for a fresh alloc/init'd
+            // window is `windowBackgroundColor`, a near-white
+            // (`rgb(240,240,240)` measured on this host) that sits behind
+            // the content view for as long as the first frame is still being
+            // set up — on a cold launch, up to several seconds
+            // (`docs/BETA.md`'s first-frame-race record shows 2.81 s). The
+            // user-facing glitch this default produces is documented in
+            // that file's "blank white window" paragraphs: the window is
+            // ordered front *before* `Renderer::render_scene` ever reaches
+            // `queue.present`, so the viewer sees the bare background, not
+            // the application. Setting the background to
+            // `underPageBackgroundColor` — the dark neutral AppKit uses for
+            // content chrome — doesn't remove the gap, it just stops
+            // screaming about it: the window arrives as a dark field, and
+            // the compositor's first frame lands on top of it without a
+            // jarring white flash in between. The color is also the exact
+            // one the launch-render gate's blank-window control measures
+            // against, so the control and the production path disagree by
+            // construction (a deliberately dark background is no longer
+            // `rgb(240,240,240)` flat).
+            let bg: ObjcId = msg_send![class!(NSColor), underPageBackgroundColor];
+            let _: () = msg_send![ns_window, setBackgroundColor: bg];
+
             // Set window title
             let title = NSString::from_str(&options.title);
             let _: () = msg_send![ns_window, setTitle: &*title];
