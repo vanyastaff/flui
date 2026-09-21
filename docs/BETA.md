@@ -534,9 +534,18 @@ input and disposal witnesses, same-process OS reopen and normal return. Failure
 cleanup signals never count as success.
 
 This covers one designated rendered main window. `open_secondary_window` still
-has no widget-content/renderer API. Full mobile lifecycle, live Windows runtime
-behavior, and native OS-suspend transport remain separate work; these desktop
-results do not imply beta release readiness by themselves.
+has no widget-content/renderer API on `WindowPolicy::SharedRealm`, but
+**`flui::app::open_window(config, policy, root)` now opens a content-bearing
+secondary window** on `WindowPolicy::SeparateRealms`: a fully mounted widget
+tree, its own `RasterLane` and frame pump, all dispatched through the same
+addressed-routing seams as the primary window. `SharedRealm` is refused at
+admission by a typed error because a per-presentation raster contract does
+not exist yet. Live-verified on macOS by `examples/multi_window_demo.rs`:
+the primary's button opens a second titled window with real content, and
+closing the secondary then the primary exits cleanly. Full mobile lifecycle,
+live Windows runtime behavior, and native OS-suspend transport remain
+separate work; these desktop results do not imply beta release readiness by
+themselves.
 
 ## Native iOS application delivery
 
