@@ -181,8 +181,12 @@ Clippy. Normal dependency graphs exclude hot-reload with default or no-default
 features and include it only when enabled. Live first-run and platform verification
 remain outstanding.
 
-Text deletion still documents scalar-value deletion in `TextEditingController`;
-reproduce the grapheme-cluster cases before fixing them.
+`TextEditingController` now moves, extends and deletes by extended grapheme
+cluster, and the obscured-field mask counts the same unit (`unicode-segmentation`,
+already in the graph via cosmic-text). The ZWJ-family, regional-indicator-flag
+and combining-mark cases are headless regressions in `controller.rs` and
+`editable_text.rs`; each fails when the helper is swapped back to
+`char_indices`. Live IME and clipboard checks remain separate.
 
 The default counter template owns its count in retained state and provides a
 Material Increment button. Its generated test sends pointer down/up events and
@@ -726,10 +730,24 @@ not a claim of OS-driven scene reclamation or SDK 27 certification.
 Shipping bundles declare one scene at a time. Programmatic destruction and new
 activation are not universally available under UIKit's single-scene policy;
 real OS delivery and deterministic controller coverage must be reported
-separately. Full multiwindow rendering, background execution
-grants and automatic retry after failed surface recreation remain beta work.
-The scene-ownership increment passed its scoped gates and independent reviews;
-see ADR-0073. Full beta release validation remains pending.
+separately. Full multiwindow rendering and background execution grants remain
+beta work. The scene-ownership increment passed its scoped gates and
+independent reviews; see ADR-0073. Full beta release validation remains pending.
+
+Automatic retry after a failed surface recreation is now implemented for both
+mobile runners (`21af0752`): a genuine rebuild failure after the window was
+reported available arms the same deadline-paced backoff device-loss recovery
+uses, carried by the platform's wake-deadline hook and consulted by the frame
+closure's dirty predicate; the expected "no window yet" answer is classified
+once, in `runner/surface_lifecycle.rs`, and never polled. This is host-tested
+against a scripted backend and raster lane (retry arming, deferral before the
+deadline, recreation once due, a held lane skipped without disarming, a later
+release disarming), and both runners lint clean for their own targets. It is
+not live-verified: no device or simulator run has yet produced a genuine
+rebuild failure to recover from, and the runner-side lint the fix needed did
+not exist until the same change (`cross-typecheck` now clippies `flui-app`
+and `flui` for `aarch64-apple-ios` and `aarch64-linux-android`; the facade
+did not build for iOS before it).
 
 ## iOS safe-area layout
 

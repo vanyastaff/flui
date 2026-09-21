@@ -45,8 +45,8 @@ use flui_platform::traits::{PlatformWindow, WindowId};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum RegistryError {
     /// The window already has a mapped address; `try_register_window` never
-    /// replaces (use [`WindowRegistry::register_window`] for replace
-    /// semantics).
+    /// replaces (use `WindowRegistry::register_window` — the Android/web
+    /// replace-semantics install, not linked because it is target-gated).
     #[error("window is already mapped to {existing:?}")]
     WindowAlreadyMapped {
         /// The address the window was already mapped to.
@@ -130,11 +130,12 @@ impl WindowRegistry {
         displaced
     }
 
-    /// The strict alternative to [`Self::register_window`]: refuses instead
+    /// The strict alternative to `Self::register_window` (target-gated, so
+    /// not linked): refuses instead
     /// of replacing when `window`'s id is already mapped. See
     /// [`RegistryError`]'s doc for its one production caller.
     ///
-    /// Calls `window.id()` internally, exactly like [`Self::register_window`]
+    /// Calls `window.id()` internally, exactly like `Self::register_window`
     /// does — so a caller outside this file (`AppRuntime::apply_install`,
     /// specifically) derives and pairs a window's id with an address without
     /// ever naming [`WindowId`] itself. Before this method existed,

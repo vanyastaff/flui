@@ -297,6 +297,10 @@ cursor-icon = "1.2"
 
 # UTILITIES - Used by multiple crates
 bitflags = "2.10"
+# Extended grapheme cluster segmentation (UAX #29) for text editing: caret
+# movement and deletion step by user-perceived character, as Flutter's
+# `characters` package does. Already in the graph through cosmic-text.
+unicode-segmentation = "1.12"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 static_assertions = "1.1"

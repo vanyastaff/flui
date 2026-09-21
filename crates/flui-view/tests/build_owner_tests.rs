@@ -668,5 +668,10 @@ fn test_build_owner_memory_size() {
     // heap-allocated), and not a leak: capacity plateaus at whatever the
     // busiest single `build_scope` call this owner has ever run needed, then
     // stays there.
-    assert!(size < 688, "BuildOwner is too large: {size} bytes");
+    //
+    // 680 -> 688 for the presentation lifecycle capability
+    // (`lifecycle_handle: Option<LifecycleHandle>`): one niche-optimised
+    // `Weak` pointer, 8 bytes, `None` for a bare owner and set once by the
+    // binding that hosts a presentation.
+    assert!(size < 696, "BuildOwner is too large: {size} bytes");
 }

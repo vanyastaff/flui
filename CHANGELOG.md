@@ -13,6 +13,35 @@ file records the repo-consumer-visible summary.
 
 ### Added
 
+- **Grapheme-cluster text editing** (`flui-widgets`): `TextEditingController`'s
+  `backspace`, `delete_forward`, `move_caret_left`/`right` and
+  `extend_selection_left`/`right` step by extended grapheme cluster (UAX #29)
+  rather than by Unicode scalar, so a family emoji, a flag or a letter with
+  combining marks is one keystroke — Flutter's `characters` unit. An obscured
+  field masks one bullet per cluster, keeping the mask in step with the caret.
+  Adds `unicode-segmentation` as a direct dependency (already in the graph
+  through cosmic-text).
+- **Automatic retry of a failed mobile surface recreation** (`flui-app`): when
+  the Android or iOS runner is told its native window is available again and
+  the wgpu surface rebuild fails for a reason other than the window not being
+  there yet, the runner now retries under the same deadline-paced exponential
+  backoff device-loss recovery uses (16 ms doubling to a 1 s cap, reset on
+  success), driven through the platform's wake-deadline hook rather than a
+  sleep on the event-loop thread. Previously the presentation stayed released
+  and every later frame was skipped until some unrelated lifecycle event
+  happened to re-emit the availability signal. The expected
+  `SurfaceTargetUnavailable` answer — the signal arriving before a window
+  exists — is never polled. Both runners settle each availability callback
+  through one shared classification, so they cannot disagree about which
+  failure is genuine.
+- **CI lints the mobile runners and the facade for their own targets**: the
+  `cross-typecheck` job now runs clippy on `flui-app` and `flui` for
+  `aarch64-apple-ios` and `aarch64-linux-android`. Until this, the
+  `cfg(target_os = ...)` runner code and the facade's target-gated re-exports
+  had no compile gate at all; `flui` did not build for iOS because it
+  re-exported `WindowPolicy` and `open_window`, which `flui-app` gates out
+  there, unconditionally.
+
 - `DisplayList::append_isolated` scopes each composed paint run, preventing a
   parent's canvas clip from leaking across `paint_child`. Serialized display
   lists now contain commands only and recompute bounds on input.

@@ -7,6 +7,8 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use unicode_segmentation::UnicodeSegmentation;
+
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
 
@@ -203,19 +205,20 @@ struct ComposingState {
 ///   selection — plus the selection handles and toolbar.
 /// - **Clipboard**: copy/paste/cut are not wired.
 /// - **Input formatters**: no validation or transformation pipeline.
-/// - **Grapheme-cluster-aware deletion**: [`Self::backspace`]/[`Self::delete_forward`]
-///   walk back or forward exactly one Unicode scalar value (`char`), not one
-///   extended grapheme cluster. Flutter deletes by grapheme cluster (the
-///   `characters` package / `CharacterRange`, matching `TextEditingValue`'s
-///   own delete-by-character semantics) — for a plain multi-byte character
-///   (e.g. `'€'`) the two happen to coincide, but for a Zero-Width-Joiner
-///   sequence (a family/flag emoji: `'👨‍👩‍👦'`) a single Backspace removes only
-///   the trailing scalar, leaving a dangling joiner rendered as a broken
-///   partial glyph on screen instead of deleting the whole visual character.
-///   Tracked as ROADMAP Cross.H's "no grapheme-cluster segmentation" known
-///   gap; the fix needs a grapheme-segmentation dependency
-///   (`unicode-segmentation`) threaded through this module's mutators and is
-///   its own future unit, not attempted here.
+///
+/// # Character unit
+///
+/// Caret movement ([`Self::move_caret_left`]/[`Self::move_caret_right`],
+/// [`Self::extend_selection_left`]/[`Self::extend_selection_right`]) and
+/// single-character deletion ([`Self::backspace`]/[`Self::delete_forward`])
+/// step by **extended grapheme cluster** (UAX #29), the user-perceived
+/// character Flutter's `characters` package / `CharacterRange` walks. A
+/// Zero-Width-Joiner sequence (`'👨‍👩‍👦'`), a regional-indicator flag (`'🇺🇸'`)
+/// or a base letter with combining marks (`"e\u{301}"`) is one step and one
+/// deletion; stepping by Unicode scalar instead would leave a dangling joiner
+/// rendered as a broken partial glyph. Offsets stay UTF-8 byte offsets — a
+/// grapheme boundary is always a `char` boundary, so every slice below stays
+/// valid.
 #[derive(Clone)]
 pub struct TextEditingController {
     /// Shared text buffer + caret state.
@@ -466,11 +469,8 @@ impl TextEditingController {
                 if caret == 0 {
                     false
                 } else {
-                    // Walk back to the previous char boundary.
-                    let prev_boundary = guard.text[..caret]
-                        .char_indices()
-                        .next_back()
-                        .map_or(0, |(idx, _)| idx);
+                    // Walk back to the previous grapheme boundary.
+                    let prev_boundary = prev_grapheme_boundary(&guard.text, caret);
                     guard.text.drain(prev_boundary..caret);
                     guard.selection = Selection::collapsed(prev_boundary);
                     guard.composing = None;
@@ -503,9 +503,9 @@ impl TextEditingController {
                 if caret == guard.text.len() {
                     false
                 } else {
-                    // Width of the char starting at `caret`.
-                    let char_width = guard.text[caret..].chars().next().map_or(0, char::len_utf8);
-                    guard.text.drain(caret..caret + char_width);
+                    // Width of the grapheme starting at `caret`.
+                    let next_boundary = next_grapheme_boundary(&guard.text, caret);
+                    guard.text.drain(caret..next_boundary);
                     guard.composing = None;
                     true
                 }
@@ -533,12 +533,7 @@ impl TextEditingController {
     pub fn extend_selection_left(&self) {
         self.extend_to(|guard| {
             let caret = guard.selection.caret;
-            (caret != 0).then(|| {
-                guard.text[..caret]
-                    .char_indices()
-                    .next_back()
-                    .map_or(0, |(idx, _)| idx)
-            })
+            (caret != 0).then(|| prev_grapheme_boundary(&guard.text, caret))
         });
     }
 
@@ -547,8 +542,7 @@ impl TextEditingController {
     pub fn extend_selection_right(&self) {
         self.extend_to(|guard| {
             let caret = guard.selection.caret;
-            (caret != guard.text.len())
-                .then(|| caret + guard.text[caret..].chars().next().map_or(0, char::len_utf8))
+            (caret != guard.text.len()).then(|| next_grapheme_boundary(&guard.text, caret))
         });
     }
 
@@ -611,10 +605,7 @@ impl TextEditingController {
                 if caret == 0 {
                     false
                 } else {
-                    let prev_boundary = guard.text[..caret]
-                        .char_indices()
-                        .next_back()
-                        .map_or(0, |(idx, _)| idx);
+                    let prev_boundary = prev_grapheme_boundary(&guard.text, caret);
                     guard.selection = Selection::collapsed(prev_boundary);
                     true
                 }
@@ -648,8 +639,8 @@ impl TextEditingController {
                 if caret == guard.text.len() {
                     false
                 } else {
-                    let char_width = guard.text[caret..].chars().next().map_or(0, char::len_utf8);
-                    guard.selection = Selection::collapsed(caret + char_width);
+                    let next_boundary = next_grapheme_boundary(&guard.text, caret);
+                    guard.selection = Selection::collapsed(next_boundary);
                     true
                 }
             };
@@ -964,6 +955,32 @@ fn strip_active_composing(inner: &mut ControllerInner) -> bool {
         }
         None => false,
     }
+}
+
+/// The byte offset where the extended grapheme cluster ending at `caret`
+/// begins — one user-perceived character to the left. `0` at the start.
+///
+/// `caret` must be a char boundary of `text` (every caller holds one: the
+/// controller clamps every offset it stores). A caret that landed strictly
+/// inside a cluster — a platform-supplied IME offset, say — is walked back to
+/// that cluster's start, which is the nearest boundary a user can see.
+fn prev_grapheme_boundary(text: &str, caret: usize) -> usize {
+    text[..caret]
+        .grapheme_indices(true)
+        .next_back()
+        .map_or(0, |(idx, _)| idx)
+}
+
+/// The byte offset where the extended grapheme cluster starting at `caret`
+/// ends — one user-perceived character to the right. `caret` itself at the
+/// end.
+///
+/// Same precondition as [`prev_grapheme_boundary`].
+fn next_grapheme_boundary(text: &str, caret: usize) -> usize {
+    text[caret..]
+        .graphemes(true)
+        .next()
+        .map_or(caret, |cluster| caret + cluster.len())
 }
 
 /// Clamp `offset` to the nearest valid UTF-8 char boundary in `s`, rounding
@@ -1466,6 +1483,118 @@ mod tests {
         controller.delete_forward(); // Should remove '€' (3 bytes).
         assert_eq!(controller.text(), "b");
         assert_eq!(controller.caret_byte_offset(), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // Grapheme-cluster correctness: the unit is the user-perceived
+    // character, not the Unicode scalar.
+    //
+    // Oracle: `'Can access characters on editing string'`
+    // (`editable_text_test.dart`, tag `3.44.0`) — Flutter's
+    // `TextEditingValue` deletes and steps by `characters`/`CharacterRange`.
+    // Red-check: swap either helper back to `char_indices`/`chars` and the
+    // ZWJ cases below leave a dangling joiner.
+    // ------------------------------------------------------------------
+
+    /// A family emoji is one grapheme made of five scalars (three people
+    /// joined by two Zero-Width-Joiners); one Backspace removes all of it.
+    const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}";
+    /// A regional-indicator pair — one flag, two scalars.
+    const FLAG: &str = "\u{1F1FA}\u{1F1F8}";
+    /// A base letter with a combining acute accent — one cluster, two
+    /// scalars.
+    const E_ACUTE: &str = "e\u{301}";
+
+    #[test]
+    fn backspace_removes_a_whole_zwj_sequence_not_one_scalar() {
+        let controller = TextEditingController::with_text(format!("a{FAMILY}"));
+        controller.backspace();
+        assert_eq!(
+            controller.text(),
+            "a",
+            "one Backspace must remove the whole family emoji, not leave a \
+             dangling joiner behind"
+        );
+        assert_eq!(controller.caret_byte_offset(), 1);
+    }
+
+    #[test]
+    fn delete_forward_removes_a_whole_flag_not_one_regional_indicator() {
+        let controller = TextEditingController::with_text(format!("{FLAG}b"));
+        controller.move_caret_home();
+        controller.delete_forward();
+        assert_eq!(controller.text(), "b");
+        assert_eq!(controller.caret_byte_offset(), 0);
+    }
+
+    #[test]
+    fn backspace_removes_a_combining_mark_with_its_base() {
+        let controller = TextEditingController::with_text(format!("r{E_ACUTE}sum{E_ACUTE}"));
+        controller.backspace();
+        assert_eq!(
+            controller.text(),
+            format!("r{E_ACUTE}sum"),
+            "the accent and its base letter are one user-perceived character"
+        );
+    }
+
+    #[test]
+    fn caret_steps_over_a_grapheme_cluster_in_both_directions() {
+        let text = format!("a{FAMILY}b");
+        let controller = TextEditingController::with_text(&text);
+        let after_a = 1;
+        let after_family = 1 + FAMILY.len();
+
+        controller.move_caret_home();
+        controller.move_caret_right();
+        assert_eq!(controller.caret_byte_offset(), after_a);
+        controller.move_caret_right();
+        assert_eq!(
+            controller.caret_byte_offset(),
+            after_family,
+            "Right must step over the whole cluster, never land inside it"
+        );
+        controller.move_caret_left();
+        assert_eq!(controller.caret_byte_offset(), after_a);
+    }
+
+    #[test]
+    fn shift_arrows_extend_the_selection_by_whole_graphemes() {
+        let text = format!("a{FLAG}b");
+        let controller = TextEditingController::with_text(&text);
+        controller.move_caret_home();
+        controller.move_caret_right(); // after 'a'
+        controller.extend_selection_right();
+        assert_eq!(
+            controller.selection(),
+            1..1 + FLAG.len(),
+            "Shift+Right selects the whole flag"
+        );
+        controller.extend_selection_left();
+        assert_eq!(
+            controller.selection(),
+            1..1,
+            "Shift+Left shrinks the selection back by the whole flag"
+        );
+    }
+
+    #[test]
+    fn grapheme_boundaries_are_char_boundaries_and_clamp_at_the_edges() {
+        let text = format!("{E_ACUTE}{FAMILY}");
+        assert_eq!(super::prev_grapheme_boundary(&text, 0), 0);
+        assert_eq!(super::next_grapheme_boundary(&text, text.len()), text.len());
+        let mut caret = 0;
+        while caret < text.len() {
+            let next = super::next_grapheme_boundary(&text, caret);
+            assert!(next > caret, "progress at {caret}");
+            assert!(text.is_char_boundary(next));
+            assert_eq!(
+                super::prev_grapheme_boundary(&text, next),
+                caret,
+                "prev is the inverse of next"
+            );
+            caret = next;
+        }
     }
 
     // ------------------------------------------------------------------

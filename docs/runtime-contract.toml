@@ -91,6 +91,10 @@ declarations = [
     "pub use flui_view as view;",
     "pub use flui_widgets as widgets;",
     "pub use flui_app::run_app;",
+    "pub use flui_app::app::open_window;",
+    "pub use flui_app::app::open_secondary_window;",
+    "pub use flui_app::app::AppConfig;",
+    "pub use flui_app::app::WindowPolicy;",
     "pub mod prelude {",
 ]
 
@@ -108,6 +112,7 @@ declarations = [
     "pub use app::{ExitPolicy, WindowPolicy};",
     "pub use app::{ CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse, request_presentation_close, };",
     "pub use app::open_secondary_window;",
+    "pub use app::open_window;",
     "pub use app::{run_app_android, run_app_android_with_config};",
     "pub use bindings::{ GestureBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding, UpdateScheduler, WidgetsBinding, };",
     "pub use flui_log::{AppIdentity, AppleBundleId};",
@@ -129,6 +134,7 @@ declarations = [
     "pub use lifecycle::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use runner::{run_app_android, run_app_android_with_config};",
     "pub use runner::open_secondary_window;",
+    "pub use runner::open_window;",
     "pub use runner::request_presentation_close;",
     "pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};",
     "pub use runtime::{ExitPolicy, WindowPolicy};",

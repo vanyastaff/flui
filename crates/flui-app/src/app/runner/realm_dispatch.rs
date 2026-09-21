@@ -417,7 +417,8 @@ impl PlatformToUi {
 /// Installs `applier` as `realm_id`'s registration-lifetime renderer-surface
 /// applier, replacing (never stacking) any previously-installed one for that
 /// SAME realm — a sibling realm's own applier is untouched. Call once per
-/// realm install, alongside [`install_platform_realm`], from each backend's
+/// realm install, alongside `install_platform_realm` (Android/web; the desktop
+/// and iOS bootstraps use [`install_realm_alongside`]), from each backend's
 /// bootstrap — never from inside a frame/event dispatch.
 ///
 /// `realm_id` not being resident here is always a caller bug, never a
@@ -555,7 +556,8 @@ pub(super) fn install_platform_realm(
 }
 
 /// Installs `realm` ALONGSIDE whatever is already hosted, never displacing a
-/// sibling — the multi-realm counterpart to [`install_platform_realm`]'s
+/// sibling — the multi-realm counterpart to `install_platform_realm`'s
+/// (Android/web-only, hence not linked)
 /// legacy single-primary-realm replace semantics. Requests window
 /// registration and the registry insertion TOGETHER, through
 /// [`crate::app::runtime::AppRuntime::request_realm_install`] (never registers
