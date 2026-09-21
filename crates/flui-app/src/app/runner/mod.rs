@@ -22,6 +22,11 @@ mod host;
 pub(super) mod ios;
 
 mod realm_dispatch;
+// Unconditional, like `device_recovery` above: the backoff's trait and
+// outcome are portable and its tests are host-run, so a
+// `cfg(target_os = "android")` here would hide the whole file from every gate
+// this host can run.
+mod retry_backoff;
 mod secondary_window;
 #[cfg(any(
     target_os = "ios",
@@ -53,6 +58,11 @@ pub(in crate::app) use realm_dispatch::{RealmTask, SurfaceApplier};
     not(target_arch = "wasm32")
 ))]
 pub use secondary_window::open_secondary_window;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 pub use secondary_window::open_window;
 #[cfg(target_arch = "wasm32")]
 use web::run_web;

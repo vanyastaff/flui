@@ -1,7 +1,7 @@
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 
-use super::device_recovery::{DeviceRecoveryBackoff, render_frame_with_device_recovery};
+use super::device_recovery::{new_device_recovery_backoff, render_frame_with_device_recovery};
 use super::frame_pacing::{
     BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
 };
@@ -13,7 +13,10 @@ use super::realm_dispatch::{
     PlatformToUi, RealmTask, dispatch_platform_realm, drain_owner_inbox, install_platform_realm,
     install_surface_applier, teardown_platform_realm,
 };
-use super::surface_lifecycle::{SurfaceLifecycleOutcome, ensure_surface};
+use super::surface_lifecycle::{
+    SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
+    retry_surface_recreation, settle_surface_availability,
+};
 use crate::app::AppConfig;
 
 // ============================================================================
@@ -86,10 +89,10 @@ where
     tracing::info!("Starting Android platform via flui-platform");
 
     // Hot-reload: build plugin path from app's internal data directory
-    let plugin_path: PathBuf = app
-        .internal_data_path()
-        .map(|p| p.join("libflui_scene.so"))
-        .unwrap_or_else(|| PathBuf::from("/data/local/tmp/libflui_scene.so"));
+    let plugin_path: PathBuf = app.internal_data_path().map_or_else(
+        || PathBuf::from("/data/local/tmp/libflui_scene.so"),
+        |p| p.join("libflui_scene.so"),
+    );
 
     // Inert unless this build carries the `hot-reload` feature.
     let hot_reload = ScenePlugin::new(&plugin_path);
@@ -137,22 +140,34 @@ where
         // down at step 6 alongside the renderer it paces) so the
         // wake-deadline hook below can be wired to it from the start — see
         // `bootstrap_desktop`'s matching comment.
-        let device_recovery_backoff = Arc::new(DeviceRecoveryBackoff::new());
+        let device_recovery_backoff = Arc::new(new_device_recovery_backoff());
 
-        // 0c. Wire the wall-clock-wake hook. Unlike `install_wake_deadline_
-        // hook` (desktop's `bootstrap_desktop`), this does NOT also fold in
-        // `AppRuntime::next_wake()` (realm-level deadlines: gesture-arena
-        // timers, animation continuations) — this backend's `Platform::
-        // set_wake_deadline_hook` override is new in this same change
-        // (`flui-platform`'s `platforms/android/mod.rs`), added
-        // specifically to carry the device-recovery deadline; folding in
-        // realm-level deadlines too would change this backend's existing,
-        // untested-here wake behavior for gesture/animation timers, which
-        // is out of this fix's scope.
+        // 0b-2. Automatic surface-recreation retry: a genuine rebuild failure
+        // leaves the presentation released, and on a window that stays
+        // available nothing would re-ask (see `SurfaceRecreationRetry`'s own
+        // doc). The retry is deadline-paced exactly like device recovery, and
+        // its deadline joins the same wake hook below. One handle for the
+        // frame closure, one for the availability callback.
+        let surface_recreation_retry = Arc::new(SurfaceRecreationRetry::new());
+        let surface_retry_for_callback = Arc::clone(&surface_recreation_retry);
+
+        // 0c. Wire the wall-clock-wake hook to both retries. Unlike
+        // `install_wake_deadline_hook` (desktop's `bootstrap_desktop`), this
+        // does NOT also fold in `AppRuntime::next_wake()` (realm-level
+        // deadlines: gesture-arena timers, animation continuations) — this
+        // backend's `Platform::set_wake_deadline_hook` override
+        // (`flui-platform`'s `platforms/android/mod.rs`) was added
+        // specifically to carry recovery deadlines; folding in realm-level
+        // deadlines too would change this backend's existing, untested-here
+        // wake behavior for gesture/animation timers.
         owner_platform_installed(|owner| {
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
+            let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
             owner.shared().set_wake_deadline_hook(Box::new(move || {
-                device_recovery_backoff.next_attempt_at()
+                super::host::merge_wake_deadlines(
+                    device_recovery_backoff.next_attempt_at(),
+                    surface_recreation_retry.next_attempt_at(),
+                )
             }));
         });
 
@@ -291,6 +306,7 @@ where
             let lane_frame = Arc::clone(&lane_frame);
             let hot_reload_frame = hot_reload_frame.clone();
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
+            let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
             let _ = dispatch_platform_realm(
                 realm_dispatch,
                 RealmTask::Frame(Box::new(move |realm| {
@@ -339,13 +355,21 @@ where
                     // platform actuates the wake. Calls the shared
                     // `frame_is_dirty` — see that function's own doc for why
                     // this must not be reimplemented locally.
+                    //
+                    // The surface-retry deadline joins the device-recovery one
+                    // here for the same reason that one must be present.
+                    let retry_deadline = super::host::merge_wake_deadlines(
+                        device_recovery_backoff.next_attempt_at(),
+                        surface_recreation_retry.next_attempt_at(),
+                    );
                     let dirty = frame_is_dirty(
                         inbox_redraw,
                         realm.needs_redraw(),
                         has_pending,
-                        device_recovery_backoff.next_attempt_at(),
-                        // Android has no wake-deadline hook, so no fallback deferral
-                        // exists to consult (ADR-0058): its backgrounded pump sleeps.
+                        retry_deadline,
+                        // Android's wake-deadline hook carries only the retry
+                        // deadlines, so no fallback deferral exists to consult
+                        // (ADR-0058): its backgrounded pump sleeps.
                         FallbackGate::default(),
                     );
                     let scheduler = realm.scheduler();
@@ -382,38 +406,52 @@ where
                     }
 
                     let now = web_time::Instant::now();
+
+                    // A retry owed by a genuine surface-recreation failure gets
+                    // its gated attempt here, BEFORE the frame, through the
+                    // shared helper (its own lane-lock scope; the realm half is
+                    // dispatched outside it).
+                    match retry_surface_recreation(&lane_frame, &surface_recreation_retry, now) {
+                        Some(SurfaceLifecycleOutcome::Recreated) => {
+                            let _ = dispatch_platform_realm(
+                                realm_dispatch,
+                                RealmTask::Frame(Box::new(|realm| {
+                                    realm.mark_primary_needs_full_repaint();
+                                })),
+                            );
+                        }
+                        Some(SurfaceLifecycleOutcome::Failed(source)) => {
+                            tracing::warn!(
+                                platform = "Android",
+                                ?source,
+                                "surface recreation retry failed; the deadline-paced retry \
+                                 continues"
+                            );
+                        }
+                        Some(SurfaceLifecycleOutcome::Released) | None => {}
+                    }
+
                     // UpdateScheduler callbacks and rendering share ONE `UiRealm::enter`
                     // dynamic extent; callbacks may legally resolve realm-local
                     // capabilities throughout the complete frame transaction.
                     //
                     // No sleep here, unlike an earlier version of this
-                    // closure: `DeviceRecoveryBackoff` paces the recovery
-                    // ATTEMPT itself via a non-blocking deadline check (see
-                    // its own doc), never by blocking this thread.
+                    // closure: both retries pace their ATTEMPT via a
+                    // non-blocking deadline check (see `RetryBackoff`'s
+                    // doc), never by blocking this thread.
                     // `AndroidPlatform::run`'s poll loop calls
                     // `process_input_events`/`dispatch_request_frame`
                     // inline on this SAME thread, so a sleep here — even
                     // one bounded to the backoff's own growing interval —
                     // would stall input and `MainEvent` lifecycle delivery
                     // (Pause/Destroy/Resize) for its duration, which is ANR
-                    // territory at the backoff's one-second cap. Unlike
-                    // desktop, Android has no non-blocking wait-until
-                    // primitive to carry the backoff's deadline instead
-                    // (`Platform::set_wake_deadline_hook`'s own doc names
-                    // Android explicitly as not overriding it) — so while a
-                    // FAILED recovery attempt still wakes this loop once
-                    // (`render_frame_with_device_recovery`'s own
-                    // `wake_frame()` call, on failure only), a merely
-                    // DEFERRED attempt (backoff not yet elapsed) wakes
-                    // nothing here, and this platform's retry cadence
-                    // degrades to "the next externally-caused wake"
-                    // (input, resize, a lifecycle event) rather than a
-                    // strict wall-clock cadence — strictly better than the
-                    // original bug (no retry, ever, ANDROID included) and
-                    // never worse than every other quiescent-wake path
-                    // this codebase already has on this backend (gesture-
-                    // arena deadlines, animation ticks: none of them have a
-                    // platform timer here either).
+                    // territory at the backoff's one-second cap. The
+                    // deadline is carried by the wake hook wired at step 0c
+                    // instead: this backend has no `ControlFlow::WaitUntil`,
+                    // so `AndroidPlatform::run`'s own ~16 ms idle poll
+                    // consults the hook every iteration and forces a
+                    // dispatch once the deadline is due (`flui-platform`'s
+                    // `platforms/android/mod.rs`).
                     scheduler.drive_frame_with_lane(
                         now,
                         flui_scheduler::IdleDeadline::far_future(now),
@@ -580,94 +618,42 @@ where
         //   never reached by this runner.
         let lane_surface = Arc::clone(&lane);
         window.on_surface_status_change(Box::new(move |has_surface| {
+            let now = web_time::Instant::now();
             let mut lane = lane_surface.lock();
-            let outcome = lane.with_backend(|renderer| ensure_surface(renderer, has_surface));
-            if matches!(&outcome, SurfaceLifecycleOutcome::Recreated) {
-                // A fresh surface's contents are undefined while the
-                // damage tracker is incremental, so the first frame after
-                // the rebuild owes a full repaint. The engine marks its own
-                // tracker inside `recreate_surface`; this is the realm
-                // half. The mint happens HERE, inside the same lane lock
-                // scope, so no stale in-flight work stays addressed to the
-                // destroyed surface — the same act device-loss recovery
-                // performs, through the same mailbox counter.
-                lane.note_surface_recreated();
-            }
+            // The engine's tracker mark, the generation mint and the retry's
+            // classification all happen inside this lane lock scope, through
+            // the shared helper — so no stale in-flight work stays addressed
+            // to the destroyed surface, and this callback and the frame-path
+            // retry cannot disagree about which failure is genuine.
+            let outcome = settle_surface_availability(
+                &mut lane,
+                &surface_retry_for_callback,
+                has_surface,
+                now,
+            );
             // The guard ends before the realm dispatch — see the same-thread
             // hazard named above, which is what puts the `drop` here.
             drop(lane);
-            match outcome {
-                // Nothing to do: the engine already logs the release
-                // (`surface_released_by_owner`) and a released renderer skips
-                // its frames while its authoritative size keeps advancing.
-                SurfaceLifecycleOutcome::Released => {}
-                SurfaceLifecycleOutcome::Recreated => {
-                    // The realm half is deferrable, so it goes through the
-                    // realm dispatch rather than running inline: unlike the
-                    // release, its ordering cannot affect completeness (the
-                    // engine's tracker mark already ran above, and the mint
-                    // with it), and the dispatcher may queue it when it is
-                    // mid-phase.
-                    let _ = dispatch_platform_realm(
-                        realm_dispatch,
-                        RealmTask::Frame(Box::new(|realm| {
-                            realm.mark_primary_needs_full_repaint();
-                        })),
-                    );
-                }
-                SurfaceLifecycleOutcome::Failed(source) => {
-                    // This one classification is decided by the error, not by
-                    // which event produced the request — the callback only
-                    // sees the bool. `SurfaceTargetUnavailable` is the
-                    // expected outcome of the acquire half: `Resume` reaches
-                    // this callback before any window exists (the backend
-                    // writes `Resume` independently of the window), so there is
-                    // nothing to build from and the probe classifies the target
-                    // as suspended. Logged at `trace`, not `debug`, because it
-                    // happens on every cycle — a line at `debug` there is
-                    // guaranteed noise on a path working as designed.
-                    if matches!(
-                        source,
-                        flui_engine::EngineError::SurfaceTargetUnavailable { .. }
-                    ) {
-                        tracing::trace!(
-                            ?source,
-                            "Android: no window to rebuild the surface from yet; the next \
-                             InitWindow brings one"
-                        );
-                    } else {
-                        // Unexpected: the window was reported available and the
-                        // rebuild failed for another reason. The engine logs
-                        // its own act; this is the app-side record of the
-                        // cause.
-                        //
-                        // No retry, and the residual that leaves is named here
-                        // rather than left to read as self-healing: the
-                        // presentation stays released, every frame after this
-                        // is a skipped one, and nothing re-asks until another
-                        // `true` arrives — and the only `true` emitters on this
-                        // backend are `Resume` and `InitWindow`. So the window
-                        // stays blank until the next lifecycle event. A retry
-                        // is declined deliberately: the signal that got us here
-                        // is delivered with the window already set (`InitWindow`
-                        // sets it before the callback runs), so a failure at
-                        // this point is genuine rather than a timing race, and
-                        // a poll is the wrong answer to a genuine failure —
-                        // it would mean re-arming the wake hook and a backoff.
-                        // The class that does recover on its own is the
-                        // device-loss one, and it is a different path:
-                        // `device_recovery` sees the renderer's device-lost
-                        // flag, retries under its backoff and wakes the loop.
-                        // The seam's statelessness covers a *missed signal*,
-                        // not a reported failure.
-                        tracing::warn!(
-                            source = ?source,
-                            "Android: the wgpu surface could not be rebuilt after a window was \
-                             reported available"
-                        );
-                    }
-                }
+            if matches!(outcome, SurfaceLifecycleOutcome::Recreated) {
+                // The realm half is deferrable, so it goes through the realm
+                // dispatch rather than running inline: unlike the release, its
+                // ordering cannot affect completeness (the engine's tracker
+                // mark already ran above, and the mint with it), and the
+                // dispatcher may queue it when it is mid-phase.
+                let _ = dispatch_platform_realm(
+                    realm_dispatch,
+                    RealmTask::Frame(Box::new(|realm| {
+                        realm.mark_primary_needs_full_repaint();
+                    })),
+                );
             }
+            // A release logs nothing here (the engine logs
+            // `surface_released_by_owner`). `SurfaceTargetUnavailable` is the
+            // expected outcome of the acquire half — `Resume` reaches this
+            // callback before any window exists, since the backend writes
+            // `Resume` independently of the window — and is traced; a genuine
+            // failure warns, and the frame-path retry above now polls it.
+            report_surface_settlement("Android", &outcome);
         }));
 
         // 9. Store the window in AppRuntime's redraw-poke slot — BEFORE

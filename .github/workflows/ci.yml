@@ -1342,6 +1342,31 @@ jobs:
       - name: cargo clippy (ios backend)
         run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-ios -- -D warnings
 
+      # The mobile RUNNERS live in flui-app (`app/runner/{android,ios}.rs`),
+      # behind `cfg(target_os = ...)`, so the four platform lines above never
+      # compile them: until these two steps, a broken Android or iOS runner
+      # was invisible to every gate (found the day they were added — an
+      # unused import and a `map_or_else` finding on the Android runner, and
+      # a facade re-export of an item flui-app gates out on iOS). The `flui`
+      # facade rides along for that last class: it is what a consumer builds
+      # against on these targets. Library targets only: the tests are
+      # host-run by the `test` job, and `--all-targets` would pull
+      # dev-dependencies this runner cannot build for the mobile triples.
+      - name: cargo clippy (ios runner)
+        run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
+
+      # `stacker` (via flui-rendering) builds `psm`'s C shim through the `cc`
+      # crate, which needs a C compiler for the target. The NDK is not on
+      # this runner's path, and it is not needed for a compile-only lint:
+      # the host `clang` cross-compiles that one file when told the target
+      # triple. Nothing is linked.
+      - name: cargo clippy (android runner)
+        env:
+          CC_aarch64_linux_android: clang
+          CFLAGS_aarch64_linux_android: --target=aarch64-linux-android21
+          AR_aarch64_linux_android: ar
+        run: cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings
+
   # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern). Branch protection
   # requires this ONE check instead of enumerating the graph, so adding or

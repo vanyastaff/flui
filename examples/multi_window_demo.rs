@@ -41,7 +41,11 @@ impl ViewState<Root> for RootState {
     fn build(&self, _view: &Root, _ctx: &dyn BuildContext) -> impl IntoView {
         let opened = self.opened.clone();
         let rebuild = self.rebuild.clone().expect("BUG: init_state runs first");
-        let label = if opened.get() { "Secondary opened" } else { "Open secondary" };
+        let label = if opened.get() {
+            "Secondary opened"
+        } else {
+            "Open secondary"
+        };
 
         Center::new().child(
             Column::new(flui::widgets::column![

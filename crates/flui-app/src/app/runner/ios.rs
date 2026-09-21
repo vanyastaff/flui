@@ -32,7 +32,7 @@ use flui_platform::platforms::ios::{IOSSceneEvent, IOSSceneSessionId};
 use flui_view::{StatelessView, View};
 use std::sync::Arc;
 
-use super::device_recovery::{DeviceRecoveryBackoff, render_frame_with_device_recovery};
+use super::device_recovery::{new_device_recovery_backoff, render_frame_with_device_recovery};
 use super::frame_pacing::{
     BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
 };
@@ -44,7 +44,10 @@ use super::realm_dispatch::{
     PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
     drain_owner_inbox, install_realm_alongside, install_surface_applier, teardown_platform_realm,
 };
-use super::surface_lifecycle::{SurfaceLifecycleOutcome, ensure_surface};
+use super::surface_lifecycle::{
+    SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
+    retry_surface_recreation, settle_surface_availability,
+};
 use crate::app::AppConfig;
 use crate::app::hot_reload::WorkerReload;
 
@@ -232,16 +235,30 @@ where
 
     // 0b. This window's device-recovery backoff, constructed before the
     // wake-deadline hook below so the hook can carry its deadline.
-    let device_recovery_backoff = Arc::new(DeviceRecoveryBackoff::new());
+    let device_recovery_backoff = Arc::new(new_device_recovery_backoff());
 
-    // 0c. Wire the wall-clock-wake hook to the backoff. Like Android, this
+    // 0b-2. Automatic surface-recreation retry: a genuine rebuild failure
+    // leaves the presentation released, and on a window that stays available
+    // nothing would re-ask (see `SurfaceRecreationRetry`'s own doc). The retry
+    // is deadline-paced exactly like device recovery, and its deadline joins
+    // the same wake hook below.
+    let surface_recreation_retry = Arc::new(SurfaceRecreationRetry::new());
+    // Separate handle for the availability callback below: the frame closure
+    // consumes the original by value on capture, so the callback needs its own
+    // `Arc` clone to share the same retry state.
+    let surface_retry_for_callback = Arc::clone(&surface_recreation_retry);
+
+    // 0c. Wire the wall-clock-wake hook to both backoffs. Like Android, this
     // does NOT fold in realm-level deadlines — the backend's frame source is
-    // the `CADisplayLink`, and this hook exists to carry a recovery deadline.
+    // the `CADisplayLink`, and this hook exists to carry the retry deadlines.
     owner_platform_installed(|owner| {
         let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
-        owner
-            .shared()
-            .set_wake_deadline_hook(Box::new(move || device_recovery_backoff.next_attempt_at()));
+        let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
+        owner.shared().set_wake_deadline_hook(Box::new(move || {
+            let device = device_recovery_backoff.next_attempt_at();
+            let surface = surface_recreation_retry.next_attempt_at();
+            super::host::merge_wake_deadlines(device, surface)
+        }));
     });
 
     // 2. Create the GPU renderer (Metal on iOS). `Renderer::new` takes its own
@@ -334,6 +351,7 @@ where
     window.on_request_frame(Box::new(move || {
         let lane_frame = Arc::clone(&lane_frame);
         let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
+        let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
         let worker_reload_frame = worker_reload_frame.clone();
         let _ = dispatch_platform_realm(
             realm_dispatch,
@@ -346,11 +364,20 @@ where
                 let inbox_redraw = drain_owner_inbox(realm);
 
                 let has_pending = realm.has_pending_work();
+                // The surface-retry deadline joins the device-recovery one in
+                // the `dirty` predicate, for the same reason that one must be
+                // present: a deadline the platform faithfully actuates still
+                // reaches `WakeAction::Skip` and returns before the retry is
+                // consulted if it is absent from this gate.
+                let retry_deadline = super::host::merge_wake_deadlines(
+                    device_recovery_backoff.next_attempt_at(),
+                    surface_recreation_retry.next_attempt_at(),
+                );
                 let dirty = frame_is_dirty(
                     inbox_redraw,
                     realm.needs_redraw(),
                     has_pending,
-                    device_recovery_backoff.next_attempt_at(),
+                    retry_deadline,
                     FallbackGate::default(),
                 );
                 let scheduler = realm.scheduler();
@@ -373,6 +400,30 @@ where
                 }
 
                 let now = web_time::Instant::now();
+
+                // A retry owed by a genuine surface-recreation failure gets its
+                // gated attempt here, BEFORE the frame, through the shared
+                // helper (its own lane-lock scope; the realm half is
+                // dispatched outside it).
+                match retry_surface_recreation(&lane_frame, &surface_recreation_retry, now) {
+                    Some(SurfaceLifecycleOutcome::Recreated) => {
+                        let _ = dispatch_platform_realm(
+                            realm_dispatch,
+                            RealmTask::Frame(Box::new(|realm| {
+                                realm.mark_primary_needs_full_repaint();
+                            })),
+                        );
+                    }
+                    Some(SurfaceLifecycleOutcome::Failed(source)) => {
+                        tracing::warn!(
+                            platform = "iOS",
+                            ?source,
+                            "surface recreation retry failed; the deadline-paced retry continues"
+                        );
+                    }
+                    Some(SurfaceLifecycleOutcome::Released) | None => {}
+                }
+
                 scheduler.drive_frame_with_lane(
                     now,
                     flui_scheduler::IdleDeadline::far_future(now),
@@ -423,30 +474,24 @@ where
     // the lane lock with the mint, and only the realm half is dispatched.
     let lane_surface = Arc::clone(&lane);
     window.on_surface_status_change(Box::new(move |has_surface| {
+        let now = web_time::Instant::now();
         let mut lane = lane_surface.lock();
-        let outcome = lane.with_backend(|renderer| ensure_surface(renderer, has_surface));
-        if matches!(&outcome, SurfaceLifecycleOutcome::Recreated) {
-            lane.note_surface_recreated();
-        }
+        let outcome =
+            settle_surface_availability(&mut lane, &surface_retry_for_callback, has_surface, now);
+        // The guard ends before the realm dispatch — see Android's matching
+        // registration for the same-thread hazard that puts the `drop` here.
         drop(lane);
-        match outcome {
-            SurfaceLifecycleOutcome::Released => {}
-            SurfaceLifecycleOutcome::Recreated => {
-                let _ = dispatch_platform_realm(
-                    realm_dispatch,
-                    RealmTask::Frame(Box::new(|realm| {
-                        realm.mark_primary_needs_full_repaint();
-                    })),
-                );
-            }
-            SurfaceLifecycleOutcome::Failed(source) => {
-                tracing::warn!(
-                    source = ?source,
-                    "iOS: the wgpu surface could not be rebuilt after the window was \
-                     reported available"
-                );
-            }
+        if matches!(outcome, SurfaceLifecycleOutcome::Recreated) {
+            // The realm half is deferrable, so it goes through the realm
+            // dispatch rather than running inline.
+            let _ = dispatch_platform_realm(
+                realm_dispatch,
+                RealmTask::Frame(Box::new(|realm| {
+                    realm.mark_primary_needs_full_repaint();
+                })),
+            );
         }
+        report_surface_settlement("iOS", &outcome);
     }));
 
     window.on_active_status_change(Box::new(move |focused| {

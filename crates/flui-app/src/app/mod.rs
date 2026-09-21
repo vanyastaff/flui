@@ -60,6 +60,11 @@ pub use lifecycle::{
     not(target_arch = "wasm32")
 ))]
 pub use runner::open_secondary_window;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 pub use runner::open_window;
 #[cfg(not(target_os = "ios"))]
 pub use runner::request_presentation_close;

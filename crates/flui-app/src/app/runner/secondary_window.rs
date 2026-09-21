@@ -205,8 +205,26 @@ struct PendingCompletion {
     /// non-generic — every caller of the drain loop reads the same type,
     /// and the generic parameter lives only at the `open_window` call
     /// site that produced this record.
-    install: Option<Box<dyn FnOnce(SecondaryWindowInstallConfig, Arc<dyn flui_platform::traits::PlatformWindow>) -> anyhow::Result<(RealmDispatcher, Arc<dyn flui_platform::traits::PlatformWindow>)>>>,
+    install: Option<SecondaryWindowInstall>,
 }
+
+/// The boxed install continuation a [`PendingCompletion`] carries: given the
+/// install configuration and the opened window, mount the content and return
+/// the realm dispatcher and the window it now drives.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+type SecondaryWindowInstall = Box<
+    dyn FnOnce(
+        SecondaryWindowInstallConfig,
+        Arc<dyn flui_platform::traits::PlatformWindow>,
+    ) -> anyhow::Result<(
+        RealmDispatcher,
+        Arc<dyn flui_platform::traits::PlatformWindow>,
+    )>,
+>;
 
 #[cfg(all(
     not(target_os = "android"),
@@ -704,7 +722,7 @@ where
         "secondary window admission is closed: application is quitting"
     );
 
-    let _reservation = reserve_window()?;
+    let reservation = reserve_window()?;
     let options: WindowOptions = (&config).into();
     let open = with_owner_platform(|owner| owner.open_window(options))
         .ok_or_else(|| {
@@ -733,7 +751,7 @@ where
                 loop_identity: Arc::clone(&loop_identity),
                 policy,
                 shared_with: None,
-                reservation: _reservation,
+                reservation,
                 close_request_handler: config.close_request_handler.clone(),
                 frame_failure_detail: config.frame_failure_detail,
             };
@@ -763,8 +781,7 @@ where
                             )
                         })
                         .map_err(|error| {
-                            anyhow::anyhow!(error)
-                                .context("installing rendered window failed")
+                            anyhow::anyhow!(error).context("installing rendered window failed")
                         })
                     })),
                 });
@@ -1309,9 +1326,11 @@ mod quit_notification_tests {
                         primary,
                         RealmTask::Frame(Box::new(move |_| {
                             PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
-                                queue
-                                    .borrow_mut()
-                                    .push(PendingCompletion { config, window, install: None });
+                                queue.borrow_mut().push(PendingCompletion {
+                                    config,
+                                    window,
+                                    install: None,
+                                });
                             });
                             shared.request_exit_policy_reevaluation();
                             assert!(reevaluation.drive());
@@ -1488,18 +1507,16 @@ mod quit_notification_tests {
                     crate::app::ui_realm::UiRealm::for_test(),
                     &crate::app::window_test_support::headless_test_window(),
                 );
-                let outcome =
-                    open_window_with_content_impl(
-                        AppConfig::default(),
-                        WindowPolicy::SharedRealm,
-                        SecondaryContentStub,
-                    );
+                let outcome = open_window_with_content_impl(
+                    AppConfig::default(),
+                    WindowPolicy::SharedRealm,
+                    SecondaryContentStub,
+                );
                 match outcome {
                     Err(error) => {
                         let message = error.to_string();
                         assert!(
-                            message.contains("SeparateRealms")
-                                || message.contains("SharedRealm"),
+                            message.contains("SeparateRealms") || message.contains("SharedRealm"),
                             "refusal must name the rejected policy, got: {message}"
                         );
                     }
@@ -1531,10 +1548,7 @@ struct SecondaryContentStub;
     not(target_arch = "wasm32")
 ))]
 impl flui_view::StatelessView for SecondaryContentStub {
-    fn build(
-        &self,
-        _ctx: &dyn flui_view::BuildContext,
-    ) -> impl flui_view::IntoView {
+    fn build(&self, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
         use flui_view::ViewExt;
         self.clone().boxed()
     }

@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 use super::device_recovery::{
-    DeviceRecoveryBackoff, FrameRecoveryOutcome, render_frame_with_device_recovery,
+    FrameRecoveryOutcome, new_device_recovery_backoff, render_frame_with_device_recovery,
 };
 use super::frame_pacing::{
     DEFAULT_DISPLAY_PERIOD, FallbackWake, WakeAction, frame_is_dirty, install_pre_present_hook,
@@ -68,7 +68,7 @@ where
     // clone is threaded into each `RealmTask::Frame` the frame closure
     // builds while the underlying counters/deadline must persist. See
     // `DeviceRecoveryBackoff`'s own doc.
-    let device_recovery_backoff = Arc::new(DeviceRecoveryBackoff::new());
+    let device_recovery_backoff = Arc::new(new_device_recovery_backoff());
 
     // 2. Create GPU renderer directly (no DesktopEmbedder). `Renderer::new`
     // takes ownership of a `WindowTarget` (issue #1043) — `Arc::clone`

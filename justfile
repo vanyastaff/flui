@@ -227,7 +227,7 @@ wasm-link-check:
 # Green here means "compiles clean under the workspace lints", nothing more.
 # Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android
 [group("build")]
-[doc("Clippy flui-platform's Windows, macOS, Android, and iOS backends from this host (mirrors the CI cross-typecheck job)")]
+[doc("Clippy flui-platform's Windows, macOS, Android, and iOS backends plus flui-app's mobile runners from this host (mirrors the CI cross-typecheck job)")]
 cross-typecheck:
     # `--features a11y` on every line: the UIA/NSAccessibility bridges are
     # feature-gated and this job is the ONLY gate that compiles them at all
@@ -242,6 +242,15 @@ cross-typecheck:
     # targets: sim and device differ only in the slice, not in the API surface
     # this lint sees, and `just ios-sim` executes the simulator one.
     cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-ios -- -D warnings
+    # The mobile runners live in flui-app behind `cfg(target_os = ...)`, so
+    # the platform lines above never compile them; the `flui` facade rides
+    # along because its re-exports are what a consumer builds against there.
+    # Library targets only (the tests are host-run). Android's `psm` C shim
+    # (via stacker) is cross-compiled by the host clang — no NDK needed for a
+    # compile-only lint.
+    cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
+    CC_aarch64_linux_android=clang CFLAGS_aarch64_linux_android=--target=aarch64-linux-android21 AR_aarch64_linux_android=ar \
+        cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings
 
 # =============================================================================
 # Testing

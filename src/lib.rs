@@ -151,18 +151,32 @@ pub use flui_types as types;
 pub use flui_view as view;
 pub use flui_widgets as widgets;
 
+/// Application configuration. Re-exported from [`app`] (`flui-app`).
+pub use flui_app::app::AppConfig;
+/// Whether an additional window joins the caller's realm or gets its own.
+/// Re-exported from [`app`] (`flui-app`); absent on iOS, where no
+/// secondary-window entry point exists.
+#[cfg(not(target_os = "ios"))]
+pub use flui_app::app::WindowPolicy;
+/// Open an additional top-level window without widget content.
+/// Re-exported from [`app`] (`flui-app`).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use flui_app::app::open_secondary_window;
+/// Open an additional top-level window with mounted widget content.
+/// Re-exported from [`app`] (`flui-app`).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use flui_app::app::open_window;
 /// The application entry point — builds the tree, opens a window, and drives
 /// the frame loop. Re-exported from [`app`] (`flui-app`).
 pub use flui_app::run_app;
-/// Open an additional top-level window with mounted widget content.
-/// Re-exported from [`app`] (`flui-app`).
-pub use flui_app::app::open_window;
-/// Open an additional top-level window without widget content.
-/// Re-exported from [`app`] (`flui-app`).
-pub use flui_app::app::open_secondary_window;
-/// Application and window configuration types. Re-exported from [`app`]
-/// (`flui-app`).
-pub use flui_app::app::{AppConfig, WindowPolicy};
 
 /// Everything an application author needs in scope to write widget code:
 /// the widget catalog prelude, [`run_app`], and — with the `material` feature
@@ -208,10 +222,16 @@ pub use flui_app::app::{AppConfig, WindowPolicy};
 /// `CupertinoTabScaffold`, …), so it stays at `flui::cupertino` rather than
 /// joining this glob.
 pub mod prelude {
-pub use flui_app::run_app;
-pub use flui_app::app::open_window;
-pub use flui_app::app::open_secondary_window;
-pub use flui_app::app::{AppConfig, WindowPolicy};
+    pub use flui_app::app::AppConfig;
+    #[cfg(not(target_os = "ios"))]
+    pub use flui_app::app::WindowPolicy;
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub use flui_app::app::{open_secondary_window, open_window};
+    pub use flui_app::run_app;
     #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,
