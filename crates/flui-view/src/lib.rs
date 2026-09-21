@@ -94,6 +94,7 @@ pub mod key;
 pub mod macros; // PORT-CHECK-OK-SP4: macros consumed via #[macro_export] (no qualified path); intentional API surface
 pub mod owner;
 pub mod seq; // PORT-CHECK-OK-SP4: seq/Children API surface; consumed via prelude re-exports
+pub mod state_cell;
 pub mod tree;
 pub mod view;
 
@@ -213,6 +214,8 @@ pub use owner::{
     BuildOwner, DuplicateGlobalKey, ElementOwner, GlobalKeyScope, LifecycleHook, RebuildHandle,
     RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
 };
+// Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
+pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
     AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementExt, ErrorView,
@@ -267,6 +270,7 @@ pub mod prelude {
         },
         key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
         owner::{BuildOwner, ElementOwner, RebuildHandle, RebuildReason, RebuildReasons},
+        state_cell::{StateCell, StateHandle},
         tree::{ElementNode, ElementTree},
         view::{
             AnimatedView, BoxedView, InheritedView, IntoView, Memo, ParentDataConfig,

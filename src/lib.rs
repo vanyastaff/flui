@@ -153,6 +153,16 @@ pub use flui_widgets as widgets;
 
 /// Application configuration. Re-exported from [`app`] (`flui-app`).
 pub use flui_app::app::AppConfig;
+/// The errors a window request can fail with — what [`open_window`] and
+/// [`AppHandle`] report, and what an [`Application`] window-error observer
+/// receives. Re-exported from [`app`] (`flui-app`); desktop only, like the
+/// entry points that produce it.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use flui_app::app::AppWindowError;
 /// Whether an additional window joins the caller's realm or gets its own.
 /// Re-exported from [`app`] (`flui-app`); absent on iOS, where no
 /// secondary-window entry point exists.
@@ -174,9 +184,22 @@ pub use flui_app::app::open_secondary_window;
     not(target_arch = "wasm32")
 ))]
 pub use flui_app::app::open_window;
+/// The resident-application builder and its control surface: a reusable
+/// main-window factory, windowless startup, and a `Send + Sync` handle that
+/// can show the window or quit from any thread. Re-exported from [`app`]
+/// (`flui-app`); desktop only.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use flui_app::app::{AppControlError, AppHandle, AppRunError, Application, StartupWindow};
 /// The application entry point — builds the tree, opens a window, and drives
 /// the frame loop. Re-exported from [`app`] (`flui-app`).
 pub use flui_app::run_app;
+/// [`run_app`] with an explicit [`AppConfig`] (window title, size, services,
+/// failure policy). Re-exported from [`app`] (`flui-app`).
+pub use flui_app::run_app_with_config;
 
 /// Everything an application author needs in scope to write widget code:
 /// the widget catalog prelude, [`run_app`], and — with the `material` feature
@@ -230,8 +253,8 @@ pub mod prelude {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    pub use flui_app::app::{open_secondary_window, open_window};
-    pub use flui_app::run_app;
+    pub use flui_app::app::{AppWindowError, open_secondary_window, open_window};
+    pub use flui_app::{run_app, run_app_with_config};
     #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,

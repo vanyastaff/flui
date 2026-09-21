@@ -88,7 +88,7 @@ Entry points by task, then the reference documents with no task of their own.
 | Change render/layout/paint | `docs/PORT.md` (translation rules, refusal triggers, type map) | `.flutter/` reference |
 | Understand error handling | `thiserror` in libs, `anyhow` in bins | |
 | Touch logging setup or a log backend | Subscriber policies, native sinks, who may depend on the backend | `docs/workspace-layers.toml` (only composition roots may depend on it) |
-| Write or review Rust code | the Rust standards the studio injects on the file you edit | Relevant architecture contract |
+| Write or review Rust code | `rustfmt.toml`, `clippy.toml`, the workspace lints in `Cargo.toml`, `docs/adr/` | Relevant architecture contract |
 | Add a cross-crate dep | `docs/workspace-layers.toml` (the checked layer policy) | Root `Cargo.toml` `[workspace.dependencies]`, `docs/FOUNDATIONS.md` Part IV |
 | Add a new crate | `docs/workspace-layers.toml` — classify it *first*; `[[planned]]` records gated extractions | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
 | Catch up on recent changes | `CHANGELOG.md` | `docs/ROADMAP.md` |
@@ -105,7 +105,8 @@ Entry points by task, then the reference documents with no task of their own.
 `AGENTS.md` (this file) is the single agent guide, shared by every agent runtime. There are no
 per-runtime shims and no separate path-scoped rule files: **put the substance here and nowhere
 else**, or the runtimes drift apart. The Rust engineering standards that `STYLE.md` used to carry
-are injected by the Rust Code Studio plugin when you edit a matching file.
+now live in `rustfmt.toml`, `clippy.toml`, the workspace lints in the root `Cargo.toml`, and
+`docs/adr/`, with the architecture-level rules in [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md).
 
 ## Error Triage
 
@@ -116,7 +117,7 @@ When you hit a build/test error:
 3. **Test flake** → the singleton family is retired, so a flake means a test is mutating a *genuinely* process-global resource (`Registry::global`, `FONT_SYSTEM` — named in `docs/runtime-contract.toml`'s ambient-reach ratchet), not a realm or scheduler. Add a lock scoped to that test module. The deleted test locks are no longer worth searching for.
 4. **Type mismatch across crate boundary** → check if you're using the wrong ID type (1-based vs 0-based). See ID offset pattern above.
 
-Anything else — a clippy warning, `todo!()` on a production path, a banned pattern — is the architecture table above or the Rust standards the studio injects on the file you edit.
+Anything else — a clippy warning, `todo!()` on a production path, a banned pattern — is the architecture table above or the standards in `rustfmt.toml`, `clippy.toml`, the workspace lints, and `docs/adr/`.
 
 ## Definition of Done (anti-cheating)
 
@@ -130,4 +131,4 @@ An agent reporting "done" makes a claim that later work is built on. A green gat
 
 ## Agent Rules
 
-- **No internal process-ID markers in code** — the studio's core rules carry the prohibition and most of its examples (`Cycle N`, `PR #NNN review`, `Phase B`). Repo-specific are two families it does not name — bare `U##` step-citations and spec `SC-NNN` success-criteria numbers — plus the exception and the sweep's denominator. A marker is acceptable only when its meaning is defined beside its use (a test-case ID in the same file's legend) or is mechanically load-bearing (`FR-NNN`/`ADR-NNNN` references a checker greps). Sweeps may exclude only archival roots — `docs/{audits,brainstorms,ideation,plans,research,superpowers}`, `.rust-studio/specs`, `specs`, `openspec`; shipped docs such as crate `ARCHITECTURE.md` and `docs/ROADMAP-TRACKER.md` stay in scope. This defines the denominator, not a claim that every in-scope hit is gone; known residue is tracked in issue #644.
+- **No internal process-ID markers in code** — this bans embedding internal process-tracking markers such as `Cycle N`, `PR #NNN review`, or `Phase B`. Repo-specific are two families named nowhere else — bare `U##` step-citations and spec `SC-NNN` success-criteria numbers — plus the exception and the sweep's denominator. A marker is acceptable only when its meaning is defined beside its use (a test-case ID in the same file's legend) or is mechanically load-bearing (`FR-NNN`/`ADR-NNNN` references a checker greps). Sweeps may exclude only archival roots — `docs/{audits,brainstorms,ideation,plans,research,superpowers}`, `.rust-studio/specs`, `specs`, `openspec`; shipped docs such as crate `ARCHITECTURE.md` and `docs/ROADMAP-TRACKER.md` stay in scope. This defines the denominator, not a claim that every in-scope hit is gone; known residue is tracked in issue #644.

@@ -75,10 +75,7 @@ strip = "debuginfo"
 }
 
 fn generate_main(dir: &Path) -> CliResult<()> {
-    let content = r#"use std::{cell::Cell, rc::Rc};
-
-use flui::prelude::*;
-use flui::view::{RebuildHandle, RebuildReason};
+    let content = r#"use flui::prelude::*;
 use flui::widgets::{SafeArea, column};
 
 fn main() {
@@ -98,8 +95,7 @@ impl StatelessView for CounterApp {
 struct CounterView;
 
 struct CounterState {
-    count: Rc<Cell<usize>>,
-    rebuild: Option<RebuildHandle>,
+    count: StateCell<usize>,
 }
 
 impl StatefulView for CounterView {
@@ -107,23 +103,18 @@ impl StatefulView for CounterView {
 
     fn create_state(&self) -> Self::State {
         CounterState {
-            count: Rc::new(Cell::new(0)),
-            rebuild: None,
+            count: StateCell::new(0),
         }
     }
 }
 
 impl ViewState<CounterView> for CounterState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
+        self.count.bind(ctx);
     }
 
     fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> impl IntoView {
-        let count = Rc::clone(&self.count);
-        let rebuild = self
-            .rebuild
-            .clone()
-            .expect("BUG: init_state runs before build");
+        let count = self.count.clone();
 
         // `main_axis_alignment` is what actually centres this, not the `Center`
         // around it. A `Column` fills the height it is given
@@ -138,10 +129,8 @@ impl ViewState<CounterView> for CounterState {
                 SizedBox::height(16.0),
                 Text::new(self.count.get().to_string()),
                 SizedBox::height(16.0),
-                ElevatedButton::new(Text::new("Increment")).on_pressed(move || {
-                    count.set(count.get() + 1);
-                    rebuild.schedule(RebuildReason::StateChange);
-                }),
+                ElevatedButton::new(Text::new("Increment"))
+                    .on_pressed(move || count.update(|n| n + 1)),
             ])
             .main_axis_alignment(MainAxisAlignment::Center),
         )

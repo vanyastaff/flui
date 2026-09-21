@@ -75,22 +75,26 @@ where
         }
     }
     /// Set window and loop service configuration.
+    #[must_use = "the builder returns the updated application; assign or chain it"]
     pub fn with_config(mut self, config: AppConfig) -> Self {
         self.config = config;
         self
     }
     /// Select whether startup reserves an initial main window.
+    #[must_use = "the builder returns the updated application; assign or chain it"]
     pub fn with_startup_window(mut self, startup: StartupWindow) -> Self {
         self.startup = startup;
         self
     }
     /// Called once before any root factory invocation. Quit suppresses startup creation.
+    #[must_use = "the builder returns the updated application; assign or chain it"]
     pub fn on_ready(mut self, callback: impl FnOnce(&AppHandle) + 'static) -> Self {
         self.ready = Some(Box::new(callback));
         self
     }
     /// Observe later window failures after rollback and reply settlement.
     /// A panicking observer is retired; it does not poison later show requests.
+    #[must_use = "the builder returns the updated application; assign or chain it"]
     pub fn on_window_error(mut self, callback: impl FnMut(&AppWindowError) + 'static) -> Self {
         self.window_error = Some(Box::new(callback));
         self

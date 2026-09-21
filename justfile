@@ -868,6 +868,11 @@ release-package-check *options:
     python3 -B scripts/release_policy.py --package {{options}}
 
 [group("quality")]
+[doc("Build and test a fresh CLI-generated consumer against the release ARCHIVES, offline: packages the release set, vendors every third-party dependency, installs the archives as a Cargo directory source, and runs `flui create` without --local so the registry dependency form is what gets resolved. Pass --preview-dirty on an uncommitted tree. Slow (vendors the whole dependency set) and disk-hungry (target/release-consumer)")]
+release-consumer-check *options:
+    python3 -B scripts/release_consumer_check.py {{options}}
+
+[group("quality")]
 [doc("Verify font provenance/notices, generated fixture bytes, and Cargo package file selection offline")]
 font-assets-check:
     python3 -B -m unittest discover -s scripts/tests -p test_font_assets.py

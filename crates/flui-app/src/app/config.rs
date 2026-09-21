@@ -57,11 +57,14 @@ impl Default for DiagnosticsProfile {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust
+/// use flui_app::AppConfig;
+///
 /// let config = AppConfig::new()
 ///     .with_title("My App")
 ///     .with_size(1024, 768)
 ///     .with_resizable(true);
+/// assert_eq!(config.title, "My App");
 /// ```
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -256,66 +259,77 @@ impl AppConfig {
     }
 
     /// Set the window title.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
     }
 
     /// Set the process-level identity used by native diagnostics sinks.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_application_identity(mut self, identity: AppIdentity) -> Self {
         self.application_identity = identity;
         self
     }
 
     /// Select development or production diagnostics defaults explicitly.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_diagnostics_profile(mut self, profile: DiagnosticsProfile) -> Self {
         self.diagnostics_profile = profile;
         self
     }
 
     /// Set the initial window size.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
         self.size = Size::new(px(width as f32), px(height as f32));
         self
     }
 
     /// Set the minimum window size.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_min_size(mut self, width: u32, height: u32) -> Self {
         self.min_size = Some(Size::new(px(width as f32), px(height as f32)));
         self
     }
 
     /// Set the maximum window size.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
         self.max_size = Some(Size::new(px(width as f32), px(height as f32)));
         self
     }
 
     /// Set whether the window is resizable.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
         self
     }
 
     /// Set whether to show window decorations.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_decorations(mut self, decorations: bool) -> Self {
         self.decorations = decorations;
         self
     }
 
     /// Set whether to start in fullscreen.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_fullscreen(mut self, fullscreen: bool) -> Self {
         self.fullscreen = fullscreen;
         self
     }
 
     /// Enable performance overlay.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_performance_overlay(mut self, show: bool) -> Self {
         self.show_performance_overlay = show;
         self
     }
 
     /// Enable debug paint.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_debug_paint(mut self, enabled: bool) -> Self {
         self.debug_paint = enabled;
         self
@@ -323,6 +337,7 @@ impl AppConfig {
 
     /// Set the policy governing when the platform loop exits once every
     /// hosted window has closed. See [`ExitPolicy`]'s own doc.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_exit_policy(mut self, policy: ExitPolicy) -> Self {
         self.exit_policy = policy;
         self
@@ -330,6 +345,7 @@ impl AppConfig {
 
     /// Set the hot-reload worker dylib path for host/worker apps.
     #[cfg(feature = "hot-reload")]
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_worker_plugin_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.worker_plugin_path = Some(path.into());
         self
@@ -337,6 +353,7 @@ impl AppConfig {
 
     /// Inject the host's own background executors. See
     /// [`Self::executors`]'s doc for what this changes.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_executors(mut self, executors: HostExecutors) -> Self {
         self.executors = Some(executors);
         self
@@ -345,6 +362,7 @@ impl AppConfig {
     /// Register a typed frame-failure callback. See
     /// [`Self::frame_failure_handler`]'s doc and
     /// [`FrameFailureHandler`]'s re-entrancy contract.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_frame_failure_handler(mut self, handler: FrameFailureHandler) -> Self {
         self.frame_failure_handler = Some(handler);
         self
@@ -361,6 +379,7 @@ impl AppConfig {
     /// [`Self::close_request_handler`]'s doc for what it is asked and
     /// when, and [`CloseRequestHandler`]'s for the contract the callback
     /// must honor.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_close_request_handler(mut self, handler: CloseRequestHandler) -> Self {
         self.close_request_handler = Some(handler);
         self
@@ -369,6 +388,7 @@ impl AppConfig {
     /// Register an application service to start at bootstrap. See
     /// [`Self::services`]'s doc for the lifetime and shutdown contract.
     #[cfg(not(target_arch = "wasm32"))]
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_service(mut self, service: ServiceDefinition) -> Self {
         self.services.push(service);
         self

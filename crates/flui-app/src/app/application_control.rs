@@ -77,6 +77,24 @@ pub enum AppWindowError {
     /// Shutdown cancelled an admitted intent before installation completed.
     #[error("application shutdown cancelled the window request")]
     Cancelled,
+    /// The request was refused at admission because the application is
+    /// quitting, or because the loop it was made against has stopped or
+    /// been replaced. Unlike [`Self::Cancelled`], nothing was admitted.
+    #[error("window admission is closed: the application loop is quitting or gone")]
+    AdmissionClosed,
+    /// Called from a thread that hosts no running platform loop. Window
+    /// entry points must run on the owner thread, from inside or after a
+    /// running `Platform::run`'s `on_ready`.
+    #[error("no application loop runs on this thread; call from the owner thread")]
+    NoOwnerLoop,
+    /// The requested [`WindowPolicy`](crate::app::WindowPolicy) is not
+    /// supported by this entry point in the application's current state;
+    /// `reason` says which precondition failed.
+    #[error("window policy not supported here: {reason}")]
+    UnsupportedPolicy {
+        /// Why this policy was refused, in one sentence.
+        reason: &'static str,
+    },
 }
 
 type Reply = ClaimSlot<Result<PresentationAddress, AppWindowError>>;

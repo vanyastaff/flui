@@ -32,8 +32,6 @@
 #[path = "../examples/vertical_slice_demo/tree.rs"]
 mod tree;
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use flui_foundation::RenderId;
@@ -46,6 +44,7 @@ use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
+use flui_view::StateCell;
 use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 
 /// Root constraints the demo is mounted under: wide/tall enough that the
@@ -63,7 +62,7 @@ struct MountedDemo {
     /// Clone of the mounted [`tree::DemoRoot`]'s `home_create_count` — how many
     /// times `DemoHomeState::create_state` has run. See that field's doc for
     /// why this, and not a display assertion, is what proves state survival.
-    home_create_count: Rc<Cell<u32>>,
+    home_create_count: StateCell<u32>,
 }
 
 impl MountedDemo {
@@ -80,7 +79,7 @@ impl MountedDemo {
         let mut binding = HeadlessBinding::new();
 
         let root_view = tree::demo_root();
-        let home_create_count = Rc::clone(&root_view.home_create_count);
+        let home_create_count = root_view.home_create_count.clone();
 
         let pipeline_owner = PipelineCell::new(PipelineOwner::new());
 
@@ -384,8 +383,8 @@ fn tapping_the_plus_button_updates_the_rendered_counter_text() {
     let tap_at = demo.absolute_position(plus);
     demo.tap(tap_at.dx.get() + 1.0, tap_at.dy.get() + 1.0);
 
-    // The tap's on_tap handler scheduled a rebuild via RebuildHandle; the
-    // next pump drains it.
+    // The tap's on_tap handler scheduled a rebuild via `StateCell::update`;
+    // the next pump drains it.
     demo.pump(Duration::ZERO);
 
     assert!(
@@ -397,8 +396,8 @@ fn tapping_the_plus_button_updates_the_rendered_counter_text() {
         "tapping '+' once must rebuild the counter text to 'Count: 1'"
     );
 
-    // A second tap keeps incrementing — proves the element (and its
-    // RebuildHandle) survives across rebuilds rather than being torn down.
+    // A second tap keeps incrementing — proves the element (and its bound
+    // `StateCell`) survives across rebuilds rather than being torn down.
     demo.tap(tap_at.dx.get() + 1.0, tap_at.dy.get() + 1.0);
     demo.pump(Duration::ZERO);
     assert!(
@@ -686,7 +685,7 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         "the details route must be gone once popped"
     );
     // The discriminating assertion: `count`/`expanded`/`scroll_offset` are
-    // `Rc<Cell<_>>`s captured once by the seed closure in `DemoRootState`
+    // `StateCell`s captured once by the seed closure in `DemoRootState`
     // (`tree.rs`), so a display check on them alone reads back correctly
     // whether `DemoHomeState` survived the round trip or was torn down and
     // rebuilt from those same closure-held cells — it cannot tell the two

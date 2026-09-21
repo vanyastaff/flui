@@ -91,10 +91,13 @@ declarations = [
     "pub use flui_view as view;",
     "pub use flui_widgets as widgets;",
     "pub use flui_app::run_app;",
+    "pub use flui_app::run_app_with_config;",
     "pub use flui_app::app::open_window;",
     "pub use flui_app::app::open_secondary_window;",
     "pub use flui_app::app::AppConfig;",
     "pub use flui_app::app::WindowPolicy;",
+    "pub use flui_app::app::AppWindowError;",
+    "pub use flui_app::app::{AppControlError, AppHandle, AppRunError, Application, StartupWindow};",
     "pub mod prelude {",
 ]
 

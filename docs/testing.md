@@ -606,5 +606,5 @@ A change cannot be merged if any of these fail. If you encounter a flaky test, f
 ## See Also
 
 - [Getting Started](getting-started.md) — toolchain setup and first build
-- [Contributing](contributing.md) — workflow, commits, speckit
-- [`AGENTS.md`](../AGENTS.md) — current performance and testing requirements (`.specify/memory/constitution.md` does not exist in this checkout)
+- [Contributing](contributing.md) — quality gates, commits, code style
+- [`AGENTS.md`](../AGENTS.md) — current performance and testing requirements

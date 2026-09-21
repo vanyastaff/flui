@@ -6,7 +6,7 @@
 //! tree, so the acceptance test proves the tree the example actually runs.
 //!
 //! Self-contained over `flui-widgets` (plus the lower-layer `flui-view` and
-//! `flui-animation` crates it already depends on for `RebuildHandle` and
+//! `flui-animation` crates it already depends on for `StateCell` and
 //! `Curves`) — no `flui-app` import here; each consumer decides how to mount.
 //!
 //! Composition: a `StatefulView` root (`count`, `expanded`, `scroll_offset`)
@@ -58,12 +58,10 @@
 //! which is what lets the "Back" button on the details route pop back to the
 //! exact same counter/scroll/expanded state, not a freshly reset one.
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::Curves;
-use flui_view::RebuildHandle;
+use flui_view::StateCell;
 use flui_widgets::prelude::*;
 use flui_widgets::{AnimatedContainer, column, row};
 
@@ -105,7 +103,7 @@ pub const BACK_BUTTON_LABEL: &str = "< Back";
 
 /// The vertical-slice demo root: a [`Navigator`] shell over the home route.
 ///
-/// `count`/`expanded`/`scroll_offset` are `Rc<Cell<_>>` so a caller (the
+/// `count`/`expanded`/`scroll_offset` are [`StateCell`]s so a caller (the
 /// acceptance test) can keep a clone from before mounting. All three are
 /// driven the same way the running example drives them — by dispatching
 /// synthetic pointer gestures through the mounted `GestureDetector`s: taps
@@ -119,25 +117,25 @@ pub const BACK_BUTTON_LABEL: &str = "< Back";
 #[derive(Clone, StatefulView)]
 pub struct DemoRoot {
     /// Tap count, shown by the counter row and incremented by its "+" button.
-    pub count: Rc<Cell<i32>>,
+    pub count: StateCell<i32>,
     /// Whether the animated box currently targets its expanded size/color.
-    pub expanded: Rc<Cell<bool>>,
+    pub expanded: StateCell<bool>,
     /// The list's scroll offset, in logical pixels — mirrored from the
     /// internal `ScrollController` by the drag gesture wired in
     /// [`DemoHomeState::build`]. Also the seed value
     /// [`DemoHomeState::create_state`] writes into that controller before the
     /// first layout, so constructing a `DemoRoot` with a nonzero offset does
     /// not start the list at zero.
-    pub scroll_offset: Rc<Cell<f32>>,
+    pub scroll_offset: StateCell<f32>,
     /// How many times [`DemoHomeState::create_state`] has run — a discriminator,
-    /// not app-visible data. `count`/`expanded`/`scroll_offset` are `Rc<Cell<_>>`
+    /// not app-visible data. `count`/`expanded`/`scroll_offset` are [`StateCell`]s
     /// shared with the seed closure below, so they read back correctly whether
     /// `DemoHomeState` survives a navigation round trip or is torn down and
     /// rebuilt from the same closure-captured cells; a display assertion on
     /// them alone cannot tell those two cases apart. This counter can, because
     /// `create_state` runs once per element lifetime — the acceptance test
     /// reads it, not the running app.
-    pub home_create_count: Rc<Cell<u32>>,
+    pub home_create_count: StateCell<u32>,
 }
 
 impl DemoRoot {
@@ -145,10 +143,10 @@ impl DemoRoot {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            count: Rc::new(Cell::new(0)),
-            expanded: Rc::new(Cell::new(false)),
-            scroll_offset: Rc::new(Cell::new(0.0)),
-            home_create_count: Rc::new(Cell::new(0)),
+            count: StateCell::new(0),
+            expanded: StateCell::new(false),
+            scroll_offset: StateCell::new(0.0),
+            home_create_count: StateCell::new(0),
         }
     }
 }
@@ -176,10 +174,10 @@ impl StatefulView for DemoRoot {
 
     fn create_state(&self) -> Self::State {
         let navigator = NavigatorHandle::new();
-        let count = Rc::clone(&self.count);
-        let expanded = Rc::clone(&self.expanded);
-        let scroll_offset = Rc::clone(&self.scroll_offset);
-        let home_create_count = Rc::clone(&self.home_create_count);
+        let count = self.count.clone();
+        let expanded = self.expanded.clone();
+        let scroll_offset = self.scroll_offset.clone();
+        let home_create_count = self.home_create_count.clone();
         let navigator_for_home = navigator.clone();
         // `SimpleRoute`, not `PageRoute`: the home route is the navigator's
         // first entry, with nothing beneath it to transition over — an
@@ -187,11 +185,11 @@ impl StatefulView for DemoRoot {
         navigator.seed_initial(
             SimpleRoute::<()>::new(move |_ctx| {
                 DemoHome {
-                    count: Rc::clone(&count),
-                    expanded: Rc::clone(&expanded),
-                    scroll_offset: Rc::clone(&scroll_offset),
+                    count: count.clone(),
+                    expanded: expanded.clone(),
+                    scroll_offset: scroll_offset.clone(),
                     navigator: navigator_for_home.clone(),
-                    create_count: Rc::clone(&home_create_count),
+                    create_count: home_create_count.clone(),
                 }
                 .into_view()
                 .boxed()
@@ -216,25 +214,27 @@ impl ViewState<DemoRoot> for DemoRootState {
 /// its persistent state) on every `Navigator` rebuild.
 #[derive(Clone, StatefulView)]
 struct DemoHome {
-    count: Rc<Cell<i32>>,
-    expanded: Rc<Cell<bool>>,
-    scroll_offset: Rc<Cell<f32>>,
+    count: StateCell<i32>,
+    expanded: StateCell<bool>,
+    scroll_offset: StateCell<f32>,
     navigator: NavigatorHandle,
     /// Incremented once per [`DemoHomeState::create_state`] call — see the
-    /// field doc on [`DemoRoot::home_create_count`], which owns the `Rc` this
-    /// clones.
-    create_count: Rc<Cell<u32>>,
+    /// field doc on [`DemoRoot::home_create_count`], which owns the storage
+    /// this clones.
+    create_count: StateCell<u32>,
 }
 
 /// Persistent state for [`DemoHome`].
 ///
-/// Captures a [`RebuildHandle`] in `init_state` (ADR-0018) so a tap callback
-/// — which runs outside `build`/layout/paint — can schedule the next frame's
-/// rebuild without touching the tree itself.
+/// Binds `count`/`expanded`/`scroll_offset` to the element's rebuild trigger
+/// in `init_state` (ADR-0018) so a tap callback — which runs outside
+/// `build`/layout/paint — can mutate them and schedule the next frame's
+/// rebuild in one call ([`StateCell::set`]/[`StateCell::update`]), without
+/// touching the tree itself.
 struct DemoHomeState {
-    count: Rc<Cell<i32>>,
-    expanded: Rc<Cell<bool>>,
-    scroll_offset: Rc<Cell<f32>>,
+    count: StateCell<i32>,
+    expanded: StateCell<bool>,
+    scroll_offset: StateCell<f32>,
     navigator: NavigatorHandle,
     /// The list's live scroll position — injected directly into the
     /// `ListView` (`ListView::position`), so `RenderViewport`'s own layout
@@ -243,9 +243,6 @@ struct DemoHomeState {
     /// because it is pure wiring, not app-visible data — `scroll_offset`
     /// above is the `pub` mirror external callers can read.
     scroll_controller: ScrollController,
-    /// `None` only before `init_state` has run; every `build` call happens
-    /// after it (`ViewState` lifecycle order), so it is always `Some` there.
-    rebuild: Option<RebuildHandle>,
 }
 
 impl StatefulView for DemoHome {
@@ -265,22 +262,23 @@ impl StatefulView for DemoHome {
         // or a teardown-and-rebuild after a covering route unmounts this
         // element — increments it. `count`/`expanded`/`scroll_offset` can't
         // tell those two apart (see `DemoRoot::home_create_count`'s doc); this can.
-        self.create_count.set(self.create_count.get() + 1);
+        self.create_count.update(|n| n + 1);
 
         DemoHomeState {
-            count: Rc::clone(&self.count),
-            expanded: Rc::clone(&self.expanded),
-            scroll_offset: Rc::clone(&self.scroll_offset),
+            count: self.count.clone(),
+            expanded: self.expanded.clone(),
+            scroll_offset: self.scroll_offset.clone(),
             navigator: self.navigator.clone(),
             scroll_controller,
-            rebuild: None,
         }
     }
 }
 
 impl ViewState<DemoHome> for DemoHomeState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
+        self.count.bind(ctx);
+        self.expanded.bind(ctx);
+        self.scroll_offset.bind(ctx);
         // Lifecycle-only acquisition (ADR-0021, port-check trigger #22): lets
         // `RenderViewport::perform_layout`'s committed content extents flush
         // a coalesced notification after layout instead of never notifying —
@@ -295,17 +293,11 @@ impl ViewState<DemoHome> for DemoHomeState {
     }
 
     fn build(&self, _view: &DemoHome, _ctx: &dyn BuildContext) -> impl IntoView {
-        let rebuild = self
-            .rebuild
-            .clone()
-            .expect("BUG: init_state runs before build (ViewState lifecycle order)");
-
         let count = self.count.get();
         let expanded = self.expanded.get();
 
         // -- counter row: Text + a "+" GestureDetector button -----------------
-        let count_for_tap = Rc::clone(&self.count);
-        let rebuild_for_count = rebuild.clone();
+        let count_for_tap = self.count.clone();
         let counter_row = Row::new(row![
             Text::new(format!("Count: {count}")),
             SizedBox::width(16.0),
@@ -314,10 +306,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                 // painted area, not only where a hit-testable descendant
                 // (the "+" glyph's own ink) happens to sit.
                 .behavior(HitTestBehavior::Opaque)
-                .on_tap(move || {
-                    count_for_tap.set(count_for_tap.get() + 1);
-                    rebuild_for_count.schedule(flui_view::RebuildReason::StateChange);
-                })
+                .on_tap(move || count_for_tap.update(|n| n + 1))
                 .child(
                     Container::new()
                         .padding(EdgeInsets::all(px(8.0)))
@@ -342,9 +331,8 @@ impl ViewState<DemoHome> for DemoHomeState {
             );
 
         // -- fixed-height, drag-to-scroll list ---------------------------------
-        let scroll_offset_for_drag = Rc::clone(&self.scroll_offset);
+        let scroll_offset_for_drag = self.scroll_offset.clone();
         let scroll_controller_for_drag = self.scroll_controller.clone();
-        let rebuild_for_drag = rebuild.clone();
         let list_area = GestureDetector::new()
             // Opaque: the drag must fire from anywhere in the list's box, not
             // only where a hit-testable descendant (an item's `Text`/padding)
@@ -362,7 +350,6 @@ impl ViewState<DemoHome> for DemoHomeState {
                 let proposed = scroll_controller_for_drag.pixels() - details.delta.dy.get();
                 scroll_controller_for_drag.jump_to(proposed);
                 scroll_offset_for_drag.set(scroll_controller_for_drag.pixels());
-                rebuild_for_drag.schedule(flui_view::RebuildReason::StateChange);
             })
             .child(
                 SizedBox::height(LIST_BOX_HEIGHT).child(
@@ -390,8 +377,7 @@ impl ViewState<DemoHome> for DemoHomeState {
             );
 
         // -- animated box: tap toggles expanded, AnimatedContainer eases to it -
-        let expanded_for_tap = Rc::clone(&self.expanded);
-        let rebuild_for_toggle = rebuild;
+        let expanded_for_tap = self.expanded.clone();
         let (target_width, target_height, target_color) = if expanded {
             (EXPANDED_WIDTH, EXPANDED_HEIGHT, EXPANDED_COLOR)
         } else {
@@ -402,10 +388,7 @@ impl ViewState<DemoHome> for DemoHomeState {
             // painted color IS its content), so hit-testing must fire across
             // the whole animated box regardless of child hit-testability.
             .behavior(HitTestBehavior::Opaque)
-            .on_tap(move || {
-                expanded_for_tap.set(!expanded_for_tap.get());
-                rebuild_for_toggle.schedule(flui_view::RebuildReason::StateChange);
-            })
+            .on_tap(move || expanded_for_tap.update(|e| !e))
             .child(
                 // An empty `Text` filler, not `SizedBox` — a `SizedBox`
                 // nested inside this container's own tight width/height
@@ -480,7 +463,7 @@ pub fn demo_root() -> DemoRoot {
 /// down, in [`DemoRoot`]. Purely a pass-through: it contributes no render
 /// node and no behavior of its own, so the tree an app author sees on screen
 /// is exactly [`DemoRoot`]'s. The acceptance test mounts `DemoRoot` directly
-/// (skipping this adapter) to reach its `Rc<Cell<_>>` handles before mount;
+/// (skipping this adapter) to reach its [`StateCell`] handles before mount;
 /// structurally and behaviorally that is the identical tree.
 #[derive(Clone, StatelessView)]
 pub struct DemoApp;

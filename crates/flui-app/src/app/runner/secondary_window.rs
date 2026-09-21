@@ -34,7 +34,39 @@ use super::realm_dispatch::{
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+use crate::app::AppWindowError;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 use crate::app::runtime::WindowPolicy;
+
+/// A native window-open failure, retained whole as the typed error's
+/// `source` — the same shape `main_window.rs` gives the primary window's.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn native_error(source: flui_platform::OpenWindowError) -> AppWindowError {
+    AppWindowError::Native {
+        source: Arc::new(source),
+    }
+}
+
+/// A realm/presentation install failure, retained whole as
+/// [`AppWindowError::Mount`]'s `source`.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn mount_error(source: impl std::error::Error + Send + Sync + 'static) -> AppWindowError {
+    AppWindowError::Mount {
+        source: Arc::new(source),
+    }
+}
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -109,19 +141,25 @@ use flui_view::View;
 ///
 /// # Errors
 ///
-/// Window creation and (`SeparateRealms` only) `UiRealm` construction
-/// surface as `Err` exactly like `bootstrap_desktop`'s own first-window
-/// failures — this call does not tear down or exit the loop on failure,
-/// unlike a first-window bootstrap failure (which propagates out of
-/// `Platform::run` and ends the loop): the caller decides what a failed
-/// secondary-window open means for their app. `SharedRealm` additionally
-/// fails if no realm is hosted on this thread yet to share with.
+/// Window creation ([`AppWindowError::Native`]) and (`SeparateRealms` only)
+/// `UiRealm` construction ([`AppWindowError::Mount`]) surface as `Err`
+/// exactly like `bootstrap_desktop`'s own first-window failures — this call
+/// does not tear down or exit the loop on failure, unlike a first-window
+/// bootstrap failure (which propagates out of `Platform::run` and ends the
+/// loop): the caller decides what a failed secondary-window open means for
+/// their app. A call from a thread with no running loop is
+/// [`AppWindowError::NoOwnerLoop`]; one made while the application is
+/// quitting is [`AppWindowError::AdmissionClosed`]; `SharedRealm` with no
+/// realm hosted on this thread yet is [`AppWindowError::UnsupportedPolicy`].
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub fn open_secondary_window(config: AppConfig, policy: WindowPolicy) -> anyhow::Result<()> {
+pub fn open_secondary_window(
+    config: AppConfig,
+    policy: WindowPolicy,
+) -> Result<(), AppWindowError> {
     open_secondary_window_impl(config, policy).map(|_| ())
 }
 
@@ -150,13 +188,18 @@ pub fn open_secondary_window(config: AppConfig, policy: WindowPolicy) -> anyhow:
 ///
 /// The same as [`open_secondary_window`], plus the renderer-initialization
 /// failures `install_desktop_window` can produce: GPU init
-/// (`AppWindowError::Renderer`), mount (`AppWindowError::Mount`).
+/// ([`AppWindowError::Renderer`]), mount ([`AppWindowError::Mount`]).
+/// `SharedRealm` is refused as [`AppWindowError::UnsupportedPolicy`].
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub fn open_window<V>(config: AppConfig, policy: WindowPolicy, root: V) -> anyhow::Result<()>
+pub fn open_window<V>(
+    config: AppConfig,
+    policy: WindowPolicy,
+    root: V,
+) -> Result<(), AppWindowError>
 where
     V: View + Clone + 'static,
 {
@@ -208,6 +251,19 @@ struct PendingCompletion {
     install: Option<SecondaryWindowInstall>,
 }
 
+/// A window the open path resolved synchronously: its realm dispatcher and
+/// the platform window it drives. `None` from the open functions means the
+/// window was accepted but its creation is deferred to a later owner turn.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) type OpenedWindow = (
+    RealmDispatcher,
+    Arc<dyn flui_platform::traits::PlatformWindow>,
+);
+
 /// The boxed install continuation a [`PendingCompletion`] carries: given the
 /// install configuration and the opened window, mount the content and return
 /// the realm dispatcher and the window it now drives.
@@ -220,10 +276,13 @@ type SecondaryWindowInstall = Box<
     dyn FnOnce(
         SecondaryWindowInstallConfig,
         Arc<dyn flui_platform::traits::PlatformWindow>,
-    ) -> anyhow::Result<(
-        RealmDispatcher,
-        Arc<dyn flui_platform::traits::PlatformWindow>,
-    )>,
+    ) -> Result<
+        (
+            RealmDispatcher,
+            Arc<dyn flui_platform::traits::PlatformWindow>,
+        ),
+        AppWindowError,
+    >,
 >;
 
 #[cfg(all(
@@ -334,9 +393,9 @@ impl Drop for WindowReservation {
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-fn reserve_window() -> anyhow::Result<WindowReservation> {
+fn reserve_window() -> Result<WindowReservation, AppWindowError> {
     let platform = with_owner_platform(flui_platform::OwnerPlatform::shared)
-        .ok_or_else(|| anyhow::anyhow!("no owner platform"))?;
+        .ok_or(AppWindowError::NoOwnerLoop)?;
     let count = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().pending_window_reservations));
     count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     Ok(WindowReservation(Arc::new(PendingRequestState {
@@ -625,24 +684,21 @@ pub(super) fn drain_pending_secondary_window_completions() {
 pub(super) fn open_secondary_window_impl(
     config: AppConfig,
     policy: WindowPolicy,
-) -> anyhow::Result<
-    Option<(
-        RealmDispatcher,
-        Arc<dyn flui_platform::traits::PlatformWindow>,
-    )>,
-> {
+) -> Result<Option<OpenedWindow>, AppWindowError> {
     use flui_platform::{WindowOpen, WindowOptions};
     let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
-    anyhow::ensure!(
-        secondary_install_admitted(&loop_identity),
-        "secondary window admission is closed: application is quitting"
-    );
+    if !secondary_install_admitted(&loop_identity) {
+        return Err(AppWindowError::AdmissionClosed);
+    }
 
     let shared_with = if policy == WindowPolicy::SharedRealm {
         Some(
             APP_RUNTIME
                 .with(|slot| slot.borrow().realms.iter().next().map(|(id, _)| *id))
-                .ok_or_else(|| anyhow::anyhow!("SharedRealm requires an existing target realm"))?,
+                .ok_or(AppWindowError::UnsupportedPolicy {
+                    reason: "SharedRealm requires a realm already hosted on this thread to \
+                             share with",
+                })?,
         )
     } else {
         None
@@ -650,15 +706,8 @@ pub(super) fn open_secondary_window_impl(
     let reservation = reserve_window()?;
     let options: WindowOptions = (&config).into();
     let open = with_owner_platform(|owner| owner.open_window(options))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "open_secondary_window called with no OwnerPlatform installed on this thread -- \
-                 call only from inside, or after, a running Platform::run's on_ready"
-            )
-        })?
-        .map_err(|error| {
-            anyhow::Error::from(error).context("secondary window open request failed")
-        })?;
+        .ok_or(AppWindowError::NoOwnerLoop)?
+        .map_err(native_error)?;
 
     let install_config = SecondaryWindowInstallConfig {
         loop_identity,
@@ -698,40 +747,30 @@ pub(super) fn open_window_with_content_impl<V>(
     config: AppConfig,
     policy: WindowPolicy,
     root: V,
-) -> anyhow::Result<
-    Option<(
-        RealmDispatcher,
-        Arc<dyn flui_platform::traits::PlatformWindow>,
-    )>,
->
+) -> Result<Option<OpenedWindow>, AppWindowError>
 where
     V: View + Clone + 'static,
 {
     use flui_platform::{WindowOpen, WindowOptions};
 
     if policy == WindowPolicy::SharedRealm {
-        anyhow::bail!(
-            "open_window with content requires WindowPolicy::SeparateRealms; SharedRealm would \
-             imply a lane-per-presentation raster contract the realm does not provide today"
-        );
+        return Err(AppWindowError::UnsupportedPolicy {
+            reason: "open_window with content requires WindowPolicy::SeparateRealms; SharedRealm \
+                     would imply a lane-per-presentation raster contract the realm does not \
+                     provide today",
+        });
     }
 
     let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
-    anyhow::ensure!(
-        secondary_install_admitted(&loop_identity),
-        "secondary window admission is closed: application is quitting"
-    );
+    if !secondary_install_admitted(&loop_identity) {
+        return Err(AppWindowError::AdmissionClosed);
+    }
 
     let reservation = reserve_window()?;
     let options: WindowOptions = (&config).into();
     let open = with_owner_platform(|owner| owner.open_window(options))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "open_window called with no OwnerPlatform installed on this thread -- \
-                 call only from inside, or after, a running Platform::run's on_ready"
-            )
-        })?
-        .map_err(|error| anyhow::Error::from(error).context("window open request failed"))?;
+        .ok_or(AppWindowError::NoOwnerLoop)?
+        .map_err(native_error)?;
 
     match open {
         WindowOpen::Ready(window) => {
@@ -780,9 +819,6 @@ where
                                 window,
                             )
                         })
-                        .map_err(|error| {
-                            anyhow::anyhow!(error).context("installing rendered window failed")
-                        })
                     })),
                 });
             });
@@ -798,12 +834,10 @@ where
             with_owner_platform(|owner| owner.proxy().wake());
             Ok(None)
         }
-        WindowOpen::Pending(_) => {
-            anyhow::bail!(
-                "open_window with content does not yet support deferred window creation \
-                 (`Pending` arm); construct on the owner thread where windows resolve Ready"
-            );
-        }
+        WindowOpen::Pending(_) => Err(AppWindowError::UnsupportedPolicy {
+            reason: "open_window with content does not yet support deferred window creation \
+                     (the `Pending` arm); call on the owner thread, where windows resolve Ready",
+        }),
     }
 }
 
@@ -820,9 +854,9 @@ where
 fn spawn_pending_secondary_window_completion(
     config: SecondaryWindowInstallConfig,
     pending: flui_platform::PendingWindow,
-) -> anyhow::Result<()> {
+) -> Result<(), AppWindowError> {
     let proxy = with_owner_platform(flui_platform::OwnerPlatform::proxy)
-        .ok_or_else(|| anyhow::anyhow!("no platform owner"))?;
+        .ok_or(AppWindowError::NoOwnerLoop)?;
     let waker = std::task::Waker::from(Arc::new(PendingOpenWake {
         proxy: proxy.clone(),
         request: Arc::clone(&config.reservation.0),
@@ -845,7 +879,9 @@ fn spawn_pending_secondary_window_completion(
                 .map(|position| queue.remove(position))
         });
         drop(rejected);
-        return Err(error.into());
+        return Err(AppWindowError::Native {
+            source: Arc::new(error),
+        });
     }
     Ok(())
 }
@@ -865,10 +901,13 @@ fn spawn_pending_secondary_window_completion(
 fn finish_open_secondary_window(
     config: SecondaryWindowInstallConfig,
     window: Arc<dyn flui_platform::traits::PlatformWindow>,
-) -> anyhow::Result<(
-    RealmDispatcher,
-    Arc<dyn flui_platform::traits::PlatformWindow>,
-)> {
+) -> Result<
+    (
+        RealmDispatcher,
+        Arc<dyn flui_platform::traits::PlatformWindow>,
+    ),
+    AppWindowError,
+> {
     struct Uninstalled(Option<Arc<dyn flui_platform::PlatformWindow>>);
     impl Drop for Uninstalled {
         fn drop(&mut self) {
@@ -883,7 +922,7 @@ fn finish_open_secondary_window(
     let mut uninstalled = Uninstalled(Some(Arc::clone(&window)));
     use flui_platform::traits::{DispatchEventResult, PlatformInput};
     if !secondary_install_admitted(&config.loop_identity) || !config.reservation.0.begin_install() {
-        anyhow::bail!("secondary window completion belongs to a stopped or replaced loop");
+        return Err(AppWindowError::AdmissionClosed);
     }
 
     let SecondaryWindowInstallConfig {
@@ -913,15 +952,11 @@ fn finish_open_secondary_window(
                         },
                     })
                 })
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "WindowPolicy::SharedRealm requires an already-hosted realm to share \
-                         with; none is installed on this thread"
-                    )
+                .ok_or(AppWindowError::UnsupportedPolicy {
+                    reason: "WindowPolicy::SharedRealm requires an already-hosted realm to share \
+                             with; none is installed on this thread",
                 })?;
-            install_presentation_alongside(shared_with, &window).map_err(|error| {
-                anyhow::Error::from(error).context("installing the secondary presentation failed")
-            })?
+            install_presentation_alongside(shared_with, &window).map_err(mount_error)?
         }
         WindowPolicy::SeparateRealms => {
             let scale_factor = window.scale_factor() as f32;
@@ -932,17 +967,13 @@ fn finish_open_secondary_window(
                 scale_factor,
                 runtime_needs_redraw_handle(),
             )
-            .map_err(|error| {
-                anyhow::anyhow!(error).context("secondary UiRealm construction failed")
-            })?;
+            .map_err(mount_error)?;
             ui_realm.set_frame_failure_detail(frame_failure_detail);
             // No frame-failure handler is installed here. Under
             // `open_secondary_window`'s current contract this realm has no
             // root widget or renderer, so secondary handler ownership is
             // blocked on the documented secondary-window rendering contract.
-            install_realm_alongside(ui_realm, &window).map_err(|error| {
-                anyhow::anyhow!(error).context("installing the secondary realm failed")
-            })?
+            install_realm_alongside(ui_realm, &window).map_err(mount_error)?
         }
     };
 

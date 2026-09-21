@@ -13,6 +13,30 @@ file records the repo-consumer-visible summary.
 
 ### Added
 
+- **Typed window errors on the facade** (`flui-app`, `flui`): `open_window` and
+  `open_secondary_window` return `Result<(), AppWindowError>` instead of
+  `anyhow::Result<()>`, so a caller can match on what failed. `AppWindowError`
+  gains `AdmissionClosed` (the application is quitting or the loop is gone),
+  `NoOwnerLoop` (called off the owner thread) and `UnsupportedPolicy { reason }`
+  (`SharedRealm` where no realm is hosted, or with mounted content). The
+  facade now re-exports `AppWindowError`, `AppRunError`, `AppControlError`,
+  `Application`, `AppHandle`, `StartupWindow` and `run_app_with_config` at
+  `flui::` (and `AppWindowError`/`run_app_with_config` in `flui::prelude`),
+  so a sole-`flui` consumer can reach the resident-application builder and
+  name every error the entry points produce without a second dependency.
+  **Breaking:** code that relied on `anyhow::Error` from those two functions
+  must switch to `AppWindowError` (or `.map_err(anyhow::Error::from)`).
+- **`StateCell<T>` / `StateHandle<T>`** (`flui-view`, in `flui::prelude`):
+  local state for a `StatefulView` that schedules its own rebuild. Replace the
+  `Rc<Cell<T>>` field plus a hand-threaded `RebuildHandle` with one field,
+  `bind(ctx)` it once in `init_state`, and write `count.update(|n| n + 1)` in a
+  callback. The generated counter template and the multi-window and
+  vertical-slice examples use it. Additive; `RebuildHandle` stays for widgets
+  that choose their own `RebuildReason`.
+- `AppConfig::with_*` and `Application`'s builder methods are `#[must_use]`:
+  dropping the returned builder (`AppConfig::new().with_title("x");`) is now
+  a warning instead of a silent no-op.
+
 - **No blank window at launch on macOS** (`flui-platform`, `flui-app`): a window
   opened `visible: true` is ordered front fully transparent and made opaque only
   once the first frame has been presented into it (new
