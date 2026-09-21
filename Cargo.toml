@@ -435,17 +435,20 @@ name = "flui"
 # archived the whole checkout root — docs/, scripts/, CI, editor and
 # research directories, 666 files — none of which a consumer compiles.
 # Nested packages under examples/ are excluded by Cargo on their own.
+# Patterns are gitignore-style, so each is anchored with a leading `/`: an
+# unanchored `README.md` would also match every README under the ignored
+# `.flutter/` reference mirror, which `include` otherwise overrides.
 include = [
-    "Cargo.toml",
-    "README.md",
-    "CHANGELOG.md",
-    "LICENSE",
-    "LICENSE-APACHE",
-    "NOTICE",
-    "llms.txt",
-    "src/**",
-    "examples/**",
-    "tests/**",
+    "/Cargo.toml",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/LICENSE-APACHE",
+    "/NOTICE",
+    "/llms.txt",
+    "/src/**",
+    "/examples/**",
+    "/tests/**",
 ]
 version.workspace = true
 edition.workspace = true

@@ -19,7 +19,7 @@ file records the repo-consumer-visible summary.
   what a consumer compiles.** The workspace is a prerelease; every internal
   `path` dependency now requires `=0.3.0-beta.1`. The `flui` facade package
   declares an `include` list (its archive went from 666 files — docs, scripts,
-  CI, editor and research directories — to 79), and every published crate
+  CI, editor and research directories — to 67), and every published crate
   ships `LICENSE`, `LICENSE-APACHE` and `NOTICE`, which the archive check now
   requires. `just release-consumer-check` packages the release set, vendors
   every third-party dependency, installs the archives as a Cargo directory

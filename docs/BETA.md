@@ -255,9 +255,10 @@ Cargo normalization using tiny temporary packages; it does not package FLUI.
 The release closure includes optional and target-specific normal/build edges,
 and dev-dependencies that Cargo retains because their resolved declaration has a
 version. Versionless dev-dependencies are omitted. Workspace inheritance and
-renamed package identities are resolved before checking. When the workspace
-becomes a prerelease, internal requirements must pin the exact cohort version;
-this change does not bump the current version.
+renamed package identities are resolved before checking. The workspace is now
+the prerelease `0.3.0-beta.1`, and every internal requirement pins that exact
+cohort version (`=0.3.0-beta.1`), so a published facade can never resolve a
+sibling from a later cohort.
 
 Twelve backward or self dev declarations are explicitly checkout-only in
 `docs/workspace-layers.toml`: six self feature activations, foundation → macros,
@@ -289,9 +290,17 @@ requires explicit `--preview-dirty`; the default requires a clean tree. The
 (`/tmp/flui-cycle-real-package-preview-network.log`). The initial restricted run
 failed DNS resolution; the permitted network retry completed successfully.
 
-This archive preview neither builds nor uploads packages. Archive inclusion rules,
-first-party license-file packaging, and clean consumer verification remain separate
-release work; successful archive creation does not establish distribution readiness.
+This archive preview neither builds nor uploads packages. Archive inclusion
+rules and first-party license-file packaging are now in place: the facade
+declares an anchored `include` list (67 files in its archive instead of 666),
+and every published crate carries `LICENSE`, `LICENSE-APACHE` and `NOTICE`,
+which `verify_archives` requires. Clean consumer verification is
+`just release-consumer-check` (`scripts/release_consumer_check.py`): it
+packages the release set, vendors every third-party dependency with
+`cargo vendor`, installs the archives as a Cargo directory source, generates a
+counter project with `flui create` *without* `--local`, and builds and tests
+it offline; the consumer's lockfile must resolve every `flui-*` package to an
+archive digest. Its first run is recorded below once it passes.
 
 Baseline verification before the release-policy and surface-color changes:
 `just ci` completed on macOS with 9,439 workspace tests and 52 GPU tests passing,
