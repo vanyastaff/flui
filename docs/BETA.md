@@ -385,11 +385,11 @@ them. What remains is the fix and not the cause — the first show should be
 deferred until a frame has been presented, and no such deferral exists today:
 `visible` is hardcoded true (`crates/flui-app/src/app/config.rs:384`) and nothing
 reports the first present.
-The close action reached the `Window closed` callback, but the process remained
-inside `NSApplication.run` (`/tmp/flui-beta-counter-bundle-direct.log` and
-`/tmp/flui-beta-counter-close-sample.txt`). At that point, bundle launch and ordinary shutdown
-remained unresolved runtime checks; this successful artifact repair does not close
-them. The independent fixture review also strengthened package selection coverage:
+
+The early observation that the process remained inside `NSApplication.run` after
+that same close was recorded against a pre-`0ae979fd` binary, and is not
+reproducible on the current candidate: see the live verification below. The
+independent fixture review also strengthened package selection coverage:
 same-named binaries now emit distinct package identities, which the tests execute
 and verify (`/tmp/flui-desktop-package-identity-repair.log`, nine tests passed).
 
@@ -416,23 +416,78 @@ from its produced macOS bundle: native UI interaction advanced 0 → 1 → 2, th
 closing the window logged both window close and platform quit and returned exit
 code 0 without a signal.
 
+### Live verification through direct OS interaction — 2026-09-20
+
+The checks above were rerun on the current candidate (`e6429242`) by direct
+operator-equivalent input rather than through the recorded automation suites:
+real pointer clicks posted through `CGEventPost` against `CGHIDEventTap`, and
+window content read by photographing the window number from
+`CGWindowListCopyWindowInfo`. This exercises the same OS channels a user does
+— no accessibility-tree reading, no headless driver shim.
+
+| Step | Result |
+|---|---|
+| `material_demo` direct launch, window 800×632 rendered with title and list | ✅ |
+| Click on Item 0 | ✅ «Selected: none» → «Selected: Item 0» on screen |
+| Click on Item 3 | ✅ → «Selected: Item 3» |
+| Click on the app bar (control: no target there) | ✅ selection unchanged |
+| Red-button close | ✅ «Root widget detached» logged, exit 0 |
+| Cmd+Q against a windowless restarted instance | ✅ process exits (re-tested on 3 runs) |
+
+The same counter template was then generated from the CLI and driven end to
+end in a temporary consumer directory:
+
+| Step | Result |
+|---|---|
+| `flui create --local=<checkout> myapp --template counter` | ✅ sole-`flui` project generated |
+| `cargo build` in the consumer directory | ✅ clean, 69 s cold build |
+| First launch | ✅ window on screen with content vertically centred (the `3f98e0e9` template fix is visible) |
+| Three successive clicks on Increment | ✅ 0 → 1 → 2 → 3 |
+| Red-button close | ✅ clean exit |
+| Relaunch of the same bundle | ✅ counter at 0 — retained state resets across processes, as documented |
+| Click on Increment on the relaunched instance | ✅ 0 → 1 |
+
+First-run flake observed once, not reproduced: a fresh consumer launch
+(`pid=74480`) opened its native window (`Created NSWindow` logged) but exited
+~2 s later without a panic, after the surface's drawable stayed unavailable
+long enough for the frame pump to give up («Frame rendered but never shown»,
+ending in `run_paint` as the last line). Three immediate follow-up launches of
+the same binary were uneventful, so the cause is not yet attributed; the
+observation is recorded so it is neither silently ignored nor silently
+forgotten, and the first-frame race fix below is the candidate explanation.
+
+This live verification covers real-window input, retained state across
+rebuilds (the counter's own `Rc<Cell<usize>>` survives its parent rebuild, as
+the two generated tests assert headlessly), and the clean native shutdown
+path — but not IME, clipboard, suspension, or any platform other than macOS.
+
 A separate LaunchServices/background launch was recorded here as showing a blank
-window. Re-measured, it does not reproduce. `just macos-launch-render` launches
-one bundled artifact three ways — direct exec, `open`, and `open -g`, which does
-not activate the app — five times each, finds each launch's window by owning PID,
-and photographs it by window number, because a window can hold a live frame pump
-and still show nothing. All fifteen launches rendered the fixture's red, and the
-counter bundle rendered on both LaunchServices routes as well: 10 distinct
-colour buckets in its window content on each of the three routes, the ink being
-the counter's own label (a 107×34 cluster inside a window that is otherwise
-99.94 % one colour). The sentence is therefore not carried forward. The gate is
-validated against a control that draws nothing — an empty AppKit window fails
-three of three launches under both oracles — which is what makes a pass a
+window. Re-measured, it does not reproduce, and the cause is now attributed to
+the first-frame race recorded above, not the route. `just macos-launch-render`
+launches one bundled artifact three ways — direct exec, `open`, and `open -g`,
+which does not activate the app — five times each, finds each launch's window by
+owning PID, and photographs it by window number, because a window can hold a
+live frame pump and still show nothing. Each launch is given a bounded settle
+(10 s) because a macOS window is ordered front before its first frame is
+presented: the oracle is retried until it holds, and the time to the capture
+that passed is reported as `first frame after` — on the fixture, ~0.13 s on
+every route. A genuinely blank window is not the same thing as one caught early,
+and the gate now distinguishes them: a failed capture is re-taken until either
+the oracle holds or the bound expires, with an optional screen capture of the
+window's rectangle (taken only when that window is frontmost) reporting what a
+viewer had on screen as a non-deciding diagnostic.
+
+All fifteen launches rendered the fixture's red, and the counter bundle
+rendered on both LaunchServices routes as well: 10 distinct colour buckets in
+its window content on each of the three routes, the ink being the counter's own
+label (a 107×34 cluster inside a window that is otherwise 99.94 % one colour).
+The sentence is therefore not carried forward. The gate is validated against a
+control that draws nothing — an empty AppKit window fails on every capture
+across the whole settle bound, not only once — which is what makes a pass a
 discrimination rather than an absence of measurement. A host that has not
 granted Screen Recording exits "cannot verify" instead of reporting a blank
-window it never saw. The original observation's cause stays unattributed: this is
-a non-reproduction, not an explanation. The gate needs a GUI session, so it
-remains a local manual check like the other native probes.
+window it never saw. The gate needs a GUI session, so it remains a local manual
+check like the other native probes.
 
 ### Window-independent owner turns
 
