@@ -709,6 +709,12 @@ web-server:
 web-demo-build:
     cd examples/web_demo && wasm-pack build --target web --out-dir pkg
 
+[group("test")]
+[doc("Drive `flui run`'s worker hot-reload loop on a freshly generated --hot-reload project through the CLI's --json event stream: a label edit reloads in place (a witness the edit adds bumps and prints the host-owned counter), a syntax error is refused with the host alive, the fix reloads with the counter preserved, idle stays idle, Ctrl-C exits. Needs a macOS GUI session; the host window is brought to front before each edit because a hidden window defers the rebuild (scripts/check-hot-reload-loop.py)")]
+macos-hot-reload-loop work="target/hot-reload-loop/work":
+    cargo build -p flui-cli --locked
+    python3 -B scripts/check-hot-reload-loop.py {{work}}
+
 [group("quality")]
 [doc("Refuse a WGSL derivative (dpdx/dpdy/fwidth, or any function that takes one) inside a branch or after a conditional return: browsers' uniformity analysis rejects the module while native naga accepts it, and no host-side oracle catches the class (scripts/check-wgsl-uniformity.py)")]
 wgsl-uniformity-check:

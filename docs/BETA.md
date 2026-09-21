@@ -597,6 +597,45 @@ live Windows runtime behavior, and native OS-suspend transport remain
 separate work; these desktop results do not imply beta release readiness by
 themselves.
 
+## Developer iteration: the hot-reload loop, driven
+
+`just macos-hot-reload-loop` (`scripts/check-hot-reload-loop.py`) generates a
+`--hot-reload` project with the CLI, runs `flui --json run` on it, and drives
+the loop through the CLI's own event stream rather than its narration. The
+first edit changes the worker's label and adds a witness to its build
+function — a line that bumps the host-owned counter and prints it — so the
+witness's appearance proves the reload ran code that did not exist before it,
+inside the host started before it, and its value is the state the host
+carried across.
+
+Run on 2026-09-21 (`/private/tmp/.../hrloop/run.jsonl`; host PID 752 for the
+whole run): initial build 408 s cold; edit #1 → `run.build.done ok=true` in
+12.0 s → `run.reload kind=hot ok=true` → `PROBE count=1`; edit #2 (an
+unterminated string) → `run.build.done ok=false` in 3.4 s → `run.reload
+ok=false`, host alive, no restart; edit #3 (the fix) → build 9.1 s → reload →
+`PROBE count=2`, strictly above the count after edit #1, which is the
+state-preservation proof — a restart, or a worker owning its own state,
+would have started over; 20 s idle produced no build or reload event; SIGINT
+exited `flui run` with 130 (an `error` event naming the interrupt) and the
+host was gone within the bound. No synthetic input is posted: a probe that
+drives the pointer would hijack an operator's mouse, and the witness needs
+none.
+
+Two things the run taught, both recorded rather than papered over. A reload
+applied while the host's window is occluded is reassembled but not rebuilt
+until the window is visible again — frames are disabled while hidden — so
+the probe brings the host to front before each edit and reports an occluded
+window as CANNOT_VERIFY, not as a missing reload; the first two attempts
+failed exactly that way while an operator's windows covered the host. And
+the host's stderr reaches `flui --json run`'s stdout unwrapped (its stdout
+is wrapped as `run.app.log`), which breaks the one-object-per-line contract;
+the probe tolerates raw lines and the defect belongs to the CLI's output
+policy work in progress.
+
+This covers the worker (`WorkerHost`) reload tier on macOS. Hot restart on a
+types change, the scene-plugin tier, and the iOS worker path are not driven by
+this probe.
+
 ## Web: the counter in a browser
 
 `examples/web_counter` is the generated counter template behind a
