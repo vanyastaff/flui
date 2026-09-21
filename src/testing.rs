@@ -9,8 +9,12 @@ pub use flui_testing::{BuildCapabilities, HeadlessBinding, MountOptions, MountOw
 pub use flui_testing::{a11y, replay};
 pub use flui_widgets::testing as widgets;
 
-/// Render-object tests that drive layout and queries without a widget tree.
+/// Render-object tests that drive layout and queries without a widget tree,
+/// plus the render-tree diagnostics dump a mounted application can be
+/// inspected with ([`render_diagnostics`](rendering::render_diagnostics) over
+/// [`HeadlessBinding::pipeline_owner`]).
 pub mod rendering {
+    pub use flui_rendering::testing::inspect::render_diagnostics;
     pub use flui_rendering::testing::{
         BoxQueryRun, FrameRun, LayoutRun, PaintRun, Probe, RenderTester, TreeNode, box_node,
         sliver_node,

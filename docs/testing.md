@@ -467,6 +467,66 @@ which is also why the primitive lives in
 `flui-testing` rather than at the bottom of the DAG where every crate could
 reach it without an edge.
 
+## Agent workflow
+
+`tests/agent_workflow.rs` is the acceptance test for the "Agent workflow" row
+of `docs/BETA.md`: evidence that an agent (or a human, working the same way)
+can discover the public API, build a UI, inspect it two different ways,
+drive an interaction through it, and assert the result — using only
+`flui::…`, the same surface a consumer of the published crate has. It is
+`flui`'s own `tests/`, not `flui-widgets`' or `flui-testing`'s, for exactly
+that reason: those crates' own tests can see implementation details this one
+must not use.
+
+The tree under test is the CLI `counter` template's own shape (`Center` →
+`Column` → prompt `Text` / count `Text` / `ElevatedButton`, a `StateCell`
+bound in `init_state`) — see `crates/flui-cli/src/templates/counter.rs` for
+the generator and `crates/flui-view/src/state_cell.rs` for the state
+primitive. Five steps, each backed by a documented, facade-reachable API:
+
+| Step | What it does | API |
+|------|--------------|-----|
+| 1. Mount | Bootstrap the tree headlessly | `flui::testing::HeadlessBinding::mount_root` |
+| 2. Inspect structure | Dump the render tree, check a known node is there | `flui::testing::rendering::render_diagnostics` over `HeadlessBinding::pipeline_owner().with(...)` + `flui::foundation::DiagnosticsNode::to_string_deep` |
+| 3. Inspect semantics | Find the button by its accessible label | `flui::testing::HeadlessBinding::{enable_semantics, a11y_tree}` + `flui::testing::a11y::A11yTree::find_by_label` |
+| 4. Drive | Tap the label's own bounds | `flui::testing::HeadlessBinding::replay` with `flui::testing::replay::PointerScript::tap` |
+| 5. Assert | Confirm the rendered count advanced | The diagnostics dump again, checked for the `RenderParagraph` `text` property |
+
+Step 4 is deliberately **not** `flui_widgets::testing::lay_out`'s
+`dispatch_pointer_down`/`find_text` convenience: those are widget-internal
+shortcuts this package's own tests use freely (see
+`tests/material_demo.rs`), but an outside agent driving the framework through
+its documented surface has only `HeadlessBinding::replay` and a hit-test
+target it found itself — semantics bounds, here — to tap with. Steps 2 and 5
+reuse the same diagnostics dump for a structural check and a content check
+respectively; that reuse is deliberate, not laziness — plain `Text` publishes
+no accessibility semantics on its own (see the next paragraph), so the
+diagnostics tree's `text` property is the only *public* way to read back
+what a `RenderParagraph` actually rendered, short of a screenshot.
+
+**A gap the test documents rather than works around silently:** the counter
+template's `ElevatedButton` (`flui-material`'s `ButtonStyleButtonCore`
+composition) attaches no `SemanticsConfiguration` of its own, and neither
+does a bare `Text`. Step 3 would find nothing without an explicit
+`flui::prelude::Semantics::new().label("Increment").button(true)` wrapper
+around the button — the same pattern `crates/flui-widgets/tests/semantics.rs`
+establishes. The test adds that wrapper itself and says so in its module
+doc; the generated template does not carry it, which means the app `flui
+create` scaffolds is not screen-reader accessible out of the box. That is a
+`flui-cli` template fix, tracked separately, not something this test's
+scope covers.
+
+The second test, `missing_label_query_reports_the_search_and_the_available_labels`,
+is the acceptance criterion's "actionable command failures" half: it queries
+a label that is not in the tree and asserts the resulting
+`flui::testing::a11y::A11yQueryError::NotFound` names the search (`"Decrement"`)
+and lists what *was* reachable (`"Increment"`) — the error `A11yTree::find_by_label`
+already produces, needing no new helper.
+
+Writing the test also found that the facade's `flui::testing::rendering`
+module did not re-export `render_diagnostics` (`flui-rendering`'s render-tree
+dump); it does now, and step 2 uses it.
+
 ## Demo composition snapshots
 
 ```bash

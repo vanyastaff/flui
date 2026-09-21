@@ -96,6 +96,19 @@ file records the repo-consumer-visible summary.
 
 ### Added
 
+- **A form and an async section in the Material demo**
+  (`examples/material_demo`): a validated `TextField` with an inline error
+  and a Submit that enables only when valid, plus a scheduler-driven
+  simulated fetch with loading, error → Retry, and cancellation on route
+  pop — with facade-only headless tests for each, including that a fetch
+  cancelled by navigating away never delivers.
+- **`tests/agent_workflow.rs`**: the "agent workflow" acceptance test —
+  mount the counter tree, dump the render diagnostics, find the button by
+  its accessible label, tap its bounds through pointer replay, and assert
+  the rendered count advanced, using only `flui::…`; a second test shows
+  the actionable failure a missing label produces. `docs/testing.md` walks
+  the same five steps. `flui::testing::rendering` now re-exports
+  `render_diagnostics`.
 - **Typed window errors on the facade** (`flui-app`, `flui`): `open_window` and
   `open_secondary_window` return `Result<(), AppWindowError>` instead of
   `anyhow::Result<()>`, so a caller can match on what failed. `AppWindowError`

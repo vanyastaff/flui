@@ -665,6 +665,16 @@ name = "demo_layer_snapshots"
 path = "tests/demo_layer_snapshots.rs"
 required-features = ["material", "cupertino"]
 
+# The "Agent workflow" acceptance test (docs/BETA.md): mounts the counter
+# template's tree through `flui::testing`, so it needs both the `testing`
+# feature (for `flui::testing` to exist at all) and `material` (the tree
+# includes an `ElevatedButton`). Without this entry a `--no-default-features
+# --features testing` build would still try to compile it and fail.
+[[test]]
+name = "agent_workflow"
+path = "tests/agent_workflow.rs"
+required-features = ["testing", "material"]
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles
 # ═══════════════════════════════════════════════════════════════════════════════

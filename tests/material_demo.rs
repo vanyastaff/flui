@@ -44,7 +44,9 @@ use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_types::geometry::px;
 use flui_types::{Offset, Size};
-use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, VsyncScope};
+use flui_widgets::{
+    FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, TextEditingController, VsyncScope,
+};
 
 /// The mounted root's logical width — wide enough for a card row, narrow
 /// enough that the FAB's end-float offset from the trailing edge is easy to
@@ -70,6 +72,12 @@ struct MountedDemo {
     /// that field's doc for why this, and not a display assertion, is what
     /// proves state survival across a route push/pop or a dialog round trip.
     home_create_count: Rc<Cell<u32>>,
+    /// Clone of the mounted root's Form-route `Name` controller — captured
+    /// before mounting so the test can type into it without first pushing
+    /// the Form route (see `tree::MaterialDemoRoot::name_controller`'s doc).
+    name_controller: TextEditingController,
+    /// Clone of the mounted root's Form-route simulated-fetch control.
+    fetch_control: tree::SimulatedFetchControl,
 }
 
 impl MountedDemo {
@@ -88,6 +96,8 @@ impl MountedDemo {
 
         let root_view = tree::demo_root();
         let home_create_count = Rc::clone(&root_view.home_create_count);
+        let name_controller = root_view.name_controller.clone();
+        let fetch_control = root_view.fetch_control.clone();
         let wrapped_root = MediaQuery::new(
             MediaQueryData::default(),
             Theme::new(ThemeData::light(), root_view),
@@ -114,6 +124,8 @@ impl MountedDemo {
             binding,
             pipeline_owner,
             home_create_count,
+            name_controller,
+            fetch_control,
         }
     }
 
@@ -212,6 +224,35 @@ impl MountedDemo {
                     assert!(
                         found.is_none(),
                         "multiple RenderParagraph nodes contain {text:?}"
+                    );
+                    found = Some(id);
+                }
+            }
+            found
+        })
+    }
+
+    /// The unique `RenderParagraph` node whose plain-text content STARTS
+    /// WITH `prefix` — for [`find_text`](Self::find_text)'s exact-match
+    /// callers, this is the one to reach for when the suffix varies (the
+    /// Form route's submitted name).
+    fn find_text_with_prefix(&self, prefix: &str) -> Option<RenderId> {
+        self.pipeline_owner.with(|owner| {
+            let mut found = None;
+            for (id, _node) in owner.render_tree().iter() {
+                let Some(diagnostics) = owner.debug_node_diagnostics(id) else {
+                    continue;
+                };
+                if diagnostics.name() != Some("RenderParagraph") {
+                    continue;
+                }
+                if diagnostics
+                    .get_property("text")
+                    .is_some_and(|text| text.starts_with(prefix))
+                {
+                    assert!(
+                        found.is_none(),
+                        "multiple RenderParagraph nodes start with {prefix:?}"
                     );
                     found = Some(id);
                 }
@@ -353,6 +394,31 @@ fn back_button_glyph_text() -> String {
     back_arrow_icon_data()
         .code_point_string()
         .expect("the back arrow's codepoint must be a valid Unicode scalar value")
+}
+
+/// The app bar action's glyph text for [`tree::form_icon_data`] — same
+/// reasoning as [`settings_glyph_text`].
+fn form_glyph_text() -> String {
+    tree::form_icon_data()
+        .code_point_string()
+        .expect("the form glyph's codepoint must be a valid Unicode scalar value")
+}
+
+/// Pushes [`tree::form_route`] from the home route's app bar action and
+/// returns once the Form route's title has rendered — the shared setup
+/// every Form-route test below starts from. Mirrors [`push_tabs_route`].
+fn push_form_route(demo: &mut MountedDemo) {
+    let form_glyph = form_glyph_text();
+    let form_button = demo
+        .find_text(&form_glyph)
+        .expect("the app bar's form action must render");
+    demo.tap_node(form_button);
+    demo.pump(Duration::ZERO);
+
+    assert!(
+        demo.find_text(tree::FORM_ROUTE_TITLE).is_some(),
+        "the form route's app bar title must render once pushed"
+    );
 }
 
 // ============================================================================
@@ -953,6 +1019,213 @@ fn the_app_bar_height_is_toolbar_plus_the_mounted_tab_bars_height() {
         "expected at least one RenderConstrainedBox sized to toolbar_height + TabBar height \
          ({EXPECTED_HEIGHT}px) once the tabs route is mounted"
     );
+}
+
+// ============================================================================
+// (9) Form route — validated `TextField`, and async load/error/retry/cancel
+// ============================================================================
+
+/// (a) An invalid `Name` shows [`tree::NAME_VALIDATION_ERROR`] and disables
+/// Submit (a tap while invalid is a no-op); once the name is replaced with a
+/// valid one, the error clears and Submit becomes live.
+///
+/// Red-check: hard-coding `is_valid_name` to always return `true` in
+/// `tree.rs` makes the first `find_text(NAME_VALIDATION_ERROR)` assertion
+/// fail (the error never shows for "ab"); hard-coding it to always return
+/// `false` makes the final `find_text_with_prefix` assertion fail instead
+/// (Submit never fires for "Alice"). Both edges of this test are load-bearing.
+#[test]
+fn invalid_name_shows_the_validation_error_and_disables_submit_until_valid() {
+    let mut demo = MountedDemo::mount();
+    push_form_route(&mut demo);
+
+    // Too short (2 letters): invalid.
+    demo.name_controller.insert_str("ab");
+    demo.pump(Duration::ZERO);
+    assert!(
+        demo.find_text(tree::NAME_VALIDATION_ERROR).is_some(),
+        "an under-length name must show the validation error"
+    );
+
+    let submit = demo
+        .find_text(tree::SUBMIT_LABEL)
+        .expect("the Submit button must render");
+    demo.tap_node(submit);
+    demo.pump(Duration::ZERO);
+    assert!(
+        demo.find_text_with_prefix(tree::FORM_SUBMITTED_PREFIX)
+            .is_none(),
+        "Submit must be disabled (a no-op) while the name is invalid"
+    );
+
+    // Replace the whole buffer with a valid name.
+    let end = demo.name_controller.text().len();
+    demo.name_controller.set_selection(0, end);
+    demo.name_controller.insert_str("Alice");
+    demo.pump(Duration::ZERO);
+    assert!(
+        demo.find_text(tree::NAME_VALIDATION_ERROR).is_none(),
+        "a valid name must clear the validation error"
+    );
+
+    let submit = demo
+        .find_text(tree::SUBMIT_LABEL)
+        .expect("the Submit button must still render");
+    demo.tap_node(submit);
+    demo.pump(Duration::ZERO);
+    assert!(
+        demo.find_text(&format!("{}Alice", tree::FORM_SUBMITTED_PREFIX))
+            .is_some(),
+        "Submit must be enabled once the name is valid, and running it must show the submitted \
+         name"
+    );
+}
+
+/// (b) `Load` → [`tree::LOADING_TEXT`] → [`tree::FETCH_SUCCESS_TEXT`].
+///
+/// Red-check: deleting `AsyncDriver::poll_ready`'s "never re-poll a task
+/// woken during this pump" guard (making a self-waking future resolve
+/// within a single frame) collapses the `Loading…` window this test asserts
+/// on to zero frames, failing the first assertion below.
+#[test]
+fn loading_the_async_section_shows_a_spinner_then_the_fetched_data() {
+    let mut demo = MountedDemo::mount();
+    push_form_route(&mut demo);
+    demo.fetch_control.set_should_fail(false);
+
+    let load = demo
+        .find_text(tree::LOAD_BUTTON_LABEL)
+        .expect("the Load button must render before any attempt");
+    demo.tap_node(load);
+    demo.pump(Duration::ZERO);
+
+    assert!(
+        demo.find_text(tree::LOADING_TEXT).is_some(),
+        "tapping Load must show the loading indicator while the fetch is in flight"
+    );
+    assert!(demo.find_text(tree::LOAD_BUTTON_LABEL).is_none());
+
+    // Two more frame pumps resolve `SimulatedFetch` (its eager subscribe
+    // poll, run inline by the tap's own pump above, already spent one).
+    demo.pump(Duration::ZERO);
+    demo.pump(Duration::ZERO);
+
+    assert!(demo.find_text(tree::LOADING_TEXT).is_none());
+    assert!(
+        demo.find_text(tree::FETCH_SUCCESS_TEXT).is_some(),
+        "the fetch must resolve to its success text"
+    );
+}
+
+/// (c) `Load` → [`tree::FETCH_ERROR_TEXT`] + Retry → [`tree::FETCH_SUCCESS_TEXT`].
+///
+/// Red-check: making `Retry`'s handler leave `attempt` unchanged (instead of
+/// incrementing it) leaves `FutureBuilder`'s key unchanged, so
+/// `did_update_view`'s unchanged-key early return skips resubscribing —
+/// the fetch never re-runs and the final success assertion fails.
+#[test]
+fn a_failed_fetch_shows_the_error_and_retry_recovers() {
+    let mut demo = MountedDemo::mount();
+    push_form_route(&mut demo);
+    demo.fetch_control.set_should_fail(true);
+
+    let load = demo
+        .find_text(tree::LOAD_BUTTON_LABEL)
+        .expect("the Load button must render");
+    demo.tap_node(load);
+    demo.pump(Duration::ZERO);
+    demo.pump(Duration::ZERO);
+    demo.pump(Duration::ZERO);
+
+    assert!(
+        demo.find_text(tree::FETCH_ERROR_TEXT).is_some(),
+        "a scripted-to-fail fetch must show its error message"
+    );
+    let retry = demo
+        .find_text(tree::RETRY_BUTTON_LABEL)
+        .expect("Retry must render once the fetch fails");
+
+    demo.fetch_control.set_should_fail(false);
+    demo.tap_node(retry);
+    demo.pump(Duration::ZERO);
+    assert!(
+        demo.find_text(tree::LOADING_TEXT).is_some(),
+        "Retry must re-issue the fetch, showing the loading indicator again"
+    );
+
+    demo.pump(Duration::ZERO);
+    demo.pump(Duration::ZERO);
+    assert!(
+        demo.find_text(tree::FETCH_SUCCESS_TEXT).is_some(),
+        "the retried fetch must succeed once scripted to"
+    );
+    assert!(demo.find_text(tree::FETCH_ERROR_TEXT).is_none());
+}
+
+/// (d) Navigating away while the fetch is in flight cancels it: nothing
+/// panics, the cancelled fetch never runs to completion (proven by
+/// [`tree::SimulatedFetchControl::delivered_count`] staying `0` across
+/// however many more frames it would have needed), and re-pushing the Form
+/// route starts from its initial (pre-`Load`) state, not a stale one.
+///
+/// Red-check: making `FormPage`'s `Load` button re-subscribe through, e.g.,
+/// a `Rc<RefCell<Option<TaskToken>>>` outside `FutureBuilder`'s own
+/// key/dispose machinery (rather than through `FutureBuilder` itself) would
+/// leak the task past the route's disposal — this test's
+/// `delivered_count() == 0` assertion is exactly what would catch that: the
+/// cancelled-in-isolation `SimulatedFetch` would otherwise complete on one
+/// of the trailing pumps below and increment it.
+#[test]
+fn navigating_away_mid_load_cancels_the_fetch_and_resets_on_return() {
+    let mut demo = MountedDemo::mount();
+    push_form_route(&mut demo);
+    demo.fetch_control.set_should_fail(false);
+
+    let load = demo
+        .find_text(tree::LOAD_BUTTON_LABEL)
+        .expect("the Load button must render");
+    demo.tap_node(load);
+    demo.pump(Duration::ZERO);
+    assert!(
+        demo.find_text(tree::LOADING_TEXT).is_some(),
+        "the fetch must still be in flight before navigating away"
+    );
+
+    let back_glyph = back_button_glyph_text();
+    let back_button = demo
+        .find_text(&back_glyph)
+        .expect("the Form route's implied BackButton must render");
+    demo.tap_node(back_button);
+    demo.pump(Duration::ZERO);
+
+    assert!(
+        demo.find_text(tree::FORM_ROUTE_TITLE).is_none(),
+        "popping the Form route must remove it"
+    );
+    assert!(
+        demo.find_text(tree::APP_TITLE).is_some(),
+        "popping must return to the home route"
+    );
+
+    // More frames than `SimulatedFetch` would ever need to resolve, had it
+    // not been dropped when the route was popped.
+    for _ in 0..5 {
+        demo.pump(Duration::ZERO);
+    }
+    assert_eq!(
+        demo.fetch_control.delivered_count(),
+        0,
+        "a cancelled fetch must never run to completion — its future must have been dropped \
+         when the route disposed, not merely had its result ignored"
+    );
+
+    push_form_route(&mut demo);
+    assert!(
+        demo.find_text(tree::LOAD_BUTTON_LABEL).is_some(),
+        "re-pushing the Form route must start from its initial (pre-Load) state"
+    );
+    assert!(demo.find_text(tree::LOADING_TEXT).is_none());
+    assert!(demo.find_text(tree::FETCH_SUCCESS_TEXT).is_none());
 }
 
 // ============================================================================
