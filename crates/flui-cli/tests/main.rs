@@ -12,14 +12,20 @@
 //! (flui-cli currently has none; see flui-view's error_view_recovery
 //! for the reference case.)
 
+#[path = "cli_build.rs"]
+mod cli_build;
 #[path = "cli_completions.rs"]
 mod cli_completions;
 #[path = "cli_create.rs"]
 mod cli_create;
+#[path = "cli_devices.rs"]
+mod cli_devices;
 #[path = "cli_doctor.rs"]
 mod cli_doctor;
 #[path = "cli_errors.rs"]
 mod cli_errors;
+#[path = "cli_maintenance.rs"]
+mod cli_maintenance;
 #[path = "cli_platform.rs"]
 mod cli_platform;
 #[path = "cli_run.rs"]

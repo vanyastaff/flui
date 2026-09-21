@@ -1,5 +1,6 @@
 use super::{DependencySource, ProjectPlan};
 
+/// The smallest runnable FLUI app: one `main` that shows one `Text`.
 pub fn generate(
     name: &str,
     org: &str,
@@ -10,7 +11,6 @@ pub fn generate(
         .file("Cargo.toml", cargo_toml(name, source))
         .file("src/main.rs", MAIN)
         .file("flui.toml", flui_toml(name, org, platforms))
-        .file("README.md", readme(name))
         .dir("assets")
 }
 
@@ -60,7 +60,7 @@ struct HelloView;
 
 impl StatelessView for HelloView {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        Center::new().child(Text::new("Hello, FLUI!"))
+        Text::new("Hello, FLUI!")
     }
 }
 "#;
@@ -84,33 +84,6 @@ target_platforms = {platform_list}
 
 [assets]
 directories = ["assets"]
-
-# [[fonts]]
-# family = "Roboto"
-# fonts = [
-#     {{ asset = "fonts/Roboto-Regular.ttf", weight = 400, style = "normal" }},
-# ]
 "#
-    )
-}
-
-fn readme(name: &str) -> String {
-    format!(
-        r"# {name}
-
-A FLUI application.
-
-## Getting Started
-
-```bash
-flui run
-```
-
-## Build
-
-```bash
-flui build desktop --release
-```
-"
     )
 }

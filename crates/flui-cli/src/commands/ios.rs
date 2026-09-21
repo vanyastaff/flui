@@ -273,12 +273,12 @@ pub(super) fn run(udid: &str, release: bool, profile: Option<&str>) -> CliResult
         simctl,
         plist,
     )?;
-    cliclack::log::success(format!(
+    crate::ui::success(format!(
         "Launched {identifier} on {}: {}",
         simulator.udid,
         String::from_utf8_lossy(&output).trim()
     ))?;
-    cliclack::outro(
+    crate::ui::outro(
         "iOS application launched; simulator runs are one-shot (no desktop hot-reload watcher)",
     )?;
     Ok(())

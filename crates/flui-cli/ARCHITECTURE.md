@@ -107,3 +107,54 @@ the validated bundle's identity and selected UDID, without shutting down devices
 Config SemVer maps to numeric Apple keys while the full value remains in FLUIVersion.
 The unavailable-device integration test guards against accidental host execution;
 SDK-required flui-build tests verify actual application bundle delivery.
+
+### One output policy, two audiences
+
+Every command narrates through `src/ui.rs`, never through `cliclack` directly.
+Human text goes to **stderr**; stdout is reserved for payloads a user would
+pipe (completion scripts) and, under `--json`, for one NDJSON object per line
+with an `event` discriminator (`doctor.check`, `device`, `run.app.log`, …).
+`--quiet` drops narration but keeps warnings, errors and tool output. The policy
+is a process-global `OnceLock` because a CLI has exactly one terminal.
+
+This follows Flutter's `--machine` and Dioxus's `--json-output`, with two
+deliberate differences: every listing and the dev loop
+emit JSON, not only a daemon, and JSON mode never mixes human text into stdout.
+The alternative — a `Context` parameter threaded through every helper — was
+rejected as pure noise for commands that are free functions.
+
+### Interactivity is decided once, up front
+
+`ui::is_interactive()` requires a terminal on stdin and stderr and none of
+`CI`, `FLUI_NON_INTERACTIVE`, `--non-interactive`, `--json`. Anything that
+would prompt (the `create` wizard) or read hot-keys (`run`) consults it and
+fails with `CliError::NonInteractive` (exit 7) and a hint instead of blocking.
+A CI job that forgot the project name gets a one-line fix, not a hung runner.
+
+### Exit codes are a contract
+
+`CliError::exit_code` maps every variant to a documented table (0 success,
+2 usage, 3 environment, 4 build/test failed, 5 device not found, 6 not a FLUI
+project, 7 needs a terminal, 130 interrupted). Scripts branch on the code;
+the text is for people. Flutter documents only 64/1; `dx` and `tauri` document
+none.
+
+### External tools run with a deadline
+
+`src/proc.rs` bounds every environment probe. `flui devices` once hung forever
+on macOS because `Safari -v` launches Safari rather than printing a version;
+browser versions are now read from `Info.plist` and every probe is killed at
+its deadline and reported as a timeout. A `Problem` row, not an error, is the
+result of a missing or hung tool: discovery never fails the command.
+
+### The dev loop multiplexes four sources
+
+`flui run` drives one `dev_loop` over a `ReloadStrategy` (process restart, or
+worker host for the Flutter-parity layout). The loop polls, in priority order:
+the Ctrl-C flag (set by a `tokio::signal` listener on its own thread), hot-keys
+from a `console::Term::read_key_raw` thread (`r`/`R`/`c`/`h`/`q`), the child's
+exit status, and the debounced source watcher. The child never shares stdin
+(the key reader owns the terminal), and in `--json` mode its stdout is piped
+and forwarded as `run.app.log` so the machine stream stays pure. The child is
+stopped on every exit path, including errors, so a failed `flui run` never
+leaves an orphaned app; a real SIGINT with nobody at the keyboard exits 130.

@@ -45,9 +45,11 @@ const STYLES: Styles = Styles::styled()
 mod commands;
 mod config;
 pub mod error;
+pub mod proc;
 pub mod runner;
 mod templates;
 pub mod types;
+pub mod ui;
 mod utils;
 
 /// Prelude module re-exporting commonly used types.
@@ -65,14 +67,44 @@ pub mod prelude {
 #[command(about = "FLUI CLI - Build beautiful cross-platform apps with Rust", long_about = None)]
 #[command(version)]
 #[command(styles = STYLES)]
+#[command(after_help = "\
+Exit codes:
+  0 success   2 usage   3 environment   4 build/test failed
+  5 device not found   6 not a FLUI project   7 needs a terminal   130 Ctrl-C
+
+Environment:
+  CI, FLUI_NON_INTERACTIVE   never prompt (same as --non-interactive)
+  NO_COLOR, CLICOLOR_FORCE   colour policy when --color=auto
+  RUST_LOG                   log filter (overrides -v)
+
+flui sends no telemetry and never touches the network unless a command
+explicitly downloads something (`flui upgrade`, `cargo` fetching crates).")]
 pub struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
     command: Commands,
 
-    /// Enable verbose output
-    #[arg(short, long, global = true)]
+    /// Show debug logs from FLUI's own crates
+    #[arg(short, long, global = true, conflicts_with = "quiet")]
     verbose: bool,
+
+    /// Suppress progress narration; keep warnings, errors and tool output
+    #[arg(short, long, global = true)]
+    quiet: bool,
+
+    /// Machine-readable output: one JSON object per line on stdout
+    /// (`{"event": ...}`), nothing decorative anywhere
+    #[arg(long, global = true)]
+    json: bool,
+
+    /// When to use colour
+    #[arg(long, global = true, value_enum, default_value_t = ui::ColorChoice::Auto, value_name = "WHEN")]
+    color: ui::ColorChoice,
+
+    /// Never prompt or read hot-keys; fail with a hint instead
+    /// (implied by CI=1, FLUI_NON_INTERACTIVE=1, or a non-terminal stdin)
+    #[arg(long, global = true)]
+    non_interactive: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -128,11 +160,21 @@ enum Commands {
         /// anyway.
         #[arg(long)]
         no_check: bool,
+
+        /// Print the files that would be written and exit without writing
+        /// anything (no directory, no git init, no cargo check).
+        #[arg(long)]
+        dry_run: bool,
     },
 
-    /// Run the FLUI application
+    /// Run the FLUI application with hot reload
+    ///
+    /// While the app runs, these keys work when stdin is a terminal:
+    /// `r` rebuild and reload, `R` full restart, `c` clear the screen,
+    /// `h` help, `q` (or Ctrl-C) quit and stop the app.
     Run {
-        /// Target device
+        /// Target device: a name or UDID from `flui devices`
+        /// (default: this desktop)
         #[arg(short, long)]
         device: Option<String>,
 
@@ -140,22 +182,26 @@ enum Commands {
         #[arg(short, long)]
         release: bool,
 
-        /// Enable hot reload (development mode)
-        #[arg(long, default_value = "true")]
+        /// Disable hot reload: build and run once, then exit with the app
+        #[arg(long, conflicts_with = "hot_reload")]
+        no_hot_reload: bool,
+
+        /// Enable hot reload (the default; kept for scripts)
+        #[arg(long, hide = true)]
         hot_reload: bool,
 
         /// Scene-only hot-reload mode (Android): rebuild and push scene plugin
         /// without restarting the app. Much faster than full rebuild.
-        #[arg(long)]
+        #[arg(long, requires = "scene_crate", requires = "package")]
         scene: bool,
 
         /// Scene plugin crate name (used with --scene)
-        #[arg(long, default_value = "flui-android-scene")]
-        scene_crate: String,
+        #[arg(long, requires = "scene")]
+        scene_crate: Option<String>,
 
         /// Android package name (used with --scene)
-        #[arg(long, default_value = "com.vanya.flui.counter")]
-        package: String,
+        #[arg(long, requires = "scene")]
+        package: Option<String>,
 
         /// Android target ABI (used with --scene)
         #[arg(long, default_value = "arm64-v8a")]
@@ -164,10 +210,6 @@ enum Commands {
         /// Build profile (dev, release, bench)
         #[arg(long)]
         profile: Option<String>,
-
-        /// Verbose output
-        #[arg(long)]
-        verbose: bool,
     },
 
     /// Build the FLUI application
@@ -183,14 +225,6 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Android: Create separate APKs per ABI
-        #[arg(long)]
-        split_per_abi: bool,
-
-        /// Web: Optimize WASM size
-        #[arg(long)]
-        optimize_wasm: bool,
-
         /// iOS: Build a static library/XCFramework rather than an application
         #[arg(long = "lib", conflicts_with = "example")]
         library: bool,
@@ -199,7 +233,8 @@ enum Commands {
         #[arg(long, conflicts_with = "universal")]
         simulator: Option<String>,
 
-        /// iOS: Build device + simulator libraries (XCFramework without an Xcode project)
+        /// iOS: Build device + simulator libraries (XCFramework without an Xcode project);
+        /// macOS: fuse the arm64 and x86_64 binaries with `lipo`
         #[arg(long)]
         universal: bool,
 
@@ -222,16 +257,20 @@ enum Commands {
         filter: Option<String>,
 
         /// Run unit tests only
-        #[arg(long)]
+        #[arg(long, conflicts_with = "integration")]
         unit: bool,
 
         /// Run integration tests only
         #[arg(long)]
         integration: bool,
 
-        /// Test on specific platform
-        #[arg(long)]
-        platform: Option<String>,
+        /// Build in release mode
+        #[arg(short, long)]
+        release: bool,
+
+        /// Extra arguments for the test harness (after `--`)
+        #[arg(last = true)]
+        harness_args: Vec<String>,
     },
 
     /// Analyze project for issues
@@ -246,8 +285,11 @@ enum Commands {
     },
 
     /// Check FLUI environment setup
+    ///
+    /// Exits 3 when a required component is missing. Optional toolchains
+    /// (Android, iOS, Web) only warn unless selected explicitly.
     Doctor {
-        /// Show detailed information
+        /// Show paths and versions for every check
         #[arg(short, long)]
         verbose: bool,
 
@@ -262,6 +304,11 @@ enum Commands {
         /// Check only Web toolchain
         #[arg(long)]
         web: bool,
+
+        /// Install what can be installed automatically (missing `rustup`
+        /// targets) and re-check
+        #[arg(long)]
+        fix: bool,
     },
 
     /// List available devices
@@ -271,8 +318,8 @@ enum Commands {
         details: bool,
 
         /// Filter by platform
-        #[arg(long)]
-        platform: Option<String>,
+        #[arg(long, value_enum)]
+        platform: Option<DevicePlatform>,
     },
 
     /// Manage emulators and simulators
@@ -292,15 +339,19 @@ enum Commands {
         platform: Option<String>,
     },
 
-    /// Update `flui_cli` and project dependencies
+    /// Update the `flui` CLI and project dependencies
     Upgrade {
-        /// Update `flui_cli` only
-        #[arg(long)]
+        /// Update the CLI only (`cargo install flui-cli`)
+        #[arg(long = "self", conflicts_with = "dependencies")]
         self_update: bool,
 
-        /// Update project dependencies only
+        /// Update project dependencies only (`cargo update`)
         #[arg(long)]
         dependencies: bool,
+
+        /// Report what would change without installing anything
+        #[arg(long)]
+        check: bool,
     },
 
     /// Manage platform support for your project
@@ -314,13 +365,6 @@ enum Commands {
         /// Check formatting without modifying files
         #[arg(long)]
         check: bool,
-    },
-
-    /// Launch `DevTools`
-    Devtools {
-        /// Port to listen on
-        #[arg(short, long, default_value = "9100")]
-        port: u16,
     },
 
     /// Generate shell completions
@@ -343,6 +387,10 @@ enum PlatformSubcommand {
     Remove {
         /// Platform to remove
         platform: String,
+
+        /// Do not ask for confirmation (required in CI / with --json)
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// List supported platforms
@@ -367,24 +415,19 @@ enum EmulatorSubcommand {
 
 /// Available project templates.
 ///
-/// Templates provide starting points for different types of FLUI applications.
+/// Every variant listed here generates a distinct, compile-tested project;
+/// the CLI never silently substitutes another template.
 #[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Template {
-    /// Basic application with minimal setup
-    Basic,
-    /// Counter app demonstrating state management (default)
+    /// Counter app: a stateful widget, a button, and a widget test (default)
     #[default]
     Counter,
-    /// Todo list app with CRUD operations
-    Todo,
-    /// Dashboard UI with multiple widgets
-    Dashboard,
-    /// Reusable widget package
-    Widget,
-    /// Plugin package for extending FLUI
-    Plugin,
-    /// Empty project with just the essentials
+    /// "Hello, FLUI!" stateless app with a Material theme
+    Basic,
+    /// The smallest runnable app: one `main` that shows one `Text`
     Empty,
+    /// Reusable widget library (`--lib`): a `StatelessView` plus a widget test
+    Widget,
 }
 
 impl Display for Template {
@@ -392,10 +435,7 @@ impl Display for Template {
         match self {
             Self::Basic => write!(f, "basic"),
             Self::Counter => write!(f, "counter"),
-            Self::Todo => write!(f, "todo"),
-            Self::Dashboard => write!(f, "dashboard"),
             Self::Widget => write!(f, "widget"),
-            Self::Plugin => write!(f, "plugin"),
             Self::Empty => write!(f, "empty"),
         }
     }
@@ -406,15 +446,32 @@ impl Template {
     #[must_use]
     pub const fn description(&self) -> &'static str {
         match self {
-            Self::Basic => "Basic application with minimal setup",
-            Self::Counter => "Counter app demonstrating state management",
-            Self::Todo => "Todo list app with CRUD operations",
-            Self::Dashboard => "Dashboard UI with multiple widgets",
-            Self::Widget => "Reusable widget package",
-            Self::Plugin => "Plugin package for extending FLUI",
-            Self::Empty => "Empty project with just the essentials",
+            Self::Basic => "Hello, FLUI! stateless app with a Material theme",
+            Self::Counter => "Counter app with a stateful widget and a widget test",
+            Self::Widget => "Reusable widget library with a widget test",
+            Self::Empty => "Smallest runnable app",
         }
     }
+
+    /// Whether this template produces a library crate rather than a binary.
+    #[must_use]
+    pub const fn is_library(&self) -> bool {
+        matches!(self, Self::Widget)
+    }
+}
+
+/// Platform filter for `flui devices`.
+#[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DevicePlatform {
+    /// This machine
+    Desktop,
+    /// Android devices and emulators (via `adb`)
+    Android,
+    /// iOS simulators (macOS only)
+    Ios,
+    /// Installed web browsers
+    Web,
 }
 
 /// Target platforms for FLUI applications.
@@ -603,14 +660,14 @@ fn install_cli_logging(
     )
 }
 
-fn init_logging(verbose: bool) {
+fn init_logging(verbosity: ui::Verbosity) {
     // `-v` raises FLUI's own crates to debug and leaves the dependency stack
     // alone. `RUST_LOG` still overrides the whole thing, and nothing narrows it
     // afterwards, so `RUST_LOG=flui_build=trace` reaches TRACE.
-    let directives = if verbose {
-        "info,flui=debug,flui_build=debug,flui_devtools=debug"
-    } else {
-        "info"
+    let directives = match verbosity {
+        ui::Verbosity::Verbose => "info,flui=debug,flui_build=debug",
+        ui::Verbosity::Normal => "info",
+        ui::Verbosity::Quiet => "warn",
     };
 
     let config = flui_log::LogConfig::builder()
@@ -641,7 +698,21 @@ fn init_logging(verbose: bool) {
 fn main() {
     let cli = Cli::parse();
 
-    init_logging(cli.verbose);
+    let verbosity = if cli.verbose {
+        ui::Verbosity::Verbose
+    } else if cli.quiet {
+        ui::Verbosity::Quiet
+    } else {
+        ui::Verbosity::Normal
+    };
+    let mode = if cli.json {
+        ui::OutputMode::Json
+    } else {
+        ui::OutputMode::Human
+    };
+    ui::install(mode, verbosity, cli.color, cli.non_interactive);
+    init_logging(verbosity);
+    let verbose = cli.verbose;
 
     // Dispatch command
     let result: crate::error::CliResult<()> = match cli.command {
@@ -656,10 +727,25 @@ fn main() {
             interactive,
             no_check,
             hot_reload,
+            dry_run,
         } => {
+            let template = if lib { Template::Widget } else { template };
+            let options = commands::create::CreateOptions {
+                local,
+                skip_check: no_check,
+                hot_reload,
+                dry_run,
+            };
             if interactive || name.is_none() {
                 // Interactive mode — newtypes already validated by prompts
                 (|| {
+                    if !ui::is_interactive() {
+                        return Err(crate::error::CliError::NonInteractive {
+                            what: "flui create without a project name".into(),
+                            hint: "pass the name: flui create <NAME> [--org ORG] [--template T]"
+                                .into(),
+                        });
+                    }
                     let config = commands::create_interactive::interactive_create()?;
                     commands::create::execute(
                         config.name,
@@ -667,12 +753,7 @@ fn main() {
                         config.template,
                         config.platforms.or(platforms),
                         path,
-                        commands::create::CreateOptions {
-                            local,
-                            lib,
-                            skip_check: no_check,
-                            hot_reload,
-                        },
+                        options,
                     )
                 })()
             } else {
@@ -689,12 +770,7 @@ fn main() {
                         template,
                         platforms,
                         path,
-                        commands::create::CreateOptions {
-                            local,
-                            lib,
-                            skip_check: no_check,
-                            hot_reload,
-                        },
+                        options,
                     )
                 })()
             }
@@ -703,18 +779,21 @@ fn main() {
         Commands::Run {
             device,
             release,
-            hot_reload,
+            no_hot_reload,
+            hot_reload: _,
             scene,
             scene_crate,
             package,
             target,
             profile,
-            verbose,
         } => {
             if scene {
+                // clap enforces both via `requires`; the unwraps document that.
+                let scene_crate = scene_crate.expect("clap: --scene requires --scene-crate");
+                let package = package.expect("clap: --scene requires --package");
                 commands::run::execute_scene(&scene_crate, &package, &target, release, verbose)
             } else {
-                commands::run::execute(device, release, hot_reload, profile, verbose)
+                commands::run::execute(device, release, !no_hot_reload, profile, verbose)
             }
         }
 
@@ -722,41 +801,44 @@ fn main() {
             platform,
             release,
             output,
-            split_per_abi,
-            optimize_wasm,
             universal,
             example,
             package,
             library,
             simulator,
         } => commands::build::execute(
-            platform,
-            release,
-            output,
-            split_per_abi,
-            optimize_wasm,
-            universal,
-            example,
-            package,
-            library,
-            simulator,
+            platform, release, output, universal, example, package, library, simulator,
         ),
 
         Commands::Test {
             filter,
             unit,
             integration,
-            platform,
-        } => commands::test::execute(filter, unit, integration, platform),
+            release,
+            harness_args,
+        } => commands::test::execute(commands::test::TestOptions {
+            filter,
+            unit,
+            integration,
+            release,
+            harness_args,
+        }),
 
         Commands::Analyze { fix, pedantic } => commands::analyze::execute(fix, pedantic),
 
         Commands::Doctor {
-            verbose,
+            verbose: doctor_verbose,
             android,
             ios,
             web,
-        } => commands::doctor::execute(verbose, android, ios, web),
+            fix,
+        } => commands::doctor::execute(commands::doctor::DoctorOptions {
+            verbose: doctor_verbose || verbose,
+            android,
+            ios,
+            web,
+            fix,
+        }),
 
         Commands::Devices { details, platform } => commands::devices::execute(details, platform),
 
@@ -772,24 +854,46 @@ fn main() {
         Commands::Upgrade {
             self_update,
             dependencies,
-        } => commands::upgrade::execute(self_update, dependencies),
+            check,
+        } => commands::upgrade::execute(self_update, dependencies, check),
 
         Commands::Platform { subcommand } => match subcommand {
             PlatformSubcommand::Add { platforms } => commands::platform::add(&platforms),
-            PlatformSubcommand::Remove { platform } => commands::platform::remove(&platform),
+            PlatformSubcommand::Remove { platform, yes } => {
+                commands::platform::remove(&platform, yes)
+            }
             PlatformSubcommand::List => commands::platform::list(),
         },
 
         Commands::Format { check } => commands::format::execute(check),
 
-        Commands::Devtools { port } => commands::devtools::execute(port),
-
         Commands::Completions { shell } => commands::completions::execute(shell),
     };
 
     if let Err(e) = result {
-        let _ = cliclack::log::error(format_error_chain(&e));
-        std::process::exit(1);
+        let code = e.exit_code();
+        match e {
+            // A deliberate cancel is not a failure: no red text, exit 0.
+            crate::error::CliError::UserCancelled => {
+                let _ = ui::outro_cancel("Cancelled");
+            }
+            crate::error::CliError::Interrupted => {
+                let _ = ui::outro_cancel("Interrupted");
+                ui::emit(
+                    "error",
+                    &serde_json::json!({ "message": "interrupted", "code": code }),
+                );
+            }
+            e => {
+                let message = format_error_chain(&e);
+                let _ = ui::error(&message);
+                ui::emit(
+                    "error",
+                    &serde_json::json!({ "message": message, "code": code }),
+                );
+            }
+        }
+        std::process::exit(code);
     }
 }
 

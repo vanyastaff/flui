@@ -1,52 +1,83 @@
-//! Test command for running project tests.
-//!
-//! Wraps `cargo test` with additional options for filtering
-//! and selecting test types.
-
 use crate::error::CliResult;
 use crate::runner::{CargoCommand, OutputStyle};
+use crate::ui;
 use console::style;
+use serde_json::json;
+
+/// Options of `flui test`.
+#[derive(Debug, Clone, Default)]
+pub struct TestOptions {
+    /// Optional test name filter.
+    pub filter: Option<String>,
+    /// Run only unit tests (`--lib`).
+    pub unit: bool,
+    /// Run only integration tests (`--tests`).
+    pub integration: bool,
+    /// Build the tests in release mode.
+    pub release: bool,
+    /// Arguments forwarded to the test harness after `--`.
+    pub harness_args: Vec<String>,
+}
 
 /// Execute the test command.
-///
-/// # Arguments
-///
-/// * `filter` - Optional test name filter
-/// * `unit` - Run only unit tests (--lib)
-/// * `integration` - Run only integration tests (--test)
-/// * `_platform` - Platform filter (not yet implemented)
 ///
 /// # Errors
 ///
 /// Returns `CliError::TestsFailed` if any tests fail.
-pub fn execute(
-    filter: Option<String>,
-    unit: bool,
-    integration: bool,
-    _platform: Option<String>,
-) -> CliResult<()> {
-    cliclack::intro(style(" flui test ").on_yellow().black())?;
+pub fn execute(options: TestOptions) -> CliResult<()> {
+    let TestOptions {
+        filter,
+        unit,
+        integration,
+        release,
+        harness_args,
+    } = options;
+    ui::intro(style(" flui test ").on_yellow().black())?;
+    ui::emit("test.start", &json!({}));
 
     let mut cmd = CargoCommand::test();
+    if release {
+        cmd = cmd.release();
+    }
+    cmd = cmd.separator_args(harness_args);
 
-    // Add filter if provided
     if let Some(ref f) = filter {
         cmd = cmd.filter(f);
-        cliclack::log::info(format!("Filter: {}", style(f).cyan()))?;
+        ui::info(format!("Filter: {}", style(f).cyan()))?;
     }
 
-    // Add test type flags
     if unit {
         cmd = cmd.lib_only();
-        cliclack::log::info("Running unit tests only")?;
+        ui::info("Running unit tests only")?;
     } else if integration {
         cmd = cmd.integration_only();
-        cliclack::log::info("Running integration tests only")?;
+        ui::info("Running integration tests only")?;
     }
 
-    let _ = cmd.output_style(OutputStyle::Streaming).run()?;
+    // Streaming inherits the child's stdout directly — fine in human mode,
+    // but under `--json` our stdout must stay pure NDJSON, and `cargo
+    // test`'s own harness prints "running N tests" / "test result: ok"
+    // straight to stdout. Capture (and drop) it instead; the `test.done`
+    // event already carries everything a machine consumer needs.
+    let output_style = if ui::is_json() {
+        OutputStyle::Captured
+    } else {
+        OutputStyle::Streaming
+    };
 
-    cliclack::outro(style("All tests passed").green())?;
-
-    Ok(())
+    match cmd.output_style(output_style).run() {
+        Ok(_) => {
+            ui::emit("test.done", &json!({ "ok": true }));
+            ui::outro(style("All tests passed").green())?;
+            Ok(())
+        }
+        Err(err) => {
+            ui::emit(
+                "test.done",
+                &json!({ "ok": false, "exit_code": err.exit_code() }),
+            );
+            ui::outro_cancel("Tests failed")?;
+            Err(err)
+        }
+    }
 }

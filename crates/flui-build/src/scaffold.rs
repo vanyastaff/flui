@@ -137,6 +137,51 @@ pub struct ScaffoldParams<'a> {
     pub package_name: &'a str,
 }
 
+/// One file [`scaffold_platform`] would write, rendered but not yet on
+/// disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScaffoldFile {
+    /// Path relative to the platform's destination directory
+    /// (`platforms/<name>/`), e.g. `app/build.gradle.kts`.
+    pub rel_path: std::path::PathBuf,
+    /// The file's contents, with placeholders already substituted.
+    pub contents: String,
+}
+
+/// Render the files [`scaffold_platform`] would write for `platform`,
+/// without touching the file system.
+///
+/// This is the shape a preview (`flui create --dry-run`) needs: the exact
+/// relative paths and contents a real scaffold would produce, so the
+/// preview and the real run can never disagree about what platform
+/// scaffolding creates.
+///
+/// # Errors
+///
+/// Returns an error if the platform name is invalid.
+pub fn scaffold_platform_plan(
+    platform: &str,
+    params: &ScaffoldParams<'_>,
+) -> BuildResult<Vec<ScaffoldFile>> {
+    let platform_lower = platform.to_lowercase();
+
+    if !is_valid_platform(&platform_lower) {
+        return Err(BuildError::invalid_platform(format!(
+            "Invalid platform '{}'. Valid platforms: {}",
+            platform,
+            VALID_PLATFORMS.join(", ")
+        )));
+    }
+
+    Ok(platform_templates(&platform_lower)
+        .iter()
+        .map(|tmpl| ScaffoldFile {
+            rel_path: std::path::PathBuf::from(tmpl.rel_path),
+            contents: substitute(tmpl.content, params),
+        })
+        .collect())
+}
+
 /// Scaffold platform-specific directories and config files.
 ///
 /// Creates the `platforms/<name>/` directory tree inside `project_dir`
@@ -152,19 +197,10 @@ pub fn scaffold_platform(
     params: &ScaffoldParams<'_>,
 ) -> BuildResult<()> {
     let platform_lower = platform.to_lowercase();
-
-    if !is_valid_platform(&platform_lower) {
-        return Err(BuildError::invalid_platform(format!(
-            "Invalid platform '{}'. Valid platforms: {}",
-            platform,
-            VALID_PLATFORMS.join(", ")
-        )));
-    }
-
     let dest_dir = project_dir.join("platforms").join(&platform_lower);
+    let files = scaffold_platform_plan(&platform_lower, params)?;
 
-    let templates = platform_templates(&platform_lower);
-    if templates.is_empty() {
+    if files.is_empty() {
         // Just create the directory (shouldn't happen for known platforms).
         std::fs::create_dir_all(&dest_dir).map_err(|e| {
             BuildError::Io(std::io::Error::new(
@@ -179,8 +215,8 @@ pub fn scaffold_platform(
         return Ok(());
     }
 
-    for tmpl in templates {
-        let file_path = dest_dir.join(tmpl.rel_path);
+    for file in &files {
+        let file_path = dest_dir.join(&file.rel_path);
 
         // Ensure parent directory exists.
         if let Some(parent) = file_path.parent() {
@@ -192,9 +228,7 @@ pub fn scaffold_platform(
             })?;
         }
 
-        // Substitute placeholders and write.
-        let rendered = substitute(tmpl.content, params);
-        std::fs::write(&file_path, rendered).map_err(|e| {
+        std::fs::write(&file_path, &file.contents).map_err(|e| {
             BuildError::Io(std::io::Error::new(
                 e.kind(),
                 format!("Failed to write '{}': {}", file_path.display(), e),
@@ -204,7 +238,7 @@ pub fn scaffold_platform(
 
     tracing::debug!(
         platform = %platform_lower,
-        files = templates.len(),
+        files = files.len(),
         dest = %dest_dir.display(),
         "Scaffolded platform directory"
     );
@@ -334,6 +368,35 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("Invalid platform"));
+    }
+
+    #[test]
+    fn test_scaffold_platform_plan_matches_scaffold_platform() {
+        let params = test_params();
+
+        let planned = scaffold_platform_plan("android", &params).expect("plan android");
+        assert_eq!(planned.len(), 6);
+
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        scaffold_platform("android", dir.path(), &params).expect("scaffold android");
+
+        for file in &planned {
+            let written =
+                std::fs::read_to_string(dir.path().join("platforms/android").join(&file.rel_path))
+                    .unwrap_or_else(|e| panic!("read {}: {e}", file.rel_path.display()));
+            assert_eq!(
+                written,
+                file.contents,
+                "plan and real write disagree for {}",
+                file.rel_path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn test_scaffold_platform_plan_rejects_invalid_platform() {
+        let params = test_params();
+        assert!(scaffold_platform_plan("fuchsia", &params).is_err());
     }
 
     #[test]

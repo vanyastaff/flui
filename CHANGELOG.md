@@ -15,6 +15,36 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **`flui` CLI brought to release quality** (`flui-cli`). One output policy
+  for every command: human text on stderr, `--json` NDJSON events on stdout
+  (`doctor.check`, `device`, `run.app.log`, `build.done`, …), `--quiet`,
+  `--color auto|always|never` honouring `NO_COLOR`/`CLICOLOR_FORCE`, and
+  `--non-interactive` (implied by `CI`, `FLUI_NON_INTERACTIVE`, or a
+  non-terminal stdin) that turns every would-be prompt into an exit-7 error
+  with the flags to pass. Exit codes are now a documented contract (0/1/2/3
+  environment/4 build/5 device/6 not a project/7 needs a terminal/130 Ctrl-C).
+  `flui run` gained hot-keys (`r` reload, `R` restart, `c`, `h`, `q`), a
+  Ctrl-C path that always stops the app first, `--device` resolution against
+  the same discovery `flui devices` uses (unknown → exit 5, Android/browser
+  → exit 2 with the command to use instead), and a library-crate refusal.
+  `flui doctor` models checks as data with `[✓]/[!]/[✗]` lines and fix hints,
+  distinguishes required from optional toolchains, checks the MSRV, and
+  `--fix` installs missing `rustup` targets. `flui devices` and
+  `flui emulators` share one device model, read simulators from `simctl`
+  JSON, and print the ids `--device` takes. `flui build` prints every artifact
+  with its size and a timing line. `flui create` plans files before writing
+  them (`--dry-run`), and every listed template is real: `counter`, `basic`,
+  `empty`, `widget` (`--lib`), plus `--hot-reload`. The CLI README documents
+  all of it, including a Flutter command mapping. Breaking: the placeholder
+  templates `todo`, `dashboard` and `plugin` are gone; `flui run --scene` no
+  longer defaults `--package`/`--scene-crate` to the author's project; the
+  no-op `build --split-per-abi`/`--optimize-wasm` flags are removed;
+  `flui upgrade` updates dependencies only unless `--self` is given, and
+  `--self-update` is now `--self`; `flui test --platform` (never implemented)
+  is gone; the `flui devtools` placeholder command is removed until a server
+  exists.
+
+
 - **Version `0.3.0-beta.1`, exact cohort pins, and archives that carry only
   what a consumer compiles.** The workspace is a prerelease; every internal
   `path` dependency now requires `=0.3.0-beta.1`. The `flui` facade package
@@ -27,6 +57,23 @@ file records the repo-consumer-visible summary.
   the first proof that a registry consumer can build without this checkout.
 
 ### Fixed
+
+- **`flui devices` hung forever on macOS** (`flui-cli`): browser detection
+  ran `Safari -v`, which launches Safari instead of printing a version.
+  Versions are now read from each app's `Info.plist`, and every external
+  probe the CLI makes (`adb`, `xcrun`, `rustup`, `java`, …) runs with a
+  10-second deadline through `flui_cli::proc`.
+- **`flui doctor` reported Apple's Java stub as installed and exited 0 after
+  "Some checks failed"** (`flui-cli`): the check now requires the probe to
+  exit successfully, and a failed required check exits 3. The always-green
+  "wgpu: Available" line is gone.
+- **Desktop logs carried ANSI escape codes into pipes** (`flui-log`): the
+  compact formatter coloured unconditionally, so `flui run --json` forwarded
+  log lines full of `\u001b[…` sequences. Colour now follows `NO_COLOR`,
+  `CLICOLOR_FORCE`, and whether the stream is a terminal.
+- **`flui upgrade` installed a crate that does not exist** (`flui-cli`): it
+  asked Cargo for `flui_cli`; the package is `flui-cli`, and a source
+  install now gets the matching `cargo install --path` hint.
 
 - **Nothing rendered in a browser** (`flui-engine`): every clip-capable
   pipeline failed to compile under WebGPU because two shaders took

@@ -116,6 +116,56 @@ pub enum CliError {
     #[error("No default device for this platform")]
     NoDefaultDevice,
 
+    /// A named device, emulator or simulator does not exist.
+    #[error("Device '{name}' not found. {hint}")]
+    DeviceNotFound {
+        /// What the user asked for.
+        name: String,
+        /// How to see what exists (`flui devices`, `flui emulators list`).
+        hint: String,
+    },
+
+    /// `flui doctor` found a required component missing or broken.
+    #[error("{failed} of {total} environment checks failed")]
+    EnvironmentCheckFailed {
+        /// Checks that reported an error (not warnings).
+        failed: usize,
+        /// Checks that ran.
+        total: usize,
+    },
+
+    /// A prompt was needed but the session cannot prompt.
+    ///
+    /// Raised instead of blocking when stdin is not a terminal, `CI` is set,
+    /// or `--non-interactive` was passed.
+    #[error("{what} needs an interactive terminal; {hint}")]
+    NonInteractive {
+        /// What would have prompted.
+        what: String,
+        /// The flag(s) that make the prompt unnecessary.
+        hint: String,
+    },
+
+    /// The user interrupted a long-running command (Ctrl-C).
+    #[error("Interrupted")]
+    Interrupted,
+
+    /// The arguments are well-formed for clap but make no sense together
+    /// (a selector conflict clap cannot express). Exit code 2, like clap's
+    /// own usage errors.
+    #[error("{0}")]
+    Usage(String),
+
+    /// The requested platform cannot be driven from this host or by this
+    /// command (e.g. `flui run --device <android serial>` today).
+    #[error("{what} is not supported: {reason}")]
+    Unsupported {
+        /// What was asked for.
+        what: String,
+        /// Why, and what to do instead.
+        reason: String,
+    },
+
     /// Shell detection failed.
     ///
     /// Returned when the user's shell cannot be automatically detected
@@ -142,9 +192,12 @@ pub enum CliError {
         details: String,
     },
 
-    /// Run operation failed.
-    #[error("cargo run failed")]
-    RunFailed,
+    /// The application exited unsuccessfully.
+    #[error("Application failed: {details}")]
+    RunFailed {
+        /// How it ended (exit code or signal).
+        details: String,
+    },
 
     /// Analysis found issues.
     #[error("Analysis found issues")]
@@ -318,17 +371,70 @@ impl CliError {
         matches!(self, Self::UserCancelled | Self::FormattingCheckFailed)
     }
 
-    /// Get exit code for this error.
+    /// The process exit code for this error.
     ///
-    /// Returns an appropriate exit code for use with `std::process::exit()`.
+    /// The table is part of the CLI's contract (documented in the crate
+    /// README under "Exit codes") so scripts can branch on *why* a command
+    /// failed instead of parsing text:
+    ///
+    /// | code | meaning |
+    /// |-----:|---------|
+    /// | 0 | success (also: the user cancelled a prompt on purpose) |
+    /// | 1 | generic failure |
+    /// | 2 | usage error (clap, or a selector conflict), an unsupported target, or an unimplemented feature |
+    /// | 3 | environment: a required tool is missing or `doctor` found errors |
+    /// | 4 | the project's build, tests, lints or format check failed |
+    /// | 5 | the requested device / emulator does not exist |
+    /// | 6 | not a FLUI project (run from the wrong directory) |
+    /// | 7 | a prompt was needed but the session is non-interactive |
+    /// | 130 | interrupted with Ctrl-C |
     #[must_use]
     pub fn exit_code(&self) -> i32 {
         match self {
-            Self::UserCancelled => 0,
-            Self::NotImplemented { .. } => 2,
-            _ => 1,
+            Self::UserCancelled => exit_code::SUCCESS,
+            Self::NotImplemented { .. } | Self::Usage(_) | Self::Unsupported { .. } => {
+                exit_code::USAGE
+            }
+            Self::ToolNotFound { .. } | Self::EnvironmentCheckFailed { .. } => {
+                exit_code::ENVIRONMENT
+            }
+            Self::BuildFailed { .. }
+            | Self::Build(_)
+            | Self::RunFailed { .. }
+            | Self::AnalysisFailed
+            | Self::TestsFailed
+            | Self::FormattingCheckFailed
+            | Self::FormattingFailed => exit_code::BUILD,
+            Self::NoDefaultDevice | Self::DeviceNotFound { .. } => exit_code::DEVICE,
+            Self::NotFluiProject { .. } => exit_code::NOT_A_PROJECT,
+            Self::NonInteractive { .. } => exit_code::NON_INTERACTIVE,
+            Self::Interrupted => exit_code::INTERRUPTED,
+            _ => exit_code::FAILURE,
         }
     }
+}
+
+/// The exit codes `flui` uses. See [`CliError::exit_code`] for the table.
+pub mod exit_code {
+    /// The command completed.
+    pub const SUCCESS: i32 = 0;
+    /// Generic failure.
+    pub const FAILURE: i32 = 1;
+    /// Usage error (clap's own convention, or a selector conflict), an
+    /// unsupported target, or an unimplemented feature.
+    pub const USAGE: i32 = 2;
+    /// A required tool is missing or the environment check found errors.
+    pub const ENVIRONMENT: i32 = 3;
+    /// The project failed to build, test, lint or format-check.
+    pub const BUILD: i32 = 4;
+    /// The requested device or emulator does not exist.
+    pub const DEVICE: i32 = 5;
+    /// The working directory is not a FLUI project.
+    pub const NOT_A_PROJECT: i32 = 6;
+    /// A prompt was needed in a non-interactive session.
+    pub const NON_INTERACTIVE: i32 = 7;
+    /// Interrupted with Ctrl-C (128 + SIGINT).
+    pub const INTERRUPTED: i32 = 130;
 }
 
 /// Extension trait to add context to Results.
@@ -386,7 +492,7 @@ where
 /// use flui_cli::error::OptionExt;
 ///
 /// fn get_home() -> CliResult<PathBuf> {
-///     dirs::home_dir().ok_or_context("Could not find home directory")
+///     std::env::home_dir().ok_or_context("Could not find home directory")
 /// }
 /// ```
 pub trait OptionExt<T> {
@@ -447,8 +553,44 @@ mod tests {
     #[test]
     fn exit_codes() {
         assert_eq!(CliError::UserCancelled.exit_code(), 0);
-        assert_eq!(CliError::TestsFailed.exit_code(), 1);
+        assert_eq!(CliError::Missing("x".into()).exit_code(), 1);
         assert_eq!(CliError::not_implemented("test").exit_code(), 2);
+        assert_eq!(CliError::tool_not_found("adb", "").exit_code(), 3);
+        assert_eq!(
+            CliError::EnvironmentCheckFailed {
+                failed: 1,
+                total: 5
+            }
+            .exit_code(),
+            3
+        );
+        assert_eq!(CliError::TestsFailed.exit_code(), 4);
+        assert_eq!(CliError::build_failed("desktop", "").exit_code(), 4);
+        assert_eq!(CliError::FormattingCheckFailed.exit_code(), 4);
+        assert_eq!(
+            CliError::DeviceNotFound {
+                name: "pixel".into(),
+                hint: String::new()
+            }
+            .exit_code(),
+            5
+        );
+        assert_eq!(
+            CliError::NotFluiProject {
+                reason: String::new()
+            }
+            .exit_code(),
+            6
+        );
+        assert_eq!(
+            CliError::NonInteractive {
+                what: "x".into(),
+                hint: String::new()
+            }
+            .exit_code(),
+            7
+        );
+        assert_eq!(CliError::Interrupted.exit_code(), 130);
     }
 
     #[test]

@@ -13,7 +13,7 @@ fn package(dir: &Path, name: &str, extra: &str) {
     .expect("manifest");
     std::fs::write(
         dir.join("src/main.rs"),
-        "fn main() { println!(\"FLUI_ADMISSION_MARKER\"); }\n",
+        "fn main() { println!(\"FLUI_ADMISSION_MARKER\"); eprintln!(\"FLUI_STDERR_MARKER\"); }\n",
     )
     .expect("main");
 }
@@ -158,39 +158,263 @@ fn unavailable_simulator_never_runs_the_host_application() {
         "a simulator request executed the host binary: {}",
         String::from_utf8_lossy(&output.stdout)
     );
-    assert!(!output.status.success(), "unavailable simulator must fail");
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "an unknown UDID is a device-not-found error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
+/// Every line of `--json` stdout is one event; the app's own stdout arrives
+/// as `run.app.log` instead of leaking into the machine stream.
 #[test]
-fn conflicting_ios_delivery_modes_fail_before_cargo() {
-    let empty = TempDir::new().expect("empty directory");
-    for arguments in [
-        vec!["build", "ios", "--universal"],
-        vec!["build", "ios", "--lib", "--example", "demo"],
-        vec!["build", "ios", "--universal", "--simulator", "chosen"],
-        vec!["build", "desktop", "--lib"],
-        vec!["build", "desktop", "--simulator", "chosen"],
+fn json_mode_streams_the_app_lifecycle_as_ndjson() {
+    let tmp = TempDir::new().expect("fixture");
+    let dependency = tmp.path().join("facade");
+    package(&dependency, "flui", "");
+    std::fs::write(dependency.join("src/lib.rs"), "").expect("facade identity");
+    let app = tmp.path().join("app");
+    package(
+        &app,
+        "app",
+        "[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
+    );
+    let output = run(&app).arg("--json").output().expect("CLI");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let events: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("not JSON: {line:?}: {e}"))
+        })
+        .collect();
+    let names: Vec<&str> = events
+        .iter()
+        .map(|e| e["event"].as_str().expect("event field"))
+        .collect();
+    for expected in [
+        "run.start",
+        "run.app.start",
+        "run.app.log",
+        "run.app.exit",
+        "run.stop",
     ] {
-        let output = cargo_bin_cmd!("flui")
-            .current_dir(empty.path())
-            .args(&arguments)
-            .output()
-            .expect("CLI");
-        assert!(!output.status.success(), "{arguments:?}");
-        let diagnostic = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            !diagnostic.contains("could not find `Cargo.toml`"),
-            "must validate selectors before Cargo: {diagnostic}"
-        );
-        assert!(
-            diagnostic.contains("conflict")
-                || diagnostic.contains("cannot be used")
-                || diagnostic.contains("iOS-only"),
-            "{diagnostic}"
-        );
+        assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
+    let logs: Vec<(&str, &str)> = events
+        .iter()
+        .filter(|e| e["event"] == "run.app.log")
+        .map(|e| (e["stream"].as_str().unwrap(), e["line"].as_str().unwrap()))
+        .collect();
+    assert!(
+        logs.contains(&("stdout", "FLUI_ADMISSION_MARKER")),
+        "{logs:?}"
+    );
+    assert!(
+        logs.contains(&("stderr", "FLUI_STDERR_MARKER")),
+        "the app's stderr must be wrapped too, never raw in the stream: {logs:?}"
+    );
+    let stop = events
+        .iter()
+        .find(|e| e["event"] == "run.stop")
+        .expect("run.stop closes run.start");
+    assert_eq!(stop["interrupted"], false);
+    let exit = events
+        .iter()
+        .find(|e| e["event"] == "run.app.exit")
+        .expect("exit event");
+    assert_eq!(exit["code"], 0);
+}
+
+/// A library crate cannot be run; the refusal names the fix (exit 6).
+#[test]
+fn library_package_is_refused_with_a_hint() {
+    let tmp = TempDir::new().expect("fixture");
+    let dependency = tmp.path().join("facade");
+    package(&dependency, "flui", "");
+    std::fs::write(dependency.join("src/lib.rs"), "").expect("facade identity");
+    let lib = tmp.path().join("widgets");
+    std::fs::create_dir_all(lib.join("src")).expect("lib dir");
+    std::fs::write(
+        lib.join("Cargo.toml"),
+        "[package]\nname = \"widgets\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
+    )
+    .expect("manifest");
+    std::fs::write(lib.join("src/lib.rs"), "").expect("lib");
+    run(&lib)
+        .assert()
+        .failure()
+        .code(6)
+        .stderr(predicate::str::contains("library"))
+        .stderr(predicate::str::contains("flui test"));
+}
+
+/// Ctrl-C in the dev loop stops the app, reports it, and exits 130.
+#[cfg(unix)]
+#[test]
+fn sigint_stops_the_dev_loop_and_exits_130() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let tmp = TempDir::new().expect("fixture");
+    let dependency = tmp.path().join("facade");
+    package(&dependency, "flui", "");
+    std::fs::write(dependency.join("src/lib.rs"), "").expect("facade identity");
+    let app = tmp.path().join("app");
+    package(
+        &app,
+        "app",
+        "[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_flui"))
+        .current_dir(&app)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args(["run", "--device", "desktop", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn flui run");
+    let stdout = child.stdout.take().expect("piped stdout");
+    let mut lines = BufReader::new(stdout).lines();
+    // The fixture app exits at once; the dev loop keeps watching after that.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no run.app.exit within 120 s"
+        );
+        let line = lines.next().expect("stream open").expect("line");
+        let event: serde_json::Value = serde_json::from_str(&line).expect("ndjson");
+        if event["event"] == "run.app.exit" {
+            break;
+        }
+    }
+    let status = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(status.success());
+    let rest: Vec<String> = lines.map_while(Result::ok).collect();
+    let status = child.wait().expect("flui exits");
+    assert_eq!(status.code(), Some(130), "events after SIGINT: {rest:?}");
+    // The app had already exited, so no `run.app.stop` is owed — only the
+    // terminal error event with the interrupt code.
+    assert!(
+        !rest.iter().any(|l| l.contains("\"run.app.stop\"")),
+        "no app was running, nothing to stop: {rest:?}"
+    );
+    assert!(
+        rest.iter().any(|l| l.contains("\"code\":130")),
+        "the error event must carry 130: {rest:?}"
+    );
+    assert!(
+        rest.iter()
+            .any(|l| l.contains("\"event\":\"run.stop\"") && l.contains("\"interrupted\":true")),
+        "run.stop must close the session on interrupt too: {rest:?}"
+    );
+}
+
+/// Ctrl-C while the app is still running (no hot reload) stops it, reports
+/// `run.app.stop`, and exits 130 — not "application failed".
+#[cfg(unix)]
+#[test]
+fn sigint_during_run_once_stops_the_app_and_exits_130() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let tmp = TempDir::new().expect("fixture");
+    let dependency = tmp.path().join("facade");
+    package(&dependency, "flui", "");
+    std::fs::write(dependency.join("src/lib.rs"), "").expect("facade identity");
+    let app = tmp.path().join("app");
+    package(
+        &app,
+        "app",
+        "[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
+    );
+    // An app that keeps running until told otherwise.
+    std::fs::write(
+        app.join("src/main.rs"),
+        "fn main() { println!(\"FLUI_ADMISSION_MARKER\"); std::thread::sleep(std::time::Duration::from_secs(600)); }\n",
+    )
+    .expect("long-running main");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_flui"))
+        .current_dir(&app)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args(["run", "--no-hot-reload", "--device", "desktop", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn flui run");
+    let stdout = child.stdout.take().expect("piped stdout");
+    let mut lines = BufReader::new(stdout).lines();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no run.app.log within 120 s"
+        );
+        let line = lines.next().expect("stream open").expect("line");
+        if line.contains("FLUI_ADMISSION_MARKER") {
+            break;
+        }
+    }
+    let status = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(status.success());
+    let rest: Vec<String> = lines.map_while(Result::ok).collect();
+    let status = child.wait().expect("flui exits");
+    assert_eq!(status.code(), Some(130), "events after SIGINT: {rest:?}");
+    assert!(
+        rest.iter().any(|l| l.contains("\"run.app.stop\"")),
+        "the running app must be reported stopped: {rest:?}"
+    );
+}
+
+/// An Android serial is a real device id `flui devices` prints, but `run`
+/// cannot drive it yet: say so (exit 2), never fall through to iOS.
+#[test]
+fn unsupported_device_platform_is_refused_honestly() {
+    let tmp = TempDir::new().expect("fixture");
+    let dependency = tmp.path().join("facade");
+    package(&dependency, "flui", "");
+    std::fs::write(dependency.join("src/lib.rs"), "").expect("facade identity");
+    let app = tmp.path().join("app");
+    package(
+        &app,
+        "app",
+        "[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
+    );
+    // Only cargo on PATH (no adb): the serial is unknown → device not found (5).
+    let cargo_dir = std::path::PathBuf::from(env!("CARGO"))
+        .parent()
+        .expect("cargo lives in a directory")
+        .to_path_buf();
+    let output = cargo_bin_cmd!("flui")
+        .current_dir(&app)
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("PATH", &cargo_dir)
+        .args(["run", "--release", "--device", "emulator-5554"])
+        .output()
+        .expect("CLI");
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("FLUI_ADMISSION_MARKER"),
+        "must not run the host binary"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("flui devices"));
 }

@@ -211,6 +211,76 @@ fn generated_counter_project_compiles() {
     assert_generated_project_compiles("counter");
 }
 
+#[test]
+fn generated_empty_project_compiles() {
+    assert_generated_project_compiles("empty");
+}
+
+#[test]
+fn generated_widget_project_compiles() {
+    assert_generated_project_compiles("widget");
+}
+
+/// The widget template ships a widget test (`greeting_renders_its_name`); a
+/// bare `cargo check` would let that test rot silently — compiled once,
+/// never executed. This runs the generated library's own test binary and
+/// requires that test to actually execute and pass, the same way
+/// `run_generated_counter_tests` does for the counter template.
+#[test]
+fn generated_widget_project_test_passes() {
+    let root = repo_root();
+    let target = root.join("target");
+    let name = "flui-tmpl-check-widget-test";
+    let output_dir = TempDir::new().expect("external output directory");
+    let project = output_dir.path().join(name);
+
+    flui()
+        .current_dir(&root)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args([
+            "create",
+            name,
+            "--template",
+            "widget",
+            "--org",
+            "com.test",
+            "--local",
+            "--no-check",
+        ])
+        .arg("--path")
+        .arg(output_dir.path())
+        .assert()
+        .success();
+
+    assert!(
+        !project.join("src/main.rs").exists(),
+        "a widget template must not ship a main.rs"
+    );
+
+    std::fs::copy(root.join("Cargo.lock"), project.join("Cargo.lock"))
+        .expect("seed the generated project with the workspace's resolved versions");
+
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let output = std::process::Command::new(&cargo)
+        .args(["test", "--offline"])
+        .arg("--target-dir")
+        .arg(target.join("cli-template-check"))
+        .args(["--", "--nocapture"])
+        .current_dir(&project)
+        .output()
+        .expect("run the generated widget's test binary");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("test tests::greeting_renders_its_name ... ok"),
+        "the generated widget's own test did not execute and pass: {stdout}"
+    );
+}
+
 /// The hot-reload template emits a three-crate *workspace*, and the real gate
 /// is that `cargo check --workspace` passes on it — the same "file existence is
 /// not enough" rule the single-crate templates follow. The workspace layout is
@@ -820,4 +890,325 @@ fn dependency_guard_detects_renamed_internal_packages() {
     dependencies.insert("views".into(), mutation.into());
     assert_eq!(dependency_identities(&dependencies), ["flui", "flui-view"]);
     assert_ne!(dependency_identities(&dependencies), ["flui"]);
+}
+
+#[test]
+fn dry_run_writes_nothing_and_lists_key_files() {
+    let tmp = TempDir::new().expect("temp dir");
+    let project_dir = tmp.path().join("dry-app");
+
+    flui()
+        .args([
+            "create",
+            "dry-app",
+            "--org",
+            "com.test",
+            "--template",
+            "basic",
+            "--dry-run",
+        ])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Cargo.toml"))
+        .stderr(
+            predicate::str::contains("src/main.rs").or(predicate::str::contains("src\\main.rs")),
+        );
+
+    assert!(
+        !project_dir.exists(),
+        "--dry-run must not create the project directory"
+    );
+}
+
+#[test]
+fn dry_run_lists_gitignore() {
+    let tmp = TempDir::new().expect("temp dir");
+
+    flui()
+        .args([
+            "create",
+            "dry-gitignore",
+            "--org",
+            "com.test",
+            "--template",
+            "basic",
+            "--dry-run",
+        ])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".gitignore"));
+}
+
+#[test]
+fn dry_run_with_platforms_lists_the_platform_scaffold_files() {
+    let tmp = TempDir::new().expect("temp dir");
+
+    flui()
+        .args([
+            "create",
+            "dry-web",
+            "--org",
+            "com.test",
+            "--template",
+            "empty",
+            "--platforms",
+            "web",
+            "--dry-run",
+        ])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .stderr(
+            predicate::str::contains("platforms/web/index.html")
+                .or(predicate::str::contains("platforms\\web\\index.html")),
+        )
+        .stderr(
+            predicate::str::contains("platforms/web/manifest.json")
+                .or(predicate::str::contains("platforms\\web\\manifest.json")),
+        );
+
+    assert!(!tmp.path().join("dry-web").exists());
+}
+
+/// The dry run's file list is the same promise `--dry-run` makes for
+/// everything else: it must name exactly the files a real run creates.
+/// This compares the two directly for `--template empty --platforms web`,
+/// so `.gitignore` and the platform scaffold (previously written outside
+/// the `ProjectPlan`, and invisible to `--dry-run`) cannot silently drift
+/// from what `--dry-run` reports again.
+#[test]
+fn dry_run_file_list_matches_a_real_run_for_empty_template_with_web_platform() {
+    let dry_tmp = TempDir::new().expect("temp dir");
+    let real_tmp = TempDir::new().expect("temp dir");
+
+    let dry_output = flui()
+        .args([
+            "create",
+            "parity-check",
+            "--org",
+            "com.test",
+            "--template",
+            "empty",
+            "--platforms",
+            "web",
+            "--dry-run",
+            "--json",
+        ])
+        .arg("--path")
+        .arg(dry_tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let dry_stdout = String::from_utf8(dry_output).expect("utf8 stdout");
+
+    let mut dry_files: Vec<PathBuf> = dry_stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value["event"] == "create.file")
+        .map(|value| PathBuf::from(value["path"].as_str().expect("path is a string")))
+        .collect();
+    dry_files.sort();
+
+    flui()
+        .args([
+            "create",
+            "parity-check",
+            "--org",
+            "com.test",
+            "--template",
+            "empty",
+            "--platforms",
+            "web",
+            "--no-check",
+        ])
+        .arg("--path")
+        .arg(real_tmp.path())
+        .assert()
+        .success();
+
+    let project_dir = real_tmp.path().join("parity-check");
+    let mut real_files: Vec<PathBuf> = walk_files(&project_dir)
+        .into_iter()
+        .map(|p| p.strip_prefix(&project_dir).unwrap().to_path_buf())
+        .collect();
+    real_files.sort();
+
+    assert_eq!(
+        dry_files, real_files,
+        "dry run and real run must agree on the file set"
+    );
+}
+
+/// Recursively collect every regular file under `dir`, skipping `.git` —
+/// that tree is git's own bookkeeping, not something any template plans.
+fn walk_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        for entry in std::fs::read_dir(&current).expect("read_dir") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.file_name().is_some_and(|name| name == ".git") {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
+#[test]
+fn dry_run_does_not_init_git_or_run_cargo_check() {
+    let tmp = TempDir::new().expect("temp dir");
+    let project_dir = tmp.path().join("dry-git");
+
+    flui()
+        .args(["create", "dry-git", "--org", "com.test", "--dry-run"])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .success();
+
+    assert!(!project_dir.exists());
+    assert!(!tmp.path().join(".git").exists());
+}
+
+#[test]
+fn dry_run_json_stdout_is_pure_ndjson_with_file_events() {
+    let tmp = TempDir::new().expect("temp dir");
+
+    let output = flui()
+        .args([
+            "create",
+            "dry-json",
+            "--org",
+            "com.test",
+            "--template",
+            "basic",
+            "--dry-run",
+            "--json",
+        ])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).expect("utf8 stdout");
+
+    assert!(!tmp.path().join("dry-json").exists());
+
+    let mut saw_start = false;
+    let mut saw_file = false;
+    let mut saw_done = false;
+    for line in stdout.lines() {
+        let value: serde_json::Value =
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("not NDJSON: {line}: {e}"));
+        match value["event"].as_str().expect("event field") {
+            "create.start" => saw_start = true,
+            "create.file" => {
+                saw_file = true;
+                assert!(value["path"].is_string());
+            }
+            "create.done" => {
+                saw_done = true;
+                assert_eq!(value["check"], "skipped");
+                assert_eq!(value["git"], false);
+            }
+            other => panic!("unexpected event in dry-run JSON stream: {other}"),
+        }
+    }
+    assert!(saw_start, "missing create.start event: {stdout}");
+    assert!(saw_file, "missing create.file event(s): {stdout}");
+    assert!(saw_done, "missing create.done event: {stdout}");
+}
+
+#[test]
+fn json_create_stdout_is_pure_ndjson_ending_in_create_done() {
+    let tmp = TempDir::new().expect("temp dir");
+
+    let output = flui()
+        .args([
+            "create",
+            "json-app",
+            "--org",
+            "com.test",
+            "--no-check",
+            "--json",
+        ])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).expect("utf8 stdout");
+
+    let events: Vec<serde_json::Value> = stdout
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("not NDJSON: {line}: {e}"))
+        })
+        .collect();
+    assert!(!events.is_empty(), "no JSON events emitted");
+    assert_eq!(
+        events.last().expect("at least one event")["event"],
+        "create.done",
+        "stdout must end in create.done: {stdout}"
+    );
+    assert_eq!(
+        events.first().expect("at least one event")["event"],
+        "create.start"
+    );
+}
+
+#[test]
+fn create_without_name_under_ci_exits_non_interactive() {
+    let tmp = TempDir::new().expect("temp dir");
+
+    flui()
+        .args(["create", "--org", "com.test"])
+        .arg("--path")
+        .arg(tmp.path())
+        .env("CI", "1")
+        .assert()
+        .failure()
+        .code(7)
+        .stderr(predicate::str::contains("flui create <NAME>"));
+}
+
+#[test]
+fn unknown_template_is_a_usage_error() {
+    let tmp = TempDir::new().expect("temp dir");
+
+    flui()
+        .args([
+            "create",
+            "todo-app",
+            "--org",
+            "com.test",
+            "--template",
+            "todo",
+        ])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("invalid value"));
+
+    assert!(!tmp.path().join("todo-app").exists());
 }

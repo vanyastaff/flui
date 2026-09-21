@@ -1,38 +1,20 @@
-use super::DependencySource;
-use crate::error::{CliResult, ResultExt};
-use flui_build::scaffold::{ScaffoldParams, scaffold_platform};
-use std::fs;
-use std::path::Path;
+use super::{DependencySource, ProjectPlan};
 
 pub fn generate(
-    dir: &Path,
     name: &str,
     org: &str,
     source: &DependencySource,
     platforms: &[String],
-) -> CliResult<()> {
-    // Create Cargo.toml
-    generate_cargo_toml(dir, name, source)?;
-
-    // Create src/main.rs
-    generate_main(dir)?;
-
-    // Create flui.toml
-    generate_flui_config(dir, name, org, platforms)?;
-
-    // Create README.md
-    generate_readme(dir, name)?;
-
-    // Create assets directory
-    fs::create_dir_all(dir.join("assets"))?;
-
-    // Scaffold platform directories
-    scaffold_platforms(dir, name, org, platforms)?;
-
-    Ok(())
+) -> ProjectPlan {
+    ProjectPlan::new()
+        .file("Cargo.toml", cargo_toml(name, source))
+        .file("src/main.rs", MAIN)
+        .file("flui.toml", flui_toml(name, org, platforms))
+        .file("README.md", readme(name))
+        .dir("assets")
 }
 
-fn generate_cargo_toml(dir: &Path, name: &str, source: &DependencySource) -> CliResult<()> {
+fn cargo_toml(name: &str, source: &DependencySource) -> String {
     let version = env!("CARGO_PKG_VERSION");
 
     let deps = format!("flui = {}", source.dependency("flui", &[]));
@@ -43,7 +25,7 @@ fn generate_cargo_toml(dir: &Path, name: &str, source: &DependencySource) -> Cli
         ""
     };
 
-    let content = format!(
+    format!(
         r#"# FLUI Template v{version}{mode_comment}
 
 # Standalone workspace declaration so this project is not absorbed into
@@ -68,14 +50,10 @@ lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
 "#
-    );
-
-    fs::write(dir.join("Cargo.toml"), content).context("Failed to create Cargo.toml")?;
-    Ok(())
+    )
 }
 
-fn generate_main(dir: &Path) -> CliResult<()> {
-    let content = r#"use flui::prelude::*;
+const MAIN: &str = r#"use flui::prelude::*;
 use flui::widgets::{SafeArea, column};
 
 fn main() {
@@ -116,13 +94,6 @@ impl ViewState<CounterView> for CounterState {
     fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> impl IntoView {
         let count = self.count.clone();
 
-        // `main_axis_alignment` is what actually centres this, not the `Center`
-        // around it. A `Column` fills the height it is given
-        // (`main_axis_size` defaults to `MainAxisSize::Max`), so `Center` has
-        // no slack to centre it in: the column is as tall as the screen and
-        // packs its children at the top (`MainAxisAlignment::Start`, both
-        // `FlexStyle` defaults). Flutter's own counter sample passes
-        // `mainAxisAlignment: MainAxisAlignment.center` for the same reason.
         Center::new().child(
             Column::new(column![
                 Text::new("You have pushed the button this many times:"),
@@ -179,7 +150,6 @@ mod tests {
             let y = offset.dy.get() + size.height.get() / 2.0;
             app.dispatch_pointer_down(x, y);
             app.dispatch_pointer_up(x, y);
-            // Only scheduled work runs: a missing rebuild request must fail.
             app.tick();
             assert!(
                 app.find_text(next).is_some(),
@@ -187,8 +157,6 @@ mod tests {
             );
             assert!(app.find_text(previous).is_none());
         }
-        // The root is swapped for an equal tree, so this rebuilds the whole
-        // app — the point being that the count outlives it.
         app.pump_widget(app_tree(480.0, 320.0));
         assert!(
             app.find_text("2").is_some(),
@@ -235,14 +203,7 @@ mod tests {
 }
 "#;
 
-    let src_dir = dir.join("src");
-    fs::create_dir_all(&src_dir)?;
-    fs::write(src_dir.join("main.rs"), content).context("Failed to create src/main.rs")?;
-
-    Ok(())
-}
-
-fn generate_flui_config(dir: &Path, name: &str, org: &str, platforms: &[String]) -> CliResult<()> {
+fn flui_toml(name: &str, org: &str, platforms: &[String]) -> String {
     let platform_list = if platforms.is_empty() {
         r#"["windows", "linux", "macos"]"#.to_string()
     } else {
@@ -250,7 +211,7 @@ fn generate_flui_config(dir: &Path, name: &str, org: &str, platforms: &[String])
         format!("[{}]", quoted.join(", "))
     };
 
-    let content = format!(
+    format!(
         r#"[app]
 name = "{name}"
 version = "0.1.0"
@@ -269,14 +230,11 @@ directories = ["assets"]
 #     {{ asset = "fonts/Roboto-Regular.ttf", weight = 400, style = "normal" }},
 # ]
 "#
-    );
-
-    fs::write(dir.join("flui.toml"), content).context("Failed to create flui.toml")?;
-    Ok(())
+    )
 }
 
-fn generate_readme(dir: &Path, name: &str) -> CliResult<()> {
-    let content = format!(
+fn readme(name: &str) -> String {
+    format!(
         r"# {name}
 
 A FLUI counter application. Press Increment to update the count.
@@ -307,30 +265,5 @@ flui test
 - [FLUI Documentation](https://github.com/vanyastaff/flui)
 - [Examples](https://github.com/vanyastaff/flui/tree/main/examples)
 "
-    );
-
-    fs::write(dir.join("README.md"), content).context("Failed to create README.md")?;
-    Ok(())
-}
-
-/// Scaffold platform directories based on the selected platforms.
-fn scaffold_platforms(dir: &Path, name: &str, org: &str, platforms: &[String]) -> CliResult<()> {
-    if platforms.is_empty() {
-        return Ok(());
-    }
-
-    let lib_name = name.replace('-', "_");
-    let package_name = format!("{org}.{lib_name}");
-    let params = ScaffoldParams {
-        app_name: name,
-        lib_name: &lib_name,
-        package_name: &package_name,
-    };
-
-    for platform in platforms {
-        scaffold_platform(platform, dir, &params)
-            .map_err(|e| crate::error::CliError::build_failed(platform, e.to_string()))?;
-    }
-
-    Ok(())
+    )
 }

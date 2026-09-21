@@ -6,6 +6,7 @@
 use crate::error::{CliError, CliResult};
 use crate::runner::{input, select};
 use crate::types::{OrganizationId, ProjectName};
+use crate::ui;
 use crate::{Platform, Template};
 use console::style;
 
@@ -31,7 +32,7 @@ pub struct ProjectConfig {
 /// - User cancels the operation
 /// - Dialog interaction fails
 pub fn interactive_create() -> CliResult<ProjectConfig> {
-    cliclack::intro(style(" Create FLUI Project ").on_cyan().black())?;
+    ui::intro(style(" Create FLUI Project ").on_cyan().black())?;
 
     // Ask for project name with validation
     let name: String = input("Project name")
@@ -62,16 +63,13 @@ pub fn interactive_create() -> CliResult<ProjectConfig> {
             "Counter",
             "Simple counter with state management",
         )
-        .item(Template::Basic, "Basic", "Minimal FLUI application")
-        .item(Template::Todo, "Todo", "Todo list app (coming soon)")
         .item(
-            Template::Dashboard,
-            "Dashboard",
-            "Dashboard UI (coming soon)",
+            Template::Basic,
+            "Basic",
+            "Hello, FLUI! with a Material theme",
         )
-        .item(Template::Widget, "Widget", "Reusable widget package")
-        .item(Template::Plugin, "Plugin", "Plugin for extending FLUI")
-        .item(Template::Empty, "Empty", "Empty project with essentials")
+        .item(Template::Empty, "Empty", "Smallest runnable app")
+        .item(Template::Widget, "Widget", "Reusable widget library")
         .interact()
         .map_err(|_| CliError::UserCancelled)?;
 

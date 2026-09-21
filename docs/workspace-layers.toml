@@ -537,11 +537,6 @@ would actually break the layering.\
 """
 
 [[same_layer_edge]]
-from = "flui-cli"
-to = "flui-devtools"
-why = "`flui run` drives the profiler/hot-reload orchestration devtools exposes. Devtools never depends on the CLI."
-
-[[same_layer_edge]]
 from = "flui-widgets"
 to = "flui-testing"
 why = """

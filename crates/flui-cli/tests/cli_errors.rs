@@ -78,6 +78,54 @@ fn create_with_invalid_org_fails() {
 }
 
 #[test]
+fn create_with_invalid_name_exits_with_generic_failure() {
+    let tmp = TempDir::new().expect("temp dir");
+
+    flui()
+        .args(["create", "fn", "--org", "com.test"])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn create_with_unknown_template_exits_with_usage_error() {
+    let tmp = TempDir::new().expect("temp dir");
+
+    flui()
+        .args([
+            "create",
+            "good-name",
+            "--org",
+            "com.test",
+            "--template",
+            "bogus",
+        ])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
+fn create_into_existing_directory_exits_with_generic_failure() {
+    let tmp = TempDir::new().expect("temp dir");
+    std::fs::create_dir(tmp.path().join("taken")).expect("pre-existing directory");
+
+    flui()
+        .args(["create", "taken", "--org", "com.test", "--no-check"])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("already exists"));
+}
+
+#[test]
 fn build_with_invalid_platform_fails() {
     // `flui build foobar` should fail because "foobar" is not a valid build target
     flui()

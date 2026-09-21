@@ -17,24 +17,23 @@
 //! # Configuration Files
 //!
 //! - **Project config** (`flui.toml`): Project-specific settings
-//! - **Global config** (`~/.flui/config.toml`): User-wide settings
+//!
+//! There is deliberately no global (per-user) configuration file: the CLI
+//! keeps no state about the user and has no telemetry to configure.
 //!
 //! # Examples
 //!
 //! ```ignore
-//! use flui_cli::config::{FluiConfig, GlobalConfig};
+//! use flui_cli::config::FluiConfig;
 //!
 //! // Load project configuration
 //! let config = FluiConfig::load()?;
 //! println!("Project: {}", config.app.name);
-//!
-//! // Load global configuration (with defaults if not present)
-//! let global = GlobalConfig::load()?;
 //! ```
 
-use crate::error::{CliError, CliResult, OptionExt, ResultExt};
+use crate::error::{CliError, CliResult, ResultExt};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // ============================================================================
 // Project Configuration (flui.toml)
@@ -302,169 +301,6 @@ fn default_opt_level() -> u8 {
     3
 }
 
-// ============================================================================
-// Global Configuration (~/.flui/config.toml)
-// ============================================================================
-
-/// Global FLUI CLI configuration.
-///
-/// Stored at `~/.flui/config.toml` (or platform-specific config directory).
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-pub struct GlobalConfig {
-    /// SDK settings.
-    #[serde(default)]
-    pub sdk: SdkConfig,
-    /// Default build settings.
-    #[serde(default)]
-    pub build: GlobalBuildConfig,
-    /// `DevTools` settings.
-    #[serde(default)]
-    pub devtools: DevToolsConfig,
-    /// Telemetry settings.
-    #[serde(default)]
-    pub telemetry: TelemetryConfig,
-}
-
-impl GlobalConfig {
-    /// Load global configuration.
-    ///
-    /// Returns default configuration if the file doesn't exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file exists but cannot be parsed.
-    pub fn load() -> CliResult<Self> {
-        let config_path = Self::config_path()?;
-
-        if !config_path.exists() {
-            return Ok(Self::default());
-        }
-
-        let content =
-            std::fs::read_to_string(&config_path).context("Failed to read global config")?;
-
-        toml::from_str(&content).context("Failed to parse global config")
-    }
-
-    /// Save global configuration.
-    ///
-    /// Creates the config directory if it doesn't exist.
-    pub fn save(&self) -> CliResult<()> {
-        let config_path = Self::config_path()?;
-
-        if let Some(config_dir) = config_path.parent() {
-            std::fs::create_dir_all(config_dir).context("Failed to create config directory")?;
-        }
-
-        let content = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
-
-        std::fs::write(&config_path, content).context("Failed to write global config")?;
-
-        Ok(())
-    }
-
-    /// Get the global config file path.
-    ///
-    /// Returns `~/.flui/config.toml` on Unix-like systems.
-    pub fn config_path() -> CliResult<PathBuf> {
-        let home = dirs::home_dir().ok_or_context("Could not find home directory")?;
-
-        Ok(home.join(".flui").join("config.toml"))
-    }
-
-    /// Get the FLUI data directory.
-    ///
-    /// Returns `~/.flui/` on Unix-like systems.
-    pub fn data_dir() -> CliResult<PathBuf> {
-        let home = dirs::home_dir().ok_or_context("Could not find home directory")?;
-
-        Ok(home.join(".flui"))
-    }
-}
-
-/// SDK configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SdkConfig {
-    /// Update channel (stable, beta, dev).
-    #[serde(default = "default_channel")]
-    pub channel: String,
-    /// Custom SDK path.
-    pub path: Option<PathBuf>,
-}
-
-impl Default for SdkConfig {
-    fn default() -> Self {
-        Self {
-            channel: default_channel(),
-            path: None,
-        }
-    }
-}
-
-/// Global build configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GlobalBuildConfig {
-    /// Number of parallel jobs.
-    #[serde(default = "default_jobs")]
-    pub jobs: usize,
-}
-
-impl Default for GlobalBuildConfig {
-    fn default() -> Self {
-        Self {
-            jobs: default_jobs(),
-        }
-    }
-}
-
-/// `DevTools` configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DevToolsConfig {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
-    /// Default port for `DevTools` server.
-    #[serde(default = "default_devtools_port")]
-    pub port: u16,
-    /// Auto-launch `DevTools` in browser.
-    #[serde(default = "default_auto_launch")]
-    pub auto_launch: bool,
-}
-
-impl Default for DevToolsConfig {
-    fn default() -> Self {
-        Self {
-            port: default_devtools_port(),
-            auto_launch: default_auto_launch(),
-        }
-    }
-}
-
-/// Telemetry configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct TelemetryConfig {
-    /// Enable anonymous usage telemetry.
-    #[serde(default)]
-    pub enabled: bool,
-}
-
-// Default value functions
-
-fn default_channel() -> String {
-    "stable".to_string()
-}
-
-fn default_jobs() -> usize {
-    // Use std::thread::available_parallelism when available
-    std::thread::available_parallelism().map_or(4, std::num::NonZero::get)
-}
-
-fn default_devtools_port() -> u16 {
-    9100
-}
-
-fn default_auto_launch() -> bool {
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,13 +319,6 @@ mod tests {
 
         let bold = FontAsset::bold("fonts/Bold.ttf");
         assert_eq!(bold.weight, 700);
-    }
-
-    #[test]
-    fn global_config_default() {
-        let config = GlobalConfig::default();
-        assert_eq!(config.sdk.channel, "stable");
-        assert_eq!(config.devtools.port, 9100);
     }
 
     #[test]

@@ -207,7 +207,10 @@ where
     #[must_use]
     pub fn desktop_compact_stderr() -> Self {
         Self {
-            sink: compact_sink(BoxMakeWriter::new(std::io::stderr)),
+            sink: compact_sink(
+                BoxMakeWriter::new(std::io::stderr),
+                ansi_wanted(&std::io::stderr()),
+            ),
         }
     }
 
@@ -338,7 +341,10 @@ fn desktop_sink<S>(format: crate::DesktopFormat) -> Sink<S> {
         // `with_target(true)` diverges from the historical backend, which hid
         // the target. The target is the exact string a `RUST_LOG` directive
         // matches on, so hiding it left an author guessing at what to write.
-        crate::DesktopFormat::Compact => compact_sink(BoxMakeWriter::new(std::io::stdout)),
+        crate::DesktopFormat::Compact => compact_sink(
+            BoxMakeWriter::new(std::io::stdout),
+            ansi_wanted(&std::io::stdout()),
+        ),
 
         #[cfg(feature = "hierarchical")]
         crate::DesktopFormat::Hierarchical => {
@@ -348,15 +354,35 @@ fn desktop_sink<S>(format: crate::DesktopFormat) -> Sink<S> {
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-fn compact_sink<S>(writer: BoxMakeWriter) -> Sink<S> {
+fn compact_sink<S>(writer: BoxMakeWriter, ansi: bool) -> Sink<S> {
     Sink::Compact(Box::new(
         tracing_subscriber::fmt::layer()
             .compact()
             .with_writer(writer)
+            .with_ansi(ansi)
             .with_target(true)
             .with_level(true)
             .with_line_number(true),
     ))
+}
+
+/// Whether the compact formatter should emit ANSI colour on `stream`.
+///
+/// `tracing-subscriber` colours unconditionally by default, which is how a
+/// `flui run --json` consumer once received log lines full of escape codes:
+/// the application's stdout was a pipe, not a terminal. The rule is the
+/// conventional one — `NO_COLOR` (non-empty) disables, `CLICOLOR_FORCE`
+/// (non-empty, not `0`) enables, otherwise colour only when the stream is a
+/// terminal.
+#[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
+fn ansi_wanted(stream: &impl std::io::IsTerminal) -> bool {
+    if std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()) {
+        return false;
+    }
+    if std::env::var_os("CLICOLOR_FORCE").is_some_and(|v| !v.is_empty() && v != "0") {
+        return true;
+    }
+    stream.is_terminal()
 }
 
 #[cfg(target_arch = "wasm32")]

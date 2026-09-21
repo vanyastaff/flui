@@ -1,32 +1,26 @@
-//! Build command for cross-platform compilation.
-
 use crate::BuildTarget;
-use crate::error::{CliResult, ResultExt};
+use crate::error::{CliError, CliResult, ResultExt};
+use crate::ui;
 use console::style;
 use flui_build::platform::BuildUnit as CargoBuildUnit;
 use flui_build::{
-    AndroidBuilder, AppBundle, BuildPhase, BuilderContextBuilder, DesktopBuilder, IOSBuilder,
-    Platform, PlatformBuilder, Profile, ProgressManager, WebBuilder,
+    AndroidBuilder, AppBundle, BuilderContextBuilder, DesktopBuilder, IOSBuilder, Platform,
+    PlatformBuilder, Profile, WebBuilder,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// Build options collected into a struct to avoid excessive bool parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BuildOptions {
     /// Build in release mode.
     pub release: bool,
-    /// Android: Create separate APKs per ABI.
-    pub split_per_abi: bool,
-    /// Web: Optimize WASM size.
-    pub optimize_wasm: bool,
     /// iOS: Build device and simulator libraries (XCFramework without an Xcode project).
     pub universal: bool,
     /// Select iOS static-library/XCFramework delivery instead of an application.
     pub library: bool,
     /// Exact iOS simulator UDID (resolved before compilation).
     pub simulator: Option<String>,
-    /// Use verbose output with progress bars.
-    pub verbose: bool,
     /// Build a named example rather than the current package's binary.
     pub example: Option<String>,
     /// Build a named workspace package's binary.
@@ -36,9 +30,9 @@ pub struct BuildOptions {
 impl BuildOptions {
     /// Resolve the cargo unit this build selects.
     ///
-    /// `--example` wins over `--package` when both are given (an example is the
-    /// more specific instruction), and neither given is the generated-project
-    /// default: the current directory's own binary.
+    /// `--example` and `--package` are mutually exclusive (rejected by
+    /// `validate_options`); neither given is the generated-project default:
+    /// the current directory's own binary.
     fn cargo_target(&self) -> CargoBuildUnit {
         if self.library {
             return CargoBuildUnit::Library {
@@ -51,6 +45,96 @@ impl BuildOptions {
             (None, None) => CargoBuildUnit::DefaultBinary,
         }
     }
+
+    /// The cargo unit's kind and name, for the `build.start` JSON event.
+    fn unit_descriptor(&self) -> (&'static str, Option<String>) {
+        if self.library {
+            return ("lib", self.package.clone());
+        }
+        match (&self.example, &self.package) {
+            (Some(example), _) => ("example", Some(example.clone())),
+            (None, Some(package)) => ("package", Some(package.clone())),
+            (None, None) => ("bin", None),
+        }
+    }
+}
+
+/// One artifact a build produced: reported in human output (path + size) and
+/// in the `build.done` JSON event.
+struct Artifact {
+    /// `"binary"` | `"app-bundle"` | `"apk"` | `"xcframework"` | `"wasm"` | `"dir"`.
+    ///
+    /// This is the stable, machine-facing tag: it never changes shape based
+    /// on how the build was invoked. See `label` for the human-facing text.
+    kind: &'static str,
+    /// Override for the human success line when `kind` alone would be
+    /// misleading — e.g. `macos --universal` reports the same `"binary"`
+    /// kind as a plain non-macOS desktop build, but here it means "fused,
+    /// not bundled", which is worth spelling out. `None` shows `kind` as-is.
+    label: Option<&'static str>,
+    /// Where the artifact was delivered.
+    path: PathBuf,
+    /// Size on disk (the sum of contained files for a bundle/directory).
+    size_bytes: u64,
+}
+
+impl Artifact {
+    fn new(kind: &'static str, path: PathBuf, size_bytes: u64) -> Self {
+        Self {
+            kind,
+            label: None,
+            path,
+            size_bytes,
+        }
+    }
+
+    /// Override the human-facing success line's description without
+    /// changing the machine-facing JSON `kind`.
+    fn with_label(mut self, label: &'static str) -> Self {
+        self.label = Some(label);
+        self
+    }
+
+    /// What the human success line calls this artifact.
+    fn display_kind(&self) -> &'static str {
+        self.label.unwrap_or(self.kind)
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "kind": self.kind,
+            "path": self.path.display().to_string(),
+            "size_bytes": self.size_bytes,
+        })
+    }
+}
+
+/// Render a byte count the way a person reads it: KB below one MB, MB above.
+fn human_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    let bytes = bytes as f64;
+    if bytes >= MB {
+        format!("{:.2} MB", bytes / MB)
+    } else {
+        format!("{:.2} KB", bytes / KB)
+    }
+}
+
+/// Refuse to do any build work outside a FLUI/Cargo project.
+///
+/// Every build backend eventually shells out to `cargo`, so the one thing
+/// they all need is a `Cargo.toml` at the workspace root. Checking it up
+/// front turns "some tool 40 seconds in reported a confusing cargo error"
+/// into an immediate, exact diagnosis.
+fn ensure_flui_project(root: &Path) -> CliResult<()> {
+    if root.join("Cargo.toml").is_file() {
+        Ok(())
+    } else {
+        Err(CliError::NotFluiProject {
+            reason: "Cargo.toml not found".into(),
+        })
+    }
 }
 
 /// Execute the build command.
@@ -58,17 +142,11 @@ impl BuildOptions {
 /// # Errors
 ///
 /// Returns an error if the build fails for the target platform.
-#[expect(
-    clippy::fn_params_excessive_bools,
-    reason = "mirrors clap argument structure"
-)]
 #[expect(clippy::too_many_arguments, reason = "mirrors clap argument structure")]
 pub fn execute(
     target: BuildTarget,
     release: bool,
     output: Option<PathBuf>,
-    split_per_abi: bool,
-    optimize_wasm: bool,
     universal: bool,
     example: Option<String>,
     package: Option<String>,
@@ -77,66 +155,121 @@ pub fn execute(
 ) -> CliResult<()> {
     let options = BuildOptions {
         release,
-        split_per_abi,
-        optimize_wasm,
         universal,
-        verbose: false,
-        example,
-        package,
         library,
         simulator,
+        example,
+        package,
     };
 
-    if (options.library || options.simulator.is_some()) && target != BuildTarget::Ios {
-        return Err(crate::error::CliError::Missing(
-            "--lib and --simulator are iOS-only options".into(),
+    validate_options(target, &options)?;
+    run(target, options, output)
+}
+
+/// Reject conflicting selectors before any environment probing or build
+/// work starts. Each message names the exact flags in conflict.
+///
+/// `--lib`/`--example` and `--universal`/`--simulator` are *not* checked
+/// here: clap's own `conflicts_with` on those arguments (see `main.rs`)
+/// already rejects them, before this function ever runs. Duplicating that
+/// check here would be dead code.
+fn validate_options(target: BuildTarget, options: &BuildOptions) -> CliResult<()> {
+    if options.library && target != BuildTarget::Ios {
+        return Err(CliError::Usage(
+            "--lib is an iOS-only option; pass it with `flui build ios --lib`".into(),
         ));
     }
-    if (options.library && options.example.is_some())
-        || (options.example.is_some() && options.package.is_some())
-        || (options.universal && !options.library && target == BuildTarget::Ios)
-        || (options.universal && options.simulator.is_some())
-    {
-        return Err(crate::error::CliError::Missing("conflicting build selectors: iOS --universal requires --lib, --lib excludes --example, and --simulator excludes --universal".into()));
+    if options.simulator.is_some() && target != BuildTarget::Ios {
+        return Err(CliError::Usage(
+            "--simulator is an iOS-only option; pass it with `flui build ios --simulator <UDID>`"
+                .into(),
+        ));
     }
-    let mode = if release { "release" } else { "debug" };
-    cliclack::intro(style(format!(" flui build {target} ")).on_cyan().black())?;
-    cliclack::log::info(format!("Mode: {}", style(mode).cyan()))?;
+    if options.example.is_some() && options.package.is_some() {
+        return Err(CliError::Usage(
+            "--example and --package are mutually exclusive: choose one build unit".into(),
+        ));
+    }
+    if options.universal && !options.library && target == BuildTarget::Ios {
+        return Err(CliError::Usage(
+            "--universal requires --lib on iOS: an application delivery cannot be built as a universal XCFramework"
+                .into(),
+        ));
+    }
+    Ok(())
+}
 
-    // `flui-build`'s builders shell out through `tokio::process`, whose
-    // `Command::status()` needs a Tokio reactor in scope on this thread.
-    // `pollster` only drives the future; it installs no reactor, so every
-    // build path panicked with "there is no reactor running" until this guard
-    // existed. A multi-thread runtime is what keeps the reactor driven while
-    // the main thread is parked inside `pollster::block_on` — the worker
-    // threads service the IO/signal driver that child-process reaping needs,
-    // which the current-thread flavour would leave undriven. Entering (not
-    // `block_on`) keeps the `pollster::block_on` call sites unchanged.
+/// Dispatch to the platform backend, time it, and report the outcome
+/// uniformly (human text plus `build.start`/`build.done` JSON events).
+fn run(target: BuildTarget, options: BuildOptions, output: Option<PathBuf>) -> CliResult<()> {
+    let mode = if options.release { "release" } else { "debug" };
+    let (unit_kind, unit_name) = options.unit_descriptor();
+
+    ui::intro(style(format!(" flui build {target} ")).on_cyan().black())?;
+    ui::info(format!("Mode: {}", style(mode).cyan()))?;
+    ui::emit(
+        "build.start",
+        &serde_json::json!({
+            "platform": target.to_string(),
+            "profile": mode,
+            "unit": { "kind": unit_kind, "name": unit_name },
+        }),
+    );
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("Failed to start the build runtime")?;
     let _reactor = runtime.enter();
 
-    // Use flui_build for cross-platform builds
+    let started = Instant::now();
     let result = match target {
-        BuildTarget::Android => build_android(options, output.as_ref()),
-        BuildTarget::Ios => build_ios(options, output.as_ref()),
-        BuildTarget::Web => build_web(options, output.as_ref()),
-        BuildTarget::Desktop => build_desktop(options, output.as_ref()),
+        BuildTarget::Android => build_android(&options, output.as_ref()),
+        BuildTarget::Ios => build_ios(&options, output.as_ref()),
+        BuildTarget::Web => build_web(&options, output.as_ref()),
+        BuildTarget::Desktop => build_desktop(&options, output.as_ref()),
         BuildTarget::Windows | BuildTarget::Linux | BuildTarget::Macos => {
-            build_specific_platform(target, options, output.as_ref())
+            build_specific_platform(target, &options, output.as_ref())
         }
     };
+    let seconds = started.elapsed().as_secs_f64();
 
-    if let Err(e) = result {
-        cliclack::outro_cancel(format!("Build failed: {e}"))?;
-        return Err(e);
+    match result {
+        Ok(artifacts) => {
+            ui::emit(
+                "build.done",
+                &serde_json::json!({
+                    "ok": true,
+                    "platform": target.to_string(),
+                    "artifacts": artifacts.iter().map(Artifact::to_json).collect::<Vec<_>>(),
+                    "seconds": seconds,
+                }),
+            );
+            for artifact in &artifacts {
+                ui::success(format!(
+                    "{}: {} ({})",
+                    artifact.display_kind(),
+                    artifact.path.display(),
+                    human_size(artifact.size_bytes)
+                ))?;
+            }
+            ui::outro(format!("{} Built in {:.1}s", style("✓").green(), seconds))?;
+            Ok(())
+        }
+        Err(error) => {
+            ui::emit(
+                "build.done",
+                &serde_json::json!({
+                    "ok": false,
+                    "platform": target.to_string(),
+                    "artifacts": [],
+                    "seconds": seconds,
+                }),
+            );
+            ui::outro_cancel(format!("Build failed: {error}"))?;
+            Err(error)
+        }
     }
-
-    cliclack::outro(style("Build completed successfully").green())?;
-
-    Ok(())
 }
 
 /// Resolve application-bundle metadata for a macOS build, from `flui.toml`.
@@ -176,68 +309,13 @@ fn macos_bundle_at(root: &std::path::Path) -> CliResult<AppBundle> {
     }
 }
 
-/// Execute build with progress indicators from `flui_build`.
-///
-/// This function provides detailed progress tracking using indicatif progress bars.
-///
-/// # Errors
-///
-/// Returns an error if the build fails.
-#[expect(dead_code, reason = "progress-based build for future verbose mode")]
-#[expect(
-    clippy::fn_params_excessive_bools,
-    reason = "mirrors clap argument structure"
-)]
-pub fn execute_with_progress(
-    target: BuildTarget,
-    release: bool,
-    output: Option<PathBuf>,
-    split_per_abi: bool,
-    optimize_wasm: bool,
-    universal: bool,
-) -> CliResult<()> {
-    let options = BuildOptions {
-        release,
-        split_per_abi,
-        optimize_wasm,
-        universal,
-        verbose: true,
-        example: None,
-        package: None,
-        library: false,
-        simulator: None,
-    };
+fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<Artifact>> {
+    let workspace_root = std::env::current_dir()?;
+    ensure_flui_project(&workspace_root)?;
 
-    let progress_manager = ProgressManager::new();
-
-    let result = match target {
-        BuildTarget::Android => {
-            build_android_with_progress(options, output.as_ref(), &progress_manager)
-        }
-        BuildTarget::Ios => build_ios(options, output.as_ref()),
-        BuildTarget::Web => build_web_with_progress(options, output.as_ref(), &progress_manager),
-        BuildTarget::Desktop => {
-            build_desktop_with_progress(options, output.as_ref(), &progress_manager)
-        }
-        BuildTarget::Windows | BuildTarget::Linux | BuildTarget::Macos => {
-            build_specific_platform_with_progress(
-                target,
-                options,
-                output.as_ref(),
-                &progress_manager,
-            )
-        }
-    };
-
-    progress_manager.join();
-    result
-}
-
-fn build_android(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
-    let spinner = cliclack::spinner();
+    let spinner = ui::spinner();
     spinner.start("Building Android APK...");
 
-    let workspace_root = std::env::current_dir()?;
     let profile = if options.release {
         Profile::Release
     } else {
@@ -261,107 +339,47 @@ fn build_android(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<(
 
     std::fs::create_dir_all(&ctx.output_dir)?;
 
-    spinner.set_message("Validating Android environment...");
+    ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
+    spinner.start("Validating Android environment...");
     android_builder
         .validate_environment()
         .context("Android environment validation failed")?;
 
-    spinner.set_message("Building Rust libraries...");
+    ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
+    spinner.start("Building Rust libraries...");
     let artifacts = pollster::block_on(android_builder.build_rust(&ctx))
         .context("Failed to build Rust libraries")?;
 
-    spinner.set_message("Building APK...");
+    ui::emit(
+        "build.phase",
+        &serde_json::json!({ "name": "build_platform" }),
+    );
+    spinner.start("Building APK...");
     let final_artifacts = pollster::block_on(android_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build APK")?;
 
     spinner.stop(format!("{} Android APK built", style("✓").green()));
 
-    cliclack::log::success(format!(
-        "APK location: {}",
-        final_artifacts.app_binary.display()
-    ))?;
-    cliclack::log::info(format!(
-        "Size: {:.2} MB",
-        final_artifacts.size_bytes as f64 / 1_048_576.0
-    ))?;
-
-    Ok(())
+    Ok(vec![Artifact::new(
+        "apk",
+        final_artifacts.app_binary,
+        final_artifacts.size_bytes,
+    )])
 }
 
-fn build_android_with_progress(
-    options: BuildOptions,
-    output: Option<&PathBuf>,
-    manager: &ProgressManager,
-) -> CliResult<()> {
-    let mut progress = manager.create_build("Android");
-
+fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<Artifact>> {
     let workspace_root = std::env::current_dir()?;
-    let profile = if options.release {
-        Profile::Release
-    } else {
-        Profile::Debug
-    };
+    ensure_flui_project(&workspace_root)?;
 
-    let android_builder =
-        AndroidBuilder::new(&workspace_root).context("Failed to initialize Android builder")?;
-
-    let mut builder = BuilderContextBuilder::new(workspace_root)
-        .with_platform(Platform::Android {
-            targets: vec!["arm64-v8a".to_string()],
-        })
-        .with_profile(profile);
-
-    if let Some(out) = output {
-        builder = builder.with_output_dir(out.clone());
-    }
-
-    let ctx = builder.build();
-    std::fs::create_dir_all(&ctx.output_dir)?;
-
-    // Validate phase
-    progress.start_phase(BuildPhase::Validate, Some("Checking Android SDK..."));
-    progress.set_progress(10);
-    android_builder
-        .validate_environment()
-        .context("Android environment validation failed")?;
-    progress.finish_phase("Environment validated");
-
-    // Build Rust phase
-    progress.start_phase(BuildPhase::BuildRust, Some("Compiling Rust libraries..."));
-    progress.set_progress(30);
-    let artifacts = pollster::block_on(android_builder.build_rust(&ctx))
-        .context("Failed to build Rust libraries")?;
-    progress.finish_phase("Rust libraries compiled");
-
-    // Build platform phase
-    progress.start_phase(BuildPhase::BuildPlatform, Some("Building APK..."));
-    progress.set_progress(70);
-    let final_artifacts = pollster::block_on(android_builder.build_platform(&ctx, &artifacts))
-        .context("Failed to build APK")?;
-
-    progress.finish(format!(
-        "APK built: {} ({:.2} MB)",
-        final_artifacts.app_binary.display(),
-        final_artifacts.size_bytes as f64 / 1_048_576.0
-    ));
-
-    Ok(())
-}
-
-fn build_ios(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
-    let spinner = cliclack::spinner();
+    let spinner = ui::spinner();
     spinner.start("Building iOS Rust target...");
 
-    let workspace_root = std::env::current_dir()?;
     let profile = if options.release {
         Profile::Release
     } else {
         Profile::Debug
     };
 
-    // Default is the device arm64 slice; `--universal` adds the simulator
-    // slice as a separate library; this does not create a universal binary.
-    // Executable examples require one triple and reject --universal.
     let simulator = options
         .simulator
         .as_deref()
@@ -395,16 +413,22 @@ fn build_ios(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
     }
     let ctx = builder.build();
 
-    spinner.set_message("Validating iOS environment...");
+    ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
+    spinner.start("Validating iOS environment...");
     ios_builder
         .validate_environment()
         .context("iOS environment validation failed")?;
 
-    spinner.set_message("Building iOS Rust target...");
+    ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
+    spinner.start("Building iOS Rust target...");
     let artifacts = pollster::block_on(ios_builder.build_rust(&ctx))
         .context("Failed to build iOS Rust target")?;
 
-    spinner.set_message("Building iOS app...");
+    ui::emit(
+        "build.phase",
+        &serde_json::json!({ "name": "build_platform" }),
+    );
+    spinner.start("Building iOS app...");
     let final_artifacts = pollster::block_on(ios_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build iOS app")?;
 
@@ -413,23 +437,25 @@ fn build_ios(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
     }
     spinner.stop(format!("{} iOS build finished", style("✓").green()));
 
-    cliclack::log::success(format!(
-        "Artifact: {}",
-        final_artifacts.app_binary.display()
-    ))?;
-    cliclack::log::info(format!(
-        "Size: {:.2} MB",
-        final_artifacts.size_bytes as f64 / 1_048_576.0
-    ))?;
-
-    Ok(())
+    let kind = if options.library {
+        "xcframework"
+    } else {
+        "app-bundle"
+    };
+    Ok(vec![Artifact::new(
+        kind,
+        final_artifacts.app_binary,
+        final_artifacts.size_bytes,
+    )])
 }
 
-fn build_web(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
-    let spinner = cliclack::spinner();
+fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<Artifact>> {
+    let workspace_root = std::env::current_dir()?;
+    ensure_flui_project(&workspace_root)?;
+
+    let spinner = ui::spinner();
     spinner.start("Building Web (WASM)...");
 
-    let workspace_root = std::env::current_dir()?;
     let profile = if options.release {
         Profile::Release
     } else {
@@ -453,95 +479,37 @@ fn build_web(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
 
     std::fs::create_dir_all(&ctx.output_dir)?;
 
-    spinner.set_message("Validating Web environment...");
+    ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
+    spinner.start("Validating Web environment...");
     web_builder
         .validate_environment()
         .context("Web environment validation failed")?;
 
-    spinner.set_message("Building WASM...");
+    ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
+    spinner.start("Building WASM...");
     let artifacts =
         pollster::block_on(web_builder.build_rust(&ctx)).context("Failed to build WASM")?;
 
-    spinner.set_message("Building web package...");
+    ui::emit(
+        "build.phase",
+        &serde_json::json!({ "name": "build_platform" }),
+    );
+    spinner.start("Building web package...");
     let final_artifacts = pollster::block_on(web_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build web package")?;
 
     spinner.stop(format!("{} Web package built", style("✓").green()));
 
-    cliclack::log::success(format!("Build location: {}", ctx.output_dir.display()))?;
-    cliclack::log::info(format!(
-        "Size: {:.2} KB",
-        final_artifacts.size_bytes as f64 / 1024.0
-    ))?;
-
-    Ok(())
+    Ok(vec![Artifact::new(
+        "dir",
+        ctx.output_dir.clone(),
+        final_artifacts.size_bytes,
+    )])
 }
 
-fn build_web_with_progress(
-    options: BuildOptions,
-    output: Option<&PathBuf>,
-    manager: &ProgressManager,
-) -> CliResult<()> {
-    let mut progress = manager.create_build("Web");
-
+fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<Artifact>> {
     let workspace_root = std::env::current_dir()?;
-    let profile = if options.release {
-        Profile::Release
-    } else {
-        Profile::Debug
-    };
 
-    let web_builder =
-        WebBuilder::new(&workspace_root).context("Failed to initialize Web builder")?;
-
-    let mut builder = BuilderContextBuilder::new(workspace_root)
-        .with_platform(Platform::Web {
-            target: "web".to_string(),
-        })
-        .with_profile(profile);
-
-    if let Some(out) = output {
-        builder = builder.with_output_dir(out.clone());
-    }
-
-    let ctx = builder.build();
-    std::fs::create_dir_all(&ctx.output_dir)?;
-
-    // Validate phase
-    progress.start_phase(BuildPhase::Validate, Some("Checking wasm-pack..."));
-    progress.set_progress(10);
-    web_builder
-        .validate_environment()
-        .context("Web environment validation failed")?;
-    progress.finish_phase("Environment validated");
-
-    // Build Rust phase
-    progress.start_phase(BuildPhase::BuildRust, Some("Compiling to WASM..."));
-    progress.set_progress(30);
-    let artifacts =
-        pollster::block_on(web_builder.build_rust(&ctx)).context("Failed to build WASM")?;
-    progress.finish_phase("WASM compiled");
-
-    // Build platform phase
-    progress.start_phase(BuildPhase::BuildPlatform, Some("Packaging web assets..."));
-    progress.set_progress(70);
-    let final_artifacts = pollster::block_on(web_builder.build_platform(&ctx, &artifacts))
-        .context("Failed to build web package")?;
-
-    progress.finish(format!(
-        "Web package built: {} ({:.2} KB)",
-        ctx.output_dir.display(),
-        final_artifacts.size_bytes as f64 / 1024.0
-    ));
-
-    Ok(())
-}
-
-fn build_desktop(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
-    let spinner = cliclack::spinner();
-    spinner.start("Building Desktop binary...");
-
-    let workspace_root = std::env::current_dir()?;
     let profile = if options.release {
         Profile::Release
     } else {
@@ -550,16 +518,20 @@ fn build_desktop(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<(
 
     let desktop_builder = DesktopBuilder::new();
 
-    let mut builder = BuilderContextBuilder::new(workspace_root)
+    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
         .with_platform(Platform::Desktop { target: None })
         .with_target(options.cargo_target())
         .with_profile(profile);
 
-    // `Desktop` builds for the host; on macOS that means staging a `.app`.
     #[cfg(target_os = "macos")]
     {
         builder = builder.with_bundle(macos_bundle()?);
     }
+
+    // Placed after the macOS bundle-metadata resolution above (not before
+    // it): an invalid `flui.toml` is a more specific diagnosis than a
+    // missing `Cargo.toml`, and must still win when both are absent/invalid.
+    ensure_flui_project(&workspace_root)?;
 
     if let Some(out) = output {
         builder = builder.with_output_dir(out.clone());
@@ -569,114 +541,54 @@ fn build_desktop(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<(
 
     std::fs::create_dir_all(&ctx.output_dir)?;
 
-    spinner.set_message("Validating Desktop environment...");
+    let spinner = ui::spinner();
+    spinner.start("Building Desktop binary...");
+
+    ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
+    spinner.start("Validating Desktop environment...");
     desktop_builder
         .validate_environment()
         .context("Desktop environment validation failed")?;
 
-    spinner.set_message("Building binary...");
+    ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
+    spinner.start("Building binary...");
     let artifacts =
         pollster::block_on(desktop_builder.build_rust(&ctx)).context("Failed to build binary")?;
 
-    spinner.set_message("Copying binary...");
+    ui::emit(
+        "build.phase",
+        &serde_json::json!({ "name": "build_platform" }),
+    );
+    spinner.start("Copying binary...");
     let final_artifacts = pollster::block_on(desktop_builder.build_platform(&ctx, &artifacts))
         .context("Failed to copy binary")?;
 
     spinner.stop(format!("{} Desktop binary built", style("✓").green()));
 
-    cliclack::log::success(format!(
-        "Binary location: {}",
-        final_artifacts.app_binary.display()
-    ))?;
-    cliclack::log::info(format!(
-        "Size: {:.2} MB",
-        final_artifacts.size_bytes as f64 / 1_048_576.0
-    ))?;
-
-    Ok(())
-}
-
-fn build_desktop_with_progress(
-    options: BuildOptions,
-    output: Option<&PathBuf>,
-    manager: &ProgressManager,
-) -> CliResult<()> {
-    let mut progress = manager.create_build("Desktop");
-
-    let workspace_root = std::env::current_dir()?;
-    let profile = if options.release {
-        Profile::Release
+    let kind = if cfg!(target_os = "macos") {
+        "app-bundle"
     } else {
-        Profile::Debug
+        "binary"
     };
-
-    let desktop_builder = DesktopBuilder::new();
-
-    let mut builder = BuilderContextBuilder::new(workspace_root)
-        .with_platform(Platform::Desktop { target: None })
-        .with_target(options.cargo_target())
-        .with_profile(profile);
-
-    #[cfg(target_os = "macos")]
-    {
-        builder = builder.with_bundle(macos_bundle()?);
-    }
-
-    if let Some(out) = output {
-        builder = builder.with_output_dir(out.clone());
-    }
-
-    let ctx = builder.build();
-    std::fs::create_dir_all(&ctx.output_dir)?;
-
-    // Validate phase
-    progress.start_phase(BuildPhase::Validate, Some("Checking build tools..."));
-    progress.set_progress(10);
-    desktop_builder
-        .validate_environment()
-        .context("Desktop environment validation failed")?;
-    progress.finish_phase("Environment validated");
-
-    // Build Rust phase
-    progress.start_phase(BuildPhase::BuildRust, Some("Compiling binary..."));
-    progress.set_progress(30);
-    let artifacts =
-        pollster::block_on(desktop_builder.build_rust(&ctx)).context("Failed to build binary")?;
-    progress.finish_phase("Binary compiled");
-
-    // Build platform phase
-    progress.start_phase(BuildPhase::BuildPlatform, Some("Copying artifacts..."));
-    progress.set_progress(70);
-    let final_artifacts = pollster::block_on(desktop_builder.build_platform(&ctx, &artifacts))
-        .context("Failed to copy binary")?;
-
-    progress.finish(format!(
-        "Desktop binary built: {} ({:.2} MB)",
-        final_artifacts.app_binary.display(),
-        final_artifacts.size_bytes as f64 / 1_048_576.0
-    ));
-
-    Ok(())
+    Ok(vec![Artifact::new(
+        kind,
+        final_artifacts.app_binary,
+        final_artifacts.size_bytes,
+    )])
 }
 
 fn build_specific_platform(
     target: BuildTarget,
-    options: BuildOptions,
+    options: &BuildOptions,
     output: Option<&PathBuf>,
-) -> CliResult<()> {
-    // A macOS universal binary is two single-arch builds combined with `lipo`;
-    // it is not a distinct cargo target, so it takes a dedicated path rather
-    // than being forced through the single-triple flow below.
+) -> CliResult<Vec<Artifact>> {
     if target == BuildTarget::Macos && options.universal {
         return build_macos_universal(options, output);
     }
 
     let target_triple = target.target_triple();
-
-    let spinner = cliclack::spinner();
-    spinner.start(format!("Building for target: {target_triple}..."));
-
     let workspace_root = std::env::current_dir()?;
+
     let profile = if options.release {
         Profile::Release
     } else {
@@ -685,17 +597,20 @@ fn build_specific_platform(
 
     let desktop_builder = DesktopBuilder::new();
 
-    let mut builder = BuilderContextBuilder::new(workspace_root)
+    let mut builder = BuilderContextBuilder::new(workspace_root.clone())
         .with_platform(Platform::Desktop {
             target: Some(target_triple.to_string()),
         })
         .with_target(options.cargo_target())
         .with_profile(profile);
 
-    // `flui build macos` stages a `.app`; other triples keep the bare binary.
     if target == BuildTarget::Macos {
         builder = builder.with_bundle(macos_bundle()?);
     }
+
+    // See the matching comment in `build_desktop`: bundle-metadata parse
+    // errors must still take priority over a missing `Cargo.toml`.
+    ensure_flui_project(&workspace_root)?;
 
     if let Some(out) = output {
         builder = builder.with_output_dir(out.clone());
@@ -705,16 +620,25 @@ fn build_specific_platform(
 
     std::fs::create_dir_all(&ctx.output_dir)?;
 
-    spinner.set_message("Validating environment...");
+    let spinner = ui::spinner();
+    spinner.start(format!("Building for target: {target_triple}..."));
+
+    ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
+    spinner.start("Validating environment...");
     desktop_builder
         .validate_environment()
         .context("Environment validation failed")?;
 
-    spinner.set_message("Building...");
+    ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
+    spinner.start("Building...");
     let artifacts =
         pollster::block_on(desktop_builder.build_rust(&ctx)).context("Failed to build")?;
 
-    spinner.set_message("Copying artifacts...");
+    ui::emit(
+        "build.phase",
+        &serde_json::json!({ "name": "build_platform" }),
+    );
+    spinner.start("Copying artifacts...");
     let final_artifacts = pollster::block_on(desktop_builder.build_platform(&ctx, &artifacts))
         .context("Failed to copy artifacts")?;
 
@@ -724,12 +648,16 @@ fn build_specific_platform(
         target_triple
     ));
 
-    cliclack::log::success(format!(
-        "Binary location: {}",
-        final_artifacts.app_binary.display()
-    ))?;
-
-    Ok(())
+    let kind = if target == BuildTarget::Macos {
+        "app-bundle"
+    } else {
+        "binary"
+    };
+    Ok(vec![Artifact::new(
+        kind,
+        final_artifacts.app_binary,
+        final_artifacts.size_bytes,
+    )])
 }
 
 /// Build one macOS executable carrying both `arm64` and `x86_64` slices.
@@ -738,13 +666,22 @@ fn build_specific_platform(
 /// `lipo -create` then fuses the two Mach-O files into a single universal
 /// binary. Both slices land in arch-specific scratch subdirectories, and only
 /// the fused artifact is promoted to the caller's output directory.
-fn build_macos_universal(options: BuildOptions, output: Option<&PathBuf>) -> CliResult<()> {
+fn build_macos_universal(
+    options: &BuildOptions,
+    output: Option<&PathBuf>,
+) -> CliResult<Vec<Artifact>> {
     const SLICES: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 
-    let spinner = cliclack::spinner();
-    spinner.start("Building universal macOS binary (arm64 + x86_64)...");
-
     let workspace_root = std::env::current_dir()?;
+    ensure_flui_project(&workspace_root)?;
+
+    let spinner = ui::spinner();
+    spinner.start("Building universal macOS binary (arm64 + x86_64)...");
+    ui::remark(
+        "This fuses both architecture slices into one executable with `lipo`; \
+         the result is not an .app bundle, unlike a plain `flui build macos`.",
+    )?;
+
     let profile = if options.release {
         Profile::Release
     } else {
@@ -771,7 +708,11 @@ fn build_macos_universal(options: BuildOptions, output: Option<&PathBuf>) -> Cli
         let slice_dir = scratch.join(triple);
         std::fs::create_dir_all(&slice_dir)?;
 
-        spinner.set_message(format!("Building {triple}..."));
+        spinner.start(format!("Building {triple}..."));
+        ui::emit(
+            "build.phase",
+            &serde_json::json!({ "name": "build_rust", "slice": triple }),
+        );
 
         let builder_inst = DesktopBuilder::new();
         let slice_ctx = BuilderContextBuilder::new(workspace_root.clone())
@@ -803,7 +744,11 @@ fn build_macos_universal(options: BuildOptions, output: Option<&PathBuf>) -> Cli
         })?;
     let fused = output_dir.join(fused_name);
 
-    spinner.set_message("Fusing slices with lipo...");
+    ui::emit(
+        "build.phase",
+        &serde_json::json!({ "name": "build_platform" }),
+    );
+    spinner.start("Fusing slices with lipo...");
     let mut args: Vec<String> = vec!["-create".to_string()];
     args.extend(slice_paths.iter().map(|p| p.display().to_string()));
     args.push("-output".to_string());
@@ -823,77 +768,13 @@ fn build_macos_universal(options: BuildOptions, output: Option<&PathBuf>) -> Cli
     }
 
     let _ = std::fs::remove_dir_all(&scratch);
+    let size_bytes = std::fs::metadata(&fused)?.len();
 
     spinner.stop(format!("{} Universal binary built", style("✓").green()));
-    cliclack::log::success(format!("Binary location: {}", fused.display()))?;
 
-    Ok(())
-}
-
-fn build_specific_platform_with_progress(
-    target: BuildTarget,
-    options: BuildOptions,
-    output: Option<&PathBuf>,
-    manager: &ProgressManager,
-) -> CliResult<()> {
-    let target_triple = target.target_triple();
-    let mut progress = manager.create_build(target_triple);
-
-    let workspace_root = std::env::current_dir()?;
-    let profile = if options.release {
-        Profile::Release
-    } else {
-        Profile::Debug
-    };
-
-    let desktop_builder = DesktopBuilder::new();
-
-    let mut builder = BuilderContextBuilder::new(workspace_root)
-        .with_platform(Platform::Desktop {
-            target: Some(target_triple.to_string()),
-        })
-        .with_target(options.cargo_target())
-        .with_profile(profile);
-
-    if target == BuildTarget::Macos {
-        builder = builder.with_bundle(macos_bundle()?);
-    }
-
-    if let Some(out) = output {
-        builder = builder.with_output_dir(out.clone());
-    }
-
-    let ctx = builder.build();
-    std::fs::create_dir_all(&ctx.output_dir)?;
-
-    // Validate phase
-    progress.start_phase(BuildPhase::Validate, Some("Checking build tools..."));
-    progress.set_progress(10);
-    desktop_builder
-        .validate_environment()
-        .context("Environment validation failed")?;
-    progress.finish_phase("Environment validated");
-
-    // Build Rust phase
-    progress.start_phase(BuildPhase::BuildRust, Some("Compiling..."));
-    progress.set_progress(30);
-    let artifacts =
-        pollster::block_on(desktop_builder.build_rust(&ctx)).context("Failed to build")?;
-    progress.finish_phase("Compiled");
-
-    // Build platform phase
-    progress.start_phase(BuildPhase::BuildPlatform, Some("Copying artifacts..."));
-    progress.set_progress(70);
-    let final_artifacts = pollster::block_on(desktop_builder.build_platform(&ctx, &artifacts))
-        .context("Failed to copy artifacts")?;
-
-    progress.finish(format!(
-        "{} binary built: {}",
-        target_triple,
-        final_artifacts.app_binary.display()
-    ));
-
-    Ok(())
+    Ok(vec![
+        Artifact::new("binary", fused, size_bytes).with_label("universal binary (not bundled)"),
+    ])
 }
 
 #[cfg(test)]
@@ -928,5 +809,19 @@ mod bundle_tests {
                 super::macos_bundle_at(root.path()).expect_err("present invalid config must fail");
             assert!(error.to_string().contains("Failed to parse"));
         }
+    }
+
+    #[test]
+    fn missing_cargo_toml_is_rejected_before_any_build_work() {
+        let root = tempfile::tempdir().expect("fixture");
+        let error =
+            super::ensure_flui_project(root.path()).expect_err("no Cargo.toml must be rejected");
+        assert!(matches!(
+            error,
+            crate::error::CliError::NotFluiProject { .. }
+        ));
+        assert!(error.to_string().contains("Cargo.toml not found"));
+        std::fs::write(root.path().join("Cargo.toml"), "[package]\n").expect("manifest");
+        super::ensure_flui_project(root.path()).expect("present Cargo.toml is accepted");
     }
 }

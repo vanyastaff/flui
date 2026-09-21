@@ -53,6 +53,7 @@
 //! ```
 
 use crate::error::{CliError, CliResult, ResultExt};
+use crate::ui;
 use std::process::{Command, ExitStatus, Stdio};
 
 // ============================================================================
@@ -136,7 +137,9 @@ impl From<CommandFailure> for CliError {
             CommandFailure::Clean => CliError::CleanFailed {
                 details: "cargo clean failed".into(),
             },
-            CommandFailure::Run => CliError::RunFailed,
+            CommandFailure::Run => CliError::RunFailed {
+                details: "cargo run failed".into(),
+            },
             CommandFailure::Upgrade => CliError::UpgradeFailed,
             CommandFailure::Update => CliError::UpdateFailed,
             CommandFailure::Custom(context) => CliError::CommandFailed {
@@ -244,7 +247,7 @@ impl CommandRunner {
     }
 
     fn run_with_spinner(&mut self, message: &str) -> CliResult<CommandResult> {
-        let spinner = cliclack::spinner();
+        let spinner = ui::spinner();
         spinner.start(message);
 
         self.command.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -291,7 +294,7 @@ impl CommandRunner {
 
     fn run_verbose(&mut self) -> CliResult<CommandResult> {
         // Print command being executed
-        let _ = cliclack::log::remark(format!("Running: {:?}", self.command));
+        let _ = ui::remark(format!("Running: {:?}", self.command));
 
         self.run_streaming()
     }
@@ -310,7 +313,7 @@ impl CommandRunner {
 
         if result.success() {
             if let Some(msg) = &self.success_message {
-                let _ = cliclack::log::success(msg);
+                let _ = ui::success(msg);
             }
             Ok(result)
         } else if let Some(failure) = &self.failure_type {
@@ -508,10 +511,21 @@ impl CargoCommand {
         self.arg("--lib")
     }
 
-    /// Add --test flag (test only integration tests).
+    /// Add --tests flag (test only integration tests).
+    ///
+    /// `--test` (singular) needs a harness *name* and is a usage error
+    /// without one; `--tests` (plural) means "every integration-test
+    /// target", which is what "integration tests only" means here.
     #[must_use]
     pub fn integration_only(self) -> Self {
-        self.arg("--test")
+        self.arg("--tests")
+    }
+
+    /// Add --all-targets flag (lint/build every target: lib, bins, tests,
+    /// examples, benches).
+    #[must_use]
+    pub fn all_targets(self) -> Self {
+        self.arg("--all-targets")
     }
 
     /// Add -D warnings (for clippy).
