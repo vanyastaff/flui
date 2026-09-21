@@ -605,10 +605,15 @@ counter --local=<checkout>`): `cargo build` clean in 7 min 22 s cold (debug),
 through LaunchServices, the window entered the CoreGraphics on-screen list
 3.85 s after `open` — and with the deferred first reveal (`fd9f2938`) a window
 in that list is one whose first frame has been presented, so the cold launch
-showed no bare background. Interactive access to that window was declined
-for this run, so the click sequence recorded on 2026-09-20 was not repeated
-here; the archive-based consumer build above is the same template through
-the registry dependency form.
+showed no bare background. Driven through the desktop app's background
+window control (raw input on the AppKit window, window capture by window id):
+the counter read 3 on first sighting (an operator had clicked it), two
+posted clicks advanced it to 4 (the first of the two activated the
+application, as AppKit's first click on an inactive app does), the window was
+resized to 1568×595 while mounted and its content stayed centred, a further
+click was posted, and the red close button ended the process. The
+archive-based consumer build above is the same template through the registry
+dependency form.
 
 ## Developer iteration: the hot-reload loop, driven
 
