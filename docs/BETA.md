@@ -597,6 +597,19 @@ live Windows runtime behavior, and native OS-suspend transport remain
 separate work; these desktop results do not imply beta release readiness by
 themselves.
 
+### Fresh consumer on the candidate — 2026-09-21
+
+Regenerated from the CLI at `e8604b0d` (`flui create beta_counter --template
+counter --local=<checkout>`): `cargo build` clean in 7 min 22 s cold (debug),
+`cargo test` ran the two generated tests, 2 passed. Bundled and opened
+through LaunchServices, the window entered the CoreGraphics on-screen list
+3.85 s after `open` — and with the deferred first reveal (`fd9f2938`) a window
+in that list is one whose first frame has been presented, so the cold launch
+showed no bare background. Interactive access to that window was declined
+for this run, so the click sequence recorded on 2026-09-20 was not repeated
+here; the archive-based consumer build above is the same template through
+the registry dependency form.
+
 ## Developer iteration: the hot-reload loop, driven
 
 `just macos-hot-reload-loop` (`scripts/check-hot-reload-loop.py`) generates a
@@ -627,10 +640,11 @@ until the window is visible again — frames are disabled while hidden — so
 the probe brings the host to front before each edit and reports an occluded
 window as CANNOT_VERIFY, not as a missing reload; the first two attempts
 failed exactly that way while an operator's windows covered the host. And
-the host's stderr reaches `flui --json run`'s stdout unwrapped (its stdout
-is wrapped as `run.app.log`), which breaks the one-object-per-line contract;
-the probe tolerates raw lines and the defect belongs to the CLI's output
-policy work in progress.
+at the time of the run the host's stderr reached `flui --json run`'s stdout
+unwrapped (its stdout was wrapped as `run.app.log`), which broke the
+one-object-per-line contract; the probe tolerates raw lines, and the CLI has
+since wrapped both streams (`b53ab703`) and closes every run with
+`run.stop {interrupted}` before the interrupt's `error` event.
 
 This covers the worker (`WorkerHost`) reload tier on macOS. Hot restart on a
 types change, the scene-plugin tier, and the iOS worker path are not driven by
