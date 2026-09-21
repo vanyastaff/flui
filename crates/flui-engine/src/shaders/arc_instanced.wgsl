@@ -199,19 +199,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let aa_radial = length(vec2<f32>(dpdx(d_radial), dpdy(d_radial))) * 0.5;
     let radial_alpha = 1.0 - smoothstep(-aa_radial, aa_radial, d_radial);
 
-    // Discard pixels fully outside the circle (fringe expansion safety).
-    if radial_alpha < 0.001 {
-        discard;
-    }
-
-    // ── Angular SDF (L2 screen-space gradient, sector half-planes) ───────
-    //
-    // Full-circle shortcut: |sweep| ≥ 2π → no angular cut, pure circle.
+    // Every derivative in this shader is taken HERE, before the first
+    // `return` and before any branch on per-instance data: WebGPU's
+    // uniformity analysis (Tint) admits `dpdx`/`dpdy` only in uniform
+    // control flow, and the sweep angle is per instance, so an early return
+    // for a full circle ahead of the angular gradient made this module
+    // invalid in every browser (2026-09-21) while native naga accepted it.
+    // The full-circle shortcut is applied AFTER the gradient, as a select.
     let tau = 6.28318530718; // 2π
     let abs_sweep = abs(sweep);
-    if abs_sweep >= tau {
-        return vec4<f32>(in.color.rgb, in.color.a * radial_alpha);
-    }
 
     // Angular SDF design (positive sweep, screen Y-down):
     //
@@ -256,20 +252,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Effective positive sweep angle (already normalized to ≥ 0 by the swap above).
     let pos_sweep = abs_sweep;
 
-    var angular_sdf: f32;
-    if pos_sweep <= 3.14159265358979 {
-        // ≤ 180°: sector is the INTERSECTION of both half-planes.
-        angular_sdf = min(d_start_hp, d_end_hp);
-    } else {
-        // > 180°: sector is the UNION (either half-plane suffices).
-        angular_sdf = max(d_start_hp, d_end_hp);
-    }
+    // ≤ 180°: the sector is the INTERSECTION of both half-planes; > 180°:
+    // the UNION (either half-plane suffices). A `select`, not a branch, so
+    // the gradient below stays in uniform control flow.
+    let angular_sdf = select(
+        max(d_start_hp, d_end_hp),
+        min(d_start_hp, d_end_hp),
+        pos_sweep <= 3.14159265358979,
+    );
 
     // Screen-space AA width for the angular edge: ~1 device-px via L2 gradient.
     let aa_angular = length(vec2<f32>(dpdx(angular_sdf), dpdy(angular_sdf))) * 0.5;
-    let angular_alpha = smoothstep(-aa_angular, aa_angular, angular_sdf);
+    // Full circle (|sweep| ≥ 2π): no angular cut, pure circle.
+    let angular_alpha = select(
+        smoothstep(-aa_angular, aa_angular, angular_sdf),
+        1.0,
+        abs_sweep >= tau,
+    );
 
-    // Discard pixels fully outside the angular sector.
+    // Discard pixels fully outside the circle (fringe expansion safety) or
+    // fully outside the angular sector. `discard` demotes the invocation to
+    // a helper and does not affect uniformity, so it may follow the
+    // derivatives.
+    if radial_alpha < 0.001 {
+        discard;
+    }
     if angular_alpha < 0.001 {
         discard;
     }

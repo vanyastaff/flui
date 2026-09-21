@@ -2311,6 +2311,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-web-counter"
+version = "0.3.0-beta.1"
+dependencies = [
+ "console_error_panic_hook",
+ "flui",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "flui-web-demo"
 version = "0.3.0-beta.1"
 dependencies = [

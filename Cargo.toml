@@ -55,6 +55,7 @@ members = [
     #   cd examples/web_demo && wasm-pack build --target web --out-dir pkg
     "examples/web_demo",      # Web/WASM platform demo (cdylib)
     "examples/painting_demo", # Web/WASM painting + engine demo (cdylib)
+    "examples/web_counter",   # The counter template through `flui::run_app` on the web (cdylib)
 
     # === Tools ===
     "tools/web-server", # Built-in web dev server (wasm-pack + HTTP serve)

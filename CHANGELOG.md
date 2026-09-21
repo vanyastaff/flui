@@ -28,6 +28,17 @@ file records the repo-consumer-visible summary.
 
 ### Fixed
 
+- **Nothing rendered in a browser** (`flui-engine`): every clip-capable
+  pipeline failed to compile under WebGPU because two shaders took
+  screen-space derivatives in non-uniform control flow — `clipAlpha` called
+  `sdfToAlpha` inside a branch on the per-instance clip kind, and the arc
+  shader took its angular gradient after a per-instance early return. Tint
+  (every browser) rejects that; native naga accepted it, which is why the
+  defect never showed on desktop. Both shaders now compute derivatives
+  unconditionally and `select` afterwards. `scripts/check-wgsl-uniformity.py`
+  (in `just gate` and CI) refuses the shape structurally, since no host-side
+  validator catches it. `examples/web_counter` and `just web-counter-build`
+  are the runnable browser evidence.
 - **`flui create` initialised a git repository in the caller's working
   directory** (`flui-cli`): `git init` ran without a directory, so the
   repository landed wherever the command was run from rather than in the

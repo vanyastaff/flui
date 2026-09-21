@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>FLUI Web Counter</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #1a1a2e; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: system-ui, sans-serif; color: #e0e0e0; }
+        #flui-canvas { border: 2px solid #333; border-radius: 8px; width: 800px; height: 600px; }
+    </style>
+</head>
+<body>
+    <canvas id="flui-canvas" width="800" height="600"></canvas>
+    <script type="module">
+        import init from './pkg/flui_web_counter.js';
+        init().catch((error) => {
+            document.body.insertAdjacentHTML('beforeend', `<pre id="flui-error">${error}</pre>`);
+            throw error;
+        });
+    </script>
+</body>
+</html>

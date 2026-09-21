@@ -709,6 +709,18 @@ web-server:
 web-demo-build:
     cd examples/web_demo && wasm-pack build --target web --out-dir pkg
 
+[group("quality")]
+[doc("Refuse a WGSL derivative (dpdx/dpdy/fwidth, or any function that takes one) inside a branch or after a conditional return: browsers' uniformity analysis rejects the module while native naga accepts it, and no host-side oracle catches the class (scripts/check-wgsl-uniformity.py)")]
+wgsl-uniformity-check:
+    python3 -B scripts/check-wgsl-uniformity.py
+
+[group("web")]
+[doc("Build examples/web_counter — the counter template through `flui::run_app` — to WASM with plain cargo + wasm-bindgen (no wasm-pack); serve examples/web_counter/ over HTTP and open index.html in a WebGPU-capable browser")]
+web-counter-build:
+    cargo build -p flui-web-counter --locked --release --target wasm32-unknown-unknown
+    wasm-bindgen --target web --out-dir examples/web_counter/pkg \
+        target/wasm32-unknown-unknown/release/flui_web_counter.wasm
+
 [group("web")]
 [doc("Build examples/painting_demo to WASM (requires wasm-pack)")]
 painting-demo-build:
@@ -809,7 +821,7 @@ text-check:
 
 [group("ci")]
 [doc("The non-test half of `ci` — what the pre-push hook runs")]
-gate: fmt-check text-check font-assets-check inventory-check runtime-conformance-check panic-policy-check port-check clippy doc-strict
+gate: fmt-check text-check font-assets-check inventory-check runtime-conformance-check panic-policy-check port-check wgsl-uniformity-check clippy doc-strict
 
 [group("ci")]
 [doc("Run local CI gates (gate + test + doctests)")]

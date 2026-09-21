@@ -121,7 +121,7 @@ on a real OS, not that beta acceptance is complete.
 | Linux (X11 / Wayland) | **experimental** | CI-executed live smoke only: the `live-smoke` job in `.github/workflows/ci.yml` builds `flui`'s `sliver_demo` example and `flui-live-smoke`, then drives a real window with real X11 input under Xvfb (pixel and exit-code checks, occlusion verified against a real cover window), plus a Wayland variant under headless weston for close-path teardown ordering (`live-smoke` / `live-smoke-wayland` recipes in `justfile`; also described in the README under "Resilience that is tested, not assumed") | No operator-equivalent input verification as used on macOS (only the harness's synthetic/scripted input); no IME check; no resident/background lifecycle coverage; native accessibility bridges are not exercised by this job; X11 and Wayland coverage differ in scope (Wayland covers only close-path teardown ordering) |
 | Windows (Win32) | **unverified** | Cross-compiled Clippy only: `just cross-typecheck` runs `cargo clippy -p flui-platform --target x86_64-pc-windows-msvc --features a11y` | No live window, input, lifecycle, or IME verification has been performed on Windows for this candidate; the "Window-independent owner turns" and "Resident main-window validation" sections explicitly note Windows show/worker paths as cross-compilation evidence only |
 | Android | **unverified** | Cross-compiled Clippy only, for `aarch64-linux-android`: `just cross-typecheck`'s `flui-platform` line plus its `flui-app`/`flui` mobile-runner lines; example crates (`examples/android_demo`, `examples/android_scene`, `examples/android_app`) are excluded from `[workspace.members]` and built separately with `cargo ndk` (`docs/crates.md`, `docs/getting-started.md`) | No simulator, emulator, or device run of any kind; no runtime, input, or lifecycle verification; the automatic-retry surface-recreation backoff (`21af0752`) is host-tested against a scripted backend only, not a real device or emulator failure |
-| Web / WASM | **unverified** | Compile-only: `just wasm-check` runs `cargo check`/`cargo clippy --target wasm32-unknown-unknown` over the wasm-capable crates, plus a `flui`/`hot-reload`-feature compile check | No browser runtime, WebGPU rendering, or input verification has been performed; hot-reload has no web runner integration (README, "Choosing a catalog") |
+| Web / WASM | **experimental** | The counter template's widget tree run through `flui::run_app` in a browser (`examples/web_counter`, `just web-counter-build`, WebGPU): rendered, three clicks on Increment advanced 0 → 3, a click with no target changed nothing, no console errors — see ["Web: the counter in a browser"](#web-the-counter-in-a-browser). Compile coverage stays `just wasm-check`. | One browser (the desktop app's Chromium-based pane) on one machine, served from `localhost`; no Firefox/Safari, no WebGL fallback (WebGPU only), no touch, no IME, no resize/visibility lifecycle check, hot-reload has no web runner. The shader uniformity defect this run exposed is fixed and guarded by `scripts/check-wgsl-uniformity.py`, whose rule is structural, not Tint itself. |
 
 ## Verification order
 
@@ -300,7 +300,19 @@ packages the release set, vendors every third-party dependency with
 `cargo vendor`, installs the archives as a Cargo directory source, generates a
 counter project with `flui create` *without* `--local`, and builds and tests
 it offline; the consumer's lockfile must resolve every `flui-*` package to an
-archive digest. Its first run is recorded below once it passes.
+archive digest.
+
+First run, 2026-09-21 on the `0.3.0-beta.1` cut (`/tmp/flui-beta-consumer-check4.log`):
+`cargo vendor` produced a 971 MiB third-party set; all 29 archives installed
+as a directory source; `flui create beta_consumer --template counter` without
+`--local` wrote `flui = "0.3.0-beta.1"`; `cargo build --offline` compiled the
+consumer from the archives in 7 min 31 s (debug), and `cargo test --offline`
+ran the template's two generated tests (`counter_responds_to_pointer_input`,
+`counter_content_is_centred`), 2 passed. The consumer's lockfile resolved 22
+`flui-*` packages, every one to an archive digest — the counter's dependency
+closure; the CLI, devtools, hot-reload and localizations packages are not in
+it. This is the first clean consumer build from the archives; it does not
+exercise a registry index, upload, or docs.rs.
 
 Baseline verification before the release-policy and surface-color changes:
 `just ci` completed on macOS with 9,439 workspace tests and 52 GPU tests passing,
@@ -584,6 +596,38 @@ closing the secondary then the primary exits cleanly. Full mobile lifecycle,
 live Windows runtime behavior, and native OS-suspend transport remain
 separate work; these desktop results do not imply beta release readiness by
 themselves.
+
+## Web: the counter in a browser
+
+`examples/web_counter` is the generated counter template behind a
+`#[wasm_bindgen(start)]` entry point: `flui::run_app` dispatches to the web
+runner on `wasm32`, which mounts the tree into the page's `#flui-canvas` and
+renders through WebGPU. `just web-counter-build` compiles it with plain
+`cargo build --target wasm32-unknown-unknown --release` and `wasm-bindgen`
+(10.6 MiB of wasm, unoptimised by `wasm-opt`); the page is served with any
+static HTTP server.
+
+First run, 2026-09-21, in the desktop app's Chromium-based browser pane: the
+page loaded, the runtime set the document title, and the canvas stayed white
+with every clip-capable pipeline invalid — the console carried Tint's
+`'dpdx' must only be called from uniform control flow` for the rect, circle,
+arc, texture and glyph shaders. The cause was two shader shapes native naga
+accepts and every browser rejects: `clipAlpha` called `sdfToAlpha` (which
+takes screen-space derivatives) inside an `if` on the per-instance clip kind,
+and the arc shader took its angular gradient after a per-instance early
+`return`. Both now compute every derivative unconditionally and choose with
+`select`; the engine's 624 tests including the GPU-gated suite still pass on
+Metal. naga's validator with every flag on accepts the old source, so there
+is no host-side oracle; `scripts/check-wgsl-uniformity.py` is the structural
+stand-in (a derivative-taking call inside a branch or after a conditional
+return is refused), it is red on the old shaders for exactly the two sites the
+browser named, and it runs in `just gate` and CI.
+
+After the fix the counter rendered — label, `0`, and the Material button —
+three clicks on Increment advanced the count 0 → 1 → 2 → 3, a click on empty
+canvas left it at 3, and the console had no errors. This is one browser, one
+machine, `localhost`; it is evidence for the Web row's move from unverified
+to experimental, not a browser matrix.
 
 ## Native iOS application delivery
 
