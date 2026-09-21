@@ -41,6 +41,12 @@ use crate::app::runtime::WindowPolicy;
     not(target_arch = "wasm32")
 ))]
 use crate::app::{AppConfig, FrameFailureDetail};
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+use flui_view::View;
 
 // ============================================================================
 // Multi-window embedder seam (issue #555's `WindowPolicy`)
@@ -119,6 +125,44 @@ pub fn open_secondary_window(config: AppConfig, policy: WindowPolicy) -> anyhow:
     open_secondary_window_impl(config, policy).map(|_| ())
 }
 
+/// Opens an additional top-level window with mounted widget content and its
+/// own renderer — the content-bearing companion of
+/// [`open_secondary_window`]'s bare shell.
+///
+/// Must be called from the owner thread while the platform loop is live.
+/// The window becomes a real presentation target: it owns its own render
+/// lane, drives its own frame pump, and accepts input routed to its own
+/// realm — the same contract `run_app`'s primary window satisfies. The
+/// `root` widget is mounted as the new window's root, sharing nothing
+/// widget-visible with any sibling presentation on this host.
+///
+/// # Policy
+///
+/// `WindowPolicy::SeparateRealms` is the only policy that admits content:
+/// each such window owns its own `UiRealm`, its own widget tree, its own
+/// raster lane. `WindowPolicy::SharedRealm` currently refuses content at
+/// admission with an `Err` — the realm's single-raster-lane contract would
+/// have to be relaxed before a presentation inside one shared realm could
+/// own its own renderer, and that relaxation is deliberately not smuggled
+/// in through this API.
+///
+/// # Errors
+///
+/// The same as [`open_secondary_window`], plus the renderer-initialization
+/// failures `install_desktop_window` can produce: GPU init
+/// (`AppWindowError::Renderer`), mount (`AppWindowError::Mount`).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub fn open_window<V>(config: AppConfig, policy: WindowPolicy, root: V) -> anyhow::Result<()>
+where
+    V: View + Clone + 'static,
+{
+    open_window_with_content_impl(config, policy, root).map(|_| ())
+}
+
 // Same cfg as `open_secondary_window`/`open_secondary_window_impl`/
 // `finish_open_secondary_window` themselves (desktop-only) -- both statics
 // exist only to serve that family, and `PENDING_SECONDARY_WINDOW_COMPLETIONS`
@@ -151,6 +195,17 @@ struct SecondaryWindowInstallConfig {
 struct PendingCompletion {
     config: SecondaryWindowInstallConfig,
     window: Arc<dyn flui_platform::traits::PlatformWindow>,
+    /// The install continuation. `None` runs the bare-shell
+    /// [`finish_open_secondary_window`]; `Some` runs the closure, which
+    /// captures everything the content-install path owns (root widget,
+    /// worker reload handle, etc.).
+    ///
+    /// `FnOnce` because a real install consumes the closure's captured
+    /// root exactly once. Boxed so `PendingCompletion` stays
+    /// non-generic — every caller of the drain loop reads the same type,
+    /// and the generic parameter lives only at the `open_window` call
+    /// site that produced this record.
+    install: Option<Box<dyn FnOnce(SecondaryWindowInstallConfig, Arc<dyn flui_platform::traits::PlatformWindow>) -> anyhow::Result<(RealmDispatcher, Arc<dyn flui_platform::traits::PlatformWindow>)>>>,
 }
 
 #[cfg(all(
@@ -484,6 +539,7 @@ pub(super) fn drain_pending_secondary_window_completions() {
                     queue.borrow_mut().push(PendingCompletion {
                         config: request.config,
                         window,
+                        install: None,
                     });
                 });
             }
@@ -501,7 +557,16 @@ pub(super) fn drain_pending_secondary_window_completions() {
         PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| std::mem::take(&mut *queue.borrow_mut()));
     for completion in completed {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if let Err(error) = finish_open_secondary_window(completion.config, completion.window) {
+            // `Some` — a content-bearing secondary window from
+            // `open_window`'s deferred-install path: the closure owns the
+            // root widget and the worker reload handle. `None` — the bare
+            // shell that predates content support: no root, no renderer,
+            // just the realm install and the platform callbacks.
+            let outcome = match completion.install {
+                Some(install) => install(completion.config, completion.window),
+                None => finish_open_secondary_window(completion.config, completion.window),
+            };
+            if let Err(error) = outcome {
                 tracing::error!(%error, "installing resolved secondary window failed");
             }
         }));
@@ -591,6 +656,136 @@ pub(super) fn open_secondary_window_impl(
         WindowOpen::Pending(pending) => {
             spawn_pending_secondary_window_completion(install_config, pending)?;
             Ok(None)
+        }
+    }
+}
+
+/// The content-bearing companion of [`open_secondary_window_impl`]:
+/// identical admission and reservation protocol, but the resolved window
+/// is routed to a full `install_desktop_window`-style mount instead of
+/// the bare-shell `finish_open_secondary_window` — the realm owns a widget
+/// tree, a GPU raster lane, and a frame pump.
+///
+/// `SharedRealm` is refused at admission, before any window creation
+/// work runs: the realm's raster lane and content renderer are per-realm,
+/// not per-presentation today, so a shared realm presenting N windows
+/// with content would need a lane-per-presentation redesign before this
+/// arm could be honoured.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) fn open_window_with_content_impl<V>(
+    config: AppConfig,
+    policy: WindowPolicy,
+    root: V,
+) -> anyhow::Result<
+    Option<(
+        RealmDispatcher,
+        Arc<dyn flui_platform::traits::PlatformWindow>,
+    )>,
+>
+where
+    V: View + Clone + 'static,
+{
+    use flui_platform::{WindowOpen, WindowOptions};
+
+    if policy == WindowPolicy::SharedRealm {
+        anyhow::bail!(
+            "open_window with content requires WindowPolicy::SeparateRealms; SharedRealm would \
+             imply a lane-per-presentation raster contract the realm does not provide today"
+        );
+    }
+
+    let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
+    anyhow::ensure!(
+        secondary_install_admitted(&loop_identity),
+        "secondary window admission is closed: application is quitting"
+    );
+
+    let _reservation = reserve_window()?;
+    let options: WindowOptions = (&config).into();
+    let open = with_owner_platform(|owner| owner.open_window(options))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "open_window called with no OwnerPlatform installed on this thread -- \
+                 call only from inside, or after, a running Platform::run's on_ready"
+            )
+        })?
+        .map_err(|error| anyhow::Error::from(error).context("window open request failed"))?;
+
+    match open {
+        WindowOpen::Ready(window) => {
+            // The install consumes nothing from this function's stack, so
+            // the closure's captured values are the whole state: the
+            // `RealmSlot` install is deferred past whatever
+            // `dispatch_platform_realm` currently owns the realm checkout
+            // (this function may itself run inside one — e.g. a widget
+            // `on_pressed`), and the deferred completion drains after the
+            // dispatch loop on the realm's own turn. Routing through
+            // `PENDING_SECONDARY_WINDOW_COMPLETIONS` is what lets
+            // `install_desktop_window`'s internals — which run
+            // `install_realm_alongside` synchronously against the
+            // registry — observe an idle checkout rather than one held by
+            // the caller's own dispatch.
+            let install_config = SecondaryWindowInstallConfig {
+                loop_identity: Arc::clone(&loop_identity),
+                policy,
+                shared_with: None,
+                reservation: _reservation,
+                close_request_handler: config.close_request_handler.clone(),
+                frame_failure_detail: config.frame_failure_detail,
+            };
+            let reload = crate::app::hot_reload::WorkerReload::from_config(&config);
+            let host = APP_RUNTIME.with(|slot| slot.borrow().main_host_lifecycle);
+            let config_for_install = config.clone();
+            PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
+                queue.borrow_mut().push(PendingCompletion {
+                    config: install_config,
+                    window: Arc::clone(&window),
+                    install: Some(Box::new(move |install_slot, window| {
+                        let _ = install_slot; // fields already captured separately
+                        super::desktop::install_desktop_window(
+                            root,
+                            &config_for_install,
+                            reload,
+                            Arc::clone(&window),
+                            host,
+                        )
+                        .map(|rendered| {
+                            (
+                                RealmDispatcher {
+                                    owner_thread: std::thread::current().id(),
+                                    address: rendered.address,
+                                },
+                                window,
+                            )
+                        })
+                        .map_err(|error| {
+                            anyhow::anyhow!(error)
+                                .context("installing rendered window failed")
+                        })
+                    })),
+                });
+            });
+            // Wake the loop so the next owner turn drains the completion.
+            // The reservation itself does not wake anything: the loop's
+            // drain runs on its regular wake points (see
+            // `drain_pending_secondary_window_completions`'s own callers),
+            // but an idle loop with no other work would never reach one.
+            // Poking the runtime's wake handle is the ordinary "I just
+            // queued background work" signal and matches what
+            // `UiRealm::request_redraw` already does from
+            // `request_redraw_for`.
+            with_owner_platform(|owner| owner.proxy().wake());
+            Ok(None)
+        }
+        WindowOpen::Pending(_) => {
+            anyhow::bail!(
+                "open_window with content does not yet support deferred window creation \
+                 (`Pending` arm); construct on the owner thread where windows resolve Ready"
+            );
         }
     }
 }
@@ -1116,7 +1311,7 @@ mod quit_notification_tests {
                             PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                                 queue
                                     .borrow_mut()
-                                    .push(PendingCompletion { config, window });
+                                    .push(PendingCompletion { config, window, install: None });
                             });
                             shared.request_exit_policy_reevaluation();
                             assert!(reevaluation.drive());
@@ -1262,5 +1457,97 @@ mod quit_notification_tests {
                 Ok(())
             }))
             .expect("new loop");
+    }
+
+    /// `open_window` (the content-bearing companion of [`open_secondary_window`])
+    /// refuses [`WindowPolicy::SharedRealm`] at admission, before any native
+    /// window is created. The raster lane and the renderer a content window
+    /// owns are per-realm, not per-presentation, and this gate is the one
+    /// place that constraint is turned into a typed failure instead of a
+    /// deferred crash (`install_desktop_window`'s mount inside a shared
+    /// realm would land its own `install_realm_alongside` call against an
+    /// already-hosted realm, which the registry correctly refuses — that
+    /// panic would be a worse signal than this `Err`).
+    ///
+    /// The headless platform answers `Ready` for a window creation, so the
+    /// gate is what stops the test short of any real GPU work; the test
+    /// would fail identically in production, never on the shared-realm arm.
+    #[test]
+    fn open_window_with_content_refuses_shared_realm_at_admission() {
+        let _clear = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+        platform
+            .run(Box::new(|owner| {
+                install_owner_platform(owner).expect("install owner wake transport");
+                // A hosted realm is required for the admission check to
+                // consider the SharedRealm alternative at all — without one
+                // the refusal would come from the shared-realm lookup
+                // instead of the policy gate we are pinning.
+                install_platform_realm(
+                    crate::app::ui_realm::UiRealm::for_test(),
+                    &crate::app::window_test_support::headless_test_window(),
+                );
+                let outcome =
+                    open_window_with_content_impl(
+                        AppConfig::default(),
+                        WindowPolicy::SharedRealm,
+                        SecondaryContentStub,
+                    );
+                match outcome {
+                    Err(error) => {
+                        let message = error.to_string();
+                        assert!(
+                            message.contains("SeparateRealms")
+                                || message.contains("SharedRealm"),
+                            "refusal must name the rejected policy, got: {message}"
+                        );
+                    }
+                    Ok(_) => panic!("SharedRealm with content must be refused at admission"),
+                }
+                Ok(())
+            }))
+            .expect("headless run");
+    }
+}
+
+/// Minimal `View` the admission-gate test installs through
+/// `open_window_with_content_impl`: the gate refuses at admission, so the
+/// root is never mounted and its content never runs — the type exists to
+/// name the parameter, not to be driven.
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[derive(Clone)]
+struct SecondaryContentStub;
+
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl flui_view::StatelessView for SecondaryContentStub {
+    fn build(
+        &self,
+        _ctx: &dyn flui_view::BuildContext,
+    ) -> impl flui_view::IntoView {
+        use flui_view::ViewExt;
+        self.clone().boxed()
+    }
+}
+
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl flui_view::View for SecondaryContentStub {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
     }
 }

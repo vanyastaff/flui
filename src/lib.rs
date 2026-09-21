@@ -154,6 +154,15 @@ pub use flui_widgets as widgets;
 /// The application entry point — builds the tree, opens a window, and drives
 /// the frame loop. Re-exported from [`app`] (`flui-app`).
 pub use flui_app::run_app;
+/// Open an additional top-level window with mounted widget content.
+/// Re-exported from [`app`] (`flui-app`).
+pub use flui_app::app::open_window;
+/// Open an additional top-level window without widget content.
+/// Re-exported from [`app`] (`flui-app`).
+pub use flui_app::app::open_secondary_window;
+/// Application and window configuration types. Re-exported from [`app`]
+/// (`flui-app`).
+pub use flui_app::app::{AppConfig, WindowPolicy};
 
 /// Everything an application author needs in scope to write widget code:
 /// the widget catalog prelude, [`run_app`], and — with the `material` feature
@@ -199,7 +208,10 @@ pub use flui_app::run_app;
 /// `CupertinoTabScaffold`, …), so it stays at `flui::cupertino` rather than
 /// joining this glob.
 pub mod prelude {
-    pub use flui_app::run_app;
+pub use flui_app::run_app;
+pub use flui_app::app::open_window;
+pub use flui_app::app::open_secondary_window;
+pub use flui_app::app::{AppConfig, WindowPolicy};
     #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,

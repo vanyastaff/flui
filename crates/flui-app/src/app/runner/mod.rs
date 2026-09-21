@@ -53,6 +53,7 @@ pub(in crate::app) use realm_dispatch::{RealmTask, SurfaceApplier};
     not(target_arch = "wasm32")
 ))]
 pub use secondary_window::open_secondary_window;
+pub use secondary_window::open_window;
 #[cfg(target_arch = "wasm32")]
 use web::run_web;
 
