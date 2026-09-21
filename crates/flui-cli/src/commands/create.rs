@@ -139,7 +139,10 @@ pub fn execute(
 
 /// Initialize a git repository in the project directory.
 fn init_git_repo(dir: &Path) -> CliResult<()> {
+    // In the project directory, never the caller's: `git init` without a
+    // directory turns wherever the user ran `flui create` into a repository.
     GitCommand::init()
+        .current_dir(dir)
         .output_style(OutputStyle::Silent)
         .run()
         .ok(); // Ignore git init errors (git might not be installed)

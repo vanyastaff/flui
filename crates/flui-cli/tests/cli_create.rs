@@ -279,6 +279,44 @@ fn generated_hot_reload_workspace_compiles() {
     );
 }
 
+/// `git init` lands in the generated project, not in the directory the CLI
+/// was run from. Before the fix, `flui create` initialised a repository in
+/// the caller's working directory — a test run left an empty `.git` inside
+/// `crates/flui-cli` itself, which made `cargo package` refuse every file
+/// in this crate as uncommitted.
+#[test]
+fn create_project_initialises_git_in_the_project_not_the_caller_directory() {
+    let tmp = TempDir::new().expect("temp dir");
+    let caller = TempDir::new().expect("caller directory");
+    let project_dir = tmp.path().join("test-git-placement");
+
+    let mut command = cargo_bin_cmd!("flui");
+    command
+        .current_dir(caller.path())
+        .args([
+            "create",
+            "test-git-placement",
+            "--template",
+            "basic",
+            "--org",
+            "com.test",
+            "--no-check",
+        ])
+        .arg("--path")
+        .arg(tmp.path())
+        .assert()
+        .success();
+
+    assert!(
+        project_dir.join(".git").is_dir(),
+        "the generated project must be a git repository (or git is absent on this host)"
+    );
+    assert!(
+        !caller.path().join(".git").exists(),
+        "the caller's working directory must not become a repository"
+    );
+}
+
 #[test]
 fn create_project_with_basic_template() {
     let tmp = TempDir::new().expect("temp dir");

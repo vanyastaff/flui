@@ -11,6 +11,16 @@ file records the repo-consumer-visible summary.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`flui create` initialised a git repository in the caller's working
+  directory** (`flui-cli`): `git init` ran without a directory, so the
+  repository landed wherever the command was run from rather than in the
+  generated project. It now runs inside the project; a regression test runs
+  the CLI from an unrelated directory and checks both locations. (A stray
+  empty `.git` this left inside `crates/flui-cli` during a test run also made
+  `cargo package` refuse every file in that crate as uncommitted.)
+
 ### Added
 
 - **Typed window errors on the facade** (`flui-app`, `flui`): `open_window` and

@@ -626,6 +626,12 @@ pub struct GitCommand {
     subcommand: String,
     args: Vec<String>,
     output_style: OutputStyle,
+    /// The repository directory the command runs in. `None` inherits the
+    /// process's working directory — never what a project-creating caller
+    /// wants: `flui create` once ran `git init` wherever the user happened
+    /// to stand, which is how a stray empty repository ended up inside this
+    /// crate's own source tree from a test run.
+    current_dir: Option<std::path::PathBuf>,
 }
 
 impl GitCommand {
@@ -653,6 +659,7 @@ impl GitCommand {
             subcommand: subcommand.into(),
             args: Vec::new(),
             output_style: OutputStyle::Silent,
+            current_dir: None,
         }
     }
 
@@ -660,6 +667,15 @@ impl GitCommand {
     #[must_use]
     pub fn arg(mut self, arg: impl Into<String>) -> Self {
         self.args.push(arg.into());
+        self
+    }
+
+    /// Run the command inside `dir` rather than the process's working
+    /// directory. Every command that targets a specific repository must set
+    /// this; see the field's doc for the failure it prevents.
+    #[must_use]
+    pub fn current_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.current_dir = Some(dir.into());
         self
     }
 
@@ -686,6 +702,9 @@ impl GitCommand {
     pub fn run(self) -> CliResult<CommandResult> {
         let mut cmd = Command::new("git");
         cmd.arg(&self.subcommand);
+        if let Some(dir) = &self.current_dir {
+            cmd.current_dir(dir);
+        }
 
         for arg in &self.args {
             cmd.arg(arg);
