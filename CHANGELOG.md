@@ -5,11 +5,26 @@ All notable changes to the FLUI workspace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 FLUI is pre-release and not published to crates.io; entries are grouped under
 `[Unreleased]` until a first tagged release cuts them over. Workspace version:
-`0.2.0` (all crates share `[workspace.package].version`). Fine-grained phase
+`0.3.0-beta.1` (all crates share `[workspace.package].version`; every internal
+dependency pins that exact prerelease, so a published cohort can never mix
+with a later one). The first tag will be `v0.3.0-beta.1`. Fine-grained phase
 history lives in [`docs/ROADMAP-TRACKER.md`](docs/ROADMAP-TRACKER.md); this
 file records the repo-consumer-visible summary.
 
 ## [Unreleased]
+
+### Changed
+
+- **Version `0.3.0-beta.1`, exact cohort pins, and archives that carry only
+  what a consumer compiles.** The workspace is a prerelease; every internal
+  `path` dependency now requires `=0.3.0-beta.1`. The `flui` facade package
+  declares an `include` list (its archive went from 666 files — docs, scripts,
+  CI, editor and research directories — to 79), and every published crate
+  ships `LICENSE`, `LICENSE-APACHE` and `NOTICE`, which the archive check now
+  requires. `just release-consumer-check` packages the release set, vendors
+  every third-party dependency, installs the archives as a Cargo directory
+  source and builds and tests a `flui create` project against them offline —
+  the first proof that a registry consumer can build without this checkout.
 
 ### Fixed
 

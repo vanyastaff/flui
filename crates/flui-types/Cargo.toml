@@ -17,7 +17,7 @@ autotests = false
 # Geometry primitives — split out into its own Layer-0 crate.
 # flui-types re-exports `pub use flui_geometry as geometry`
 # so existing `flui_types::geometry::*` consumers continue to compile.
-flui-geometry = { path = "../flui-geometry", version = "0.2.0" }
+flui-geometry = { path = "../flui-geometry", version = "=0.3.0-beta.1" }
 
 # Serialization support (optional).
 # `rc` enables `Serialize`/`Deserialize` for `Arc<T>` — needed by

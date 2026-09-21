@@ -36,7 +36,7 @@ default = []
 # production dependency cycle: `flui-foundation` uses `flui-macros` only
 # as a dev-dependency to test derives inside the runtime owner.
 [dev-dependencies]
-flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "=0.3.0-beta.1" }
 
 [lints]
 workspace = true

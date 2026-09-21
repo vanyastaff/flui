@@ -11,6 +11,7 @@ import tarfile
 import tomllib
 
 ROLES = {'facade', 'cli', 'support', 'private'}
+LICENCE_FILES = ('LICENSE', 'LICENSE-APACHE', 'NOTICE')
 REGISTRY_INDEX = 'https://github.com/rust-lang/crates.io-index'
 
 
@@ -312,6 +313,12 @@ def verify_archives(root, selected):
                 errors.append(f'{name}: normalized manifest absent')
                 continue
             normalized = tomllib.loads(manifest.read().decode())
+            # The dual licence texts and the Flutter attribution travel with
+            # every archive; a registry consumer never sees the checkout root.
+            names = set(package.getnames())
+            for required in LICENCE_FILES:
+                if f'{name}-{version}/{required}' not in names:
+                    errors.append(f'{name}: archive lacks {required}')
         expected = {declaration_identity(alias, spec, kind, target)
                     for alias, spec, _, kind, target in declarations(documents[name],
                         directories[name], root, workspace)}

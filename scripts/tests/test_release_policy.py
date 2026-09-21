@@ -39,6 +39,8 @@ class Fixture:
         directory = self.root if name == 'flui' else self.root / 'crates' / name
         (directory / 'src').mkdir(parents=True, exist_ok=True)
         (directory / 'src/lib.rs').write_text('pub fn fixture() {}\n')
+        for licence in release_policy.LICENCE_FILES:
+            (directory / licence).write_text(f'{licence} fixture text\n')
         allowed = 'false' if role == 'private' else '["crates-io"]'
         if publish is not None:
             allowed = publish

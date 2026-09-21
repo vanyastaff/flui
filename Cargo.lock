@@ -1695,7 +1695,7 @@ checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
 
 [[package]]
 name = "flui"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "anyhow",
  "flui-animation",
@@ -1734,7 +1734,7 @@ dependencies = [
 
 [[package]]
 name = "flui-animation"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "criterion",
  "flui-foundation",
@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "flui-app"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "accesskit",
  "android-activity",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "flui-assets"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-types",
  "image",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "flui-build"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "cargo_metadata",
  "indicatif",
@@ -1818,7 +1818,7 @@ dependencies = [
 
 [[package]]
 name = "flui-cli"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -1845,7 +1845,7 @@ dependencies = [
 
 [[package]]
 name = "flui-cupertino"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-animation",
  "flui-foundation",
@@ -1862,7 +1862,7 @@ dependencies = [
 
 [[package]]
 name = "flui-desktop-scene"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-hot-reload",
  "flui-layer",
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "flui-devtools"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-foundation",
  "flui-hot-reload",
@@ -1888,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "flui-engine"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -1921,7 +1921,7 @@ dependencies = [
 
 [[package]]
 name = "flui-foundation"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-macros",
  "flui-types",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "flui-geometry"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "bytemuck",
  "glam",
@@ -1948,7 +1948,7 @@ dependencies = [
 
 [[package]]
 name = "flui-hot-reload"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "android_log-sys",
  "flui-foundation",
@@ -1965,7 +1965,7 @@ dependencies = [
 
 [[package]]
 name = "flui-hot-reload-lifecycle-fixture"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-hot-reload",
  "flui-layer",
@@ -1974,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "flui-interaction"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "criterion",
  "cursor-icon",
@@ -1998,7 +1998,7 @@ dependencies = [
 
 [[package]]
 name = "flui-layer"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "bitflags 2.13.2",
  "flui-foundation",
@@ -2012,7 +2012,7 @@ dependencies = [
 
 [[package]]
 name = "flui-live-smoke"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "anyhow",
  "x11rb 0.14.0",
@@ -2020,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "flui-localizations"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-types",
  "flui-widgets",
@@ -2028,7 +2028,7 @@ dependencies = [
 
 [[package]]
 name = "flui-log"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "android_log-sys",
  "thiserror 2.0.20",
@@ -2042,7 +2042,7 @@ dependencies = [
 
 [[package]]
 name = "flui-macros"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-foundation",
  "proc-macro-crate",
@@ -2053,7 +2053,7 @@ dependencies = [
 
 [[package]]
 name = "flui-material"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-animation",
  "flui-foundation",
@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "flui-objects"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-animation",
  "flui-foundation",
@@ -2089,7 +2089,7 @@ dependencies = [
 
 [[package]]
 name = "flui-painting"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "cosmic-text",
  "criterion",
@@ -2106,7 +2106,7 @@ dependencies = [
 
 [[package]]
 name = "flui-painting-demo"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "console_error_panic_hook",
  "flui-engine",
@@ -2120,7 +2120,7 @@ dependencies = [
 
 [[package]]
 name = "flui-platform"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -2167,7 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "flui-rendering"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "bitflags 2.13.2",
  "criterion",
@@ -2199,7 +2199,7 @@ dependencies = [
 
 [[package]]
 name = "flui-scheduler"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "bitflags 2.13.2",
  "criterion",
@@ -2217,7 +2217,7 @@ dependencies = [
 
 [[package]]
 name = "flui-semantics"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "accesskit",
  "criterion",
@@ -2235,7 +2235,7 @@ dependencies = [
 
 [[package]]
 name = "flui-testing"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "accesskit",
  "criterion",
@@ -2258,7 +2258,7 @@ dependencies = [
 
 [[package]]
 name = "flui-tree"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "bon",
  "flui-foundation",
@@ -2269,7 +2269,7 @@ dependencies = [
 
 [[package]]
 name = "flui-types"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "criterion",
  "flui-geometry",
@@ -2282,7 +2282,7 @@ dependencies = [
 
 [[package]]
 name = "flui-view"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "bon",
  "criterion",
@@ -2312,7 +2312,7 @@ dependencies = [
 
 [[package]]
 name = "flui-web-demo"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "console_error_panic_hook",
  "flui-platform",
@@ -2324,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "flui-web-server"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "axum",
  "clap",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "flui-widgets"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "bitflags 2.13.2",
  "flui-animation",
@@ -2762,7 +2762,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hot-reload-counter-host"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-app",
  "flui-hot-reload",
@@ -2772,7 +2772,7 @@ dependencies = [
 
 [[package]]
 name = "hot-reload-counter-logic"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-hot-reload",
  "flui-types",
@@ -2783,7 +2783,7 @@ dependencies = [
 
 [[package]]
 name = "hot-reload-counter-types"
-version = "0.2.0"
+version = "0.3.0-beta.1"
 dependencies = [
  "flui-hot-reload",
  "flui-view",
