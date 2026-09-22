@@ -132,6 +132,86 @@ fn double_tap_fires_on_two_quick_taps() {
     );
 }
 
+/// `on_double_tap_down` fires at the second contact's own DOWN, ahead of
+/// (and independently of) `on_double_tap`, which waits for that contact to
+/// also lift cleanly — the whole point of the callback, per its own doc.
+#[test]
+fn double_tap_down_fires_before_the_second_contact_lifts() {
+    let downs = Arc::new(AtomicUsize::new(0));
+    let taps = Arc::new(AtomicUsize::new(0));
+    let (down_cb, tap_cb) = (Arc::clone(&downs), Arc::clone(&taps));
+
+    let mut scoped = lay_out(
+        GestureDetector::new()
+            .on_double_tap_down(move |_details| {
+                down_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_double_tap(move || {
+                tap_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(target()),
+        tight(100.0, 100.0),
+    );
+
+    // First tap.
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    scoped.pump_for(Duration::from_millis(50));
+
+    // Second contact: DOWN only so far, no up yet.
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    assert_eq!(
+        downs.load(Ordering::SeqCst),
+        1,
+        "on_double_tap_down fires the instant the second contact goes down"
+    );
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        0,
+        "on_double_tap must not fire yet -- the second contact has not lifted"
+    );
+
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "on_double_tap fires once the second contact lifts cleanly"
+    );
+}
+
+/// A detector configured with ONLY `on_double_tap_down` (no `on_double_tap`
+/// at all — `EditableText`'s own double-tap word-select composition never
+/// sets `on_double_tap`) must still join the arena for its own callback to
+/// have any chance of firing. Regression coverage for exactly that gap:
+/// `RecognizerGroup::double_tap_active` originally gated participation on
+/// `on_double_tap` alone, which would have made this configuration silently
+/// never fire anything.
+#[test]
+fn on_double_tap_down_alone_with_no_on_double_tap_still_participates() {
+    let downs = Arc::new(AtomicUsize::new(0));
+    let in_cb = Arc::clone(&downs);
+
+    let mut scoped = lay_out(
+        GestureDetector::new()
+            .on_double_tap_down(move |_details| {
+                in_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(target()),
+        tight(100.0, 100.0),
+    );
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    scoped.pump_for(Duration::from_millis(50));
+    scoped.dispatch_pointer_down(50.0, 50.0);
+
+    assert_eq!(
+        downs.load(Ordering::SeqCst),
+        1,
+        "on_double_tap_down alone must still fire without on_double_tap set"
+    );
+}
+
 #[test]
 fn second_tap_after_the_window_is_not_a_double_tap() {
     let double_taps = Arc::new(AtomicUsize::new(0));

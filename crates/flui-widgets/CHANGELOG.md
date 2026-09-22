@@ -22,6 +22,26 @@ Versioning: per `docs/release.md` policy.
 - **`SubmitCallback`** (`Rc<dyn Fn(&str)>`) exported at the crate root, the
   shared alias `EditableText::on_submitted`/`RawTextField::on_submitted`
   (and `flui_material::TextField::on_submitted`) all use.
+- **Word-boundary caret/selection/delete**: `TextEditingController` gained
+  `move_caret_word_left`/`move_caret_word_right`,
+  `extend_selection_word_left`/`extend_selection_word_right`, and
+  `delete_word_backward`/`delete_word_forward` — UAX #29 word segments
+  (`unicode-segmentation`), not ASCII whitespace runs. `EditableText`
+  wires them to Ctrl (Windows/Linux) or Alt (macOS's Option) +
+  Left/Right/Backspace/Delete, composing with Shift the same way
+  character movement already does. See the `TextEditingController` type
+  doc's `# Word unit` section and `ARCHITECTURE.md`'s Mapping decision #19
+  for the forward/backward asymmetry and the known
+  Thai/Lao/Khmer/Myanmar dictionary-segmentation limitation.
+- **Double-tap word selection**: `GestureDetector` gained
+  `on_double_tap_down` (Flutter parity:
+  `DoubleTapGestureRecognizer.onDoubleTapDown`), fired at the second
+  contact's own DOWN rather than waiting for it to also lift.
+  `EditableText` composes a `GestureDetector` around its existing
+  `Listener`-based pointer handlers to widen the caret into the enclosing
+  word on double-tap, reusing the same `TextLayout::get_word_boundary`
+  (`flui-painting`) Ctrl/Alt+Arrow word-jump uses one layer down. See
+  `ARCHITECTURE.md`'s Mapping decision #20.
 - Initial `flui-widgets` Core.1 vertical-slice catalog.
 - Layout family: `Padding`, `Align`, `Center`, `SizedBox`, `ConstrainedBox`, `LimitedBox`, `Transform`, `AspectRatio`, `Baseline`, `FittedBox`, `FractionallySizedBox`, `FractionalTranslation`.
 - Flex/stack family: `Row`, `Column`, `Flex`, `Expanded`, `Flexible`, `Stack`, `Positioned`.

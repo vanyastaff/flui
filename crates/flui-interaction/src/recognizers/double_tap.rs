@@ -80,6 +80,7 @@ pub struct DoubleTapGestureRecognizer {
 #[derive(Default)]
 struct DoubleTapCallbacks {
     on_double_tap: Option<DoubleTapCallback>,
+    on_double_tap_down: Option<DoubleTapCallback>,
     on_double_tap_cancel: Option<DoubleTapCallback>,
 }
 
@@ -181,6 +182,25 @@ impl DoubleTapGestureRecognizer {
         self
     }
 
+    /// Set the double-tap-DOWN callback — fires the instant the second
+    /// contact goes down (validated by timing/slop against the first tap),
+    /// not after it lifts. Flutter parity:
+    /// `DoubleTapGestureRecognizer.onDoubleTapDown` — exists for exactly
+    /// the case `on_double_tap` cannot serve: a consumer (double-tap word
+    /// selection, say) that wants the tap's position as soon as the
+    /// gesture is confirmed, without waiting the extra down-to-up round
+    /// trip `on_double_tap` needs to also confirm the tap didn't drag past
+    /// slop or get cancelled. Both callbacks may fire for the same
+    /// gesture: `on_double_tap_down` first, `on_double_tap` after, if the
+    /// second contact lifts cleanly.
+    pub fn with_on_double_tap_down(
+        self: Arc<Self>,
+        callback: impl Fn(DoubleTapDetails) + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_double_tap_down = Some(Rc::new(callback));
+        self
+    }
+
     /// Set the double tap cancel callback
     pub fn with_on_double_tap_cancel(
         self: Arc<Self>,
@@ -245,6 +265,21 @@ impl DoubleTapGestureRecognizer {
                     // Valid second tap down.
                     state.phase = DoubleTapPhase::SecondDown;
                     state.current_position = Some(position);
+                    drop(state);
+
+                    // Clone-then-drop-then-call: `state` above is already
+                    // released before this runs, but the callback itself is
+                    // arbitrary user code that may re-enter this recognizer
+                    // (e.g. through the arena) — never call it while a lock
+                    // this function took is still held.
+                    let callback = self.callbacks.borrow().on_double_tap_down.clone();
+                    if let Some(callback) = callback {
+                        callback(DoubleTapDetails {
+                            global_position,
+                            local_position: position,
+                            kind,
+                        });
+                    }
                 }
             }
             _ => {}
@@ -808,6 +843,58 @@ mod tests {
 
         // Should NOT have called double tap callback
         assert!(!*tapped.lock());
+    }
+
+    #[test]
+    fn on_double_tap_down_fires_at_the_second_contacts_own_down_not_its_up() {
+        let arena = GestureArena::new();
+        let down_seen = Arc::new(Mutex::new(None));
+        let down_seen_clone = down_seen.clone();
+        let up_seen = Arc::new(Mutex::new(false));
+        let up_seen_clone = up_seen.clone();
+
+        let recognizer = DoubleTapGestureRecognizer::new(arena)
+            .with_on_double_tap_down(move |details| {
+                // PORT-CHECK-OK-LOCK: Option<Offset<Pixels>> is Copy, no significant drop
+                *down_seen_clone.lock() = Some(details.local_position);
+            })
+            .with_on_double_tap(move |_details| {
+                *up_seen_clone.lock() = true;
+            });
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let first_pos = Offset::new(px(100.0), px(100.0));
+
+        // First tap: down + up, entering the inter-tap window.
+        recognizer.add_pointer(pointer, first_pos, first_pos);
+        let up_event = make_up_event(first_pos, PointerType::Touch);
+        recognizer.handle_event(PointerDispatch::at_root(&up_event));
+        assert_eq!(
+            recognizer.gesture_state.lock().phase,
+            DoubleTapPhase::WaitingForSecond
+        );
+
+        // Second tap: DOWN only so far, no up yet.
+        let second_pos = Offset::new(px(102.0), px(101.0)); // within slop
+        recognizer.handle_down(second_pos, second_pos, PointerType::Touch);
+
+        assert_eq!(
+            *down_seen.lock(),
+            Some(second_pos),
+            "on_double_tap_down must fire the instant the second contact goes down"
+        );
+        assert!(
+            !*up_seen.lock(),
+            "on_double_tap must not fire yet -- the second contact has not lifted"
+        );
+
+        // Lifting the second contact fires on_double_tap too, same gesture.
+        let second_up = make_up_event(second_pos, PointerType::Touch);
+        recognizer.handle_event(PointerDispatch::at_root(&second_up));
+        assert!(
+            *up_seen.lock(),
+            "on_double_tap fires once the second contact lifts cleanly"
+        );
     }
 
     #[test]

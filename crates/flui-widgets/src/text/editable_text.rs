@@ -154,6 +154,49 @@ fn source_offset_at_global(
         .flatten()
 }
 
+/// The SOURCE byte range of the word under a point in the root's
+/// coordinate space — the double-tap counterpart of
+/// [`source_offset_at_global`]; see its doc for the coordinate mapping
+/// and masked/source distinction, both shared verbatim here.
+///
+/// Delegates to [`RenderEditable::word_range_at_local_offset`]
+/// (`flui-objects`), which itself delegates to
+/// [`TextLayout::get_word_boundary`](flui_painting::TextLayout::get_word_boundary)
+/// — the UAX #29 word segmentation this widget's Ctrl/Alt+Arrow word-jump
+/// also uses, one layer down, so a double-tap and a keyboard word-jump
+/// agree on where a word starts and ends.
+fn source_word_range_at_global(
+    owner: &PipelineCell,
+    inner_anchor: &flui_objects::SubtreeAnchor,
+    global: Offset<Pixels>,
+    obscuring: Option<char>,
+) -> Option<Range<usize>> {
+    let anchor_id = inner_anchor.get()?;
+    owner
+        .try_with(|owner| {
+            let root_id = owner.root_id()?;
+            let tree = owner.render_tree();
+            let editable_id = *tree.children(anchor_id).first()?;
+            let editable = tree
+                .get(editable_id)?
+                .as_box()?
+                .render_object()
+                .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: same sanctioned boundary as `source_offset_at_global` above; see docs/PORT.md FR-033/widgets.
+            let to_root = owner.transform_to(editable_id, root_id)?;
+            let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
+            let masked = editable.word_range_at_local_offset(Offset::new(x, y))?;
+            Some(match obscuring {
+                Some(mask) => {
+                    let text = editable.plain_text();
+                    source_offset_for_masked_offset(text, masked.start, mask)
+                        ..source_offset_for_masked_offset(text, masked.end, mask)
+                }
+                None => masked,
+            })
+        })
+        .flatten()
+}
+
 /// The source byte offset a masked byte offset corresponds to — the inverse
 /// of [`obscure`]'s mapping.
 ///
@@ -623,12 +666,14 @@ impl EditableTextState {
     ///
     /// # What is deliberately absent
     ///
-    /// Shift-click extension, double-tap word selection and triple-tap line
-    /// selection. Each needs a click-count or a modifier this level does not
-    /// see — `Listener` delivers raw pointer events, and the tap/multi-tap
-    /// arbitration that produces those lives in `flui-interaction`'s
-    /// recognisers. `RenderEditable::word_range_at_local_offset` is already
-    /// there for the double-tap case when a recogniser is wired above this.
+    /// Shift-click extension and triple-tap line selection. Each needs a
+    /// click-count or a modifier this level does not see — `Listener`
+    /// delivers raw pointer events, and the tap/multi-tap arbitration that
+    /// produces those lives in `flui-interaction`'s recognisers.
+    /// Double-tap word selection USED to be on this list too; it now lives
+    /// one level up, in [`EditableTextState::wrap_double_tap_word_select`],
+    /// composed around this method's own return value rather than added
+    /// here — see that method's doc.
     fn install_pointer_handlers(
         &self,
         field: crate::interaction::Listener,
@@ -711,6 +756,60 @@ impl EditableTextState {
             .on_pointer_move(moved)
             .on_pointer_up(release)
             .on_pointer_cancel(cancel)
+    }
+
+    /// Wrap `child` (the pointer-handled field this method's caller just
+    /// built) in a [`crate::interaction::GestureDetector`] that extends the
+    /// selection to the enclosing word on double-tap.
+    ///
+    /// `GestureDetector` sits OUTSIDE [`crate::interaction::Listener`], not
+    /// the other way round: `Listener` never enters the gesture arena
+    /// (its own doc explains why), so it keeps placing the caret on every
+    /// tap — including the second one of a double-tap — with nothing
+    /// competing for that contact. `GestureDetector`'s
+    /// `DoubleTapGestureRecognizer` independently watches the SAME pointer
+    /// stream and, once it confirms two taps, widens that already-placed
+    /// caret into a word selection. Reimplementing double-tap timing/slop
+    /// detection by hand inside `Listener`'s handlers instead of composing
+    /// the real recognizer would duplicate
+    /// `flui_interaction::DoubleTapGestureRecognizer` rather than reuse
+    /// it — see this crate's `ARCHITECTURE.md` Mapping decision for this
+    /// composition.
+    ///
+    /// `on_double_tap_down`, not `on_double_tap`: the word selection should
+    /// land as soon as the second tap is confirmed, the same instant
+    /// `Listener`'s own `down` handler already placed the caret there —
+    /// waiting for the second contact to also lift (`on_double_tap`) would
+    /// put the caret and the word-select visibly out of sync for the
+    /// gesture's duration.
+    fn wrap_double_tap_word_select(
+        &self,
+        child: impl IntoView,
+        view: &EditableText,
+    ) -> impl IntoView {
+        let enabled = view.enabled;
+        let obscuring = view.obscure_text.then_some(view.obscuring_character);
+        let owner = self.pipeline_owner.clone();
+        let anchor = self.inner_anchor.clone();
+        let controller = Rc::clone(&self.controller);
+
+        crate::interaction::GestureDetector::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_double_tap_down(move |details| {
+                if !enabled {
+                    return;
+                }
+                let Some(owner) = owner.as_ref() else {
+                    return;
+                };
+                let Some(range) =
+                    source_word_range_at_global(owner, &anchor, details.global_position, obscuring)
+                else {
+                    return;
+                };
+                controller.borrow().set_selection(range.start, range.end);
+            })
+            .child(child)
     }
 
     fn manager(&self) -> &Rc<FocusManager> {
@@ -1044,7 +1143,8 @@ impl ViewState<EditableText> for EditableTextState {
                 }),
             ));
 
-        self.install_pointer_handlers(field, view)
+        let field = self.install_pointer_handlers(field, view);
+        self.wrap_double_tap_word_select(field, view)
     }
 
     fn dispose(&mut self) {
@@ -3508,6 +3608,44 @@ mod tests {
             controller.caret_byte_offset(),
             selection.end,
             "the caret follows the pointer, not the lower end"
+        );
+    }
+
+    /// A double-tap selects the whole word under it — the composition
+    /// `EditableTextState::wrap_double_tap_word_select` adds around
+    /// `install_pointer_handlers`'s plain tap-places-caret behavior. The
+    /// first tap alone still just collapses (`Listener` never waits for
+    /// the arena); the second tap's own DOWN then widens that caret into
+    /// the enclosing word.
+    ///
+    /// Red-check: skip wrapping `install_pointer_handlers`'s return value
+    /// in `wrap_double_tap_word_select` — the selection stays collapsed
+    /// after the second tap, same as the first.
+    #[test]
+    fn a_double_tap_selects_the_word_under_it() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("double-tapped field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+
+        // First tap: places a collapsed caret, same as
+        // `a_tap_places_the_caret_where_it_landed`.
+        harness.dispatch_pointer_down(1.0, 5.0);
+        harness.dispatch_pointer_up(1.0, 5.0);
+        assert!(
+            !controller.has_selection(),
+            "the first tap alone only collapses"
+        );
+
+        // Second tap, same spot: `on_double_tap_down` widens it to the word.
+        harness.dispatch_pointer_down(1.0, 5.0);
+
+        assert_eq!(
+            controller.selection(),
+            0..5,
+            "a double-tap at the start of \"hello\" selects the whole word"
         );
     }
 

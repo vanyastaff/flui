@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — `get_word_boundary` uses UAX #29 word segmentation, not an ASCII-whitespace scan
+
+- `TextLayout::get_word_boundary` now segments with
+  `unicode-segmentation`'s `split_word_bound_indices` instead of walking
+  ASCII whitespace bytes: it no longer treats a straight apostrophe as a
+  word break by accident, no longer returns the whole line for scripts
+  with no ASCII whitespace at all (CJK), and treats a run of whitespace as
+  one segment rather than a sequence of one-byte gaps. New direct
+  dependency on `unicode-segmentation` (already resolved transitively
+  through `cosmic-text`; this is a direct edge onto the same copy, not a
+  new one). Clusters-only, not dictionary-based — Thai/Lao/Khmer remain a
+  known limitation; see `flui-widgets/ARCHITECTURE.md`'s Mapping decision
+  for this feature.
+
 ### Changed — glyphs cross to the engine, not the buffer (ADR-0067, 2026-09-18)
 
 - `TextLayout::placed_glyphs(origin, scale)` yields `PlacedGlyph { key:

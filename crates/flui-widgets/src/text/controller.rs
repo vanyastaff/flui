@@ -199,10 +199,10 @@ struct ComposingState {
 /// The following behaviors are absent in v1 and must not be faked:
 /// - **Multi-tap and shift-click selection**: a selection is tracked,
 ///   rendered, honoured by every edit, produced by a tap or a drag on the
-///   field, and extended from the keyboard with Shift. What is absent is
-///   anything needing a click COUNT or a modifier on the POINTER —
-///   shift-click extension, double-tap word selection, triple-tap line
-///   selection — plus the selection handles and toolbar.
+///   field, and extended from the keyboard with Shift. Double-tap word
+///   selection has since landed (`EditableTextState::wrap_double_tap_word_select`,
+///   `flui-widgets`). Still absent: shift-click extension and triple-tap
+///   line selection — plus the selection handles and toolbar.
 /// - **Clipboard**: copy/paste/cut are not wired.
 /// - **Input formatters**: no validation or transformation pipeline.
 ///

@@ -8,6 +8,17 @@ Versioning: per `docs/release.md` policy.
 
 ### Added
 
+- `DoubleTapGestureRecognizer::with_on_double_tap_down` /
+  `DoubleTapDetails`-carrying `on_double_tap_down` callback (Flutter
+  parity: `DoubleTapGestureRecognizer.onDoubleTapDown`) — fires at the
+  second contact's own DOWN (once validated against the first tap's
+  timing and slop), ahead of and independently from `on_double_tap`,
+  which still waits for that contact to also lift cleanly. `DoubleTapDetails`
+  is now re-exported from the crate root alongside
+  `DoubleTapGestureRecognizer`. Closes the gap `flui-widgets`'
+  `GestureDetector` needed to add double-tap word selection to
+  `EditableText` without reimplementing tap-count/slop/timeout tracking a
+  second time.
 - `ImpulseVelocityTracker` — Android's default fling-velocity strategy since 8.1 (AOSP `VelocityTracker.cpp` impulse model: kinetic-energy bookkeeping, from-rest boundary condition). Flutter ships least-squares only; impulse discounts stale samples on sharp deceleration, tracking the finger's final intent.
 - `OneEuroFilter` / `OneEuroFilter2D` — speed-adaptive low-pass for stylus/pointer smoothing (Casiez, Roussel & Vogel, CHI 2012) with the paper's recommended defaults (`min_cutoff=1.0`, `beta=0.007`, `d_cutoff=1.0`).
 - `GestureSettings::for_platform(TargetPlatform)` (runtime platform dispatch, Flutter `defaultTargetPlatform` model) + cfg-seeded `GestureSettings::native()`; `android_defaults()` (AOSP `ViewConfiguration`: 8 dp slop, 16 dp paging, 300 ms double-tap, 400 ms long-press, 50–8000 dp/s fling) and `ios_defaults()` (10 pt `allowableMovement`; extrapolated fields documented).
