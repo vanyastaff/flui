@@ -280,6 +280,15 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        self.depend_on_inherited_fields(type_id, crate::view::FieldMask::ALL, callback)
+    }
+
+    fn depend_on_inherited_fields(
+        &self,
+        type_id: TypeId,
+        mask: crate::view::FieldMask,
+        callback: &mut dyn FnMut(&dyn Any),
+    ) -> bool {
         // Walk ancestors looking for an Element whose view_type_id
         // matches; the first one is the nearest InheritedView<T>.
         //
@@ -330,7 +339,7 @@ impl BuildContext for ElementBuildContext {
         };
 
         // Register dependency (id + depth).
-        accessor.record_dependent(self_id, self_depth);
+        accessor.record_dependent(self_id, self_depth, mask);
         owner.register_inherited_dependency(self_id, ancestor_id);
         drop(owner);
 
@@ -641,6 +650,8 @@ pub(crate) struct DependentRecord {
     pub(crate) dependent: ElementId,
     /// The dependent's tree depth (for dirty-heap ordering).
     pub(crate) depth: usize,
+    /// The provider fields the dependent read (#1090).
+    pub(crate) mask: crate::view::FieldMask,
 }
 
 /// Build-time [`BuildContext`] backed by a live, borrowed read view of the
@@ -837,6 +848,15 @@ impl BuildContext for BuildCtx<'_> {
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        self.depend_on_inherited_fields(type_id, crate::view::FieldMask::ALL, callback)
+    }
+
+    fn depend_on_inherited_fields(
+        &self,
+        type_id: TypeId,
+        mask: crate::view::FieldMask,
+        callback: &mut dyn FnMut(&dyn Any),
+    ) -> bool {
         let Some(provider_id) = self.find_inherited_provider(type_id) else {
             return false;
         };
@@ -863,6 +883,7 @@ impl BuildContext for BuildCtx<'_> {
             provider: provider_id,
             dependent: self.element_id,
             depth: self.depth,
+            mask,
         });
         callback(accessor.view_as_any());
         true

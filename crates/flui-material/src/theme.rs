@@ -7,7 +7,7 @@
 //! `Theme` the same way it wraps any other ambient theme.
 
 use flui_view::prelude::*;
-use flui_view::{BoxedView, InheritedView, impl_inherited_view};
+use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
 use flui_widgets::InheritedTheme;
 
 use crate::theme_data::ThemeData;
@@ -84,6 +84,33 @@ impl Theme {
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<ThemeData> {
         ctx.depend_on::<Self, _>(|t| t.data.clone())
     }
+
+    /// Depend on **one slot group** of the nearest `Theme` (issue #1090):
+    /// `mask` is one or more `ThemeData::FIELD_*` constants (one per
+    /// `ThemeData` field, from `#[derive(InheritedData)]`), and this element
+    /// rebuilds only when a masked slot changes. `Theme::of` stays the
+    /// whole-theme dependency. `None` without a `Theme` ancestor.
+    pub fn depend_on_fields<R>(
+        ctx: &dyn BuildContext,
+        mask: FieldMask,
+        f: impl FnOnce(&ThemeData) -> R,
+    ) -> Option<R> {
+        ctx.depend_on_field::<Self, _>(mask, |t| f(&t.data))
+    }
+
+    /// The color scheme, depending on `color_scheme` only.
+    #[must_use]
+    pub fn color_scheme_of(ctx: &dyn BuildContext) -> Option<crate::color_scheme::ColorScheme> {
+        Self::depend_on_fields(ctx, ThemeData::FIELD_COLOR_SCHEME, |d| {
+            d.color_scheme.clone()
+        })
+    }
+
+    /// The text theme, depending on `text_theme` only.
+    #[must_use]
+    pub fn text_theme_of(ctx: &dyn BuildContext) -> Option<crate::text_theme::TextTheme> {
+        Self::depend_on_fields(ctx, ThemeData::FIELD_TEXT_THEME, |d| d.text_theme.clone())
+    }
 }
 
 impl std::fmt::Debug for Theme {
@@ -109,6 +136,10 @@ impl InheritedView for Theme {
         // Rebuild descendants whenever any style field changes — same
         // contract as Flutter's `ThemeData.==`.
         self.data != old.data
+    }
+
+    fn changed_fields(&self, old: &Self) -> FieldMask {
+        self.data.field_mask_diff(&old.data)
     }
 }
 

@@ -72,8 +72,15 @@ pub trait InheritedElementAccess {
     ///
     /// Idempotent: re-registering the same id overwrites its depth
     /// (HashMap keyed by id) so reconciliation-driven depth changes are
-    /// captured without leaving stale entries.
-    fn record_dependent(&mut self, dependent: ElementId, depth: usize);
+    /// captured without leaving stale entries, and unions `mask` into the
+    /// fields it depends on (issue #1090: a dependent that read two fields in
+    /// two builds depends on both).
+    fn record_dependent(
+        &mut self,
+        dependent: ElementId,
+        depth: usize,
+        mask: crate::view::FieldMask,
+    );
 
     /// Release a dependent during deactivate or unmount.
     ///

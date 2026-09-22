@@ -275,6 +275,20 @@ pub trait BuildContext {
         callback: &mut dyn FnMut(&dyn std::any::Any),
     ) -> bool;
 
+    /// [`depend_on_inherited`](Self::depend_on_inherited) at **field**
+    /// granularity (issue #1090): the dependency is recorded with `mask`, and
+    /// a later provider update schedules this element only if a field in the
+    /// mask changed ([`InheritedView::changed_fields`]). `FieldMask::ALL`
+    /// is exactly `depend_on_inherited`.
+    ///
+    /// [`InheritedView::changed_fields`]: crate::InheritedView::changed_fields
+    fn depend_on_inherited_fields(
+        &self,
+        type_id: TypeId,
+        mask: crate::view::FieldMask,
+        callback: &mut dyn FnMut(&dyn std::any::Any),
+    ) -> bool;
+
     /// Look up data from an ancestor InheritedView WITHOUT registering a
     /// dependency.
     ///
@@ -512,6 +526,31 @@ pub trait BuildContextExt: BuildContext {
     /// // Or extract a single field:
     /// let color: Option<Color> = ctx.depend_on::<MyTheme, _>(|t| t.data().primary_color);
     /// ```
+    /// [`depend_on`](Self::depend_on) at **field** granularity (issue #1090):
+    /// read through `f` as usual, but depend only on the fields in `mask` —
+    /// the `FIELD_*` constants a `#[derive(InheritedData)]` data type emits.
+    /// Changing `Theme.text_scale` then no longer rebuilds a
+    /// `Theme::FIELD_COLOR_SCHEME` reader. Read-is-depend: there is no way to
+    /// read a field through this method without depending on it.
+    ///
+    /// ```rust,ignore
+    /// let size = ctx.depend_on_field::<MediaQuery, _>(MediaQueryData::FIELD_SIZE, |mq| mq.data().size);
+    /// ```
+    fn depend_on_field<T: 'static, R>(
+        &self,
+        mask: crate::view::FieldMask,
+        f: impl FnOnce(&T) -> R,
+    ) -> Option<R> {
+        let mut result: Option<R> = None;
+        let mut once = Some(f);
+        self.depend_on_inherited_fields(TypeId::of::<T>(), mask, &mut |any| {
+            if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
+                result = Some(call(typed));
+            }
+        });
+        result
+    }
+
     fn depend_on<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         let mut result: Option<R> = None;
         let mut once = Some(f);

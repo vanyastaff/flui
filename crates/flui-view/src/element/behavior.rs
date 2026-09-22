@@ -1278,6 +1278,19 @@ where
 /// HashMap because dependents may attach dependency aspects (the
 /// `Object?` value); we will gain that capability if we expand
 /// `aspect` support — for now the value slot holds the depth.
+/// One dependent of an `InheritedElement`: its tree depth (for the dirty heap)
+/// and the fields it read (issue #1090; [`FieldMask::ALL`] for a whole-type
+/// dependency).
+///
+/// [`FieldMask::ALL`]: crate::view::FieldMask::ALL
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DependentEntry {
+    /// Depth captured at `depend_on_inherited` time.
+    pub depth: usize,
+    /// Union of every field mask this dependent registered with.
+    pub mask: crate::view::FieldMask,
+}
+
 #[derive(Debug)]
 pub struct InheritedBehavior<V: InheritedView> {
     /// Cached data for dependents.
@@ -1299,7 +1312,7 @@ pub struct InheritedBehavior<V: InheritedView> {
     /// the time `depend_on_inherited` was called). The depth is needed
     /// for `BuildOwner::schedule_build_for(id, depth, reason)` so the rebuild
     /// heap orders dependents correctly without a separate tree walk.
-    pub dependents: HashMap<ElementId, usize>,
+    pub dependents: HashMap<ElementId, DependentEntry>,
     /// Marker for view type.
     _phantom: PhantomData<V>,
 }
@@ -1326,8 +1339,18 @@ impl<V: InheritedView> InheritedBehavior<V> {
     /// Idempotent: re-registering the same `element` overwrites its
     /// stored depth (depths can change across reconciliation, so the
     /// latest call wins). HashMap inherently dedups on key.
-    pub(crate) fn add_dependent(&mut self, element: ElementId, depth: usize) {
-        self.dependents.insert(element, depth);
+    pub fn add_dependent(
+        &mut self,
+        element: ElementId,
+        depth: usize,
+        mask: crate::view::FieldMask,
+    ) {
+        let entry = self.dependents.entry(element).or_insert(DependentEntry {
+            depth,
+            mask: crate::view::FieldMask::NONE,
+        });
+        entry.depth = depth;
+        entry.mask |= mask;
     }
 
     /// Remove a dependent element.
@@ -1336,7 +1359,7 @@ impl<V: InheritedView> InheritedBehavior<V> {
     }
 
     /// Get all dependent elements (id -> depth map).
-    pub fn dependents(&self) -> &HashMap<ElementId, usize> {
+    pub fn dependents(&self) -> &HashMap<ElementId, DependentEntry> {
         &self.dependents
     }
 }
@@ -1356,8 +1379,13 @@ where
         &self.view_cache as &dyn std::any::Any
     }
 
-    fn record_dependent(&mut self, dependent: ElementId, depth: usize) {
-        self.add_dependent(dependent, depth);
+    fn record_dependent(
+        &mut self,
+        dependent: ElementId,
+        depth: usize,
+        mask: crate::view::FieldMask,
+    ) {
+        self.add_dependent(dependent, depth, mask);
     }
 
     fn remove_dependent(&mut self, dependent: ElementId) {
@@ -1410,12 +1438,22 @@ where
         // `InheritedElement.notifyClients(InheritedWidget old)` calls
         // `widget.updateShouldNotify(old)` and on true iterates
         // `_dependents.keys` to enqueue each dependent for build.
-        if core.view().update_should_notify(old_view) {
+        // Field-granular (#1090): the provider reports WHICH fields changed
+        // (`FieldMask::ALL` for a provider that never opted in — the
+        // `update_should_notify` default), and only dependents whose recorded
+        // mask intersects are scheduled. One path for both granularities.
+        let changed = core.view().changed_fields(old_view);
+        if !changed.is_empty() {
             tracing::debug!(
-                "InheritedBehavior::on_view_updated notifying {} dependents",
+                changed = changed.bits(),
+                "InheritedBehavior::on_view_updated notifying dependents of {} candidates",
                 self.dependents.len()
             );
-            for (&dep_id, &dep_depth) in &self.dependents {
+            for (&dep_id, entry) in &self.dependents {
+                if !entry.mask.intersects(changed) {
+                    continue;
+                }
+                let dep_depth = entry.depth;
                 // Flutter parity (`framework.dart:6371-6374`):
                 // `notifyDependent` calls `dependent.didChangeDependencies`.
                 // We split this across two phases — the set-flag part
@@ -1430,9 +1468,7 @@ where
                 owner.schedule_build_for(dep_id, dep_depth, crate::RebuildReason::DependencyChange);
             }
         } else {
-            tracing::trace!(
-                "InheritedBehavior::on_view_updated no notify (update_should_notify=false)"
-            );
+            tracing::trace!("InheritedBehavior::on_view_updated no notify (no field changed)");
         }
     }
 

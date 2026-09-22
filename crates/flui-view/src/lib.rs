@@ -223,11 +223,11 @@ pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
     AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementExt, ErrorView,
-    ErrorViewBuilder, FlutterError, InheritedElement, InheritedView, IntoElement, IntoView, Memo,
-    ParentDataConfig, ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement,
-    RenderObjectContext, RenderObjectContextError, RenderView, RootRenderElement, RootRenderView,
-    StatefulElement, StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewState,
-    clear_error_view_builder, set_error_view_builder,
+    ErrorViewBuilder, FieldMask, FlutterError, InheritedData, InheritedElement, InheritedView,
+    IntoElement, IntoView, Memo, ParentDataConfig, ParentDataElement, ParentDataView, ProxyElement,
+    ProxyView, RenderElement, RenderObjectContext, RenderObjectContextError, RenderView,
+    RootRenderElement, RootRenderView, StatefulElement, StatefulView, StatelessElement,
+    StatelessView, View, ViewExt, ViewState, clear_error_view_builder, set_error_view_builder,
 };
 
 // ============================================================================
@@ -257,7 +257,7 @@ pub mod prelude {
     // `Serialize`). Rust's namespace separation (macros vs types vs
     // traits) makes the collision well-defined: `#[derive(StatelessView)]`
     // picks the macro, `impl StatelessView for X { … }` picks the trait.
-    pub use flui_macros::{StatefulView, StatelessView};
+    pub use flui_macros::{InheritedData, StatefulView, StatelessView};
 
     // Logging
     pub use crate::context::{BuildContext, BuildContextExt};
