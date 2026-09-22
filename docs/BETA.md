@@ -731,13 +731,17 @@ and the probe now waits for the first frame and reports the wait instead.
 Not covered: occlusion by another window (the runner's `occlusion_visible`
 path), display sleep, and a live drag-resize's intermediate frames.
 
-One observation from the run, not a budget: at startup the rendering
-pipeline warns once — `run_layout: no cached state.constraints() AND no
-root_constraints … skipping dirty entry` for a non-root render node — on
-the frame in which the `LayoutBuilder` child is first marked dirty before
-its parent has laid it out. The pipeline recovers on that same frame's
-layout pass (every later phase renders), so it is recorded here as a
-diagnostic to quieten, not a failure.
+One observation from the run, fixed the same day: the rendering pipeline
+warned — `run_layout: no cached state.constraints() AND no
+root_constraints … skipping dirty entry` for a non-root render node —
+once at startup here, on the frame in which the `LayoutBuilder` child was
+first marked dirty before its parent laid it out, and once per frame in
+the workload probe's scrolling `ListView::builder` (children built during
+layout and left for the parent to lay out later). That is the ordinary
+ADR-0017 build-during-layout path, not a fault — the child keeps
+`NEEDS_LAYOUT` until its parent lays it out — so the non-root case is a
+`debug` line now and only a root without constraints (a binding bug)
+still warns. The run re-done after the change logs no warning.
 
 ## Performance and resilience: the representative workload — 2026-09-22
 

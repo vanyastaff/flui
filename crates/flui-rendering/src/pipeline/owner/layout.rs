@@ -132,18 +132,36 @@ impl PipelineOwner<Layout> {
                     //      call layout_child for this id), the entry
                     //      is correctly dropped because the parent
                     //      is the authority on child constraints.
-                    // Logged at warn so the diagnostic surfaces but
-                    // doesn't halt the pipeline.
-                    tracing::warn!(
-                        id = ?dirty_node.id,
-                        is_root = ?(self.root_id == Some(dirty_node.id)),
-                        "run_layout: no cached state.constraints() AND no \
-                         root_constraints (or id != root_id); skipping dirty entry. \
-                         Recovery: for root → call set_root_constraints (which \
-                         auto-marks the root dirty); for non-root → parent's \
-                         perform_layout must call ctx.layout_child(idx, c) for \
-                         this id first."
-                    );
+                    //      This is ORDINARY for a child mounted during
+                    //      layout (ADR-0017: `LayoutBuilder`, the
+                    //      sliver builders) that its parent chose not
+                    //      to lay out this pass — a list item built
+                    //      and found off-screen, say — and the child
+                    //      keeps NEEDS_LAYOUT until the parent does.
+                    //      A Scaffold body under a LayoutBuilder hit
+                    //      it once per launch and a scrolling
+                    //      ListView::builder once per frame, so it is
+                    //      a debug line, not a warning (measured
+                    //      2026-09-22, docs/BETA.md's lifecycle run).
+                    // Case 1 stays at warn: the root having no
+                    // constraints is a binding bug, and a launch that
+                    // draws nothing is what it looks like.
+                    if self.root_id == Some(dirty_node.id) {
+                        tracing::warn!(
+                            id = ?dirty_node.id,
+                            "run_layout: the root has no root_constraints; skipping its \
+                             dirty entry. The binding must call set_root_constraints \
+                             before run_frame (it auto-marks the root dirty)."
+                        );
+                    } else {
+                        tracing::debug!(
+                            id = ?dirty_node.id,
+                            "run_layout: non-root dirty entry has no cached constraints \
+                             and its parent did not lay it out this pass; it keeps \
+                             NEEDS_LAYOUT until the parent's perform_layout calls \
+                             ctx.layout_child for it"
+                        );
+                    }
                     continue;
                 };
                 match self.layout_dirty_root(dirty_node.id, constraints) {
