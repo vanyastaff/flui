@@ -10,6 +10,10 @@ repository.workspace = true
 description = "Event routing, interaction handling, and gesture recognition for FLUI"
 categories = ["gui"]
 keywords = ["gui", "ui", "events", "gestures", "interaction"]
+# All root tests/*.rs files are compiled as modules of ONE integration-test
+# binary (tests/main.rs); the per-file auto-discovered targets each linked the
+# whole dependency stack. Targets that write process-global state stay separate.
+autotests = false
 
 [dependencies]
 # Flui dependencies
@@ -65,6 +69,15 @@ proptest = "1.5"
 # behind the `testing` feature (they're not part of the release API).
 # Checkout-only test edge; see docs/workspace-layers.toml release policy.
 flui-interaction = { path = ".", features = ["testing"] }
+
+[[test]]
+name = "interaction_it"
+path = "tests/main.rs"
+
+# Own target: installs a counting `#[global_allocator]`, which is process-wide.
+[[test]]
+name = "pointer_route_hot_path"
+path = "tests/pointer_route_hot_path.rs"
 
 [[bench]]
 name = "velocity_tracker_bench"

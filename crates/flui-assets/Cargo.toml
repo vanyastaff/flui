@@ -11,6 +11,10 @@ repository.workspace = true
 keywords = ["assets", "cache", "async", "game", "ui"]
 categories = ["asynchronous", "caching", "game-development", "gui"]
 documentation = "https://docs.rs/flui-assets"
+# All root tests/*.rs files are compiled as modules of ONE integration-test
+# binary (tests/main.rs); the per-file auto-discovered targets each linked the
+# whole dependency stack. Targets that write process-global state stay separate.
+autotests = false
 
 [dependencies]
 # Internal dependencies
@@ -80,3 +84,7 @@ full = ["images", "network"]
 
 [lints]
 workspace = true
+
+[[test]]
+name = "assets_it"
+path = "tests/main.rs"

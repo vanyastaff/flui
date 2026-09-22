@@ -10,6 +10,10 @@ repository.workspace = true
 description = "Frame scheduling, task prioritization, and animation coordination for FLUI"
 keywords = ["scheduler", "vsync", "animation", "frame", "ticker"]
 categories = ["gui", "game-development", "rendering"]
+# All root tests/*.rs files are compiled as modules of ONE integration-test
+# binary (tests/main.rs); the per-file auto-discovered targets each linked the
+# whole dependency stack. Targets that write process-global state stay separate.
+autotests = false
 
 [dependencies]
 # Flui foundation (for the generic Id<T: Marker> system: FrameId, TaskId, TickerId;
@@ -65,6 +69,20 @@ serde = ["dep:serde"]
 # `cfg(any(test, feature = "testing"))`, and opted into by a downstream
 # crate's dev-dependency edge (see `crates/flui-view/Cargo.toml`).
 testing = []
+
+[[test]]
+name = "scheduler_it"
+path = "tests/main.rs"
+
+# Own target: installs a counting `#[global_allocator]`, which is process-wide.
+[[test]]
+name = "async_driver_ready_index_allocation"
+path = "tests/async_driver_ready_index_allocation.rs"
+
+# Own target: installs a counting `#[global_allocator]`, which is process-wide.
+[[test]]
+name = "frame_telemetry_allocation"
+path = "tests/frame_telemetry_allocation.rs"
 
 [[bench]]
 name = "frame_clock_gate"

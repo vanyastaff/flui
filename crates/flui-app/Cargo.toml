@@ -10,6 +10,10 @@ repository.workspace = true
 description = "Application runner for FLUI - bootstraps the platform, renderer and UI realm on desktop, mobile and web"
 keywords = ["gui", "ui", "flutter", "application", "runtime"]
 categories = ["gui"]
+# All root tests/*.rs files are compiled as modules of ONE integration-test
+# binary (tests/main.rs); the per-file auto-discovered targets each linked the
+# whole dependency stack. Targets that write process-global state stay separate.
+autotests = false
 
 [lib]
 crate-type = ["rlib"]
@@ -181,3 +185,7 @@ flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-u
 
 [lints]
 workspace = true
+
+[[test]]
+name = "app_it"
+path = "tests/main.rs"
