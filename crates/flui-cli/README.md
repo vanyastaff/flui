@@ -26,6 +26,19 @@ platform, and checks your environment.
 cargo install flui-cli --locked
 ```
 
+Prebuilt binaries for Linux (x86_64, aarch64), macOS (Intel, Apple
+silicon) and Windows (x86_64) are attached to every
+[GitHub release](https://github.com/vanyastaff/flui/releases), with a
+`SHA256SUMS` file. [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall)
+picks the right one:
+
+```bash
+cargo binstall flui-cli
+```
+
+Both routes install two binaries: `flui`, and `cargo-flui` so that
+`cargo flui <command>` is the same CLI with the same exit codes.
+
 From a checkout (the CLI and the framework then share one source tree):
 
 ```bash

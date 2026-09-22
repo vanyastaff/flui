@@ -40,6 +40,15 @@ file records the repo-consumer-visible summary.
   was resolved and never used, while the warning promised the APK step
   would be skipped — now it is), and the iOS simulator probes use the
   bounded runner in `proc.rs` instead of a fresh tokio runtime per call.
+- **`cargo flui` and prebuilt CLI binaries** (`flui-cli`,
+  `.github/workflows/release.yml`). `flui-cli` ships a second binary,
+  `cargo-flui`, an exec shim over the `flui` installed beside it, so
+  `cargo flui run` is the same CLI with the same exit codes. A `v*` tag
+  builds `flui-<target>` archives for five targets with the workspace
+  release profile (thin LTO, ~3 MiB versus ~4 MiB from `cargo install`) and
+  drafts a GitHub release with `SHA256SUMS`; `[package.metadata.binstall]`
+  points `cargo binstall flui-cli` at them. Publishing the draft and
+  `cargo publish` stay human steps.
 - **Dependency audit with `cargo shear`** (`flui-cli`, `flui-hot-reload`,
   `justfile`). `just shear` runs the feature-aware unused-dependency check.
   `flui-cli` drops clap's `cargo` and `env` features (no `crate_*!` macro,

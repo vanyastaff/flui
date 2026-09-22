@@ -1,0 +1,140 @@
+name: Release
+
+# Prebuilt `flui` binaries for a `v*` tag.
+#
+#   build    — one job per target: `cargo build -p flui-cli --release --locked`
+#              with the workspace release profile (thin LTO, one codegen
+#              unit; `cargo install` from crates.io does not see that profile,
+#              these archives are the smaller build), packed as
+#              `flui-<target>.tar.gz` (`.zip` on Windows) with `flui`,
+#              `cargo-flui`, the CLI README and CHANGELOG and both licenses.
+#   release  — a DRAFT GitHub release for the tag with every archive and a
+#              `SHA256SUMS` file. Publishing the draft is a human step; a tag
+#              that contains `-` (beta, rc) is marked as a pre-release.
+#
+# The archive name and layout are what `[package.metadata.binstall]` in
+# crates/flui-cli/Cargo.toml promises `cargo binstall flui-cli`. Change them
+# together. Publishing to crates.io is not done here.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build -p flui-cli --release --locked --target "${{ matrix.target }}"
+
+      - name: Smoke-test the binaries
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release"
+          "$bin/flui" --version
+          "$bin/cargo-flui" flui --version
+          "$bin/flui" --json completions bash | head -c 200
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="flui-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/flui" \
+             "target/${{ matrix.target }}/release/cargo-flui" \
+             crates/flui-cli/README.md crates/flui-cli/CHANGELOG.md \
+             LICENSE LICENSE-APACHE "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -r "dist/$name"
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "flui-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/flui.exe", `
+                    "target/${{ matrix.target }}/release/cargo-flui.exe", `
+                    "crates/flui-cli/README.md", "crates/flui-cli/CHANGELOG.md", `
+                    "LICENSE", "LICENSE-APACHE" -Destination "dist/$name/"
+          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+          Remove-Item -Recurse -Force "dist/$name"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flui-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: draft release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only this job can write, and only releases.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum flui-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Draft the GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$TAG" --draft --verify-tag "${prerelease[@]}" \
+            --title "flui-cli $TAG" \
+            --notes "Prebuilt \`flui\` and \`cargo-flui\` binaries. Install with \`cargo binstall flui-cli\` or unpack the archive for your platform; verify with \`SHA256SUMS\`. Changes: crates/flui-cli/CHANGELOG.md." \
+            dist/*

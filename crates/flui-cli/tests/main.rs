@@ -30,3 +30,5 @@ mod cli_maintenance;
 mod cli_platform;
 #[path = "cli_run.rs"]
 mod cli_run;
+#[path = "cli_shim.rs"]
+mod cli_shim;

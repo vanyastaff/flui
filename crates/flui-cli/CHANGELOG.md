@@ -33,6 +33,11 @@ the workspace version and follows [Semantic Versioning](https://semver.org/).
   `cargo update` would change.
 - `flui platform remove --yes` for scripts.
 - Shell completions travel inside a `completions` event under `--json`.
+- `cargo flui <command>`: a `cargo-flui` binary ships beside `flui` and
+  runs it with the same arguments, output and exit code.
+- Prebuilt binaries for Linux (x86_64, aarch64), macOS (Intel, Apple
+  silicon) and Windows (x86_64) on every `v*` release, with `SHA256SUMS`;
+  `cargo binstall flui-cli` installs them.
 
 ### Changed
 
