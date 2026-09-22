@@ -1,0 +1,21 @@
+// Every token the scanner must report, one per guarded body.
+impl ViewState<V> for S {
+    fn build(&self, _v: &V, cx: &dyn BuildContext) -> impl IntoView {
+        let r = cx.reactive();
+        self.count.set(&r, 1); // a write from build re-marks this frame's readers
+        self.count.update(&r, |c| *c += 1);
+        SizedBox::square(1.0)
+    }
+}
+impl RenderBox for R {
+    fn perform_layout(&mut self, cx: &mut LayoutCx) -> Size {
+        self.width.set_if_changed(&cx.reactive(), 2.0);
+        let _e = r.effect(move |r| {});
+        Size::ZERO
+    }
+    fn paint(&self, cx: &mut PaintCx) {
+        let _m = r.computed(move |r| 1);
+        let _e = r.effect_owned_by(id, move |r| {});
+        let _m2 = r.computed_owned_by(id, move |r| 1);
+    }
+}

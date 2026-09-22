@@ -147,6 +147,9 @@ harness = true
 
 [features]
 default = []
+# ADR-0074 phase-2 prototype: realm-scoped signals in the widget harness and
+# the `signals` integration tests (`--features signals`).
+signals = ["flui-view/signals", "flui-testing?/signals"]
 # Activates the `image` crate for decoding PNG/JPEG/GIF/… from bytes or files.
 # Required by `MemoryImage` and `FileImage`; `DirectImageProvider` compiles
 # without it.

@@ -1,0 +1,37 @@
+// Reads in build are the sanctioned subscription path; one-argument Cell::set
+// is not a signal write; writes and graph growth from lifecycle hooks,
+// callbacks and effects are where they belong.
+impl ViewState<V> for S {
+    fn init_state(&mut self, cx: &dyn BuildContext) {
+        self.count = cx.reactive().signal_owned_by(cx.element_id(), 0u32);
+        self.total = cx.reactive().computed(move |r| count.track(r, |c| *c * 2).unwrap());
+        self.effect = Some(cx.reactive().effect(move |r| {
+            let v = count.track(r, |c| *c).unwrap();
+            other.set(r, v).unwrap();
+        }));
+    }
+    fn build(&self, _v: &V, cx: &dyn BuildContext) -> impl IntoView {
+        let n = self.count.get(cx);
+        let t = self.total.with(cx, |t| *t);
+        let p = self.count.peek(&cx.reactive(), |c| *c).unwrap();
+        self.cell.set(n);
+        self.flag.set(true);
+        let count = self.count;
+        let inc = Button::new("+1").on_tap(move |cx| count.update(cx.reactive(), |c| *c += 1));
+        Button::new("-1").on_tap(move |cx| {
+            count.update(cx.reactive(), |c| *c -= 1).unwrap();
+            other.set(cx.reactive(), 0).unwrap();
+        });
+        Column::new((inc, Text::new(format!("{n} {t} {p}"))))
+    }
+    fn did_update_view(&mut self, old: &V, new: &V) {
+        self.count.set(&self.r, new.n);
+    }
+}
+impl RenderBox for R {
+    fn perform_layout(&mut self, cx: &mut LayoutCx) -> Size {
+        let w = self.width.peek(&cx.reactive(), |w| *w).unwrap();
+        self.cache.set(w);
+        Size::new(w, w)
+    }
+}

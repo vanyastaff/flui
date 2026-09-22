@@ -17,6 +17,11 @@ categories = ["gui"]
 # drives its own `HeadlessBinding` instance), so no isolated targets.
 autotests = false
 
+[features]
+# ADR-0074 phase-2 prototype: exposes `HeadlessBinding::reactive()` and runs the
+# effects phase (build -> effects -> layout -> paint) inside `pump_frame`.
+signals = ["flui-view/signals"]
+
 [lints]
 workspace = true
 

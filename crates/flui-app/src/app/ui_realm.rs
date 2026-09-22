@@ -252,6 +252,12 @@ pub(crate) enum UiCommand {
     },
     /// Apply a typed navigator mutation on the owner thread.
     Navigation(NavigatorCommand),
+    /// Run a closure against the realm's reactive graph on the owner thread
+    /// (ADR-0074 §5.8): the cross-thread way to write a signal. Readers it
+    /// marks land in the owner's inbox for the next frame — enqueue-and-wake,
+    /// never touch the tree.
+    #[cfg(feature = "signals")]
+    SignalWrite(Box<dyn FnOnce(&flui_view::Reactive) + Send>),
 }
 
 impl std::fmt::Debug for UiCommand {
@@ -273,6 +279,8 @@ impl std::fmt::Debug for UiCommand {
                 .debug_tuple("UiCommand::Navigation")
                 .field(command)
                 .finish(),
+            #[cfg(feature = "signals")]
+            UiCommand::SignalWrite(_) => f.write_str("UiCommand::SignalWrite(..)"),
         }
     }
 }
@@ -395,6 +403,24 @@ impl UiCommandSender {
         command: NavigatorCommand,
     ) -> Result<(), CommandSendError> {
         self.send(UiCommand::Navigation(command))
+    }
+
+    /// Enqueue a signal write for the owner thread (ADR-0074 §5.8). `apply`
+    /// receives the realm's `Reactive` graph at the next Idle drain; a write
+    /// it performs marks readers for the following frame.
+    #[cfg(feature = "signals")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "cross-thread signal write sender is wired before public runtime vending"
+        )
+    )]
+    pub(crate) fn send_signal_write(
+        &self,
+        apply: Box<dyn FnOnce(&flui_view::Reactive) + Send>,
+    ) -> Result<(), CommandSendError> {
+        self.send(UiCommand::SignalWrite(apply))
     }
 
     /// Request a redraw of the realm's presentation, coalesced: any number of pending
@@ -3685,6 +3711,14 @@ impl UiRealm {
                         report.dropped_stale += 1;
                     }
                 },
+                #[cfg(feature = "signals")]
+                UiCommand::SignalWrite(apply) => {
+                    let reactive = self
+                        .widgets()
+                        .with_build_owner(|owner| owner.reactive().clone());
+                    apply(&reactive);
+                    report.invoked += 1;
+                }
             }
         }
         report

@@ -112,6 +112,11 @@ test-utils = ["dep:tracing-subscriber"]
 # Narrow cross-crate seam for framework composition roots (`flui-app` and the
 # widget hot-reload pipeline). Not an application-facing API contract.
 runtime-internals = []
+# ADR-0074 phase-2 prototype: realm-scoped `Signal<T>`/`Memo<T>`/`Effect` owned by the
+# `BuildOwner`'s `Reactive` graph. Reading a signal in `build` registers the element
+# as a reader; writing schedules exactly the readers. Off by default until the
+# go/no-go measurement in the ADR lands.
+signals = []
 
 # The `legacy-downcast` feature flag was retired
 # (FR-021): the pre-FR-021 inline `downcast_ref::<V>()` body inside

@@ -93,6 +93,8 @@ pub mod element;
 pub mod key;
 pub mod macros; // PORT-CHECK-OK-SP4: macros consumed via #[macro_export] (no qualified path); intentional API surface
 pub mod owner;
+#[cfg(feature = "signals")]
+pub mod reactive;
 pub mod seq; // PORT-CHECK-OK-SP4: seq/Children API surface; consumed via prelude re-exports
 pub mod state_cell;
 pub mod tree;
@@ -215,6 +217,8 @@ pub use owner::{
     RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
+#[cfg(feature = "signals")]
+pub use reactive::{Computed, Effect, Reactive, Signal, SignalError, SignalSlot};
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{

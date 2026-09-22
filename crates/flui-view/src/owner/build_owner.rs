@@ -371,6 +371,11 @@ pub struct BuildOwner {
     /// provider on deactivate/unmount without adding a collection to every
     /// [`ElementNode`](crate::tree::ElementNode).
     pub(crate) inherited_dependencies: InheritedDependencies,
+    /// ADR-0074: the realm's reactive graph. Constructed with the owner,
+    /// re-pointed at the external inbox whenever the frame-request callback
+    /// changes (`set_on_build_scheduled`).
+    #[cfg(feature = "signals")]
+    reactive: crate::reactive::Reactive,
 
     /// Keep-alive holds on lazy sliver children — which children band eviction
     /// must skip. Presentation-scoped like every other lifecycle capability,
@@ -632,7 +637,7 @@ impl BuildOwner {
     /// The manager is not replaceable after construction: the element tree and
     /// focus tree share one ownership lifetime.
     pub fn with_focus_manager(focus_manager: Rc<FocusManager>) -> Self {
-        Self {
+        let owner = Self {
             dirty_elements: BinaryHeap::new(),
             dirty_reasons: HashMap::new(),
             global_keys: GlobalKeyRegistry::new(),
@@ -641,6 +646,8 @@ impl BuildOwner {
             inactive_elements: Vec::new(),
             pending_dependency_changes: std::collections::HashSet::new(),
             inherited_dependencies: InheritedDependencies::default(),
+            #[cfg(feature = "signals")]
+            reactive: crate::reactive::Reactive::new(),
             keep_alive: super::KeepAliveHolds::default(),
             tree_observer: None,
             recovered_panics: Vec::new(),
@@ -668,7 +675,13 @@ impl BuildOwner {
             hit_test_handle: None,
             owner_tag: OwnerTag::fresh(),
             global_key_scope: None,
-        }
+        };
+        // ADR-0074: writes must reach the inbox from the first frame, before any
+        // binding installs a frame-request callback (`set_on_build_scheduled`
+        // re-points the graph when one arrives).
+        #[cfg(feature = "signals")]
+        owner.reactive.set_scheduler(owner.external_scheduler());
+        owner
     }
 
     #[doc(hidden)]
@@ -875,6 +888,16 @@ impl BuildOwner {
         F: Fn() + Send + Sync + 'static,
     {
         self.on_build_scheduled = Some(Arc::new(callback));
+        #[cfg(feature = "signals")]
+        self.reactive.set_scheduler(self.external_scheduler());
+    }
+
+    /// The realm's reactive graph (ADR-0074): signals, memos, effects and the
+    /// reader registry that schedules exactly the elements that read a
+    /// written signal.
+    #[cfg(feature = "signals")]
+    pub fn reactive(&self) -> &crate::reactive::Reactive {
+        &self.reactive
     }
 
     /// Schedule an element for rebuild.
@@ -1148,6 +1171,8 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
+            #[cfg(feature = "signals")]
+            reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
         }
     }
@@ -1657,6 +1682,8 @@ impl BuildOwner {
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
+                    #[cfg(feature = "signals")]
+                    reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
                 };
                 if needs_did_change {
@@ -1676,6 +1703,8 @@ impl BuildOwner {
                 if replacement_location.is_some() {
                     element_owner.arm_lifecycle_panic_handoff();
                 }
+                #[cfg(feature = "signals")]
+                self.reactive.begin_element_build(id);
                 let views = element.element_mut().build_into_views(&mut element_owner);
                 if replacement_location.is_some() {
                     assert!(
@@ -1693,6 +1722,8 @@ impl BuildOwner {
             // (before the next dirty pop) preserves Flutter's
             // record-before-notify ordering (`framework.dart:5086`).
             tree.put_element(id, element);
+            #[cfg(feature = "signals")]
+            self.reactive.end_element_build(id);
 
             let new_views: Vec<Box<dyn View>> = match build_outcome {
                 Ok(views) => {
@@ -1813,6 +1844,8 @@ impl BuildOwner {
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
+                    #[cfg(feature = "signals")]
+                    reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
                 };
                 crate::tree::id_reconcile::reconcile_children_by_id(
@@ -2246,6 +2279,8 @@ impl BuildOwner {
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
                 recovered_panics: &mut self.recovered_panics,
+                #[cfg(feature = "signals")]
+                reactive: &self.reactive,
                 lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
             };
 
@@ -2453,6 +2488,8 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
+            #[cfg(feature = "signals")]
+            reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
         };
 

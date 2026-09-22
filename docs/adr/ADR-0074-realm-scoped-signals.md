@@ -139,7 +139,7 @@ What must be different, point by point:
 
 ## 4. Decision (proposed)
 
-Add a realm-owned reactive graph — `Signal<T>`, `Memo<T>`, `Effect` — to the view layer,
+Add a realm-owned reactive graph — `Signal<T>`, `Computed<T>`, `Effect` — to the view layer,
 where **reading a signal inside `build` registers the building element as a reader**,
 and **writing a signal schedules exactly the reader elements** on the existing dirty heap.
 `setState`, `ValueNotifier`, `InheritedView` remain; `InheritedView` field masks (#1090)
@@ -154,7 +154,7 @@ and signals share one reader-registry implementation.
 /// the value lives in the realm's arena, so the handle is `'static` and cheap to
 /// capture in closures without `Rc` cycles.
 pub struct Signal<T: 'static> { slot: SignalSlot, _t: PhantomData<T> }   // Copy, !Send
-pub struct Memo<T: 'static>   { slot: SignalSlot, _t: PhantomData<T> }   // Copy, !Send, read-only
+pub struct Computed<T: 'static> { slot: SignalSlot, _t: PhantomData<T> } // Copy, !Send, read-only ("memo"; the name `Memo<V>` is C1's view combinator)
 pub struct Effect             { slot: EffectSlot }                        // RAII: dropping unregisters
 
 impl<T> Signal<T> {
@@ -166,6 +166,13 @@ impl<T> Signal<T> {
 }
 ```
 
+- **Naming.** The cached computation is `Computed<T>`, not `Memo<T>`: `flui_view::Memo<V>`
+  is already C1's view-memoization combinator (a `View` that short-circuits a subtree
+  when its data is unchanged) and lives in the same crate, so a reactive `Memo<T>` would
+  collide at the crate root (it did, in the first compile). The market is split anyway —
+  Leptos, Solid and Dioxus say `Memo`; Vue says `computed`; SwiftUI has computed
+  properties; Compose says `derivedStateOf` — so `Computed` is a recognised name, and it
+  reads as what the node is (a computed value) rather than as what it does (memoise).
 - `Reactive` is the realm's reactive graph, reachable from `BuildContext` (for build-time
   reads), from lifecycle hooks and callbacks (`cx.reactive()`), and from the headless
   driver. It is `!Send + !Sync`, lives next to `BuildOwner` in the realm's services
@@ -175,7 +182,7 @@ impl<T> Signal<T> {
 - **No trait bound on `T` beyond `'static`.** `Signal<T>::set` and `update` mark readers
   **always**, whether or not the value changed — there is no equality check and no
   `PartialEq` bound. `set_if_changed` (requires `T: PartialEq`) is the opt-in that skips
-  marking on an equal write; `Memo<T>` requires `PartialEq` on its output by construction.
+  marking on an equal write; `Computed<T>` requires `PartialEq` on its output by construction.
   This is the rule, not a default (§5.7); it is what keeps C1's Druid warning honoured.
 - `Signal<T>` is `Copy`: closures in `on_tap` capture it by value, no `Rc<RefCell<>>`
   choreography, no listener registration, no `RebuildHandle` in `init_state`.
@@ -217,7 +224,7 @@ signal.set(v)                         // owner thread, outside build
   not already have.
 - Memos use Leptos's three-state discipline (stale / check / clean): a `Memo` marked stale
   recomputes on the next read and only marks *its* readers if the new output differs
-  (`PartialEq` required for `Memo<T>`, opt-in by construction). This is what stops
+  (`PartialEq` required for `Computed<T>`, opt-in by construction). This is what stops
   "20-field form → `is_dirty` memo → Save button" from rebuilding the button on every
   keystroke that does not change dirtiness.
 - Writes are coalesced per frame by construction: the heap dedups by element, and a
@@ -292,12 +299,12 @@ fn build_list(cx: &dyn BuildContext, todos: &Todos) -> impl IntoView {
 **Form, 20 fields** — one signal per field, one memo for validity:
 
 ```rust
-struct FormModel { fields: [Signal<String>; 20], invalid: Memo<usize> }
+struct FormModel { fields: [Signal<String>; 20], invalid: Computed<usize> }
 
 impl FormModel {
     fn new(r: &Reactive) -> Self {
         let fields = std::array::from_fn(|_| r.signal(String::new()));
-        let invalid = r.memo(move |cx| fields.iter().filter(|f| f.with(cx, |s| s.is_empty())).count());
+        let invalid = r.computed(move |r| fields.iter().filter(|f| f.track(r, |s| s.is_empty()).unwrap()).count());
         Self { fields, invalid }
     }
 }
@@ -316,7 +323,7 @@ driven by `fields[3].set(r, "x".into())`; the assertion is on the memo, not on a
 - `build` is still a pure function of `(View, State, reads)`; the reads are recorded, not
   ordered.
 - Equality is opt-in, never implied: a plain `set` marks readers even for an equal value;
-  only `set_if_changed` and `Memo` compare, and both say so in their bounds.
+  only `set_if_changed` and `Computed` compare, and both say so in their bounds.
 - Lifetime is ownership, not call structure: a signal created by a `ViewState` is released
   when that state is disposed (the `Reactive` arena tracks the creating element and frees
   its slots on unmount, LIFO); an app-level signal is released with the realm.
@@ -377,8 +384,8 @@ covered by the realm command inbox.
 - A signal read in `build` that is *also* written in the same element's `did_update_view`
   is a foot-gun (mid-drain absorb budget, then a loud stop); the refusal in §5.2 covers
   `build` only, the budget covers the rest.
-- `Memo` requires `PartialEq` on its output: a memo over a non-comparable type must return
-  a comparable projection. Documented, not hidden.
+- `Computed` requires `PartialEq` on its output: a computed value over a non-comparable
+  type must return a comparable projection. Documented, not hidden.
 
 ## 7. Amendment to FOUNDATIONS C1 (required if accepted)
 
@@ -399,7 +406,7 @@ explicit revision.
 
 ## 8. Phase-2 measurement plan and go/no-go
 
-Prototype scope: `Signal`/`Memo`/`Reactive` in `flui-view` behind `feature = "signals"`,
+Prototype scope: `Signal`/`Computed`/`Effect`/`Reactive` in `flui-view` behind `feature = "signals"`,
 reader registry, `RebuildReason::SignalChange`, `HeadlessBinding::reactive()`, one
 `UiCommand::SignalWrite` variant. No catalog changes.
 

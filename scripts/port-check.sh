@@ -1662,6 +1662,34 @@ else
     echo "ok    23: every ADR number is used exactly once"
   fi
 fi
+# -----------------------------------------------------------------------------
+# Trigger 24 (ADR-0074) — a realm-scoped signal is never WRITTEN, and no computed value or
+# effect is CREATED, inside a build / layout / paint body.
+#
+# Reading a signal in `build` is the sanctioned subscription path (the same
+# class as `depend_on`), and trigger 22's capability list is untouched. The
+# write side is the hazard: `Signal::set`/`update`/`set_if_changed` from a
+# frame phase re-marks readers of the frame still running (the unbounded-loop
+# hazard trigger 22 exists for); `Reactive::effect`/`computed` created per build
+# leak one slot per rebuild. `Reactive::write` refuses the same at runtime
+# (`SignalError::WrittenDuringBuild`); this is the static half.
+#
+# Delegates to a brace-depth scanner with its own accept/reject fixtures:
+# `scripts/check-signal-write-scope.sh --self-test`.
+# -----------------------------------------------------------------------------
+signal_write_hits=$("${repo_root}/scripts/check-signal-write-scope.sh" crates 2>/dev/null || true)
+if [[ -n "${signal_write_hits}" ]]; then
+  echo "VIOLATION 24: a realm-scoped signal was written, or a computed/effect created,"
+  echo "             inside a build/layout/paint body (ADR-0074 §5.2)"
+  echo "see ${trigger_doc} (trigger 24)"
+  echo "${signal_write_hits}"
+  echo ""
+  violations=$((violations + 1))
+else
+  if [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    24: signals are only written, and memos/effects only created, outside frame phases"
+  fi
+fi
 
 # -----------------------------------------------------------------------------
 # LockDiscipline/StatementDrop (#1150 lock-drop sweep) — a value with a

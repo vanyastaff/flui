@@ -95,6 +95,16 @@ pub trait BuildContext {
     /// [`FOUNDATIONS.md`]: ../../../docs/FOUNDATIONS.md
     fn rebuild_handle(&self) -> crate::RebuildHandle;
 
+    /// The realm's reactive graph (ADR-0074). Reachable from every lifecycle
+    /// hook and callback; the graph is owned by the `BuildOwner`.
+    #[cfg(feature = "signals")]
+    fn reactive(&self) -> crate::reactive::Reactive;
+
+    /// Record that the element building through this context read `slot`.
+    /// Called by `Signal::get`/`with`; a no-op outside a build.
+    #[cfg(feature = "signals")]
+    fn signal_read(&self, slot: crate::reactive::SignalSlot);
+
     /// The binding's frame-driven async task driver, if a binding
     /// installed one.
     ///

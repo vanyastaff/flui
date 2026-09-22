@@ -119,6 +119,9 @@ mod scroll;
 mod semantics;
 #[path = "shrink_wrapping_viewport.rs"]
 mod shrink_wrapping_viewport;
+#[cfg(feature = "signals")]
+#[path = "signals.rs"]
+mod signals;
 #[path = "slide_transition.rs"]
 mod slide_transition;
 #[path = "sliver_opacity.rs"]

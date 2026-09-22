@@ -576,6 +576,18 @@ impl HeadlessBinding {
         self.vsync = vsync;
     }
 
+    /// The realm's reactive graph (ADR-0074): create signals, write them, and
+    /// assert on memos without mounting a widget around them.
+    #[cfg(feature = "signals")]
+    pub fn reactive(&self) -> flui_view::Reactive {
+        self.tree
+            .as_ref()
+            .expect("reactive requires a tree-bound binding (built via with_tree)")
+            .build_owner
+            .reactive()
+            .clone()
+    }
+
     /// Mutable access to the bound `BuildOwner`, for an embedder/harness that
     /// schedules a specific element's rebuild (e.g. a root `setState`) before
     /// calling [`pump_frame`](Self::pump_frame).
@@ -1065,6 +1077,11 @@ impl HeadlessBinding {
         // Drain the build inbox, filled by the vsync tick and the async-driver
         // poll that ran before this closure.
         tree_binding.build_owner.build_scope(&mut tree_binding.tree);
+        // ADR-0074 §5.4: build -> effects -> layout -> paint. An effect that
+        // writes a signal marks readers into the owner's inbox, which the NEXT
+        // `build_scope` drains — never this frame's.
+        #[cfg(feature = "signals")]
+        tree_binding.build_owner.reactive().run_effects();
 
         // `run_frame_with_layout_builders` is the shared
         // layout<->build fixpoint — it settles every build-during-layout node

@@ -473,6 +473,23 @@ The check scans filenames rather than contents: `docs/adr/ADR-NNNN-*.md`, number
 
 **Allowlist:** none. A number is used once.
 
+### 24. A realm-scoped **signal written**, or a computed/effect **created**, inside a `build` / layout / paint body
+
+[ADR-0074](adr/ADR-0074-realm-scoped-signals.md) makes *reading* a signal in `build` the sanctioned subscription path — `Signal::get(cx)` / `with(cx)` register the building element as a reader, the same class of edge as `depend_on`, so trigger 22's capability list is deliberately untouched. What is refused is the other direction:
+
+| Refused inside a guarded body | Why |
+|---|---|
+| `signal.set(&r, ..)`, `signal.update(&r, ..)`, `signal.set_if_changed(&r, ..)` | a write from `build` re-marks readers of the frame that is still building — the unbounded-loop hazard trigger 22 exists for; from `perform_layout`/`paint` it mutates state after `build_scope` already ran, so the current frame observes torn state |
+| `r.effect(..)`, `r.effect_owned_by(..)`, `r.computed(..)`, `r.computed_owned_by(..)` | a computed value or effect created per build leaks one arena slot per rebuild; they belong in `init_state` / `did_change_dependencies`, held in the state |
+
+`peek(..)` is allowed anywhere (it registers nothing), and so is a write from a callback closure *defined* in `build` — the closure body runs later, from an event, and the scanner sees only the definition line's tokens (`on_tap(move |cx| count.update(cx.reactive(), ..))` is legal; the accepted fixture pins it).
+
+**Guarded functions:** the same list as trigger 22.
+
+**Implementation:** [`scripts/check-signal-write-scope.sh`](../scripts/check-signal-write-scope.sh), a brace-depth scanner like trigger 22's, matching `.set(`/`.update(` only when the first argument reads like a graph handle followed by a comma (one-argument `Cell::set(x)` and `WidgetStatesController::update(WidgetState::Pressed, ..)` do not match), plus the four creation names. Fixtures under `scripts/fixtures/signal-write/`; `--self-test` asserts every token is reported by the rejected fixture and none by the accepted one. The runtime half is `Reactive::write` returning `SignalError::WrittenDuringBuild`.
+
+**Allowlist:** none. Nothing in `crates/` writes a signal or creates a computed/effect in a guarded body today.
+
 ### LockDiscipline/StatementDrop. A significant value must not drop while its own lock guard is still held
 
 **Scope:** `crates/flui-scheduler`, `crates/flui-foundation` (whole crate trees, minus `examples/`), the two crates issue #1150's lock-drop sweep actually audited, site by site. This is deliberately narrower than most numbered triggers: a sibling crate carrying the same shape is real but unaudited residue for a future sweep to widen this glob into (tracked in #1176), not a claim that the rest of the workspace is clean.
