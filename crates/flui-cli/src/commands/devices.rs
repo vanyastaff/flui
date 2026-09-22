@@ -201,6 +201,16 @@ fn linux_pretty_name() -> Option<String> {
 /// `$ANDROID_SDK_ROOT`'s conventional subdirectory. Shared with
 /// `emulators.rs`.
 pub(crate) fn find_android_tool(tool: &str, sdk_subdir: &str) -> Option<PathBuf> {
+    let found = locate_android_tool(tool, sdk_subdir);
+    if found.is_none() {
+        crate::ui::debug(format!(
+            "probe {tool}: not on PATH and no Android SDK ({sdk_subdir}) to look under"
+        ));
+    }
+    found
+}
+
+fn locate_android_tool(tool: &str, sdk_subdir: &str) -> Option<PathBuf> {
     if let Ok(path) = which::which(tool) {
         return Some(path);
     }
@@ -526,7 +536,10 @@ fn linux_browsers() -> Vec<Device> {
 
 #[cfg(target_os = "linux")]
 fn linux_browser_device(name: &str, command: &str) -> Option<Device> {
-    let path = which::which(command).ok()?;
+    let Ok(path) = which::which(command) else {
+        crate::ui::debug(format!("probe {command}: not on PATH"));
+        return None;
+    };
     let version = probe_stdout(Command::new(command).arg("--version"), PROBE_TIMEOUT);
 
     let mut details = BTreeMap::new();

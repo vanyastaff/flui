@@ -361,7 +361,7 @@ fn external_consumer_names_resident_application_and_renamed_facade() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = r#"
 use flui::app::{Application, AppHandle, AppRunError, AppControlError, AppWindowError, MainWindowRequest, StartupWindow, ExitPolicy, AppConfig};
-use std::{cell::Cell, rc::Rc, future::Future};
+use std::{cell::Cell, rc::Rc};
 fn send_sync<T: Send + Sync>() {}
 pub fn application() {
     send_sync::<AppHandle>();
