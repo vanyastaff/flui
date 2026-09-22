@@ -115,8 +115,8 @@ impl PipelineOwner<Layout> {
                 }
 
                 let Some(constraints) = self.cached_or_root_constraints(dirty_node.id) else {
-                    // Dropping the dirty entry here without recovery
-                    // strands the work. The two real cases this hits:
+                    // No constraints to lay out against. The two cases
+                    // this hits, one a bug and one routine:
                     //   1. Root id with root_constraints unset — the
                     //      binding should have called
                     //      set_root_constraints BEFORE run_frame.

@@ -41,8 +41,8 @@
 //! # A deliberate, bounded reference cycle
 //!
 //! On the `type` → `idle` transition the listener calls `stop()` on the very
-//! [`AnimationController`] it is registered on, which means the closure
-//! captures a clone of that controller — a single, bounded
+//! [`AnimationController`] it is registered on, which means the listener's
+//! [`Probe`] holds that controller — a single, bounded
 //! `AnimationController` ⟷ listener cycle that never grows and is reclaimed
 //! at process exit. That is an acceptable trade-off in this one-shot,
 //! self-terminating measurement binary; it would not be in a long-running
@@ -71,14 +71,12 @@
 //!   (`"default"` or `"env"`); `scripts/check-macos-workload.py` measures
 //!   the main display through CoreGraphics and sets the variable, so under
 //!   the script the budgets are stated against the real panel.
-//! - **What a nonzero idle frame count means is backend-dependent.** If the
-//!   platform backend redraws continuously on every display refresh
-//!   regardless of dirty state (a documented property of this substrate's
-//!   AppKit path — see the project's own frame-pump notes), idle frames will
-//!   be close to `idle_seconds × refresh_rate` even with nothing animating.
-//!   That is a real, honestly-measured number — not a bug in this probe —
-//!   and `scripts/check-macos-workload.py` reports it as a finding rather
-//!   than silently budgeting around it.
+//! - **The idle frame count is a measurement, not an assumption.** A backend
+//!   that kept redrawing with nothing dirty would show close to
+//!   `idle_seconds × refresh_rate` here; the accepted macOS run
+//!   (`docs/BETA.md`) shows 1 — the frame the controller's `stop()` lands
+//!   on — and `scripts/check-macos-workload.py` budgets it at 5, reporting
+//!   anything above as a finding rather than budgeting around it.
 
 use std::env;
 use std::sync::Arc;
@@ -304,70 +302,76 @@ fn schedule_idle_observer(post_frame: PostFrameHandle, idle_frames: Arc<AtomicU6
     });
 }
 
-/// Runs the whole probe: `scroll_seconds` of scrolling, `type_chars` ticks of
-/// typing, then [`IDLE_SECONDS`] of enforced idleness, then requests
-/// application quit. Registered as the tick controller's listener, so it
-/// runs once per real frame the mounted realm draws.
-#[allow(clippy::too_many_arguments)]
-fn on_tick(
-    controller: &AnimationController,
-    tick_state: &Mutex<TickState>,
-    scroll_controller: &ScrollController,
-    text_controller: &TextEditingController,
-    post_frame: &Mutex<Option<PostFrameHandle>>,
-    idle_frames: &Arc<AtomicU64>,
-    app_handle: &AppHandle,
-    config: &WorkloadConfig,
-) {
-    let now = Instant::now();
-    let mut state = tick_state.lock();
-    loop {
-        match state.phase {
-            WorkloadPhase::Scroll => {
-                let elapsed = now.saturating_duration_since(state.phase_started_at);
-                if elapsed.as_secs_f64() >= config.scroll_seconds {
-                    emit_phase_summary("scroll", &state, config);
-                    state.begin_phase(WorkloadPhase::Type, now);
-                    continue;
-                }
-                state.record_tick(now);
-                step_scroll(scroll_controller, &mut state);
-                break;
-            }
-            WorkloadPhase::Type => {
-                if state.type_ticks >= config.type_chars {
-                    emit_phase_summary("type", &state, config);
-                    state.begin_phase(WorkloadPhase::Idle, now);
+/// Everything the tick listener needs, owned once and shared with the
+/// [`WorkloadDriverState`] that registers it: the listener is `Fn() + Send +
+/// Sync`, so every field is `Send + Sync` (see the module doc).
+struct Probe {
+    controller: AnimationController,
+    tick_state: Mutex<TickState>,
+    scroll_controller: ScrollController,
+    text_controller: TextEditingController,
+    post_frame: Mutex<Option<PostFrameHandle>>,
+    idle_frames: Arc<AtomicU64>,
+    app_handle: AppHandle,
+    config: WorkloadConfig,
+}
 
-                    // Stop this probe's own demand for continuous frames —
-                    // see the module doc's "A deliberate, bounded reference
-                    // cycle" for why capturing `controller` here is safe.
-                    let _ = controller.stop();
-
-                    // Arm the independent, non-demanding idle observer.
-                    if let Some(handle) = post_frame.lock().clone() {
-                        schedule_idle_observer(handle, Arc::clone(idle_frames));
+impl Probe {
+    /// Runs the whole probe: `scroll_seconds` of scrolling, `type_chars`
+    /// ticks of typing, then [`IDLE_SECONDS`] of enforced idleness, then
+    /// requests application quit. Registered as the tick controller's
+    /// listener, so it runs once per real frame the mounted realm draws.
+    fn on_tick(&self) {
+        let now = Instant::now();
+        let mut state = self.tick_state.lock();
+        loop {
+            match state.phase {
+                WorkloadPhase::Scroll => {
+                    let elapsed = now.saturating_duration_since(state.phase_started_at);
+                    if elapsed.as_secs_f64() >= self.config.scroll_seconds {
+                        emit_phase_summary("scroll", &state, &self.config);
+                        state.begin_phase(WorkloadPhase::Type, now);
+                        continue;
                     }
-
-                    // A plain OS timer, not a frame tick, ends the idle
-                    // window: with the controller stopped, nothing here is
-                    // guaranteed to tick again at all.
-                    let idle_frames_for_timer = Arc::clone(idle_frames);
-                    let handle_for_timer = app_handle.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_secs_f64(IDLE_SECONDS));
-                        let frames = idle_frames_for_timer.load(Ordering::SeqCst);
-                        println!("{{\"phase\":\"idle\",\"frames\":{frames}}}");
-                        let _ = handle_for_timer.request_quit();
-                    });
-                    return;
+                    state.record_tick(now);
+                    step_scroll(&self.scroll_controller, &mut state);
+                    break;
                 }
-                state.record_tick(now);
-                step_type(text_controller, state.type_ticks);
-                state.type_ticks += 1;
-                break;
+                WorkloadPhase::Type => {
+                    if state.type_ticks >= self.config.type_chars {
+                        emit_phase_summary("type", &state, &self.config);
+                        state.begin_phase(WorkloadPhase::Idle, now);
+
+                        // Stop this probe's own demand for continuous frames —
+                        // see the module doc's "A deliberate, bounded reference
+                        // cycle" for why holding `controller` here is safe.
+                        let _ = self.controller.stop();
+
+                        // Arm the independent, non-demanding idle observer.
+                        if let Some(handle) = self.post_frame.lock().clone() {
+                            schedule_idle_observer(handle, Arc::clone(&self.idle_frames));
+                        }
+
+                        // A plain OS timer, not a frame tick, ends the idle
+                        // window: with the controller stopped, nothing here is
+                        // guaranteed to tick again at all.
+                        let idle_frames_for_timer = Arc::clone(&self.idle_frames);
+                        let handle_for_timer = self.app_handle.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(Duration::from_secs_f64(IDLE_SECONDS));
+                            let frames = idle_frames_for_timer.load(Ordering::SeqCst);
+                            println!("{{\"phase\":\"idle\",\"frames\":{frames}}}");
+                            let _ = handle_for_timer.request_quit();
+                        });
+                        return;
+                    }
+                    state.record_tick(now);
+                    step_type(&self.text_controller, state.type_ticks);
+                    state.type_ticks += 1;
+                    break;
+                }
+                WorkloadPhase::Idle => break,
             }
-            WorkloadPhase::Idle => break,
         }
     }
 }
@@ -452,14 +456,7 @@ struct WorkloadDriver {
 }
 
 struct WorkloadDriverState {
-    scroll_controller: ScrollController,
-    text_controller: TextEditingController,
-    app_handle: AppHandle,
-    config: WorkloadConfig,
-    controller: AnimationController,
-    tick_state: Arc<Mutex<TickState>>,
-    post_frame: Arc<Mutex<Option<PostFrameHandle>>>,
-    idle_frames: Arc<AtomicU64>,
+    probe: Arc<Probe>,
     registration: Option<(Vsync, VsyncRegistration)>,
 }
 
@@ -468,14 +465,16 @@ impl StatefulView for WorkloadDriver {
 
     fn create_state(&self) -> Self::State {
         WorkloadDriverState {
-            scroll_controller: self.scroll_controller.clone(),
-            text_controller: self.text_controller.clone(),
-            app_handle: self.app_handle.clone(),
-            config: self.config,
-            controller: AnimationController::with_detached_ticker(Duration::from_millis(1_000)),
-            tick_state: Arc::new(Mutex::new(TickState::new(Instant::now()))),
-            post_frame: Arc::new(Mutex::new(None)),
-            idle_frames: Arc::new(AtomicU64::new(0)),
+            probe: Arc::new(Probe {
+                controller: AnimationController::with_detached_ticker(Duration::from_millis(1_000)),
+                tick_state: Mutex::new(TickState::new(Instant::now())),
+                scroll_controller: self.scroll_controller.clone(),
+                text_controller: self.text_controller.clone(),
+                post_frame: Mutex::new(None),
+                idle_frames: Arc::new(AtomicU64::new(0)),
+                app_handle: self.app_handle.clone(),
+                config: self.config,
+            }),
             registration: None,
         }
     }
@@ -484,35 +483,20 @@ impl StatefulView for WorkloadDriver {
 impl ViewState<WorkloadDriver> for WorkloadDriverState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         if let Some(handle) = ctx.post_frame_handle() {
-            *self.post_frame.lock() = Some(handle);
+            *self.probe.post_frame.lock() = Some(handle);
         }
 
-        let controller = self.controller.clone();
-        let tick_state = Arc::clone(&self.tick_state);
-        let scroll_controller = self.scroll_controller.clone();
-        let text_controller = self.text_controller.clone();
-        let post_frame = Arc::clone(&self.post_frame);
-        let idle_frames = Arc::clone(&self.idle_frames);
-        let app_handle = self.app_handle.clone();
-        let config = self.config;
-        self.controller.add_listener(Arc::new(move || {
-            on_tick(
-                &controller,
-                &tick_state,
-                &scroll_controller,
-                &text_controller,
-                &post_frame,
-                &idle_frames,
-                &app_handle,
-                &config,
-            );
-        }));
+        let probe = Arc::clone(&self.probe);
+        self.probe
+            .controller
+            .add_listener(Arc::new(move || probe.on_tick()));
 
         if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
-            let registration = vsync.register(self.controller.clone());
+            let registration = vsync.register(self.probe.controller.clone());
             self.registration = Some((vsync, registration));
         }
-        self.controller
+        self.probe
+            .controller
             .repeat(true)
             .expect("a freshly created controller accepts repeat()");
     }

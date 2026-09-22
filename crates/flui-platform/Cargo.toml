@@ -106,8 +106,8 @@ windows = { version = "0.62", features = [
 # is gone entirely: `objc` had not released since 2019, and `cocoa` deprecated
 # its whole surface in favor of this family. Versions are the ones `wgpu-hal`
 # already pins, so no new crate generation was introduced.
-objc2 = { version = "0.6.4", features = ["std"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = [
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = [
     "std",
     "objc2-core-foundation",
     "NSObject",
@@ -122,7 +122,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSBundle",
     "NSRange",
 ] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+objc2-app-kit = { workspace = true, features = [
     "objc2-core-foundation",
     "NSApplication",
     "NSGraphicsContext",
@@ -138,8 +138,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSVisualEffectView",
     "NSWindowScripting",
 ] }
-objc2-core-foundation = { version = "0.3.2", default-features = false }
-dispatch2 = "0.3.1"
+objc2-core-foundation.workspace = true
+dispatch2.workspace = true
 # CoreGraphics, for the one display property Cocoa does not expose: the
 # refresh rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`),
 # which is what `PlatformWindow::refresh_period` needs. NSScreen has no

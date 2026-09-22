@@ -47,6 +47,22 @@ impl Drop for InstallRollback {
     }
 }
 
+/// The window options for a window this module's runner will drive:
+/// [`From<&AppConfig>`]'s options with the reveal deferred to the first
+/// presented frame. The deferral is a promise to call
+/// `PlatformWindow::reveal_after_first_frame`, and [`install_desktop_window`]
+/// is what keeps it (the [`FirstReveal`] policy wired into its frame
+/// closure), so only the two open sites that install it — the main window
+/// and a content-bearing secondary window — ask for it. `run_direct` and the
+/// bare `open_secondary_window` convert `AppConfig` directly and reveal at
+/// open, because nothing in them would ever perform the reveal.
+pub(super) fn rendered_window_options(config: &AppConfig) -> flui_platform::WindowOptions {
+    flui_platform::WindowOptions {
+        reveal: flui_platform::WindowReveal::AfterFirstFrame,
+        ..config.into()
+    }
+}
+
 pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
@@ -770,5 +786,24 @@ where
         .run()
     {
         panic!("desktop bootstrap failed: {error}");
+    }
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::rendered_window_options;
+    use crate::app::AppConfig;
+    use flui_platform::WindowReveal;
+
+    /// The runner's own open sites are the only ones that ask for the
+    /// deferred reveal; everything else about the options is the shared
+    /// conversion's (see `AppConfig`'s tests for its `AtOpen`).
+    #[test]
+    fn rendered_windows_defer_their_reveal_to_the_first_frame() {
+        let config = AppConfig::new().with_title("rendered");
+        let options = rendered_window_options(&config);
+        assert_eq!(options.reveal, WindowReveal::AfterFirstFrame);
+        assert_eq!(options.title, "rendered");
+        assert!(options.visible);
     }
 }

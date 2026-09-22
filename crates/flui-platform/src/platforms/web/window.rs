@@ -135,7 +135,11 @@ impl WebWindow {
         };
 
         // The layout's box is the size; the requested size is the fallback
-        // for a canvas that has none yet, and becomes its CSS size then.
+        // for a canvas that has none yet, and becomes its CSS size then —
+        // including for a canvas this constructor created, whose viewport
+        // styling above is then overridden by the fixed size: a page that
+        // gives the canvas no box at construction (a `display: none`
+        // ancestor, say) gets the requested size rather than nothing.
         let (width, height, scale_factor) = layout_size(&canvas).unwrap_or_else(|| {
             let style = canvas.style();
             let _ = style.set_property("width", &format!("{width}px"));
@@ -243,10 +247,14 @@ impl PlatformWindow for WebWindow {
     }
 
     fn physical_size(&self) -> Size<DevicePixels> {
+        // Rounded, exactly as `apply_backing_size` sizes the canvas's
+        // backing store, so the surface the embedder configures from this
+        // answer and the store it renders into agree at fractional device
+        // pixel ratios (981 CSS px at 1.5 is 1472, not 1471).
         let state = self.state.lock();
         Size::new(
-            device_px((state.width * state.scale_factor as f32) as i32),
-            device_px((state.height * state.scale_factor as f32) as i32),
+            device_px((f64::from(state.width) * state.scale_factor).round() as i32),
+            device_px((f64::from(state.height) * state.scale_factor).round() as i32),
         )
     }
 

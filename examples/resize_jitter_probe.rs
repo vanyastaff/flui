@@ -11,8 +11,9 @@
 //! resize-jitter regression test". (The literal has since been raised to 2
 //! on a different measurement — `examples/workload_probe.rs` showed 1
 //! halving the frame rate of any frame with real work in it; see the
-//! literal's comment. This probe's result below is what made that raise a
-//! free choice on the resize axis.)
+//! literal's comment. This probe's result below settles the in-process half
+//! of the resize axis; the compositor-side half stays unobserved, as that
+//! comment says.)
 //!
 //! **It is not that test, and the measurement is why.** Driving a real
 //! 40-resize burst while rendering continuously into the Metal swapchain

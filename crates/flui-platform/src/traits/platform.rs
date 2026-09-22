@@ -35,6 +35,7 @@ use crate::{
 ///
 /// [`PlatformWindow::reveal_after_first_frame`]: crate::traits::PlatformWindow::reveal_after_first_frame
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WindowReveal {
     /// The window is on screen when `open_window` returns (the default).
     /// Every backend supports this.

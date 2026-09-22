@@ -234,6 +234,19 @@ def main() -> int:
     reader = threading.Thread(target=read_stdout, daemon=True)
     reader.start()
 
+    # stderr is drained as it arrives too: a probe that logs more than the
+    # pipe buffer (~64 KiB) would otherwise block on write and never exit,
+    # and be reported as a hang it did not have.
+    stderr_chunks: list[str] = []
+
+    def read_stderr() -> None:
+        assert process.stderr is not None
+        for raw_line in process.stderr:
+            stderr_chunks.append(raw_line)
+
+    stderr_reader = threading.Thread(target=read_stderr, daemon=True)
+    stderr_reader.start()
+
     rss_samples_kib: list[tuple[float, int]] = []
     start_time = time.time()
     timed_out = False
@@ -252,7 +265,8 @@ def main() -> int:
 
     process.wait(timeout=10)
     reader.join(timeout=10)
-    stderr_output = process.stderr.read() if process.stderr else ""
+    stderr_reader.join(timeout=10)
+    stderr_output = "".join(stderr_chunks)
 
     results: list[dict] = []
 

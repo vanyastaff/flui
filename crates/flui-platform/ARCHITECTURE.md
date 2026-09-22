@@ -805,14 +805,19 @@ the window's state lock, never inside an owner route, so exactly one caller
 performs the reveal.
 
 Opt-in rather than the backend's default, because the reveal report is a
-promise only a frame-loop owner can keep. `flui-app`'s runner makes it
-(`From<&AppConfig> for WindowOptions` selects `AfterFirstFrame`); a direct
-consumer of this crate — `examples/hello_world.rs`, `wgpu_window.rs`, the
-platform probes, a bare `open_secondary_window` — has no first frame to
-report, and a window whose reveal waits for a call that never comes is a
-window nobody sees. The default `WindowReveal::AtOpen` therefore leaves alpha
-untouched and those windows appear at open, as they always did. A backend that
-cannot defer treats `AfterFirstFrame` as `AtOpen`.
+promise only a frame-loop owner can keep, and the promise is selected at the
+one place that keeps it: `flui-app`'s desktop runner asks for
+`AfterFirstFrame` at its two open sites (the main window and a content-bearing
+secondary window, through `runner::desktop::rendered_window_options`), whose
+frame closure performs the reveal. Its shared `From<&AppConfig> for
+WindowOptions` conversion stays at `AtOpen` on purpose — `run_direct` and the
+bare `open_secondary_window` use it and have no frame loop that would reveal.
+A direct consumer of this crate — `examples/hello_world.rs`, `wgpu_window.rs`,
+the platform probes — likewise has no first frame to report, and a window
+whose reveal waits for a call that never comes is a window nobody sees. The
+default `WindowReveal::AtOpen` therefore leaves alpha untouched and those
+windows appear at open, as they always did. A backend that cannot defer treats
+`AfterFirstFrame` as `AtOpen`.
 
 Transparent rather than hidden, because a hidden alternative was tried and
 measured on 2026-09-21: an un-ordered window gets no Metal drawable — wgpu

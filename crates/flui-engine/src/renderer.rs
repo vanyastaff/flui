@@ -1033,7 +1033,10 @@ impl Renderer {
             // one-period edge lag during a live drag is a conjecture nothing
             // in-process can observe. The pool is widened on that basis, and
             // `just macos-workload` is the regression gate: its scroll and
-            // type p99 budgets are stated in display periods.
+            // type p99 budgets are stated in display periods. The
+            // measurement is AppKit/Metal on one 100 Hz panel; the literal
+            // is global to every wgpu backend, where 2 is wgpu's own default
+            // and the other backends are unmeasured either way.
             //
             // Pinned independently of the clock-side produce-capacity threshold
             // (`flui_scheduler::FrameClock::set_max_in_flight`, issue #556): that

@@ -39,6 +39,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -149,7 +150,6 @@ def registry_form(manifest, version):
     """Replace every `flui = { git = ..., tag = ... }` dependency with the
     registry form at the exact packaged version, keeping any `features`;
     returns the manifest and how many were rewritten."""
-    import re
     count = 0
 
     def rewrite(match):
@@ -202,8 +202,10 @@ def main():
 
     cli = build_cli(out / 'cli-target')
     manifest = create_consumer(cli, consumer, args.template, version)
-    if f'"{version}"' not in manifest:
-        sys.exit(f'release-consumer-check: the generated manifest does not depend on flui {version}:\n{manifest}')
+    if not re.search(rf'^flui\s*=.*\bversion\s*=\s*"={re.escape(version)}"', manifest, flags=re.M) \
+            and not re.search(rf'^flui\s*=\s*"{re.escape(version)}"', manifest, flags=re.M):
+        sys.exit(f'release-consumer-check: the generated manifest does not depend on flui '
+                 f'{version} by registry version (after the git-tag rewrite):\n{manifest}')
     point_consumer_at_vendor(consumer, vendor)
 
     # A separate target directory: the consumer must compile the archives,

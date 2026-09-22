@@ -402,12 +402,15 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             size: config.size,
             resizable: config.resizable,
             visible: true,
-            // The runner drives the frame loop and reports its first
-            // presented frame (`runner::first_reveal`), so it can promise
-            // the deferred reveal that a direct `flui-platform` consumer
-            // cannot; the backend that can defer never shows a bare
-            // background, the rest reveal at open.
-            reveal: flui_platform::WindowReveal::AfterFirstFrame,
+            // `AtOpen`, the conservative default: `AfterFirstFrame` is a
+            // PROMISE to call `reveal_after_first_frame`, and this
+            // conversion is shared by callers that keep it (the desktop
+            // runner, through `FirstReveal`) and callers that do not
+            // (`run_direct`, the bare `open_secondary_window`). The one
+            // path that keeps it opts in at its own open site —
+            // `runner::desktop::rendered_window_options` — so nothing can
+            // open a window at alpha 0 that no one will ever reveal.
+            reveal: flui_platform::WindowReveal::AtOpen,
             decorated: config.decorations,
             min_size: config.min_size,
             max_size: config.max_size,
@@ -427,6 +430,17 @@ mod tests {
         assert!(config.resizable);
         #[cfg(feature = "hot-reload")]
         assert!(config.worker_plugin_path.is_none());
+    }
+
+    /// The shared conversion must not promise a reveal it cannot keep:
+    /// `run_direct` and the bare secondary window open through it and
+    /// never call `reveal_after_first_frame`. The desktop runner opts in
+    /// at its own open sites (`runner::desktop::rendered_window_options`).
+    #[test]
+    fn app_config_converts_to_window_options_that_reveal_at_open() {
+        let options: flui_platform::WindowOptions = (&AppConfig::default()).into();
+        assert_eq!(options.reveal, flui_platform::WindowReveal::AtOpen);
+        assert!(options.visible);
     }
 
     #[test]

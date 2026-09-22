@@ -93,9 +93,35 @@ mod probe {
     /// constraints the root `LayoutBuilder` saw last.
     struct Witness {
         frames: AtomicU64,
-        /// `(max_width, max_height)` in logical pixels, ×1000 for atomic
-        /// storage.
-        constraints_milli: Mutex<Option<(u64, u64)>>,
+        /// `(max_width, max_height)` in logical pixels.
+        constraints: Mutex<Option<(f32, f32)>>,
+    }
+
+    /// What a frame-counting phase must satisfy.
+    #[derive(Clone, Copy)]
+    enum FrameBudget {
+        /// A resumed window animates again: at least this many frames.
+        AtLeast(u64),
+        /// A suppressed window costs no loop: at most this many frames.
+        AtMost(u64),
+    }
+
+    impl FrameBudget {
+        fn holds(self, frames: u64) -> bool {
+            match self {
+                Self::AtLeast(min) => frames >= min,
+                Self::AtMost(max) => frames <= max,
+            }
+        }
+    }
+
+    impl std::fmt::Display for FrameBudget {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::AtLeast(min) => write!(f, ">={min}"),
+                Self::AtMost(max) => write!(f, "<={max}"),
+            }
+        }
     }
 
     fn schedule_frame_observer(post_frame: PostFrameHandle, witness: Arc<Witness>) {
@@ -161,10 +187,8 @@ mod probe {
             Theme::new(
                 ThemeData::light(),
                 Scaffold::new().body(LayoutBuilder::new(move |_ctx, constraints| {
-                    *witness.constraints_milli.lock() = Some((
-                        (f64::from(constraints.max_width.0) * 1000.0).round() as u64,
-                        (f64::from(constraints.max_height.0) * 1000.0).round() as u64,
-                    ));
+                    *witness.constraints.lock() =
+                        Some((constraints.max_width.0, constraints.max_height.0));
                     // A bar that sweeps with the controller: the frame has
                     // something to draw differently each tick.
                     let width = 40.0 + 200.0 * value;
@@ -211,35 +235,20 @@ mod probe {
         witness.frames.load(Ordering::SeqCst) - before
     }
 
-    fn report_frames(
-        name: &'static str,
-        frames: u64,
-        window: Duration,
-        budget: &str,
-        passed: bool,
-    ) {
-        println!(
-            "{{\"phase\":\"{name}\",\"frames\":{frames},\"window_s\":{:.1},\"budget\":\"{budget}\",\"pass\":{passed}}}",
-            window.as_secs_f64()
-        );
-    }
-
-    /// Count frames over `window` and record the phase against its bound.
+    /// Count frames over `window` and record the phase against its budget.
     fn frames_phase(
         witness: &Witness,
         results: &mut Vec<PhaseResult>,
         name: &'static str,
         window: Duration,
-        min: Option<u64>,
-        max: Option<u64>,
+        budget: FrameBudget,
     ) {
         let frames = count_frames(witness, window);
-        let (passed, budget) = match (min, max) {
-            (Some(min), _) => (frames >= min, format!(">={min}")),
-            (_, Some(max)) => (frames <= max, format!("<={max}")),
-            _ => unreachable!("every phase declares a bound"),
-        };
-        report_frames(name, frames, window, &budget, passed);
+        let passed = budget.holds(frames);
+        println!(
+            "{{\"phase\":\"{name}\",\"frames\":{frames},\"window_s\":{:.1},\"budget\":\"{budget}\",\"pass\":{passed}}}",
+            window.as_secs_f64()
+        );
         results.push(PhaseResult { name, passed });
     }
 
@@ -275,8 +284,7 @@ mod probe {
             &mut results,
             "visible",
             RESUMED_WINDOW,
-            Some(RESUMED_MIN_FRAMES),
-            None,
+            FrameBudget::AtLeast(RESUMED_MIN_FRAMES),
         );
 
         on_main(|mtm| main_window(mtm).miniaturize(None));
@@ -288,8 +296,7 @@ mod probe {
             &mut results,
             "minimized",
             SUPPRESSED_WINDOW,
-            None,
-            Some(SUPPRESSED_MAX_FRAMES),
+            FrameBudget::AtMost(SUPPRESSED_MAX_FRAMES),
         );
 
         on_main(|mtm| main_window(mtm).deminiaturize(None));
@@ -299,8 +306,7 @@ mod probe {
             &mut results,
             "restored",
             RESUMED_WINDOW,
-            Some(RESUMED_MIN_FRAMES),
-            None,
+            FrameBudget::AtLeast(RESUMED_MIN_FRAMES),
         );
 
         on_main(|mtm| NSApplication::sharedApplication(mtm).hide(None));
@@ -312,8 +318,7 @@ mod probe {
             &mut results,
             "hidden",
             SUPPRESSED_WINDOW,
-            None,
-            Some(SUPPRESSED_MAX_FRAMES),
+            FrameBudget::AtMost(SUPPRESSED_MAX_FRAMES),
         );
 
         on_main(|mtm| NSApplication::sharedApplication(mtm).unhide(None));
@@ -323,8 +328,7 @@ mod probe {
             &mut results,
             "unhidden",
             RESUMED_WINDOW,
-            Some(RESUMED_MIN_FRAMES),
-            None,
+            FrameBudget::AtLeast(RESUMED_MIN_FRAMES),
         );
 
         // Resize: grow the frame, then compare the content size AppKit
@@ -347,8 +351,8 @@ mod probe {
         let mut seen = None;
         let mut matched = false;
         while std::time::Instant::now() < deadline {
-            if let Some((w, h)) = *witness.constraints_milli.lock() {
-                let (w, h) = (w as f64 / 1000.0, h as f64 / 1000.0);
+            if let Some((w, h)) = *witness.constraints.lock() {
+                let (w, h) = (f64::from(w), f64::from(h));
                 seen = Some((w, h));
                 if (w - expected.0).abs() <= 1.0 && (h - expected.1).abs() <= 1.0 {
                     matched = true;
@@ -380,7 +384,7 @@ mod probe {
 
         let witness = Arc::new(Witness {
             frames: AtomicU64::new(0),
-            constraints_milli: Mutex::new(None),
+            constraints: Mutex::new(None),
         });
         let results: Arc<Mutex<Option<Vec<PhaseResult>>>> = Arc::new(Mutex::new(None));
 

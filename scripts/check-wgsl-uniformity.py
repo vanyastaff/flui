@@ -53,7 +53,10 @@ TOKEN = re.compile(r'[A-Za-z_]\w*|[{}();]')
 
 
 def strip_comments(text):
-    text = re.sub(r'/\*.*?\*/', lambda m: ' ' * len(m.group(0)), text, flags=re.S)
+    """Blank comments without moving anything: a block comment keeps its
+    newlines so every later token stays on its own line — the marker
+    lines are numbered against the raw text."""
+    text = re.sub(r'/\*.*?\*/', lambda m: re.sub(r'[^\n]', ' ', m.group(0)), text, flags=re.S)
     return '\n'.join(line.split('//', 1)[0] for line in text.splitlines())
 
 
@@ -67,12 +70,20 @@ def uniform_marked_lines(text):
 
 def arm_uniform_branches(tokens, marker_lines):
     """Rewrite `tokens` to (line, tok, armed): a marker arms the NEXT branch
-    keyword at or after its line, and nothing else."""
+    keyword at or after its line, and nothing else. A marker with no branch
+    after it in its own function is dropped at the next `fn`, so it can
+    never arm a branch in a later function."""
+    tokens = list(tokens)
     armed_tokens = []
     pending = sorted(marker_lines)
-    for number, tok in tokens:
+    for index, (number, tok) in enumerate(tokens):
         armed = False
-        if tok in BRANCH_KEYWORDS and pending and pending[0] <= number:
+        if tok == 'fn':
+            pending = [line for line in pending if line >= number]
+        # The `else` of an `else if` is not the branch the marker means:
+        # the `if` that follows carries the condition, so it takes the arm.
+        chained_if = tok == 'else' and index + 1 < len(tokens) and tokens[index + 1][1] == 'if'
+        if tok in BRANCH_KEYWORDS and not chained_if and pending and pending[0] <= number:
             armed = True
             pending.pop(0)
         armed_tokens.append((number, tok, armed))
@@ -149,6 +160,12 @@ def check_function(path, name, body, derives):
         if tok in BRANCH_KEYWORDS:
             if armed or (tok == 'else' and chained_uniform):
                 pending = UNIFORM
+            elif tok == 'if' and pending == UNIFORM and not armed:
+                # `else if <cond>` chained to a uniform branch: the new
+                # condition is its own question, and only its own marker
+                # can answer it — a bare `else {` inherits, `else if` does
+                # not.
+                pending = BRANCH
             elif pending != UNIFORM:
                 pending = BRANCH
         elif tok == '(':
@@ -269,6 +286,44 @@ fn marker_arms_only_the_next_branch(x: f32, c: bool) -> f32 {
     }
     return 0.0;
 }
+fn else_if_does_not_inherit_the_marker(x: f32, c: bool) -> f32 {
+    // wgsl-uniformity: uniform
+    if u.flag > 0.0 {
+        return 1.0;
+    } else if c {
+        return dpdx(x);
+    }
+    return 0.0;
+}
+fn else_if_with_its_own_marker(x: f32) -> f32 {
+    // wgsl-uniformity: uniform
+    if u.flag > 0.0 {
+        return 1.0;
+    } else if u.other > 0.0 { // wgsl-uniformity: uniform
+        return dpdx(x);
+    }
+    return 0.0;
+}
+fn block_comment_before_marker(x: f32) -> f32 {
+    /* a block comment
+       spanning three
+       lines */
+    // wgsl-uniformity: uniform
+    if u.flag > 0.0 {
+        return dpdx(x);
+    }
+    return 0.0;
+}
+fn marker_without_a_branch_is_dropped_here(x: f32) -> f32 {
+    // wgsl-uniformity: uniform (nothing to arm in this function)
+    return x;
+}
+fn branch_after_a_stale_marker(x: f32, c: bool) -> f32 {
+    if c {
+        return dpdx(x);
+    }
+    return 0.0;
+}
 """
 EXPECTED = {
     ('else_on_closing_line', 'inside a branch'),
@@ -277,6 +332,8 @@ EXPECTED = {
     ('for_header_split_and_call_split', 'after an early return'),
     ('sampler_in_branch', 'inside a branch'),
     ('marker_arms_only_the_next_branch', 'inside a branch'),
+    ('else_if_does_not_inherit_the_marker', 'inside a branch'),
+    ('branch_after_a_stale_marker', 'inside a branch'),
 }
 
 

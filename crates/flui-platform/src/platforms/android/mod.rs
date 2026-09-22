@@ -238,28 +238,30 @@ impl AndroidPlatform {
                             // `debug`, so a drag does not flood logcat.
                             let first = !FIRST_MOTION_SEEN.swap(true, Ordering::Relaxed);
                             let pointer = motion.pointer_at_index(0);
+                            // One field list, two levels: `tracing`'s
+                            // callsite level must be a constant, so the
+                            // level is pasted by a local macro rather than
+                            // chosen at runtime.
+                            macro_rules! motion_event {
+                                ($level:expr) => {
+                                    tracing::event!(
+                                        target: "flui_platform::android::input",
+                                        $level,
+                                        action = ?motion.action(),
+                                        pointers = motion.pointer_count(),
+                                        converted = events.len(),
+                                        x = pointer.x(),
+                                        y = pointer.y(),
+                                        scale_factor,
+                                        first,
+                                        "motion event reached the input queue"
+                                    )
+                                };
+                            }
                             if first {
-                                tracing::info!(
-                                    target: "flui_platform::android::input",
-                                    action = ?motion.action(),
-                                    pointers = motion.pointer_count(),
-                                    converted = events.len(),
-                                    x = pointer.x(),
-                                    y = pointer.y(),
-                                    scale_factor,
-                                    "first motion event reached the input queue"
-                                );
+                                motion_event!(tracing::Level::INFO);
                             } else {
-                                tracing::debug!(
-                                    target: "flui_platform::android::input",
-                                    action = ?motion.action(),
-                                    pointers = motion.pointer_count(),
-                                    converted = events.len(),
-                                    x = pointer.x(),
-                                    y = pointer.y(),
-                                    scale_factor,
-                                    "motion event"
-                                );
+                                motion_event!(tracing::Level::DEBUG);
                             }
                             let mut any_handled = false;
                             for platform_input in events {

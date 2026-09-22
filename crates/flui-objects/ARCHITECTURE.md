@@ -88,10 +88,11 @@ text-less paragraph in a tree as contributing semantics (`has_been_annotated
 == true`), which forms or merges an empty, unlabelled node wherever a
 `RenderParagraph` sits directly under a semantics boundary or an
 explicit-child-node ancestor. Flutter's own `SemanticsConfiguration` has the
-same unconditional setters; the oracle does not hit this failure mode because
-nothing in its call graph currently constructs an empty `RenderParagraph` in a
-position where the empty node would surface. FLUI's headless test harness
-does (see `crates/flui-widgets/tests/semantics.rs`), so the divergence is
+same unconditional setters; whether the oracle ever surfaces an empty node
+this way was not traced — its `Text` widgets normally carry text, and this
+document makes no claim about the rest of its call graph. FLUI's headless
+test harness does construct the empty case (see
+`crates/flui-widgets/tests/semantics.rs`), so the divergence is
 made explicit here instead of leaking into the merge pipeline as an
 undocumented empty-label node.
 
