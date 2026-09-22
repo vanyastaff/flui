@@ -60,6 +60,7 @@
 | Run an example | `just example-hello` / `example <name>` / `example-list` |
 | Render-object catalog guard | `cargo test -p flui-objects --test render_object_harness` |
 | Port-check detail | `just port-check-verbose` (per-trigger pass/fail) |
+| MSRV check | `bash scripts/check-toolchain-consistency.sh` (in `just gate`) — pre-1.0 tracks latest stable, bumped within a week of release; post-1.0, N-2. Source of truth: `rust-toolchain.toml`'s `channel` |
 | Flaky test that isn't yours | a genuinely process-global resource (`Registry::global`, `FONT_SYSTEM`) is mutated, not a realm/scheduler — scope a lock to that test module |
 
 ## Architecture Constraints (port methodology)

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/vanyastaff/flui/actions/workflows/ci.yml/badge.svg)](https://github.com/vanyastaff/flui/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](README.md#license)
-[![MSRV: 1.97](https://img.shields.io/badge/MSRV-1.97-orange.svg)](README.md#minimum-supported-rust-version)
+[![MSRV: 1.98](https://img.shields.io/badge/MSRV-1.98-orange.svg)](README.md#minimum-supported-rust-version)
 
 > A modular, Flutter-inspired declarative UI framework for Rust with GPU-accelerated rendering.
 
@@ -24,7 +24,7 @@ See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate st
 
 ## Quick Start
 
-Prerequisites: Rust 1.97 (edition 2024). The repository is a Cargo workspace consumed by path — clone and build. A `rust-toolchain.toml` is committed, so `rustup` will install and select the correct toolchain automatically.
+Prerequisites: Rust 1.98 (edition 2024). The repository is a Cargo workspace consumed by path — clone and build. A `rust-toolchain.toml` is committed, so `rustup` will install and select the correct toolchain automatically.
 
 ```bash
 git clone https://github.com/vanyastaff/flui
@@ -157,12 +157,17 @@ itself), see `examples/platform_window.rs`. More examples live under
 
 ## Minimum Supported Rust Version
 
-The MSRV is **Rust 1.97**, declared as `rust-version` in the workspace
-manifest, pinned by `rust-toolchain.toml`, and verified by a dedicated CI job.
-Policy: pre-release, the MSRV may be bumped in any commit when a dependency or
-language feature warrants it; every bump updates the manifest, the toolchain
-pin, this section, and CI together (the procedure lives in
-`rust-toolchain.toml`'s header).
+The MSRV is **Rust 1.98**, declared as `rust-version` in the workspace
+manifest, pinned by `rust-toolchain.toml`, and verified by a dedicated CI job
+plus `scripts/check-toolchain-consistency.sh` (part of `just gate`), which
+checks that `Cargo.toml`, `clippy.toml`, the `msrv` CI job, and the `flui-cli`
+project templates all agree with `rust-toolchain.toml`'s channel.
+
+**Policy:** pre-1.0, the MSRV tracks the latest stable release and is bumped
+within a week of each new stable (Rust ships every 6 weeks); after 1.0 it
+follows N-2 (tolerates the two most recent stable releases behind current).
+Every bump updates the manifest, the toolchain pin, this section, and CI
+together (the procedure lives in `rust-toolchain.toml`'s header).
 
 ## Documentation
 

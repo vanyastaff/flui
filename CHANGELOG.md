@@ -34,6 +34,17 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `adb install -r`, starts the `NativeActivity` and follows `logcat --pid`.
   See `crates/flui-cli/CHANGELOG.md`.
 
+### Changed
+
+- **MSRV 1.97 → 1.98**, and the policy changed with it: pre-1.0 the MSRV now
+  tracks the latest stable release (bumped within a week of each new stable)
+  rather than only when a stabilization is actually used; post-1.0 it will
+  follow N-2. A new gate, `scripts/check-toolchain-consistency.sh` (wired
+  into `just gate` as `toolchain-consistency-check`), checks that
+  `Cargo.toml`, `clippy.toml`, the `msrv` CI job, and all five `flui-cli`
+  project templates agree with `rust-toolchain.toml`'s channel, so the
+  declaration can no longer drift silently across those files.
+
 ## [0.1.0] - 2026-09-21
 
 First tagged release of the workspace. On crates.io this cut ships

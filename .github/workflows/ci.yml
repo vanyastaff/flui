@@ -23,7 +23,7 @@ name: CI
 #   doc            — rustdoc with RUSTDOCFLAGS=-D warnings
 #   deny           — advisories/bans/licenses/sources
 #   doc-test       — rustdoc examples executed as tests
-#   msrv           — cargo check on the declared 1.97 MSRV
+#   msrv           — cargo check on the declared 1.98 MSRV
 #   miri           — UB check on flui-rendering's pipeline owner and
 #                    flui-view's GlobalKey plane (advisory)
 #   ci             — aggregator: designed to be the one status check branch
@@ -964,10 +964,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust 1.97 (declared MSRV)
+      - name: Install Rust 1.98 (declared MSRV)
         uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
-          toolchain: "1.97"
+          toolchain: "1.98"
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

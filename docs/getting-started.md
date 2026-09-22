@@ -8,7 +8,7 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 
 | Tool | Minimum version | Notes |
 |------|-----------------|-------|
-| Rust | 1.97 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned separately in `rust-toolchain.toml`. `rustup` installs/selects it automatically on first `cargo` invocation. |
+| Rust | 1.98 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned separately in `rust-toolchain.toml`. `rustup` installs/selects it automatically on first `cargo` invocation. |
 | Cargo | bundled with Rust | Workspace uses `resolver = "3"` (MSRV-aware) and edition 2024. |
 | Git | any recent | Required to clone the repo. |
 | Python | 3.11+ | Required for repository verification scripts (`just ci`), which import `tomllib`. Ensure `python3` on `PATH` selects this version; not required to run an application. |
@@ -18,6 +18,16 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 
 The GPU dependency version is defined by `wgpu` in `[workspace.dependencies]`
 in `Cargo.toml`; consult that manifest when checking driver or backend requirements.
+
+### MSRV policy
+
+Pre-1.0, the MSRV tracks the latest stable release and is bumped within a
+week of each new stable (Rust ships every 6 weeks); post-1.0 it follows N-2
+(tolerates the two most recent stable releases behind current). A bump
+touches `Cargo.toml`, `clippy.toml`, the `msrv` CI job, and the `flui-cli`
+project templates together — `scripts/check-toolchain-consistency.sh` (part
+of `just gate`) fails if any of them drift from `rust-toolchain.toml`'s
+channel. Full procedure: `rust-toolchain.toml`'s header comment.
 
 ## Clone and Build
 

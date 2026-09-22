@@ -2,7 +2,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/flui-cli.svg)](https://crates.io/crates/flui-cli)
 [![CI](https://github.com/vanyastaff/flui/actions/workflows/ci.yml/badge.svg)](https://github.com/vanyastaff/flui/actions/workflows/ci.yml)
-[![MSRV](https://img.shields.io/badge/MSRV-1.97-blue.svg)](https://github.com/vanyastaff/flui/blob/main/crates/flui-cli/Cargo.toml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.98-blue.svg)](https://github.com/vanyastaff/flui/blob/main/crates/flui-cli/Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
 
 The command-line tool for the [FLUI](https://github.com/vanyastaff/flui)
@@ -52,7 +52,7 @@ cd flui
 cargo install --path crates/flui-cli --locked
 ```
 
-Requires Rust 1.97 or newer with Cargo, rustup and Git. Platform toolchains
+Requires Rust 1.98 or newer with Cargo, rustup and Git. Platform toolchains
 are only needed for the platforms you build: Xcode command line tools for
 macOS and iOS; for Android the SDK (`ANDROID_HOME`) with `platform-tools`,
 `build-tools` and an NDK, `cargo-ndk`, the `aarch64-linux-android` target,

@@ -617,6 +617,11 @@ runtime-conformance-check:
 panic-policy-check:
     bash scripts/check-panic-policy.sh
 
+[group("quality")]
+[doc("Check every declared MSRV agrees with rust-toolchain.toml's channel (see docs/PORT.md §Version policy)")]
+toolchain-consistency-check:
+    bash scripts/check-toolchain-consistency.sh
+
 # =============================================================================
 # Port methodology
 # =============================================================================
@@ -867,7 +872,7 @@ text-check:
 
 [group("ci")]
 [doc("The non-test half of `ci` — what the pre-push hook runs")]
-gate: fmt-check text-check font-assets-check inventory-check runtime-conformance-check panic-policy-check port-check wgsl-uniformity-check clippy doc-strict
+gate: fmt-check text-check font-assets-check inventory-check runtime-conformance-check panic-policy-check toolchain-consistency-check port-check wgsl-uniformity-check clippy doc-strict
 
 [group("ci")]
 [doc("Run local CI gates (gate + test + doctests)")]

@@ -641,7 +641,7 @@ bash scripts/doc-strict.sh                                    # doc job: the sam
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
 FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test job's dedicated flui-platform step
 cargo test --workspace --locked --doc
-cargo check --workspace --all-targets --locked                # repeated on Rust 1.97 (MSRV job)
+cargo check --workspace --all-targets --locked                # repeated on Rust 1.98 (MSRV job)
 cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (continue-on-error); NARROW — every
                                                               # unit test under that module, including PipelineCell
                                                               # checkout, an owner-local run_frame traversal, a

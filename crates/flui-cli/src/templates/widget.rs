@@ -35,7 +35,7 @@ fn cargo_toml(name: &str, lib_name: &str, source: &DependencySource) -> String {
 name = "{name}"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.98"
 
 [lib]
 name = "{lib_name}"
