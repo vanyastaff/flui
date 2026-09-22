@@ -155,7 +155,6 @@ pin, this section, and CI together (the procedure lives in
 | [Architecture](docs/architecture.md) | Three-tree pipeline + layered crate DAG overview (current state) |
 | [Crates Map](docs/crates.md) | Per-layer crate inventory with status and purpose |
 | [Testing](docs/testing.md) | Build / test / clippy / fmt commands, coverage targets, benchmarks |
-| [Contributing](docs/contributing.md) | Quality gates, planning a large change, conventional commits, git hygiene, code style, architectural constraints |
 
 For deep architectural rules (dependency DAG, pipeline contracts, anti-patterns) see [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md).
 For AI-agent guidance (build commands, architecture, troubleshooting) see [`AGENTS.md`](AGENTS.md).

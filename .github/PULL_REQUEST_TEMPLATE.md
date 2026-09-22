@@ -8,6 +8,7 @@ Describe the change and why it belongs in FLUI.
 - [ ] Flutter reference checked for render/layout/paint/lifecycle/reconciliation changes, or not applicable
 - [ ] New or changed behavior has tests that would fail without this change
 - [ ] Public API changes are documented
+- [ ] A Flutter divergence is recorded (ADR or `## Mapping decisions`), or not applicable
 
 ## Architecture
 
