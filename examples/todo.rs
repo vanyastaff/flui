@@ -99,7 +99,7 @@ impl ViewState<TodoView> for TodoState {
                         }),
                         Text::new(item.text.clone()),
                         IconButton::new(Icon::new(delete_icon_data())).on_pressed(move || {
-                            delete_items.update(|list| list.retain(|it| it.id != id))
+                            delete_items.update(|list| list.retain(|it| it.id != id));
                         }),
                     ])
                     .boxed()
