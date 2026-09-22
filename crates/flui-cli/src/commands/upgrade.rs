@@ -454,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn unparseable_version_yields_none() {
+    fn unparsable_version_yields_none() {
         assert_eq!(is_newer("not-a-version", "0.3.0"), None);
     }
 

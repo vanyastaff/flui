@@ -169,8 +169,8 @@ toml = "1.1"
 bon = "3.8"
 
 # DX TOOLING - flui-cli / flui-devtools
-tempfile = "3"     # scratch dirs/files (build staging and tests)
-which = "8"        # locate toolchain executables (build/cli)
+tempfile = "3" # scratch dirs/files (build staging and tests)
+which = "8"    # locate toolchain executables (build/cli)
 
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros", version = "=0.1.0" }
@@ -502,15 +502,11 @@ toml.workspace = true
 flui-layer = { path = "crates/flui-layer", version = "=0.1.0" }
 # === Rendering Layer (colored_box_app / animated_box_app examples; "testing"
 # for the vertical_slice_demo acceptance test's render-tree inspection) ===
-flui-rendering = { path = "crates/flui-rendering", version = "=0.1.0", features = [
-    "testing",
-] }
+flui-rendering = { path = "crates/flui-rendering", version = "=0.1.0", features = ["testing"] }
 flui-objects = { path = "crates/flui-objects", version = "=0.1.0" }
 # === Interaction Layer ("testing" for the vertical_slice_demo acceptance
 # test's synthetic pointer events) ===
-flui-interaction = { path = "crates/flui-interaction", version = "=0.1.0", features = [
-    "testing",
-] }
+flui-interaction = { path = "crates/flui-interaction", version = "=0.1.0", features = ["testing"] }
 
 # === Reactive Layer (animated_box_app example) ===
 flui-scheduler = { path = "crates/flui-scheduler", version = "=0.1.0" }
