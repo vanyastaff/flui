@@ -27,7 +27,7 @@
 //! (`CheckboxMode`); the a11y cases below prove indeterminate still exports
 //! `Toggled::Mixed` while binary never does.
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;

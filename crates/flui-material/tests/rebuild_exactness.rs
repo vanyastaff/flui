@@ -51,7 +51,7 @@
 //!   coarse "everything rebuilds" regression is caught, not silently
 //!   absorbed by an assertion that only checks the dependent side.
 
-mod common;
+use crate::common;
 
 use std::cell::Cell;
 use std::rc::Rc;

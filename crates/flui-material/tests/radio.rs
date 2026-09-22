@@ -28,7 +28,7 @@
 //! paint-invocation proof (`inner_dot_is_present_only_when_selected`, a
 //! real `Canvas`/`DisplayList` recording).
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;

@@ -10,7 +10,7 @@
 //! the plumbing — the delegate republishes `FlexibleSpaceBarSettings` on
 //! every seam rebuild, and the widget re-interpolates from it.
 
-mod common;
+use crate::common;
 use common::{lay_out, tight};
 use flui_material::{FlexibleSpaceBar, SliverAppBar, Theme, ThemeData};
 use flui_view::BoxedView;

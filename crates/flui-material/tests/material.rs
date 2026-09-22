@@ -16,7 +16,7 @@
 //! `sync_path_clip_target` ever stopped forwarding the configured `shape`
 //! (e.g. closed over a stale/default value instead), these tests would flip.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

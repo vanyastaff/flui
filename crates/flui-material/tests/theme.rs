@@ -21,7 +21,7 @@
 
 use std::sync::{Arc, Mutex};
 
-mod common;
+use crate::common;
 
 use common::{lay_out, loose};
 use flui_material::{ColorSchemeOverrides, Theme, ThemeData, ThemeDataOverrides};

@@ -28,7 +28,7 @@
 
 // a panic IS the failure report in test code (docs/PANIC-POLICY.md)
 
-mod common;
+use crate::common;
 
 use std::rc::Rc;
 

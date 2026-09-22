@@ -13,7 +13,7 @@
 //! `WidgetStatesController`) that the disabled/enabled/overridden icon color
 //! actually reaches the `IconTheme` ancestor the icon child reads.
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;

@@ -4,7 +4,7 @@
 //! target, the `enabled`/theme cascades, and slot presence/absence actually
 //! reach a mounted tree, not just `resolve_style` computed in isolation.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

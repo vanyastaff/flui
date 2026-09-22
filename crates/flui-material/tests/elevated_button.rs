@@ -14,7 +14,7 @@
 //! covered by each file's own unit tests), so one button's worth of
 //! integration coverage is enough to prove the wiring, not four.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
