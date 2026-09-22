@@ -59,6 +59,21 @@ then `flui create` pins this tag as a git dependency.
   `flui-platform` consumer's window visible at open, since only a frame-loop
   owner can report a first frame. Explicit `show`/`set_visible(true)`/
   `activate` reveal immediately. Other backends are unchanged.
+- **Android touches reach the framework** (`flui-platform`): the Android
+  backend filled `PointerState::position` with physical pixels where every
+  other backend — and the framework's reader — uses logical pixels, so on a
+  density-420 emulator every tap landed past the viewport's edge and
+  hit-tested nothing. It divides by the scale factor now, and
+  `PlatformInput`'s doc states the contract. The first `MotionEvent` of the
+  process is logged at `info` (later ones at `debug`) so a silent tap can be
+  told apart from an undelivered one. Verified on an android-35 arm64
+  emulator: two `adb shell input tap`s on the generated counter show «2».
+- **Window-lifecycle probe** (`examples/lifecycle_probe.rs`,
+  `just macos-lifecycle`): drives the running application's own window
+  through miniaturize/deminiaturize, hide/unhide and a resize from AppKit
+  and counts frames through each; the accepted run (zero frames while
+  minimized or hidden, the panel rate after each restore, the resize
+  reaching layout exactly) is recorded in `docs/BETA.md`.
 - **The web canvas is the page's to size** (`flui-platform`): the browser
   backend's window is the canvas's CSS box, read from the live layout, and
   a `ResizeObserver` on the canvas plus the window's `resize` event keep the

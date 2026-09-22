@@ -120,7 +120,7 @@ on a real OS, not that beta acceptance is complete.
 | iOS Simulator (iPhone 16e, iOS 26.2) | **experimental** | Touch input and Home/return state retention via XCUITest, since the backend publishes no accessibility tree (["iOS execution lifecycle foundation"](#ios-execution-lifecycle-foundation), `just ios-input-check`, `scripts/check-ios-input.py`); safe-area inset layout (["iOS safe-area layout"](#ios-safe-area-layout), `just ios-safe-area-check`); scene disconnect/reconnect protocol probe (["UIKit scene ownership"](#uikit-scene-ownership)) | No physical device tested; the oracle is pixels only (no a11y tree, so nothing is read by identifier); no IME or keyboard check; landscape orientation, keyboard occlusion, and other device classes are untested; background execution grants and full multiwindow/background-launch rendering remain unverified; the measured counter bundle was the CLI's 2026-09-19 build, not a fresh build of the current revision; `just ios-sim` (static Material app renders, animated app's pixels change between two screenshots 2 s apart and the process survives) was re-run on 2026-09-22 at `51c8fe63` on an iPhone 17 Pro simulator and passed both arms — the XCUITest touch check was not re-run |
 | Linux (X11 / Wayland) | **experimental** | CI-executed live smoke only: the `live-smoke` job in `.github/workflows/ci.yml` builds `flui`'s `sliver_demo` example and `flui-live-smoke`, then drives a real window with real X11 input under Xvfb (pixel and exit-code checks, occlusion verified against a real cover window), plus a Wayland variant under headless weston for close-path teardown ordering (`live-smoke` / `live-smoke-wayland` recipes in `justfile`; also described in the README under "Resilience that is tested, not assumed") | No operator-equivalent input verification as used on macOS (only the harness's synthetic/scripted input); no IME check; no resident/background lifecycle coverage; native accessibility bridges are not exercised by this job; X11 and Wayland coverage differ in scope (Wayland covers only close-path teardown ordering) |
 | Windows (Win32) | **unverified** | Cross-compiled Clippy only: `just cross-typecheck` runs `cargo clippy -p flui-platform --target x86_64-pc-windows-msvc --features a11y` | No live window, input, lifecycle, or IME verification has been performed on Windows for this candidate; the "Window-independent owner turns" and "Resident main-window validation" sections explicitly note Windows show/worker paths as cross-compilation evidence only |
-| Android | **unverified** | Cross-compiled Clippy only, for `aarch64-linux-android`: `just cross-typecheck`'s `flui-platform` line plus its `flui-app`/`flui` mobile-runner lines; example crates (`examples/android_demo`, `examples/android_scene`, `examples/android_app`) are excluded from `[workspace.members]` and built separately with `cargo ndk` (`docs/crates.md`, `docs/getting-started.md`) | First emulator run, 2026-09-22, from the CLI's `flui build android` work (android-35 arm64, `-gpu host`): the generated counter renders its first frame and the count is visible, but two `adb shell input tap`s on Increment changed nothing and nothing between the input queue and the framework logged — the Android backend now traces every `MotionEvent` (`51c8fe63`, target `flui_platform::android::input`) so the next run can tell "never delivered" from "delivered and missed"; on `-gpu swiftshader_indirect` a debug build produced no first frame in four minutes (process at 80 % CPU after "Selected GPU: SwiftShader"); no lifecycle verification; the automatic-retry surface-recreation backoff (`21af0752`) is host-tested against a scripted backend only, not a real device or emulator failure |
+| Android (emulator, android-35 arm64) | **experimental** | First emulator run, 2026-09-22, from the CLI's `flui build android` / `flui run --device` work in the peer session (generated counter with `android_main`, `cargo ndk` arm64-v8a debug APK, android-35 google_apis arm64 on Apple Silicon, `-gpu host`, density 420, 1080×2400): first frame ~10 s after launch, the counter visible; two `adb shell input tap 540 1284` on Increment showed «2» on the screenshot taken right after — once the backend handed the framework logical pointer positions (`bf2725be`; before it every touch landed past the viewport's edge, diagnosed through the `28e048f1` first-motion-event trace: `x=540.0 y=1284.0 scale_factor=2.625`). Cross-compiled Clippy for `aarch64-linux-android` in `just cross-typecheck`. | One emulator, one host, debug build, an `adb` tap rather than a finger; no lifecycle (pause/resume/rotate) or keyboard verification; on `-gpu swiftshader_indirect` a debug build produced no first frame in four minutes (process at ~80 % CPU after "Selected GPU: SwiftShader", no errors in logcat) — software rendering is unverified; the debug APK is 406 MB because the `.so` ships uncompressed with full debug info; the automatic-retry surface-recreation backoff (`21af0752`) is host-tested against a scripted backend only, not a real device or emulator failure |
 | Web / WASM | **experimental** | The counter template's widget tree run through `flui::run_app` in a browser (`examples/web_counter`, `just web-counter-build`, WebGPU): rendered, three clicks on Increment advanced 0 → 3, a click with no target changed nothing, no console errors — see ["Web: the counter in a browser"](#web-the-counter-in-a-browser). Compile coverage stays `just wasm-check`. | One browser (the desktop app's Chromium-based pane) on one machine, served from `localhost`; no Firefox/Safari, no WebGL fallback (WebGPU only), no touch, no IME, no resize/visibility lifecycle check, hot-reload has no web runner. The shader uniformity defect this run exposed is fixed and guarded by `scripts/check-wgsl-uniformity.py`, whose rule is structural, not Tint itself. |
 
 ## Verification order
@@ -700,6 +700,44 @@ a page styling the canvas `100vw`/`100vh`: the canvas measured 1100×700 for
 an 1100×700 viewport with no inline style, followed a viewport change to
 980×1260 at device pixel ratio 2 (backing store 1960×2520) with the counter
 re-centred, and a click on the re-laid-out button advanced the count.
+
+## Window lifecycle on macOS: minimize, hide, resize — 2026-09-22
+
+`examples/lifecycle_probe.rs` (`just macos-lifecycle`, release build) runs a
+Material tree through the ordinary `flui::app::Application` path with a
+free-running `AnimationController` demanding frames, then drives its own
+window from a driver thread through AppKit on the main queue — no operator
+input, no synthetic OS events — and counts the frames the runner produces
+through each transition with a self-re-arming post-frame callback:
+
+| phase | driver | frames | budget | verdict |
+| --- | --- | --- | --- | --- |
+| first frame | wait | 0.892 s after the window factory | ≤ 15 s (hang guard) | PASS |
+| visible | — | 201 in 2 s | ≥ 30 | PASS |
+| minimized | `-[NSWindow miniaturize:]` (`isMiniaturized` confirmed) | 0 in 3 s | ≤ 5 | PASS |
+| restored | `-[NSWindow deminiaturize:]` | 199 in 2 s | ≥ 30 | PASS |
+| hidden | `-[NSApplication hide:]` (`isHidden` confirmed) | 0 in 3 s | ≤ 5 | PASS |
+| unhidden | `-[NSApplication unhide:]` | 200 in 2 s | ≥ 30 | PASS |
+| resized | `-[NSWindow setFrame:display:]` +200×+100 | layout saw 840×580 = the new content size | ±1 px within 1 s | PASS |
+
+Same host and display as the workload run (M1, macOS 27.0, 100 Hz). A
+minimized or hidden window costs the runner nothing at all — zero frames
+against a controller that never stops asking — and the loop is back at the
+panel rate within the half-second settle after each restore; the resize
+reaches the root's constraints exactly. Budgets were declared in the
+probe's module doc before its first run; the first run failed only its
+baseline, which had started before the cold GPU stack produced a frame,
+and the probe now waits for the first frame and reports the wait instead.
+Not covered: occlusion by another window (the runner's `occlusion_visible`
+path), display sleep, and a live drag-resize's intermediate frames.
+
+One observation from the run, not a budget: at startup the rendering
+pipeline warns once — `run_layout: no cached state.constraints() AND no
+root_constraints … skipping dirty entry` for a non-root render node — on
+the frame in which the `LayoutBuilder` child is first marked dirty before
+its parent has laid it out. The pipeline recovers on that same frame's
+layout pass (every later phase renders), so it is recorded here as a
+diagnostic to quieten, not a failure.
 
 ## Performance and resilience: the representative workload — 2026-09-22
 
