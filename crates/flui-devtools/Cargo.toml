@@ -48,8 +48,15 @@ default = ["profiling", "timeline", "inspector"]
 # frame spans the framework already emits.
 profiling = ["dep:tracing", "dep:tracing-subscriber"]
 
+# The serialisation half of `timeline`, not a capability of its own. It is
+# a named feature because the `flui` facade has a `serde` feature and cargo
+# applies a workspace-root `--features serde` to every default member,
+# which is an error on a package whose optional `serde` is reachable only
+# through `dep:` (the feature-matrix job runs exactly that command).
+serde = ["dep:serde"]
+
 # Event timeline with Chrome-trace export and the FrameSnapshot bridge.
-timeline = ["dep:flui-scheduler", "dep:serde", "dep:serde_json"]
+timeline = ["dep:flui-scheduler", "serde", "dep:serde_json"]
 
 # Counting/logging tree observer over the ADR-0040 observation seam.
 # Depends ONLY on flui-foundation (dependency inversion) — still zero

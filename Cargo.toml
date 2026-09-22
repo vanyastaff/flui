@@ -633,6 +633,12 @@ name = "screenshot"
 path = "examples/screenshot.rs"
 required-features = ["material", "cupertino"]
 
+# Secondary window opened from a Material button; see the example's own doc.
+[[example]]
+name = "multi_window_demo"
+path = "examples/multi_window_demo.rs"
+required-features = ["material"]
+
 [[test]]
 name = "material_demo"
 path = "tests/material_demo.rs"

@@ -84,7 +84,7 @@ impl EventCategory {
     }
 }
 
-/// Returns the current thread's [`ThreadId`].
+/// Returns the current thread's [`std::thread::ThreadId`].
 ///
 /// Used as a serde `default` function for `TimelineEvent::thread_id`, which is
 /// skipped during serialization and reconstructed on deserialization.
