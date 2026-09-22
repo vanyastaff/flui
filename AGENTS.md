@@ -34,7 +34,8 @@
 ## How to Work
 
 - **One git worktree per task, never the shared checkout:** `git worktree add -b <area>/<slug>
-  ../flui-wt-<slug> origin/main` (e.g. `platform/win32-ime`).
+  ../flui-wt-<slug> origin/main` (e.g. `platform/win32-ime`). Reviewing another PR: `gh pr
+  diff`/`checkout` in your own directory, never `checkout`/`branch` in their worktree.
 - **A task is:** goal, crates/files in scope, acceptance criterion, what counts as proof — missing
   one, ask before guessing scope.
 - **A report is:** actual command output behind each claim, plus what you could *not* verify and
@@ -48,6 +49,8 @@
   `U##`/`SC-NNN` are documented repo exceptions; `FR-NNN`/`ADR-NNNN` are fine (checker-grepped).
   Archival roots excluded (`docs/{audits,brainstorms,ideation,plans,research,superpowers}`,
   `.rust-studio/specs`, `specs`, `openspec`); residue tracked in issue #644.
+- **A new gate is a justfile recipe + a `checks`-job step** — a recipe alone isn't on the merge
+  path. A doc pulled in via `include_str!` is source, not docs: list it in `ci.yml`'s paths-filter.
 
 ## Commands
 
@@ -61,6 +64,7 @@
 | Render-object catalog guard | `cargo test -p flui-objects --test render_object_harness` |
 | Port-check detail | `just port-check-verbose` (per-trigger pass/fail) |
 | Flaky test that isn't yours | a genuinely process-global resource (`Registry::global`, `FONT_SYSTEM`) is mutated, not a realm/scheduler — scope a lock to that test module |
+| This machine (shared, memory-limited) | one compiling worker, shared `CARGO_TARGET_DIR`, `CARGO_BUILD_JOBS` by RAM; docs-only PR = script gates |
 
 ## Architecture Constraints (port methodology)
 
@@ -91,6 +95,7 @@ entry; never an implicit gap.
 | **Render object** (`RenderBox`/`RenderSliver`) | Implement the trait (`flui-rendering`/`flui-objects`) → register in `RENDER_OBJECT_TYPES` → `harness_*` test (`render_object_harness`) → no `RwLock<Box<dyn>>`/`async` in `perform_layout`/`paint` → Flutter equivalent (or absence) in `## Mapping decisions` |
 | **Widget** | `View`/`ViewState` (facade or `flui-widgets`) → back with a render object (row above) → wire `SemanticsConfiguration` for AT → test that fails without the change → `## Mapping decisions` for any divergence |
 | **Platform capability** (new `BuildContext` handle) | Lifecycle-acquired (ADR-0018/0021/0030/0037), never usable inside `build`/`perform_layout`/`paint` → backend under `flui-platform`, no `windows::*`/`cocoa::*`/`objc2::*` leaking out → token in `check-frame-capability-scope.sh` → test that fails without it → ADR if protocol-level |
+| **Example using `material`/`cupertino`** | `[[example]] required-features = [...]` (`just facade-combos` needs it) |
 
 ## Definition of Done (anti-cheating)
 
