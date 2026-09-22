@@ -1264,13 +1264,6 @@ impl BuildOwner {
         super::RebuildHandle::new(self.external_scheduler(), element)
     }
 
-    /// Number of elements queued in the out-of-frame inbox, awaiting the next
-    /// [`build_scope`](Self::build_scope) drain.
-    ///
-    /// Observability for the `RebuildHandle` channel: a
-    /// `schedule(reason)` from a worker thread is visible here before any frame runs.
-    /// Returns a count, never a guard — the lock stays private (SP-6).
-    #[must_use]
     /// What the most recent `build_scope` rebuilt: the number of distinct
     /// elements built this frame and, per [`RebuildReason`], how many of them
     /// carried that cause (an element scheduled for two reasons counts once in
@@ -1289,6 +1282,13 @@ impl BuildOwner {
         }
     }
 
+    /// Number of elements queued in the out-of-frame inbox, awaiting the next
+    /// [`build_scope`](Self::build_scope) drain.
+    ///
+    /// Observability for the `RebuildHandle` channel: a
+    /// `schedule(reason)` from a worker thread is visible here before any frame runs.
+    /// Returns a count, never a guard — the lock stays private (SP-6).
+    #[must_use]
     pub fn pending_external_builds(&self) -> usize {
         self.external_inbox.lock().len()
     }

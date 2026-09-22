@@ -247,12 +247,15 @@ impl StatelessView for AppB {
 
 // ------------------------------------------------------------------ harness
 
+/// Applies "the change" for step `i` to a mounted tree.
+type Change = Box<dyn FnMut(&mut LaidOut, u64)>;
+
 /// One mounted tree plus the closure that applies "the change" for step `i`.
 struct Scenario {
     name: &'static str,
     variant: &'static str,
     laid: LaidOut,
-    change: Box<dyn FnMut(&mut LaidOut, u64)>,
+    change: Change,
 }
 
 struct Measured {
@@ -269,7 +272,7 @@ impl Scenario {
             layout_roots: self
                 .laid
                 .pipeline_owner()
-                .with(|owner| owner.layout_roots_last_run()),
+                .with(flui_rendering::pipeline::PipelineOwner::layout_roots_last_run),
         }
     }
 }
@@ -519,7 +522,7 @@ fn print_counts_table(scenarios: &mut [Scenario]) {
     println!();
     println!("| scenario | variant | elements built | by reason | layout roots |");
     println!("|---|---|---:|---|---:|");
-    for scenario in scenarios.iter_mut() {
+    for scenario in &mut *scenarios {
         // Warm up once so the measured frame is a steady-state change, not the
         // first mutation after mount.
         let _ = scenario.step(1);
@@ -548,7 +551,7 @@ fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("adr_0074_change_plus_frame");
     group.measurement_time(Duration::from_secs(3));
     group.warm_up_time(Duration::from_millis(500));
-    for scenario in scenarios.iter_mut() {
+    for scenario in &mut *scenarios {
         let id = format!("{} / {}", scenario.name, scenario.variant);
         let mut i = 10u64;
         group.bench_function(id, |b| {

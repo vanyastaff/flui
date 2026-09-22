@@ -652,6 +652,15 @@ impl<T: 'static> Signal<T> {
         self.slot
     }
 
+    /// The `Send + Sync` form of this handle, for a closure that will run on
+    /// the owner thread later (`UiCommand::SignalWrite`).
+    pub fn detach(self) -> SignalSender<T> {
+        SignalSender {
+            slot: self.slot,
+            _t: PhantomData,
+        }
+    }
+
     /// Read during `build`: the building element becomes a reader.
     pub fn get(self, cx: &dyn crate::BuildContext) -> T
     where
@@ -699,6 +708,44 @@ impl<T: 'static> Signal<T> {
             return Ok(false);
         }
         self.set(r, value).map(|()| true)
+    }
+}
+
+/// The `Send + Sync` form of a [`Signal`] handle for crossing a thread
+/// boundary: it carries only the slot, and can do nothing until it is
+/// re-attached on the owner thread (inside a `UiCommand::SignalWrite`
+/// closure, ADR-0074 §5.8), where [`SignalSender::attach`] hands back the
+/// realm-affine [`Signal`].
+pub struct SignalSender<T: 'static> {
+    slot: SignalSlot,
+    _t: PhantomData<fn() -> T>,
+}
+
+impl<T: 'static> Clone for SignalSender<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T: 'static> Copy for SignalSender<T> {}
+
+impl<T: 'static> fmt::Debug for SignalSender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SignalSender")
+            .field("slot", &self.slot)
+            .finish()
+    }
+}
+
+impl<T: 'static> SignalSender<T> {
+    /// Re-attach on the owner thread. The handle is only meaningful against
+    /// the graph that minted the original signal; any operation through
+    /// another graph reports [`SignalError::Released`].
+    pub fn attach(self) -> Signal<T> {
+        Signal {
+            slot: self.slot,
+            _t: PhantomData,
+            _local: PhantomData,
+        }
     }
 }
 

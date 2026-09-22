@@ -235,7 +235,7 @@ impl BuildContext for ElementBuildContext {
 
     #[cfg(feature = "signals")]
     fn signal_read(&self, slot: crate::reactive::SignalSlot) {
-        if self.is_building {
+        if BuildContext::is_building(self) {
             self.owner
                 .read()
                 .reactive()
