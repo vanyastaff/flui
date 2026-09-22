@@ -499,22 +499,23 @@ shortcuts this package's own tests use freely (see
 its documented surface has only `HeadlessBinding::replay` and a hit-test
 target it found itself — semantics bounds, here — to tap with. Steps 2 and 5
 reuse the same diagnostics dump for a structural check and a content check
-respectively; that reuse is deliberate, not laziness — plain `Text` publishes
-no accessibility semantics on its own (see the next paragraph), so the
-diagnostics tree's `text` property is the only *public* way to read back
-what a `RenderParagraph` actually rendered, short of a screenshot.
+respectively; that reuse is deliberate, not laziness — the semantics tree
+carries a `Text`'s content as a label, but the diagnostics tree's `text`
+property is the reading of what the `RenderParagraph` actually rendered,
+which is what step 5 is asserting.
 
-**A gap the test documents rather than works around silently:** the counter
+**A gap the first version of this test found, now closed:** the counter
 template's `ElevatedButton` (`flui-material`'s `ButtonStyleButtonCore`
-composition) attaches no `SemanticsConfiguration` of its own, and neither
-does a bare `Text`. Step 3 would find nothing without an explicit
-`flui::prelude::Semantics::new().label("Increment").button(true)` wrapper
-around the button — the same pattern `crates/flui-widgets/tests/semantics.rs`
-establishes. The test adds that wrapper itself and says so in its module
-doc; the generated template does not carry it, which means the app `flui
-create` scaffolds is not screen-reader accessible out of the box. That is a
-`flui-cli` template fix, tracked separately, not something this test's
-scope covers.
+composition) attached no `SemanticsConfiguration` of its own, and neither
+did a bare `Text`, so step 3 found nothing unless the test wrapped the
+button in an explicit `flui::prelude::Semantics` — which meant the app `flui
+create` scaffolds was not screen-reader accessible out of the box.
+`RenderParagraph` now publishes its plain text as a semantics label with its
+text direction (an empty paragraph publishes nothing — a recorded mapping
+decision in `crates/flui-objects/ARCHITECTURE.md`), and `ButtonStyleButtonCore`
+wraps every button it composes in `Semantics(container, button, enabled)`.
+The test mounts the template's tree exactly and queries `"Increment"` from
+the framework's own node.
 
 The second test, `missing_label_query_reports_the_search_and_the_available_labels`,
 is the acceptance criterion's "actionable command failures" half: it queries
