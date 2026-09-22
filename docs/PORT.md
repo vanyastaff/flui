@@ -52,7 +52,7 @@ Triggers are seeded from observed friction in the workspace. Forward-looking tri
 
 **Back-references:** the project constitution's v2.2.0 Anti-Patterns entry ("`Arc<Mutex<>>` for tree structures") — historical citation; `.specify/memory/constitution.md` no longer exists in this checkout, see [`AGENTS.md`](../AGENTS.md) for the current rule; the "sync hot path" rule.
 
-**Regex (used by `just port-check`):** `RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` (storage-shaped violations). Scope extended in Mythos Step 13 of the `flui-layer` chain to cover `crates/flui-layer/src/` and to match `dyn Layer` / `dyn ContainerLayer` shapes as well. Re-confirmed in Mythos Step 13 of the `flui-painting` chain to cover the post-split `crates/flui-painting/src/` subdirectories (`canvas/`, `display_list/`, `text_layout/`, `text_painter/`) as a forward-looking guard.
+**Regex (used by `just port-check`):** `RwLock<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` (storage-shaped violations). Scope extended in Mythos Step 13 of the `flui-layer` chain to cover `crates/flui-layer/src/` and to match `dyn Layer` / `dyn ContainerLayer` shapes as well. Re-confirmed in Mythos Step 13 of the `flui-painting` chain to cover the post-split `crates/flui-painting/src/` subdirectories (`canvas/`, `display_list/`, `text_layout/`, `text_painter/`) as a forward-looking guard. Scope and trait-name set extended again in Mythos Step 9 of the `flui-engine` chain to cover `crates/flui-engine/src/` and match `dyn CommandRenderer` as well — `scripts/port-check.sh`'s trigger-1 invocation scans `flui-rendering/src`, `flui-view/src`, `flui-layer/src`, `flui-painting/src`, **and `flui-engine/src`**, with `CommandRenderer` in the trait alternation.
 
 ### 2. `Box<dyn RenderObject<_>>` wrapped in any interior-mutability primitive in render storage
 
@@ -64,7 +64,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Back-references:** historical `.ai-factory/ARCHITECTURE.md` example "`RenderBad { children: Vec<Box<dyn RenderObject>> }` — forbidden" and constitution Principle IV — neither file exists in this checkout; see [`FOUNDATIONS.md`](FOUNDATIONS.md) and [`AGENTS.md`](../AGENTS.md) for the current rule.
 
-**Regex:** `(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` constrained to render-storage modules, `crates/flui-layer/src/`, and `crates/flui-painting/src/`. Scope and trait-name set extended in Mythos Step 13 of the `flui-layer` chain; re-confirmed for the post-split `flui-painting` subdirectories in Mythos Step 13 of the `flui-painting` chain.
+**Regex:** `(RwLock|Mutex|RefCell|Cell|UnsafeCell)<\s*Box<\s*dyn\s+(RenderObject|Layer\b|ContainerLayer)` constrained to render-storage modules, `crates/flui-layer/src/`, and `crates/flui-painting/src/`. Scope and trait-name set extended in Mythos Step 13 of the `flui-layer` chain; re-confirmed for the post-split `flui-painting` subdirectories in Mythos Step 13 of the `flui-painting` chain. Extended again in Mythos Step 9 of the `flui-engine` chain: `crates/flui-engine/src/` joins the scope and `dyn CommandRenderer` joins the trait alternation, mirroring trigger 1's identical extension.
 
 ### 3. `async fn` on `View::build`, `RenderObject::layout`, `RenderObject::paint`
 
@@ -72,7 +72,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Back-references:** the "sync hot path, async at the edges" rule; permitted at IO (`flui-assets`), scheduler (`flui-scheduler`), build pipeline (`flui-cli`'s build module) only.
 
-**Regex:** `async\s+fn\s+(build|layout|paint|perform_layout|composite|render|fire_composition_callbacks)\b` constrained to `crates/flui-{rendering,view,painting,layer}/src/**`. Scope and verb set extended in Mythos Step 13 of the `flui-layer` chain to catch layer-level async (`composite`, `render`, `fire_composition_callbacks`). Re-confirmed in Mythos Step 13 of the `flui-painting` chain to recurse into the post-split `crates/flui-painting/src/` subdirectories (rg recurses naturally; verified via `bash scripts/port-check.sh -v`).
+**Regex:** `async\s+fn\s+(build|layout|paint|perform_layout|composite|render|fire_composition_callbacks)\b` constrained to `crates/flui-{rendering,view,painting,layer}/src/**`. Scope and verb set extended in Mythos Step 13 of the `flui-layer` chain to catch layer-level async (`composite`, `render`, `fire_composition_callbacks`). Re-confirmed in Mythos Step 13 of the `flui-painting` chain to recurse into the post-split `crates/flui-painting/src/` subdirectories (rg recurses naturally; verified via `bash scripts/port-check.sh -v`). Scope and verb set extended again in Mythos Step 9 of the `flui-engine` chain: `crates/flui-engine/src/` joins the scope, and `submit|present|render_scene|render_layer_recursive|handle_backdrop_filter` join the verb alternation to catch async on the engine's own hot-path entry points.
 
 **Whitelist:** `crates/flui-view/src/binding.rs` route-notification handlers (`handle_pop_route`, `handle_push_route`, `handle_commit_back_gesture`, `handle_request_app_exit`) are async per Flutter's `SystemChannels` callback shape; they sit on the binding layer, not the render path.
 
@@ -90,7 +90,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Why:** per-frame allocations are the largest controllable frame-budget tax. `Arc::clone` is cheap individually but compounds across hundreds of render objects times 60 frames per second. Caller is asked to pass `&Arc<T>` or `&T` rather than clone.
 
-**Regex:** `Arc::clone\(` constrained to `crates/flui-rendering/src/objects/**/*.rs` and `crates/flui-engine/src/layer_render.rs` (the per-layer wgpu walk; scope extended in Mythos Step 13 of the `flui-layer` chain as a forward-looking guard).
+**Regex:** `Arc::clone\(` constrained to `crates/flui-objects/src/**/*.rs` and `crates/flui-engine/src/layer_render.rs` (the per-layer wgpu walk; scope extended in Mythos Step 13 of the `flui-layer` chain as a forward-looking guard). The path was `crates/flui-rendering/src/objects/**/*.rs` before ADR-0008 split the concrete render-object catalog out into its own `flui-objects` crate; `scripts/port-check.sh`'s trigger-5 invocation already scans the new location.
 
 ### 6. Recursive `Box<dyn View>` stored in element child collections
 
@@ -102,13 +102,13 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 ### 7. `Arc<Mutex<*Renderer | *Pool | wgpu::*>>` field in `flui-engine` 🔮
 
-A renderer, a pool or a raw wgpu handle behind a shared lock invites a second mutator into a single-mutator design. One file is excluded by glob — `!**/texture_pool.rs`, where `Arc<Mutex<TexturePoolInner>>` is still the real shape — and that exclusion must go in the same change as the lock. The exclusions for `renderer.rs` and the dispatcher file have been retired: `Renderer` now owns its `OffscreenRenderer` outright and `LayerDispatcher<'frame>` borrows one, so both files are watched again.
+A renderer, a pool or a raw wgpu handle behind a shared lock invites a second mutator into a single-mutator design. **No production file is excluded any more.** `renderer.rs` and the dispatcher file were retired earlier: `Renderer` now owns its `OffscreenRenderer` outright and `LayerDispatcher<'frame>` borrows one, so both are watched again. `texture_pool.rs`'s own exclusion is retired too — `TexturePoolInner` no longer sits behind `Arc<Mutex<...>>` (see that file's own doc comment, which describes the shape in the past tense), so the glob was removed in the same change; `scripts/port-check.sh`'s trigger-7 invocation excludes only test files today.
 
 **Why:** the wgpu single-mutator runtime invariant means `Arc<Mutex<T>>` on engine subsystems hides a single-thread access pattern behind shared-mutability ceremony. The lock is uncontended in production but the shape mismatches the type-level invariant; a future regression would re-introduce the same maintenance burden.
 
 **Back-references:** verdict §12 rejected design #2 (`Arc<RwLock<Renderer>>` shared); strategy clause "single owner of wgpu resources."
 
-**Regex:** `^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` constrained to `crates/flui-engine/src/`, with file-glob exclusions for the three Friction-log-tracked sites listed above. Anchored to struct-field syntax (leading whitespace + optional `pub` + ident + `:`); inner alternation `((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` is grouped so `wgpu::*` matches only at the outer-type position. Catches both `Arc<...>` and `Option<Arc<...>>` field shapes. Tightened after Copilot review on PR #79.
+**Regex:** `^\s+(pub\s+)?\w+\s*:\s*(Option<\s*)?Arc<\s*(parking_lot::)?(Mutex|RwLock)<\s*((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` constrained to `crates/flui-engine/src/`, excluding only test files — no production file carries a live exclusion (see above). Anchored to struct-field syntax (leading whitespace + optional `pub` + ident + `:`); inner alternation `((super::)?(\w+::)*\w*(Renderer|Pool)\w*|wgpu::\w+)` is grouped so `wgpu::*` matches only at the outer-type position. Catches both `Arc<...>` and `Option<Arc<...>>` field shapes. Tightened after Copilot review on PR #79.
 
 ### 8. `unimplemented!()` / `todo!()` in production `fn` body
 
@@ -116,7 +116,7 @@ A renderer, a pool or a raw wgpu handle behind a shared lock invites a second mu
 
 **Allowlist marker:** `// PORT-CHECK-OK-STUB: <reason + tracking-issue>` on the same line as the panic. The reason should name the tracking issue or follow-up doc so the stub doesn't become permanent.
 
-**Scope:** framework crates (`crates/`), excluding tests (`tests/`, `test*.rs`), examples, and the per-platform stub modules (`crates/flui-platform/src/platforms/{linux,ios,android}/`) which are tracked outside SP-1 under the platform-impl track in [`ROADMAP.md`](ROADMAP.md).
+**Scope:** framework crates (`crates/`), excluding tests (`tests/`, `test*.rs`) and the per-platform stub modules (`crates/flui-platform/src/platforms/{linux,ios,android}/`) which are tracked outside SP-1 under the platform-impl track in [`ROADMAP.md`](ROADMAP.md). **Not currently excluded: `examples/` directories** — unlike triggers 10/12/13's `rg` invocations, trigger 8's has no `!**/examples/**` glob in `scripts/port-check.sh` today. No crate's `examples/` directory currently contains `unimplemented!`/`todo!`, so this is a latent gap rather than a live false positive, but it means a stub committed under an in-crate `examples/` dir would be caught (correctly rejected) rather than silently passed — the opposite of what this line used to claim. Flagged for a follow-up rather than silently patched here.
 
 **Regex:** `unimplemented!\s*\(|todo!\s*\(` with doc-comment and marker filters.
 
@@ -145,6 +145,10 @@ A renderer, a pool or a raw wgpu handle behind a shared lock invites a second mu
 **Multi-line declaration handling:** the scan does NOT use `rg -U` multiline mode (mixing multi-line output blocks with line-oriented `grep -Ev` filters partial-filters multi-line matches → false positives and silent bypasses). The single-line scan catches rustfmt-formatted code (which collapses `Box<dyn Trait>` to one line whenever possible).
 
 **Back-references:** [specs/004-view-element-core/spec.md FR-036](../specs/004-view-element-core/spec.md), [Phase 3.1 §U30](plans/2026-05-22-005-feat-view-element-core-contracts-plan.md).
+
+### FR-033. `downcast_ref::<…>` in the View-type update dispatch path
+
+**Scope:** `crates/flui-view/src/element/generic.rs` and `crates/flui-view/src/element/dispatch.rs` only — the body of `ElementCore::update_view` and its dispatch helper. This is the base FR-033 grep, named in the trigger summary line and cross-referenced from `FR-033/widgets` below, but this document had no dedicated scope entry for it until now — only passing mentions. The grep matches any `downcast_ref::<` inside those two files, not just a `<…View…>`-shaped one: the historical regression form is `downcast_ref::<V>()` with `V` a generic parameter, which a `View`-substring-anchored regex would miss entirely. Legitimate non-View-type `downcast_ref` uses (slot attachment in `unified.rs`) sit outside this scope on purpose. **Allowlist:** `// PORT-CHECK-OK-DOWNCAST: <reason>` on the same line, reserved for sites that enter the scope but are sanctioned individually — joining the `FR-033/widgets` marker below under the same census (`rg PORT-CHECK-OK`). This is a SPEC requirement, not a numbered refusal trigger; trigger 9 (FR-036) is the broader sanctioned-`dyn` enforcement, this grep targets one defect class on a tighter scope.
 
 ### FR-033/widgets. Type-erased downcasts in the widget catalog (ADR-0019 U4)
 
@@ -438,14 +442,23 @@ Doc-comment mentions ("…tessellated by lyon…") are fine and filtered out by 
 
 ### 22. A **lifecycle-only presentation capability** acquired inside a `build` / layout / paint body
 
-**The capabilities.** These capabilities let lifecycle and input callbacks affect a presentation outside the build/layout/paint transaction. Four exist, and all are guarded by this trigger:
+**The capabilities.** These capabilities let lifecycle and input callbacks affect a presentation outside the build/layout/paint transaction. `scripts/check-frame-capability-scope.sh`'s own `capabilities=` line is the authoritative token list — **eleven** tokens today, not four; this table previously documented only the first four added and drifted behind the scanner as later ones landed (the scanner's own header comment makes the same point about itself: "it said 'seven tokens' for a list of nine before this note replaced the count"). All eleven are guarded by this trigger:
 
 | Capability | Introduced | What it does |
 |---|---|---|
 | `rebuild_handle()` | [`ADR-0018`](adr/ADR-0018-async-builder-seam.md) U1 | `RebuildHandle::schedule()` marks its element dirty for the **next** frame. |
 | `post_frame_handle()` | [`ADR-0021`](adr/ADR-0021-hero-flight-seam.md) U2 | `PostFrameHandle::schedule()` queues work for the **end of the current** frame. |
+| `local_post_frame_handle()` | ADR-0021 / #556 | The `!Send` sibling of `post_frame_handle()` — `LocalPostFrameHandle::schedule_local()` addresses its lane directly instead of going through the cross-thread queue, same hazard as `post_frame_handle()` otherwise. |
 | `text_input_handle()` | [`ADR-0030`](adr/ADR-0030-platform-text-input-ime-capability.md) | Returns the weak concrete handle to the presentation-owned text-input session. |
+| `lifecycle_handle()` | ADR-0035 | A weak presentation lifecycle subscription, acquired during widget initialization rather than every build. |
 | `focus_manager()` | [`ADR-0037`](adr/ADR-0037-presentation-ownership-domains.md) | Returns the exact `Rc<FocusManager>` owned by the presentation's build owner. |
+| `keep_alive_handle()` | #835 | The retained form of a keep-alive hold, for state that becomes keep-worthy after `init_state`; re-acquiring it every rebuild is the same frame-phase hazard as the others. |
+| `keep_alive_lease()` | #835 | Takes a hold on the enclosing lazy sliver child so cache-band eviction skips it; acquired from `build` it would be re-taken every rebuild, and the lease's `Drop` releasing the previous hold would make a child's survival depend on rebuild ordering. |
+| `owner_platform()` | ADR-0039 §6 | The odd one out: a free function in `flui-app`'s runner (`with_owner_platform`), not a `BuildContext` method, reaching the loop-scoped `!Send` owner-thread platform capability — guarded the same way regardless, since the scanner matches tokens, not call shapes. |
+| `pipeline_owner()` | `PipelineCell` port (`docs/runtime-contract.toml`'s `semantics-two-phase-borrow` contract) | Returns a live `PipelineCell` handle to the whole render tree; calling `.with_mut()` on it from a guarded body would reenter the pipeline mid-transaction — `PipelineCell::with_mut`'s own reentrancy guard turns that into an immediate panic rather than silent corruption. |
+| `hit_test_handle()` | (undocumented in the scanner's own header comment — see note below) | The realm's fresh-hit-test capability: answers "what is under this global position right now", which cached pointer-dispatch routing cannot — `DragTarget` discovery is the case that needs it (`crates/flui-view/src/context/build_context.rs`'s own doc comment). |
+
+`hit_test_handle()` is a second, independent gap from the one this table fixes: it's absent even from `scripts/check-frame-capability-scope.sh`'s own header-comment prose (present only in the bare `capabilities=` token list), so the scanner's self-description is already behind its own enforcement, the same pattern one level down.
 
 **Why:** acquiring a capability inside `build` can create an unbounded rebuild loop, queue a callback against the frame still building, attach an IME client repeatedly, or make synchronous focus mutation part of reconciliation. Acquiring one inside `perform_layout`, `paint`, or a compositing walk can mutate presentation state *after* `build_scope` has already run for this frame, so the current frame observes torn state.
 
@@ -475,7 +488,7 @@ The check scans filenames rather than contents: `docs/adr/ADR-NNNN-*.md`, number
 
 ### LockDiscipline/StatementDrop. A significant value must not drop while its own lock guard is still held
 
-**Scope:** `crates/flui-scheduler`, `crates/flui-foundation` (whole crate trees, minus `examples/`), the two crates issue #1150's lock-drop sweep actually audited, site by site. This is deliberately narrower than most numbered triggers: a sibling crate carrying the same shape is real but unaudited residue for a future sweep to widen this glob into (tracked in #1176), not a claim that the rest of the workspace is clean.
+**Scope:** `crates/` — the whole workspace (minus `examples/`). `scripts/port-check.sh`'s own trigger comment already states this as the current scope, widened from the two crates issue #1150's original lock-drop sweep first audited site by site (`crates/flui-scheduler`, `crates/flui-foundation`), and running the scan confirms it: it does flag hits outside those two crates today (e.g. `crates/flui-widgets`, `crates/flui-material`), each resolved the same way as any other hit — a real violation fixed by extract-then-drop, or sanctioned by a `// PORT-CHECK-OK-LOCK: <reason>` marker (see the Allowlist entry below). Tracking issue #1176 describes this widening as its task but is still open at the time of this note — the code and this doc are both ahead of the tracker; closing #1176 (or filing what's actually left, if anything) is separate housekeeping, not a reason to keep describing the scope as unwidened.
 
 **The hazard.** A `MutexGuard`/`RwLockWriteGuard`/`RefMut` is a temporary. If the value it displaces, removes, or returns has a significant `Drop` (one that can run arbitrary user code, most commonly another `Arc`'s refcount reaching zero and destroying a captured closure or handle, or a `Waker`'s executor vtable), and that value drops while the guard's own temporary is still alive, a destructor that re-enters the same lock deadlocks. This is the exact shape `ARCHITECTURE.md`'s retired `schedule_frame`/`current_frame()` entry documents for `flui-scheduler`, the shape the `Vec::retain`-during-lock hazard three sibling call sites shared in the same crate, and the shape found in `ListenerRegistry`'s owner-hook dispatch and `ClaimSlot`'s `register_waker`, both of which none of the patterns below can see at all; a targeted review found them, not the trigger. Every one of these is fixed the same way: locate the removal/displacement under the lock, and drop the extracted value only after the guard falls, never by a full copy and never by holding the guard across arbitrary user code.
 
@@ -541,7 +554,7 @@ A generic helper following the same shape, `Notifier::extract_locked` (`crates/f
 
 **Test hits are real hits, not exempt.** A test file is exactly where the next contributor copies the shape from. #1150's sweep fixed every inline `mod tests` hit found in scope rather than leaving a "trivial in tests" carve-out. Most of those fixes (18 of the 20 `Option<T>`-slot sites) use `guard.replace(x)` (`Option::replace`) rather than `mem::replace(&mut *guard, Some(x))`: the two are drop-ordering-equivalent (both release the guard, a statement temporary, at the `let` binding's own `;`, after the extracted value is already bound), but `mem::replace(&mut *guard, Some(x))` trips `clippy::mem_replace_option_with_some` under this workspace's `-D warnings` gate, so `guard.replace(x)` is the one that actually ships. The remaining sites use a plain `mem::replace` (a non-`Option` slot) or the same block-scoped extraction as the production sites. The fix is mechanical either way, and the shape it teaches is the one worth keeping constant.
 
-**Back-references:** issue #1150 (sweep), issue #1176 (workspace-wide widening, not yet done); `crates/flui-scheduler/ARCHITECTURE.md`'s `TaskQueue::clear` and "No legacy, lock-tied frame-callback registration API" mapping entries; `crates/flui-scheduler/src/panic_payload.rs`'s `discard_panic_payload` (hoisted crate-private, used by `scheduler.rs`, `async_driver.rs`'s `TaskToken::drop`, and `ticker.rs`'s `TickerDelivery::deliver_now` — a caught panic PAYLOAD can itself own a type whose own `Drop` panics, and dropping it bare during an already-unwinding recovery path is the identical double-panic hazard one level removed from a lock guard); `crates/flui-foundation/src/notifier_generic.rs`'s `extract_locked`; `crates/flui-foundation/src/listener_registry.rs`'s `set_on_first_listener`/`set_on_last_listener` and `RegistryInner::after_add`/`after_remove`; `crates/flui-foundation/src/claim_slot.rs`'s `Inner::wake_task` and `register_waker`.
+**Back-references:** issue #1150 (sweep), issue #1176 (workspace-wide widening — shipped in the script, tracking issue still open); `crates/flui-scheduler/ARCHITECTURE.md`'s `TaskQueue::clear` and "No legacy, lock-tied frame-callback registration API" mapping entries; `crates/flui-scheduler/src/panic_payload.rs`'s `discard_panic_payload` (hoisted crate-private, used by `scheduler.rs`, `async_driver.rs`'s `TaskToken::drop`, and `ticker.rs`'s `TickerDelivery::deliver_now` — a caught panic PAYLOAD can itself own a type whose own `Drop` panics, and dropping it bare during an already-unwinding recovery path is the identical double-panic hazard one level removed from a lock guard); `crates/flui-foundation/src/notifier_generic.rs`'s `extract_locked`; `crates/flui-foundation/src/listener_registry.rs`'s `set_on_first_listener`/`set_on_last_listener` and `RegistryInner::after_add`/`after_remove`; `crates/flui-foundation/src/claim_slot.rs`'s `Inner::wake_task` and `register_waker`.
 
 ### Reactive lint promotion
 
