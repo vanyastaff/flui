@@ -109,8 +109,8 @@ type HorizontalDragCancelHandler = Rc<dyn Fn()>;
 /// The platform's action arrives through a `Send + Sync` handler while the
 /// detector's callbacks are `Rc` (they capture the tree's own state), so the
 /// handler only records the request and schedules a rebuild
-/// ([`RebuildHandle`]); the next `build`, on the UI thread, hands the request
-/// to a [`LocalPostFrameHandle`] which runs the `Rc` callback after that
+/// (`RebuildHandle`); the next `build`, on the UI thread, hands the request
+/// to a `LocalPostFrameHandle` which runs the `Rc` callback after that
 /// frame — never inside `build`, where a callback that sets state would be
 /// re-entrant. One frame of latency, no unsafe, and a request that arrives
 /// while the detector is unmounted is dropped with its element.
