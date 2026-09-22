@@ -1,0 +1,32 @@
+// panic!() is held to the same ratchet as expect(): conforming when the message
+// starts with `BUG: ` or names its `try_` twin; two sites below do neither.
+pub fn get(&self) -> u32 {
+    match self.try_get() {
+        Ok(v) => v,
+        Err(e) => panic!("Signal::get: {e} (use try_get for a fallible read)"),
+    }
+}
+
+pub fn index(&self, i: usize) -> u32 {
+    self.slots.get(i).copied().unwrap_or_else(|| panic!("BUG: slot {i} minted by this arena must exist"))
+}
+
+pub fn bare(&self) -> u32 {
+    panic!("no value available")
+}
+
+pub fn dynamic(&self, msg: &str) -> u32 {
+    panic!("{}", msg)
+}
+
+pub fn not_a_call(&self) -> &str {
+    "the word panic!( inside a string literal is masked"
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn free() {
+        panic!("tests may panic freely");
+    }
+}

@@ -14,6 +14,7 @@ A panic is a **bug report**, never a control-flow mechanism.
 | Caller-triggerable failure (bad input, missing file, lock contention, platform error) | Return `Result` with a `thiserror` error type. Never panic. |
 | Internal invariant that the module itself maintains (slab index handed out by this arena, ID minted by this tree, state machine transition guarded upstream) | `expect("BUG: <invariant that was violated>")` |
 | Test code, benches, examples | `unwrap()`/`expect()` freely — a panic *is* the failure report there. |
+| Convenience twin over a fallible form (`get` over `try_get`, `with` over `try_with`, `signal` over `try_signal`) | Allowed when the failure is a **programming error with a stale or misused handle** — the same class as `RefCell::borrow` over `try_borrow` or slice indexing over `get`. The `# Panics` section documents it, the message **names the `try_` form**, and the `try_` form exists with a typed error. Never for caller-triggerable failures that a `Result` should carry. |
 | Compile-time-checkable invariant | Prefer the type system (`NonZeroUsize` IDs, Arity system) over any runtime check. This is the house style — see the ID offset pattern in `AGENTS.md`. |
 
 ### The `BUG:` message convention
@@ -75,16 +76,20 @@ even while the crate-level allow is still present.
 
 `expect()` is deliberately **not** linted (`expect_used` stays off): with the
 `BUG:` convention it is the sanctioned invariant idiom, and the review bar is
-the message, not the call. Audit them with:
+the message, not the call. `panic!()` is held to the same bar: its message
+starts with `BUG: ` (an invariant) or names the `try_` twin it is the
+convenience form of. Audit them with:
 
 ```bash
 rg '\.expect\("(?!BUG: )' crates/*/src --pcre2   # expects missing the convention
+rg 'panic!\("(?!BUG: )(?!.*try_)' crates/*/src --pcre2   # panics that are neither BUG: nor a twin
 rg '\.unwrap\(\)' crates/*/src                   # should be test-only or allow-tracked
 ```
 
 **Mechanical gate.** `scripts/check-panic-policy.sh` (`just
 panic-policy-check`, wired into `just ci` and the CI `checks` job) enforces
-the `BUG:` prefix on every production `expect()` under `crates/*/src`,
+the `BUG:` prefix on every production `expect()` under `crates/*/src`, and
+the `BUG:`-or-`try_`-twin rule on every production `panic!()` there,
 excluding `#[cfg(test)]`/`#[cfg(any(test, feature = "testing"))]`-gated
 modules, functions, and impls (test-support code is exempt, same as
 `tests/`/`benches/`/`examples/`). It is a per-file, shrink-only ratchet
