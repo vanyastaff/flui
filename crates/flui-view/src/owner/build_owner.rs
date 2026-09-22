@@ -249,6 +249,47 @@ pub(crate) struct BuildScopeQueues {
     scratch: Vec<DirtyElement>,
 }
 
+/// Per-cause rebuild counters for one `build_scope`, indexed by the
+/// `RebuildReason` discriminant (`#[repr(u8)]`, eleven variants today; sixteen
+/// slots leave room for the `#[non_exhaustive]` enum to grow).
+#[derive(Debug, Default)]
+struct FrameBuildCounts {
+    /// Which causes appeared this frame — the bitset is also the stable
+    /// iteration order for the report.
+    seen: Option<RebuildReasons>,
+    counts: [usize; 16],
+}
+
+impl FrameBuildCounts {
+    fn clear(&mut self) {
+        self.seen = None;
+        self.counts = [0; 16];
+    }
+
+    fn record(&mut self, reason: RebuildReason) {
+        let index = reason as u8 as usize;
+        debug_assert!(
+            index < self.counts.len(),
+            "BUG: RebuildReason outgrew the counter table"
+        );
+        if let Some(slot) = self.counts.get_mut(index) {
+            *slot += 1;
+        }
+        match &mut self.seen {
+            Some(seen) => seen.insert(reason),
+            None => self.seen = Some(RebuildReasons::from_reason(reason)),
+        }
+    }
+
+    fn by_reason(&self) -> Vec<(RebuildReason, usize)> {
+        self.seen
+            .into_iter()
+            .flat_map(RebuildReasons::iter)
+            .map(|reason| (reason, self.counts[reason as u8 as usize]))
+            .collect()
+    }
+}
+
 /// Per-frame rebuild telemetry, see [`BuildOwner::last_frame_build_report`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FrameBuildReport {
@@ -487,7 +528,9 @@ pub struct BuildOwner {
     /// How many elements this frame's drain rebuilt for each cause — the
     /// per-frame telemetry ADR-0074 §8 measures against (`FrameStats` has no
     /// rebuild figure). Reset with `built_this_frame` at every `build_scope`.
-    frame_builds_by_reason: HashMap<RebuildReason, usize>,
+    /// Boxed so the owner grows by one pointer, not by a counter table
+    /// (`build_owner_tests::test_build_owner_memory_size` budgets this struct).
+    frame_builds: Box<FrameBuildCounts>,
 
     /// Registry of live lazy-sliver [`ChildManager`]s, one per live adaptor
     /// element. Keyed by the sliver's `RenderId`; populated at mount and
@@ -685,7 +728,7 @@ impl BuildOwner {
             mid_drain_absorbs_left: MAX_MID_DRAIN_ABSORBS,
             mid_drain_cap_streak: false,
             built_this_frame: HashSet::new(),
-            frame_builds_by_reason: HashMap::new(),
+            frame_builds: Box::default(),
             child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
             layout_builder_registry: LayoutBuilderRegistry::default(),
             lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
@@ -1270,15 +1313,9 @@ impl BuildOwner {
     /// `elements_built` and once under each reason). Reset at every
     /// `build_scope`, so read it after a pump, before the next one.
     pub fn last_frame_build_report(&self) -> FrameBuildReport {
-        let mut by_reason: Vec<(RebuildReason, usize)> = self
-            .frame_builds_by_reason
-            .iter()
-            .map(|(reason, count)| (*reason, *count))
-            .collect();
-        by_reason.sort_by_key(|(reason, _)| reason.as_str());
         FrameBuildReport {
             elements_built: self.built_this_frame.len(),
-            by_reason,
+            by_reason: self.frame_builds.by_reason(),
         }
     }
 
@@ -1369,7 +1406,7 @@ impl BuildOwner {
         }
         self.mid_drain_absorbs_left = MAX_MID_DRAIN_ABSORBS;
         self.built_this_frame.clear();
-        self.frame_builds_by_reason.clear();
+        self.frame_builds.clear();
 
         self.build_scope_impl(tree);
     }
@@ -1823,7 +1860,7 @@ impl BuildOwner {
             // an A↔B ping-pong — see `Self::absorb_mid_drain_inbox`.
             self.built_this_frame.insert(id);
             for reason in reasons.iter() {
-                *self.frame_builds_by_reason.entry(reason).or_insert(0) += 1;
+                self.frame_builds.record(reason);
             }
 
             // ADR-0040: the build ran to completion (the resume_unwind branch
