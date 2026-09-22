@@ -185,8 +185,8 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 /// A single-line text field that accepts keyboard input when focused.
 ///
 /// Flutter parity: `widgets/editable_text.dart` `EditableText` — the low-level
-/// editable primitive.  [`TextField`](super::text_field::TextField) wraps this
-/// with decoration and tap-to-focus.
+/// editable primitive.  [`RawTextField`](super::text_field::RawTextField) wraps
+/// this with decoration and tap-to-focus.
 ///
 /// # Key routing
 ///
@@ -274,9 +274,9 @@ pub struct EditableText {
     /// `TextField` and flows down as `_isEnabled` into
     /// `_effectiveFocusNode.canRequestFocus`
     /// (`text_field.dart:1183,1282-1299`, tag `3.44.0`). FLUI's
-    /// [`TextField`](super::text_field::TextField) has no decoration/enabled
-    /// plumbing yet, so this substrate hoists the behavior onto
-    /// `EditableText` itself, one layer lower than the oracle — see
+    /// [`RawTextField`](super::text_field::RawTextField) has no
+    /// decoration/enabled plumbing yet, so this substrate hoists the behavior
+    /// onto `EditableText` itself, one layer lower than the oracle — see
     /// [`enabled`](Self::enabled)'s doc comment for exactly what it
     /// withholds.
     pub(super) enabled: bool,
