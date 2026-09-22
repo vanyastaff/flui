@@ -22,7 +22,11 @@ fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-LOCK_PATH="$root/Cargo.lock" PACKAGE_NAME="$1" python3 -c '
+# tomllib needs Python >= 3.11; /usr/bin/python3 on macOS is 3.9.
+source "$root/scripts/lib/interpreters.sh"
+flui_require_python311 "locked-version"
+
+LOCK_PATH="$root/Cargo.lock" PACKAGE_NAME="$1" "$FLUI_PYTHON" -c '
 import os, sys, tomllib
 with open(os.environ["LOCK_PATH"], "rb") as f:
     lock = tomllib.load(f)

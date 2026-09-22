@@ -931,6 +931,11 @@ install-hooks:
 clean-incremental:
     rm -rf "${CARGO_TARGET_DIR:-target}/debug/incremental"
 
+[group("setup")]
+[doc("Check every tool `just ci` needs (`just doctor full`: also `just ci-full`) and print the install command for each missing one; exit 1 if any is missing. Installs nothing. Works under the stock macOS bash 3.2; without just: bash scripts/doctor.sh")]
+doctor mode="ci":
+    bash scripts/doctor.sh {{mode}}
+
 [group("maintenance")]
 [doc("Prune stale build artifacts: current-toolchain sweep + anything older than 7 days (requires cargo-sweep)")]
 sweep:
