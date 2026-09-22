@@ -221,12 +221,18 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
-          # A file matches `non_docs` if it matches `**` (everything) and does
-          # NOT match any of the negated patterns below — dorny/paths-filter
-          # evaluates a filter's pattern list in order, gitignore-style, so a
-          # later `!pattern` re-excludes what an earlier positive pattern
-          # matched. Keep this allowlist in sync with AGENTS.md's worktree
-          # policy if the "docs-only" definition ever changes.
+          # `predicate-quantifier: some-with-excludes` is required for the
+          # `!pattern` entries below to actually exclude anything — the
+          # action's DEFAULT quantifier ('some') treats every entry as an
+          # independent OR-match, so a negated pattern never overrides the
+          # catch-all `**` and the filter matches everything regardless
+          # (verified against a real docs-only PR: without this line,
+          # `non_docs` still came back `true` for a CHANGELOG.md-only diff).
+          # With it: a file matches `non_docs` only if it matches `**` AND
+          # none of the negated patterns — i.e. everything except this
+          # docs-only allowlist. Keep the allowlist in sync with AGENTS.md's
+          # worktree policy if the "docs-only" definition ever changes.
+          predicate-quantifier: some-with-excludes
           filters: |
             non_docs:
               - '**'
