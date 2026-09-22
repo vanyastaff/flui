@@ -151,6 +151,10 @@ pub use flui_types as types;
 pub use flui_view as view;
 pub use flui_widgets as widgets;
 
+/// The `android-activity` crate `android_main` receives its `AndroidApp`
+/// from, so an application declares no Android dependency of its own.
+#[cfg(target_os = "android")]
+pub use flui_app::android_activity;
 /// Application configuration. Re-exported from [`app`] (`flui-app`).
 pub use flui_app::app::AppConfig;
 /// The errors a window request can fail with — what [`open_window`] and
@@ -200,6 +204,10 @@ pub use flui_app::run_app;
 /// [`run_app`] with an explicit [`AppConfig`] (window title, size, services,
 /// failure policy). Re-exported from [`app`] (`flui-app`).
 pub use flui_app::run_app_with_config;
+/// The Android entry points, called from the `cdylib`'s `android_main`
+/// (`flui create` writes one). Re-exported from `flui-app`.
+#[cfg(target_os = "android")]
+pub use flui_app::{run_app_android, run_app_android_with_config};
 
 /// Everything an application author needs in scope to write widget code:
 /// the widget catalog prelude, [`run_app`], and — with the `material` feature

@@ -6,9 +6,11 @@ pub fn generate(
     source: &DependencySource,
     platforms: &[String],
 ) -> ProjectPlan {
+    let lib_name = name.replace('-', "_");
     ProjectPlan::new()
         .file("Cargo.toml", cargo_toml(name, source))
-        .file("src/main.rs", MAIN)
+        .file("src/lib.rs", LIB)
+        .file("src/main.rs", super::main_rs(&lib_name, "CounterApp"))
         .file("flui.toml", flui_toml(name, org, platforms))
         .file("README.md", readme(name))
         .dir("assets")
@@ -24,6 +26,7 @@ fn cargo_toml(name: &str, source: &DependencySource) -> String {
     } else {
         ""
     };
+    let lib_table = super::LIB_TABLE;
 
     format!(
         r#"# FLUI Template v{version}{mode_comment}
@@ -38,6 +41,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 
+{lib_table}
 [dependencies]
 {deps}
 
@@ -53,15 +57,23 @@ strip = "debuginfo"
     )
 }
 
-const MAIN: &str = r#"use flui::prelude::*;
+const LIB: &str = r#"//! The application, and the entry points the platforms call.
+//!
+//! `src/main.rs` mounts [`CounterApp`] on the desktop; `android_main` below
+//! is what Android's `NativeActivity` calls once it has loaded this crate as
+//! a `cdylib` (`flui build android`).
+
+use flui::prelude::*;
 use flui::widgets::{SafeArea, column};
 
-fn main() {
-    run_app(CounterApp);
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+fn android_main(app: flui::android_activity::AndroidApp) {
+    flui::run_app_android(app, CounterApp);
 }
 
 #[derive(Clone, StatelessView)]
-struct CounterApp;
+pub struct CounterApp;
 
 impl StatelessView for CounterApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {

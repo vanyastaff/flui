@@ -110,6 +110,10 @@ pub use app::open_secondary_window;
 ))]
 pub use app::open_window;
 // Android-specific entry points
+/// The crate `android_main` receives its `AndroidApp` from; re-exported so
+/// an application's manifest names only `flui`.
+#[cfg(target_os = "android")]
+pub use android_activity;
 #[cfg(target_os = "android")]
 pub use app::{run_app_android, run_app_android_with_config};
 // Bindings re-exports

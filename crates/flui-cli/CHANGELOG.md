@@ -8,6 +8,22 @@ the workspace version and follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `flui run --device <serial>` for an online Android device or emulator
+  from `flui devices`: the APK is built, installed with `adb install -r`,
+  the `NativeActivity` started, and `adb logcat --pid` of the app follows as
+  the session's output (`run.app.log` under `--json`); a change rebuilds,
+  reinstalls and restarts, `q`/Ctrl-C force-stop the app. New events
+  `run.android.install {serial, apk}` and `run.android.start {package, pid}`.
+  An offline or unauthorized device is refused with exit 5 and the reason.
+- `flui build android` produces an APK for a generated project without
+  Gradle: `cargo ndk` compiles the project's own `cdylib`, then the SDK's
+  build-tools package it (`aapt2 link`, native libraries stored
+  uncompressed, `zipalign -p 4`, `apksigner` with `~/.android/debug.keystore`,
+  created on first use). A `platforms/android/gradlew` switches the build to
+  Gradle, for projects that grow a Java or Kotlin side.
+- `flui doctor --android` checks the SDK `build-tools` (aapt2, zipalign,
+  apksigner) and `cargo-ndk`.
+
 - `flui run --device browser:<name>` for any browser `flui devices` lists:
   the project is built for `wasm32-unknown-unknown`, served by a built-in
   dev server on `127.0.0.1` (`--web-port`, default a free port), the
@@ -17,6 +33,14 @@ the workspace version and follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The `counter`, `basic` and `empty` templates put the application in
+  `src/lib.rs` (`crate-type = ["rlib", "cdylib"]`) with a
+  `#[cfg(target_os = "android")] android_main` beside it, and keep
+  `src/main.rs` as the one-line desktop entry. The root view is `pub`. The
+  facade re-exports `run_app_android`, `run_app_android_with_config` and
+  `android_activity` on Android so the project still names only `flui`.
+  The scaffolded `AndroidManifest.xml` declares no icon (no `res/` is
+  needed; the platform's default applies).
 - `flui build web` builds a generated project: the `fn main` binary is
   compiled for wasm32 and `wasm-bindgen --target web` writes `pkg/app.js`
   and `pkg/app_bg.wasm` beside `index.html` in the output directory. The

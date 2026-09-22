@@ -64,8 +64,8 @@ fn assert_generated_project_compiles(template: &str) {
         .success();
 
     if template == "counter" {
-        let source =
-            std::fs::read_to_string(project.join("src/main.rs")).expect("generated source");
+        // The app and its tests live in the library; main.rs only mounts it.
+        let source = std::fs::read_to_string(project.join("src/lib.rs")).expect("generated source");
         for test in GENERATED_COUNTER_TESTS {
             let function = test
                 .rsplit("::")
@@ -143,7 +143,7 @@ fn assert_generated_project_compiles(template: &str) {
             "{graph}"
         );
 
-        run_generated_counter_tests(&cargo, &project, &name, &target);
+        run_generated_counter_tests(&cargo, &project, &target);
     }
 }
 
@@ -165,9 +165,11 @@ const GENERATED_COUNTER_TESTS: &[&str] = &[
 /// The binary runs whole — no `--exact`, no test-name filter — so the harness
 /// cannot pin itself to a subset of the template's tests and report a pass for
 /// the rest.
-fn run_generated_counter_tests(cargo: &str, project: &Path, name: &str, target: &Path) {
+fn run_generated_counter_tests(cargo: &str, project: &Path, target: &Path) {
+    // The tests live in the library (so does the app; main.rs only mounts
+    // it), and `--lib` is exactly that one target.
     let output = std::process::Command::new(cargo)
-        .args(["test", "--offline", "--bin", name])
+        .args(["test", "--offline", "--lib"])
         .arg("--target-dir")
         .arg(target.join("cli-template-check"))
         .args(["--", "--nocapture"])

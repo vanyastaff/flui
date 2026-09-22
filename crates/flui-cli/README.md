@@ -54,8 +54,10 @@ cargo install --path crates/flui-cli --locked
 
 Requires Rust 1.97 or newer with Cargo, rustup and Git. Platform toolchains
 are only needed for the platforms you build: Xcode command line tools for
-macOS and iOS; the Android SDK (`ANDROID_HOME`), NDK, a JDK and `adb` for
-Android; the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` (the
+macOS and iOS; for Android the SDK (`ANDROID_HOME`) with `platform-tools`,
+`build-tools` and an NDK, `cargo-ndk`, the `aarch64-linux-android` target,
+and a JDK (only `apksigner` runs on it; no Gradle unless you add a
+`platforms/android/gradlew`); the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` (the
 version your project's `wasm-bindgen` crate resolves to; the build tells you
 the exact `cargo install` otherwise) for the web. `flui doctor` tells you
 what is missing and how to fix it.
@@ -143,8 +145,16 @@ flui run --no-hot-reload                    # build and run once
 flui run --device 90D572B1-...              # an iOS simulator UDID from `flui devices`
 flui run --device browser:chrome            # wasm32 build, served on localhost, page reloads on rebuild
 flui run --device browser:firefox --web-port 8080 --no-open   # fixed port, URL printed only
+flui run --device emulator-5554             # Android: build the APK, install, start, follow logcat
 flui run --profile bench
 ```
+
+On Android the project's `cdylib` is compiled with `cargo ndk`, packaged
+into an APK by the SDK's own build-tools (no Gradle, no Java project: see
+[Building](#building)), installed with `adb install -r`, and its
+`NativeActivity` started; `adb logcat --pid` of the app is the session's
+output. A change rebuilds, reinstalls and restarts; `q` or Ctrl-C
+force-stop the app.
 
 In a browser the project's `fn main` is compiled for `wasm32-unknown-unknown`
 as it is (`run_app` picks the web runner there), `wasm-bindgen --target web`
@@ -186,7 +196,7 @@ flui build macos --release                  # staged .app bundle
 flui build macos --universal                # arm64 + x86_64 binary fused with lipo (not bundled)
 flui build ios --simulator <UDID>           # native app for one simulator
 flui build ios --lib --universal            # XCFramework instead of an app
-flui build android --release
+flui build android --release                # signed APK, no Gradle needed
 flui build web --release
 flui build desktop --example widgets_gallery   # inside the FLUI checkout
 flui build desktop --package my-app-host
@@ -196,6 +206,15 @@ flui build desktop --output dist/
 Selector conflicts (`--lib` with `--example`, `--simulator` on a non-iOS
 target, `--universal` without `--lib` on iOS) are rejected before any build
 starts. Every build ends with the artifact list and `Built in N.Ns`.
+
+An Android build compiles the project's `cdylib` with `cargo ndk` (the
+`android_main` in `src/lib.rs`) and packages it with the SDK's build-tools:
+`aapt2 link` on the scaffolded manifest, the library stored under
+`lib/<abi>/`, `zipalign`, and `apksigner` with the debug keystore in
+`~/.android` (created on first use). The result is
+`target/flui-out/android/<name>-<profile>.apk`. When the project has a
+`platforms/android/gradlew`, Gradle builds the APK instead, so an app that
+grows Java or Kotlin code keeps working with the same command.
 
 ## Checking the environment
 
@@ -227,9 +246,9 @@ the installed bundle, never by launching the browser; on Linux a bounded
 `--version` probe is used.
 
 `flui run --device` accepts any id or name from this list, or a unique
-prefix. Today it can drive this machine, iOS simulators and installed
-browsers; an Android device is refused with exit code 2 and the command to
-use instead.
+prefix: this machine, iOS simulators, installed browsers, and Android
+devices or emulators that `adb` reports online (an unauthorized or offline
+one is refused with exit code 5 and the reason).
 
 ## Machine-readable output
 
@@ -308,6 +327,7 @@ nothing anywhere.
 | `flutter create app` | `flui create app` |
 | `flutter run` + `r` / `R` / `q` | `flui run` + `r` / `R` / `q` |
 | `flutter run -d chrome --web-port 8080` | `flui run --device browser:chrome --web-port 8080` |
+| `flutter run -d emulator-5554` | `flui run --device emulator-5554` |
 | `flutter devices --machine` | `flui devices --json` |
 | `flutter emulators --launch x` | `flui emulators launch x` |
 | `flutter doctor -v` | `flui doctor -v` (plus `--json` and `--fix`) |
