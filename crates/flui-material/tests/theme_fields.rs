@@ -2,12 +2,10 @@
 //! one slot rebuilds only that slot's consumers plus the whole-theme
 //! consumers. Same `StaticChild` boundary as `rebuild_exactness`.
 
-mod common;
-
 use std::cell::Cell;
 use std::rc::Rc;
 
-use common::{lay_out, loose};
+use crate::common::{lay_out, loose};
 use flui_material::{Theme, ThemeData};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
