@@ -9,6 +9,10 @@ license.workspace = true
 description = "Core types for FLUI - geometry, layout, styling"
 keywords = ["gui", "geometry", "layout", "flutter", "flui"]
 categories = ["gui", "data-structures"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/benches/"]
 repository.workspace = true
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 16

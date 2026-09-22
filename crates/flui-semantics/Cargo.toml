@@ -11,6 +11,10 @@ description = "Semantics tree for FLUI accessibility - part of 5-tree architectu
 keywords = ["ui", "accessibility", "semantics", "a11y", "screen-reader"]
 categories = ["gui", "accessibility"]
 
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md", "/benches/"]
+
 [features]
 default = []
 # Exposes test-only constructors (e.g. `SemanticsOwner::new_without_callback`)

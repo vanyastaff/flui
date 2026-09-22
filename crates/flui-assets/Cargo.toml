@@ -10,6 +10,10 @@ description = "High-performance asset management with smart caching, type safety
 repository.workspace = true
 keywords = ["assets", "cache", "async", "game", "ui"]
 categories = ["asynchronous", "caching", "game-development", "gui"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/docs/"]
 documentation = "https://docs.rs/flui-assets"
 
 [dependencies]

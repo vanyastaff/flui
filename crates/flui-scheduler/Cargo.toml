@@ -11,6 +11,10 @@ description = "Frame scheduling, task prioritization, and animation coordination
 keywords = ["scheduler", "vsync", "animation", "frame", "ticker"]
 categories = ["gui", "game-development", "rendering"]
 
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md", "/benches/"]
+
 [dependencies]
 # Flui foundation (for the generic Id<T: Marker> system: FrameId, TaskId, TickerId;
 # and MonotonicClock/ManualClock/SystemClock, which FrameClock's ClockSource reuses)

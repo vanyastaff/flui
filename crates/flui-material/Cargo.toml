@@ -11,6 +11,10 @@ repository.workspace = true
 keywords = ["ui", "material", "theme", "flutter", "flui"]
 categories = ["gui"]
 
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md"]
+
 [dependencies]
 # `Theme` is an `InheritedView` that implements `flui-widgets`' `InheritedTheme`
 # trait and wraps `BoxedView`/`IntoView` — the widget-authoring spine.

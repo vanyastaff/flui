@@ -9,6 +9,16 @@ license.workspace = true
 description = "Render-object protocol for FLUI - layout, paint, hit testing and semantics over the render tree"
 keywords = ["gui", "rendering", "layout", "flutter", "flui"]
 categories = ["gui", "rendering"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = [
+    "/ARCHITECTURE.md",
+    "/benches/",
+    "/docs/",
+    "/migration/",
+    "/flutter-rendering-hierarchy.md",
+]
 repository.workspace = true
 # Benches are declared explicitly below; disable auto-discovery so the shared
 # `benches/helpers.rs` module is not itself compiled as a standalone bench target.

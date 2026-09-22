@@ -9,6 +9,10 @@ license.workspace = true
 description = "Concrete RenderBox/RenderSliver catalog for FLUI (the object catalog atop flui-rendering)"
 keywords = ["gui", "layout", "rendering", "flutter", "flui"]
 categories = ["gui", "rendering"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md"]
 repository.workspace = true
 # Single-binary integration-test consolidation. The binary keeps the name
 # `render_object_harness` — docs and muscle memory reference
