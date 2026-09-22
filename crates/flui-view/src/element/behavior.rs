@@ -1259,6 +1259,19 @@ where
 // InheritedBehavior
 // ============================================================================
 
+/// One dependent of an `InheritedElement`: its tree depth (for the dirty heap)
+/// and the fields it read (issue #1090; [`FieldMask::ALL`] for a whole-type
+/// dependency).
+///
+/// [`FieldMask::ALL`]: crate::view::FieldMask::ALL
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DependentEntry {
+    /// Depth captured at `depend_on_inherited` time.
+    pub depth: usize,
+    /// Union of every field mask this dependent registered with.
+    pub mask: crate::view::FieldMask,
+}
+
 /// Behavior for InheritedView elements.
 ///
 /// Manages dependents tracking and data caching. Similar to ProxyView but with
@@ -1278,19 +1291,6 @@ where
 /// HashMap because dependents may attach dependency aspects (the
 /// `Object?` value); we will gain that capability if we expand
 /// `aspect` support — for now the value slot holds the depth.
-/// One dependent of an `InheritedElement`: its tree depth (for the dirty heap)
-/// and the fields it read (issue #1090; [`FieldMask::ALL`] for a whole-type
-/// dependency).
-///
-/// [`FieldMask::ALL`]: crate::view::FieldMask::ALL
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DependentEntry {
-    /// Depth captured at `depend_on_inherited` time.
-    pub depth: usize,
-    /// Union of every field mask this dependent registered with.
-    pub mask: crate::view::FieldMask,
-}
-
 #[derive(Debug)]
 pub struct InheritedBehavior<V: InheritedView> {
     /// Cached data for dependents.
@@ -1443,7 +1443,9 @@ where
         // `update_should_notify` default), and only dependents whose recorded
         // mask intersects are scheduled. One path for both granularities.
         let changed = core.view().changed_fields(old_view);
-        if !changed.is_empty() {
+        if changed.is_empty() {
+            tracing::trace!("InheritedBehavior::on_view_updated no notify (no field changed)");
+        } else {
             tracing::debug!(
                 changed = changed.bits(),
                 "InheritedBehavior::on_view_updated notifying dependents of {} candidates",
@@ -1467,8 +1469,6 @@ where
                 owner.note_dependency_change(dep_id);
                 owner.schedule_build_for(dep_id, dep_depth, crate::RebuildReason::DependencyChange);
             }
-        } else {
-            tracing::trace!("InheritedBehavior::on_view_updated no notify (no field changed)");
         }
     }
 

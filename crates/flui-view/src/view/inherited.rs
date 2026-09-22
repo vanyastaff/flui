@@ -8,75 +8,6 @@
 
 use super::view::View;
 
-/// A View that provides data to its descendants.
-///
-/// InheritedViews allow efficient data propagation down the tree.
-/// Descendants can access the data via `ctx.depend_on::<T>()`.
-///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `InheritedWidget`:
-///
-/// ```dart
-/// class ThemeData extends InheritedWidget {
-///   final Color primaryColor;
-///
-///   ThemeData({required this.primaryColor, required Widget child})
-///       : super(child: child);
-///
-///   @override
-///   bool updateShouldNotify(ThemeData old) {
-///     return primaryColor != old.primaryColor;
-///   }
-///
-///   static ThemeData of(BuildContext context) {
-///     return context.dependOnInheritedWidgetOfExactType<ThemeData>()!;
-///   }
-/// }
-/// ```
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_view::{InheritedView, BuildContext, IntoView};
-///
-/// #[derive(Clone)]
-/// struct Theme {
-///     primary_color: Color,
-/// }
-///
-/// struct ThemeProvider {
-///     theme: Theme,
-///     child: Box<dyn View>,
-/// }
-///
-/// impl InheritedView for ThemeProvider {
-///     type Data = Theme;
-///
-///     fn data(&self) -> &Self::Data {
-///         &self.theme
-///     }
-///
-///     fn child(&self) -> &dyn View {
-///         &*self.child
-///     }
-///
-///     fn update_should_notify(&self, old: &Self) -> bool {
-///         self.theme.primary_color != old.theme.primary_color
-///     }
-/// }
-///
-/// // Usage in a descendant:
-/// fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-///     let theme = ctx.depend_on::<ThemeProvider>().unwrap();
-///     Container::new().color(theme.primary_color)
-/// }
-/// ```
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement `InheritedView`",
-    label = "missing `impl InheritedView for {Self}`",
-    note = "an inherited view publishes `type Data` to its subtree: `impl InheritedView for {Self} {{ type Data = ..; fn data(&self) -> &Self::Data {{ .. }} fn child(&self) -> &dyn View {{ .. }} fn update_should_notify(&self, old: &Self) -> bool {{ .. }} }}`; descendants read it with `ctx.depend_on::<{Self}>()`"
-)]
 /// Which fields of a provider's data a dependent read, or a provider update
 /// changed — a 64-bit set, one bit per field (issue #1090, ADR-0008 §2).
 ///
@@ -165,6 +96,75 @@ pub trait InheritedData: Clone + 'static {
     fn field_mask_diff(&self, other: &Self) -> FieldMask;
 }
 
+/// A View that provides data to its descendants.
+///
+/// InheritedViews allow efficient data propagation down the tree.
+/// Descendants can access the data via `ctx.depend_on::<T>()`.
+///
+/// # Flutter Equivalent
+///
+/// This corresponds to Flutter's `InheritedWidget`:
+///
+/// ```dart
+/// class ThemeData extends InheritedWidget {
+///   final Color primaryColor;
+///
+///   ThemeData({required this.primaryColor, required Widget child})
+///       : super(child: child);
+///
+///   @override
+///   bool updateShouldNotify(ThemeData old) {
+///     return primaryColor != old.primaryColor;
+///   }
+///
+///   static ThemeData of(BuildContext context) {
+///     return context.dependOnInheritedWidgetOfExactType<ThemeData>()!;
+///   }
+/// }
+/// ```
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use flui_view::{InheritedView, BuildContext, IntoView};
+///
+/// #[derive(Clone)]
+/// struct Theme {
+///     primary_color: Color,
+/// }
+///
+/// struct ThemeProvider {
+///     theme: Theme,
+///     child: Box<dyn View>,
+/// }
+///
+/// impl InheritedView for ThemeProvider {
+///     type Data = Theme;
+///
+///     fn data(&self) -> &Self::Data {
+///         &self.theme
+///     }
+///
+///     fn child(&self) -> &dyn View {
+///         &*self.child
+///     }
+///
+///     fn update_should_notify(&self, old: &Self) -> bool {
+///         self.theme.primary_color != old.theme.primary_color
+///     }
+/// }
+///
+/// // Usage in a descendant:
+/// fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+///     let theme = ctx.depend_on::<ThemeProvider>().unwrap();
+///     Container::new().color(theme.primary_color)
+/// }
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not implement `InheritedView`",
+    label = "missing `impl InheritedView for {Self}`",
+    note = "an inherited view publishes `type Data` to its subtree: `impl InheritedView for {Self} {{ type Data = ..; fn data(&self) -> &Self::Data {{ .. }} fn child(&self) -> &dyn View {{ .. }} fn update_should_notify(&self, old: &Self) -> bool {{ .. }} }}`; descendants read it with `ctx.depend_on::<{Self}>()`"
+)]
 pub trait InheritedView: Clone + 'static + Sized {
     /// The data type this InheritedView provides.
     type Data: Clone + 'static;
@@ -335,8 +335,14 @@ mod tests {
             .behavior_mut()
             .add_dependent(dep2, 4, FieldMask::ALL);
         assert_eq!(element.behavior().dependents().len(), 2);
-        assert_eq!(element.behavior().dependents().get(&dep1), Some(&3));
-        assert_eq!(element.behavior().dependents().get(&dep2), Some(&4));
+        assert_eq!(
+            element.behavior().dependents().get(&dep1).map(|e| e.depth),
+            Some(3)
+        );
+        assert_eq!(
+            element.behavior().dependents().get(&dep2).map(|e| e.depth),
+            Some(4)
+        );
 
         // Adding same dependent again should overwrite depth (idempotent
         // dedup via HashMap key) — not duplicate.
@@ -344,7 +350,10 @@ mod tests {
             .behavior_mut()
             .add_dependent(dep1, 5, FieldMask::ALL);
         assert_eq!(element.behavior().dependents().len(), 2);
-        assert_eq!(element.behavior().dependents().get(&dep1), Some(&5));
+        assert_eq!(
+            element.behavior().dependents().get(&dep1).map(|e| e.depth),
+            Some(5)
+        );
 
         element.behavior_mut().remove_dependent(dep1);
         assert_eq!(element.behavior().dependents().len(), 1);

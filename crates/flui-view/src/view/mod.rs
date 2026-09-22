@@ -41,7 +41,7 @@ pub use error::{
 // / `update_or_substitute` and the lazy-sliver item builder are its only
 // callers.
 pub(crate) use error::recovery_view_for;
-pub use inherited::InheritedView;
+pub use inherited::{FieldMask, InheritedData, InheritedView};
 pub use into_view::{BoxedElement, BoxedView, ElementExt, IntoElement, IntoView, ViewExt};
 pub use memo::Memo;
 pub use parent_data::{ParentDataConfig, ParentDataView};

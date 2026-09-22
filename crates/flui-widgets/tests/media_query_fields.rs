@@ -215,8 +215,9 @@ fn a_field_reader_still_rebuilds_when_its_own_field_changes_after_an_unrelated_o
         "size reader rebuilds when size finally changes"
     );
     assert_eq!(c.scale.get(), 2, "scale reader untouched by a size change");
-    let root = laid.current_root();
-    let column = laid.only_child(root);
+    // The render root is the Column itself: MediaQuery and StaticChild have no
+    // render object.
+    let column = laid.current_root();
     assert_eq!(
         laid.size(laid.child(column, 0)).width,
         px(9.0),
@@ -245,9 +246,9 @@ fn an_unchanged_provider_swap_rebuilds_nobody() {
 #[test]
 fn padding_and_insets_masks_are_distinct_fields() {
     let mut a = MediaQueryData::default();
-    a.padding = EdgeInsets::all(8.0);
+    a.padding = EdgeInsets::all(px(8.0));
     let mut b = a.clone();
-    b.view_insets = EdgeInsets::all(16.0);
+    b.view_insets = EdgeInsets::all(px(16.0));
     let changed = flui_view::InheritedData::field_mask_diff(&a, &b);
     assert!(changed.intersects(MediaQueryData::FIELD_VIEW_INSETS));
     assert!(!changed.intersects(MediaQueryData::FIELD_PADDING));
