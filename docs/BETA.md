@@ -314,6 +314,19 @@ closure; the CLI, devtools, hot-reload and localizations packages are not in
 it. This is the first clean consumer build from the archives; it does not
 exercise a registry index, upload, or docs.rs.
 
+Second run, 2026-09-22 at `52509489`: since `3d52cf55` the template's
+non-local branch pins `flui` to the release git tag rather than a registry
+version, so the check would have built the tag, not the archives, and the
+consumer now ships a lockfile resolved against the live registry
+(`wasm-bindgen-futures 0.4.78` against the vendor set's 0.4.77) that an
+offline build cannot satisfy. The script now rewrites the two git-tag
+dependencies to `flui = { version = "=0.1.0" }` (keeping `features`) and
+drops the generated lockfile before the offline build, so the archives are
+what gets built and the resolution is the vendor set's. Result: 28 archives
+installed, the consumer built and its two generated tests passed offline,
+and the lockfile resolved 22 `flui-*` packages to archive digests — PASS.
+
+
 Baseline verification before the release-policy and surface-color changes:
 `just ci` completed on macOS with 9,439 workspace tests and 52 GPU tests passing,
 plus doctests (`/tmp/flui-beta-ci-facade-final.log`). That run skipped three
