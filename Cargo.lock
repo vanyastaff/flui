@@ -1781,32 +1781,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-build"
-version = "0.3.0-beta.1"
-dependencies = [
- "cargo_metadata",
- "indicatif",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "toml",
- "tracing",
- "which",
-]
-
-[[package]]
 name = "flui-cli"
 version = "0.3.0-beta.1"
 dependencies = [
  "assert_cmd",
+ "cargo_metadata",
  "clap",
  "clap_complete",
  "cliclack",
  "console",
- "flui-build",
  "flui-hot-reload",
  "flui-log",
+ "notify-debouncer-mini",
  "pollster",
  "predicates",
  "rustix 1.1.5",
@@ -1852,7 +1838,6 @@ name = "flui-devtools"
 version = "0.3.0-beta.1"
 dependencies = [
  "flui-foundation",
- "flui-hot-reload",
  "flui-scheduler",
  "flui-testing",
  "parking_lot",
@@ -1935,7 +1920,6 @@ dependencies = [
  "flui-types",
  "flui-view",
  "libc",
- "notify-debouncer-mini",
  "parking_lot",
  "tracing",
  "windows",

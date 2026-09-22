@@ -15,6 +15,23 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **`flui-build` is gone; the build pipeline is a module of `flui-cli`**
+  (`flui-cli`, `flui-hot-reload`, `flui-devtools`; breaking for anyone who
+  depended on those surfaces). `flui-build` had one consumer, the CLI, and no
+  framework dependency, so it moved to `crates/flui-cli/src/build/`. The
+  dev-loop `SourceWatcher` moved from `flui-hot-reload`'s `source-watch`
+  feature to `crates/flui-cli/src/watch.rs`: it is dev-machine code, and
+  keeping it in the runtime crate made `cargo install flui-cli` compile the
+  rendering stack. The CLI now links no framework crate but `flui-log`; its
+  normal dependency graph fell from 199 crates to 135, and it no longer has
+  to wait for the framework's own release to be published. The two env-var
+  names shared with the runtime (`FLUI_HOT_RELOAD`, `FLUI_WORKER_PLUGIN`) are
+  pinned by a dev-dependency test. `flui-hot-reload` loses the `source-watch`
+  feature and `dev` module; `flui-devtools` loses the `hot-reload` feature and
+  `HotReloader` (a callback wrapper with no consumer). Merging also exposed
+  library API the CLI never used, deleted rather than gated: the progress
+  reporter and `indicatif`, the build-output parser, `BuilderContextExt`,
+  `--features` plumbing no command could set, and the builders' `clean`.
 - **`flui` CLI brought to release quality** (`flui-cli`). One output policy
   for every command: human text on stderr, `--json` NDJSON events on stdout
   (`doctor.check`, `device`, `run.app.log`, `build.done`, …), `--quiet`,

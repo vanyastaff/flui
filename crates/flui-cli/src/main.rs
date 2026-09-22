@@ -42,6 +42,7 @@ const STYLES: Styles = Styles::styled()
     .valid(AnsiColor::Green.on_default().effects(Effects::BOLD))
     .invalid(AnsiColor::Yellow.on_default().effects(Effects::BOLD));
 
+mod build;
 mod commands;
 mod config;
 pub mod error;
@@ -51,6 +52,7 @@ mod templates;
 pub mod types;
 pub mod ui;
 mod utils;
+mod watch;
 
 /// Prelude module re-exporting commonly used types.
 ///
@@ -661,11 +663,12 @@ fn install_cli_logging(
 }
 
 fn init_logging(verbosity: ui::Verbosity) {
-    // `-v` raises FLUI's own crates to debug and leaves the dependency stack
-    // alone. `RUST_LOG` still overrides the whole thing, and nothing narrows it
-    // afterwards, so `RUST_LOG=flui_build=trace` reaches TRACE.
+    // `-v` raises FLUI's own crates (and this binary, whose crate name is
+    // `flui`) to debug and leaves the dependency stack alone. `RUST_LOG` still
+    // overrides the whole thing, and nothing narrows it afterwards, so
+    // `RUST_LOG=flui=trace` reaches TRACE.
     let directives = match verbosity {
-        ui::Verbosity::Verbose => "info,flui=debug,flui_build=debug",
+        ui::Verbosity::Verbose => "info,flui=debug",
         ui::Verbosity::Normal => "info",
         ui::Verbosity::Quiet => "warn",
     };
@@ -914,7 +917,7 @@ mod desktop_error_tests {
     #[test]
     fn command_context_keeps_the_actionable_build_cause() {
         let error = crate::error::CliError::context(
-            flui_build::BuildError::path_not_found(
+            crate::build::error::BuildError::path_not_found(
                 "/custom target/app".into(),
                 "Cargo executable absent",
             ),

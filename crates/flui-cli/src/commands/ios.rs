@@ -1,8 +1,8 @@
 //! Native simulator selection and one-shot application launch.
-use crate::error::{CliError, CliResult, ResultExt};
-use flui_build::{
-    AppBundle, BuildUnit, BuilderContextBuilder, IOSBuilder, Platform, PlatformBuilder, Profile,
+use crate::build::{
+    AppBundle, BuildUnit, BuilderContextBuilder, IosBuilder, Platform, PlatformBuilder, Profile,
 };
+use crate::error::{CliError, CliResult, ResultExt};
 use std::{path::Path, process::Stdio, time::Duration};
 use tokio::io::AsyncReadExt;
 
@@ -240,7 +240,7 @@ pub(super) fn run(udid: &str, release: bool, profile: Option<&str>) -> CliResult
     let root = std::env::current_dir()?;
     let bundle = configured_bundle(&root)?;
     let mut context = BuilderContextBuilder::new(root)
-        .with_platform(Platform::IOS {
+        .with_platform(Platform::Ios {
             targets: vec![simulator.triple.clone()],
         })
         .with_target(BuildUnit::DefaultBinary)
@@ -254,7 +254,7 @@ pub(super) fn run(udid: &str, release: bool, profile: Option<&str>) -> CliResult
     }
     let context = context.build();
     let runtime = tokio::runtime::Runtime::new().context("start build runtime")?;
-    let builder = IOSBuilder::new();
+    let builder = IosBuilder::new();
     let delivered = runtime
         .block_on(async {
             let artifacts = builder.build_rust(&context).await?;

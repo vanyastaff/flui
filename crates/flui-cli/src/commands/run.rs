@@ -17,12 +17,8 @@
 use crate::config::{FluiConfig, HotReloadConfig};
 use crate::error::{CliError, CliResult, ResultExt};
 use crate::ui;
+use crate::watch::{SourceWatcher, timing};
 use console::style;
-use flui_hot_reload::{
-    dev::SourceWatcher,
-    engine::env as worker_env,
-    strategy::{env, timing},
-};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -282,6 +278,18 @@ fn run_once(release: bool, profile: Option<String>, verbose: bool) -> CliResult<
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Environment variables the dev loop sets for the app it launches. They are
+/// the contract with the runtime half of hot reload (`flui_hot_reload::engine::env`
+/// and `strategy::env`, read inside the app); the names are duplicated here
+/// so the CLI does not link the framework, and `env_names_match_the_runtime`
+/// below keeps the two in step.
+mod env {
+    /// Set to `1` when the app is launched by `flui run` with hot reload on.
+    pub const HOT_RELOAD: &str = "FLUI_HOT_RELOAD";
+    /// Path of the worker `cdylib` a `--hot-reload` host should load.
+    pub const WORKER_PLUGIN: &str = "FLUI_WORKER_PLUGIN";
 }
 
 // ============================================================================
@@ -1223,7 +1231,7 @@ fn spawn_host_package(
         cmd.arg("--verbose");
     }
 
-    cmd.env(worker_env::WORKER_PLUGIN, worker_plugin);
+    cmd.env(env::WORKER_PLUGIN, worker_plugin);
     cmd.env(env::HOT_RELOAD, "1");
     spawn_child(cmd, "Failed to spawn host application")
 }
@@ -1480,7 +1488,7 @@ pub fn execute_scene(
     release: bool,
     _verbose: bool,
 ) -> CliResult<()> {
-    use flui_build::android::AndroidBuilder;
+    use crate::build::android::AndroidBuilder;
 
     let mode = if release { "release" } else { "debug" };
     ui::intro(style(" flui run --scene ").on_magenta().black())?;
@@ -1606,7 +1614,19 @@ pub fn execute_scene(
 mod tests {
     #[cfg(unix)]
     use super::HotKey;
-    use super::{fnv1a, has_flui_dependency, is_host_device, stage_worker_artifact};
+    use super::{env, fnv1a, has_flui_dependency, is_host_device, stage_worker_artifact};
+
+    /// The env-var names are duplicated from `flui-hot-reload` so the CLI
+    /// does not link the framework; this is the only place that proves they
+    /// still agree.
+    #[test]
+    fn env_names_match_the_runtime() {
+        assert_eq!(env::HOT_RELOAD, flui_hot_reload::strategy::env::HOT_RELOAD);
+        assert_eq!(
+            env::WORKER_PLUGIN,
+            flui_hot_reload::engine::env::WORKER_PLUGIN
+        );
+    }
 
     #[test]
     fn host_device_aliases() {

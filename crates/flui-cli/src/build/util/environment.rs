@@ -1,7 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use crate::error::{BuildError, BuildResult};
+use crate::build::error::{BuildError, BuildResult};
 
 /// Check if a command exists in PATH
 pub fn check_command_exists(command: &str) -> BuildResult<PathBuf> {

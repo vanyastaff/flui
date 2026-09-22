@@ -1,11 +1,16 @@
 // Only the macOS bundle staging below takes a `Path`; on other hosts the
 // import would be unused and trip `-D warnings`.
 #[cfg(target_os = "macos")]
+// Only the macOS bundle staging below takes a `Path`; on other hosts the
+// import would be unused and trip `-D warnings`.
+#[cfg(target_os = "macos")]
 use std::path::Path;
 
-use crate::error::{BuildError, BuildResult};
-use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private};
-use crate::util::cargo;
+use crate::build::error::{BuildError, BuildResult};
+use crate::build::platform::{
+    BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private,
+};
+use crate::build::util::cargo;
 
 /// Builder for desktop platforms (Windows, macOS, Linux)
 #[derive(Debug, Default)]
@@ -63,19 +68,15 @@ impl DesktopBuilder {
 impl private::Sealed for DesktopBuilder {}
 
 impl PlatformBuilder for DesktopBuilder {
-    fn platform_name(&self) -> &'static str {
-        "desktop"
-    }
-
     fn validate_environment(&self) -> BuildResult<()> {
         // Just need cargo
-        crate::util::check_command_exists("cargo")?;
+        crate::build::util::check_command_exists("cargo")?;
         Ok(())
     }
 
     async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
         let target = match &ctx.platform {
-            crate::platform::Platform::Desktop { target } => match target {
+            crate::build::platform::Platform::Desktop { target } => match target {
                 Some(t) => t.clone(),
                 None => Self::detect_host_target()?,
             },
@@ -93,10 +94,6 @@ impl PlatformBuilder for DesktopBuilder {
         args.extend(selected.cargo_args());
         if let Some(profile_flag) = ctx.profile.cargo_flag() {
             args.push(profile_flag.to_string());
-        }
-        if !ctx.features.is_empty() {
-            args.push("--features".to_string());
-            args.push(ctx.features.join(","));
         }
 
         let executable = cargo::build_artifact(&ctx.workspace_root, &args, &selected).await?;
@@ -163,18 +160,6 @@ impl PlatformBuilder for DesktopBuilder {
             size_bytes,
         })
     }
-
-    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
-        if ctx.output_dir.exists() {
-            std::fs::remove_dir_all(&ctx.output_dir)?;
-            tracing::info!("Cleaned output: {:?}", ctx.output_dir);
-        }
-
-        // Note: We don't clean cargo target/ directory as it's shared
-        tracing::info!("To clean Cargo build artifacts, run: cargo clean");
-
-        Ok(())
-    }
 }
 
 impl DesktopBuilder {
@@ -193,7 +178,7 @@ impl DesktopBuilder {
     fn stage_macos_app(
         ctx: &BuilderContext,
         executable: &Path,
-        bundle: &crate::platform::AppBundle,
+        bundle: &crate::build::platform::AppBundle,
     ) -> BuildResult<FinalArtifacts> {
         validate_bundle_name(&bundle.name)?;
         let app_dir = ctx.output_dir.join(format!("{}.app", bundle.name));

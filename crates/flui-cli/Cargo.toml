@@ -26,15 +26,23 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-# Build system
-flui-build = { path = "../flui-build", version = "=0.3.0-beta.1" }
-flui-hot-reload = { path = "../flui-hot-reload", version = "=0.3.0-beta.1", features = [
-    "source-watch",
-] }
+# The CLI links no framework crate: the build pipeline (`src/build/`) and the
+# source watcher (`src/watch.rs`) are modules here, and the hot-reload
+# runtime half stays in `flui-hot-reload`, linked by the app, with the env-var
+# contract checked by a dev-dependency test in `commands/run.rs`.
+
+# Build pipeline: cargo metadata for artifact selection, staging
+# directories, and `process`/`io-util` for the async builders.
+cargo_metadata = { workspace = true }
+tempfile = { workspace = true }
+
+# Source watcher for the dev loop.
+notify-debouncer-mini = "0.7"
 
 # Async runtime — `run` blocks on the async Android build/push pipeline via
-# a multi-thread `Runtime`; `signal` hosts the Ctrl-C listener of the dev loop.
-tokio = { workspace = true, features = ["rt-multi-thread", "time", "signal"] }
+# a multi-thread `Runtime`; `signal` hosts the Ctrl-C listener of the dev loop;
+# `process`/`io-util` drive the builders' child processes.
+tokio = { workspace = true, features = ["rt-multi-thread", "time", "signal", "process", "io-util"] }
 
 # Logging backend. The CLI chooses and installs its own subscriber policy and
 # reuses flui-log's backend construction; it is a composition root, so this
@@ -61,7 +69,7 @@ which = "8.0"
 cliclack = "0.5"
 console = "0.16"
 
-# Async runtime (for flui-build async builders)
+# Blocks on the async builders from synchronous command code.
 pollster = { workspace = true }
 
 
@@ -73,9 +81,13 @@ pollster = { workspace = true }
 rustix = { version = "1.1", default-features = false, features = ["std", "termios", "stdio"] }
 
 [dev-dependencies]
-tempfile = "3.10"
 assert_cmd = "2.0"
 predicates = "3.1"
+# `#[tokio::test]` in the build pipeline's artifact tests.
+tokio = { workspace = true, features = ["macros"] }
+# Only for the env-var contract test in `commands/run.rs`; never in the
+# `cargo install` graph.
+flui-hot-reload = { path = "../flui-hot-reload", version = "=0.3.0-beta.1" }
 
 # Consolidated integration-test binary (see `autotests = false` above).
 # All five suites drive the built `flui` binary in subprocesses via

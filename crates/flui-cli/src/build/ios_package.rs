@@ -1,6 +1,6 @@
 //! Native library delivery without a consumer Xcode project.
-use crate::error::{BuildError, BuildResult};
-use crate::{BuildArtifacts, BuilderContext, FinalArtifacts, Platform};
+use crate::build::error::{BuildError, BuildResult};
+use crate::build::{BuildArtifacts, BuilderContext, FinalArtifacts, Platform};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
@@ -83,7 +83,7 @@ pub(crate) async fn package(
     ctx: &BuilderContext,
     artifacts: &BuildArtifacts,
 ) -> BuildResult<FinalArtifacts> {
-    let Platform::IOS { targets } = &ctx.platform else {
+    let Platform::Ios { targets } = &ctx.platform else {
         return Err(invalid("expected iOS targets"));
     };
     let groups = plan(targets, &artifacts.rust_libs)?;
@@ -663,7 +663,7 @@ pub(crate) async fn package_application(
     artifacts: &BuildArtifacts,
     executable: &Path,
 ) -> BuildResult<FinalArtifacts> {
-    let Platform::IOS { targets } = &ctx.platform else {
+    let Platform::Ios { targets } = &ctx.platform else {
         return Err(invalid("expected iOS application target"));
     };
     if targets.len() != 1 {
@@ -676,7 +676,7 @@ pub(crate) async fn package_application(
         let name = artifacts.metadata["package_name"].as_str().ok_or_else(|| {
             invalid("application bundle metadata or Cargo package metadata is required")
         })?;
-        let mut bundle = crate::AppBundle::new(name, "dev.flui");
+        let mut bundle = crate::build::AppBundle::new(name, "dev.flui");
         bundle.version = artifacts.metadata["package_version"]
             .as_str()
             .ok_or_else(|| invalid("Cargo package version is required"))?
@@ -745,7 +745,7 @@ pub(crate) async fn package_application(
         Ok(FinalArtifacts { app_binary: destination, size_bytes })
     }).await.map_err(|error| invalid(format!("application packaging worker failed: {error}")))?
 }
-fn validate_bundle(bundle: &crate::AppBundle) -> BuildResult<()> {
+fn validate_bundle(bundle: &crate::build::AppBundle) -> BuildResult<()> {
     if bundle.name.is_empty()
         || bundle.name.contains(['/', '\\'])
         || !matches!(
@@ -825,9 +825,9 @@ mod app_tests {
     #[test]
     fn bundle_identity_rejects_path_escape_and_underscore_identifier() {
         for name in ["../bad", "/outside", "x\\bad", ""] {
-            assert!(validate_bundle(&crate::AppBundle::new(name, "org.test")).is_err());
+            assert!(validate_bundle(&crate::build::AppBundle::new(name, "org.test")).is_err());
         }
-        let mut bundle = crate::AppBundle::new("counter-app", "org.test");
+        let mut bundle = crate::build::AppBundle::new("counter-app", "org.test");
         assert_eq!(bundle.identifier, "org.test.counter-app");
         validate_bundle(&bundle).expect("valid");
         bundle.identifier = "org.test.counter_app".into();

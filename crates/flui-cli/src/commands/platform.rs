@@ -4,13 +4,13 @@
 //! Platform scaffolding creates the `platforms/<name>/` directory structure
 //! and updates `flui.toml` configuration.
 
+use crate::build::scaffold::{
+    ScaffoldParams, is_valid_platform, scaffold_platform, valid_platform_names,
+};
 use crate::config::FluiConfig;
 use crate::error::{CliError, CliResult};
 use crate::ui;
 use console::style;
-use flui_build::scaffold::{
-    ScaffoldParams, is_valid_platform, scaffold_platform, valid_platform_names,
-};
 use serde_json::json;
 
 /// Add platform support to the project.
@@ -35,9 +35,9 @@ pub fn add(platforms: &[String]) -> CliResult<()> {
     let lib_name = config.app.name.replace('-', "_");
     let package_name = config.app.app_id();
     let params = ScaffoldParams {
-        app_name: &config.app.name,
-        lib_name: &lib_name,
-        package_name: &package_name,
+        app: &config.app.name,
+        lib: &lib_name,
+        package: &package_name,
     };
 
     let mut added_count = 0u32;

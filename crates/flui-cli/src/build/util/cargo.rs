@@ -7,8 +7,8 @@ use cargo_metadata::{CrateType, Message, Metadata, PackageId, TargetKind};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
-use crate::error::{BuildError, BuildResult};
-use crate::platform::BuildUnit;
+use crate::build::error::{BuildError, BuildResult};
+use crate::build::platform::BuildUnit;
 
 pub(crate) struct CargoTarget {
     package: PackageId,

@@ -19,13 +19,10 @@ app-plugin = [
     "dep:flui-types",
     "dep:parking_lot",
 ]
-# Layer 1: debounced source watching for `flui-cli` / `flui-devtools`
-source-watch = ["dep:notify-debouncer-mini"]
 
 [dependencies]
 flui-layer = { path = "../flui-layer", version = "=0.3.0-beta.1" }
 flui-foundation = { path = "../flui-foundation", version = "=0.3.0-beta.1", optional = true }
-notify-debouncer-mini = { version = "0.7", optional = true }
 flui-view = { path = "../flui-view", version = "=0.3.0-beta.1", optional = true }
 flui-rendering = { path = "../flui-rendering", version = "=0.3.0-beta.1", optional = true }
 flui-types = { path = "../flui-types", version = "=0.3.0-beta.1", optional = true }

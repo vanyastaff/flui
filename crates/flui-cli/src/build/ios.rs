@@ -1,16 +1,16 @@
 use std::path::Path;
 
-use crate::error::{BuildError, BuildResult};
-use crate::platform::{
+use crate::build::error::{BuildError, BuildResult};
+use crate::build::platform::{
     BuildArtifacts, BuildUnit, BuilderContext, FinalArtifacts, PlatformBuilder, private,
 };
-use crate::util::{check_command_exists, process};
+use crate::build::util::{check_command_exists, process};
 
 /// Builder for iOS platform (.app bundles via Xcode).
 #[derive(Debug, Default)]
-pub struct IOSBuilder;
+pub struct IosBuilder;
 
-impl IOSBuilder {
+impl IosBuilder {
     /// Create a stateless builder; operations use their `BuilderContext`.
     #[must_use]
     pub const fn new() -> Self {
@@ -18,13 +18,9 @@ impl IOSBuilder {
     }
 }
 
-impl private::Sealed for IOSBuilder {}
+impl private::Sealed for IosBuilder {}
 
-impl PlatformBuilder for IOSBuilder {
-    fn platform_name(&self) -> &'static str {
-        "ios"
-    }
-
+impl PlatformBuilder for IosBuilder {
     fn validate_environment(&self) -> BuildResult<()> {
         // Check xcodebuild
         check_command_exists("xcodebuild")?;
@@ -52,7 +48,7 @@ impl PlatformBuilder for IOSBuilder {
     }
 
     async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
-        let crate::platform::Platform::IOS { targets } = &ctx.platform else {
+        let crate::build::platform::Platform::Ios { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected iOS platform".to_string(),
             });
@@ -72,16 +68,18 @@ impl PlatformBuilder for IOSBuilder {
             ));
         }
         let selected = if application {
-            crate::util::cargo::select_target(&ctx.workspace_root, &ctx.target).await?
+            crate::build::util::cargo::select_target(&ctx.workspace_root, &ctx.target).await?
         } else {
-            crate::util::cargo::select_static_library(&ctx.workspace_root, &ctx.target).await?
+            crate::build::util::cargo::select_static_library(&ctx.workspace_root, &ctx.target)
+                .await?
         };
         let mut outputs = Vec::new();
         for target in targets {
             let mut args = cargo_args_for(ctx, target);
             args.extend(selected.cargo_args());
             outputs.push(
-                crate::util::cargo::build_artifact(&ctx.workspace_root, &args, &selected).await?,
+                crate::build::util::cargo::build_artifact(&ctx.workspace_root, &args, &selected)
+                    .await?,
             );
         }
         if application {
@@ -111,7 +109,8 @@ impl PlatformBuilder for IOSBuilder {
                     "executable delivery conflicts with library selection or archives",
                 ));
             }
-            return crate::ios_package::package_application(ctx, artifacts, executable).await;
+            return crate::build::ios_package::package_application(ctx, artifacts, executable)
+                .await;
         }
         if !matches!(ctx.target, BuildUnit::Library { .. }) {
             return Err(BuildError::invalid_config(
@@ -127,13 +126,13 @@ impl PlatformBuilder for IOSBuilder {
         // Check if Xcode project exists
         let xcodeproj = ios_dir.join("flui.xcodeproj");
         if !xcodeproj.exists() {
-            return crate::ios_package::package(ctx, artifacts).await;
+            return crate::build::ios_package::package(ctx, artifacts).await;
         }
 
         // Determine scheme and configuration
         let configuration = match ctx.profile {
-            crate::platform::Profile::Debug => "Debug",
-            crate::platform::Profile::Release => "Release",
+            crate::build::platform::Profile::Debug => "Debug",
+            crate::build::platform::Profile::Release => "Release",
         };
 
         // xcodebuild takes the project path as a UTF-8 CLI argument; a
@@ -191,35 +190,6 @@ impl PlatformBuilder for IOSBuilder {
             size_bytes,
         })
     }
-
-    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
-        let ios_frameworks_dir = ctx
-            .workspace_root
-            .join("platforms")
-            .join("ios")
-            .join("Frameworks");
-
-        if ios_frameworks_dir.exists() {
-            std::fs::remove_dir_all(&ios_frameworks_dir)?;
-            tracing::info!("Cleaned Frameworks: {:?}", ios_frameworks_dir);
-        }
-
-        // Clean Xcode build
-        let ios_dir = ctx.workspace_root.join("platforms").join("ios");
-        let xcodeproj = ios_dir.join("flui.xcodeproj");
-
-        if xcodeproj.exists() {
-            process::run_command_in_dir("xcodebuild", &["clean"], &ios_dir).await?;
-        }
-
-        // Clean output directory
-        if ctx.output_dir.exists() {
-            std::fs::remove_dir_all(&ctx.output_dir)?;
-            tracing::info!("Cleaned output: {:?}", ctx.output_dir);
-        }
-
-        Ok(())
-    }
 }
 
 /// The cargo invocation that builds `ctx.target` for one iOS `target` triple.
@@ -235,10 +205,6 @@ fn cargo_args_for(ctx: &BuilderContext, target: &str) -> Vec<String> {
     ];
     if let Some(profile_flag) = ctx.profile.cargo_flag() {
         args.push(profile_flag.to_string());
-    }
-    if !ctx.features.is_empty() {
-        args.push("--features".to_string());
-        args.push(ctx.features.join(","));
     }
     args
 }

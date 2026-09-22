@@ -1,4 +1,4 @@
-/// Custom error types for the `flui_build` crate.
+/// Custom error types for the `build` module.
 ///
 /// This module provides type-safe error handling with detailed error messages
 /// and context. All build errors are represented by the `BuildError` enum.
@@ -6,7 +6,7 @@
 /// # Example
 ///
 /// ```rust
-/// use flui_build::{BuildError, BuildResult};
+/// use crate::build::{BuildError, BuildResult};
 /// use std::path::PathBuf;
 ///
 /// fn check_tool() -> BuildResult<()> {
@@ -37,7 +37,7 @@ use thiserror::Error;
 /// ## Tool Not Found
 ///
 /// ```rust
-/// use flui_build::BuildError;
+/// use crate::build::BuildError;
 ///
 /// let error = BuildError::ToolNotFound {
 ///     tool: "wasm-pack".to_string(),
@@ -51,7 +51,7 @@ use thiserror::Error;
 /// ## Command Failed
 ///
 /// ```rust
-/// use flui_build::BuildError;
+/// use crate::build::BuildError;
 ///
 /// let error = BuildError::CommandFailed {
 ///     command: "cargo build".to_string(),
@@ -159,7 +159,7 @@ impl From<&str> for BuildError {
 /// # Examples
 ///
 /// ```rust
-/// use flui_build::{BuildResult, BuildError};
+/// use crate::build::{BuildResult, BuildError};
 ///
 /// fn check_environment() -> BuildResult<()> {
 ///     // Check environment...
@@ -180,7 +180,7 @@ impl BuildError {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::BuildError;
+    /// use crate::build::BuildError;
     ///
     /// let error = BuildError::tool_not_found("cargo-ndk", "cargo install cargo-ndk");
     /// ```
@@ -196,7 +196,7 @@ impl BuildError {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::BuildError;
+    /// use crate::build::BuildError;
     ///
     /// let error = BuildError::target_not_installed(
     ///     "aarch64-linux-android",
@@ -215,7 +215,7 @@ impl BuildError {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::BuildError;
+    /// use crate::build::BuildError;
     ///
     /// let error = BuildError::env_var_error("ANDROID_HOME", "not set");
     /// ```
@@ -231,7 +231,7 @@ impl BuildError {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::BuildError;
+    /// use crate::build::BuildError;
     ///
     /// let error = BuildError::command_failed("cargo build", 1, "compilation error");
     /// ```
@@ -252,7 +252,7 @@ impl BuildError {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::BuildError;
+    /// use crate::build::BuildError;
     /// use std::path::PathBuf;
     ///
     /// let error = BuildError::path_not_found(
@@ -272,7 +272,7 @@ impl BuildError {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::BuildError;
+    /// use crate::build::BuildError;
     ///
     /// let error = BuildError::invalid_platform("unsupported target architecture");
     /// ```
@@ -287,7 +287,7 @@ impl BuildError {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::BuildError;
+    /// use crate::build::BuildError;
     ///
     /// let error = BuildError::invalid_config("output_dir", "path does not exist");
     /// ```

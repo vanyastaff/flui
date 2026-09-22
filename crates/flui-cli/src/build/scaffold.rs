@@ -5,7 +5,7 @@
 //! This ensures `flui-cli` works correctly when installed standalone
 //! via `cargo install` without access to the source workspace.
 
-use crate::error::{BuildError, BuildResult};
+use crate::build::error::{BuildError, BuildResult};
 use std::path::Path;
 
 /// Valid platform names for FLUI projects.
@@ -14,28 +14,30 @@ const VALID_PLATFORMS: &[&str] = &["android", "ios", "web", "windows", "linux", 
 // ── Embedded templates ──────────────────────────────────────────────────────
 
 // Android
-const ANDROID_MANIFEST: &str = include_str!("../templates/platforms/android/AndroidManifest.xml");
-const ANDROID_BUILD_GRADLE: &str = include_str!("../templates/platforms/android/build.gradle.kts");
+const ANDROID_MANIFEST: &str =
+    include_str!("../../templates/platforms/android/AndroidManifest.xml");
+const ANDROID_BUILD_GRADLE: &str =
+    include_str!("../../templates/platforms/android/build.gradle.kts");
 const ANDROID_ROOT_BUILD_GRADLE: &str =
-    include_str!("../templates/platforms/android/root.build.gradle.kts");
+    include_str!("../../templates/platforms/android/root.build.gradle.kts");
 const ANDROID_SETTINGS_GRADLE: &str =
-    include_str!("../templates/platforms/android/settings.gradle.kts");
+    include_str!("../../templates/platforms/android/settings.gradle.kts");
 const ANDROID_GRADLE_PROPERTIES: &str =
-    include_str!("../templates/platforms/android/gradle.properties");
-const ANDROID_GITIGNORE: &str = include_str!("../templates/platforms/android/.gitignore");
+    include_str!("../../templates/platforms/android/gradle.properties");
+const ANDROID_GITIGNORE: &str = include_str!("../../templates/platforms/android/.gitignore");
 
 // iOS
-const IOS_README: &str = include_str!("../templates/platforms/ios/README.md");
-const IOS_GITIGNORE: &str = include_str!("../templates/platforms/ios/.gitignore");
+const IOS_README: &str = include_str!("../../templates/platforms/ios/README.md");
+const IOS_GITIGNORE: &str = include_str!("../../templates/platforms/ios/.gitignore");
 
 // Web
-const WEB_INDEX_HTML: &str = include_str!("../templates/platforms/web/index.html");
-const WEB_MANIFEST_JSON: &str = include_str!("../templates/platforms/web/manifest.json");
+const WEB_INDEX_HTML: &str = include_str!("../../templates/platforms/web/index.html");
+const WEB_MANIFEST_JSON: &str = include_str!("../../templates/platforms/web/manifest.json");
 
 // Desktop
-const WINDOWS_GITIGNORE: &str = include_str!("../templates/platforms/windows/.gitignore");
-const LINUX_GITIGNORE: &str = include_str!("../templates/platforms/linux/.gitignore");
-const MACOS_GITIGNORE: &str = include_str!("../templates/platforms/macos/.gitignore");
+const WINDOWS_GITIGNORE: &str = include_str!("../../templates/platforms/windows/.gitignore");
+const LINUX_GITIGNORE: &str = include_str!("../../templates/platforms/linux/.gitignore");
+const MACOS_GITIGNORE: &str = include_str!("../../templates/platforms/macos/.gitignore");
 
 // ── Template entry ──────────────────────────────────────────────────────────
 
@@ -130,11 +132,11 @@ pub fn is_valid_platform(name: &str) -> bool {
 #[derive(Debug)]
 pub struct ScaffoldParams<'a> {
     /// Application display name (e.g. "My App").
-    pub app_name: &'a str,
+    pub app: &'a str,
     /// Rust library crate name / native lib name (e.g. "`my_app`").
-    pub lib_name: &'a str,
+    pub lib: &'a str,
     /// Reverse-domain package name (e.g. "`com.example.my_app`").
-    pub package_name: &'a str,
+    pub package: &'a str,
 }
 
 /// One file [`scaffold_platform`] would write, rendered but not yet on
@@ -251,9 +253,9 @@ pub fn scaffold_platform(
 /// Replace `{{app_name}}`, `{{lib_name}}`, and `{{package_name}}` in a template string.
 fn substitute(template: &str, params: &ScaffoldParams<'_>) -> String {
     template
-        .replace("{{app_name}}", params.app_name)
-        .replace("{{lib_name}}", params.lib_name)
-        .replace("{{package_name}}", params.package_name)
+        .replace("{{app_name}}", params.app)
+        .replace("{{lib_name}}", params.lib)
+        .replace("{{package_name}}", params.package)
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -265,9 +267,9 @@ mod tests {
 
     fn test_params() -> ScaffoldParams<'static> {
         ScaffoldParams {
-            app_name: "Test App",
-            lib_name: "test_app",
-            package_name: "com.example.test_app",
+            app: "Test App",
+            lib: "test_app",
+            package: "com.example.test_app",
         }
     }
 

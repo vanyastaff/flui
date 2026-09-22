@@ -4,6 +4,8 @@
 runs them with hot reload, builds for every platform, and checks your
 environment. It starts in about 25 ms, sends no telemetry, never touches the
 network unless you ask it to, and every command has a machine-readable mode.
+It is a standalone binary: `cargo install flui-cli` compiles no framework
+crate, so it installs in a fraction of the time an app build takes.
 
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 

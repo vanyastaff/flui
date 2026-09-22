@@ -1,7 +1,9 @@
-//! Debounced source-file watcher for dev-time build orchestration.
+//! Debounced source-file watcher behind `flui run`.
 //!
-//! Wraps `notify-debouncer-mini` with a small, channel-based API shared by
-//! `flui-cli` and `flui-devtools`.
+//! Wraps `notify-debouncer-mini` with a small, channel-based API. This is
+//! dev-machine code: the app being reloaded never watches files, so the
+//! watcher lives in the CLI rather than in `flui-hot-reload` (whose runtime
+//! half is what the app links).
 
 use std::{
     path::{Path, PathBuf},
@@ -11,7 +13,16 @@ use std::{
 
 use notify_debouncer_mini::{DebouncedEvent, DebouncedEventKind, Debouncer, new_debouncer};
 
-use crate::strategy::timing;
+/// Debounce and polling intervals for the dev loop.
+pub mod timing {
+    use std::time::Duration;
+
+    /// Debounce window for source changes on a desktop host.
+    pub const SOURCE_DEBOUNCE: Duration = Duration::from_millis(500);
+    /// Debounce window for Android scene-plugin sources, where `adb push`
+    /// follows every rebuild and a shorter window keeps the round trip tight.
+    pub const ANDROID_SCENE_DEBOUNCE: Duration = Duration::from_millis(300);
+}
 
 /// Error creating or configuring a [`SourceWatcher`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,25 +88,6 @@ impl SourceWatcher {
             .watcher()
             .watch(path, mode)
             .map_err(|e| WatchError::watch(path, e))
-    }
-
-    /// Block until the next batch of changed paths is available.
-    ///
-    /// Returns `None` when the watcher channel is closed.
-    pub fn recv(&self) -> Option<Vec<PathBuf>> {
-        loop {
-            match self.rx.recv() {
-                Ok(Ok(events)) => {
-                    if let Some(paths) = Self::paths_from_events(&events) {
-                        return Some(paths);
-                    }
-                }
-                Ok(Err(error)) => {
-                    tracing::warn!("source watch error: {error:?}");
-                }
-                Err(_) => return None,
-            }
-        }
     }
 
     /// Wait up to `timeout` for changed paths.

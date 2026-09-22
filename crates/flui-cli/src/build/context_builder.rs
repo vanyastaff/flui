@@ -12,7 +12,7 @@
 /// # Example
 ///
 /// ```rust
-/// use flui_build::*;
+/// use crate::build::*;
 /// use std::path::PathBuf;
 ///
 /// // ✅ This compiles - all required fields set
@@ -28,7 +28,7 @@
 /// ```
 use std::path::PathBuf;
 
-use crate::platform::{AppBundle, BuildUnit, BuilderContext, Platform, Profile};
+use crate::build::platform::{AppBundle, BuildUnit, BuilderContext, Platform, Profile};
 
 /// Type state: No platform set
 #[derive(Debug)]
@@ -60,7 +60,7 @@ pub struct HasProfile(pub(crate) Profile);
 /// ## Basic Usage
 ///
 /// ```rust
-/// use flui_build::*;
+/// use crate::build::*;
 /// use std::path::PathBuf;
 ///
 /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
@@ -72,13 +72,12 @@ pub struct HasProfile(pub(crate) Profile);
 /// ## With Optional Features
 ///
 /// ```rust
-/// use flui_build::*;
+/// use crate::build::*;
 /// use std::path::PathBuf;
 ///
 /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
 ///     .with_platform(Platform::Web { target: "web".to_string() })
 ///     .with_profile(Profile::Debug)
-///     .with_features(vec!["feature1".to_string()])
 ///     .with_output_dir(PathBuf::from("custom/output"))
 ///     .build();
 /// ```
@@ -86,7 +85,7 @@ pub struct HasProfile(pub(crate) Profile);
 /// ## Type Safety
 ///
 /// ```compile_fail
-/// use flui_build::*;
+/// use crate::build::*;
 /// use std::path::PathBuf;
 ///
 /// // This will not compile - missing profile
@@ -100,7 +99,6 @@ pub struct BuilderContextBuilder<P = NoPlatform, Pr = NoProfile> {
     platform: P,
     target: BuildUnit,
     profile: Pr,
-    features: Vec<String>,
     output_dir: Option<PathBuf>,
     bundle: Option<AppBundle>,
 }
@@ -116,7 +114,7 @@ impl BuilderContextBuilder<NoPlatform, NoProfile> {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::*;
+    /// use crate::build::*;
     /// use std::path::PathBuf;
     ///
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."));
@@ -128,7 +126,6 @@ impl BuilderContextBuilder<NoPlatform, NoProfile> {
             platform: NoPlatform,
             target: BuildUnit::DefaultBinary,
             profile: NoProfile,
-            features: Vec::new(),
             output_dir: None,
             bundle: None,
         }
@@ -146,7 +143,7 @@ impl<Pr> BuilderContextBuilder<NoPlatform, Pr> {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::*;
+    /// use crate::build::*;
     /// use std::path::PathBuf;
     ///
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
@@ -160,7 +157,6 @@ impl<Pr> BuilderContextBuilder<NoPlatform, Pr> {
             platform: HasPlatform(platform),
             target: self.target,
             profile: self.profile,
-            features: self.features,
             output_dir: self.output_dir,
             bundle: self.bundle,
         }
@@ -178,7 +174,7 @@ impl<P> BuilderContextBuilder<P, NoProfile> {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::*;
+    /// use crate::build::*;
     /// use std::path::PathBuf;
     ///
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
@@ -190,7 +186,6 @@ impl<P> BuilderContextBuilder<P, NoProfile> {
             platform: self.platform,
             target: self.target,
             profile: HasProfile(profile),
-            features: self.features,
             output_dir: self.output_dir,
             bundle: self.bundle,
         }
@@ -208,7 +203,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::*;
+    /// use crate::build::*;
     /// use std::path::PathBuf;
     ///
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
@@ -225,7 +220,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::*;
+    /// use crate::build::*;
     /// use std::path::PathBuf;
     ///
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
@@ -234,49 +229,6 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     #[must_use]
     pub fn with_bundle(mut self, bundle: AppBundle) -> Self {
         self.bundle = Some(bundle);
-        self
-    }
-
-    /// Add features to enable.
-    ///
-    /// # Arguments
-    ///
-    /// * `features` - List of features to enable
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_build::*;
-    /// use std::path::PathBuf;
-    ///
-    /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
-    ///     .with_features(vec!["feature1".to_string(), "feature2".to_string()]);
-    /// ```
-    #[must_use]
-    pub fn with_features(mut self, features: Vec<String>) -> Self {
-        self.features = features;
-        self
-    }
-
-    /// Add a single feature to enable.
-    ///
-    /// # Arguments
-    ///
-    /// * `feature` - Feature name
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_build::*;
-    /// use std::path::PathBuf;
-    ///
-    /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
-    ///     .with_feature("feature1")
-    ///     .with_feature("feature2");
-    /// ```
-    #[must_use]
-    pub fn with_feature(mut self, feature: impl Into<String>) -> Self {
-        self.features.push(feature.into());
         self
     }
 
@@ -291,7 +243,7 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::*;
+    /// use crate::build::*;
     /// use std::path::PathBuf;
     ///
     /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
@@ -318,7 +270,7 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_build::*;
+    /// use crate::build::*;
     /// use std::path::PathBuf;
     ///
     /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
@@ -344,7 +296,6 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
             platform: self.platform.0,
             target: self.target,
             profile: self.profile.0,
-            features: self.features,
             output_dir,
             bundle: self.bundle,
         }
@@ -365,33 +316,6 @@ mod tests {
             .build();
 
         assert_eq!(ctx.profile, Profile::Release);
-        assert_eq!(ctx.features.len(), 0);
-    }
-
-    #[test]
-    fn test_builder_with_features() {
-        let ctx = BuilderContextBuilder::new(PathBuf::from("."))
-            .with_platform(Platform::Web {
-                target: "web".to_string(),
-            })
-            .with_profile(Profile::Debug)
-            .with_features(vec!["feature1".to_string()])
-            .build();
-
-        assert_eq!(ctx.features.len(), 1);
-        assert_eq!(ctx.features[0], "feature1");
-    }
-
-    #[test]
-    fn test_builder_with_single_features() {
-        let ctx = BuilderContextBuilder::new(PathBuf::from("."))
-            .with_platform(Platform::Desktop { target: None })
-            .with_profile(Profile::Release)
-            .with_feature("feat1")
-            .with_feature("feat2")
-            .build();
-
-        assert_eq!(ctx.features.len(), 2);
     }
 
     #[test]

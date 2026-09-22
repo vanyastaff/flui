@@ -14,7 +14,7 @@ version := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 commit  := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 
 # Active workspace members (must match crates/* in Cargo.toml [workspace.members])
-active_crates := "flui-animation flui-app flui-assets flui-testing flui-build flui-cli flui-cupertino flui-devtools flui-engine flui-foundation flui-geometry flui-hot-reload flui-interaction flui-layer flui-localizations flui-log flui-macros flui-material flui-objects flui-painting flui-platform flui-rendering flui-scheduler flui-semantics flui-tree flui-types flui-view flui-widgets"
+active_crates := "flui-animation flui-app flui-assets flui-testing flui-cli flui-cupertino flui-devtools flui-engine flui-foundation flui-geometry flui-hot-reload flui-interaction flui-layer flui-localizations flui-log flui-macros flui-material flui-objects flui-painting flui-platform flui-rendering flui-scheduler flui-semantics flui-tree flui-types flui-view flui-widgets"
 
 # Default recipe — show help
 [doc("Show available recipes grouped by category")]
@@ -74,20 +74,19 @@ build-layered:
     cargo build -p flui-testing
     cargo build -p flui-app
     cargo build -p flui-devtools
-    cargo build -p flui-build
     cargo build -p flui-cli
 
 [group("build")]
 [doc("Type-check and clippy the wasm-capable crates for wasm32-unknown-unknown (mirrors the CI wasm-check job)")]
 wasm-check:
     cargo check --workspace --locked --target wasm32-unknown-unknown \
-      --exclude flui-assets --exclude flui-build --exclude flui-cli \
+      --exclude flui-assets --exclude flui-cli \
       --exclude flui-web-server --exclude hot-reload-counter-host \
       --exclude hot-reload-counter-logic --exclude hot-reload-counter-types
     # Lib/bin targets only: test targets pull native-only dev-deps (tokio).
     # This is the ONLY lint pass over flui-platform's wasm32-only web backend.
     cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown \
-      --exclude flui-assets --exclude flui-build --exclude flui-cli \
+      --exclude flui-assets --exclude flui-cli \
       --exclude flui-web-server --exclude hot-reload-counter-host \
       --exclude hot-reload-counter-logic --exclude hot-reload-counter-types \
       -- -D warnings

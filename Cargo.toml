@@ -65,9 +65,8 @@ members = [
     "crates/flui-animation", # Animation system (ACTIVE)
 
     # === DX tooling ===
-    "crates/flui-devtools", # Profiler / timeline / file-watch (no tree inspector yet — see the crate docs)
-    "crates/flui-build",    # Build orchestration (android / cross)
-    "crates/flui-cli",      # `flui` CLI (run / build / devtools / templates)
+    "crates/flui-devtools", # Profiler / timeline / inspector counters
+    "crates/flui-cli",      # `flui` CLI (create / run / build / doctor / devices); owns the build pipeline and the source watcher
     # NOTE: there is deliberately NO signals crate. flui-reactivity (a signals/
     # hooks experiment) was removed 2026-07-28: it had zero consumers, could not
     # build even standalone (inherited workspace deps that were never declared),
@@ -112,7 +111,6 @@ default-members = [
     "crates/flui-assets",
     "crates/flui-animation",
     "crates/flui-devtools",
-    "crates/flui-build",
     "crates/flui-cli",
 ]
 
@@ -170,8 +168,7 @@ toml = "1.1"
 # BUILDER UTILITIES - Used by widgets
 bon = "3.8"
 
-# DX TOOLING - flui-cli / flui-build / flui-devtools
-indicatif = "0.18" # progress bars (build/cli)
+# DX TOOLING - flui-cli / flui-devtools
 tempfile = "3"     # scratch dirs/files (build staging and tests)
 which = "8"        # locate toolchain executables (build/cli)
 
@@ -426,7 +423,7 @@ struct_excessive_bools = "allow"
 # no runtime difference. It also has no answer for the feature-gated stub pairs
 # (`flui-assets`'s `network`-off `load_url`/`load_text`), where the `async` is
 # what keeps the two configurations' signatures identical. Fires on `flui-assets`
-# and `flui-build` today; new in Rust 1.98's pedantic set.
+# and `flui-cli`'s build pipeline today; new in Rust 1.98's pedantic set.
 unused_async_trait_impl = "allow"
 
 [package]

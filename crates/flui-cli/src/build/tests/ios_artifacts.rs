@@ -1,6 +1,6 @@
 //! Cargo artifact acceptance without Xcode app packaging. Host fixtures are portable.
-use flui_build::{
-    BuildUnit, BuilderContextBuilder, IOSBuilder, Platform, PlatformBuilder, Profile,
+use crate::build::{
+    BuildUnit, BuilderContextBuilder, IosBuilder, Platform, PlatformBuilder, Profile,
 };
 use std::{
     path::{Path, PathBuf},
@@ -117,7 +117,11 @@ fn fixture(case: &str, targets: &str) {
     }
     let mut command = Command::new(std::env::current_exe().expect("test executable"));
     command
-        .args(["--exact", "ios_cargo_artifact_fixtures", "--nocapture"])
+        .args([
+            "--exact",
+            "build::tests::ios_artifacts::ios_cargo_artifact_fixtures",
+            "--nocapture",
+        ])
         .env(ROOT, &root)
         .env(CASE, case)
         .env(TARGETS, targets)
@@ -132,6 +136,15 @@ fn fixture(case: &str, targets: &str) {
     assert!(
         output.status.success(),
         "{case}: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The worker is this test binary running one named test. libtest names
+    // unit tests by module path, so a short name matches nothing, exits 0
+    // and silently proves nothing; require the one test to have run.
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{case}: the worker test did not run:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -163,7 +176,7 @@ fn worker(root: PathBuf, case: &str) {
         root.clone()
     };
     let ctx = BuilderContextBuilder::new(cwd)
-        .with_platform(Platform::IOS {
+        .with_platform(Platform::Ios {
             targets: selected_targets,
         })
         .with_profile(Profile::Debug)
@@ -171,7 +184,7 @@ fn worker(root: PathBuf, case: &str) {
         .with_output_dir(root.join("staged"))
         .build();
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
-    let builder = IOSBuilder::new();
+    let builder = IosBuilder::new();
     let result = runtime.block_on(builder.build_rust(&ctx));
     let sentinel = || {
         assert_eq!(
@@ -281,10 +294,10 @@ fn worker(root: PathBuf, case: &str) {
             let prior = delivered.app_binary.join("previous-sentinel");
             std::fs::write(&prior, "old output").expect("old sentinel");
             let mut two = ctx.clone();
-            two.platform = Platform::IOS {
+            two.platform = Platform::Ios {
                 targets: targets[..2].to_vec(),
             };
-            let swapped = flui_build::BuildArtifacts {
+            let swapped = crate::build::BuildArtifacts {
                 rust_libs: vec![
                     artifacts.rust_libs[1].clone(),
                     artifacts.rust_libs[0].clone(),
@@ -320,10 +333,10 @@ fn worker(root: PathBuf, case: &str) {
                 .join(device["LibraryIdentifier"].as_str().expect("id"))
                 .join(device["LibraryPath"].as_str().expect("path"));
             let mut single = ctx.clone();
-            single.platform = Platform::IOS {
+            single.platform = Platform::Ios {
                 targets: vec![targets[0].clone()],
             };
-            let one = flui_build::BuildArtifacts {
+            let one = crate::build::BuildArtifacts {
                 rust_libs: vec![inside],
                 executable: None,
                 metadata: serde_json::json!({}),
@@ -425,7 +438,7 @@ fn simulator_application_uses_actual_executable_metadata_and_native_bundle() {
     );
     write(root, "platforms/ios/Frameworks/keep.txt", "untouched");
     let context = BuilderContextBuilder::new(root.to_path_buf())
-        .with_platform(Platform::IOS {
+        .with_platform(Platform::Ios {
             targets: vec!["aarch64-apple-ios-sim".into()],
         })
         .with_target(BuildUnit::DefaultBinary)
@@ -433,7 +446,7 @@ fn simulator_application_uses_actual_executable_metadata_and_native_bundle() {
         .with_output_dir(root.join("delivered"))
         .build();
     let runtime = tokio::runtime::Runtime::new().expect("runtime");
-    let builder = IOSBuilder::new();
+    let builder = IosBuilder::new();
     let artifacts = runtime
         .block_on(builder.build_rust(&context))
         .expect("simulator executable");
@@ -475,7 +488,7 @@ fn simulator_application_uses_actual_executable_metadata_and_native_bundle() {
     );
     write(&delivered.app_binary, "old-sentinel", "prior bundle");
     let mut wrong_platform = context.clone();
-    wrong_platform.platform = Platform::IOS {
+    wrong_platform.platform = Platform::Ios {
         targets: vec!["aarch64-apple-ios".into()],
     };
     assert!(

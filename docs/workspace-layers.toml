@@ -431,13 +431,6 @@ disposition = "optionalize"
 note = "Development capability; optional in both flui-app and the facade, and absent from their ordinary production graphs."
 
 [[member]]
-name = "flui-build"
-release_role = "support"
-layer = 6
-disposition = "keep"
-note = "Async cross-platform build pipeline; one of the three sanctioned async edges (contract C8)."
-
-[[member]]
 name = "flui-material"
 release_role = "support"
 layer = 7
@@ -485,14 +478,14 @@ name = "flui-devtools"
 release_role = "support"
 layer = 9
 disposition = "keep"
-note = "Profiler and inspector adapters over `tracing`. Consumes flui-hot-reload; nothing in the framework consumes it."
+note = "Profiler, timeline and inspector adapters over `tracing`. Nothing in the framework consumes it; flui-testing takes its inspector counters."
 
 [[member]]
 name = "flui-cli"
 release_role = "cli"
 layer = 9
 disposition = "keep"
-note = "CLI tooling. Depends on flui-devtools inside L9 (see same_layer_edge)."
+note = "The `flui` binary. Owns the build pipeline (once `flui-build`) and the source watcher; links no framework crate but flui-log, so the hot-reload env-var contract is checked by a dev-dependency test instead of a normal edge."
 
 [[member]]
 name = "flui"

@@ -1,9 +1,12 @@
 # FLUI CLI architecture
 
-`flui-cli` owns command parsing, project template selection, and generation of
-consumer dependency declarations. `flui-build` owns platform scaffolding and
-build orchestration. Template dependency resolution stays in the CLI rather
-than adding framework-installation knowledge to a platform scaffold.
+`flui-cli` owns command parsing, project template selection, generation of
+consumer dependency declarations, platform scaffolding and build
+orchestration (`src/build/`, once the `flui-build` crate), and the dev-loop
+source watcher (`src/watch.rs`). It links no framework crate except
+`flui-log`: the runtime half of hot reload stays in `flui-hot-reload`, which
+the *app* links, and the only contract between the two is a pair of
+environment-variable names pinned by a dev-dependency test.
 
 ## Mapping decisions
 
@@ -106,7 +109,7 @@ Commands have deadlines and drain both output streams. Install and launch use
 the validated bundle's identity and selected UDID, without shutting down devices.
 Config SemVer maps to numeric Apple keys while the full value remains in FLUIVersion.
 The unavailable-device integration test guards against accidental host execution;
-SDK-required flui-build tests verify actual application bundle delivery.
+SDK-required build-pipeline tests (`src/build/tests/`) verify actual application bundle delivery.
 
 ### One output policy, two audiences
 
@@ -158,3 +161,22 @@ exit status, and the debounced source watcher. The child never shares stdin
 and forwarded as `run.app.log` so the machine stream stays pure. The child is
 stopped on every exit path, including errors, so a failed `flui run` never
 leaves an orphaned app; a real SIGINT with nobody at the keyboard exits 130.
+
+## The build pipeline is a module, not a crate
+
+`flui-build` had exactly one consumer, this binary, and no framework
+dependency, so it became `src/build/`. Merging exposed what a library hides:
+a progress reporter, an output parser, a context-extension trait, `--features`
+plumbing no command could set, and a `clean` method on every builder that
+`flui clean` never called. All of it was deleted rather than gated. The
+integration tests moved to `src/build/tests/` as unit modules; they still
+build real Cargo fixtures and re-execute the test binary as a worker.
+
+## The watcher is dev-machine code
+
+`SourceWatcher` watches files on the developer's machine; nothing in a
+running app does. It lives here, so `cargo install flui-cli` no longer pulls
+`flui-hot-reload` and the rendering crates behind it (the normal dependency
+graph fell from 199 crates to 135). `flui-devtools` lost its `hot-reload`
+feature for the same reason: a callback wrapper over the watcher with no
+consumer.

@@ -31,9 +31,9 @@ pub use plan::{PlannedFile, ProjectPlan};
 pub use source::DependencySource;
 
 use crate::Template;
+use crate::build::scaffold::{ScaffoldParams, scaffold_platform_plan};
 use crate::error::CliResult;
 use crate::types::{OrganizationId, ProjectName};
-use flui_build::scaffold::{ScaffoldParams, scaffold_platform_plan};
 use std::path::Path;
 
 /// `.gitignore` for a generated project. Part of the plan (not a
@@ -175,13 +175,13 @@ impl TemplateBuilder {
     /// real run would create — including `.gitignore` and, for a
     /// non-library, non-hot-reload template, the platform scaffolding
     /// (`platforms/<name>/…`) that used to be written directly by
-    /// `flui-build` outside the plan. The template match is exhaustive on
+    /// the build module outside the plan. The template match is exhaustive on
     /// purpose — a new [`Template`] variant must get its own generator
     /// here, not fall back to another template's files.
     ///
     /// Platform names in `self.platforms` are assumed valid: they come
     /// from the `Platform` clap enum, whose `Display` output is exactly
-    /// `flui_build::scaffold`'s `VALID_PLATFORMS` list, so
+    /// `crate::build::scaffold`'s `VALID_PLATFORMS` list, so
     /// `scaffold_platform_plan` never actually sees an unknown name here.
     pub fn plan(&self) -> ProjectPlan {
         let name_str = self.name.as_str();
@@ -226,15 +226,15 @@ impl TemplateBuilder {
         let lib_name = self.name.as_str().replace('-', "_");
         let package_name = format!("{}.{lib_name}", self.org.as_str());
         let params = ScaffoldParams {
-            app_name: self.name.as_str(),
-            lib_name: &lib_name,
-            package_name: &package_name,
+            app: self.name.as_str(),
+            lib: &lib_name,
+            package: &package_name,
         };
 
         for platform in &self.platforms {
             let files = scaffold_platform_plan(platform, &params).unwrap_or_else(|error| {
                 // See the invariant documented on `plan`: a `Platform` clap
-                // value always names a platform `flui-build` knows.
+                // value always names a platform the build module knows.
                 unreachable!("platform '{platform}' from the validated Platform enum: {error}")
             });
             for file in files {

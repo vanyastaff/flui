@@ -16,11 +16,6 @@
 //! - Frame boundaries
 //! - Custom trace events
 //!
-//! ## 🔥 Hot Reload (feature: hot-reload)
-//! - Watch file changes and report them to a callback
-//! - That is all: rebuild triggering and state preservation live in
-//!   `flui-hot-reload` (worker/host split), not here
-//!
 //! ## 🔎 Inspector counters (feature: inspector)
 //! - A counting/logging `TreeObserver` (ADR-0040 seam) — tallies element
 //!   mounts, moves, rebuilds (per cause), and unmounts of a running realm
@@ -62,31 +57,14 @@
 //! println!("Frame time: {:.2}ms", stats.total_time_ms());
 //! ```
 //!
-//! ## Hot Reload
-//!
-//! ```rust,ignore
-//! #[cfg(feature = "hot-reload")]
-//! use flui_devtools::hot_reload::HotReloader;
-//!
-//! #[cfg(feature = "hot-reload")]
-//! {
-//!     let mut reloader = HotReloader::new("./src");
-//!     reloader.on_change(|path| {
-//!         println!("File changed: {:?}", path);
-//!         // Trigger rebuild
-//!     });
-//!     reloader.watch();
-//! }
-//! ```
 //!
 //! # Feature Flags
 //!
-//! - `default`: no features enabled; opt in via `profiling`, `timeline`, or `hot-reload`
+//! - `default`: no features enabled; opt in via `profiling`, `timeline`, or `inspector`
 //! - `profiling`: Performance profiling tools (pulls in `tracing` +
 //!   `tracing-subscriber`, which is how the profiler is fed — the framework
 //!   cannot call this crate, so `FrameTimingLayer` subscribes to its spans)
 //! - `timeline`: Timeline view for events
-//! - `hot-reload`: File watching (reports changes; nothing more)
 //! - `inspector`: Counting/logging tree observer over the ADR-0040 seam
 //! - `full`: all of the above
 //!
@@ -102,8 +80,6 @@ mod common;
 /// layering permits, since nothing in the framework may depend on this crate.
 #[cfg(feature = "profiling")]
 pub mod frame_timing_layer;
-#[cfg(feature = "hot-reload")]
-pub mod hot_reload;
 #[cfg(feature = "inspector")]
 pub mod inspector;
 #[cfg(feature = "profiling")]
@@ -129,8 +105,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod prelude {
     #[cfg(feature = "profiling")]
     pub use crate::frame_timing_layer::FrameTimingLayer;
-    #[cfg(feature = "hot-reload")]
-    pub use crate::hot_reload::HotReloader;
     #[cfg(feature = "inspector")]
     pub use crate::inspector::{InspectorCounters, InspectorSnapshot};
     #[cfg(feature = "profiling")]

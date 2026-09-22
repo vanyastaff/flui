@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::error::{BuildError, BuildResult};
+use crate::build::error::{BuildError, BuildResult};
 
 /// Private module to seal the `PlatformBuilder` trait.
 ///
@@ -13,7 +13,7 @@ pub(crate) mod private {
 
 /// Build context containing configuration and paths.
 ///
-/// Use [`BuilderContextBuilder`](crate::BuilderContextBuilder) to construct instances.
+/// Use [`BuilderContextBuilder`](crate::build::BuilderContextBuilder) to construct instances.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct BuilderContext {
@@ -25,8 +25,6 @@ pub struct BuilderContext {
     pub target: BuildUnit,
     /// Build profile (debug or release)
     pub profile: Profile,
-    /// Cargo features to enable
-    pub features: Vec<String>,
     /// Output directory for build artifacts
     pub output_dir: PathBuf,
     /// Application bundle metadata, when the target stages a platform bundle.
@@ -100,24 +98,7 @@ pub enum BuildUnit {
     },
 }
 
-impl BuildUnit {
-    /// The cargo arguments that select this target.
-    #[must_use]
-    pub fn cargo_args(&self) -> Vec<String> {
-        match self {
-            Self::DefaultBinary => Vec::new(),
-            Self::Package(name) => vec!["-p".to_string(), name.clone()],
-            Self::Example(name) => vec!["--example".to_string(), name.clone()],
-            Self::Library { package } => {
-                let mut args = vec!["--lib".into()];
-                if let Some(package) = package {
-                    args.extend(["--package".into(), package.clone()]);
-                }
-                args
-            }
-        }
-    }
-}
+impl BuildUnit {}
 
 /// Platform to build for
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -129,7 +110,7 @@ pub enum Platform {
         targets: Vec<String>,
     },
     /// iOS platform with target architectures
-    IOS {
+    Ios {
         /// Target architectures (e.g., "aarch64-apple-ios", "x86_64-apple-ios")
         targets: Vec<String>,
     },
@@ -151,7 +132,7 @@ impl Platform {
     pub fn name(&self) -> &str {
         match self {
             Platform::Android { .. } => "android",
-            Platform::IOS { .. } => "ios",
+            Platform::Ios { .. } => "ios",
             Platform::Web { .. } => "web",
             Platform::Desktop { .. } => "desktop",
         }
@@ -219,7 +200,7 @@ impl TryFrom<&str> for Platform {
             "android" => Ok(Platform::Android {
                 targets: vec!["aarch64-linux-android".to_string()],
             }),
-            "ios" => Ok(Platform::IOS {
+            "ios" => Ok(Platform::Ios {
                 targets: vec!["aarch64-apple-ios".to_string()],
             }),
             "web" => Ok(Platform::Web {
@@ -260,8 +241,8 @@ pub struct FinalArtifacts {
 
 /// Platform-specific builder trait.
 ///
-/// This trait is sealed and cannot be implemented outside of `flui_build`.
-/// Only the built-in builders (`AndroidBuilder`, `IOSBuilder`, `WebBuilder`, `DesktopBuilder`)
+/// This trait is sealed and cannot be implemented outside of `crate::build`.
+/// Only the built-in builders (`AndroidBuilder`, `IosBuilder`, `WebBuilder`, `DesktopBuilder`)
 /// implement this trait.
 ///
 /// # Sealed Trait
@@ -269,12 +250,10 @@ pub struct FinalArtifacts {
 /// This trait is sealed using the [sealed trait pattern](https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed).
 /// External crates cannot implement this trait, which allows us to add methods
 /// in the future without breaking changes.
-// Sealed trait — only implemented within this crate, so Send bounds on futures are guaranteed.
-#[expect(async_fn_in_trait)]
+// Sealed trait — only implemented within this binary, so Send bounds on
+// futures are guaranteed (and `async_fn_in_trait` has nothing to warn about:
+// no downstream crate can name the returned futures).
 pub trait PlatformBuilder: private::Sealed + Send + Sync {
-    /// Platform name
-    fn platform_name(&self) -> &str;
-
     /// Validate environment (check tools, SDK, etc.)
     fn validate_environment(&self) -> BuildResult<()>;
 
@@ -287,9 +266,6 @@ pub trait PlatformBuilder: private::Sealed + Send + Sync {
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
     ) -> BuildResult<FinalArtifacts>;
-
-    /// Clean build artifacts
-    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()>;
 }
 
 #[cfg(test)]
@@ -299,18 +275,5 @@ mod tests {
     #[test]
     fn build_target_default_is_the_current_packages_binary() {
         assert_eq!(BuildUnit::default(), BuildUnit::DefaultBinary);
-        assert!(BuildUnit::DefaultBinary.cargo_args().is_empty());
-    }
-
-    #[test]
-    fn build_target_maps_to_its_cargo_selector() {
-        assert_eq!(
-            BuildUnit::Package("my-app".to_string()).cargo_args(),
-            vec!["-p".to_string(), "my-app".to_string()]
-        );
-        assert_eq!(
-            BuildUnit::Example("material_demo".to_string()).cargo_args(),
-            vec!["--example".to_string(), "material_demo".to_string()]
-        );
     }
 }

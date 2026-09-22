@@ -2,13 +2,6 @@ use crate::error::{CliError, CliResult};
 use std::path::Path;
 use std::process::Command;
 
-// Re-export scaffolding from flui-build where the logic belongs.
-// Used by platform add/remove commands (Phase 4).
-#[expect(unused_imports, reason = "re-exports for Phase 4 platform commands")]
-pub use flui_build::scaffold::{
-    ScaffoldParams, is_valid_platform, scaffold_platform, valid_platform_names,
-};
-
 /// Check if a command exists in PATH.
 #[expect(dead_code, reason = "utility functions for future commands")]
 pub fn command_exists(cmd: &str) -> bool {

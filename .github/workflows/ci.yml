@@ -53,7 +53,7 @@ env:
   #     | grep -oE -- '--manifest-path [^ ]+' | sort | uniq -c | sort -rn
   FM_GROUP_1: flui-engine flui-app flui-platform flui-widgets flui-devtools
   FM_GROUP_2: flui flui-types flui-geometry flui-rendering flui-assets flui-view flui-objects flui-log
-  FM_GROUP_3: flui-interaction flui-hot-reload flui-tree flui-semantics flui-scheduler flui-painting flui-layer flui-foundation flui-cli flui-animation flui-macros flui-testing flui-material flui-localizations flui-cupertino flui-build flui-desktop-scene flui-live-smoke flui-web-demo flui-web-server flui-painting-demo flui-hot-reload-lifecycle-fixture hot-reload-counter-host hot-reload-counter-logic hot-reload-counter-types
+  FM_GROUP_3: flui-interaction flui-hot-reload flui-tree flui-semantics flui-scheduler flui-painting flui-layer flui-foundation flui-cli flui-animation flui-macros flui-testing flui-material flui-localizations flui-cupertino flui-desktop-scene flui-live-smoke flui-web-demo flui-web-server flui-painting-demo flui-hot-reload-lifecycle-fixture hot-reload-counter-host hot-reload-counter-logic hot-reload-counter-types
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   # Strict workspace-wide; matches the local `just ci` gate.
@@ -1096,12 +1096,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # flui-assets / flui-build / flui-cli / flui-web-server: mio + uuid
+      # flui-assets / flui-cli / flui-web-server: mio + uuid
       # (tokio-net / CLI stack) have no wasm32-unknown-unknown support.
       # hot-reload-counter-*: dlopen-based hot-reload, host-only by design.
       NO_WASM_PKGS: >-
         --exclude flui-assets
-        --exclude flui-build
         --exclude flui-cli
         --exclude flui-web-server
         --exclude hot-reload-counter-host

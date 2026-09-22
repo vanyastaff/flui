@@ -2,8 +2,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use flui_build::desktop::DesktopBuilder;
-use flui_build::{BuildUnit, BuilderContextBuilder, Platform, PlatformBuilder, Profile};
+use crate::build::desktop::DesktopBuilder;
+use crate::build::{BuildUnit, BuilderContextBuilder, Platform, PlatformBuilder, Profile};
 
 const FIXTURE_ROOT: &str = "FLUI_DESKTOP_FIXTURE_ROOT";
 const FIXTURE_CASE: &str = "FLUI_DESKTOP_FIXTURE_CASE";
@@ -96,7 +96,7 @@ fn fixture(case: &str) {
     command
         .args([
             "--exact",
-            "desktop_uses_cargos_external_target_directory",
+            "build::tests::desktop_artifacts::desktop_uses_cargos_external_target_directory",
             "--nocapture",
         ])
         .env(FIXTURE_ROOT, &root)
@@ -111,6 +111,15 @@ fn fixture(case: &str) {
     assert!(
         output.status.success(),
         "{case}: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The worker is this test binary running one named test. libtest names
+    // unit tests by module path, so a short name matches nothing, exits 0
+    // and silently proves nothing; require the one test to have run.
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{case}: the worker test did not run:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -291,13 +300,13 @@ async fn bundle_names_cannot_escape_the_output_directory() {
             .with_platform(Platform::Desktop { target: None })
             .with_profile(Profile::Debug)
             .with_output_dir(output.clone())
-            .with_bundle(flui_build::AppBundle {
+            .with_bundle(crate::build::AppBundle {
                 name,
                 identifier: "org.example.fixture".into(),
                 version: "0.1.0".into(),
             })
             .build();
-        let artifacts = flui_build::BuildArtifacts {
+        let artifacts = crate::build::BuildArtifacts {
             rust_libs: Vec::new(),
             executable: Some(executable),
             metadata: serde_json::json!({}),
@@ -331,13 +340,13 @@ async fn unicode_bundle_names_work_and_existing_symlinks_are_not_followed() {
         .with_platform(Platform::Desktop { target: None })
         .with_profile(Profile::Debug)
         .with_output_dir(output.clone())
-        .with_bundle(flui_build::AppBundle {
+        .with_bundle(crate::build::AppBundle {
             name: name.into(),
             identifier: "org.example.fixture".into(),
             version: "0.1.0".into(),
         })
         .build();
-    let artifacts = flui_build::BuildArtifacts {
+    let artifacts = crate::build::BuildArtifacts {
         rust_libs: Vec::new(),
         executable: Some(executable),
         metadata: serde_json::json!({}),

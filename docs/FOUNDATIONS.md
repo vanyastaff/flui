@@ -155,7 +155,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
 | L4 — Render machine + render catalog | `flui-engine`, `flui-rendering`, `flui-objects` |
 | L5 — Framework spine | `flui-view` |
-| L6 — Widget catalog + DX tooling | `flui-widgets`, `flui-testing`, `flui-hot-reload`, `flui-build` |
+| L6 — Widget catalog + DX tooling | `flui-widgets`, `flui-testing`, `flui-hot-reload` |
 | L7 — Design systems | `flui-material`, `flui-cupertino` |
 | L8 — Global localizations | `flui-localizations` |
 | L9 — Application / tooling | `flui-app`, `flui-devtools`, `flui-cli` |
@@ -182,7 +182,6 @@ graph TD
     view[flui-view]
     devtools[flui-devtools]
     cli[flui-cli]
-    build[flui-build]
     hotreload[flui-hot-reload]
     widgets[flui-widgets]
     testing[flui-testing]
@@ -239,7 +238,6 @@ graph TD
     app --> hotreload
     devtools --> hotreload
     cli --> devtools
-    cli --> build
     cli --> hotreload
     facade --> app
     facade --> material

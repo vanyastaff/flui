@@ -1,12 +1,12 @@
 use crate::BuildTarget;
+use crate::build::platform::BuildUnit as CargoBuildUnit;
+use crate::build::{
+    AndroidBuilder, AppBundle, BuilderContextBuilder, DesktopBuilder, IosBuilder, Platform,
+    PlatformBuilder, Profile, WebBuilder,
+};
 use crate::error::{CliError, CliResult, ResultExt};
 use crate::ui;
 use console::style;
-use flui_build::platform::BuildUnit as CargoBuildUnit;
-use flui_build::{
-    AndroidBuilder, AppBundle, BuilderContextBuilder, DesktopBuilder, IOSBuilder, Platform,
-    PlatformBuilder, Profile, WebBuilder,
-};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -396,11 +396,11 @@ fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
         vec!["aarch64-apple-ios".to_string()]
     };
 
-    let ios_builder = IOSBuilder::new();
+    let ios_builder = IosBuilder::new();
 
     let bundle = super::ios::configured_bundle(&workspace_root)?;
     let mut builder = BuilderContextBuilder::new(workspace_root)
-        .with_platform(Platform::IOS { targets })
+        .with_platform(Platform::Ios { targets })
         .with_target(options.cargo_target())
         .with_profile(profile);
     if !options.library
@@ -462,8 +462,7 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
         Profile::Debug
     };
 
-    let web_builder =
-        WebBuilder::new(&workspace_root).context("Failed to initialize Web builder")?;
+    let web_builder = WebBuilder::new(&workspace_root);
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Web {

@@ -1,7 +1,7 @@
-//! FLUI Build System Library
-//!
-//! This library provides the core build infrastructure for the FLUI framework,
-//! supporting cross-platform builds for Android, Web (WASM), iOS, and Desktop platforms.
+//! The build pipeline behind `flui build` and `flui run`: cross-platform
+//! builds for Android, Web (WASM), iOS and desktop, plus platform scaffolding.
+//! Formerly the `flui-build` crate; it has no consumer but this binary, so it
+//! lives here as a module.
 //!
 //! # Architecture
 //!
@@ -15,7 +15,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use flui_build::*;
+//! use crate::build::*;
 //! use std::path::PathBuf;
 //!
 //! #[tokio::main]
@@ -46,14 +46,11 @@
 //! ```
 
 // Ship bar (wave 4): every public item is documented; keep it that way.
-#![deny(missing_docs)]
 
 /// Android platform build support
 pub mod android;
 /// Type-state builder for `BuilderContext`
 pub mod context_builder;
-/// Extension trait with utility methods for `BuilderContext`
-pub mod context_ext;
 /// Desktop platform build support (Windows, macOS, Linux)
 pub mod desktop;
 /// Custom error types for build operations
@@ -61,26 +58,21 @@ pub mod error;
 /// iOS platform build support
 pub mod ios;
 mod ios_package;
-/// Output parsers for build tools (cargo, gradle, wasm-pack)
-pub mod output_parser;
 /// Platform abstractions and core types
 pub mod platform;
-/// Build progress tracking and reporting
-pub mod progress;
 /// Platform scaffolding for new projects
 pub mod scaffold;
 /// Utility functions and helpers
 pub(crate) mod util;
+
+#[cfg(test)]
+mod tests;
 /// Web/WASM platform build support
 pub mod web;
 
 pub use android::AndroidBuilder;
 pub use context_builder::BuilderContextBuilder;
-pub use context_ext::BuilderContextExt;
 pub use desktop::DesktopBuilder;
-pub use error::{BuildError, BuildResult};
-pub use ios::IOSBuilder;
-pub use output_parser::{BuildEvent, OutputParser, get_parser};
+pub use ios::IosBuilder;
 pub use platform::*;
-pub use progress::{BuildPhase, BuildProgress, ProgressManager};
 pub use web::WebBuilder;

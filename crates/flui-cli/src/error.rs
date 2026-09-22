@@ -263,7 +263,7 @@ pub enum CliError {
 
     /// Build system error.
     #[error("Build system error: {0}")]
-    Build(#[from] flui_build::error::BuildError),
+    Build(#[from] crate::build::error::BuildError),
 
     /// Generic error with context.
     ///

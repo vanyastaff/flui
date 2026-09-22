@@ -32,9 +32,8 @@
 //! ## Two-Layer Architecture
 //!
 //! ```text
-//! Layer 1 — Build orchestration (dev-time, optional `source-watch` feature)
-//!   SourceWatcher  →  cargo build  →  new .so/.dll on disk
-//!        ↑ used by flui-cli, flui-devtools
+//! Layer 1 — Build orchestration (dev-time, lives in the `flui` CLI)
+//!   flui run's watcher  →  cargo build  →  new .so/.dll on disk
 //!
 //! Layer 2 — Artifact reload (runtime, always on native targets)
 //!   HotReloadDriver  →  mtime poll  →  unload/load DynLib  →  new Scene
@@ -106,7 +105,7 @@
 // The crate-level `warn(clippy::pedantic)` above re-enables the pedantic
 // lints the workspace allows; these five are re-suppressed. `allow`, not
 // `expect`: which of them fire depends on the enabled features and target
-// (the `source-watch` watcher, the wasm32 subset), so no expectation holds
+// (the wasm32 subset), so no expectation holds
 // in every configuration `cargo hack --each-feature` and the facade combos
 // compile.
 #![allow(
@@ -119,9 +118,6 @@
 )]
 
 pub mod strategy;
-
-#[cfg(feature = "source-watch")]
-pub mod dev;
 
 pub mod engine;
 

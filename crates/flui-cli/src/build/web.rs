@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use crate::error::{BuildError, BuildResult};
-use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private};
-use crate::util::{check_command_exists, process};
+use crate::build::error::{BuildError, BuildResult};
+use crate::build::platform::{
+    BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private,
+};
+use crate::build::util::{check_command_exists, process};
 
 /// Builder for Web/WASM platform (via wasm-pack)
 #[derive(Debug)]
@@ -12,24 +14,17 @@ pub struct WebBuilder {
 
 impl WebBuilder {
     /// Creates a new `WebBuilder`
-    ///
-    /// # Errors
-    ///
-    /// Currently infallible, but returns Result for consistency
-    pub fn new(workspace_root: &Path) -> BuildResult<Self> {
-        Ok(Self {
+    #[must_use]
+    pub fn new(workspace_root: &Path) -> Self {
+        Self {
             workspace_root: workspace_root.to_path_buf(),
-        })
+        }
     }
 }
 
 impl private::Sealed for WebBuilder {}
 
 impl PlatformBuilder for WebBuilder {
-    fn platform_name(&self) -> &'static str {
-        "web"
-    }
-
     fn validate_environment(&self) -> BuildResult<()> {
         // Check wasm-pack
         check_command_exists("wasm-pack")?;
@@ -52,13 +47,16 @@ impl PlatformBuilder for WebBuilder {
     }
 
     async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
-        if matches!(ctx.target, crate::platform::BuildUnit::Library { .. }) {
+        if matches!(
+            ctx.target,
+            crate::build::platform::BuildUnit::Library { .. }
+        ) {
             return Err(BuildError::invalid_config(
                 "build unit",
                 "explicit static-library delivery is supported only on iOS",
             ));
         }
-        let crate::platform::Platform::Web { target } = &ctx.platform else {
+        let crate::build::platform::Platform::Web { target } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected Web platform".to_string(),
             });
@@ -95,7 +93,7 @@ impl PlatformBuilder for WebBuilder {
             web_dist_str,
         ];
 
-        if matches!(ctx.profile, crate::platform::Profile::Release) {
+        if matches!(ctx.profile, crate::build::platform::Profile::Release) {
             args.push("--release");
         } else {
             args.push("--dev");
@@ -188,26 +186,6 @@ impl PlatformBuilder for WebBuilder {
             app_binary: output_dir.join("index.html"),
             size_bytes,
         })
-    }
-
-    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
-        let dist_dir = self
-            .workspace_root
-            .join("platforms")
-            .join("web")
-            .join("dist");
-
-        if dist_dir.exists() {
-            std::fs::remove_dir_all(&dist_dir)?;
-            tracing::info!("Cleaned dist: {:?}", dist_dir);
-        }
-
-        if ctx.output_dir.exists() {
-            std::fs::remove_dir_all(&ctx.output_dir)?;
-            tracing::info!("Cleaned output: {:?}", ctx.output_dir);
-        }
-
-        Ok(())
     }
 }
 

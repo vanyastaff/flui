@@ -1,8 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use crate::error::{BuildError, BuildResult};
-use crate::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private};
-use crate::util::{check_command_exists, environment, process};
+use crate::build::error::{BuildError, BuildResult};
+use crate::build::platform::{
+    BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private,
+};
+use crate::build::util::{check_command_exists, environment, process};
 
 /// Builder for Android platform (APK builds via Gradle and cargo-ndk)
 #[derive(Debug)]
@@ -153,10 +155,6 @@ impl AndroidBuilder {
 impl private::Sealed for AndroidBuilder {}
 
 impl PlatformBuilder for AndroidBuilder {
-    fn platform_name(&self) -> &'static str {
-        "android"
-    }
-
     fn validate_environment(&self) -> BuildResult<()> {
         // Check cargo-ndk
         check_command_exists("cargo")?;
@@ -211,13 +209,16 @@ impl PlatformBuilder for AndroidBuilder {
     }
 
     async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
-        if matches!(ctx.target, crate::platform::BuildUnit::Library { .. }) {
+        if matches!(
+            ctx.target,
+            crate::build::platform::BuildUnit::Library { .. }
+        ) {
             return Err(BuildError::invalid_config(
                 "build unit",
                 "explicit static-library delivery is supported only on iOS",
             ));
         }
-        let crate::platform::Platform::Android { targets } = &ctx.platform else {
+        let crate::build::platform::Platform::Android { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected Android platform".to_string(),
             });
@@ -334,8 +335,8 @@ impl PlatformBuilder for AndroidBuilder {
         }
 
         let gradle_task = match ctx.profile {
-            crate::platform::Profile::Debug => "assembleDebug",
-            crate::platform::Profile::Release => "assembleRelease",
+            crate::build::platform::Profile::Debug => "assembleDebug",
+            crate::build::platform::Profile::Release => "assembleRelease",
         };
 
         // Use absolute path for gradle wrapper; it is spawned as a UTF-8
@@ -383,39 +384,5 @@ impl PlatformBuilder for AndroidBuilder {
             app_binary: output_apk,
             size_bytes,
         })
-    }
-
-    async fn clean(&self, ctx: &BuilderContext) -> BuildResult<()> {
-        let jni_libs_dir = self
-            .workspace_root
-            .join("platforms")
-            .join("android")
-            .join("app")
-            .join("src")
-            .join("main")
-            .join("jniLibs");
-
-        if jni_libs_dir.exists() {
-            std::fs::remove_dir_all(&jni_libs_dir)?;
-            tracing::info!("Cleaned jniLibs: {:?}", jni_libs_dir);
-        }
-
-        // Clean Gradle build
-        let android_dir = self.workspace_root.join("platforms").join("android");
-        let gradle_wrapper = if cfg!(target_os = "windows") {
-            "gradlew.bat"
-        } else {
-            "./gradlew"
-        };
-
-        process::run_command_in_dir(gradle_wrapper, &["clean"], &android_dir).await?;
-
-        // Clean output directory
-        if ctx.output_dir.exists() {
-            std::fs::remove_dir_all(&ctx.output_dir)?;
-            tracing::info!("Cleaned output: {:?}", ctx.output_dir);
-        }
-
-        Ok(())
     }
 }

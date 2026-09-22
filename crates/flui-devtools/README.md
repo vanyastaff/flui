@@ -1,6 +1,6 @@
 # FLUI DevTools 🛠️
 
-Developer tools for FLUI framework - profiling, debugging, hot reload, and inspection tools inspired by Flutter DevTools and React DevTools.
+Developer tools for FLUI framework - profiling, timeline, and inspection tools inspired by Flutter DevTools and React DevTools.
 
 ## Features
 
@@ -152,38 +152,12 @@ std::fs::write("trace.json", json).unwrap();
 // Then open chrome://tracing and load trace.json
 ```
 
-### Hot Reload
-
-```rust
-#[cfg(feature = "hot-reload")]
-use flui_devtools::hot_reload::HotReloader;
-
-#[cfg(feature = "hot-reload")]
-{
-    let mut reloader = HotReloader::new();
-    reloader.watch("./src")?;
-    
-    reloader.on_change(|path| {
-        println!("File changed: {:?}", path);
-        // Trigger rebuild
-        app.rebuild();
-    });
-    
-    // Non-blocking watch
-    let _handle = reloader.watch_async();
-    
-    // Or blocking
-    // reloader.watch_blocking()?;
-}
-```
-
 ## Feature Flags
 
 - `default`: Enables `profiling` and `inspector`
 - `profiling`: Performance profiling tools
 - `inspector`: Widget tree inspection
 - `timeline`: Timeline event tracking
-- `hot-reload`: File watching and hot reload
 - `network-monitor`: HTTP request monitoring (TODO)
 - `memory-profiler`: Memory usage tracking (TODO)
 - `remote-debug`: WebSocket debugging server (TODO)
@@ -196,7 +170,6 @@ See `examples/` directory for complete examples:
 - `profiler_demo.rs` - Frame profiling
 - `inspector_demo.rs` - Widget inspection
 - `timeline_demo.rs` - Timeline recording
-- `hot_reload_demo.rs` - Hot reload setup
 
 ## Architecture
 
@@ -216,7 +189,6 @@ See `examples/` directory for complete examples:
     │  • Profiler         │─── Frame timing
     │  • Inspector        │─── Widget tree
     │  • Timeline         │─── Events
-    │  • HotReloader      │─── File watch
     └─────────────────────┘
 ```
 
