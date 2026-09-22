@@ -4,7 +4,7 @@
 //! geometry, the transition-only barrier dim, the 500ms duration, and the
 //! default-on back-gesture detector — not just that the builder compiles.
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

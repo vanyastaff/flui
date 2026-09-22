@@ -3,7 +3,7 @@
 //! inset), `resize_to_avoid_bottom_inset`, and that a navigation bar
 //! actually mounts as an overlay.
 
-mod common;
+use crate::common;
 
 use common::{LaidOut, lay_out, tight};
 use flui_cupertino::{CupertinoNavigationBar, CupertinoPageScaffold};

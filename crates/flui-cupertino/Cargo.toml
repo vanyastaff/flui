@@ -10,6 +10,10 @@ description = "iOS-style (Cupertino) theming foundation for FLUI — CupertinoDy
 repository.workspace = true
 keywords = ["ui", "cupertino", "ios", "flutter", "flui"]
 categories = ["gui"]
+# All root tests/*.rs files are compiled as modules of ONE integration-test
+# binary (tests/main.rs); the per-file auto-discovered targets each linked the
+# whole dependency stack. Targets that write process-global state stay separate.
+autotests = false
 
 [dependencies]
 # `View`/`InheritedView`/`impl_inherited_view!`/`BuildContext` — the
@@ -70,3 +74,7 @@ parking_lot = { workspace = true }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "cupertino_it"
+path = "tests/main.rs"

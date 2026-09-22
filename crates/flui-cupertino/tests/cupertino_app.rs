@@ -15,7 +15,7 @@
 // `unwrap` in test code: a panic IS the failure report (docs/PANIC-POLICY.md).
 #![expect(clippy::unwrap_used)]
 
-mod common;
+use crate::common;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

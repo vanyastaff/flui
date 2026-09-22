@@ -1,7 +1,7 @@
 //! Integration tests for [`CupertinoTabBar`] — the 50pt default height, the
 //! hairline top border's oracle-cited alpha, and that every item mounts.
 
-mod common;
+use crate::common;
 
 use common::{lay_out, tight};
 use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem, CupertinoTheme, CupertinoThemeData};

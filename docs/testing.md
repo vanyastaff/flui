@@ -358,7 +358,7 @@ The constitution requires `///` doc comments on every public item and `//!` over
   trybuild/`compile_fail`, and feature-gated targets that CI runs by name.
   `flui-log` is the deliberate exception: each of its files owns one scenario
   that installs the global subscriber, so each stays a binary of its own.
-  A crate whose suites share a `tests/common/` helper module (`flui-material`)
+  A crate whose suites share a `tests/common/` helper module (`flui-material`, `flui-cupertino`)
   declares it once, as `mod common;` in `tests/main.rs`, and each suite imports it
   with `use crate::common;`: a `mod common;` inside every `#[path]`-loaded suite
   would load the same file once per suite, which `clippy::duplicate_mod` rejects.
