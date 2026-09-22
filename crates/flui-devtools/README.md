@@ -1,204 +1,105 @@
-# FLUI DevTools 🛠️
+# flui-devtools
 
-Developer tools for FLUI framework - profiling, timeline, and inspection tools inspired by Flutter DevTools and React DevTools.
+Runtime developer tooling for FLUI: the half that runs inside the
+application. Three small, feature-gated modules, each an adapter over a seam
+the framework already exposes. Nothing here walks a widget, element or render
+tree, opens a port, or watches files.
 
-## Features
+| Module | Feature | What it is |
+|--------|---------|------------|
+| `profiler` + `frame_timing_layer` | `profiling` | Per-frame build/layout/paint/compositing timings, jank detection, FPS and history. Fed by a `tracing` layer that subscribes to the framework's own frame spans. |
+| `timeline` | `timeline` | An event recorder with Chrome trace (`chrome://tracing`) and JSON export, plus a bridge that turns the scheduler's `FrameSnapshot`s into trace events. |
+| `inspector` | `inspector` | `InspectorCounters`, a counting `TreeObserver` over the ADR-0040 observation seam: mounts, moves, rebuilds per cause, unmounts. |
 
-### 🎯 Performance Profiler (default)
-Real-time frame performance analysis with phase-level breakdown:
-- Frame timing with nanosecond precision
-- Build/Layout/Paint phase profiling
-- Jank detection and FPS tracking
-- Frame history and statistics
-- RAII guards for automatic timing
+All three features are on by default. A release build stays at zero devtools
+cost by not depending on this crate, not by a feature flag here.
 
-### 🔍 Widget Inspector (default)
-Interactive widget tree inspection and debugging:
-- Widget tree visualization
-- Property inspection
-- Size and position analysis
-- Widget highlighting
-- Type-based search
-- Root-to-widget path tracing
+## Profiling a running app
 
-### ⏱️ Timeline View
-Event timeline with Chrome DevTools integration:
-- Timeline event recording
-- Category-based filtering
-- Chrome Trace format export
-- Thread-aware tracking
-- Nested event support
-
-### 🔥 Hot Reload
-File watching with automatic rebuilds:
-- Cross-platform file watching
-- Configurable debounce
-- Async and blocking modes
-- Multiple path monitoring
-- RAII watch handles
-
-## Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-flui_devtools = "0.1"
-
-# Or with all features:
-flui_devtools = { version = "0.1", features = ["full"] }
-```
-
-## Quick Start
-
-### Performance Profiling
+The framework emits a `frame` span from `UpdateScheduler::drive_frame` and
+`build`, `layout`, `paint`, `compositing` spans from the pipeline.
+`FrameTimingLayer` subscribes to them; it never needs to be called.
 
 ```rust
-use flui_devtools::prelude::*;
+use std::sync::Arc;
 
-let profiler = Profiler::new();
+use flui_devtools::{FrameTimingLayer, Profiler};
+use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig};
+use tracing_subscriber::layer::SubscriberExt;
 
-// Profile a frame
-profiler.begin_frame();
+let profiler = Arc::new(Profiler::new());
+let subscriber = LogConfig::default()
+    .subscriber()?
+    .with(FrameTimingLayer::new(Arc::clone(&profiler)));
+flui_log::install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::Auto)?;
 
-{
-    let _guard = profiler.profile_phase(FramePhase::Build);
-    // Build widgets...
-}
-
-{
-    let _guard = profiler.profile_phase(FramePhase::Layout);
-    // Layout RenderObjects...
-}
-
-{
-    let _guard = profiler.profile_phase(FramePhase::Paint);
-    // Paint layers...
-}
-
-profiler.end_frame();
-
-// Print frame summary
-profiler.print_frame_summary();
-
-// Get detailed stats
-if let Some(stats) = profiler.frame_stats() {
-    println!("Frame #{}: {:.2}ms", 
-        stats.frame_number, 
-        stats.total_time_ms()
-    );
-    println!("  Build: {:.1}%", stats.build_percent());
-    println!("  Layout: {:.1}%", stats.layout_percent());
-    println!("  Paint: {:.1}%", stats.paint_percent());
-}
-
-// Get performance metrics
-println!("Avg FPS (last 60 frames): {:.1}", profiler.average_fps(60));
-println!("Jank: {:.1}%", profiler.jank_percentage(100));
+// run the app; `flui-app` inherits an installed subscriber
 ```
 
-### Widget Inspector
+The layer carries its own per-layer filter that admits exactly the five spans
+above. FLUI's default `INFO` log filter therefore does not starve it, and
+attaching it does not turn on `DEBUG` logging for the whole process.
 
 ```rust
-use flui_devtools::inspector::Inspector;
-
-let inspector = Inspector::new();
-inspector.attach_to_tree(element_tree);
-
-// Select and inspect a widget
-let widget_info = inspector.select_widget(element_id);
-println!("Widget type: {:?}", widget_info.widget_type);
-println!("Size: {:?}", widget_info.size);
-println!("Position: {:?}", widget_info.position);
-println!("Children: {}", widget_info.children.len());
-
-// Highlight widget for debugging
-inspector.highlight_widget(element_id);
-
-// Get full widget tree
-let tree = inspector.get_widget_tree();
-for node in tree.iter() {
-    println!("{:indent$}{}", "", node.widget_type, 
-        indent = node.depth * 2);
+if let Some(frame) = profiler.frame_stats() {
+    println!("{:.2} ms, jank: {}", frame.total_time_ms(), frame.is_jank());
+    for phase in &frame.phases {
+        println!("  {}: {:.2} ms", phase.phase.name(), phase.duration_ms());
+    }
 }
-
-// Find all widgets of a type
-let buttons = inspector.find_widgets_by_type("Button");
+println!("avg {:.1} FPS, {:.1}% jank", profiler.average_fps(), profiler.jank_percentage());
 ```
 
-### Timeline Events
+`Profiler::with_config(ProfilerConfig { jank_threshold_ms, max_frame_history })`
+sets the jank line (one 60 Hz frame budget by default) and the history depth.
+
+The contract between the two halves is a set of span names, pinned by
+`tests/frame_profile_end_to_end.rs`: it drives a real tree through
+`HeadlessBinding::pump_frame`, the same `drive_frame` every runner uses, and
+reads the profile back.
+
+## Timeline
 
 ```rust
-use flui_devtools::timeline::{Timeline, EventCategory};
+use flui_devtools::timeline::{EventCategory, Timeline};
 
 let timeline = Timeline::new();
-
-// Record frame event
 {
-    let _guard = timeline.record_event("Frame #42", EventCategory::Frame);
-    // Frame work...
+    let _guard = timeline.record_event("load assets", EventCategory::Custom);
+    // ...
 }
-
-// Record custom events
-{
-    let _guard = timeline.record_event("LoadAssets", EventCategory::Custom);
-    // Asset loading...
-}
-
-// Export to Chrome DevTools
-let json = timeline.export_chrome_trace();
-std::fs::write("trace.json", json).unwrap();
-
-// Then open chrome://tracing and load trace.json
+std::fs::write("trace.json", timeline.export_chrome_trace())?;
 ```
 
-## Feature Flags
+`Timeline::record_frame_snapshots` converts `flui_scheduler::FrameSnapshot`s
+(from `FrameClock::frames_since`) into `Frame` events in the same trace, so a
+presentation's frame history and hand-recorded events share one file.
 
-- `default`: Enables `profiling` and `inspector`
-- `profiling`: Performance profiling tools
-- `inspector`: Widget tree inspection
-- `timeline`: Timeline event tracking
-- `network-monitor`: HTTP request monitoring (TODO)
-- `memory-profiler`: Memory usage tracking (TODO)
-- `remote-debug`: WebSocket debugging server (TODO)
-- `tracing-support`: Integration with `tracing` crate (TODO)
-- `full`: All features enabled
+## Inspector counters
 
-## Examples
+```rust
+use std::sync::Arc;
 
-See `examples/` directory for complete examples:
-- `profiler_demo.rs` - Frame profiling
-- `inspector_demo.rs` - Widget inspection
-- `timeline_demo.rs` - Timeline recording
+use flui_devtools::inspector::InspectorCounters;
+use flui_foundation::observe::TreeObserver;
 
-## Architecture
-
-```
-┌─────────────────────────────────────────┐
-│          FLUI Application               │
-│   ┌─────────────────────────────┐      │
-│   │     Widget Tree             │      │
-│   │     Element Tree            │      │
-│   │     Render Tree             │      │
-│   └─────────────────────────────┘      │
-└──────────────┬──────────────────────────┘
-               │
-    ┌──────────▼──────────┐
-    │   FLUI DevTools     │
-    ├─────────────────────┤
-    │  • Profiler         │─── Frame timing
-    │  • Inspector        │─── Widget tree
-    │  • Timeline         │─── Events
-    └─────────────────────┘
+let counters = Arc::new(InspectorCounters::new());
+build_owner.set_tree_observer(Arc::clone(&counters) as Arc<dyn TreeObserver>);
+// ...drive frames...
+let snapshot = counters.snapshot();
+println!("{} mounts, {} rebuilds, {} unmounts", snapshot.mounts, snapshot.rebuilds, snapshot.unmounts);
 ```
 
-## Performance
+This is the event half of ADR-0040's dependency-inverted seam: structural
+observations pushed by the core, with no access to the trees themselves.
+`flui-testing` drives a real tree against it as the seam's proof.
 
-DevTools is designed for minimal runtime overhead:
-- **Profiler**: ~50ns per phase (RAII guard)
-- **Inspector**: O(1) widget lookup with caching
-- **Timeline**: Lock-free event recording
-- **Hot Reload**: Debounced file events
+## What this crate is not
+
+There is no inspector UI, no DevTools server, no network monitor, no memory
+profiler and no remote-debug protocol. Hot reload is two other places: the
+runtime half is `flui-hot-reload`, linked by the app; the source watcher and
+rebuild loop are the `flui` CLI.
 
 ## License
 

@@ -51,7 +51,25 @@ use std::{collections::VecDeque, sync::Arc};
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
-use crate::common::DevToolsConfig;
+/// What the profiler treats as jank, and how much history it keeps.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProfilerConfig {
+    /// A frame longer than this many milliseconds counts as jank.
+    pub jank_threshold_ms: f64,
+    /// Frames kept in [`Profiler::frame_history`]; older ones are dropped.
+    pub max_frame_history: usize,
+}
+
+impl Default for ProfilerConfig {
+    /// One 60 Hz frame budget as the jank line, five seconds of history at
+    /// 60 Hz.
+    fn default() -> Self {
+        Self {
+            jank_threshold_ms: 1000.0 / 60.0,
+            max_frame_history: 300,
+        }
+    }
+}
 
 /// Frame rendering phase
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -179,7 +197,7 @@ impl Drop for PhaseGuard {
 /// Internal profiler state
 struct ProfilerInner {
     /// Configuration
-    config: DevToolsConfig,
+    config: ProfilerConfig,
     /// Current frame number
     frame_number: u64,
     /// Frame start time
@@ -195,7 +213,7 @@ struct ProfilerInner {
 }
 
 impl ProfilerInner {
-    fn new(config: DevToolsConfig) -> Self {
+    fn new(config: ProfilerConfig) -> Self {
         let max_history = config.max_frame_history;
         Self {
             config,
@@ -317,11 +335,11 @@ pub struct Profiler {
 impl Profiler {
     /// Create a new profiler with default configuration
     pub fn new() -> Self {
-        Self::with_config(DevToolsConfig::default())
+        Self::with_config(ProfilerConfig::default())
     }
 
     /// Create a new profiler with custom configuration
-    pub fn with_config(config: DevToolsConfig) -> Self {
+    pub fn with_config(config: ProfilerConfig) -> Self {
         Self {
             inner: Arc::new(Mutex::new(ProfilerInner::new(config))),
         }
@@ -520,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_jank_detection() {
-        let config = DevToolsConfig {
+        let config = ProfilerConfig {
             jank_threshold_ms: 10.0, // 10ms threshold
             ..Default::default()
         };
@@ -547,25 +565,39 @@ mod tests {
         assert_eq!(profiler.jank_percentage(), 50.0);
     }
 
+    /// `average_fps` is the mean of the per-frame `fps` values in the
+    /// history. Asserted against the recorded frames themselves rather than
+    /// against wall-clock expectations: the earlier version slept 16 ms per
+    /// frame and required 50–70 FPS back, which tested the OS scheduler and
+    /// failed whenever the machine was busy.
     #[test]
-    fn test_average_fps() {
+    fn average_fps_is_the_mean_of_the_recorded_frames() {
         let profiler = Profiler::new();
-
-        // Simulate frames with known duration
-        for _ in 0..10 {
+        for _ in 0..4 {
             profiler.begin_frame();
-            thread::sleep(Duration::from_millis(16)); // ~60 FPS
+            thread::sleep(Duration::from_millis(2));
             profiler.end_frame();
         }
 
-        let avg_fps = profiler.average_fps();
-        // Should be close to 60 FPS (allowing for some variance)
-        assert!(avg_fps > 50.0 && avg_fps < 70.0, "FPS was {avg_fps}");
+        let history = profiler.frame_history();
+        assert_eq!(history.len(), 4);
+        let expected = history.iter().map(|s| s.fps).sum::<f64>() / history.len() as f64;
+        assert!(
+            (profiler.average_fps() - expected).abs() < 1e-9,
+            "average_fps {} must be the mean of the recorded fps values ({expected})",
+            profiler.average_fps()
+        );
+        // A frame that slept 2 ms cannot report more than 500 FPS. The lower
+        // bound belongs to the OS scheduler, not to this profiler.
+        assert!(
+            history.iter().all(|s| s.fps <= 500.0),
+            "a 2 ms frame cannot exceed 500 FPS; got {history:?}"
+        );
     }
 
     #[test]
     fn test_frame_history_limit() {
-        let config = DevToolsConfig {
+        let config = ProfilerConfig {
             max_frame_history: 5,
             ..Default::default()
         };

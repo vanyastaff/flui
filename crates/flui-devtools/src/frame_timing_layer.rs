@@ -5,24 +5,48 @@
 //!
 //! `flui-devtools` is layer 9 of the workspace DAG and nothing in the framework
 //! may depend on it, so frame timings cannot be pushed here through an API. The
-//! framework *emits* — `build`, `layout`, `paint` and `compositing` spans from
-//! the pipeline — and this adapter subscribes. That is the only seam the
-//! layering permits, and it is why the framework needed no knowledge of the
-//! profiler at all.
+//! framework *emits* — a `frame` span from the scheduler, and `build`,
+//! `layout`, `paint`, `compositing` spans from the pipeline — and this adapter
+//! subscribes. That is the only seam the layering permits, and it is why the
+//! framework needed no knowledge of the profiler at all.
 //!
 //! # What it listens to
 //!
-//! | span | phase |
-//! |------|-------|
-//! | `build` | [`FramePhase::Build`] |
-//! | `layout` | [`FramePhase::Layout`] |
-//! | `paint` | [`FramePhase::Paint`] |
-//! | `compositing` | `FramePhase::Custom("Compositing")` |
+//! | span | opened by | phase |
+//! |------|-----------|-------|
+//! | `frame` | `UpdateScheduler::drive_frame` (`flui-scheduler`) | the frame itself |
+//! | `build` | `BuildOwner::build_scope` (`flui-view`) | [`Build`](crate::profiler::FramePhase::Build) |
+//! | `layout` | `PipelineOwner::run_layout` (`flui-rendering`) | [`Layout`](crate::profiler::FramePhase::Layout) |
+//! | `paint` | `PipelineOwner::run_paint` (`flui-rendering`) | [`Paint`](crate::profiler::FramePhase::Paint) |
+//! | `compositing` | the compositing pass (`flui-rendering`) | `Custom("Compositing")` |
 //!
-//! A frame is delimited by the `render_frame_entered` span that `UiRealm` opens
-//! per frame. Phase spans outside any frame are ignored rather than folded into
-//! a neighbouring frame — a headless test or a one-off layout pass is not a
-//! frame, and attributing its cost to one would be a fabricated measurement.
+//! A frame is delimited by the `frame` span `UpdateScheduler::drive_frame`
+//! opens — the one driver every runner and `HeadlessBinding::pump_frame`
+//! share — so a profiled frame's extent is exactly the scheduler's own
+//! "in a frame" state. Phase spans outside any frame are ignored rather than
+//! folded into a neighbouring frame: a headless bootstrap or a one-off layout
+//! pass is not a frame, and attributing its cost to one would be a fabricated
+//! measurement.
+//!
+//! The names are strings on both sides, and strings drift. The unit tests in
+//! this module pin this side only; `tests/frame_profile_end_to_end.rs` drives
+//! a real tree through `drive_frame` and reads the profile back, which is the
+//! only evidence that the framework still emits what this layer expects. The
+//! first version of this layer waited for a `render_frame_entered` span that
+//! nothing ever opened, and its unit tests — which emitted that span
+//! themselves — stayed green while every real profile stayed empty.
+//!
+//! # The layer carries its own filter
+//!
+//! [`FrameTimingLayer::new`] returns the layer behind a per-layer filter that
+//! admits exactly the five spans above and nothing else. Two things follow.
+//! A log layer with an `INFO` filter beside it (FLUI's default) does not
+//! starve the profiler: the registry records a `DEBUG` frame span for this
+//! layer while the log layer never sees it. And attaching the profiler does
+//! not switch on `DEBUG`/`TRACE` for the whole process: an unfiltered layer
+//! declares interest in every callsite, so every event in the app would pay
+//! the dispatch cost the moment profiling starts. Measuring must not change
+//! what is measured.
 //!
 //! # One frame at a time, by span identity
 //!
@@ -46,15 +70,16 @@
 
 use std::sync::Arc;
 
-use tracing::Subscriber;
 use tracing::span::{Attributes, Id};
+use tracing::{Metadata, Subscriber};
+use tracing_subscriber::filter::{FilterFn, Filtered, filter_fn};
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
 use crate::profiler::{FramePhase, PhaseGuard, Profiler};
 
-/// The span `UiRealm` opens once per frame.
-const FRAME_SPAN: &str = "render_frame_entered";
+/// The span `UpdateScheduler::drive_frame` opens around every frame.
+const FRAME_SPAN: &str = "frame";
 
 /// Maps a span name to the phase it measures, or `None` if it is not a phase.
 fn phase_for(name: &str) -> Option<FramePhase> {
@@ -66,6 +91,15 @@ fn phase_for(name: &str) -> Option<FramePhase> {
         _ => None,
     }
 }
+
+/// The per-layer filter: the frame span and its phase spans, nothing else —
+/// no events, no other spans, at any level.
+fn is_frame_or_phase(metadata: &Metadata<'_>) -> bool {
+    metadata.is_span() && (metadata.name() == FRAME_SPAN || phase_for(metadata.name()).is_some())
+}
+
+/// The filter [`FrameTimingLayer::new`] wraps the layer in.
+pub type FrameSpanFilter = FilterFn<fn(&Metadata<'_>) -> bool>;
 
 /// Parked in a phase span's extensions for the span's lifetime.
 ///
@@ -82,9 +116,9 @@ struct ActivePhase(PhaseGuard);
 /// Install it on any `tracing_subscriber` registry:
 ///
 /// ```no_run
-/// # use std::sync::Arc;
-/// # use flui_devtools::profiler::Profiler;
-/// # use flui_devtools::frame_timing_layer::FrameTimingLayer;
+/// use std::sync::Arc;
+///
+/// use flui_devtools::{FrameTimingLayer, Profiler};
 /// use tracing_subscriber::layer::SubscriberExt;
 ///
 /// let profiler = Arc::new(Profiler::new());
@@ -93,10 +127,8 @@ struct ActivePhase(PhaseGuard);
 /// tracing::subscriber::set_global_default(subscriber).expect("no subscriber installed yet");
 /// ```
 ///
-/// The framework emits its frame spans at `DEBUG`, so a filter above that level
-/// silently starves this layer. That is a filter misconfiguration rather than a
-/// bug here, but it looks identical to “profiling is broken”, so it is worth
-/// checking first.
+/// In a FLUI app the registry is the one `flui_log::LogConfig::subscriber`
+/// builds; the crate README shows that composition.
 #[derive(Clone)]
 pub struct FrameTimingLayer {
     profiler: Arc<Profiler>,
@@ -110,13 +142,18 @@ pub struct FrameTimingLayer {
 }
 
 impl FrameTimingLayer {
-    /// Wraps a profiler this layer will feed.
+    /// Wraps a profiler this layer will feed, behind the layer's own filter
+    /// (the module docs say why the filter is not optional).
     #[must_use]
-    pub fn new(profiler: Arc<Profiler>) -> Self {
-        Self {
+    pub fn new<S>(profiler: Arc<Profiler>) -> Filtered<Self, FrameSpanFilter, S>
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        let layer = Self {
             profiler,
             active_frame: Arc::new(parking_lot::Mutex::new(None)),
-        }
+        };
+        layer.with_filter(filter_fn(is_frame_or_phase as fn(&Metadata<'_>) -> bool))
     }
 }
 
@@ -215,13 +252,14 @@ mod tests {
         profiler
     }
 
-    /// **The wiring contract.** The framework's own span names must reach the
-    /// profiler as phases. If a span is renamed on either side this fails,
-    /// which is the point — the two halves are coupled only by these strings.
+    /// This side of the wiring contract: the names this layer maps to phases.
+    /// It can only prove the layer's half, because the spans are emitted here
+    /// by the test itself; `tests/frame_profile_end_to_end.rs` proves the
+    /// framework still emits them.
     #[test]
     fn the_frameworks_phase_spans_become_profiler_phases() {
         let profiler = profile(|| {
-            let _frame = tracing::debug_span!("render_frame_entered").entered();
+            let _frame = tracing::debug_span!("frame").entered();
             {
                 let _build = tracing::debug_span!("build", dirty_elements = 3).entered();
             }
@@ -265,7 +303,7 @@ mod tests {
     #[test]
     fn unrelated_spans_are_not_phases() {
         let profiler = profile(|| {
-            let _frame = tracing::debug_span!("render_frame_entered").entered();
+            let _frame = tracing::debug_span!("frame").entered();
             let _other = tracing::debug_span!("some_unrelated_work").entered();
         });
 
@@ -300,11 +338,11 @@ mod tests {
     #[test]
     fn a_concurrent_frame_is_dropped_rather_than_blended() {
         let profiler = profile(|| {
-            let own_frame = tracing::debug_span!("render_frame_entered");
+            let own_frame = tracing::debug_span!("frame");
             let _own = own_frame.enter();
             {
                 // The other realm's whole frame, opened mid-way through ours.
-                let other_frame = tracing::debug_span!(parent: None, "render_frame_entered");
+                let other_frame = tracing::debug_span!(parent: None, "frame");
                 let _other = other_frame.enter();
                 let _other_layout = tracing::debug_span!("layout").entered();
             } // ...and closed while ours is still running.
@@ -332,7 +370,7 @@ mod tests {
     #[test]
     fn repeated_build_spans_report_one_build_phase() {
         let profiler = profile(|| {
-            let _frame = tracing::debug_span!("render_frame_entered").entered();
+            let _frame = tracing::debug_span!("frame").entered();
             {
                 let _build = tracing::debug_span!("build", dirty_elements = 2).entered();
             }
@@ -361,7 +399,7 @@ mod tests {
     fn consecutive_frames_are_recorded_separately() {
         let profiler = profile(|| {
             for _ in 0..2 {
-                let _frame = tracing::debug_span!("render_frame_entered").entered();
+                let _frame = tracing::debug_span!("frame").entered();
                 let _build = tracing::debug_span!("build").entered();
             }
         });

@@ -30,7 +30,8 @@
 //!
 //! // Export to Chrome DevTools format
 //! let json = timeline.export_chrome_trace();
-//! std::fs::write("trace.json", json).unwrap();
+//! // std::fs::write("trace.json", &json)?;
+//! # drop(json);
 //! // Load trace.json in chrome://tracing
 //! ```
 
@@ -511,7 +512,8 @@ impl Timeline {
     /// # use flui_devtools::timeline::Timeline;
     /// # let timeline = Timeline::new();
     /// let json = timeline.export_chrome_trace();
-    /// std::fs::write("trace.json", json).unwrap();
+    /// // std::fs::write("trace.json", &json)?;
+    /// # drop(json);
     /// // Then open chrome://tracing and load trace.json
     /// ```
     pub fn export_chrome_trace(&self) -> String {

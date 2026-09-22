@@ -15,6 +15,16 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **`flui-devtools` is only what exists** (`flui-devtools`; breaking). Default
+  features now enable the crate's three modules (a crate that exists only to
+  provide them shipped with nothing on by default), so `cargo doc` also
+  documents them. `DevToolsConfig` is `ProfilerConfig` with just the two
+  fields the profiler reads; the unread `profiling_enabled`,
+  `inspector_enabled` and `target_fps` are gone, as are the unused
+  `FrameNumber`/`Timestamp`/`DurationNanos` types, the `VERSION` constant, an
+  unused `windows-sys` dependency, and `FEATURES.md`. The README describes
+  the profiler, the timeline and the observation counters, and no longer
+  promises an inspector UI, a network monitor or a memory profiler.
 - **`flui-build` is gone; the build pipeline is a module of `flui-cli`**
   (`flui-cli`, `flui-hot-reload`, `flui-devtools`; breaking for anyone who
   depended on those surfaces). `flui-build` had one consumer, the CLI, and no
@@ -75,6 +85,17 @@ file records the repo-consumer-visible summary.
 
 ### Fixed
 
+- **`flui-devtools`' frame profiler never saw a frame** (`flui-devtools`,
+  `flui-scheduler`). `FrameTimingLayer` delimited frames by a span named
+  `render_frame_entered` that no crate opened, so in a real app the profiler
+  recorded nothing while its unit tests, which emitted that span themselves,
+  stayed green. `UpdateScheduler::drive_frame`, the one frame driver every
+  runner and `HeadlessBinding::pump_frame` share, now opens a `DEBUG` span
+  named `frame` around the whole frame, the layer listens for it, and a new
+  end-to-end test drives a real tree through the headless binding and reads
+  the profile back. The layer now also carries its own per-layer filter:
+  FLUI's default `INFO` log filter no longer starves it, and attaching it no
+  longer declares interest in every callsite in the process.
 - **`flui-cli` did not compile on Windows** (`flui-cli`, `flui-build`): the
   Ctrl-C listener's runtime asked for `enable_io`, which tokio's `signal`
   feature only exposes on Unix; it now uses `enable_all`. Under the

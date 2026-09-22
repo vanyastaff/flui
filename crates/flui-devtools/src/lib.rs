@@ -1,81 +1,67 @@
-//! FLUI DevTools - Developer tools for FLUI framework
+//! Runtime developer tooling for FLUI: the half that runs *inside* the
+//! application. Three small, feature-gated modules, each an adapter over a
+//! seam the framework already exposes, so nothing here reaches into a widget,
+//! element or render tree:
 //!
-//! What this crate actually contains today — three small, feature-gated
-//! subsystems, all standalone (no view/element/render-tree access):
+//! - **`profiling`** — [`Profiler`] with per-phase frame statistics, fed by
+//!   [`FrameTimingLayer`], a `tracing` layer that subscribes to the `frame`
+//!   span `UpdateScheduler::drive_frame` opens and the `build`/`layout`/
+//!   `paint`/`compositing` spans the pipeline emits inside it.
+//! - **`timeline`** — [`timeline::Timeline`], an event recorder with Chrome
+//!   trace export and a bridge from the scheduler's `FrameSnapshot`s.
+//! - **`inspector`** — [`inspector::InspectorCounters`], a counting
+//!   `TreeObserver` over the ADR-0040 observation seam: mounts, moves,
+//!   rebuilds per cause, unmounts.
 //!
-//! # Features
+//! # What this crate is not
 //!
-//! ## 🎯 Performance Profiler (feature: profiling)
-//! - Frame timing and jank detection
-//! - Build/layout/paint phase profiling — fed manually by the caller, or
-//!   from the framework's own frame spans via `FrameTimingLayer`
-//! - Performance timeline with markers
+//! It is not an inspector UI, not a DevTools server, and not a hot-reload
+//! tool: it walks no tree, opens no port, and watches no files (the source
+//! watcher lives in the `flui` CLI). Earlier documentation of this crate
+//! promised a widget inspector, a network monitor, a memory profiler and a
+//! remote-debug protocol; none of them was ever implemented, and no feature
+//! here claims them.
 //!
-//! ## ⏱️ Timeline View (feature: timeline)
-//! - Event timeline visualization
-//! - Frame boundaries
-//! - Custom trace events
+//! # Profiling a running app
 //!
-//! ## 🔎 Inspector counters (feature: inspector)
-//! - A counting/logging `TreeObserver` (ADR-0040 seam) — tallies element
-//!   mounts, moves, rebuilds (per cause), and unmounts of a running realm
-//! - Depends only on `flui-foundation`; installed via
-//!   `WidgetsBinding::install_tree_observer` by the embedder
+//! ```no_run
+//! use std::sync::Arc;
 //!
-//! # What this crate is NOT (yet)
+//! use flui_devtools::{FrameTimingLayer, Profiler};
+//! use flui_log::{InstallPolicy, LogBridgePolicy, LogConfig};
+//! use tracing_subscriber::layer::SubscriberExt;
 //!
-//! It is not a full inspector: it still has no dependency on any flui tree
-//! crate and cannot walk widgets, elements, render objects, or semantics.
-//! What exists (feature `inspector`) is the *event* half of ADR-0040's
-//! dependency-inverted seam — structural observations pushed by the core.
-//! Pull-shaped inspection (state versions, dependency edges, memory) waits
-//! on its own future seam. There is likewise no network monitor, no memory
-//! profiler, and no remote-debug protocol — earlier versions of this
-//! documentation advertised those as features; they were never implemented.
-//!
-//! # Usage
-//!
-//! ## Basic Profiling
-//!
-//! ```rust,ignore
-//! use flui_devtools::profiler::{Profiler, FramePhase};
-//!
-//! // Create profiler
-//! let mut profiler = Profiler::new();
-//!
-//! // Start frame
-//! profiler.begin_frame();
-//!
-//! // Profile build phase
-//! let _guard = profiler.profile_phase(FramePhase::Build);
-//! // ... your build code ...
-//! drop(_guard);
-//!
-//! // End frame and get metrics
-//! profiler.end_frame();
-//! let stats = profiler.frame_stats();
-//! println!("Frame time: {:.2}ms", stats.total_time_ms());
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let profiler = Arc::new(Profiler::new());
+//! // FLUI's own log subscriber, with the profiler layer beside it. The layer
+//! // carries its own filter, so the log filter's level does not affect it.
+//! let subscriber = LogConfig::default()
+//!     .subscriber()?
+//!     .with(FrameTimingLayer::new(Arc::clone(&profiler)));
+//! flui_log::install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::Auto)?;
+//! // ...run the app; `flui-app` inherits an installed subscriber...
+//! if let Some(frame) = profiler.frame_stats() {
+//!     println!("last frame: {:.2} ms", frame.total_time_ms());
+//! }
+//! # Ok(())
+//! # }
 //! ```
 //!
+//! # Feature flags
 //!
-//! # Feature Flags
+//! All three are on by default; disable what you do not need.
 //!
-//! - `default`: no features enabled; opt in via `profiling`, `timeline`, or `inspector`
-//! - `profiling`: Performance profiling tools (pulls in `tracing` +
-//!   `tracing-subscriber`, which is how the profiler is fed — the framework
-//!   cannot call this crate, so `FrameTimingLayer` subscribes to its spans)
-//! - `timeline`: Timeline view for events
-//! - `inspector`: Counting/logging tree observer over the ADR-0040 seam
-//! - `full`: all of the above
-//!
-//! No other feature exists. The `default = []` boundary is what keeps a
-//! release build at zero devtools overhead: nothing here is compiled, no
-//! port is opened, no background work runs.
+//! - `profiling`: [`Profiler`] and [`FrameTimingLayer`] (`tracing` +
+//!   `tracing-subscriber`).
+//! - `timeline`: [`timeline`] (`flui-scheduler` for `FrameSnapshot`, `serde`
+//!   for the exporters).
+//! - `inspector`: [`inspector`] (`flui-foundation` for the seam).
+//! - `full`: all of the above, as one name for feature-matrix runs.
 
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
-mod common;
+
 /// Feeds the profiler from the framework's own frame spans — the only seam
 /// layering permits, since nothing in the framework may depend on this crate.
 #[cfg(feature = "profiling")]
@@ -87,15 +73,10 @@ pub mod profiler;
 #[cfg(feature = "timeline")]
 pub mod timeline;
 
-// Re-exports
-pub use common::*;
 #[cfg(feature = "profiling")]
 pub use frame_timing_layer::FrameTimingLayer;
 #[cfg(feature = "profiling")]
-pub use profiler::Profiler;
-
-/// DevTools version
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub use profiler::{Profiler, ProfilerConfig};
 
 /// Prelude module for convenient imports
 ///
@@ -108,17 +89,7 @@ pub mod prelude {
     #[cfg(feature = "inspector")]
     pub use crate::inspector::{InspectorCounters, InspectorSnapshot};
     #[cfg(feature = "profiling")]
-    pub use crate::profiler::{FramePhase, FrameStats, Profiler};
+    pub use crate::profiler::{FramePhase, FrameStats, Profiler, ProfilerConfig};
     #[cfg(feature = "timeline")]
     pub use crate::timeline::{Timeline, TimelineEvent};
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_version() {
-        assert!(!VERSION.is_empty());
-    }
 }

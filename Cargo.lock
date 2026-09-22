@@ -1838,15 +1838,18 @@ name = "flui-devtools"
 version = "0.3.0-beta.1"
 dependencies = [
  "flui-foundation",
+ "flui-log",
+ "flui-objects",
+ "flui-rendering",
  "flui-scheduler",
  "flui-testing",
+ "flui-view",
  "parking_lot",
  "serde",
  "serde_json",
  "tracing",
  "tracing-subscriber",
  "web-time",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
