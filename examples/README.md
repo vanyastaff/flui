@@ -38,8 +38,6 @@ separate crates or WASM targets with their own build step.
 | **scene_render** — end-to-end GPU compositor proof | `cargo run --example scene_render` |
 | **wgpu_window** — platform-driven GPU rendering integration test | `cargo run --example wgpu_window` |
 | **image_demo** — interactive visual check of `RenderImage` | `cargo run --example image_demo` |
-| **input_test** — keyboard and mouse event handling | `cargo run --example input_test` |
-| **test_background** — simple background-color check | `cargo run --example test_background` |
 | **window_features** — cross-platform window API demo | `cargo run --example window_features` |
 
 ## Windows-specific
@@ -47,7 +45,6 @@ separate crates or WASM targets with their own build step.
 | Example | Run |
 |---|---|
 | **windows11_demo** — Mica backdrop, dark title bar, rounded corners, Snap Layouts | `cargo run --example windows11_demo` (Windows 11 Build 22000+; dark mode needs Windows 10 Build 17763+) |
-| **windows11_features** | `cargo run --example windows11_features` |
 
 ## iOS
 
