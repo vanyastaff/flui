@@ -84,7 +84,7 @@ These are not "nice to have." Items 1, 2, and 4 are *contracts* — they are bak
 
 ## Part III — The locked contracts
 
-These nine decisions are the "right contract." Each is committed by the **first widget written**; changing one after the catalog exists is a catalog-wide rewrite, not a refactor. They must be locked before [ROADMAP Core.1 — Vertical slice](ROADMAP.md#core1--vertical-slice-core--business-integration--was-phase-1).
+These nine decisions are the "right contract." Each is committed by the **first widget written**; changing one after the catalog exists is a catalog-wide rewrite, not a refactor. They must be locked before [ROADMAP Core.1 — Vertical slice](archive/ROADMAP.md#core1--vertical-slice-core--business-integration--was-phase-1) (archived — historical detail; not current status).
 
 ### C1 — Reactivity: `setState` canonical, signals out, `memoize` added
 
@@ -285,7 +285,7 @@ This section is deliberately short. The current code's unfinished and wrong part
 | Paint | `run_paint` clears the dirty flag on nodes it never paints |
 | Contracts | C2 / C3 / C4+C6 are not yet locked with design docs |
 
-These are not a "repair project." They are the first stretch of normal construction — bringing the spine to its target specification — and [ROADMAP Core.0 — Spine to target spec](ROADMAP.md#core0--spine-to-target-spec--was-phase-0) closes them. The full inventory, prioritized, with the per-defect blast radius, is [`research/2026-05-22-architecture-correction-plan.md`](research/2026-05-22-architecture-correction-plan.md).
+These are not a "repair project." They are the first stretch of normal construction — bringing the spine to its target specification — and [ROADMAP Core.0 — Spine to target spec](archive/ROADMAP.md#core0--spine-to-target-spec--was-phase-0) (archived — historical detail; not current status) closes them. The full inventory, prioritized, with the per-defect blast radius, is [`research/2026-05-22-architecture-correction-plan.md`](research/2026-05-22-architecture-correction-plan.md).
 
 ---
 

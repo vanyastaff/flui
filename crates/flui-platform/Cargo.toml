@@ -23,12 +23,12 @@ autotests = false
 # the seam.
 accesskit = { workspace = true }
 
-flui-types = { path = "../flui-types", version = "=0.1.0" }
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # Layer-legal downward edge (foundation sits below platform in the DAG),
 # carrying two seams: OwnerAffinity — the ADR-0039 owner-thread backstop,
 # hosted in foundation so its tests run in CI (flui-platform's suite does
 # not) — and the generational DataTransferId for the ADR-0038 transport.
-flui-foundation = { path = "../flui-foundation", version = "=0.1.0" }
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # Wasm-safe Instant for input timestamps (std re-export on native).
 web-time = { workspace = true }
 

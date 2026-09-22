@@ -8,7 +8,7 @@ guards:
   - "scripts/port-check.sh trigger #21 — lyon confined to wgpu/tessellator.rs"
 ---
 
-[← Designs index](.) · [Roadmap](../ROADMAP.md) · [Tracker (N10)](../ROADMAP-TRACKER.md) · [Scene/DrawCommand contract](2026-06-30-scene-drawcommand-contract.md)
+[← Designs index](.) · [Roadmap](../ROADMAP.md) · [Tracker (N10)](../archive/ROADMAP-TRACKER.md) · [Scene/DrawCommand contract](2026-06-30-scene-drawcommand-contract.md)
 
 # RasterBackend seam (Core.0 N10)
 

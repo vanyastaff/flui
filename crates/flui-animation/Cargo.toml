@@ -16,11 +16,11 @@ workspace = true
 
 [dependencies]
 # Core FLUI types
-flui-types = { path = "../flui-types", version = "=0.1.0" }
-flui-foundation = { path = "../flui-foundation", version = "=0.1.0" }
-flui-scheduler = { path = "../flui-scheduler", version = "=0.1.0" }
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 # `#[derive(Animatable)]` — re-exported below for user-defined spring-animatable types.
-flui-macros = { path = "../flui-macros", version = "=0.1.0" }
+flui-macros = { path = "../flui-macros", version = "=0.2.0-dev" }
 
 # Concurrency
 parking_lot.workspace = true

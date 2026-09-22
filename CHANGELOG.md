@@ -9,10 +9,17 @@ with a later one. The numbering starts at `0.1.0` where the public history
 does: nothing was published before, and the beta status is stated in the
 README rather than in a pre-release suffix that `flui = "0.1"` would not
 match. Fine-grained phase history lives in
-[`docs/ROADMAP-TRACKER.md`](docs/ROADMAP-TRACKER.md); this file records the
+[`docs/archive/ROADMAP-TRACKER.md`](docs/archive/ROADMAP-TRACKER.md); this file records the
 repo-consumer-visible summary.
 
 ## [Unreleased]
+
+Workspace version bumped to `0.2.0-dev` to mark active development toward the next release;
+every internal crate-to-crate pin moved in step (root `Cargo.toml` `[workspace.dependencies]`
+plus each crate's own manifest, `Cargo.lock` regenerated). `docs/ROADMAP-TRACKER.md` and the
+prior `docs/ROADMAP.md` moved to `docs/archive/` (historical, not a source of status); the live
+`docs/ROADMAP.md` is now a short milestone table (B0–B4) pointing at the working roadmap
+document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta-audit/`.
 
 ### Added
 
