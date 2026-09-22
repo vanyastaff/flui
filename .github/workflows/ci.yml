@@ -9,7 +9,7 @@ name: CI
 #   wasm-check     — cargo check for the wasm-capable crates + real cdylib link of the two web
 #                    demos + import-surface check against scripts/wasm-import-allowlist.txt
 #   cross-typecheck — cargo clippy (no link, no tests) of flui-platform's windows + macos + android backends
-#   cli-macos      — nextest of flui-cli on macos-latest (simctl, Xcode probes, .app staging, termios hot-keys)
+#   cli-macos      — nextest of flui-cli on macos-latest (simctl, Xcode probes, .app staging, termios hot-keys) + clippy of the flui-app iOS runner (needs xcrun)
 #   test           — build + nextest (lib + integration), ubuntu, plus a
 #                    dedicated flui-platform (Linux-runnable subset) step
 #   gpu-test       — full testing readback suite on windows/WARP (merge-blocking)
@@ -54,7 +54,7 @@ env:
   #     | grep -oE -- '--manifest-path [^ ]+' | sort | uniq -c | sort -rn
   FM_GROUP_1: flui-engine flui-app flui-platform flui-widgets flui-devtools
   FM_GROUP_2: flui flui-types flui-geometry flui-rendering flui-assets flui-view flui-objects flui-log
-  FM_GROUP_3: flui-interaction flui-hot-reload flui-tree flui-semantics flui-scheduler flui-painting flui-layer flui-foundation flui-cli flui-animation flui-macros flui-testing flui-material flui-localizations flui-cupertino flui-desktop-scene flui-live-smoke flui-web-demo flui-web-server flui-painting-demo flui-hot-reload-lifecycle-fixture hot-reload-counter-host hot-reload-counter-logic hot-reload-counter-types
+  FM_GROUP_3: flui-interaction flui-hot-reload flui-tree flui-semantics flui-scheduler flui-painting flui-layer flui-foundation flui-cli flui-animation flui-macros flui-testing flui-material flui-localizations flui-cupertino flui-desktop-scene flui-live-smoke flui-web-demo flui-web-server flui-painting-demo flui-hot-reload-lifecycle-fixture hot-reload-counter-host hot-reload-counter-logic hot-reload-counter-types flui-web-counter
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   # Strict workspace-wide; matches the local `just ci` gate.
@@ -1316,8 +1316,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust stable
+      - name: Install Rust stable (+ iOS target for the runner lint below)
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: aarch64-apple-ios
 
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -1334,6 +1336,18 @@ jobs:
 
       - name: cargo nextest run -p flui-cli
         run: cargo nextest run -p flui-cli --locked
+
+      # The iOS RUNNER in flui-app (`app/runner/ios.rs`) is behind
+      # `cfg(target_os = "ios")`; its Android twin is linted in
+      # `cross-typecheck`, but this one needs a macOS host: `psm` (via
+      # `stacker`, via flui-rendering) compiles its shim through `cc`, which
+      # finds the Apple SDK with `xcrun`. The `flui` facade rides along
+      # because it is what a consumer builds against on this target.
+      # Library targets only: the tests are host-run elsewhere and
+      # `--all-targets` would pull dev-dependencies that cannot build for
+      # the mobile triple.
+      - name: cargo clippy (ios runner)
+        run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
 
   cross-typecheck:
     name: cross-typecheck
@@ -1394,8 +1408,10 @@ jobs:
       # against on these targets. Library targets only: the tests are
       # host-run by the `test` job, and `--all-targets` would pull
       # dev-dependencies this runner cannot build for the mobile triples.
-      - name: cargo clippy (ios runner)
-        run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
+      # The iOS half of this pair lives in the `cli-macos` job: `psm` (via
+      # `stacker`, via flui-rendering) compiles its shim through `cc`, which
+      # resolves the Apple SDK with `xcrun`, and this Linux runner has no
+      # xcrun and no iOS SDK to point it at.
 
       # `stacker` (via flui-rendering) builds `psm`'s C shim through the `cc`
       # crate, which needs a C compiler for the target. The NDK is not on
