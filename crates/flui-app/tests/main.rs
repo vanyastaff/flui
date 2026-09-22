@@ -1,12 +1,6 @@
-//! Single-binary consolidation of flui-app's root integration tests.
-//!
-//! Each former standalone test target linked the full dependency stack
-//! separately; compiling them as modules of one `app_it` binary cuts link time
-//! and `target/` disk. Source files stay in place (see `autotests = false` +
-//! `[[test]]` in `Cargo.toml`).
-//!
-//! Convention (mirrors `flui-testing/tests/main.rs`): a test that WRITES
-//! process-global state keeps its own `[[test]]` target instead.
+//! flui-app's root `tests/*.rs` files, compiled as modules of one binary. A test
+//! that writes process-global state keeps its own `[[test]]` target instead (see
+//! `Cargo.toml`).
 
 #[path = "data_transfer_transport.rs"]
 mod data_transfer_transport;

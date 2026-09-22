@@ -1,12 +1,6 @@
-//! Single-binary consolidation of flui-assets's root integration tests.
-//!
-//! Each former standalone test target linked the full dependency stack
-//! separately; compiling them as modules of one `assets_it` binary cuts link time
-//! and `target/` disk. Source files stay in place (see `autotests = false` +
-//! `[[test]]` in `Cargo.toml`).
-//!
-//! Convention (mirrors `flui-testing/tests/main.rs`): a test that WRITES
-//! process-global state keeps its own `[[test]]` target instead.
+//! flui-assets's root `tests/*.rs` files, compiled as modules of one binary. A test
+//! that writes process-global state keeps its own `[[test]]` target instead (see
+//! `Cargo.toml`).
 
 #[path = "image_asset_integration.rs"]
 mod image_asset_integration;

@@ -271,7 +271,9 @@ The constitution requires `///` doc comments on every public item and `//!` over
 - **Integration tests** live in `tests/` per crate. Cross-crate pipelines are tested in `flui-engine`.
   A crate's root `tests/*.rs` files compile as modules of **one** integration-test
   binary (`tests/main.rs` with `#[path]` module declarations, `autotests = false`
-  plus a `[[test]]` in `Cargo.toml`, named `<crate>_it`), because every
+  plus a `[[test]]` in `Cargo.toml`, named after the crate without its `flui-`
+  prefix: `widgets_it`, `scheduler_it`, `app_it`, …; `flui_testing_it` is the one
+  pre-existing exception), because every
   auto-discovered per-file target links the whole dependency stack again. A test
   that *writes* process-global state — a `#[global_allocator]`, the global
   `tracing` subscriber slot or callsite-interest cache, an environment variable —
