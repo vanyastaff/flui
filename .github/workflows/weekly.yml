@@ -261,7 +261,7 @@ jobs:
   # proven end to end. `cargo fetch` first: the test copies the workspace
   # lockfile into the project and builds offline.
   cli-live-build:
-    name: flui create + build desktop (live)
+    name: flui create + build desktop / web + dev server (live)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -287,3 +287,20 @@ jobs:
         env:
           FLUI_CLI_LIVE_BUILD: "1"
         run: cargo nextest run -p flui-cli --locked -E 'test(live_desktop_build_produces_an_artifact_on_disk)'
+
+      # The web half: the same scaffold built for wasm32 and served by
+      # `flui run --device browser:…`. wasm-bindgen-cli must match the
+      # locked wasm-bindgen crate exactly (the build refuses otherwise), so
+      # the version comes from Cargo.lock, as `just wasm-test` reads it.
+      - name: Install the wasm32 target and the locked wasm-bindgen-cli
+        run: |
+          rustup target add wasm32-unknown-unknown
+          version=$(python3 -c "import tomllib;print(next(p['version'] for p in tomllib.load(open('Cargo.lock','rb'))['package'] if p['name']=='wasm-bindgen'))")
+          cargo install wasm-bindgen-cli --version "$version" --locked
+
+      # Chromium is preinstalled on ubuntu-latest, so `flui devices` lists a
+      # browser and the serve half runs; `--no-open` keeps it headless.
+      - name: live web build and dev server of a generated project
+        env:
+          FLUI_CLI_LIVE_WEB: "1"
+        run: cargo nextest run -p flui-cli --locked -E 'test(live_web_build_and_run_serve_the_generated_project)'

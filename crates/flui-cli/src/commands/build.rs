@@ -485,7 +485,9 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
     spinner.start("Validating Web environment...");
-    WebBuilder::validate_environment().context("Web environment validation failed")?;
+    web_builder
+        .validate_environment()
+        .context("Web environment validation failed")?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building WASM...");
@@ -496,8 +498,7 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
         &serde_json::json!({ "name": "build_platform" }),
     );
     spinner.start("Building web package...");
-    let final_artifacts = web_builder
-        .build_platform(&ctx, &artifacts)
+    let final_artifacts = block_on(web_builder.build_platform(&ctx, &artifacts))
         .context("failed to build web package")?;
 
     spinner.stop(format!("{} Web package built", style("✓").green()));

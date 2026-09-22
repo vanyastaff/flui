@@ -55,9 +55,10 @@ cargo install --path crates/flui-cli --locked
 Requires Rust 1.97 or newer with Cargo, rustup and Git. Platform toolchains
 are only needed for the platforms you build: Xcode command line tools for
 macOS and iOS; the Android SDK (`ANDROID_HOME`), NDK, a JDK and `adb` for
-Android; the `wasm32-unknown-unknown` target and `wasm-bindgen` or
-`wasm-pack` for the web. `flui doctor` tells you what is missing and how to
-fix it.
+Android; the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` (the
+version your project's `wasm-bindgen` crate resolves to; the build tells you
+the exact `cargo install` otherwise) for the web. `flui doctor` tells you
+what is missing and how to fix it.
 
 ## Quick start
 
@@ -140,8 +141,16 @@ flui run                                    # debug, hot reload
 flui run --release                          # optimized, no hot reload
 flui run --no-hot-reload                    # build and run once
 flui run --device 90D572B1-...              # an iOS simulator UDID from `flui devices`
+flui run --device browser:chrome            # wasm32 build, served on localhost, page reloads on rebuild
+flui run --device browser:firefox --web-port 8080 --no-open   # fixed port, URL printed only
 flui run --profile bench
 ```
+
+In a browser the project's `fn main` is compiled for `wasm32-unknown-unknown`
+as it is (`run_app` picks the web runner there), `wasm-bindgen --target web`
+produces `pkg/app.js` + `pkg/app_bg.wasm` next to `platforms/web/index.html`,
+and a dev server on `127.0.0.1` serves that directory. Every rebuild reloads
+the open page; `r` rebuilds by hand, `q` stops the server.
 
 While the app runs and stdin is a terminal:
 
@@ -218,9 +227,9 @@ the installed bundle, never by launching the browser; on Linux a bounded
 `--version` probe is used.
 
 `flui run --device` accepts any id or name from this list, or a unique
-prefix. Today it can drive this machine and iOS simulators; an Android
-device or a browser is refused with exit code 2 and the command to use
-instead.
+prefix. Today it can drive this machine, iOS simulators and installed
+browsers; an Android device is refused with exit code 2 and the command to
+use instead.
 
 ## Machine-readable output
 
@@ -234,6 +243,7 @@ object with an `event` field; human text, if any, goes to stderr.
 | `emulator`, `emulators.summary`, `emulator.launch` | `emulators` |
 | `create.start`, `create.file`, `create.done` | `create` (also with `--dry-run`) |
 | `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.change`, `run.reload`, `run.app.stop`, `run.stop` | `run` |
+| `run.web.serve {url, dir}`, `run.web.open {browser, url}`, `run.reload {kind: "page"}` | `run --device browser:…` |
 | `build.start`, `build.phase`, `build.done` | `build` |
 | `test.start`, `test.done`, `analyze.done`, `format.done` | `test`, `analyze`, `format` |
 | `clean.removed`, `clean.done` | `clean` |
@@ -297,6 +307,7 @@ nothing anywhere.
 |---------|------|
 | `flutter create app` | `flui create app` |
 | `flutter run` + `r` / `R` / `q` | `flui run` + `r` / `R` / `q` |
+| `flutter run -d chrome --web-port 8080` | `flui run --device browser:chrome --web-port 8080` |
 | `flutter devices --machine` | `flui devices --json` |
 | `flutter emulators --launch x` | `flui emulators launch x` |
 | `flutter doctor -v` | `flui doctor -v` (plus `--json` and `--fix`) |

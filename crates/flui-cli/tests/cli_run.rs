@@ -418,3 +418,32 @@ fn unsupported_device_platform_is_refused_honestly() {
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("flui devices"));
 }
+
+/// A browser id that `flui devices` does not list is a device-not-found
+/// error (exit 5), the same as any other unknown `--device`.
+#[test]
+fn unknown_browser_device_exits_device_not_found() {
+    let tmp = TempDir::new().expect("temporary fixture");
+    let dependency = tmp.path().join("facade");
+    package(&dependency, "flui", "");
+    std::fs::write(dependency.join("src/lib.rs"), "").expect("identity fixture library");
+    let app = tmp.path().join("app");
+    package(
+        &app,
+        "app",
+        "[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
+    );
+    cargo_bin_cmd!("flui")
+        .current_dir(&app)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args([
+            "run",
+            "--device",
+            "browser:definitely-not-installed",
+            "--no-open",
+        ])
+        .assert()
+        .failure()
+        .code(5)
+        .stderr(predicate::str::contains("browser:definitely-not-installed"));
+}
