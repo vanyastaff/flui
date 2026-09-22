@@ -50,13 +50,22 @@
 //! is no `Semantics`/`Tooltip` layer). What ships, outermost to innermost:
 //!
 //! ```text
-//! ConstrainedBox(min/fixed/max size)
-//!   Material(color, elevation, shape)
-//!     InkWell(overlay_color, shared states controller, enabled = on_pressed.is_some())
-//!       Padding(padding)
-//!         DefaultTextStyle(text_style with foreground_color folded into its `color`)
-//!           child
+//! Semantics(container: true, button: true, enabled: on_pressed.is_some())
+//!   ConstrainedBox(min/fixed/max size)
+//!     Material(color, elevation, shape)
+//!       InkWell(overlay_color, shared states controller, enabled = on_pressed.is_some())
+//!         Padding(padding)
+//!           DefaultTextStyle(text_style with foreground_color folded into its `color`)
+//!             child
 //! ```
+//!
+//! The `Semantics` wrapper is outermost, matching the oracle's own
+//! `Semantics(container: true, button: widget.isSemanticButton, enabled:
+//! widget.enabled, child: _InputPadding(...))` (`button_style_button.dart`
+//! `:591-598`) with `_InputPadding` dropped (see above) and
+//! `isSemanticButton` narrowed to always-`true` — every concrete button this
+//! core composes for is semantically a button in this V1, so there is no
+//! per-button override to thread through yet.
 //!
 //! # Own `WidgetStatesController`, shared with the inner `InkWell`
 //!
@@ -95,8 +104,8 @@ use flui_types::typography::TextStyle;
 use flui_view::RebuildHandle;
 use flui_view::prelude::*;
 use flui_widgets::{
-    ConstrainedBox, DefaultTextStyle, Padding, WidgetState, WidgetStateProperty, WidgetStates,
-    WidgetStatesController,
+    ConstrainedBox, DefaultTextStyle, Padding, Semantics, WidgetState, WidgetStateProperty,
+    WidgetStates, WidgetStatesController,
 };
 
 use crate::button_style::ButtonStyle;
@@ -360,12 +369,18 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             ink_well = ink_well.on_tap(move || on_pressed());
         }
 
-        ConstrainedBox::new(constraints).child(
-            Material::new(background_color)
-                .elevation(elevation)
-                .shape(shape)
-                .child(ink_well),
-        )
+        Semantics::new()
+            .container(true)
+            .button(true)
+            .enabled(view.is_interactive())
+            .child(
+                ConstrainedBox::new(constraints).child(
+                    Material::new(background_color)
+                        .elevation(elevation)
+                        .shape(shape)
+                        .child(ink_well),
+                ),
+            )
     }
 
     fn dispose(&mut self) {

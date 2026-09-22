@@ -47,22 +47,41 @@ then `flui create` pins this tag as a git dependency.
   a warning instead of a silent no-op.
 
 - **No blank window at launch on macOS** (`flui-platform`, `flui-app`): a window
-  opened `visible: true` is ordered front fully transparent and made opaque only
-  once the first frame has been presented into it (new
+  opened `visible: true` with the new `WindowOptions::reveal =
+  WindowReveal::AfterFirstFrame` is ordered front fully transparent and made
+  opaque only once the first frame has been presented into it (new
   `PlatformWindow::reveal_after_first_frame`, default no-op; `flui-app`'s
-  desktop runner calls it on the first presented frame or after a one-second
-  fallback when a frame ran and presented nothing). Before, the bare window
-  background was on screen for as long as the GPU stack took to build — 2.81 s
-  on a cold launch. `WindowOptions::visible` now documents itself as the intended
-  state. Explicit `show`/`set_visible(true)`/`activate` reveal immediately.
-  Other backends are unchanged.
+  desktop runner asks for the deferral and calls it on the first presented
+  frame or after a one-second fallback when a frame ran and presented
+  nothing). Before, the bare window background was on screen for as long as
+  the GPU stack took to build — 2.81 s on a cold launch. The deferral is
+  opt-in: the default `WindowReveal::AtOpen` keeps every direct
+  `flui-platform` consumer's window visible at open, since only a frame-loop
+  owner can report a first frame. Explicit `show`/`set_visible(true)`/
+  `activate` reveal immediately. Other backends are unchanged.
+- **Text and Material/Cupertino buttons publish semantics** (`flui-objects`,
+  `flui-material`, `flui-cupertino`): `RenderParagraph` describes its plain
+  text as the semantics label with its text direction (Flutter's
+  `describeSemanticsConfiguration`; an empty paragraph publishes no node —
+  see `crates/flui-objects/ARCHITECTURE.md`), and `ButtonStyleButtonCore`
+  wraps every button it composes in `Semantics(container, button, enabled)`,
+  so a `Text("Increment")` inside an `ElevatedButton` is a labelled button
+  node an assistive technology — or `A11yTree::find_by_label` — can find.
+  The `flui create` counter template is screen-reader reachable out of the
+  box; `tests/agent_workflow.rs` queries it with no explicit `Semantics`
+  wrapper any more.
 - **Grapheme-cluster text editing** (`flui-widgets`): `TextEditingController`'s
   `backspace`, `delete_forward`, `move_caret_left`/`right` and
   `extend_selection_left`/`right` step by extended grapheme cluster (UAX #29)
   rather than by Unicode scalar, so a family emoji, a flag or a letter with
   combining marks is one keystroke — Flutter's `characters` unit. An obscured
   field masks one bullet per cluster, keeping the mask in step with the caret.
-  Adds `unicode-segmentation` as a direct dependency (already in the graph
+  The step is resolved over the whole buffer (`GraphemeCursor`), so a caret
+  that lands inside a cluster still steps to that cluster's edges, and
+  `set_selection`/`set_caret_byte_offset` snap an in-cluster offset forward
+  to a cluster boundary; only the IME preedit cursor keeps a mid-cluster
+  position, since that is the input method's own state. Adds
+  `unicode-segmentation` as a direct dependency (already in the graph
   through cosmic-text).
 - **Automatic retry of a failed mobile surface recreation** (`flui-app`): when
   the Android or iOS runner is told its native window is available again and
@@ -988,8 +1007,14 @@ then `flui create` pins this tag as a git dependency.
   defect never showed on desktop. Both shaders now compute derivatives
   unconditionally and `select` afterwards. `scripts/check-wgsl-uniformity.py`
   (in `just gate` and CI) refuses the shape structurally, since no host-side
-  validator catches it. `examples/web_counter` and `just web-counter-build`
-  are the runnable browser evidence.
+  validator catches it: it walks tokens rather than lines, so `} else {`,
+  a one-line `if c { return x; }` and a split `for` header are all seen;
+  `textureSample` and its bias/compare forms count as derivatives (Tint
+  applies the same rule to them); a branch on a uniform value is admitted
+  only with a `wgsl-uniformity: uniform` comment saying why (the blur and
+  morphology loops); and `--self-test` pins every one of those layouts.
+  `examples/web_counter` and `just web-counter-build` are the runnable
+  browser evidence.
 - **`flui create` initialised a git repository in the caller's working
   directory** (`flui-cli`): `git init` ran without a directory, so the
   repository landed wherever the command was run from rather than in the

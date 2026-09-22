@@ -107,7 +107,7 @@ Experimental support must be visible in installation instructions and release
 notes. Narrowing beta platform scope is a product decision, not a way to turn a
 failed check green.
 
-## Platform status — candidate fd9f2938
+## Platform status — candidate: this branch at `v0.1.0` and after
 
 None of these are **beta verified**: none has passed every advertised workflow
 in [What beta must demonstrate](#what-beta-must-demonstrate). "Beta candidate"
@@ -422,7 +422,10 @@ observations are consistent with warmth rather than with route: a cold launch's
 first frame was still undrawn 2.81 s after its window appeared, while on every
 warm launch since, the window was already drawn at its first sighting; the three
 launch routes were also measured directly and rendered 15/15 and 9/9 across all of
-them. The fix now exists: a macOS window opened visible is ordered front at
+them. The fix now exists: a macOS window opened visible with
+`WindowOptions::reveal = WindowReveal::AfterFirstFrame` — what `flui-app`'s
+runner asks for; a direct `flui-platform` consumer keeps the default
+`AtOpen`, having no first frame to report — is ordered front at
 `alphaValue` 0 and made opaque when the desktop runner reports the first
 presented frame (`PlatformWindow::reveal_after_first_frame`, driven by
 `flui-app`'s `FirstReveal` policy with a one-second fallback measured from the

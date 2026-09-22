@@ -68,6 +68,57 @@ a healthy viewport cannot inject non-finite scroll edges into the harness.
 
 ---
 
+### `RenderParagraph` publishes no semantics node for empty text
+
+**Rule:** Flutter's `RenderParagraph.describeSemanticsConfiguration`
+(`rendering/paragraph.dart`, oracle tag `3.44.0`) sets `config.attributedLabel`
+and `config.textDirection` unconditionally in its plain-text branch (no inline
+recognizers/placeholders — the only branch this object's V1 scope supports;
+see `src/text/paragraph.rs`'s module doc "Out of scope"), including for an
+empty string.
+
+**Choice:** `RenderParagraph::describe_semantics_configuration` sets neither
+`label` nor `text_direction` when `TextPainter`'s plain text is empty, leaving
+the configuration un-annotated.
+
+**Why the divergence:** `SemanticsConfiguration::set_text_direction` (like
+every other setter in `flui-semantics`) calls `mark_annotated()` on its own,
+with no emptiness check — so mirroring the oracle exactly would mark *every*
+text-less paragraph in a tree as contributing semantics (`has_been_annotated
+== true`), which forms or merges an empty, unlabelled node wherever a
+`RenderParagraph` sits directly under a semantics boundary or an
+explicit-child-node ancestor. Flutter's own `SemanticsConfiguration` has the
+same unconditional setters; the oracle does not hit this failure mode because
+nothing in its call graph currently constructs an empty `RenderParagraph` in a
+position where the empty node would surface. FLUI's headless test harness
+does (see `crates/flui-widgets/tests/semantics.rs`), so the divergence is
+made explicit here instead of leaking into the merge pipeline as an
+undocumented empty-label node.
+
+**Alternatives considered:**
+
+- Set `label`/`text_direction` unconditionally, matching the oracle
+  byte-for-byte — rejected: publishes a spurious node (or spurious merge
+  input) for any empty-text paragraph, which is strictly worse for an
+  assistive-technology consumer than publishing nothing.
+- Fix `set_text_direction` to skip `mark_annotated()` for a "no-op" value —
+  rejected: `text_direction` has no such value (`Ltr`/`Rtl` are both
+  meaningful), and the fix would have to special-case this one call site
+  rather than the setter, which is what this decision does instead, kept
+  local to `RenderParagraph`.
+
+**Trade-off:** an empty-text `RenderParagraph` that Flutter would still tag
+with a (redundant) text direction publishes nothing at all here. No known
+consumer depends on an empty-labelled paragraph node's `text_direction`
+alone; the alternative (a phantom node with no label) is the actively worse
+default.
+
+**Replacement coverage:** `crates/flui-widgets/tests/semantics.rs` mounts a
+`Text` with empty content and asserts no node forms; a `Text("hello")` mount
+asserts the label does.
+
+---
+
 ## Thread safety
 
 No locks. Catalog objects are mutated on the UI realm's layout/paint thread

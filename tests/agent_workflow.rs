@@ -36,20 +36,18 @@
 //!    `RenderParagraph` "text" property advancing from `0` to `1`: the
 //!    rendered output, not an internal counter field.
 //!
-//! ## A gap this test had to work around
+//! ## What step 3 relies on
 //!
 //! The CLI `counter` template's tree (`Center` → `Column` →
-//! `Text`/`Text`/`ElevatedButton`, mirrored below) publishes **no**
-//! accessibility semantics at all: neither `Text` nor `ElevatedButton`
-//! (`flui-material`'s `ButtonStyleButtonCore` composition — see that module's
-//! doc comment) attaches a `SemanticsConfiguration`. A screen reader — and
-//! step 3 above — would see nothing. This test wraps the button in an
-//! explicit `flui::prelude::Semantics::new().label("Increment").button(true)`
-//! (the same pattern `flui-widgets/tests/semantics.rs` establishes) purely so
-//! step 3 has a label to find; it is not part of the generated template. That
-//! gap — the generated counter app is not screen-reader accessible out of the
-//! box — is worth fixing in `flui-cli`'s template, but is out of scope here
-//! (this package does not own `crates/flui-cli`).
+//! `Text`/`Text`/`ElevatedButton`, mirrored below) carries no explicit
+//! `Semantics` node. The label step 3 finds comes from the framework itself:
+//! `flui-material`'s `ButtonStyleButtonCore` publishes a button semantics
+//! node, and `RenderParagraph` publishes its text as that node's label (see
+//! `crates/flui-objects/ARCHITECTURE.md`, "Semantics mapping"). Writing the
+//! first version of this test is what found that neither did — the counter
+//! app was not screen-reader accessible out of the box, and this test had
+//! to wrap the button in an explicit `Semantics` to have anything to query.
+//! It no longer does; the tree below IS the template's.
 
 use std::time::Duration;
 
@@ -63,11 +61,8 @@ use flui::widgets::column;
 
 /// The tree `flui create`'s counter template builds: `Center` → `Column` →
 /// prompt `Text` / count `Text` / `ElevatedButton`, driven by a `StateCell`
-/// bound in `init_state` — see `crates/flui-view/src/state_cell.rs`.
-///
-/// The one addition over the template (see the module doc's "gap" section)
-/// is the `Semantics` wrapper around the button, needed to make step 3 (the
-/// semantics query) possible at all.
+/// bound in `init_state` — see `crates/flui-view/src/state_cell.rs`. No
+/// additions: the semantics step 3 queries are the framework's own.
 #[derive(Clone, StatefulView)]
 struct AgentCounter;
 
@@ -99,15 +94,8 @@ impl ViewState<AgentCounter> for AgentCounterState {
                 SizedBox::height(16.0),
                 Text::new(self.count.get().to_string()),
                 SizedBox::height(16.0),
-                Semantics::new()
-                    .container(true)
-                    .label("Increment")
-                    .button(true)
-                    .enabled(true)
-                    .child(
-                        ElevatedButton::new(Text::new("Increment"))
-                            .on_pressed(move || count.update(|n| n + 1)),
-                    ),
+                ElevatedButton::new(Text::new("Increment"))
+                    .on_pressed(move || count.update(|n| n + 1)),
             ])
             .main_axis_alignment(MainAxisAlignment::Center),
         )
@@ -198,7 +186,7 @@ fn agent_can_mount_inspect_drive_and_assert_the_counter() {
         .expect("semantics was enabled and a frame ran, so a tree must exist");
     let button = tree
         .find_by_label("Increment")
-        .expect("the Semantics wrapper labels the button \"Increment\"");
+        .expect("ElevatedButton publishes a button node labelled by its Text child");
     let bounds = button
         .bounds()
         .expect("a laid-out node always carries bounds");

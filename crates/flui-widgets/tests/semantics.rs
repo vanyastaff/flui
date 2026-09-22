@@ -2,7 +2,7 @@
 
 use crate::common::{lay_out, loose, size};
 use flui_rendering::semantics::{SemanticsAction, SemanticsActionHandler, semantics_action_for};
-use flui_widgets::{ExcludeSemantics, MergeSemantics, Semantics, SizedBox};
+use flui_widgets::{ExcludeSemantics, MergeSemantics, Semantics, SizedBox, Text};
 
 #[test]
 fn semantics_widget_mounts_annotations_render_object() {
@@ -44,6 +44,51 @@ fn exclude_semantics_widget_mounts_exclude_render_object() {
     let root = laid.find_by_render_type("RenderExcludeSemantics");
     assert_eq!(root, laid.root());
     assert_eq!(laid.size(root), size(24.0, 16.0));
+}
+
+// ===========================================================================
+// RenderParagraph — plain text publishes its own label
+// ===========================================================================
+
+/// `RenderParagraph::describe_semantics_configuration` (`crates/flui-objects/
+/// src/text/paragraph.rs`) must publish a labelled semantics node for
+/// non-empty text — without it, no screen reader ever announces a `Text`
+/// widget, and `A11yTree::find_by_label` cannot locate one. Red before that
+/// implementation existed: `describe_semantics_configuration` was the
+/// `RenderBox` trait default (a no-op), so `find_by_label("hello")` failed
+/// with `A11yQueryError::NotFound`.
+#[test]
+fn text_with_content_publishes_a_node_labelled_with_its_own_text() {
+    let mut laid = lay_out(Text::new("hello"), loose(200.0));
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    tree.find_by_label("hello")
+        .unwrap_or_else(|error| panic!("expected one node labelled \"hello\": {error}"));
+}
+
+/// The companion negative case: empty text contributes no label anywhere in
+/// the tree (see `crates/flui-objects/ARCHITECTURE.md`'s "`RenderParagraph`
+/// publishes no semantics node for empty text" mapping decision) — an empty
+/// `RenderParagraph` must not merge a spurious empty label into whatever
+/// boundary it sits under.
+#[test]
+fn empty_text_publishes_no_label_anywhere() {
+    let mut laid = lay_out(Text::new(""), loose(200.0));
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    assert!(
+        tree.nodes().all(|node| node.label().is_none()),
+        "an empty Text must not publish a label on any node. Tree was:\n{}",
+        tree.describe()
+    );
 }
 
 /// A viewport must not hand a screen reader a rect for content that is not on
