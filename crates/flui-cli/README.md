@@ -2,12 +2,17 @@
 
 [![crates.io](https://img.shields.io/crates/v/flui-cli.svg)](https://crates.io/crates/flui-cli)
 [![CI](https://github.com/vanyastaff/flui/actions/workflows/ci.yml/badge.svg)](https://github.com/vanyastaff/flui/actions/workflows/ci.yml)
-[![MSRV](https://img.shields.io/badge/MSRV-1.97-blue.svg)](Cargo.toml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.97-blue.svg)](https://github.com/vanyastaff/flui/blob/main/crates/flui-cli/Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
 
 The command-line tool for the [FLUI](https://github.com/vanyastaff/flui)
 framework. It scaffolds projects, runs them with hot reload, builds for every
 platform, and checks your environment.
+
+FLUI is at 0.x: the framework API and this tool's `flui.toml` keys can still
+change between minor versions. The CLI contract that scripts depend on
+(flags, `--json` events, exit codes) is listed below and changes are called
+out in the [changelog](https://github.com/vanyastaff/flui/blob/main/crates/flui-cli/CHANGELOG.md).
 
 - **Fast to install and start.** A standalone binary with no FLUI crate in its
   dependency graph: `cargo install flui-cli` compiles no framework code, and
