@@ -144,6 +144,22 @@ cargo clean                          # wipe target/ before a fresh build
 
 The `[default-members]` section of `Cargo.toml` excludes Android-only crates because `ndk-sys` does not compile on the host. Use `cargo ndk` for Android targets (see [Getting Started](getting-started.md)).
 
+### Local machine mode (shared, memory-limited)
+
+On a shared, memory-constrained dev machine — several agent worktrees against the same checkout,
+one compiling worker at a time (see AGENTS.md's Commands table) — every worktree points at the
+same `CARGO_TARGET_DIR`, and `CARGO_BUILD_JOBS` is sized to available RAM rather than core count.
+A docs-only change never needs a `cargo` invocation at all: `just fmt-check text-check
+inventory-check port-check` is the full local gate for it, which is what lets a docs worktree stay
+green without contending for the shared build. One concrete consequence of the shared
+`CARGO_TARGET_DIR`: the trybuild suites (`flui-engine::compile_fail`, `flui-rendering::compile_fail`,
+`unit_mixing_compile_fail::ui`, `trybuild_ui::ui_tests` — see `.config/nextest.toml`) each drive a
+real `rustc` invocation per fixture into scratch output under `target/`, so two of them compiling
+concurrently from different worktrees against the same target dir can spuriously fail on artifact
+contention rather than on the fixture's actual `compile_fail` assertion — keep trybuild runs
+serialized with the rest of the machine's one-worker-at-a-time rule, not fanned out across parallel
+agent sessions.
+
 ## Test Commands
 
 ### Workspace-wide
