@@ -160,15 +160,23 @@ mod tests {
         // `VERSION` is wired from the package version (`env!("CARGO_PKG_VERSION")`);
         // assert its shape, not a pinned literal — a hardcoded value breaks on
         // every workspace version bump (it broke at the 0.1.0 -> 0.2.0 bump).
-        let parts: Vec<&str> = VERSION.split('.').collect();
+        // Per semver grammar a `major.minor.patch` core may be followed by a
+        // `-pre.release` and/or `+build.metadata` (in that order, and a
+        // pre-release identifier may itself contain dots, e.g. `-rc.1`), so
+        // both are stripped — build metadata first — before splitting the
+        // core on `.`; splitting the raw string on `.` first would
+        // miscount a dotted pre-release as extra core components.
+        let core = VERSION.split('+').next().unwrap_or(VERSION);
+        let core = core.split('-').next().unwrap_or(core);
+        let parts: Vec<&str> = core.split('.').collect();
         assert_eq!(
             parts.len(),
             3,
-            "VERSION should be semver `major.minor.patch`, got {VERSION:?}",
+            "VERSION core should be semver `major.minor.patch`, got {VERSION:?}",
         );
         assert!(
             parts.iter().all(|part| part.parse::<u64>().is_ok()),
-            "VERSION components should be numeric, got {VERSION:?}",
+            "VERSION core components should be numeric, got {VERSION:?}",
         );
     }
 

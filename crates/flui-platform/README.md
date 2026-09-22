@@ -56,7 +56,7 @@ rest of the workspace stays `unsafe`-free. Every unsafe block carries a
 
 Tests are currently **excluded from the CI nextest run** pending the
 Windows-only `STATUS_HEAP_CORRUPTION` investigation (tracked as Cross.P /
-item H9 in [`docs/ROADMAP-TRACKER.md`](../../docs/ROADMAP-TRACKER.md)). The
+item H9 in [`docs/archive/ROADMAP-TRACKER.md`](../../docs/archive/ROADMAP-TRACKER.md)). The
 crash does not reproduce on Linux checkouts, where only the headless backend
 compiles; lib tests pass locally on the headless backend.
 

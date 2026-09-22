@@ -26,11 +26,11 @@ default = []
 testing = []
 
 [dependencies]
-flui-foundation = { path = "../flui-foundation", version = "=0.1.0" }
-flui-tree = { path = "../flui-tree", version = "=0.1.0" }
-flui-types = { path = "../flui-types", version = "=0.1.0" }
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-tree = { path = "../flui-tree", version = "=0.2.0-dev" }
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # Layers carry recorded painting (`DisplayList`, `Canvas`).
-flui-painting = { path = "../flui-painting", version = "=0.1.0" }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 
 # `PerformanceOverlayOption` flag set.
 bitflags = { workspace = true }

@@ -16,23 +16,23 @@ categories = ["gui"]
 autotests = false
 
 [dependencies]
-flui-foundation = { path = "../flui-foundation", version = "=0.1.0" }
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-macros = { workspace = true }
-flui-tree = { path = "../flui-tree", version = "=0.1.0" }
-flui-types = { path = "../flui-types", version = "=0.1.0" }
-flui-rendering = { path = "../flui-rendering", version = "=0.1.0" }
+flui-tree = { path = "../flui-tree", version = "=0.2.0-dev" }
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 # Owner-routed interaction targets/dispatch handles (ADR-0027).
-flui-interaction = { path = "../flui-interaction", version = "=0.1.0" }
+flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 # Concrete render-object catalog (moved out of flui-rendering per ADR-0008).
 # Snap/expand controller plumb-through for the floating persistent headers:
 # the WIDGET layer owns the controller lifecycle (vsync lives there); this
 # crate only carries the already-built controller into the render object.
-flui-animation = { path = "../flui-animation", version = "=0.1.0" }
-flui-objects = { path = "../flui-objects", version = "=0.1.0" }
+flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
+flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 # The frame-driven async task driver. A `ViewState` reaches its
 # binding's driver through `BuildContext::async_driver()`; the type lives here.
 # No cycle: flui-rendering already depends on flui-scheduler.
-flui-scheduler = { path = "../flui-scheduler", version = "=0.1.0" }
+flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 # The `Stream` trait `StreamBuilder` polls. Trait-only.
 futures-core = { workspace = true }
 
@@ -65,11 +65,11 @@ criterion = { workspace = true }
 # Enable flui-rendering's `testing` feature for unit tests so the
 # layout-builder tests can read committed geometry back off the pipeline
 # (`testing::box_geometry`). Dev-only; stays out of release builds.
-flui-rendering = { path = "../flui-rendering", version = "=0.1.0", features = ["testing"] }
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 # Enable flui-scheduler's `testing` feature so `future_builder.rs`'s
 # `nested_token_disposal_cancels_child_and_parent` unit test can reach
 # `AsyncDriver::is_unlocked`. Dev-only; stays out of release builds.
-flui-scheduler = { path = "../flui-scheduler", version = "=0.1.0", features = ["testing"] }
+flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev", features = ["testing"] }
 # Same crate; dev-deps must redeclare so unit tests + integration
 # tests under `#[cfg(test)]` (without the `test-utils` feature flag
 # enabled at the integration boundary) still see it. Cargo merges

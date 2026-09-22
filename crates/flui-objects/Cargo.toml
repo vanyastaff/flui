@@ -19,12 +19,12 @@ repository.workspace = true
 autotests = false
 
 [dependencies]
-flui-rendering = { path = "../flui-rendering", version = "=0.1.0" }
-flui-painting = { path = "../flui-painting", version = "=0.1.0" }
-flui-types = { path = "../flui-types", version = "=0.1.0" }
-flui-foundation = { path = "../flui-foundation", version = "=0.1.0" }
-flui-tree = { path = "../flui-tree", version = "=0.1.0" }
-flui-animation = { path = "../flui-animation", version = "=0.1.0" }
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-tree = { path = "../flui-tree", version = "=0.2.0-dev" }
+flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
 
@@ -36,13 +36,13 @@ testing = ["flui-rendering/testing"]
 serde = ["flui-types/serde"]
 
 [dev-dependencies]
-flui-rendering = { path = "../flui-rendering", version = "=0.1.0", features = ["testing"] }
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 # Checkout-only test edge; see docs/workspace-layers.toml release policy.
 flui-objects = { path = ".", features = ["testing"] }
-flui-types = { path = "../flui-types", version = "=0.1.0" }
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 insta = { workspace = true }
-flui-scheduler = { path = "../flui-scheduler", version = "=0.1.0" }
-flui-interaction = { path = "../flui-interaction", version = "=0.1.0", features = ["testing"] }
+flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
+flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
 
 [[test]]
 name = "render_object_harness"

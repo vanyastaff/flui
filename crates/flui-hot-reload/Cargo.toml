@@ -22,10 +22,10 @@ app-plugin = [
 ]
 
 [dependencies]
-flui-layer = { path = "../flui-layer", version = "=0.1.0" }
-flui-foundation = { path = "../flui-foundation", version = "=0.1.0", optional = true }
-flui-view = { path = "../flui-view", version = "=0.1.0", optional = true }
-flui-rendering = { path = "../flui-rendering", version = "=0.1.0", optional = true }
+flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev", optional = true }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", optional = true }
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", optional = true }
 parking_lot = { workspace = true, optional = true }
 tracing = { workspace = true }
 
@@ -40,7 +40,7 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Libr
 
 [dev-dependencies]
 flui-testing = { workspace = true }
-flui-view = { path = "../flui-view", version = "=0.1.0", features = ["test-utils"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
 
 [lints]
 workspace = true

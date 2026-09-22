@@ -320,7 +320,7 @@ was chosen deliberately over splitting them across two mechanisms.
 
 **Allowlist marker:** `// PORT-CHECK-OK-UNIT: <reason>` within ±2 lines of the declaration (e.g. `PixelDelta`'s `From<f64>`, which carries a platform scroll delta rather than a coordinate).
 
-**Back-references:** [N-geom polish-pass research §III U1–U12](research/2026-05-24-flui-geometry-polish-pass-research.md), [ROADMAP-TRACKER N-geom block](ROADMAP-TRACKER.md).
+**Back-references:** [N-geom polish-pass research §III U1–U12](research/2026-05-24-flui-geometry-polish-pass-research.md), [ROADMAP-TRACKER N-geom block](archive/ROADMAP-TRACKER.md).
 
 ### 15. `println!` / `eprintln!` / `dbg!` in foundation / tree / macros source
 

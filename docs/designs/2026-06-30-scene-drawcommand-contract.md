@@ -8,7 +8,7 @@ guards:
   - "crates/flui-painting/src/display_list/command.rs — `mod contract_freeze` (exhaustive-match compile guard + count assertion)"
 ---
 
-[← Designs index](.) · [Roadmap](../ROADMAP.md) · [Tracker (N11)](../ROADMAP-TRACKER.md)
+[← Designs index](.) · [Roadmap](../ROADMAP.md) · [Tracker (N11)](../archive/ROADMAP-TRACKER.md)
 
 # Scene / DrawCommand contract freeze (Core.0 N11)
 
