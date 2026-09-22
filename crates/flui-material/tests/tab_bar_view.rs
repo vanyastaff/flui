@@ -9,7 +9,7 @@
 //! recovers as an `ErrorView` in every build profile (release `assert!` in
 //! `build`, not a silent all-`Offstage` fall-through).
 
-mod common;
+use crate::common;
 
 use std::cell::Cell;
 use std::rc::Rc;

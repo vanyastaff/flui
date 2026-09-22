@@ -6,7 +6,7 @@
 //! produces, proving `_CardDefaultsM3` actually reaches paint configuration
 //! rather than just being computed in isolation.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

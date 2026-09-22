@@ -9,7 +9,7 @@
 //! documented 48px empty box, and a `DefaultTabController` ancestor is
 //! actually reachable by (and required by) a descendant `TabBar`.
 
-mod common;
+use crate::common;
 
 use common::{lay_out, tight};
 use flui_material::{

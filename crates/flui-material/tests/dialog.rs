@@ -2,7 +2,7 @@
 //! through the full render pipeline (`tests/common/mod.rs`, the same harness
 //! `tests/card.rs`/`tests/material.rs` use).
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

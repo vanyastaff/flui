@@ -20,7 +20,7 @@
 
 // a panic IS the failure report in test code (docs/PANIC-POLICY.md)
 
-mod common;
+use crate::common;
 
 use common::{lay_out, tight};
 use flui_material::{

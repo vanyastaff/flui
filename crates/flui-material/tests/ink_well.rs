@@ -5,7 +5,7 @@
 //! cover structural enter/exit, tap, disabled behavior, focus, press timing,
 //! and overlay resolution without a second headless-only input protocol.
 
-mod common;
+use crate::common;
 
 use std::rc::Rc;
 use std::sync::Arc;

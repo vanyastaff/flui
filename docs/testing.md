@@ -305,6 +305,10 @@ The constitution requires `///` doc comments on every public item and `//!` over
   trybuild/`compile_fail`, and feature-gated targets that CI runs by name.
   `flui-log` is the deliberate exception: each of its files owns one scenario
   that installs the global subscriber, so each stays a binary of its own.
+  A crate whose suites share a `tests/common/` helper module (`flui-material`)
+  declares it once, as `mod common;` in `tests/main.rs`, and each suite imports it
+  with `use crate::common;`: a `mod common;` inside every `#[path]`-loaded suite
+  would load the same file once per suite, which `clippy::duplicate_mod` rejects.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
 - **Demo composition tests** live in `tests/demo_layer_snapshots.rs`: each demo mounts headless and its committed `LayerTree` is compared, as structured text, against an `insta` snapshot. See [Demo composition snapshots](#demo-composition-snapshots) below for the run/review workflow and why they are structural rather than pixels.
 - **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.

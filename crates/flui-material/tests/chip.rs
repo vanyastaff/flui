@@ -25,7 +25,7 @@
 //! `ChipBorderPainter`/`ChipCheckmarkPainter`'s own paint-invocation/
 //! geometry proofs (real `Canvas`/`DisplayList` recordings).
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;

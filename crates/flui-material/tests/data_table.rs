@@ -5,7 +5,7 @@
 //! `data_table.rs`'s own pure-function unit tests (`resolve_style`,
 //! `selection_summary`, `row_decoration`) computed in isolation.
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;

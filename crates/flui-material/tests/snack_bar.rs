@@ -14,7 +14,7 @@
 //! interaction, real pointer dispatch through `SnackBarAction`, and
 //! multi-scaffold fan-out.
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;

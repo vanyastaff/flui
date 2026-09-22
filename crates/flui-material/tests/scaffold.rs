@@ -10,7 +10,7 @@
 //! `scaffold.rs`. Each test below indexes `laid.child(layout_root, n)`
 //! against exactly that order for the slots it configures.
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;

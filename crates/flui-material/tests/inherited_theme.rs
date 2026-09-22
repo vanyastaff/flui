@@ -30,7 +30,7 @@
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
 #![expect(clippy::option_option, clippy::unwrap_used)]
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 

@@ -7,7 +7,7 @@
 //! already cover), a real tap firing `on_pressed`, and the 56×56 geometry a
 //! `Scaffold`'s `floating_action_button` slot actually lays out.
 
-mod common;
+use crate::common;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

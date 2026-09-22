@@ -7,7 +7,7 @@
 //! a real mount, so these tests prove the composition end to end rather than
 //! re-checking `app_bar.rs`'s own unit-tested `resolve_style` formula.
 
-mod common;
+use crate::common;
 
 use common::{lay_out, loose, tight};
 use flui_material::{AppBar, AppBarThemeData, Theme, ThemeData, ThemeDataOverrides};

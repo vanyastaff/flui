@@ -24,7 +24,7 @@
 //! (`thumb_circle_center_lands_on_the_correct_track_end_per_value`, a real
 //! `Canvas`/`DisplayList` recording).
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;

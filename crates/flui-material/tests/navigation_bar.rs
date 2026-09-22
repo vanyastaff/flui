@@ -30,7 +30,7 @@
 //! over the local override), which would silently make every geometry
 //! assertion below test the wrong height band.
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;

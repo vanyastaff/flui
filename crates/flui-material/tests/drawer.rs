@@ -52,7 +52,7 @@
 //! strip to cover the whole drag path, working around the harness gap
 //! without touching production defaults.
 
-mod common;
+use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;

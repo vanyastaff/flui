@@ -9,7 +9,7 @@
 //! as the scroll offset changes, and `pinned` actually holds the collapsed
 //! bar on screen.
 
-mod common;
+use crate::common;
 use common::{lay_out, tight};
 use flui_material::{SliverAppBar, Theme, ThemeData};
 use flui_view::BoxedView;

@@ -3,7 +3,7 @@
 //! `flui-widgets`' own `tests/routes.rs` harness for `PopupRoute` (the
 //! machinery `show_dialog` is built on).
 
-mod common;
+use crate::common;
 
 use std::cell::Cell;
 use std::rc::Rc;

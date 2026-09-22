@@ -10,6 +10,10 @@ description = "Material Design theming foundation for FLUI — ColorScheme, Typo
 repository.workspace = true
 keywords = ["ui", "material", "theme", "flutter", "flui"]
 categories = ["gui"]
+# All root tests/*.rs files are compiled as modules of ONE integration-test
+# binary (tests/main.rs); the per-file auto-discovered targets each linked the
+# whole dependency stack. Targets that write process-global state stay separate.
+autotests = false
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
@@ -71,3 +75,7 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 
 [lints]
 workspace = true
+
+[[test]]
+name = "material_it"
+path = "tests/main.rs"

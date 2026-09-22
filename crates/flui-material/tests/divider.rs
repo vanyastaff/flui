@@ -4,7 +4,7 @@
 //! (height/thickness/indents) and the theme cascade actually reach a mounted
 //! tree, not just `resolve_style` computed in isolation.
 
-mod common;
+use crate::common;
 
 use common::{lay_out, loose};
 use flui_material::{
