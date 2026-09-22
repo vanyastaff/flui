@@ -48,6 +48,14 @@ the workspace version and follows [Semantic Versioning](https://semver.org/).
   dimmed `debug:` lines on stderr.
 - Error messages follow the `thiserror` convention: lowercase, no trailing
   period, and the cause chain printed once under `Caused by:`.
+- Platform build tools (Gradle, `wasm-pack`, `xcodebuild`, `cargo ndk`,
+  `adb`) are killed when the build that started them is cancelled, and
+  `flui build android` passes `JAVA_HOME` to the Gradle wrapper. Without
+  `JAVA_HOME` the native libraries are still built and the APK step is
+  skipped, which is what the warning always said.
+- iOS simulator probes (`simctl`, `plutil`) run through the same bounded
+  process runner as every other probe instead of spinning up an async
+  runtime per call.
 - `flui.toml` models exactly the documented keys (`[app]`, `[build]
   target_platforms`, `[hot_reload]`); `flui platform add/remove` no longer
   writes unread `[assets]`, `fonts`, `lto` or `opt_level` keys back into the

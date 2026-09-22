@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::build::desktop::DesktopBuilder;
-use crate::build::{BuildUnit, BuilderContextBuilder, Platform, PlatformBuilder, Profile};
+use crate::build::{BuildUnit, BuilderContextBuilder, Platform, Profile};
 
 const FIXTURE_ROOT: &str = "FLUI_DESKTOP_FIXTURE_ROOT";
 const FIXTURE_CASE: &str = "FLUI_DESKTOP_FIXTURE_CASE";
@@ -206,7 +206,9 @@ fn worker(root: PathBuf, case: &str) {
         );
     }
     let staged = runtime
-        .block_on(builder.build_platform(&ctx, &artifacts))
+        .block_on(std::future::ready(DesktopBuilder::build_platform(
+            &ctx, &artifacts,
+        )))
         .expect("stage executable");
     assert_eq!(
         std::fs::read(staged.app_binary).expect("staged bytes"),
@@ -311,9 +313,8 @@ async fn bundle_names_cannot_escape_the_output_directory() {
             executable: Some(executable),
             metadata: serde_json::json!({}),
         };
-        let builder = DesktopBuilder::new();
         assert!(
-            builder.build_platform(&ctx, &artifacts).await.is_err(),
+            DesktopBuilder::build_platform(&ctx, &artifacts).is_err(),
             "unsafe bundle component must be rejected"
         );
         assert_eq!(
@@ -351,11 +352,8 @@ async fn unicode_bundle_names_work_and_existing_symlinks_are_not_followed() {
         executable: Some(executable),
         metadata: serde_json::json!({}),
     };
-    let builder = DesktopBuilder::new();
-    let staged = builder
-        .build_platform(&ctx, &artifacts)
-        .await
-        .expect("unicode and spaces are valid");
+    let staged =
+        DesktopBuilder::build_platform(&ctx, &artifacts).expect("unicode and spaces are valid");
     assert_eq!(staged.app_binary, output.join(format!("{name}.app")));
     let plist =
         std::fs::read_to_string(staged.app_binary.join("Contents/Info.plist")).expect("plist");
@@ -364,7 +362,7 @@ async fn unicode_bundle_names_work_and_existing_symlinks_are_not_followed() {
     let external = temp.path().join("external");
     write(&external, "sentinel", "must survive");
     std::os::unix::fs::symlink(&external, &staged.app_binary).expect("fixture link");
-    assert!(builder.build_platform(&ctx, &artifacts).await.is_err());
+    assert!(DesktopBuilder::build_platform(&ctx, &artifacts).is_err());
     assert_eq!(
         std::fs::read_to_string(external.join("sentinel")).expect("target preserved"),
         "must survive"
@@ -372,7 +370,7 @@ async fn unicode_bundle_names_work_and_existing_symlinks_are_not_followed() {
     std::fs::remove_file(&staged.app_binary).expect("remove fixture link");
     std::os::unix::fs::symlink(temp.path().join("missing"), &staged.app_binary)
         .expect("dangling link");
-    assert!(builder.build_platform(&ctx, &artifacts).await.is_err());
+    assert!(DesktopBuilder::build_platform(&ctx, &artifacts).is_err());
     assert!(
         std::fs::symlink_metadata(&staged.app_binary)
             .expect("link retained")

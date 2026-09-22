@@ -266,17 +266,6 @@ pub struct GeneratedProject {
     pub plan: ProjectPlan,
 }
 
-#[expect(
-    dead_code,
-    reason = "method reserved for future post-generation reporting"
-)]
-impl GeneratedProject {
-    /// Get the full application ID (e.g., "`com.example.my_app`").
-    pub fn app_id(&self) -> String {
-        self.org.app_id(&self.name)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

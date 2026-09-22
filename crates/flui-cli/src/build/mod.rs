@@ -3,16 +3,11 @@
 //! Formerly the `flui-build` crate; it has no consumer but this binary, so it
 //! lives here as a module.
 //!
-//! # Architecture
-//!
-//! The build system uses a trait-based architecture with platform-specific builders:
-//!
-//! - `PlatformBuilder` trait: Common interface for all platforms
-//! - `AndroidBuilder`: Builds APKs using cargo-ndk and Gradle
-//! - `WebBuilder`: Builds WASM packages using wasm-pack
-//! - `DesktopBuilder`: Builds native desktop applications
-//!
-//! # Usage
+//! Each platform is one builder type (`AndroidBuilder`, `IosBuilder`,
+//! `WebBuilder`, `DesktopBuilder`) with the same three entry points:
+//! `validate_environment`, `build_rust`, `build_platform`. The set is closed
+//! and `commands/build.rs` dispatches on the target with a `match`, so there
+//! is no trait behind them.
 
 /// Android platform build support
 pub(crate) mod android;

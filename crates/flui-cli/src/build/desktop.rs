@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use crate::build::error::{BuildError, BuildResult};
-use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
+use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts};
 use crate::build::util::cargo;
 
 /// Builder for desktop platforms (Windows, macOS, Linux)
@@ -65,14 +65,14 @@ impl DesktopBuilder {
     }
 }
 
-impl PlatformBuilder for DesktopBuilder {
-    fn validate_environment(&self) -> BuildResult<()> {
+impl DesktopBuilder {
+    pub(crate) fn validate_environment() -> BuildResult<()> {
         // Just need cargo
         crate::build::util::check_command_exists("cargo")?;
         Ok(())
     }
 
-    async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
+    pub(crate) async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
         let target = match &ctx.platform {
             crate::build::platform::Platform::Desktop { target } => match target {
                 Some(t) => t.clone(),
@@ -109,8 +109,7 @@ impl PlatformBuilder for DesktopBuilder {
         })
     }
 
-    async fn build_platform(
-        &self,
+    pub(crate) fn build_platform(
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
     ) -> BuildResult<FinalArtifacts> {

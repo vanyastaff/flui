@@ -1,7 +1,5 @@
 //! Cargo artifact acceptance without Xcode app packaging. Host fixtures are portable.
-use crate::build::{
-    BuildUnit, BuilderContextBuilder, IosBuilder, Platform, PlatformBuilder, Profile,
-};
+use crate::build::{BuildUnit, BuilderContextBuilder, IosBuilder, Platform, Profile};
 use std::{
     path::{Path, PathBuf},
     process::Command,

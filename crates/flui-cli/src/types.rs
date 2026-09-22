@@ -67,14 +67,6 @@ impl ProjectName {
         &self.0
     }
 
-    /// Convert to a crate name (hyphens replaced with underscores).
-    ///
-    /// Rust crate names use underscores, not hyphens.
-    #[must_use]
-    pub(crate) fn to_crate_name(&self) -> String {
-        self.0.replace('-', "_")
-    }
-
     /// Validate a project name.
     fn validate(name: &str) -> CliResult<()> {
         if name.is_empty() {
@@ -213,16 +205,6 @@ impl OrganizationId {
     #[must_use]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Get the application ID by combining with a project name.
-    ///
-    /// The resulting ID is suitable for use as:
-    /// - Android package name
-    /// - iOS bundle identifier
-    #[must_use]
-    pub(crate) fn app_id(&self, name: &ProjectName) -> String {
-        format!("{}.{}", self.0, name.to_crate_name())
     }
 
     fn validate(org: &str) -> CliResult<()> {
@@ -428,15 +410,6 @@ mod tests {
         }
 
         #[test]
-        fn to_crate_name() {
-            let name = ProjectName::new("my-app").unwrap();
-            assert_eq!(name.to_crate_name(), "my_app");
-
-            let name = ProjectName::new("my_app").unwrap();
-            assert_eq!(name.to_crate_name(), "my_app");
-        }
-
-        #[test]
         fn conversions() {
             // FromStr
             let name: ProjectName = "my-app".parse().unwrap();
@@ -483,13 +456,6 @@ mod tests {
         fn default() {
             let org = OrganizationId::default();
             assert_eq!(org.as_str(), "com.example");
-        }
-
-        #[test]
-        fn app_id_generation() {
-            let org = OrganizationId::new("com.example").unwrap();
-            let name = ProjectName::new("my-app").unwrap();
-            assert_eq!(org.app_id(&name), "com.example.my_app");
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::build::error::{BuildError, BuildResult};
+use crate::build::error::BuildError;
 
 /// Build context containing configuration and paths.
 ///
@@ -88,8 +88,6 @@ pub(crate) enum BuildUnit {
         package: Option<String>,
     },
 }
-
-impl BuildUnit {}
 
 /// Platform to build for
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -227,26 +225,6 @@ pub(crate) struct FinalArtifacts {
     pub(crate) app_binary: PathBuf,
     /// File size, or the sum of contained file sizes for a bundle, in bytes.
     pub(crate) size_bytes: u64,
-}
-
-/// Platform-specific builder trait.
-///
-/// This trait is sealed and cannot be implemented outside of `crate::build`.
-/// Only the built-in builders (`AndroidBuilder`, `IosBuilder`, `WebBuilder`, `DesktopBuilder`)
-/// implement this trait.
-pub(crate) trait PlatformBuilder: Send + Sync {
-    /// Validate environment (check tools, SDK, etc.)
-    fn validate_environment(&self) -> BuildResult<()>;
-
-    /// Build Rust libraries
-    async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts>;
-
-    /// Build platform-specific artifacts (APK, WASM, etc.)
-    async fn build_platform(
-        &self,
-        ctx: &BuilderContext,
-        artifacts: &BuildArtifacts,
-    ) -> BuildResult<FinalArtifacts>;
 }
 
 #[cfg(test)]

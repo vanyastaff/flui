@@ -2,7 +2,7 @@ use crate::BuildTarget;
 use crate::build::platform::BuildUnit as CargoBuildUnit;
 use crate::build::{
     AndroidBuilder, AppBundle, BuilderContextBuilder, DesktopBuilder, IosBuilder, Platform,
-    PlatformBuilder, Profile, WebBuilder,
+    Profile, WebBuilder,
 };
 use crate::error::{CliError, CliResult, ResultExt};
 use crate::ui;
@@ -422,9 +422,7 @@ fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
     spinner.start("Validating iOS environment...");
-    ios_builder
-        .validate_environment()
-        .context("iOS environment validation failed")?;
+    IosBuilder::validate_environment().context("iOS environment validation failed")?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building iOS Rust target...");
@@ -487,9 +485,7 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
     spinner.start("Validating Web environment...");
-    web_builder
-        .validate_environment()
-        .context("Web environment validation failed")?;
+    WebBuilder::validate_environment().context("Web environment validation failed")?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building WASM...");
@@ -500,7 +496,8 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
         &serde_json::json!({ "name": "build_platform" }),
     );
     spinner.start("Building web package...");
-    let final_artifacts = block_on(web_builder.build_platform(&ctx, &artifacts))
+    let final_artifacts = web_builder
+        .build_platform(&ctx, &artifacts)
         .context("failed to build web package")?;
 
     spinner.stop(format!("{} Web package built", style("✓").green()));
@@ -551,9 +548,7 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
 
     ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
     spinner.start("Validating Desktop environment...");
-    desktop_builder
-        .validate_environment()
-        .context("desktop environment validation failed")?;
+    DesktopBuilder::validate_environment().context("desktop environment validation failed")?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building binary...");
@@ -565,8 +560,8 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
         &serde_json::json!({ "name": "build_platform" }),
     );
     spinner.start("Copying binary...");
-    let final_artifacts = block_on(desktop_builder.build_platform(&ctx, &artifacts))
-        .context("failed to copy binary")?;
+    let final_artifacts =
+        DesktopBuilder::build_platform(&ctx, &artifacts).context("failed to copy binary")?;
 
     spinner.stop(format!("{} Desktop binary built", style("✓").green()));
 
@@ -630,9 +625,7 @@ fn build_specific_platform(
 
     ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
     spinner.start("Validating environment...");
-    desktop_builder
-        .validate_environment()
-        .context("environment validation failed")?;
+    DesktopBuilder::validate_environment().context("environment validation failed")?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building...");
@@ -643,8 +636,8 @@ fn build_specific_platform(
         &serde_json::json!({ "name": "build_platform" }),
     );
     spinner.start("Copying artifacts...");
-    let final_artifacts = block_on(desktop_builder.build_platform(&ctx, &artifacts))
-        .context("failed to copy artifacts")?;
+    let final_artifacts =
+        DesktopBuilder::build_platform(&ctx, &artifacts).context("failed to copy artifacts")?;
 
     spinner.stop(format!(
         "{} {} binary built",
@@ -728,12 +721,10 @@ fn build_macos_universal(
             .with_output_dir(slice_dir)
             .build();
 
-        builder_inst
-            .validate_environment()
-            .context("environment validation failed")?;
+        DesktopBuilder::validate_environment().context("environment validation failed")?;
         let artifacts = block_on(builder_inst.build_rust(&slice_ctx))
             .with_context(|| format!("failed to build {triple}"))?;
-        let final_artifacts = block_on(builder_inst.build_platform(&slice_ctx, &artifacts))
+        let final_artifacts = DesktopBuilder::build_platform(&slice_ctx, &artifacts)
             .with_context(|| format!("failed to stage {triple}"))?;
         slice_paths.push(final_artifacts.app_binary);
     }

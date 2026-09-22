@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
+use tokio::process::Command;
 
 use crate::build::error::{BuildError, BuildResult};
-use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
+use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts};
 use crate::build::util::{check_command_exists, environment, process};
 
 /// Builder for Android platform (APK builds via Gradle and cargo-ndk)
@@ -10,7 +11,9 @@ pub(crate) struct AndroidBuilder {
     workspace_root: PathBuf,
     android_home: PathBuf,
     ndk_home: PathBuf,
-    _java_home: Option<PathBuf>,
+    /// `None` when `JAVA_HOME` is unset: the native libraries are still
+    /// built, the Gradle APK step is skipped.
+    java_home: Option<PathBuf>,
 }
 
 impl AndroidBuilder {
@@ -23,9 +26,7 @@ impl AndroidBuilder {
         let android_home = environment::resolve_android_home()?;
         let ndk_home = environment::resolve_ndk_home(&android_home)?;
 
-        // Java is optional - only needed for Gradle APK build
         let java_home = environment::resolve_java_home().ok();
-
         if java_home.is_none() {
             let _ = crate::ui::warning("JAVA_HOME not set - APK build will be skipped".to_string());
         }
@@ -34,14 +35,14 @@ impl AndroidBuilder {
             workspace_root: workspace_root.to_path_buf(),
             android_home,
             ndk_home,
-            _java_home: java_home,
+            java_home,
         })
     }
 }
 
 /// Scene plugin build/deploy methods for hot-reload workflow.
 ///
-/// These methods are separate from the `PlatformBuilder` trait because they
+/// These methods are separate from the build entry points because they
 /// operate on a scene plugin crate (cdylib), not the host application.
 impl AndroidBuilder {
     /// Build a scene plugin crate as a cdylib `.so` for the given Android target.
@@ -76,8 +77,7 @@ impl AndroidBuilder {
             args.push("--release".to_string());
         }
 
-        let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        process::run_command("cargo", &args_refs).await?;
+        process::run(Command::new("cargo").args(&args)).await?;
 
         // Map cargo-ndk target name to Rust target triple
         let rust_target = match target {
@@ -141,19 +141,20 @@ impl AndroidBuilder {
         let app_path = format!("/data/data/{package}/files/{lib_name}");
 
         // Push to /data/local/tmp/
-        process::run_command("adb", &["push", so_str, &tmp_path]).await?;
+        process::run(Command::new("adb").args(["push", so_str, &tmp_path])).await?;
 
         // Copy into app's data directory (SELinux requires app_data_file context)
         let cp_cmd = format!("cp {tmp_path} {app_path}");
-        process::run_command("adb", &["shell", "run-as", package, "sh", "-c", &cp_cmd]).await?;
+        process::run(Command::new("adb").args(["shell", "run-as", package, "sh", "-c", &cp_cmd]))
+            .await?;
 
         crate::ui::debug(format!("Scene plugin pushed to device: {app_path}"));
         Ok(())
     }
 }
 
-impl PlatformBuilder for AndroidBuilder {
-    fn validate_environment(&self) -> BuildResult<()> {
+impl AndroidBuilder {
+    pub(crate) fn validate_environment(&self) -> BuildResult<()> {
         // Check cargo-ndk
         check_command_exists("cargo")?;
 
@@ -210,7 +211,7 @@ impl PlatformBuilder for AndroidBuilder {
         Ok(())
     }
 
-    async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
+    pub(crate) async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
         if matches!(
             ctx.target,
             crate::build::platform::BuildUnit::Library { .. }
@@ -275,7 +276,7 @@ impl PlatformBuilder for AndroidBuilder {
                 args.push(profile_flag);
             }
 
-            process::run_command("cargo", &args).await?;
+            process::run(Command::new("cargo").args(&args)).await?;
 
             // Find the .so file
             let abi_dir = jni_libs_dir.join(target);
@@ -303,7 +304,7 @@ impl PlatformBuilder for AndroidBuilder {
         })
     }
 
-    async fn build_platform(
+    pub(crate) async fn build_platform(
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
@@ -318,46 +319,42 @@ impl PlatformBuilder for AndroidBuilder {
             "gradlew"
         };
 
-        // Check if gradle wrapper exists
         let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
-        if !gradle_wrapper_path.exists() {
-            let _ = crate::ui::warning("Gradle wrapper not found, skipping APK build".to_string());
-            crate::ui::debug(
-                "Native libraries built successfully at: platforms/android/app/src/main/jniLibs/"
-                    .to_string(),
-            );
-
-            // Return the .so file as the artifact
-            let so_file = artifacts
-                .rust_libs
-                .first()
-                .ok_or_else(|| BuildError::Other("No native libraries found".to_string()))?;
-            let size_bytes = std::fs::metadata(so_file)?.len();
-
-            return Ok(FinalArtifacts {
-                app_binary: so_file.clone(),
-                size_bytes,
-            });
-        }
+        let gradle = match &self.java_home {
+            None => Err("JAVA_HOME not set"),
+            Some(_) if !gradle_wrapper_path.exists() => Err("Gradle wrapper not found"),
+            Some(java_home) => Ok(java_home),
+        };
+        let java_home = match gradle {
+            Ok(java_home) => java_home,
+            Err(reason) => {
+                let _ = crate::ui::warning(format!("{reason}, skipping APK build"));
+                crate::ui::debug(
+                    "native libraries built at platforms/android/app/src/main/jniLibs/".to_string(),
+                );
+                let so_file = artifacts
+                    .rust_libs
+                    .first()
+                    .ok_or_else(|| BuildError::Other("no native libraries found".to_string()))?;
+                let size_bytes = std::fs::metadata(so_file)?.len();
+                return Ok(FinalArtifacts {
+                    app_binary: so_file.clone(),
+                    size_bytes,
+                });
+            }
+        };
 
         let gradle_task = match ctx.profile {
             crate::build::platform::Profile::Debug => "assembleDebug",
             crate::build::platform::Profile::Release => "assembleRelease",
         };
-
-        // Use absolute path for gradle wrapper; it is spawned as a UTF-8
-        // command string, so a non-UTF-8 workspace root must surface as an
-        // error, not a panic.
-        let gradle_wrapper_str = gradle_wrapper_path.to_str().ok_or_else(|| {
-            BuildError::invalid_config(
-                "workspace_root",
-                format!(
-                    "Gradle wrapper path {} is not valid UTF-8",
-                    gradle_wrapper_path.display()
-                ),
-            )
-        })?;
-        process::run_command_in_dir(gradle_wrapper_str, &[gradle_task], &android_dir).await?;
+        process::run(
+            Command::new(&gradle_wrapper_path)
+                .arg(gradle_task)
+                .env("JAVA_HOME", java_home)
+                .current_dir(&android_dir),
+        )
+        .await?;
 
         // Find the APK
         let apk_dir = android_dir

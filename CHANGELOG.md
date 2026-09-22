@@ -29,6 +29,17 @@ file records the repo-consumer-visible summary.
   build tables) that nothing read but `flui platform` wrote back into the
   user's file. `flui.toml` now models exactly the keys the README documents;
   unknown keys from older files are ignored.
+- **`flui-cli` build pipeline: one streaming process runner, no builder
+  trait** (`flui-cli`). The `PlatformBuilder` trait had four implementations
+  and no polymorphic caller (`flui build` matches on the target), and it hid
+  what the compiler now reports: two builders whose environment check and
+  staging step never touched `self` or awaited anything, and two dead
+  `types.rs` methods. The platform tools (Gradle, `wasm-pack`, `xcodebuild`,
+  `cargo ndk`, `adb`) go through one `process::run` that kills the child
+  when the build is cancelled, `JAVA_HOME` reaches the Gradle wrapper (it
+  was resolved and never used, while the warning promised the APK step
+  would be skipped — now it is), and the iOS simulator probes use the
+  bounded runner in `proc.rs` instead of a fresh tokio runtime per call.
 - **`flui-cli` draws its own terminal output** (`flui-cli`). `cliclack` is
   gone: it brought 42 of the CLI's 116 crates — ICU text segmentation with
   its data tables and proc-macros, to word-wrap prompt text — for a dozen

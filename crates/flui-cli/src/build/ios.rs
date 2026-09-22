@@ -1,9 +1,8 @@
 use std::path::Path;
+use tokio::process::Command;
 
 use crate::build::error::{BuildError, BuildResult};
-use crate::build::platform::{
-    BuildArtifacts, BuildUnit, BuilderContext, FinalArtifacts, PlatformBuilder,
-};
+use crate::build::platform::{BuildArtifacts, BuildUnit, BuilderContext, FinalArtifacts};
 use crate::build::util::{check_command_exists, process};
 
 /// Builder for iOS platform (.app bundles via Xcode).
@@ -18,8 +17,8 @@ impl IosBuilder {
     }
 }
 
-impl PlatformBuilder for IosBuilder {
-    fn validate_environment(&self) -> BuildResult<()> {
+impl IosBuilder {
+    pub(crate) fn validate_environment() -> BuildResult<()> {
         // Check xcodebuild
         check_command_exists("xcodebuild")?;
 
@@ -45,7 +44,7 @@ impl PlatformBuilder for IosBuilder {
         Ok(())
     }
 
-    async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
+    pub(crate) async fn build_rust(&self, ctx: &BuilderContext) -> BuildResult<BuildArtifacts> {
         let crate::build::platform::Platform::Ios { targets } = &ctx.platform else {
             return Err(BuildError::InvalidPlatform {
                 reason: "Expected iOS platform".to_string(),
@@ -95,7 +94,7 @@ impl PlatformBuilder for IosBuilder {
         }
     }
 
-    async fn build_platform(
+    pub(crate) async fn build_platform(
         &self,
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
@@ -157,7 +156,7 @@ impl PlatformBuilder for IosBuilder {
             "build",
         ];
 
-        process::run_command_in_dir("xcodebuild", &args, &ios_dir).await?;
+        process::run(Command::new("xcodebuild").args(&args).current_dir(&ios_dir)).await?;
 
         // Find the .app bundle
         let build_dir = ios_dir.join("build").join(configuration).join("iphoneos");

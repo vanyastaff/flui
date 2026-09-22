@@ -1,71 +1,32 @@
 //! Native simulator selection and one-shot application launch.
-use crate::build::{
-    AppBundle, BuildUnit, BuilderContextBuilder, IosBuilder, Platform, PlatformBuilder, Profile,
-};
+use crate::build::{AppBundle, BuildUnit, BuilderContextBuilder, IosBuilder, Platform, Profile};
 use crate::error::{CliError, CliResult, ResultExt};
-use std::{path::Path, process::Stdio, time::Duration};
-use tokio::io::AsyncReadExt;
+use crate::proc;
+use std::{io, path::Path, process::Command, time::Duration};
 
 fn invalid(message: impl Into<String>) -> CliError {
     CliError::Missing(message.into())
 }
-/// Bounded process execution drains both pipes and kills/reaps on timeout.
+/// Run a simulator tool to completion within `limit`, returning its stdout.
+///
+/// The deadline covers the pipe drain too: a grandchild that inherited the
+/// pipe (CoreSimulator services do) cannot hold the CLI past `limit`.
 fn tool(program: &str, args: &[&str], limit: Duration) -> CliResult<Vec<u8>> {
-    let runtime = tokio::runtime::Runtime::new().context("start tool runtime")?;
-    runtime.block_on(async {
-        let mut child = tokio::process::Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .context("start simulator tool")?;
-        let mut stdout = child.stdout.take().expect("BUG: stdout configured piped");
-        let mut stderr = child.stderr.take().expect("BUG: stderr configured piped");
-        let mut out = tokio::spawn(async move {
-            let mut bytes = Vec::new();
-            stdout.read_to_end(&mut bytes).await.map(|_| bytes)
-        });
-        let mut err = tokio::spawn(async move {
-            let mut bytes = Vec::new();
-            stderr.read_to_end(&mut bytes).await.map(|_| bytes)
-        });
-        let completed = tokio::time::timeout(limit, async {
-            let status = child.wait().await.context("wait for simulator tool")?;
-            let output = (&mut out)
-                .await
-                .context("join stdout")?
-                .context("read stdout")?;
-            let diagnostic = (&mut err)
-                .await
-                .context("join stderr")?
-                .context("read stderr")?;
-            Ok::<_, CliError>((status, output, diagnostic))
-        })
-        .await;
-        let (status, output, diagnostic) = if let Ok(result) = completed {
-            result?
-        } else {
-            // Includes pipe draining: inherited pipe handles must not extend the deadline.
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            out.abort();
-            err.abort();
-            return Err(invalid(format!(
-                "{program} {} timed out (including output drain)",
-                args.join(" ")
-            )));
-        };
-        if !status.success() {
-            return Err(invalid(format!(
-                "{program} {} failed: {}",
-                args.join(" "),
-                String::from_utf8_lossy(&diagnostic)
-            )));
+    let output = match proc::output_with_timeout(Command::new(program).args(args), limit) {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+            return Err(invalid(format!("{program} {} timed out", args.join(" "))));
         }
-        Ok(output)
-    })
+        Err(error) => return Err(error).context("start simulator tool"),
+    };
+    if !output.status.success() {
+        return Err(invalid(format!(
+            "{program} {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(output.stdout)
 }
 fn simctl(args: &[&str], limit: Duration) -> CliResult<Vec<u8>> {
     let mut all = vec!["simctl"];
@@ -352,10 +313,13 @@ mod tests {
     #[test]
     fn command_deadline_includes_inherited_output_pipes() {
         let start = std::time::Instant::now();
-        let error = tool("sh", &["-c", "sleep 2 & exit 0"], Duration::from_millis(50))
-            .expect_err("inherited pipe times out");
-        assert!(error.to_string().contains("timed out"));
+        let output = tool("sh", &["-c", "sleep 2 & exit 0"], Duration::from_millis(50))
+            .expect("the tool itself exited 0");
+        assert!(output.is_empty());
         assert!(start.elapsed() < Duration::from_secs(1));
+        let error = tool("sh", &["-c", "sleep 2"], Duration::from_millis(50))
+            .expect_err("a tool that never exits times out");
+        assert!(error.to_string().contains("timed out"));
     }
     #[test]
     fn device_architecture_is_exact_and_runtime_consistent() {
