@@ -53,6 +53,10 @@ the workspace version and follows [Semantic Versioning](https://semver.org/).
   `flui build android` passes `JAVA_HOME` to the Gradle wrapper. Without
   `JAVA_HOME` the native libraries are still built and the APK step is
   skipped, which is what the warning always said.
+- `clap` is pulled with `derive` only: the `cargo` and `env` features
+  enabled macros and attributes no code used. `serde` is a local
+  dependency with `derive` alone rather than the workspace's `rc` set.
+  `cargo shear` and `cargo outdated` report nothing for this crate.
 - iOS simulator probes (`simctl`, `plutil`) run through the same bounded
   process runner as every other probe instead of spinning up an async
   runtime per call.

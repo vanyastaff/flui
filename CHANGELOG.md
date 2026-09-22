@@ -40,6 +40,13 @@ file records the repo-consumer-visible summary.
   was resolved and never used, while the warning promised the APK step
   would be skipped — now it is), and the iOS simulator probes use the
   bounded runner in `proc.rs` instead of a fresh tokio runtime per call.
+- **Dependency audit with `cargo shear`** (`flui-cli`, `flui-hot-reload`,
+  `justfile`). `just shear` runs the feature-aware unused-dependency check.
+  `flui-cli` drops clap's `cargo` and `env` features (no `crate_*!` macro,
+  no `#[arg(env)]` in the code) and declares `serde` locally with `derive`
+  only; `flui-hot-reload` drops `flui-types`, an optional dependency of
+  `app-plugin` that nothing imported. `cargo outdated` finds every direct
+  dependency of the CLI on its latest release.
 - **`flui-cli` draws its own terminal output** (`flui-cli`). `cliclack` is
   gone: it brought 42 of the CLI's 116 crates — ICU text segmentation with
   its data tables and proc-macros, to word-wrap prompt text — for a dozen

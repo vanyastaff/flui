@@ -445,6 +445,11 @@ test-assets:
 deny:
     cargo deny check
 
+[group("quality")]
+[doc("Unused dependencies, feature-aware (requires cargo-shear: cargo install cargo-shear)")]
+shear:
+    cargo shear
+
 # SCOPE: widened from `pipeline::owner::subtree_arena` to `pipeline::owner`
 # to pick up `cell.rs`'s PipelineCell checkout tests and two new
 # real-NodePtr walks alongside the original subtree_arena suite. The
