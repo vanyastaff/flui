@@ -408,17 +408,16 @@ where
                     let now = web_time::Instant::now();
 
                     // A retry owed by a genuine surface-recreation failure gets
-                    // its gated attempt here, BEFORE the frame, through the
-                    // shared helper (its own lane-lock scope; the realm half is
-                    // dispatched outside it).
+                    // its gated attempt here, BEFORE the frame, through the shared
+                    // helper (its own lane-lock scope, released before the realm
+                    // half). This closure already runs as the realm's Frame task, so
+                    // the full-repaint mark goes to `realm` directly and the frame
+                    // about to run is the one that repaints into the new surface —
+                    // re-dispatching it as another Frame task would queue it behind
+                    // this one (the dispatcher is mid-phase) and land it a frame late.
                     match retry_surface_recreation(&lane_frame, &surface_recreation_retry, now) {
                         Some(SurfaceLifecycleOutcome::Recreated) => {
-                            let _ = dispatch_platform_realm(
-                                realm_dispatch,
-                                RealmTask::Frame(Box::new(|realm| {
-                                    realm.mark_primary_needs_full_repaint();
-                                })),
-                            );
+                            realm.mark_primary_needs_full_repaint();
                         }
                         Some(SurfaceLifecycleOutcome::Failed(source)) => {
                             tracing::warn!(
