@@ -926,6 +926,32 @@ install-hooks:
     git config core.hooksPath scripts/githooks
     @echo "core.hooksPath -> scripts/githooks (git push --no-verify still bypasses it)"
 
+# The target directory keeps every version and feature set ever built into it
+# -- several worktrees sharing one CARGO_TARGET_DIR held 17 copies of
+# libflui_types at once -- and nothing prunes it. `cargo sweep` resolves the
+# directory through `cargo metadata`, so CARGO_TARGET_DIR is honored. Deleting
+# artifacts under a running build fails that build ("No such file" in
+# .fingerprint/deps): run these only while nothing builds from this target.
+[group("maintenance")]
+[doc("Bound the target directory (CARGO_TARGET_DIR is honored): drop artifacts of toolchains rustup no longer has, then the oldest artifacts until it is under <max> (default 12GB). Needs cargo-sweep (just doctor). Run only while nothing builds from this target")]
+clean-stale max="12GB":
+    cargo sweep --installed .
+    cargo sweep --maxsize {{max}} .
+    @echo "clean-stale: the nested-cargo test caches are separate target roots cargo-sweep cannot see; drop them with: just clean-nested"
+
+[group("maintenance")]
+[doc("Delete the nested-cargo tests' build caches (cli-template-check/, facade-consumer-check/, tests/trybuild/ under the target directory); the next `just test-nested-cargo` rebuilds them (~9 min cold). Run only while no test run is using them")]
+clean-nested:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target=$(cargo metadata --format-version 1 --no-deps --offline | {{ flui_python }} -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+    for dir in cli-template-check facade-consumer-check tests/trybuild; do
+        if [ -d "$target/$dir" ]; then
+            echo "removing $(du -sh "$target/$dir" | cut -f1) $target/$dir"
+            rm -rf "${target:?}/$dir"
+        fi
+    done
+
 [group("maintenance")]
 [doc("Drop target/debug/incremental only (it reached 8.1 GB after one workspace test build); the next build is a full one for changed crates, nothing else is touched")]
 clean-incremental:

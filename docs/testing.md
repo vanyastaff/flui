@@ -189,8 +189,9 @@ they wrote to `<checkout>/target` whatever `CARGO_TARGET_DIR` said: 5-9 GB of
 private cache per checkout. trybuild keeps its own `tests/trybuild/` there, since
 it builds with a different `--cfg` and would thrash a shared cache. Nothing
 prunes these three directories: they grow with every FLUI version and feature
-set built through them (1.5-3 GB each is normal), and `just clean-stale` or
-deleting them by hand is safe whenever no test run is using them.
+set built through them (1.5-3 GB each is normal). `just clean-nested` deletes
+them, safe whenever no test run is using them; `just clean-stale` bounds the
+main target directory the same way (oldest artifacts first, via cargo-sweep).
 
 **Limitation of a shared `CARGO_TARGET_DIR`.** trybuild writes each suite's
 generated project into `<target>/tests/trybuild/<crate>/`. Two checkouts
