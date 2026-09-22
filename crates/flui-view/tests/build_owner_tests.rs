@@ -673,5 +673,13 @@ fn test_build_owner_memory_size() {
     // (`lifecycle_handle: Option<LifecycleHandle>`): one niche-optimised
     // `Weak` pointer, 8 bytes, `None` for a bare owner and set once by the
     // binding that hosts a presentation.
-    assert!(size < 696, "BuildOwner is too large: {size} bytes");
+    //
+    // 688 -> 696 for ADR-0074's per-frame rebuild telemetry
+    // (`frame_builds: Box<FrameBuildCounts>`, one pointer; the sixteen
+    // counters live behind it precisely so this struct does not pay for a
+    // table). Under the `signals` feature the realm's `reactive: Reactive`
+    // (a `u32` graph id plus an `Rc`: 16 bytes, measured 712 by the CI
+    // feature run) sits beside it, so the budget below leaves room for both
+    // configurations.
+    assert!(size < 720, "BuildOwner is too large: {size} bytes");
 }

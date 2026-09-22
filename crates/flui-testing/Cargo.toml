@@ -21,6 +21,11 @@ exclude = ["/benches/"]
 # drives its own `HeadlessBinding` instance), so no isolated targets.
 autotests = false
 
+[features]
+# ADR-0074: exposes `HeadlessBinding::reactive()` so a test creates, writes and
+# reads signals against the tree's own graph.
+signals = ["flui-view/signals"]
+
 [lints]
 workspace = true
 

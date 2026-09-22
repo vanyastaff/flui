@@ -34,6 +34,10 @@ wasm-bindgen-test = "=0.3.77"
 [features]
 default = ["desktop"]
 
+# ADR-0074 phase-2 prototype: `UiCommand::SignalWrite` — a cross-thread signal write
+# executed on the realm's owner thread at the next Idle drain.
+signals = ["flui-view/signals"]
+
 # === Platform Features ===
 # Honest note (verified 2026-08-04): these four are no-op selectors today —
 # `rg 'feature\s*=\s*"(desktop|android|ios|web)"' crates/flui-app/src` has

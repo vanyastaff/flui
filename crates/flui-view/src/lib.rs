@@ -93,6 +93,8 @@ pub mod element;
 pub mod key;
 pub mod macros; // PORT-CHECK-OK-SP4: macros consumed via #[macro_export] (no qualified path); intentional API surface
 pub mod owner;
+#[cfg(feature = "signals")]
+pub mod reactive;
 pub mod seq; // PORT-CHECK-OK-SP4: seq/Children API surface; consumed via prelude re-exports
 pub mod state_cell;
 pub mod tree;
@@ -211,10 +213,12 @@ pub use test_only_global_key_registry::{
 };
 // Tree management
 pub use owner::{
-    BuildOwner, DuplicateGlobalKey, ElementOwner, GlobalKeyScope, LifecycleHook, RebuildHandle,
-    RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
+    BuildOwner, DuplicateGlobalKey, ElementOwner, FrameBuildReport, GlobalKeyScope, LifecycleHook,
+    RebuildHandle, RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
+#[cfg(feature = "signals")]
+pub use reactive::{Reactive, Signal, SignalError, SignalSender, SignalSlot, SlotInfo};
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{

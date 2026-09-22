@@ -1740,6 +1740,8 @@ impl ElementTree {
         let providers = owner.unmount_inherited_dependent(dependent);
         self.release_inherited_providers(dependent, providers);
         owner.clear_pending_dependency_change(dependent);
+        #[cfg(feature = "signals")]
+        owner.release_reactive(dependent);
         // A keep-alive lease normally releases through its own `Drop` when the
         // holder's state drops. An element can be torn down without that
         // happening in the same step, and a stranded holder would keep

@@ -228,6 +228,21 @@ impl BuildContext for ElementBuildContext {
         self.owner.read().rebuild_handle(self.element_id)
     }
 
+    #[cfg(feature = "signals")]
+    fn reactive(&self) -> crate::reactive::Reactive {
+        self.owner.read().reactive().clone()
+    }
+
+    #[cfg(feature = "signals")]
+    fn signal_read(&self, slot: crate::reactive::SignalSlot) {
+        if BuildContext::is_building(self) {
+            self.owner
+                .read()
+                .reactive()
+                .register_element_reader(slot, self.element_id);
+        }
+    }
+
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
         self.owner.read().async_driver().cloned()
     }
@@ -672,6 +687,8 @@ pub(crate) struct BuildCapabilities {
     /// The presentation's keep-alive table, so an item can take a hold on the
     /// lazy sliver child it lives inside from `init_state`.
     pub(crate) keep_alive: crate::owner::KeepAliveHolds,
+    #[cfg(feature = "signals")]
+    pub(crate) reactive: crate::reactive::Reactive,
 }
 
 pub(crate) struct BuildCtx<'b> {
@@ -762,6 +779,18 @@ impl BuildContext for BuildCtx<'_> {
 
     fn rebuild_handle(&self) -> crate::RebuildHandle {
         self.rebuild.clone()
+    }
+
+    #[cfg(feature = "signals")]
+    fn reactive(&self) -> crate::reactive::Reactive {
+        self.capabilities.reactive.clone()
+    }
+
+    #[cfg(feature = "signals")]
+    fn signal_read(&self, slot: crate::reactive::SignalSlot) {
+        self.capabilities
+            .reactive
+            .register_element_reader(slot, self.element_id);
     }
 
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
@@ -1350,6 +1379,8 @@ mod tests {
                 hit_test_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
+                #[cfg(feature = "signals")]
+                reactive: crate::reactive::Reactive::new(),
             },
         );
         ctx.visit_child_elements(&mut |_| {});
@@ -1376,6 +1407,8 @@ mod tests {
                 hit_test_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
+                #[cfg(feature = "signals")]
+                reactive: crate::reactive::Reactive::new(),
             },
         );
 

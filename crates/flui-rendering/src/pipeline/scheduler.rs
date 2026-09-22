@@ -97,6 +97,11 @@ pub(super) struct DirtyTracker {
 
     /// True while `run_semantics` is iterating `dirty.needs_semantics`.
     debug_doing_semantics: bool,
+    /// Dirty layout entries drained by every `run_layout` so far — monotonic,
+    /// so a caller measures a frame as the difference across it (`run_layout`
+    /// can run several times per frame, so a per-run reset would report only
+    /// the last, usually empty, pass; ADR-0074 §8 telemetry).
+    layout_drained_total: u64,
 
     /// Shared wake sink — the same `Arc` that `PipelineOwner` holds for its
     /// callback setters. Both clones point at the same
@@ -116,6 +121,7 @@ impl DirtyTracker {
             debug_doing_layout: false,
             debug_doing_paint: false,
             debug_doing_semantics: false,
+            layout_drained_total: 0,
             notifier,
             #[cfg(test)]
             eviction_passes: 0,
@@ -773,7 +779,14 @@ impl DirtyTracker {
     /// loop picks them up in the next iteration.
     pub(super) fn take_layout_batch_shallow_first(&mut self) -> Vec<DirtyNode> {
         self.dirty.needs_layout.sort_shallow_first();
-        self.dirty.needs_layout.drain().collect()
+        let batch: Vec<DirtyNode> = self.dirty.needs_layout.drain().collect();
+        self.layout_drained_total += batch.len() as u64;
+        batch
+    }
+
+    /// Dirty layout entries drained by every `run_layout` so far.
+    pub(super) fn layout_drained_total(&self) -> u64 {
+        self.layout_drained_total
     }
 
     // =========================================================================

@@ -95,6 +95,16 @@ pub trait BuildContext {
     /// [`FOUNDATIONS.md`]: ../../../docs/FOUNDATIONS.md
     fn rebuild_handle(&self) -> crate::RebuildHandle;
 
+    /// The realm's reactive graph (ADR-0074). Reachable from every lifecycle
+    /// hook and callback; the graph is owned by the `BuildOwner`.
+    #[cfg(feature = "signals")]
+    fn reactive(&self) -> crate::reactive::Reactive;
+
+    /// Record that the element building through this context read `slot`.
+    /// Called by `Signal::get`/`with`; a no-op outside a build.
+    #[cfg(feature = "signals")]
+    fn signal_read(&self, slot: crate::reactive::SignalSlot);
+
     /// The binding's frame-driven async task driver, if a binding
     /// installed one.
     ///
@@ -465,6 +475,21 @@ pub trait BuildContext {
 
 /// Extension trait for typed InheritedView lookups.
 pub trait BuildContextExt: BuildContext {
+    /// Create a signal owned by **this element** (ADR-0074): released when the
+    /// element unmounts. Call it from `ViewState::init_state` (or
+    /// `did_change_dependencies`) and hold the `Copy` handle in the state;
+    /// read it in `build` with `Signal::get`/`with`.
+    ///
+    /// # Panics
+    ///
+    /// If called while this element's `build` is running
+    /// (`SignalError::CreatedDuringBuild`): a slot per rebuild is a leak.
+    #[cfg(feature = "signals")]
+    #[must_use]
+    fn signal<T: 'static>(&self, value: T) -> crate::reactive::Signal<T> {
+        self.reactive().signal_owned_by(self.element_id(), value)
+    }
+
     /// Look up data from an ancestor InheritedView (with dependency).
     ///
     /// Typed callback wrapper over [`BuildContext::depend_on_inherited`].

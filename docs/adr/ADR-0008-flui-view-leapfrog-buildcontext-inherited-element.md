@@ -104,7 +104,7 @@ This makes "setState after dispose", "listener leak", and "wake a dead element" 
 | "Forgot to mark dirty" / wake a dead element | silent no-update / runtime throw | varies | **unrepresentable** (`Mounted` is the only re-entry; mutate auto-schedules) |
 | Reconciliation observability | debug-mode rebuild tracking + devtools protocol | no stable typed production diff trace | typed, zero-cost-when-unsubscribed `flui::reconcile` stream from the **live** path |
 
-R1 (loyalty) holds throughout: the leapfrog is in developer-facing safety, ergonomics, and internal efficiency — not in changing what the end user sees — exactly as `UsageByParent` improved the contract without changing layout output. Signals-as-default are rejected (they route invalidation around the retained tree, violating R1 and C1); the smallest sound invalidation unit stays the Element.
+R1 (loyalty) holds throughout: the leapfrog is in developer-facing safety, ergonomics, and internal efficiency — not in changing what the end user sees — exactly as `UsageByParent` improved the contract without changing layout output. Signals-as-default are rejected (they route invalidation around the retained tree, violating R1 and C1); the smallest sound invalidation unit stays the Element. **Superseded-by: [ADR-0074](ADR-0074-realm-scoped-signals.md)** for the first clause — realm-scoped signals do *not* route around the tree: a write only puts reader elements on the same depth heap, and the field-mask registry planned here is the same reader registry (ADR-0074 §5.5). The second clause (Element as the invalidation unit) stands and is what ADR-0074 relies on.
 
 ---
 

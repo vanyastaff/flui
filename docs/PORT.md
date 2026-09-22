@@ -486,6 +486,25 @@ The check scans filenames rather than contents: `docs/adr/ADR-NNNN-*.md`, number
 
 **Allowlist:** none. A number is used once.
 
+### 24. A realm-scoped **signal written or created** inside a `build` / layout / paint body
+
+[ADR-0074](adr/ADR-0074-realm-scoped-signals.md) makes *reading* a signal in `build` the sanctioned subscription path — `Signal::get(cx)` / `with(cx)` / `try_get` / `try_with` register the building element as a reader, the same class of edge as `depend_on`, so trigger 22's capability list is deliberately untouched. What is refused is the other direction:
+
+| Refused inside a guarded body | Why |
+|---|---|
+| `signal.set(&r, ..)`, `signal.update(&r, ..)`, `signal.set_if_changed(&r, ..)` | a write from `build` re-marks readers of the frame that is still building — the unbounded-loop hazard trigger 22 exists for; from `perform_layout`/`paint` it mutates state after `build_scope` already ran, so the current frame observes torn state |
+| `cx.signal(..)`, `r.signal_owned_by(..)`, `r.try_signal(..)`, `r.try_signal_owned_by(..)` | a slot created per build is a leak; create in `init_state` / `did_change_dependencies` and hold the `Copy` handle |
+
+`peek(..)` is allowed anywhere (it registers nothing), and so is a write from a callback closure *defined* in `build` — the closure body runs later, from an event.
+
+**This trigger is advisory.** A textual scanner cannot tell a closure the build defines for later (`on_tap(move |_| sig.set(..))`) from one it invokes synchronously (`items.iter().for_each(|i| sig.set(..))`), and it cannot see a write behind a helper function. The binding gate is the **run-time guard** in `flui-view::reactive`: while an element's `build` runs (armed by `build_or_recover`, the one choke point every element kind builds through), a write is `SignalError::WrittenDuringBuild` and a creation is `SignalError::CreatedDuringBuild`, each with a `tracing::warn!`, and `crates/flui-widgets/tests/signals.rs` proves it against the real pipeline. The scanner catches the obvious cases at review time, before a test has to.
+
+**Guarded functions:** the same list as trigger 22.
+
+**Implementation:** [`scripts/check-signal-write-scope.sh`](../scripts/check-signal-write-scope.sh), a brace-depth scanner like trigger 22's, matching `.set(`/`.update(` only when the first argument reads like a graph handle followed by a comma (or when rustfmt wrapped the call, `.set(` at a line end), plus the four creation names; one-argument `Cell::set(x)` and `WidgetStatesController::update(WidgetState::Pressed, ..)` do not match. The rejected fixture lives under `scripts/fixtures/signal-write/`; the **accepted fixture is real code**, `crates/flui-widgets/tests/signals_scanner_accepted.rs`, compiled and run under the `signals` feature, so every legal shape it pins also type-checks. `--self-test` asserts every token is reported by the rejected fixture and none by the accepted one; `port-check.sh` runs the self-test first and fails closed if the scanner itself fails.
+
+**Allowlist:** a line carrying `PORT-CHECK-OK-24: <reason>` is skipped. The only holders are the run-time-guard tests in `crates/flui-widgets/tests/signals.rs`, which write and create from `build` on purpose to prove the refusal; production code has no entry.
+
 ### LockDiscipline/StatementDrop. A significant value must not drop while its own lock guard is still held
 
 **Scope:** `crates/` — the whole workspace (minus `examples/`). `scripts/port-check.sh`'s own trigger comment already states this as the current scope, widened from the two crates issue #1150's original lock-drop sweep first audited site by site (`crates/flui-scheduler`, `crates/flui-foundation`), and running the scan confirms it: it does flag hits outside those two crates today (e.g. `crates/flui-widgets`, `crates/flui-material`), each resolved the same way as any other hit — a real violation fixed by extract-then-drop, or sanctioned by a `// PORT-CHECK-OK-LOCK: <reason>` marker (see the Allowlist entry below). Tracking issue #1176 describes this widening as its task but is still open at the time of this note — the code and this doc are both ahead of the tracker; closing #1176 (or filing what's actually left, if anything) is separate housekeeping, not a reason to keep describing the scope as unwidened.
@@ -1226,7 +1245,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs 23 refusal triggers — one `rg` (ripgrep) pass each, except trigger 22, which delegates to a brace-depth scanner, and trigger 23, which scans filenames rather than file contents — plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure), and extra named architecture guards including `ADR-0027/platform-control`, `ADR-0037/closed-ui-commands`, `ADR-0037/focus-owner`, and `LockDiscipline/StatementDrop` — and filters out doc-comment matches except where a guard deliberately treats public docs as part of its surface. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs 24 refusal triggers — one `rg` (ripgrep) pass each, except triggers 22 and 24, which delegate to brace-depth scanners, and trigger 23, which scans filenames rather than file contents — plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure), and extra named architecture guards including `ADR-0027/platform-control`, `ADR-0037/closed-ui-commands`, `ADR-0037/focus-owner`, and `LockDiscipline/StatementDrop` — and filters out doc-comment matches except where a guard deliberately treats public docs as part of its surface. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 

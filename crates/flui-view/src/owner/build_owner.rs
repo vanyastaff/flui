@@ -249,6 +249,72 @@ pub(crate) struct BuildScopeQueues {
     scratch: Vec<DirtyElement>,
 }
 
+/// Per-cause rebuild counters for one `build_scope`, indexed by the
+/// `RebuildReason` discriminant (`#[repr(u8)]`), sized by `RebuildReason::COUNT`
+/// so a new variant grows the table with it.
+#[derive(Debug, Default)]
+struct FrameBuildCounts {
+    /// Which causes appeared this frame — the bitset is also the stable
+    /// iteration order for the report.
+    seen: Option<RebuildReasons>,
+    counts: [usize; RebuildReason::COUNT],
+}
+
+impl FrameBuildCounts {
+    fn clear(&mut self) {
+        self.seen = None;
+        self.counts = [0; RebuildReason::COUNT];
+    }
+
+    fn record(&mut self, reason: RebuildReason) {
+        let index = reason as u8 as usize;
+        debug_assert!(
+            index < self.counts.len(),
+            "BUG: RebuildReason outgrew the counter table"
+        );
+        if let Some(slot) = self.counts.get_mut(index) {
+            *slot += 1;
+        }
+        match &mut self.seen {
+            Some(seen) => seen.insert(reason),
+            None => self.seen = Some(RebuildReasons::from_reason(reason)),
+        }
+    }
+
+    fn by_reason(&self) -> Vec<(RebuildReason, usize)> {
+        self.seen
+            .into_iter()
+            .flat_map(RebuildReasons::iter)
+            .map(|reason| {
+                (
+                    reason,
+                    self.counts.get(reason as u8 as usize).copied().unwrap_or(0),
+                )
+            })
+            .collect()
+    }
+}
+
+/// Per-frame rebuild telemetry, see [`BuildOwner::last_frame_build_report`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FrameBuildReport {
+    /// Distinct elements rebuilt by the last `build_scope`.
+    pub elements_built: usize,
+    /// Rebuilt-element count per cause, in stable diagnostic-name order.
+    pub by_reason: Vec<(RebuildReason, usize)>,
+}
+
+impl FrameBuildReport {
+    /// How many rebuilt elements carried `reason`.
+    #[must_use]
+    pub fn count(&self, reason: RebuildReason) -> usize {
+        self.by_reason
+            .iter()
+            .find(|(candidate, _)| *candidate == reason)
+            .map_or(0, |(_, count)| *count)
+    }
+}
+
 impl DirtyElement {
     /// Construct a new dirty-elements heap entry.
     pub(crate) fn new(id: ElementId, depth: usize) -> Self {
@@ -371,6 +437,11 @@ pub struct BuildOwner {
     /// provider on deactivate/unmount without adding a collection to every
     /// [`ElementNode`](crate::tree::ElementNode).
     pub(crate) inherited_dependencies: InheritedDependencies,
+    /// ADR-0074: the realm's reactive graph. Constructed with the owner,
+    /// re-pointed at the external inbox whenever the frame-request callback
+    /// changes (`set_on_build_scheduled`).
+    #[cfg(feature = "signals")]
+    reactive: crate::reactive::Reactive,
 
     /// Keep-alive holds on lazy sliver children — which children band eviction
     /// must skip. Presentation-scoped like every other lifecycle capability,
@@ -459,6 +530,12 @@ pub struct BuildOwner {
     /// or from the other half of an A↔B ping-pong — and spends one unit of
     /// [`Self::mid_drain_absorbs_left`].
     pub(crate) built_this_frame: HashSet<ElementId>,
+    /// How many elements this frame's drain rebuilt for each cause — the
+    /// per-frame telemetry ADR-0074 §8 measures against (`FrameStats` has no
+    /// rebuild figure). Reset with `built_this_frame` at every `build_scope`.
+    /// Boxed so the owner grows by one pointer, not by a counter table
+    /// (`build_owner_tests::test_build_owner_memory_size` budgets this struct).
+    frame_builds: Box<FrameBuildCounts>,
 
     /// Registry of live lazy-sliver [`ChildManager`]s, one per live adaptor
     /// element. Keyed by the sliver's `RenderId`; populated at mount and
@@ -632,7 +709,7 @@ impl BuildOwner {
     /// The manager is not replaceable after construction: the element tree and
     /// focus tree share one ownership lifetime.
     pub fn with_focus_manager(focus_manager: Rc<FocusManager>) -> Self {
-        Self {
+        let owner = Self {
             dirty_elements: BinaryHeap::new(),
             dirty_reasons: HashMap::new(),
             global_keys: GlobalKeyRegistry::new(),
@@ -641,6 +718,8 @@ impl BuildOwner {
             inactive_elements: Vec::new(),
             pending_dependency_changes: std::collections::HashSet::new(),
             inherited_dependencies: InheritedDependencies::default(),
+            #[cfg(feature = "signals")]
+            reactive: crate::reactive::Reactive::new(),
             keep_alive: super::KeepAliveHolds::default(),
             tree_observer: None,
             recovered_panics: Vec::new(),
@@ -654,6 +733,7 @@ impl BuildOwner {
             mid_drain_absorbs_left: MAX_MID_DRAIN_ABSORBS,
             mid_drain_cap_streak: false,
             built_this_frame: HashSet::new(),
+            frame_builds: Box::default(),
             child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
             layout_builder_registry: LayoutBuilderRegistry::default(),
             lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
@@ -668,7 +748,13 @@ impl BuildOwner {
             hit_test_handle: None,
             owner_tag: OwnerTag::fresh(),
             global_key_scope: None,
-        }
+        };
+        // ADR-0074: writes must reach the inbox from the first frame, before any
+        // binding installs a frame-request callback (`set_on_build_scheduled`
+        // re-points the graph when one arrives).
+        #[cfg(feature = "signals")]
+        owner.reactive.set_scheduler(owner.external_scheduler());
+        owner
     }
 
     #[doc(hidden)]
@@ -875,6 +961,16 @@ impl BuildOwner {
         F: Fn() + Send + Sync + 'static,
     {
         self.on_build_scheduled = Some(Arc::new(callback));
+        #[cfg(feature = "signals")]
+        self.reactive.set_scheduler(self.external_scheduler());
+    }
+
+    /// The realm's reactive graph (ADR-0074): signals and the
+    /// reader registry that schedules exactly the elements that read a
+    /// written signal.
+    #[cfg(feature = "signals")]
+    pub fn reactive(&self) -> &crate::reactive::Reactive {
+        &self.reactive
     }
 
     /// Schedule an element for rebuild.
@@ -1148,6 +1244,8 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
+            #[cfg(feature = "signals")]
+            reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
         }
     }
@@ -1212,6 +1310,18 @@ impl BuildOwner {
     /// through this owner's inbox.
     pub(crate) fn rebuild_handle(&self, element: ElementId) -> super::RebuildHandle {
         super::RebuildHandle::new(self.external_scheduler(), element)
+    }
+
+    /// What the most recent `build_scope` rebuilt: the number of distinct
+    /// elements built this frame and, per [`RebuildReason`], how many of them
+    /// carried that cause (an element scheduled for two reasons counts once in
+    /// `elements_built` and once under each reason). Reset at every
+    /// `build_scope`, so read it after a pump, before the next one.
+    pub fn last_frame_build_report(&self) -> FrameBuildReport {
+        FrameBuildReport {
+            elements_built: self.built_this_frame.len(),
+            by_reason: self.frame_builds.by_reason(),
+        }
     }
 
     /// Number of elements queued in the out-of-frame inbox, awaiting the next
@@ -1301,6 +1411,7 @@ impl BuildOwner {
         }
         self.mid_drain_absorbs_left = MAX_MID_DRAIN_ABSORBS;
         self.built_this_frame.clear();
+        self.frame_builds.clear();
 
         self.build_scope_impl(tree);
     }
@@ -1657,6 +1768,8 @@ impl BuildOwner {
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
+                    #[cfg(feature = "signals")]
+                    reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
                 };
                 if needs_did_change {
@@ -1747,6 +1860,9 @@ impl BuildOwner {
             // rescheduling itself, a child notifying it back, or one half of
             // an A↔B ping-pong — see `Self::absorb_mid_drain_inbox`.
             self.built_this_frame.insert(id);
+            for reason in reasons.iter() {
+                self.frame_builds.record(reason);
+            }
 
             // ADR-0040: the build ran to completion (the resume_unwind branch
             // can no longer take it) and the slot is restored — safe window
@@ -1813,6 +1929,8 @@ impl BuildOwner {
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
+                    #[cfg(feature = "signals")]
+                    reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
                 };
                 crate::tree::id_reconcile::reconcile_children_by_id(
@@ -2246,6 +2364,8 @@ impl BuildOwner {
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
                 recovered_panics: &mut self.recovered_panics,
+                #[cfg(feature = "signals")]
+                reactive: &self.reactive,
                 lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
             };
 
@@ -2453,6 +2573,8 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
+            #[cfg(feature = "signals")]
+            reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
         };
 

@@ -502,7 +502,7 @@ def production_files(crates_dir: Path) -> list[Path]:
 
 
 # =============================================================================
-# expect() site extraction: locate every `.expect(` call surviving the
+# expect()/panic!() site extraction: locate every `.expect(` call surviving the
 # production_code() pipeline (i.e. not in a comment, doc, or cfg(test)-gated
 # item), then read its message from the ORIGINAL (unmasked) text -- the mask
 # pass preserves line/column layout exactly, so a location found in the
@@ -510,6 +510,19 @@ def production_files(crates_dir: Path) -> list[Path]:
 # =============================================================================
 
 EXPECT_RE = re.compile(r"\.expect\(")
+# `panic!(` sites are held to the same ratchet. A panic message conforms when it
+# starts with `BUG: ` (an internal invariant) OR names its fallible twin with a
+# `try_` identifier (the convenience-twin rule in PANIC-POLICY.md: `get` over
+# `try_get`, like `RefCell::borrow` over `try_borrow`).
+PANIC_RE = re.compile(r"(?<![A-Za-z0-9_])panic!\(")
+
+
+def conforms(kind: str, content: str | None) -> bool:
+    if content is None:
+        return False
+    if content.startswith("BUG: "):
+        return True
+    return kind == "panic" and "try_" in content
 _CONST_DEF_TMPL = r"const\s+{name}\s*:[^=]*=\s*"
 
 
@@ -556,7 +569,9 @@ def extract_string_literal(raw: str, start: int) -> tuple[str, int] | None:
 
 def nonconforming_sites(rs_file: Path) -> list[tuple[int, str]]:
     """Returns (line_number, message-or-placeholder) for every production
-    `.expect(...)` site whose message does not start with `BUG: `."""
+    `.expect(...)` site whose message does not start with `BUG: `, and every
+    production `panic!(...)` site whose message neither starts with `BUG: `
+    nor names a `try_` twin."""
     raw = rs_file.read_text()
     prod = production_code(raw)
     prod_lines = prod.split("\n")
@@ -568,7 +583,10 @@ def nonconforming_sites(rs_file: Path) -> list[tuple[int, str]]:
 
     sites: list[tuple[int, str]] = []
     for li, pline in enumerate(prod_lines):
-        for m in EXPECT_RE.finditer(pline):
+        matches = [("expect", m) for m in EXPECT_RE.finditer(pline)] + [
+            ("panic", m) for m in PANIC_RE.finditer(pline)
+        ]
+        for kind, m in matches:
             col = m.end()
             content: str | None = None
             search_line = li
@@ -600,7 +618,7 @@ def nonconforming_sites(rs_file: Path) -> list[tuple[int, str]]:
                 search_line += 1
                 search_col = 0
                 hops += 1
-            if content is None or not content.startswith("BUG: "):
+            if not conforms(kind, content):
                 sites.append((li + 1, content if content is not None else "<dynamic, non-literal argument>"))
     return sites
 
@@ -643,7 +661,7 @@ def run_check(crates_dir: Path, allowlist: dict[str, int]) -> tuple[list[str], d
       * counted, not listed          -> new debt, must be declared (fail)
       * listed, now zero sites       -> stale entry, must be removed (fail)
       * listed count < actual count  -> REGRESSION: the file gained bare
-                                         expect() site(s) since it was listed
+                                         expect()/panic!() site(s) since it was listed
                                          (fail) -- this is the ratchet's
                                          whole point: a file does not stay
                                          green just by staying on the list
@@ -667,13 +685,13 @@ def run_check(crates_dir: Path, allowlist: dict[str, int]) -> tuple[list[str], d
         preview = "; ".join(f"{n}: {msg[:60]!r}" for n, msg in sites[:3])
         more = f" (+{len(sites) - 3} more)" if len(sites) > 3 else ""
         errors.append(
-            f"{rel} has {len(sites)} production expect() site(s) without the `BUG: ` prefix "
+            f"{rel} has {len(sites)} production expect()/panic!() site(s) without the `BUG: ` prefix "
             f"and is not on docs/panic-policy-allowlist.txt: {preview}{more}"
         )
     for rel in fully_stale:
         errors.append(
             f"{rel} is on docs/panic-policy-allowlist.txt but no longer has any non-conforming "
-            "expect() site -- remove its entry (the allowlist is a shrink-only ratchet)"
+            "expect()/panic!() site -- remove its entry (the allowlist is a shrink-only ratchet)"
         )
     for rel in tracked:
         actual = counts[rel]
@@ -682,13 +700,13 @@ def run_check(crates_dir: Path, allowlist: dict[str, int]) -> tuple[list[str], d
             sites = nonconforming_sites(root / rel)
             preview = "; ".join(f"{n}: {msg[:60]!r}" for n, msg in sites[:3])
             errors.append(
-                f"{rel} has {actual} non-conforming expect() site(s) now, but "
+                f"{rel} has {actual} non-conforming expect()/panic!() site(s) now, but "
                 f"docs/panic-policy-allowlist.txt lists {listed} -- new debt was added to an "
                 f"already-listed file (fix the new site(s) or raise the listed count): {preview}"
             )
         elif actual < listed:
             errors.append(
-                f"{rel} has {actual} non-conforming expect() site(s) now, but "
+                f"{rel} has {actual} non-conforming expect()/panic!() site(s) now, but "
                 f"docs/panic-policy-allowlist.txt still lists {listed} -- lower the listed count "
                 "to match (the allowlist is a shrink-only ratchet per file, not just per file set)"
             )
@@ -726,6 +744,7 @@ def self_test() -> int:
     check("conforming.rs.fixture", 0)
     check("unlisted_violation.rs.fixture", 1)
     check("stale_allowlist_candidate.rs.fixture", 0)
+    check("panic_sites.rs.fixture", 2)
 
     # Exercise the REAL run_check() pipeline end to end (not a hand-rolled
     # re-check of the same set arithmetic): copy the fixtures into a
@@ -766,7 +785,7 @@ def self_test() -> int:
             print("self-test: fully reconciled allowlist passes clean")
             errors, _ = run_check(
                 crate_src.parent.parent,
-                {f"{rel_prefix}/unlisted_violation.rs": 1},
+                {f"{rel_prefix}/unlisted_violation.rs": 1, f"{rel_prefix}/panic_sites.rs": 2},
             )
             if not errors:
                 print("  ok: no violations when the allowlist matches reality exactly")
@@ -929,6 +948,6 @@ if errors:
 total_sites = sum(counts.values())
 print(
     f"check-panic-policy: {len(counts)} file(s) on the allowlist, "
-    f"{total_sites} tracked non-conforming expect() site(s); no unlisted or stale entries"
+    f"{total_sites} tracked non-conforming expect()/panic!() site(s); no unlisted or stale entries"
 )
 PY

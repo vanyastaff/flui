@@ -571,6 +571,8 @@ facade-combos:
                  "--no-default-features --features hot-reload" \
                  "--no-default-features --features serde" \
                  "--no-default-features --features a11y" \
+                 "--no-default-features --features signals" \
+                 "--no-default-features --features material,signals" \
                  "--all-features" \
                  ""; do
         echo "==> cargo clippy -p flui --locked --all-targets ${combo:-(default features)}"
@@ -646,7 +648,7 @@ toolchain-consistency-check:
 # =============================================================================
 
 [group("port")]
-[doc("Run refusal-trigger grep regressions (22 triggers + named guards from docs/PORT.md)")]
+[doc("Run refusal-trigger grep regressions (24 triggers + named guards from docs/PORT.md)")]
 port-check:
     bash scripts/port-check.sh
 
@@ -678,6 +680,11 @@ port-markers:
 [doc("Run benchmarks for a single crate (criterion)")]
 bench crate:
     cargo bench -p {{crate}}
+
+[group("perf")]
+[doc("ADR-0074 §8 go/no-go: setState vs signals rebuild/relayout counts + pump time on one widget tree")]
+bench-signals:
+    cargo bench -p flui-widgets --features signals --bench signals_rebuilds -- --noplot
 
 [group("bench")]
 [doc("Run benchmarks across the workspace")]

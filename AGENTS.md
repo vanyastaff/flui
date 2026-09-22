@@ -69,7 +69,7 @@
 
 ## Architecture Constraints (port methodology)
 
-Enforced by `just port-check`/CI; 23 refusal triggers + FR-033 in [`docs/PORT.md`](docs/PORT.md).
+Enforced by `just port-check`/CI; 24 refusal triggers + FR-033 in [`docs/PORT.md`](docs/PORT.md).
 
 | Rule | Checked by |
 |------|------------|

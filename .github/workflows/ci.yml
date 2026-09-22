@@ -124,7 +124,7 @@ jobs:
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
           # release day. Bump deliberately. `ripgrep` is required by
-          # scripts/port-check.sh (the 22 refusal triggers + FR-033 all
+          # scripts/port-check.sh (the 24 refusal triggers + FR-033 all
           # run through `rg`).
           #
           # actionlint is NOT here: install-action has no recipe for it and
@@ -191,7 +191,7 @@ jobs:
       - name: 'panic-policy expect-message convention gate'
         run: bash scripts/check-panic-policy.sh
 
-      - name: scripts/port-check.sh (22 refusal triggers + FR-033)
+      - name: scripts/port-check.sh (24 refusal triggers + FR-033)
         run: bash scripts/port-check.sh -v
 
       # Browsers' WGSL uniformity analysis rejects a derivative taken inside a
@@ -579,6 +579,17 @@ jobs:
       # CI-dead.
       - name: cargo nextest run (facade non-default catalogs)
         run: cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
+
+      # ADR-0074 realm-scoped signals live behind the non-default `signals`
+      # feature on flui-view/flui-testing/flui-widgets/flui-app; the workspace
+      # run above never compiles their tests. Same rule as the two blocks
+      # above: a test behind a non-default feature needs its own run.
+      - name: cargo nextest run (realm-scoped signals feature)
+        run: >
+          cargo nextest run
+          -p flui-view -p flui-testing -p flui-widgets -p flui-app
+          --features flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals
+          --locked --no-fail-fast
 
       # The facade run above drives the insta demo-snapshot suite, so this job
       # needs the same candidate upload `test` has — otherwise a snapshot diff

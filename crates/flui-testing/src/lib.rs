@@ -576,6 +576,18 @@ impl HeadlessBinding {
         self.vsync = vsync;
     }
 
+    /// The realm's reactive graph (ADR-0074): create signals, write them, and
+    /// read them back without mounting a widget around them. `None` for a
+    /// gesture-only binding (built via [`new`](Self::new) rather than
+    /// [`with_tree`](Self::with_tree)): there is no tree, so no graph.
+    #[cfg(feature = "signals")]
+    #[must_use]
+    pub fn reactive(&self) -> Option<flui_view::Reactive> {
+        self.tree
+            .as_ref()
+            .map(|tree| tree.build_owner.reactive().clone())
+    }
+
     /// Mutable access to the bound `BuildOwner`, for an embedder/harness that
     /// schedules a specific element's rebuild (e.g. a root `setState`) before
     /// calling [`pump_frame`](Self::pump_frame).

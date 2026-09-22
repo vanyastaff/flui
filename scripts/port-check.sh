@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/port-check.sh
 #
-# Verifies the 23 refusal triggers (1-23, with #9 numbered for FR-036)
+# Verifies the 24 refusal triggers (1-24, with #9 numbered for FR-036)
 # documented in docs/PORT.md against the workspace, plus the FR-033
 # sanctioned-dyn-boundary check, the N-geom.U16 engine-glam boundary
 # guard, Cross.H2 canonical-type-home guards, the Cross.H3
@@ -35,7 +35,7 @@
 # docs/PORT.md "## Verification" for usage and rationale.
 #
 # Usage:
-#   bash scripts/port-check.sh             # check all 23 triggers + extra guards; silent on pass
+#   bash scripts/port-check.sh             # check all 24 triggers + extra guards; silent on pass
 #   bash scripts/port-check.sh -v          # verbose: per-trigger pass + marker totals
 #   bash scripts/port-check.sh -b          # marker-budget mode (per-file breakdown)
 #   bash scripts/port-check.sh --verbose   # alias for -v
@@ -1662,6 +1662,49 @@ else
     echo "ok    23: every ADR number is used exactly once"
   fi
 fi
+# -----------------------------------------------------------------------------
+# Trigger 24 (ADR-0074) — a realm-scoped signal is never WRITTEN or CREATED
+# inside a build / layout / paint body.
+#
+# Reading a signal in `build` is the sanctioned subscription path (the same
+# class as `depend_on`), and trigger 22's capability list is untouched. The
+# write side is the hazard: `Signal::set`/`update`/`set_if_changed` from a
+# frame phase re-marks readers of the frame still running (the unbounded-loop
+# hazard trigger 22 exists for); a slot created per build (`signal`,
+# `signal_owned_by` and their `try_` forms) leaks one slot per rebuild. The
+# runtime refuses both (`SignalError::{WrittenDuringBuild, CreatedDuringBuild}`)
+# and is the gate; this scanner is the advisory static half.
+#
+# Delegates to a brace-depth scanner with its own accept/reject fixtures:
+# `scripts/check-signal-write-scope.sh --self-test`.
+# -----------------------------------------------------------------------------
+# Fail closed: a scanner that cannot run is a red trigger, not a green one,
+# and its self-test runs first so a broken scanner cannot pass by silence.
+# Exit 0 = clean, 1 = violations, anything else = the scanner itself failed.
+if ! "${repo_root}/scripts/check-signal-write-scope.sh" --self-test >/dev/null 2>&1; then
+  echo "VIOLATION 24: scripts/check-signal-write-scope.sh failed its own self-test"
+  "${repo_root}/scripts/check-signal-write-scope.sh" --self-test 2>&1 | sed 's/^/  /' || true
+  echo ""
+  violations=$((violations + 1))
+else
+  signal_write_status=0
+  signal_write_hits=$("${repo_root}/scripts/check-signal-write-scope.sh" crates 2>&1) || signal_write_status=$?
+  if [[ "${signal_write_status}" -eq 1 ]]; then
+    echo "VIOLATION 24: a realm-scoped signal was written or created"
+    echo "             inside a build/layout/paint body (ADR-0074 §5.2)"
+    echo "see ${trigger_doc} (trigger 24)"
+    echo "${signal_write_hits}"
+    echo ""
+    violations=$((violations + 1))
+  elif [[ "${signal_write_status}" -ne 0 ]]; then
+    echo "VIOLATION 24: scripts/check-signal-write-scope.sh exited ${signal_write_status} (scanner failure, not a clean scan)"
+    echo "${signal_write_hits}"
+    echo ""
+    violations=$((violations + 1))
+  elif [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    24: signals are only written and created outside frame phases"
+  fi
+fi
 
 # -----------------------------------------------------------------------------
 # LockDiscipline/StatementDrop (#1150 lock-drop sweep) — a value with a
@@ -1824,7 +1867,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 23 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner + LockDiscipline/StatementDrop grep clean"
+echo "port-check: all 24 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner + LockDiscipline/StatementDrop grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

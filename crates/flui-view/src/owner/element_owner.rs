@@ -168,6 +168,10 @@ pub struct ElementOwner<'a> {
 
     /// Sparse reverse index for inherited dependency ownership.
     pub(crate) inherited_dependencies: &'a mut InheritedDependencies,
+    /// The realm's reactive graph (ADR-0074), for build-time reader
+    /// registration and unmount-time release.
+    #[cfg(feature = "signals")]
+    pub(crate) reactive: &'a crate::reactive::Reactive,
 
     /// Snapshot of `BuildOwner::on_build_scheduled` so
     /// `schedule_build_for` can fire the visual-update callback
@@ -454,6 +458,13 @@ impl ElementOwner<'_> {
     /// Permanently discard a dependent's reverse-index lifecycle state.
     pub(crate) fn unmount_inherited_dependent(&mut self, dependent: ElementId) -> ProviderIds {
         self.inherited_dependencies.unmount(dependent)
+    }
+
+    /// The element left the tree: drop its signal reads and release every
+    /// signal created on its behalf (ADR-0074 §5.7).
+    #[cfg(feature = "signals")]
+    pub(crate) fn release_reactive(&self, element: ElementId) {
+        self.reactive.release_element(element);
     }
 
     /// Return whether this reactivated element previously had dependencies.

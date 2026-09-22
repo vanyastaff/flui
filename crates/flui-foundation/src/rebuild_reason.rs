@@ -36,12 +36,18 @@ pub enum RebuildReason {
     RootChange,
     /// Hot reload requested that every live element rebuild in place.
     HotReload,
+    /// A realm-scoped signal this element read during its last build was
+    /// written (ADR-0074).
+    SignalChange,
 }
 
 impl RebuildReason {
     /// Every variant in stable diagnostic order — the backing table for
     /// [`RebuildReasons::iter`].
-    pub(crate) const ALL: [Self; 10] = [
+    /// Number of variants — the size a per-reason table needs.
+    pub const COUNT: usize = 11;
+
+    pub(crate) const ALL: [Self; Self::COUNT] = [
         Self::InitialMount,
         Self::ParentUpdate,
         Self::StateChange,
@@ -52,6 +58,7 @@ impl RebuildReason {
         Self::ChildListChange,
         Self::RootChange,
         Self::HotReload,
+        Self::SignalChange,
     ];
 
     const fn bit(self) -> u16 {
@@ -72,6 +79,7 @@ impl RebuildReason {
             Self::ChildListChange => "child_list_change",
             Self::RootChange => "root_change",
             Self::HotReload => "hot_reload",
+            Self::SignalChange => "signal_change",
         }
     }
 }
