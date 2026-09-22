@@ -680,9 +680,14 @@ bench-compare old new:
 # =============================================================================
 
 [group("examples")]
-[doc("Run the hello_world platform smoke test")]
+[doc("Run the counter example — the minimal FLUI \"hello world\" (one StateCell, one button)")]
 example-hello:
-    cargo run --example hello_world
+    cargo run --example counter
+
+[group("examples")]
+[doc("Run the platform_window example — raw window + event loop, no widgets (advanced)")]
+example-platform-window:
+    cargo run --example platform_window
 
 [group("examples")]
 [doc("Run an example by name (e.g. just example direct_render)")]

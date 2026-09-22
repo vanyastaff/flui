@@ -1,4 +1,10 @@
-//! Hello World - Minimal FLUI application
+//! Platform Window — the platform layer *without* widgets: a raw window and
+//! event loop, no `View`/`Element`/render tree. Useful for debugging platform
+//! integration itself, not as a first example of the framework — for that,
+//! see `examples/counter.rs` (minimal) or `examples/widgets_gallery.rs`
+//! (overview).
+//!
+//! Run with: cargo run --example platform_window
 
 use flui_platform::{WindowOptions, current_platform};
 use flui_types::geometry::{Size, px};
@@ -8,7 +14,7 @@ fn main() {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    tracing::info!("FLUI Hello World!");
+    tracing::info!("FLUI platform window example");
     tracing::info!("Platform: {}", std::env::consts::OS);
 
     let platform = current_platform().expect("Failed to initialize platform");
@@ -37,7 +43,7 @@ fn main() {
             tracing::info!("Creating window...");
 
             let window_options = WindowOptions {
-                title: "Hello FLUI!".to_string(),
+                title: "FLUI Platform Window".to_string(),
                 size: Size::new(px(800.0), px(600.0)),
                 resizable: true,
                 visible: true,
