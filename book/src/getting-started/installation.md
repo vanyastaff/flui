@@ -59,6 +59,8 @@ A window opens showing a count and an "Increment" button — the same shape `flu
 
 ## Next steps
 
+- [Tutorial: counter → todo](tutorial-todo.md) — the same shape one step further, a list instead
+  of a single number.
 - [Concepts](../concepts/overview.md) — the mental model behind `View`/`Element`/`RenderObject`.
 - [Flutter → FLUI mapping](../mapping.md) — if you already know Flutter's vocabulary.
 - [Cookbook](../cookbook/overview.md) — task-oriented examples.
