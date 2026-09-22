@@ -416,3 +416,141 @@ fn live_web_build_and_run_serve_the_generated_project() {
         "{rest:?}"
     );
 }
+
+/// Real Android path: scaffold against this checkout, `flui build android
+/// --json` must produce a signed APK carrying the project's library under
+/// `lib/arm64-v8a/`, and, when `flui devices` lists an online Android
+/// device, `flui run --device <serial> --no-hot-reload --json` must install,
+/// start (`run.android.start`) and stop on SIGINT with `run.stop`. Gated
+/// behind `FLUI_CLI_LIVE_ANDROID=1`: it needs the SDK, NDK, cargo-ndk and a
+/// JDK, and compiles the framework for `aarch64-linux-android`.
+#[cfg(unix)]
+#[test]
+fn live_android_build_and_run_install_the_generated_project() {
+    use std::io::{BufRead, BufReader};
+    if std::env::var_os("FLUI_CLI_LIVE_ANDROID").is_none() {
+        eprintln!(
+            "skipping live_android_build_and_run_install_the_generated_project: set FLUI_CLI_LIVE_ANDROID=1"
+        );
+        return;
+    }
+    let repo_root = repo_root();
+    let workdir = TempDir::new().expect("scaffold workdir");
+    let name = "flui_live_android_check";
+    let project = workdir.path().join(name);
+    flui()
+        .current_dir(&repo_root)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args([
+            "create",
+            name,
+            "--org",
+            "com.test",
+            "--template",
+            "counter",
+            "--no-check",
+        ])
+        .arg(format!("--local={}", repo_root.display()))
+        .arg("--path")
+        .arg(workdir.path())
+        .assert()
+        .success();
+    std::fs::copy(repo_root.join("Cargo.lock"), project.join("Cargo.lock"))
+        .expect("seed the generated project with the workspace's resolved versions");
+    flui()
+        .current_dir(&project)
+        .args(["platform", "add", "android", "--json"])
+        .assert()
+        .success();
+
+    let output = flui()
+        .current_dir(&project)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args(["build", "android", "--json"])
+        .output()
+        .expect("run flui build android --json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let events = ndjson_events(&output.stdout);
+    let done = events
+        .iter()
+        .find(|event| event["event"] == "build.done")
+        .unwrap_or_else(|| panic!("no `build.done` event in {events:?}"));
+    let apk = Path::new(
+        done["artifacts"][0]["path"]
+            .as_str()
+            .expect("artifact path"),
+    );
+    assert!(apk.is_file(), "missing APK {}", apk.display());
+    let archive = zip::ZipArchive::new(std::fs::File::open(apk).expect("open apk")).expect("zip");
+    let names: Vec<&str> = archive.file_names().collect();
+    assert!(names.contains(&"AndroidManifest.xml"), "{names:?}");
+    assert!(
+        names.contains(&format!("lib/arm64-v8a/lib{name}.so").as_str()),
+        "{names:?}"
+    );
+    assert!(
+        names.iter().any(|entry| entry.starts_with("META-INF/")),
+        "unsigned: {names:?}"
+    );
+
+    let devices = flui()
+        .current_dir(&project)
+        .args(["devices", "--json"])
+        .output()
+        .expect("flui devices --json");
+    let Some(serial) = ndjson_events(&devices.stdout)
+        .into_iter()
+        .find(|event| {
+            event["event"] == "device"
+                && event["platform"] == "android"
+                && event["status"] == "online"
+        })
+        .and_then(|event| event["id"].as_str().map(str::to_string))
+    else {
+        eprintln!("no online Android device; the install half is not exercised here");
+        return;
+    };
+
+    let mut run = std::process::Command::new(assert_cmd::cargo::cargo_bin("flui"))
+        .current_dir(&project)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args(["run", "--device", &serial, "--no-hot-reload", "--json"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .expect("spawn flui run");
+    let mut lines = BufReader::new(run.stdout.take().expect("piped stdout")).lines();
+    let mut seen = Vec::new();
+    loop {
+        let line = lines
+            .next()
+            .expect("flui run ended before the app started")
+            .expect("stdout line");
+        let event: serde_json::Value = serde_json::from_str(&line).expect("NDJSON");
+        seen.push(event.clone());
+        if event["event"] == "run.android.start" {
+            assert_eq!(event["package"], "com.test.flui_live_android_check");
+            break;
+        }
+    }
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-INT", &run.id().to_string()])
+            .status()
+            .expect("kill")
+            .success()
+    );
+    let rest: Vec<String> = lines.map_while(Result::ok).collect();
+    let status = run.wait().expect("flui run exit status");
+    assert_eq!(status.code(), Some(130), "{rest:?}");
+    assert!(
+        rest.iter()
+            .any(|line| line.contains("\"event\":\"run.stop\"")),
+        "{rest:?}"
+    );
+}

@@ -14,6 +14,19 @@ repo-consumer-visible summary.
 
 ## [Unreleased]
 
+### Added
+
+- **`flui run --device <android serial>` and a Gradle-less `flui build
+  android`** (`flui-cli`, `flui`, `flui-app`). The facade re-exports
+  `run_app_android`, `run_app_android_with_config` and `android_activity`
+  on Android (`flui-app` re-exports the crate), so a generated project's
+  `src/lib.rs` carries an `android_main` while naming only `flui`. The CLI
+  compiles that `cdylib` with `cargo ndk` and packages it with the SDK's
+  build-tools (`aapt2`, `zipalign`, `apksigner`, debug keystore); a
+  `platforms/android/gradlew` switches to Gradle. `flui run` installs with
+  `adb install -r`, starts the `NativeActivity` and follows `logcat --pid`.
+  See `crates/flui-cli/CHANGELOG.md`.
+
 ## [0.1.0] - 2026-09-21
 
 First tagged release of the workspace. On crates.io this cut ships

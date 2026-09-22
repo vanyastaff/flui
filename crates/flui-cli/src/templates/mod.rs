@@ -20,6 +20,22 @@ use crate::error::CliResult;
 use crate::types::{OrganizationId, ProjectName};
 use std::path::Path;
 
+/// `src/main.rs` of a single-crate template: the desktop entry point,
+/// mounting the root view the library exports. Everything else, including
+/// the Android entry, lives in `src/lib.rs`, which `cargo ndk` builds as a
+/// `cdylib` and the binary and the tests link as an rlib.
+pub(super) fn main_rs(lib_name: &str, root: &str) -> String {
+    format!("fn main() {{\n    flui::run_app({lib_name}::{root});\n}}\n")
+}
+
+/// The `[lib]` table every single-crate template writes.
+pub(super) const LIB_TABLE: &str = r#"# The rlib feeds the binary and the tests; the cdylib is what `cargo ndk`
+# builds for Android (`flui build android`), entered through `android_main`
+# in src/lib.rs.
+[lib]
+crate-type = ["rlib", "cdylib"]
+"#;
+
 /// `.gitignore` for a generated project. Part of the plan (not a
 /// side-effect of `git init`) so `--dry-run` lists it and a real run and a
 /// dry run always agree on the file set.
