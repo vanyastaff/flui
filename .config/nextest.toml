@@ -16,14 +16,39 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # is reported as a leak after this grace period instead of hanging the run.
 leak-timeout = "1s"
 
-# Tests that run a real compiler: the trybuild suites (every compile_fail
-# case through rustc) and the flui-cli template tests (`cargo build` of a
-# generated project). Measured on CI's 4-core runner: 64–265 s for a trybuild
-# suite and ~180 s for each template build, varying run to run with cache
-# state — a 4-minute global killed both template tests once. Budget: 20 min.
+# Nested-cargo tests: each runs a real `cargo` of its own on a project it
+# generates. The trybuild suites push every compile_fail case through rustc;
+# the flui-cli template tests (`cli_create::generated_*`) build or test a
+# generated project; `flui::facade_consumer` checks external consumer
+# crates against the facade. They own the run's wall-clock: in a cold
+# `just ci` 21 of them took 83-305 s each (2026-09-22, e9a5456d, jobs=6),
+# and no other test in the workspace reached 20 s.
+#
+# The filter below appears THREE times -- this override and the two
+# profiles after it. Keep them identical: a test missing from the override
+# loses its budget, one missing from a profile silently leaves `just ci`.
+#
+# They run in parallel, deliberately without a `max-threads = 1` test group:
+# serializing them was measured slower both cold (713.6 s vs 563.1 s for the
+# 24) and warm (25.9 s vs 13.7 s), 2026-09-22, M1/8 GB, jobs=6.
+#
+# Budget: 300 s slow, killed after 20 min. Measured on CI's 4-core runner:
+# 64-265 s for a trybuild suite and ~180 s for each template build, varying
+# run to run with cache state -- a 4-minute global killed both template tests
+# once.
 [[profile.default.overrides]]
-filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | test(/^cli_create::generated_.*_project_compiles$/)'
+filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | (binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer)'
 slow-timeout = { period = "300s", terminate-after = 4 }
+
+# `just test-ci` runs the suite in two stages: everything else first, then
+# the nested-cargo tests (`just test-nested-cargo`). The split is a partition
+# -- the two profiles' default filters are exact complements -- so the union
+# is the whole suite and no test runs twice or not at all.
+[profile.no-nested-cargo]
+default-filter = 'not (binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | (binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer))'
+
+[profile.nested-cargo]
+default-filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | (binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer)'
 
 # GPU readback tests share one software rasterizer (lavapipe locally, WARP on
 # the CI GPU job), and each builds its own `wgpu::Device`. Submitting from

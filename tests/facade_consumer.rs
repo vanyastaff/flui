@@ -7,7 +7,7 @@
 //! each test reports itself skipped through [`checkout_root`] rather than
 //! failing on a path that was never meant to exist there.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 /// The workspace checkout these consumer projects depend on by path, or
@@ -25,6 +25,37 @@ fn checkout_root() -> Option<&'static Path> {
         );
         None
     }
+}
+
+/// The workspace's target directory as Cargo itself resolves it —
+/// `CARGO_TARGET_DIR`, a configured `build.target-dir`, or `<root>/target` —
+/// so the consumer checks' separate cache (a subdirectory of it, never the
+/// directory itself) follows a relocated target instead of rebuilding from
+/// cold inside every checkout.
+fn workspace_target_dir(root: &Path) -> PathBuf {
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--offline",
+        ])
+        .current_dir(root)
+        .output()
+        .expect("run cargo metadata for the workspace target directory");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("cargo metadata emits JSON");
+    PathBuf::from(
+        metadata["target_directory"]
+            .as_str()
+            .expect("cargo metadata reports `target_directory`"),
+    )
 }
 
 fn dependency(package: &str, path: &Path, defaults: bool) -> toml::Value {
@@ -81,7 +112,7 @@ fn run_consumer(
         .args([command, "--offline", "--all-targets", "--manifest-path"])
         .arg(project.path().join("Cargo.toml"))
         .arg("--target-dir")
-        .arg(root.join("target/facade-consumer-check"))
+        .arg(workspace_target_dir(root).join("facade-consumer-check"))
         .current_dir(project.path())
         .output()
         .expect("run consumer Cargo check")

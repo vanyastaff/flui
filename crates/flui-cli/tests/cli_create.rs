@@ -26,6 +26,38 @@ fn repo_root() -> PathBuf {
         .expect("canonical workspace root")
 }
 
+/// The workspace's target directory as Cargo itself resolves it —
+/// `CARGO_TARGET_DIR`, a configured `build.target-dir`, or `<root>/target` —
+/// so the template checks' separate cache (a subdirectory of it, never the
+/// directory itself) follows a relocated target instead of rebuilding from
+/// cold inside every checkout.
+fn workspace_target_dir(root: &Path) -> PathBuf {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let output = std::process::Command::new(cargo)
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--offline",
+        ])
+        .current_dir(root)
+        .output()
+        .expect("run cargo metadata for the workspace target directory");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("cargo metadata emits JSON");
+    PathBuf::from(
+        metadata["target_directory"]
+            .as_str()
+            .expect("cargo metadata reports `target_directory`"),
+    )
+}
+
 /// Generate a project with `--local` and prove it actually compiles.
 ///
 /// This is the real gate on the templates: the file-existence tests below pass
@@ -38,7 +70,7 @@ fn repo_root() -> PathBuf {
 /// the duration of the run.
 fn assert_generated_project_compiles(template: &str) {
     let root = repo_root();
-    let target = root.join("target");
+    let target = workspace_target_dir(&root);
     let name = format!("flui-tmpl-check-{template}");
     let output_dir = TempDir::new().expect("external output directory");
     let project = output_dir.path().join(&name);
@@ -231,7 +263,7 @@ fn generated_widget_project_compiles() {
 #[test]
 fn generated_widget_project_test_passes() {
     let root = repo_root();
-    let target = root.join("target");
+    let target = workspace_target_dir(&root);
     let name = "flui-tmpl-check-widget-test";
     let output_dir = TempDir::new().expect("external output directory");
     let project = output_dir.path().join(name);
@@ -291,7 +323,7 @@ fn generated_widget_project_test_passes() {
 #[test]
 fn generated_hot_reload_workspace_compiles() {
     let root = repo_root();
-    let target = root.join("target");
+    let target = workspace_target_dir(&root);
     let name = "flui-tmpl-check-hot-reload";
     let output_dir = TempDir::new().expect("external output directory");
     let project = output_dir.path().join(name);

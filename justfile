@@ -356,14 +356,33 @@ ios-safe-area-check udid:
 } }}
 
 [group("test")]
-[doc("Run the workspace test scope used by CI (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
-test-ci:
-    cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
+[doc("Run the workspace test scope used by CI: every test outside the nested-cargo group, then that group as the last stage (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
+test-ci: _tests-outside-nested-cargo test-nested-cargo
+
+[group("test")]
+[doc("The CI test scope without the nested-cargo group — the quick local loop. Everything else in `just test-ci` runs; the skipped tests are named at the end, with the command that runs them")]
+test-ci-fast: _tests-outside-nested-cargo
+    @echo 'test-ci-fast: SKIPPED the nested-cargo group (trybuild compile_fail suites, flui-cli cli_create::generated_*, flui::facade_consumer; filter in .config/nextest.toml). Run them with: just test-nested-cargo'
+
+# The nested-cargo group: the tests that run a `cargo` of their own on a
+# project they generate (.config/nextest.toml, profile `nested-cargo`). They
+# dominate the suite's wall-clock, so `test-ci` runs them last and
+# `test-ci-fast` leaves them out. Both invocations mirror the two in
+# `_tests-outside-nested-cargo`: same packages and features, so nothing is
+# rebuilt, and the two profiles partition the suite exactly.
+[group("test")]
+[doc("Run only the nested-cargo tests (trybuild compile_fail suites, flui-cli template builds, facade consumer checks) — the last stage of `just test-ci`")]
+test-nested-cargo:
+    cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --profile nested-cargo
+    cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast --profile nested-cargo
+
+_tests-outside-nested-cargo:
+    cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --profile no-nested-cargo
     # The facade defaults to Material only, so the run above skips
     # `tests/cupertino_demo.rs` (required-features) and the localizations
     # assertions in `tests/facade_smoke.rs`. Same precedent as CI's
     # flui-assets/flui-widgets feature-gated run.
-    cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
+    cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast --profile no-nested-cargo
     # Mirrors CI's dedicated flui-platform step, guarded by host OS:
     # `--all-features` is required just to compile the winit backend
     # (invisible under `default = ["desktop"]`); `FLUI_HEADLESS=1` routes

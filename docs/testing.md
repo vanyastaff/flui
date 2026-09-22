@@ -128,8 +128,9 @@ bash scripts/check-runtime-conformance.sh                  # runtime-conformance
 bash scripts/check-toolchain-consistency.sh                # toolchain-consistency-check: MSRV agrees with rust-toolchain.toml everywhere it's declared
 bash scripts/port-check.sh                                 # port-check: architecture refusal triggers
 cargo clippy --workspace --all-targets -- -D warnings      # clippy: lint gate — zero warnings
-cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast  # test-ci (flui-platform gets its own invocation below — see CI Expectations)
+cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --profile no-nested-cargo  # test-ci, stage 1 (flui-platform gets its own invocation below — see CI Expectations)
 FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test-ci: flui-platform, headless (Linux only — apt install xvfb; skipped with a message on other hosts, see justfile)
+cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --profile nested-cargo  # test-ci, last stage: the nested-cargo tests (see below)
 cargo test --workspace --locked --doc                      # test-doc: doc-tests (flui-platform included — its doctests need neither device above)
 bash scripts/doc-strict.sh                                # doc-strict: cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 ```
@@ -139,6 +140,58 @@ contributor can run it standalone) *and* a step in `.github/workflows/ci.yml`'s
 `checks` job (so CI actually runs it — `just gate`/`just ci` are not
 themselves invoked from CI; each script is its own explicit step there). A
 recipe with no CI step only runs when someone remembers to run it by hand.
+
+### Nested-cargo tests
+
+About two dozen tests run a `cargo` of their own on a project they generate:
+the trybuild `compile_fail` suites (`flui-engine`, `flui-rendering`,
+`flui-view`'s `trybuild_ui`, `flui-types`' `unit_mixing_compile_fail`), the
+`flui-cli` template tests (`cli_create::generated_*`), and every
+`flui::facade_consumer` test. Most take one to five minutes, so they set the
+suite's wall-clock while the other ~9,700 tests are quick. `.config/nextest.toml`
+names them with one filter and two profiles that partition the suite
+exactly: `no-nested-cargo` and `nested-cargo`.
+
+- `just test-ci` (and so `just ci`) runs everything else first, then this
+  group as its last stage. Nothing is dropped: the two stages together are
+  the whole suite, and CI runs it as one invocation.
+- `just test-ci-fast` is the quick local loop: the same scope without the
+  group, ending with a line that names what it skipped.
+- `just test-nested-cargo` runs only the group.
+
+Measured on the workspace invocation (2026-09-22, M1/8 GB, `CARGO_BUILD_JOBS=6`,
+wall-clock including the build):
+
+| Nested-build caches | One invocation (before) | Two stages (`just test-ci`) |
+|---|---|---|
+| warm, nothing changed | 191.2 s | 101.6 + 13.7 = 115.3 s |
+| after an edit to `flui-types` (registry deps warm) | 576.9 s | 406.5 + 87.2 = 493.7 s |
+| cold (caches deleted) | 527.7 s | 101.6 + 563.1 = 664.7 s |
+
+Only the fully cold case is slower: the quick tests no longer hide behind the
+nested builds. That happens once per cache wipe: the caches live in the
+target directory, not in the checkout (below). The group runs in parallel: serializing it was
+slower cold (713.6 s vs 563.1 s) and warm (25.9 s vs 13.7 s).
+
+Where their builds go: each nested build needs a target directory other than
+the outer one, because under `cargo test` the outer Cargo holds its build lock
+for the whole run. The template and facade-consumer builds use
+`cli-template-check/` and `facade-consumer-check/` under the workspace target
+directory as Cargo resolves it (`cargo metadata`'s `target_directory`, so a
+`CARGO_TARGET_DIR` is honored: their registry dependencies stay warm across
+checkouts that share it, while the FLUI crates themselves rebuild per checkout,
+because a path dependency's location is part of its build hash). Before this,
+they wrote to `<checkout>/target` whatever `CARGO_TARGET_DIR` said: 5-9 GB of
+private cache per checkout. trybuild keeps its own `tests/trybuild/` there, since
+it builds with a different `--cfg` and would thrash a shared cache.
+
+**Limitation of a shared `CARGO_TARGET_DIR`.** trybuild writes each suite's
+generated project into `<target>/tests/trybuild/<crate>/`. Two checkouts
+sharing one target directory and running the same trybuild suite at the same
+time overwrite each other's project: a race, reported as a spurious failure.
+Run test stages from one checkout at a time, or give each checkout its own
+target directory for tests. Sharing is safe for `check`, `clippy` and builds,
+which Cargo serializes on its lock.
 
 ## Build
 
