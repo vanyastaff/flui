@@ -1160,3 +1160,5 @@ there.
 
 [Unreleased]: https://github.com/vanyastaff/flui/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/vanyastaff/flui/releases/tag/v0.1.0
+
+<!-- w0-3 paths-filter skip demo: this line proves ci.yml's docs-only path correctly skips the compiling jobs. Safe to revert/close without merging. -->
