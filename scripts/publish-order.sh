@@ -64,15 +64,38 @@ def is_publishable(pkg):
 
 publishable = {name for name in workspace_names if is_publishable(packages[name])}
 
-edges = {name: set() for name in publishable}
+# Two edge sets, deliberately different:
+#  - `order_edges` (normal + build only) decides PUBLISH ORDER: a dev-only
+#    dependency does not need to exist on the registry before a downstream
+#    consumer can *use* this crate, so it must not gate the topological sort
+#    (a dev-dep cycle between two crates would otherwise be reported as an
+#    unpublishable cycle it isn't).
+#  - `verify_edges` (normal + build + dev) decides what counts as an
+#    EXPECTED dry-run failure: `cargo publish --dry-run` (no `--no-verify`
+#    here — the whole point is to also catch packaging-completeness bugs)
+#    extracts the package and re-resolves its FULL manifest, dev-deps
+#    included, to compile its test targets during verification. A crate
+#    whose only internal edge is a dev-dependency (flui-macros -> flui-
+#    foundation, real example: kept as a dev-dep specifically to avoid a
+#    production cycle, per that crate's own Cargo.toml comment) still fails
+#    dry-run on that dependency not being published, and that failure is
+#    exactly as "expected" as a normal-dependency one.
+order_edges = {name: set() for name in publishable}
+verify_edges = {name: set() for name in publishable}
 for name in publishable:
     pkg = packages[name]
     for dep in pkg.get("dependencies", []):
         dep_name = dep["name"]
-        if dep_name in publishable and dep.get("kind") in (None, "normal", "build"):
-            edges[name].add(dep_name)
+        if dep_name not in publishable:
+            continue
+        kind = dep.get("kind")
+        if kind in (None, "normal", "build"):
+            order_edges[name].add(dep_name)
+            verify_edges[name].add(dep_name)
+        elif kind == "dev":
+            verify_edges[name].add(dep_name)
 
-remaining = {name: set(deps) for name, deps in edges.items()}
+remaining = {name: set(deps) for name, deps in order_edges.items()}
 ordered = []
 while remaining:
     ready = sorted(name for name, deps in remaining.items() if not deps)
@@ -91,7 +114,7 @@ with open(order_path, "w", encoding="utf-8") as f:
 
 with open(edges_path, "w", encoding="utf-8") as f:
     for name in ordered:
-        f.write(f"{name}\t{','.join(sorted(edges[name]))}\n")
+        f.write(f"{name}\t{','.join(sorted(verify_edges[name]))}\n")
 PY
 
 order=()
