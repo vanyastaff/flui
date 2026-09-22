@@ -785,7 +785,7 @@ def self_test() -> int:
             print("self-test: fully reconciled allowlist passes clean")
             errors, _ = run_check(
                 crate_src.parent.parent,
-                {f"{rel_prefix}/unlisted_violation.rs": 1},
+                {f"{rel_prefix}/unlisted_violation.rs": 1, f"{rel_prefix}/panic_sites.rs": 2},
             )
             if not errors:
                 print("  ok: no violations when the allowlist matches reality exactly")
