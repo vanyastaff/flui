@@ -6,6 +6,38 @@ dependency checklist for application authors.
 
 ## Mapping decisions
 
+### `TextField` prelude collision — explicit-shadow, not omission
+
+`flui-widgets` and `flui-material` each ship a distinct `TextField` — a
+design-agnostic text-editing primitive and the M3-styled input. An earlier
+revision of `flui::prelude` resolved the name collision by omitting the
+Material one from the curated glob entirely, reasoning that "a curated glob
+cannot carry both without one silently shadowing the other" and keeping
+`flui_widgets::TextField` as the ambient default.
+
+That reasoning stated the mechanism correctly but reached the wrong
+conclusion for this prelude's actual audience: an application author writing
+an ordinary Material screen with `use flui::prelude::*;` who reaches for
+`TextField` gets a *compiling* result either way, so the omission does not
+surface as an error — it surfaces as an unstyled field silently rendered
+where a themed one was expected, exactly the "quiet Material-shaped mistake"
+this facade's curation exists to prevent for every other Material type. The
+codebase's every real caller of `flui::material::TextField`
+(`examples/material_demo`, `examples/workload_probe`, `examples/todo`)
+already imports it explicitly and would be unaffected by the omission either
+way — the fix has zero blast radius on existing code and only changes what
+an *unqualified* `TextField` resolves to for code that has not yet been
+written.
+
+`flui::prelude` now explicitly names `flui_material::TextField` in its
+material re-export list (Rust's explicit-import-over-glob-import rule,
+already the pattern every other name in that list follows, e.g.
+`ElevatedButton`/`IconButton` are also explicitly listed despite not being
+ambiguous) — it shadows the `flui_widgets::prelude::*` glob's copy of the
+same name whenever the `material` feature is on. `flui_widgets::TextField`
+remains reachable by its own path or via `flui_widgets::prelude` directly;
+nothing about the widgets-crate type itself changed.
+
 ### Explicit authoring modules
 
 `painting`, `rendering`, and `interaction` expose canonical framework types through

@@ -90,6 +90,17 @@ use crate::owner::RebuildHandle;
 /// `Rc`-backed, `Copy`-typed local state bound to one element's rebuild
 /// trigger.
 ///
+/// **`T` must be `Copy`** (the bound below is not a suggestion — a `Vec`,
+/// `String`, or any other non-`Copy` type will not compile here). Reach for
+/// [`StateHandle<T>`] instead for those: same contract, same `bind`/`update`
+/// shape, `T` unconstrained. As a rule of thumb — a counter, a flag, an
+/// enum, a small `Copy` struct: `StateCell`; a list, a string, anything you
+/// would otherwise wrap in `Rc<RefCell<_>>`: `StateHandle`. The read/write
+/// shape differs to match: `StateCell::get`/`set` hand back and take `T` by
+/// value, while [`StateHandle::with`]/[`StateHandle::update`] take a closure
+/// borrowing `&T`/`&mut T` — copying a `Vec` on every read would defeat the
+/// point of choosing it over cloning by hand.
+///
 /// Neither `Send` nor `Sync` — `Rc`-backed local state belongs to the
 /// element that owns it:
 ///
@@ -257,6 +268,17 @@ impl<T: Copy + fmt::Debug> fmt::Debug for StateCell<T> {
 
 /// `RefCell`-backed local state bound to one element's rebuild trigger, for
 /// `T` that is not `Copy`.
+///
+/// **No `Copy` bound on `T`** — this is [`StateCell`]'s counterpart for a
+/// `Vec`, a `String`, or anything else you would otherwise wrap in
+/// `Rc<RefCell<_>>` by hand. If `T` *is* `Copy` and small, [`StateCell`]'s
+/// by-value `get`/`set` is usually the simpler fit; nothing stops using
+/// `StateHandle` for a `Copy` type too, but `StateCell` exists so a caller
+/// doesn't have to borrow-and-clone just to read a `usize`. Reads/writes
+/// here go through a closure instead — [`Self::with`] borrows `&T`,
+/// [`Self::update`] borrows `&mut T` for in-place mutation — because
+/// handing back `T` by value on every read (as `StateCell::get` does) would
+/// mean cloning a `Vec` just to check its length.
 ///
 /// See the [module docs](self) for the full contract shared with
 /// [`StateCell`]: unbound mutation is silent, mutation after unmount is a

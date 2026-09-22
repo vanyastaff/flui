@@ -546,6 +546,62 @@ fn typing_while_focused_clears_the_hint_row_in_the_decorator() {
 }
 
 // ============================================================================
+// on_submitted — forwarded to the composed EditableText, fires on Enter
+// ============================================================================
+
+/// `TextField::on_submitted` reaches the composed `EditableText` — Enter,
+/// dispatched through this harness's own `FocusManager` the way production
+/// input arrives (not `EditableText::on_submitted`'s handler called
+/// directly, which `flui-widgets`' own unit tests already cover), calls the
+/// callback with the field's live text.
+///
+/// Mutation red-check: delete `MaterialTextFieldState::build`'s
+/// `if let Some(on_submitted) = view.on_submitted.clone() { ... }` forwarding
+/// block — `TextField::on_submitted` compiles and stores the callback, but
+/// it never reaches `EditableText`, and the assertion below sees `None`.
+#[test]
+fn on_submitted_reaches_the_composed_editable_text_and_fires_on_enter() {
+    use flui_interaction::events::NamedKey;
+    use std::cell::RefCell;
+
+    let controller = TextEditingController::new();
+    let focus_node = FocusNode::with_debug_label("submit-field");
+    let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let submitted_for_callback = Rc::clone(&submitted);
+
+    let laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            TextField::new(controller.clone())
+                .focus_node(Rc::clone(&focus_node))
+                .on_submitted(move |text| {
+                    // PORT-CHECK-OK-LOCK: displaces an Option<String>, a plain heap buffer with no re-entrant drop.
+                    *submitted_for_callback.borrow_mut() = Some(text.to_string());
+                }),
+        ),
+        tight(300.0, 100.0),
+    );
+
+    focus_node.request_focus();
+    type_char(&laid.focus_manager(), 'h');
+    type_char(&laid.focus_manager(), 'i');
+    assert_eq!(controller.text(), "hi", "sanity: typing reached the field");
+    assert_eq!(*submitted.borrow(), None, "typing alone must not submit");
+
+    let enter = KeyEventBuilder::new(Code::Enter)
+        .with_key(Key::Named(NamedKey::Enter))
+        .with_state(KeyState::Down)
+        .build();
+    laid.focus_manager().dispatch_key_event(&enter);
+
+    assert_eq!(
+        *submitted.borrow(),
+        Some("hi".to_string()),
+        "Enter must call on_submitted with the field's current text"
+    );
+}
+
+// ============================================================================
 // Caret color — error vs. primary
 // ============================================================================
 

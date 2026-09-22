@@ -10,10 +10,10 @@
 //!
 //! No form/validation widget is used — none exists in this codebase yet.
 //! Adding an item is a plain `TextField` (Material's, not `flui-widgets`'
-//! theme-free one — see the import below) read at "Add"-press time, the
-//! same "read a `TextEditingController` from a button's `on_pressed`"
-//! pattern `examples/material_demo` uses for its own Submit button. There
-//! is no `on_submitted`/enter-to-add: `TextField` doesn't have one yet.
+//! theme-free one — see the import below): pressing Enter
+//! (`TextField::on_submitted`) or the "Add" button both call the same
+//! `add_item` helper, which pushes the item and clears the field
+//! (`TextEditingController::clear`).
 //!
 //! Run with: cargo run --example todo --features material
 
@@ -43,6 +43,26 @@ struct Item {
     id: u64,
     text: String,
     done: bool,
+}
+
+/// Shared by the "Add" button's `on_pressed` and the field's
+/// `on_submitted` — both end up here with the field's current text, so
+/// pressing Enter and clicking Add behave identically. Empty text is a
+/// no-op (nothing to add); otherwise the new item gets one past the
+/// highest existing id and the field clears itself for the next entry.
+fn add_item(items: &StateHandle<Vec<Item>>, field: &TextEditingController, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    items.update(|list| {
+        let id = list.last().map_or(0, |it| it.id + 1);
+        list.push(Item {
+            id,
+            text: text.to_string(),
+            done: false,
+        });
+    });
+    field.clear();
 }
 
 #[derive(Clone, StatelessView)]
@@ -107,27 +127,22 @@ impl ViewState<TodoView> for TodoState {
                 .collect()
         });
 
-        let add_item_field = self.new_item.clone();
+        let submit_items = items.clone();
+        let submit_field = self.new_item.clone();
+        let button_items = items;
+        let button_field = self.new_item.clone();
 
         Column::new(column![
             Row::new(row![
-                TextField::new(new_item_field).decoration(InputDecoration {
-                    label_text: Some("New item".to_string()),
-                    ..Default::default()
-                }),
+                TextField::new(new_item_field)
+                    .decoration(InputDecoration {
+                        label_text: Some("New item".to_string()),
+                        ..Default::default()
+                    })
+                    .on_submitted(move |text| add_item(&submit_items, &submit_field, text)),
                 ElevatedButton::new(Text::new("Add")).on_pressed(move || {
-                    let text = add_item_field.text();
-                    if text.is_empty() {
-                        return;
-                    }
-                    items.update(|list| {
-                        let id = list.last().map_or(0, |it| it.id + 1);
-                        list.push(Item {
-                            id,
-                            text: text.clone(),
-                            done: false,
-                        });
-                    });
+                    let text = button_field.text();
+                    add_item(&button_items, &button_field, &text);
                 }),
             ]),
             SizedBox::height(16.0),

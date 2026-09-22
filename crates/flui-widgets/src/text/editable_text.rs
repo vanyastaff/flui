@@ -35,6 +35,8 @@ use crate::AnimatedBuilder;
 use crate::text::controller::TextEditingController;
 
 type ImeFocusTransition = Rc<dyn Fn(bool)>;
+/// Callback for [`EditableText::on_submitted`] — see that method's doc.
+type SubmitCallback = Rc<dyn Fn(&str)>;
 
 // ============================================================================
 // EditableText
@@ -250,7 +252,7 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 ///   wrapping, multi-line layout, and vertical scrolling are not implemented.
 /// - **Input formatters** — no validation or transformation pipeline.
 /// - **Scroll when text overflows** — the rendered text clips without scrolling.
-#[derive(Clone, Debug, StatefulView)]
+#[derive(Clone, StatefulView)]
 pub struct EditableText {
     /// Controller that owns the text buffer and caret.
     pub(super) controller: TextEditingController,
@@ -295,6 +297,9 @@ pub struct EditableText {
     /// The character painted in place of each source character. Flutter's
     /// default, and Flutter asserts it is exactly one character.
     pub(super) obscuring_character: char,
+    /// Called with the current text when Enter is pressed while this field
+    /// has focus — see [`Self::on_submitted`]'s doc.
+    pub(super) on_submitted: Option<SubmitCallback>,
 }
 
 impl EditableText {
@@ -314,6 +319,7 @@ impl EditableText {
             text_style: None,
             obscure_text: false,
             obscuring_character: DEFAULT_OBSCURING_CHARACTER,
+            on_submitted: None,
         }
     }
 
@@ -398,6 +404,49 @@ impl EditableText {
     pub fn text_style(mut self, style: TextStyle) -> Self {
         self.text_style = Some(style);
         self
+    }
+
+    /// Call `callback` with the field's current text when Enter is pressed
+    /// while it has focus.
+    ///
+    /// Flutter parity: `EditableText.onSubmitted` (`editable_text.dart`) —
+    /// fires on a raw Enter keypress here rather than an IME action-button
+    /// commit, since this substrate has no platform IME-action-button
+    /// integration yet (see the type doc's `# DEFERRED (v1)` list). The key
+    /// is consumed ([`KeyEventResult::Handled`](flui_interaction::routing::KeyEventResult))
+    /// only when a callback is set — with none, Enter is left unconsumed
+    /// (`Ignored`) so an ancestor can still act on it, unchanged from this
+    /// field's behavior before this method existed.
+    ///
+    /// No multiline support exists in this substrate (there is no
+    /// newline-insertion behavior to conflict with), so Enter has exactly
+    /// one meaning here: submit.
+    #[must_use]
+    pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
+        self.on_submitted = Some(Rc::new(callback));
+        self
+    }
+}
+
+// Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
+// no `Debug` impl (a trait object over a closure has no useful
+// representation beyond its presence), so a derive would reject every field
+// once this one exists. Mirrors `EditableTextState`'s own manual impl just
+// below for the same reason.
+impl std::fmt::Debug for EditableText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditableText")
+            .field("controller", &self.controller)
+            .field("focus_node", &self.focus_node)
+            .field("caret_height", &self.caret_height)
+            .field("caret_color", &self.caret_color)
+            .field("selection_color", &self.selection_color)
+            .field("enabled", &self.enabled)
+            .field("text_style", &self.text_style)
+            .field("obscure_text", &self.obscure_text)
+            .field("obscuring_character", &self.obscuring_character)
+            .field("on_submitted", &self.on_submitted.is_some())
+            .finish()
     }
 }
 
@@ -509,6 +558,15 @@ pub struct EditableTextState {
     /// of the slot; a loop closure that already holds its own clone still
     /// sees the flip (shared `Cell`) and dies on its next firing.
     cursor_area_alive: Rc<RefCell<Option<Rc<Cell<bool>>>>>,
+    /// The current [`EditableText::on_submitted`] callback, behind a shared
+    /// cell for the same reason `controller` is: the key handler closure
+    /// installed in `init_state` reads through it at DISPATCH time, so a
+    /// parent rebuilding with a different callback (or none) takes effect
+    /// without re-registering the handler. Unlike `controller`/`focus_node`,
+    /// no identity comparison gates the update in `did_update_view` — a
+    /// closure has no meaningful identity to compare, so it is simply
+    /// overwritten every rebuild, which is cheap and always correct.
+    on_submitted: Rc<RefCell<Option<SubmitCallback>>>,
 }
 
 impl std::fmt::Debug for EditableTextState {
@@ -547,6 +605,7 @@ impl StatefulView for EditableText {
             ime_token: Rc::new(RefCell::new(None)),
             local_post_frame_handle: None,
             cursor_area_alive: Rc::new(RefCell::new(None)),
+            on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
         }
     }
 }
@@ -678,9 +737,12 @@ impl ViewState<EditableText> for EditableTextState {
         //    `can_request_focus` (kept in sync with `enabled` in
         //    `did_update_view`) so a stray dispatch to an already-focused
         //    field that has since been disabled is a no-op.
-        self.key_handler_registration = Some(self.focus_node.register_on_key_event(
-            build_key_handler(Rc::clone(&self.controller), Rc::clone(&self.focus_node)),
-        ));
+        self.key_handler_registration =
+            Some(self.focus_node.register_on_key_event(build_key_handler(
+                Rc::clone(&self.controller),
+                Rc::clone(&self.focus_node),
+                Rc::clone(&self.on_submitted),
+            )));
 
         // 3. Forward controller change events into the rebuild notifier so the
         //    inner AnimatedBuilder rebuilds on every keystroke.
@@ -833,6 +895,14 @@ impl ViewState<EditableText> for EditableTextState {
     }
 
     fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
+        // Cheap and unconditional: a closure has no identity worth comparing,
+        // so every rebuild just installs whatever `on_submitted` the latest
+        // view carries — read through this cell at dispatch time by the key
+        // handler installed once in `init_state`.
+        self.on_submitted
+            .borrow_mut()
+            .clone_from(&new_view.on_submitted);
+
         // A parent rebuilding with a DIFFERENT controller retargets the
         // mounted field onto it, rather than the field silently going on
         // driving the one it was born with. The reference does the same in
@@ -870,9 +940,12 @@ impl ViewState<EditableText> for EditableTextState {
         if !Rc::ptr_eq(&self.focus_node, &new_view.focus_node) {
             let replacement = Rc::clone(&new_view.focus_node);
             replacement.set_can_request_focus(new_view.enabled);
-            let replacement_key_handler_registration = replacement.register_on_key_event(
-                build_key_handler(self.controller.clone(), Rc::clone(&replacement)),
-            );
+            let replacement_key_handler_registration =
+                replacement.register_on_key_event(build_key_handler(
+                    self.controller.clone(),
+                    Rc::clone(&replacement),
+                    Rc::clone(&self.on_submitted),
+                ));
             let replacement_rect_provider_registration = self
                 .rect_provider
                 .as_ref()
@@ -1256,6 +1329,7 @@ fn is_command_chord(modifiers: Modifiers) -> bool {
 fn build_key_handler(
     controller: Rc<RefCell<TextEditingController>>,
     focus_node: Rc<FocusNode>,
+    on_submitted: Rc<RefCell<Option<SubmitCallback>>>,
 ) -> KeyEventHandler {
     Rc::new(move |event| {
         let controller = controller.borrow();
@@ -1341,6 +1415,19 @@ fn build_key_handler(
                 }
                 KeyEventResult::Handled
             }
+            // Only claimed when something actually consumes it — with no
+            // `on_submitted` set, Enter is left `Ignored` so an ancestor
+            // can still act on it, unchanged from this field's behavior
+            // before `on_submitted` existed. See `on_submitted`'s doc for
+            // why a raw Enter keypress rather than an IME action-button
+            // commit.
+            Key::Named(NamedKey::Enter) => match on_submitted.borrow().as_ref() {
+                Some(callback) => {
+                    callback(&controller.text());
+                    KeyEventResult::Handled
+                }
+                None => KeyEventResult::Ignored,
+            },
             Key::Named(_) => KeyEventResult::Ignored,
         }
     })
@@ -1747,6 +1834,7 @@ mod tests {
         let handler = build_key_handler(
             Rc::new(RefCell::new(controller.clone())),
             Rc::clone(&focus_node),
+            Rc::new(RefCell::new(None)),
         );
 
         let event = KeyEventBuilder::new(Code::KeyA)
@@ -1790,6 +1878,7 @@ mod tests {
             let handler = build_key_handler(
                 Rc::new(RefCell::new(controller.clone())),
                 Rc::clone(&focus_node),
+                Rc::new(RefCell::new(None)),
             );
             let event = KeyEventBuilder::new(code)
                 .with_key(Key::Character(key.to_string()))
@@ -1866,6 +1955,7 @@ mod tests {
         let handler = build_key_handler(
             Rc::new(RefCell::new(controller.clone())),
             Rc::clone(&focus_node),
+            Rc::new(RefCell::new(None)),
         );
         controller.move_caret_end();
 
@@ -2033,6 +2123,79 @@ mod tests {
             1,
             "and collapses to the span's end, without stepping past it"
         );
+    }
+
+    fn enter_key_event() -> flui_interaction::events::KeyEvent {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+        KeyEventBuilder::new(Code::Enter)
+            .with_key(Key::Named(NamedKey::Enter))
+            .with_state(KeyState::Down)
+            .build()
+    }
+
+    /// Enter, dispatched through a mounted field the way production input
+    /// arrives (`FocusManager::dispatch_key_event`, not `build_key_handler`
+    /// called directly), reaches `on_submitted` with the field's current
+    /// text.
+    ///
+    /// Red-check: delete the `Key::Named(NamedKey::Enter)` arm — this test
+    /// then falls through to `Key::Named(_) => Ignored` and the assertion on
+    /// `submitted.borrow()` fails (still `None`).
+    #[test]
+    fn enter_calls_on_submitted_with_the_current_text() {
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("submit field");
+        let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let submitted_for_callback = Rc::clone(&submitted);
+
+        let harness = crate::test_harness::mount(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(
+                move |text| {
+                    // PORT-CHECK-OK-LOCK: displaces an Option<String>, a plain heap buffer with no re-entrant drop.
+                    *submitted_for_callback.borrow_mut() = Some(text.to_string());
+                },
+            ),
+        );
+        focus_node.request_focus();
+
+        harness
+            .focus_manager()
+            .dispatch_key_event(&character_key_event('h'));
+        harness
+            .focus_manager()
+            .dispatch_key_event(&character_key_event('i'));
+        assert_eq!(controller.text(), "hi", "typed text reaches the buffer");
+        assert_eq!(*submitted.borrow(), None, "typing alone must not submit");
+
+        let result = harness
+            .focus_manager()
+            .dispatch_key_event(&enter_key_event());
+
+        assert_eq!(
+            *submitted.borrow(),
+            Some("hi".to_string()),
+            "Enter calls on_submitted with the field's current text"
+        );
+        assert!(result, "Enter is consumed once a callback is set");
+    }
+
+    /// The contrast case: with no `on_submitted`, Enter is left unconsumed —
+    /// unchanged from this field's behavior before the callback existed, so
+    /// an ancestor can still act on a bare Enter press.
+    #[test]
+    fn enter_with_no_on_submitted_is_ignored() {
+        let controller = TextEditingController::with_text("hi");
+        let focus_node = FocusNode::with_debug_label("no-submit field");
+        let harness =
+            crate::test_harness::mount(EditableText::new(controller, Rc::clone(&focus_node)));
+        focus_node.request_focus();
+
+        let result = harness
+            .focus_manager()
+            .dispatch_key_event(&enter_key_event());
+
+        assert!(!result, "with no on_submitted, Enter is not consumed");
     }
 
     /// A root that can drop its `EditableText`, so a still-focused field can

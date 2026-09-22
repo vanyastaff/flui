@@ -241,17 +241,15 @@ pub use flui_app::{run_app_android, run_app_android_with_config};
 /// customization, reach them at `flui::material`), or `flui-material`
 /// internals like the raw M3 type-scale table (`english_like_2021`).
 ///
-/// **`TextField` is deliberately absent.** `flui-widgets` and
-/// `flui-material` each ship a distinct type of that name — a design-agnostic
-/// text-editing primitive and the M3-styled input — so a curated glob cannot
-/// carry both without one silently shadowing the other. [`prelude`] keeps
-/// [`flui_widgets::TextField`] (already part of [`flui_widgets::prelude`]);
-/// reach the Material one explicitly as `flui::material::TextField`. The
-/// Cupertino catalog has no such collision
-/// (every type is `Cupertino`-prefixed), but its surface is app-shell-shaped
-/// rather than everyday-widget-shaped (`CupertinoPageScaffold`,
-/// `CupertinoTabScaffold`, …), so it stays at `flui::cupertino` rather than
-/// joining this glob.
+/// **`TextField` explicitly names the Material type, shadowing
+/// [`flui_widgets::TextField`]** (still reachable at its own path, or via
+/// `flui_widgets::prelude` directly) — see this module's own
+/// `## Mapping decisions` entry in `ARCHITECTURE.md` for why an earlier
+/// revision of this doc instead omitted it. The Cupertino catalog has no
+/// such collision (every type is `Cupertino`-prefixed), but its surface is
+/// app-shell-shaped rather than everyday-widget-shaped
+/// (`CupertinoPageScaffold`, `CupertinoTabScaffold`, …), so it stays at
+/// `flui::cupertino` rather than joining this glob.
 pub mod prelude {
     pub use flui_app::app::AppConfig;
     #[cfg(not(target_os = "ios"))]
@@ -270,7 +268,8 @@ pub mod prelude {
         IconButton, InkWell, ListTile, Material, MaterialApp, NavigationBar, NavigationDestination,
         OutlinedButton, Radio, Scaffold, ScaffoldMessenger, ScaffoldMessengerHandle,
         ScaffoldMessengerScope, SnackBar, Switch, Tab, TabBar, TabBarView, TabController,
-        TextButton, TextTheme, Theme, ThemeData, ThemeMode, VerticalDivider, show_dialog,
+        TextButton, TextField, TextTheme, Theme, ThemeData, ThemeMode, VerticalDivider,
+        show_dialog,
     };
     pub use flui_widgets::prelude::*;
 }
