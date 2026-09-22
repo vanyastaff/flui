@@ -2,7 +2,7 @@
 //! swallow, the press-opacity timeline under a real vsync, and per-size
 //! geometry reaching the mounted render tree.
 
-mod common;
+use crate::common;
 
 use std::cell::Cell;
 use std::rc::Rc;

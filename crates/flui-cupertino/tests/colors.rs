@@ -11,7 +11,7 @@
 
 #![expect(clippy::unwrap_used)]
 
-mod common;
+use crate::common;
 
 use std::sync::{Arc, Mutex};
 

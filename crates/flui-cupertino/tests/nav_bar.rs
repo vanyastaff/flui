@@ -9,7 +9,7 @@
 //! with no ancestor — see `flui-material/tests/app_bar.rs` for the same
 //! precedent.
 
-mod common;
+use crate::common;
 
 use common::{lay_out, loose, tight};
 use flui_cupertino::CupertinoNavigationBar;

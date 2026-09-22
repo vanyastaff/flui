@@ -3,7 +3,7 @@
 //! state survives switching away and back (Offstage, not unmount), plus the
 //! content-padding contract and the tab bar's own tap wiring.
 
-mod common;
+use crate::common;
 
 use std::cell::Cell;
 use std::rc::Rc;
