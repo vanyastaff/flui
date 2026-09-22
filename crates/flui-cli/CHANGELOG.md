@@ -6,6 +6,12 @@ the workspace version and follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-21
+
+First published release. `Changed`, `Fixed` and `Removed` describe what
+differs from the CLI as it lived in the repository before publication; a
+user starting from crates.io sees only the result.
+
 ### Added
 
 - `--json` on every command: one NDJSON object per line on stdout with an
@@ -104,3 +110,6 @@ the workspace version and follows [Semantic Versioning](https://semver.org/).
   each was a placeholder with no implementation behind it.
 - Global (per-user) configuration and telemetry settings: the CLI stores
   nothing about you and sends nothing anywhere.
+
+[Unreleased]: https://github.com/vanyastaff/flui/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/vanyastaff/flui/releases/tag/v0.1.0

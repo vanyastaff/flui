@@ -3,18 +3,22 @@
 All notable changes to the FLUI workspace are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-FLUI is pre-release and not published to crates.io; entries are grouped under
-`[Unreleased]` until a first tagged release cuts them over. Workspace version:
-`0.1.0` (all crates share `[workspace.package].version`; every internal
+All crates share `[workspace.package].version`, and every internal
 dependency pins that exact version, so a published cohort can never mix
-with a later one). The first tag will be `v0.1.0`: nothing was ever
-published, so the numbering starts where the public history does, and the
-beta status is stated in the README rather than in a pre-release suffix that
-`flui = "0.1"` would not match. Fine-grained phase
-history lives in [`docs/ROADMAP-TRACKER.md`](docs/ROADMAP-TRACKER.md); this
-file records the repo-consumer-visible summary.
+with a later one. The numbering starts at `0.1.0` where the public history
+does: nothing was published before, and the beta status is stated in the
+README rather than in a pre-release suffix that `flui = "0.1"` would not
+match. Fine-grained phase history lives in
+[`docs/ROADMAP-TRACKER.md`](docs/ROADMAP-TRACKER.md); this file records the
+repo-consumer-visible summary.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-09-21
+
+First tagged release of the workspace. On crates.io this cut ships
+`flui-cli` alone; the framework crates publish from a later tag, and until
+then `flui create` pins this tag as a git dependency.
 
 ### Changed
 
@@ -1068,3 +1072,6 @@ there.
   content bounds; deterministic-replay IR purity witness.
 - **Business.1 (in flight)**: Flutter widget-catalog port continues
   (`RichText`/`Icon` landed); tracked in `docs/ROADMAP.md`.
+
+[Unreleased]: https://github.com/vanyastaff/flui/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/vanyastaff/flui/releases/tag/v0.1.0
