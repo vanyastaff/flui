@@ -369,30 +369,43 @@ pedantic = { level = "warn", priority = -1 }
 # ship-quality waves. `expect_used` stays off — expect() with the BUG:
 # message convention IS the sanctioned invariant idiom.
 unwrap_used = "warn"
-# `undocumented_unsafe_blocks` is deliberately NOT enabled. It was tried and
-# reverted, for two reasons worth recording so it is not re-adopted casually:
-#
-#   * It can only see what the Linux clippy job compiles. `cfg(windows)`'s
-#     flui-platform backend — every file under `platforms::windows`
-#     (`window.rs`, `platform.rs`, `clipboard.rs`, `display.rs`, `events.rs`,
-#     `util.rs`) — is now fully SAFETY-documented: every unsafe block carries
-#     an invariant comment (or, for `unsafe fn`, a `# Safety` rustdoc
-#     section), verified via `cargo clippy --target x86_64-pc-windows-msvc`.
-#     `cfg(target_os = "macos")` and the Android/`wasm32` backends are not:
-#     as of the last full audit (docs/audits/2026-08-04-full-audit.md §2.1),
-#     macOS carried ~11 undocumented sites, Android ~14 (mostly outside the
-#     now-scoped `platforms::android::memory` FFI island), web ~9 — none of
-#     which the Linux clippy job reaches. A green workspace run would still
-#     license the claim "every unsafe site is documented" while that remains
-#     false for two of three desktop targets plus mobile/web. Enabling it is
-#     only meaningful once the cross-target jobs run `clippy`, not `cargo
-#     check`. They now do — `cross-typecheck` lints msvc/darwin/android and
-#     `wasm-check` lints wasm32 — so this first reason no longer holds and
-#     the lint is due a re-evaluation; the second reason below still does.
-#   * Turning it on first and writing comments to satisfy it produces prose, not
-#     review. That is how several comments in flui-hot-reload came to state
-#     invariants the code does not establish. Document unsafe because the
-#     invariant was checked, not because a lint failed.
+# `undocumented_unsafe_blocks` — re-evaluated (W0-5), measured, reverted.
+# This workspace runs every clippy-capable job under `-D warnings`, so
+# `warn` here means "CI enforces it immediately", and the actual CI run
+# (not a local guess) came back red on every compiling job: clippy,
+# cross-typecheck, wasm-check, all three feature-matrix groups, and
+# cli-macos. Confirmed real, annotatable sites (each job aborts on its
+# first error, so this is a floor, not the true total — appkit/android
+# were never even reached before windows/ios aborted the job that would
+# have checked them): flui-platform/src/window.rs:328,332;
+# platforms/{windows/{accessibility.rs:96, platform.rs:382,1998,
+# owner_control.rs:109, window.rs:117}, web/{clipboard.rs:26,
+# display.rs:13-14, executor.rs:15, platform.rs:49, window.rs:40},
+# ios/platform.rs:996}; flui-hot-reload/src/worker.rs:61;
+# flui-log/tests/a_rejected_env_override_still_installs.rs:37 — sixteen
+# sites, plus twelve more that CANNOT be annotated at all: paired
+# `unsafe impl` sites in six OUT_DIR-generated files under
+# flui-engine's build.rs (advanced_blend/blur/color_matrix/gamma/mode/
+# morphology_generated.rs), where a `// SAFETY:` comment would have to
+# live in codegen'd output, not source. Per this comment's own stated
+# rule: too many for `-D warnings`, revert to `allow`, keep the real
+# count instead of forcing green with prose. `dbg_macro`/`todo`/
+# `unimplemented` below are unaffected — zero hits across the same CI
+# matrix, confirmed via the same run's logs. The original point stands
+# for future unsafe code either way: write a SAFETY comment because the
+# invariant was checked, not because a lint failed — several stale ones
+# in flui-hot-reload came from writing the comment first.
+undocumented_unsafe_blocks = "allow"
+# `dbg_macro`/`todo`/`unimplemented`: restriction lints, off by default even
+# under `all`/`pedantic`. A `dbg!()` left in is a debug-session leftover, not
+# a review comment. `todo!()`/`unimplemented!()` are placeholders; the
+# codebase's real ones (platform-init stubs on linux/ios/android, per
+# AGENTS.md's stated exception) carry a per-site
+# `#[expect(clippy::unimplemented, reason = "...")]` instead of a blanket
+# allow, so a *new* one anywhere else still fails CI.
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"
