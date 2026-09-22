@@ -235,3 +235,6 @@ flamegraph.svg
 
 # wasm-bindgen output of the web examples (built by `just web-counter-build` and friends)
 examples/*/pkg/
+
+# mdBook build output (built by `mdbook build book/`, deployed by .github/workflows/docs.yml)
+/book/book/
