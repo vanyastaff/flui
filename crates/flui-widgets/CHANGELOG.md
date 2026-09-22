@@ -35,6 +35,12 @@ Versioning: per `docs/release.md` policy.
 
 ### Changed
 
+- **`TextField` renamed to `RawTextField`** (and `TextFieldState` to
+  `RawTextFieldState`) — a breaking rename, sanctioned pre-1.0, so the
+  facade's `flui::prelude` can give `TextField` one unconditional meaning
+  (`flui_material::TextField`) instead of shadowing it feature-dependently.
+  See the root `CHANGELOG.md` and `ARCHITECTURE.md`'s `## Mapping
+  decisions` for the full history.
 - Widget-visible consequences of `flui-animation`'s zero-duration synchronous
   settle (issue #1171): an implicitly-animated widget (`AnimatedContainer`,
   `AnimatedOpacity`, …) retargeted with `Duration::ZERO` now lays out the new

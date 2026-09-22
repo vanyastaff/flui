@@ -51,6 +51,17 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Changed
 
+- **`flui_widgets::TextField` renamed to `RawTextField`** (and
+  `TextFieldState` to `RawTextFieldState`) — a breaking rename, sanctioned
+  pre-1.0. `flui::prelude`'s `TextField` now names `flui_material::TextField`
+  unconditionally, with no shadowing and no feature-dependent meaning (an
+  intermediate revision had the Material type explicitly shadow the widgets
+  one whenever the `material` feature was on, which — while it compiled
+  correctly — violated Cargo's feature-additivity contract). See
+  `ARCHITECTURE.md`'s `## Mapping decisions` entry for the full history.
+  Nothing under `examples/`/`crates/flui-cli`'s templates referenced the
+  renamed type; every existing `TextField` usage already meant the Material
+  one and needed no changes.
 - **MSRV 1.97 → 1.98**, and the policy changed with it: pre-1.0 the MSRV now
   tracks the latest stable release (bumped within a week of each new stable)
   rather than only when a stabilization is actually used; post-1.0 it will

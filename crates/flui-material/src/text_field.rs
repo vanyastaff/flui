@@ -8,8 +8,12 @@
 //! `_TextFieldState.build` composes a raw `widgets.EditableText` and
 //! `InputDecorator` inline (`text_field.dart:1684-1782`), which is exactly
 //! this substrate's own shape: no
-//! [`flui_widgets::TextField`](flui_widgets::text::text_field::TextField) in
-//! the middle.
+//! [`flui_widgets::RawTextField`](flui_widgets::text::text_field::RawTextField)
+//! in the middle — that type is this crate's theme-free sibling for a tree
+//! with no `Theme` ancestor, named `RawTextField` (not `TextField`)
+//! specifically so this Material type gets to be the one thing named
+//! `TextField` throughout the facade; see that type's own module doc for
+//! the naming rationale.
 //!
 //! # Live plumbing — what's wired and how
 //!
@@ -126,7 +130,7 @@ use flui_foundation::notifier::Listenable;
 use flui_interaction::FocusNode;
 use flui_view::RebuildHandle;
 use flui_view::prelude::*;
-use flui_widgets::{EditableText, GestureDetector, TextEditingController};
+use flui_widgets::{EditableText, GestureDetector, SubmitCallback, TextEditingController};
 
 use crate::input_decorator::{InputDecoration, InputDecorator};
 use crate::theme::Theme;
@@ -134,9 +138,6 @@ use crate::theme::Theme;
 // ============================================================================
 // TextField
 // ============================================================================
-
-/// Callback for [`TextField::on_submitted`] — see that method's doc.
-type SubmitCallback = Rc<dyn Fn(&str)>;
 
 /// The Material single-line text field — [`EditableText`] decorated by
 /// [`InputDecorator`], with live focus/enabled/error plumbing. See the

@@ -241,13 +241,16 @@ pub use flui_app::{run_app_android, run_app_android_with_config};
 /// customization, reach them at `flui::material`), or `flui-material`
 /// internals like the raw M3 type-scale table (`english_like_2021`).
 ///
-/// **`TextField` explicitly names the Material type, shadowing
-/// [`flui_widgets::TextField`]** (still reachable at its own path, or via
-/// `flui_widgets::prelude` directly) — see this module's own
-/// `## Mapping decisions` entry in `ARCHITECTURE.md` for why an earlier
-/// revision of this doc instead omitted it. The Cupertino catalog has no
-/// such collision (every type is `Cupertino`-prefixed), but its surface is
-/// app-shell-shaped rather than everyday-widget-shaped
+/// **`TextField` names the Material type, unambiguously** — `flui-widgets`'
+/// own theme-free stand-in is named [`flui_widgets::RawTextField`], not
+/// `TextField`, specifically so this glob never has to choose between two
+/// same-named types or make `TextField`'s meaning depend on whether the
+/// `material` feature happens to be on. See this module's own
+/// `## Mapping decisions` entry in `ARCHITECTURE.md` for the two earlier
+/// revisions this superseded (first an omission, then an explicit-shadow
+/// that solved the ambiguity but broke feature-additivity). The Cupertino
+/// catalog has no such collision (every type is `Cupertino`-prefixed), but
+/// its surface is app-shell-shaped rather than everyday-widget-shaped
 /// (`CupertinoPageScaffold`, `CupertinoTabScaffold`, …), so it stays at
 /// `flui::cupertino` rather than joining this glob.
 pub mod prelude {

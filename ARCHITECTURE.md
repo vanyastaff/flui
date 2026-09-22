@@ -6,37 +6,54 @@ dependency checklist for application authors.
 
 ## Mapping decisions
 
-### `TextField` prelude collision — explicit-shadow, not omission
+### `TextField` prelude collision — renamed the widgets primitive, not shadowed
 
-`flui-widgets` and `flui-material` each ship a distinct `TextField` — a
-design-agnostic text-editing primitive and the M3-styled input. An earlier
-revision of `flui::prelude` resolved the name collision by omitting the
-Material one from the curated glob entirely, reasoning that "a curated glob
-cannot carry both without one silently shadowing the other" and keeping
-`flui_widgets::TextField` as the ambient default.
+`flui-widgets` and `flui-material` used to ship two distinct types both named
+`TextField` — a design-agnostic text-editing primitive and the M3-styled
+input. Three revisions of how `flui::prelude` handles this, kept in order
+because each corrected a real flaw in the one before it:
 
-That reasoning stated the mechanism correctly but reached the wrong
-conclusion for this prelude's actual audience: an application author writing
-an ordinary Material screen with `use flui::prelude::*;` who reaches for
-`TextField` gets a *compiling* result either way, so the omission does not
-surface as an error — it surfaces as an unstyled field silently rendered
-where a themed one was expected, exactly the "quiet Material-shaped mistake"
-this facade's curation exists to prevent for every other Material type. The
-codebase's every real caller of `flui::material::TextField`
+1. **Omission.** The first revision left the Material type out of the
+   curated glob entirely, reasoning that "a curated glob cannot carry both
+   without one silently shadowing the other," and kept `flui_widgets::TextField`
+   as the ambient default. That reasoning stated the mechanism correctly but
+   reached the wrong conclusion for this prelude's actual audience: an
+   application author writing an ordinary Material screen with
+   `use flui::prelude::*;` who reached for `TextField` got a *compiling*
+   result either way, so the omission never surfaced as an error — it
+   surfaced as an unstyled field silently rendered where a themed one was
+   expected, exactly the "quiet Material-shaped mistake" this facade's
+   curation exists to prevent for every other Material type.
+2. **Explicit shadow.** The second revision had `flui::prelude` explicitly
+   name `flui_material::TextField` in its material re-export list (Rust's
+   explicit-import-over-glob-import rule, the same pattern every other name
+   in that list already follows, e.g. `ElevatedButton`/`IconButton` are also
+   explicit despite not being ambiguous), shadowing the
+   `flui_widgets::prelude::*` glob's copy of the same name whenever the
+   `material` feature was on. This fixed the silent-mistake problem but
+   introduced a different one: `TextField`'s meaning then depended on
+   whether the `material` feature happened to be enabled, which violates
+   Cargo's feature-additivity contract — enabling a feature is supposed to
+   only *add* symbols, never change what an existing name already resolves
+   to for code that hasn't opted into the new feature's own symbols.
+3. **Rename (current).** `flui-widgets`' primitive is now
+   [`flui_widgets::RawTextField`](../crates/flui-widgets/src/text/text_field.rs),
+   not `TextField` — a breaking rename, sanctioned pre-1.0. `TextField`
+   belongs to `flui_material` alone, unconditionally; `flui::prelude` lists
+   it in the material re-export block like every other Material type, with
+   no shadowing and no feature-dependent meaning. `RawTextFieldState` was
+   renamed alongside it for the same reason (an orphaned `TextFieldState`
+   with no `TextField` beside it would have been confusing); `SubmitCallback`
+   (the shared `Rc<dyn Fn(&str)>` alias both `on_submitted` methods use) was
+   made `pub` and exported from `flui-widgets` so `flui_material::TextField`
+   reuses the same type instead of declaring its own copy.
+
+The codebase's every real caller of `flui::material::TextField`
 (`examples/material_demo`, `examples/workload_probe`, `examples/todo`)
-already imports it explicitly and would be unaffected by the omission either
-way — the fix has zero blast radius on existing code and only changes what
-an *unqualified* `TextField` resolves to for code that has not yet been
-written.
-
-`flui::prelude` now explicitly names `flui_material::TextField` in its
-material re-export list (Rust's explicit-import-over-glob-import rule,
-already the pattern every other name in that list follows, e.g.
-`ElevatedButton`/`IconButton` are also explicitly listed despite not being
-ambiguous) — it shadows the `flui_widgets::prelude::*` glob's copy of the
-same name whenever the `material` feature is on. `flui_widgets::TextField`
-remains reachable by its own path or via `flui_widgets::prelude` directly;
-nothing about the widgets-crate type itself changed.
+already imported it explicitly under all three revisions and needed no
+changes across any of them — every fix here was about what an *unqualified*
+`TextField` resolves to for code that hasn't been written yet, never about
+existing call sites.
 
 ### Explicit authoring modules
 
