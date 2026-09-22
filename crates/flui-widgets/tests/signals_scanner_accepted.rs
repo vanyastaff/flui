@@ -69,13 +69,13 @@ impl ViewState<Counter> for CounterState {
         self.flag.set(true);
         // Writes inside callback closures defined here run later, from an event.
         let tapped = Rc::clone(&self.view.tapped);
-        let tap: Box<dyn Fn(&Reactive)> =
-            Box::new(move |r: &Reactive| count.update(r, |c| *c += 1).map(|_| ()).unwrap_or(()));
-        let _hold = tap;
-        let _tapped = tapped;
+        let _tap: Box<dyn Fn(&Reactive)> = Box::new(move |r: &Reactive| {
+            tapped.set(tapped.get() + 1);
+            let _ = count.update(r, |c| *c += 1);
+        });
         let _later: Box<dyn Fn(&Reactive)> = Box::new(move |r: &Reactive| {
-            count.update(r, |c| *c -= 1).map(|_| ()).unwrap_or(());
-            other.set(r, 0).unwrap_or(());
+            let _ = count.update(r, |c| *c -= 1);
+            let _ = other.set(r, 0);
         });
         Column::new(vec![
             flui_view::ViewExt::boxed(SizedBox::square(1.0 + n as f32)),

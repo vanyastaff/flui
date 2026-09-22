@@ -954,7 +954,7 @@ mod tests {
         });
         assert_eq!(seen.as_deref(), Ok("alive"));
         assert!(matches!(
-            a.peek(&r, |v| v.len()),
+            a.peek(&r, String::len),
             Err(SignalError::Released { .. })
         ));
         assert_eq!(r.live_slot_count(), 0);

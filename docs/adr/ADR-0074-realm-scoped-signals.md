@@ -375,9 +375,9 @@ Nothing is removed in this ADR.
   flag, a pressed visual). Guidance: local, short-lived, read by this element only →
   `setState`; shared, long-lived, read by a handful of elements → signal (created with
   `cx.signal` by the element that owns its lifetime, or at the app root).
-- **Choosing by reader count.** A signal write costs about **1.8 µs per reader** on top of
-  what one `setState` on the readers' common parent costs (§8.1, 600 readers: 2.09 ms
-  against 1.01 ms), because every reader is scheduled through the inbox individually.
+- **Choosing by reader count.** A signal write costs about **1.3–1.8 µs per reader** on top of
+  what one `setState` on the readers' common parent costs (§8.1, 600 readers: 1.77–2.09 ms
+  against 1.01 ms across two runs), because every reader is scheduled through the inbox individually.
   Below ~50 readers that is noise next to the rebuilds it saves; above it the scheduling
   itself dominates. Rule: **a value with fewer than ~50 readers is a `Signal`; a value read
   by hundreds of cells (a theme slot, a unit preference, a media-query field) is an
@@ -458,7 +458,7 @@ No-go if the idle overhead exceeds 5 %, if any scenario needs a `PartialEq` boun
 expressed in `scripts/check-frame-capability-scope.sh` without false positives on
 `peek`.
 
-### 8.1 Phase-2 results (2026-09-22)
+### 8.1 Phase-2 results (2026-09-22, re-measured after the Computed/Effect split)
 
 `just bench-signals` (`crates/flui-widgets/benches/signals_rebuilds.rs`), M1 8-core /
 8 GB, `CARGO_BUILD_JOBS=6`, `CARGO_INCREMENTAL=0`, warm shared target, **dev profile**
@@ -466,42 +466,42 @@ expressed in `scripts/check-frame-capability-scope.sh` without false positives o
 cold build of the GPU stack inside the build slot), one run, criterion 2 s measurement.
 Counts come from `BuildOwner::last_frame_build_report` and the frame's difference of
 `PipelineOwner::layout_roots_total`; both variants mount the same tree shape (two elements
-per cell: a stateless cell view over a `SizedBox`). Counts do not depend on the profile;
-timings are dev-profile and only comparable A against B. **Rows that used the reverted
-`Computed` prototype** ("form 20: field flips validity") are kept as a measurement of
-that design for ADR-0075; the shipped bench derives validity in the Save cell from all 20
-fields, so its B figure for a keystroke is the field reader **plus the Save cell** (4
-elements), to be re-measured in the next build slot.
+per cell: a stateless cell view over a `SizedBox`). The form's "Save" cell reads all 20
+fields in both variants (no derived value: that is ADR-0075's subject), so a keystroke
+rebuilds the field's reader **and** the Save cell under signals. Counts do not depend on
+the profile; timings are dev-profile and only comparable A against B.
 
 | scenario | variant | elements built | by reason | layout roots | change + frame |
 |---|---|---:|---|---:|---:|
-| list 10k: one row changes | A setState | 20003 | parent_update=20002 state_change=1 | 1 | 15.31 ms |
-| list 10k: one row changes | **B signals** | **2** | parent_update=1 signal_change=1 | 1 | **4.13 ms** |
-| list 10k: append one row | A setState | 20003 | initial_mount=2 parent_update=20000 state_change=1 | 2 | 34.63 ms |
-| list 10k: append one row | B signals | 20005 | initial_mount=2 parent_update=20002 signal_change=1 | 2 | 36.45 ms |
-| form 20: keystroke, validity unchanged | A setState | 44 | parent_update=43 state_change=1 | 1 | 39.08 µs |
-| form 20: keystroke, validity unchanged (prototype: Save read a `Computed`) | **B signals** | **2** | parent_update=1 signal_change=1 | 1 | **17.19 µs** |
-| form 20: field flips validity | A setState | 44 | parent_update=43 state_change=1 | 1 | 39.24 µs |
-| form 20: field flips validity (prototype `Computed`, reverted → ADR-0075) | **B signals** | **4** | parent_update=2 signal_change=2 | 1 | **17.92 µs** |
+| list 10k: one row changes | A setState | 20003 | parent_update=20002 state_change=1 | 1 | 15.55 ms |
+| list 10k: one row changes | **B signals** | **2** | parent_update=1 signal_change=1 | 1 | **4.28 ms** |
+| list 10k: append one row | A setState | 20003 | initial_mount=2 parent_update=20000 state_change=1 | 2 | 33.98 ms |
+| list 10k: append one row | B signals | 20005 | initial_mount=2 parent_update=20002 signal_change=1 | 2 | 35.57 ms |
+| form 20: keystroke in one field | A setState | 44 | parent_update=43 state_change=1 | 1 | 37.87 µs |
+| form 20: keystroke in one field | **B signals** | **4** | parent_update=2 signal_change=2 | 1 | **18.26 µs** |
 | setting read by 3×200 cells | A setState | 1209 | parent_update=1208 state_change=1 | 1 | 1.01 ms |
-| setting read by 3×200 cells | B signals | 1200 | parent_update=600 signal_change=600 | 1 | 2.09 ms |
-| idle frame (list 10k mounted) | A setState | 0 | – | 0 | 4.06 µs |
-| idle frame (list 10k mounted) | B signals | 0 | – | 0 | 4.07 µs |
+| setting read by 3×200 cells | B signals | 1200 | parent_update=600 signal_change=600 | 1 | 1.77 ms |
+| idle frame (list 10k mounted) | A setState | 0 | – | 0 | 4.11 µs |
+| idle frame (list 10k mounted) | B signals | 0 | – | 0 | 4.14 µs |
+
+The reverted prototype's derived-value scenario ("form 20: field flips validity", a
+`Computed` invalid count read by the Save cell) measured 4 elements / 17.9 µs against
+44 / 39.2 µs; that figure is ADR-0075's baseline to beat, not a claim of this ADR.
 
 Reading against the go/no-go of §8:
 
 - **"One thing changed" rebuilds exactly the readers.** List row: 2 elements instead of
-  20 003; form keystroke: 2 instead of 44; validity flip: 4 (the field's reader and the
-  Save reader, each with its `SizedBox` child) instead of 44. The §8 wording "≤ 3
-  elements" counted readers, not their children; the measured figure is *2 elements per
-  reader*, which is the tree shape, not a signals cost. **Met.**
+  20 003; form keystroke: 4 (the field's reader and the Save cell that reads every field,
+  each with its `SizedBox` child) instead of 44. The §8 wording "≤ 3 elements" counted
+  readers, not their children; the measured figure is *2 elements per reader*, which is
+  the tree shape, not a signals cost. **Met.**
 - **Relayout count ≤ A.** Equal in every scenario (the changed box is the only layout
   root either way). **Met.**
-- **Wall time B ≤ A** where the readers are few: 3.7× (list) and 2.3× (form) faster.
+- **Wall time B ≤ A** where the readers are few: 3.6× (list) and 2.1× (form) faster.
   **Met.** Where *everyone* reads the value (600 cells): B rebuilds the same 1 200
-  elements but takes 2.09 ms against 1.01 ms — scheduling 600 readers through the inbox
-  (a `HashMap` insert and a heap push each) costs about 1.8 µs per reader more than one
-  `setState` on their common parent. **Not met for fan-out writes**; this is the price of
+  elements but takes 1.77 ms against 1.01 ms — scheduling 600 readers through the inbox
+  (a `HashMap` insert and a heap push each) costs about 1.3 µs per reader more than one
+  `setState` on their common parent (2.09 ms / 1.8 µs in the first run; issue #1249). **Not met for fan-out writes**; this is the price of
   precision and the honest guidance is §5.10's: a value every cell reads belongs in an
   `InheritedView` (one dependency edge per subtree, field masks per #1090), not in a
   signal each cell reads. Append: B is not better (36.4 vs 34.6 ms, within noise): the
@@ -510,10 +510,8 @@ Reading against the go/no-go of §8:
   parent legitimately does; stopping the propagation at unchanged children is
   `Memo<V>`/`can_update`'s job (C1), orthogonal to this ADR and now measurable with the
   same telemetry.
-- **Idle overhead ≤ 5 %.** 4.07 vs 4.06 µs: 10 000 registered readers cost nothing per
+- **Idle overhead ≤ 5 %.** 4.14 vs 4.11 µs: 10 000 registered readers cost nothing per
   idle frame. **Met.**
-- **#1090 field test through the same registry.** Not run in phase 2 (the mask column is
-  not implemented yet); stays a go-condition for the follow-up that implements it.
 
 **Verdict: go**, with two written-down limits: (1) fan-out values are an `InheritedView`
 concern, not a per-cell signal read; (2) structural list changes need `Memo<V>`/
