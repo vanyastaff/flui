@@ -674,8 +674,10 @@ fn main() {
         } => {
             if scene {
                 // clap enforces both via `requires`; the unwraps document that.
-                let scene_crate = scene_crate.expect("clap: --scene requires --scene-crate");
-                let package = package.expect("clap: --scene requires --package");
+                let scene_crate = scene_crate
+                    .expect("BUG: clap `requires` guarantees --scene-crate with --scene");
+                let package =
+                    package.expect("BUG: clap `requires` guarantees --package with --scene");
                 commands::run::execute_scene(&scene_crate, &package, &target, release, verbose)
             } else {
                 commands::run::execute(device, release, !no_hot_reload, profile, verbose)
