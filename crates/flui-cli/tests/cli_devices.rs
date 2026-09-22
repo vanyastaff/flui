@@ -125,14 +125,39 @@ fn devices_with_no_tools_on_path_reports_problems_not_errors() {
 /// Regression guard for the bug this module was built to fix: `flui
 /// devices` used to shell out to Safari's binary to read its version, which
 /// launches the GUI and never returns.
+///
+/// A `--version` baseline is still measured (and still reported in the
+/// panic message) as a diagnostic, but it is not used to scale the bound
+/// down — a first version of this test used `(baseline * 5).max(5s)`, and
+/// it flaked on *both* `ubuntu-latest` and `cli-macos` the same day it
+/// landed: `--version` pays only fork+exec/dynamic-linking cost, near-zero
+/// on a quiet runner (1.5ms / 5.3ms observed), while `devices` does real
+/// subprocess probing (`adb`/`xcrun`) whose cost has nothing to do with
+/// process-spawn overhead — so `baseline * 5` collapsed to a bound tighter
+/// than `devices`' own legitimate work (9.15s / 11.26s observed, both
+/// comfortably normal). The ratio was never meaningful; only the floor
+/// was ever doing anything, so the floor is now the whole bound, set well
+/// above every real number seen for `devices` on this runner class so far
+/// (the original flake's 23s/28.9s under the old flat `< 20s`, and the
+/// 9.15s/11.26s above) — 60s. Safari's GUI launching and never returning
+/// hangs indefinitely, not for tens of seconds, so 60s stays a wide
+/// margin below the regression this guards against while comfortably
+/// clearing realistic shared-runner noise.
 #[test]
 fn devices_finishes_well_under_the_old_gui_launch_hang() {
+    let baseline_started = Instant::now();
+    flui().arg("--version").assert().success();
+    let baseline = baseline_started.elapsed();
+
     let started = Instant::now();
     flui().arg("devices").assert().success();
     let elapsed = started.elapsed();
+
+    let threshold = Duration::from_secs(60);
     assert!(
-        elapsed < Duration::from_secs(20),
-        "flui devices took {elapsed:?} -- regression of the Safari GUI-launch hang?"
+        elapsed < threshold,
+        "flui devices took {elapsed:?} (baseline `flui --version`: {baseline:?}, threshold: \
+         {threshold:?}) -- regression of the Safari GUI-launch hang?"
     );
 }
 
