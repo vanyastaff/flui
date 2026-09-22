@@ -307,7 +307,7 @@ fn scenarios() -> Vec<Scenario> {
         let rows: Rc<RefCell<Vec<Signal<u32>>>> = Rc::new(RefCell::new(Vec::new()));
         let rows_for_mount = Rc::clone(&rows);
         let mut laid = mount_b(|r| {
-            *rows_for_mount.borrow_mut() = (0..LIST_ROWS as u32).map(|v| r.signal(v)).collect();
+            rows_for_mount.replace((0..LIST_ROWS as u32).map(|v| r.signal(v)).collect());
             ListB {
                 count: r.signal(LIST_ROWS),
                 rows: Rc::clone(&rows_for_mount),
@@ -351,9 +351,9 @@ fn scenarios() -> Vec<Scenario> {
         let count_cell: Rc<RefCell<Option<Signal<usize>>>> = Rc::new(RefCell::new(None));
         let count_for_mount = Rc::clone(&count_cell);
         let mut laid = mount_b(|r| {
-            *rows_for_mount.borrow_mut() = (0..=LIST_ROWS as u32).map(|v| r.signal(v)).collect();
+            rows_for_mount.replace((0..=LIST_ROWS as u32).map(|v| r.signal(v)).collect());
             let count = r.signal(LIST_ROWS);
-            *count_for_mount.borrow_mut() = Some(count);
+            count_for_mount.replace(Some(count));
             ListB {
                 count,
                 rows: Rc::clone(&rows_for_mount),
@@ -408,7 +408,7 @@ fn scenarios() -> Vec<Scenario> {
         let init = initial.clone();
         let mut laid = mount_b(|r| {
             let fields: Vec<Signal<u32>> = init.iter().map(|v| r.signal(*v)).collect();
-            *fields_for_mount.borrow_mut() = fields.clone();
+            fields_for_mount.replace(fields.clone());
             let sources = fields.clone();
             let invalid = r.computed(move |r| {
                 sources
@@ -456,7 +456,7 @@ fn scenarios() -> Vec<Scenario> {
         let unit_for_mount = Rc::clone(&unit_cell);
         let mut laid = mount_b(|r| {
             let unit = r.signal(1u32);
-            *unit_for_mount.borrow_mut() = Some(unit);
+            unit_for_mount.replace(Some(unit));
             AppB { unit }
         });
         let r = reactive(&mut laid);
@@ -482,7 +482,7 @@ fn scenarios() -> Vec<Scenario> {
         let rows: Rc<RefCell<Vec<Signal<u32>>>> = Rc::new(RefCell::new(Vec::new()));
         let rows_for_mount = Rc::clone(&rows);
         let laid = mount_b(|r| {
-            *rows_for_mount.borrow_mut() = (0..LIST_ROWS as u32).map(|v| r.signal(v)).collect();
+            rows_for_mount.replace((0..LIST_ROWS as u32).map(|v| r.signal(v)).collect());
             ListB {
                 count: r.signal(LIST_ROWS),
                 rows: Rc::clone(&rows_for_mount),
