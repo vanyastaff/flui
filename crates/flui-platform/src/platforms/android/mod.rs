@@ -56,6 +56,7 @@ use std::{
 };
 
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
+
 pub use memory::{
     PageAlignedVec, PageAllocError, align_to_page_size, align_to_page_size_u64, get_page_size,
     is_16kb_page_size,
@@ -197,7 +198,13 @@ impl AndroidPlatform {
     ///
     /// Drains all buffered input events via `input_events_iter()` and
     /// dispatches them through the window's callbacks as `PlatformInput`.
+    /// The first `MotionEvent` of the process is logged at `info`
+    /// (`FIRST_MOTION_SEEN`), every later one at `debug`.
     fn process_input_events(&self) {
+        /// Whether any `MotionEvent` has reached this function in this
+        /// process.
+        static FIRST_MOTION_SEEN: AtomicBool = AtomicBool::new(false);
+
         let window_guard = self.window.lock();
         let Some(window) = window_guard.as_ref() else {
             // No window yet — still drain events to prevent ANR
@@ -219,6 +226,43 @@ impl AndroidPlatform {
                     let handled = match event {
                         InputEvent::MotionEvent(motion) => {
                             let events = input::convert_motion_event(motion, scale_factor);
+                            // The one place a touch is visible between the
+                            // OS and the framework: a tap that changes
+                            // nothing on screen is diagnosed from these
+                            // lines (present → the framework's hit test or
+                            // arena; absent → the queue never delivered
+                            // it). The FIRST motion event of the process is
+                            // an `info` line — a lifecycle fact like "first
+                            // frame rendered", visible under the default
+                            // `info` filter — and every one after it is
+                            // `debug`, so a drag does not flood logcat.
+                            let first = !FIRST_MOTION_SEEN.swap(true, Ordering::Relaxed);
+                            let pointer = motion.pointer_at_index(0);
+                            // One field list, two levels: `tracing`'s
+                            // callsite level must be a constant, so the
+                            // level is pasted by a local macro rather than
+                            // chosen at runtime.
+                            macro_rules! motion_event {
+                                ($level:expr) => {
+                                    tracing::event!(
+                                        target: "flui_platform::android::input",
+                                        $level,
+                                        action = ?motion.action(),
+                                        pointers = motion.pointer_count(),
+                                        converted = events.len(),
+                                        x = pointer.x(),
+                                        y = pointer.y(),
+                                        scale_factor,
+                                        first,
+                                        "motion event reached the input queue"
+                                    )
+                                };
+                            }
+                            if first {
+                                motion_event!(tracing::Level::INFO);
+                            } else {
+                                motion_event!(tracing::Level::DEBUG);
+                            }
                             let mut any_handled = false;
                             for platform_input in events {
                                 let result = callbacks.dispatch_input(platform_input);

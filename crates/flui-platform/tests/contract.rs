@@ -311,6 +311,7 @@ fn test_window_lifecycle_contract() {
         decorated: true,
         min_size: Some(Size::new(px(320.0), px(240.0))),
         max_size: None,
+        ..Default::default()
     };
 
     match platform.open_window(options.clone()) {

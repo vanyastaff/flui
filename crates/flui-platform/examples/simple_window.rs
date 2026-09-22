@@ -43,6 +43,7 @@ fn main() {
         decorated: true,
         min_size: Some(flui_types::geometry::Size::new(px(400.0), px(300.0))),
         max_size: None,
+        ..Default::default()
     };
 
     // Create window before running the event loop.

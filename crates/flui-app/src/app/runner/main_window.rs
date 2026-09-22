@@ -224,7 +224,9 @@ impl MainController {
             }
             return;
         }
-        let options = (&self.config).into();
+        // Deferred reveal: this window is installed through
+        // `install_desktop_window`, which performs the reveal.
+        let options = super::desktop::rendered_window_options(&self.config);
         let opened = with_owner_platform(|owner| owner.open_window(options));
         if !self.is_current() {
             match opened {

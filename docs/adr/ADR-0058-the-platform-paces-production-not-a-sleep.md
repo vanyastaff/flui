@@ -51,7 +51,8 @@ than by inference:
    record. Its own honesty note already said the row was unmeasured.
 2. **The `Fifo` block is real, but it engages behind the swapchain, not per
    call.** wgpu-hal configures `min_image_count(maximum_frame_latency + 1)` —
-   two images at our `desired_maximum_frame_latency: 1` — so an acquire
+   two images at the `desired_maximum_frame_latency: 1` of the time (three
+   since it was raised to 2 on 2026-09-22; ADR-0029's addendum) — so an acquire
    cannot block until the queue is actually full. The 16 ms sleep drained
    that queue before the third acquire ever happened, which is why a probe
    taken *with the sleep in place* measured a 13 µs acquire and concluded the

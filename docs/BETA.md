@@ -32,7 +32,7 @@ so `publish = false` is not a substitute for designing that closure.
 | Platform behavior | Every platform advertised as beta runs the application, accepts its native input, resizes, suspends/resumes where applicable, and exits cleanly. | Per-platform execution evidence below. Compilation alone cannot certify runtime support. |
 | Developer iteration | Documented reload modes apply edits predictably and state preservation matches their advertised contract. Failed edits can be corrected without corrupting the running application. | Tests and live checks for repeated edits, idle applications, failed builds, state preservation, and shutdown. Publish target-specific limitations. |
 | Agent workflow | An agent can discover the public API, create a UI, inspect structure/semantics, drive an interaction, and assert the result through documented interfaces. | A reproducible consumer example using the existing diagnostics and testing APIs, with meaningful assertions and actionable command failures. |
-| Performance and resilience | Static applications become idle; representative scrolling and editing workloads have recorded frame timing and memory behavior; supported recovery paths work. | Reproducible workload, hardware/OS, build profile, timing distribution, memory measurements, and explicit budgets chosen before acceptance. No invented performance claim. |
+| Performance and resilience | Static applications become idle; representative scrolling and editing workloads have recorded frame timing and memory behavior; supported recovery paths work. | Reproducible workload, hardware/OS, build profile, timing distribution, memory measurements, and explicit budgets chosen before acceptance. No invented performance claim. Recorded for macOS in ["Performance and resilience: the representative workload — 2026-09-22"](#performance-and-resilience-the-representative-workload--2026-09-22) (`just macos-workload`); recovery paths are the device-loss and surface-recreation retries, exercised by their unit tests and not yet by a live fault. |
 | Distribution | The candidate installs and builds outside this checkout, with its full dependency closure available through the chosen distribution channel. | Package/dependency audit, clean consumer build, licenses, changelog, version/migration notes, and reproducible release instructions. |
 
 The user-facing mental model remains declarative composition over the retained
@@ -107,7 +107,7 @@ Experimental support must be visible in installation instructions and release
 notes. Narrowing beta platform scope is a product decision, not a way to turn a
 failed check green.
 
-## Platform status — candidate fd9f2938
+## Platform status — candidate: this branch at `v0.1.0` and after
 
 None of these are **beta verified**: none has passed every advertised workflow
 in [What beta must demonstrate](#what-beta-must-demonstrate). "Beta candidate"
@@ -116,11 +116,11 @@ on a real OS, not that beta acceptance is complete.
 
 | Platform | Status | Evidence | Published limitations |
 |---|---|---|---|
-| macOS (AppKit, Metal, ARM64) | **beta candidate** | Live operator-equivalent input through real OS channels — `CGEventPost`/`CGHIDEventTap` clicks and `CGWindowListCopyWindowInfo` capture, no accessibility-tree shim (["Live verification through direct OS interaction — 2026-09-20"](#live-verification-through-direct-os-interaction--2026-09-20)); native close/quit/reopen (["Native macOS last-window exit"](#native-macos-last-window-exit), `exit_policy_probe`, `just macos-close-path`); launch-route rendering across direct exec, `open`, and `open -g` (`just macos-launch-render`, cited in the same live-verification section); the deferred-first-reveal fix for the white-window observation, commit `fd9f2938` ("Reveal a macOS window only once its first frame has been presented", `PlatformWindow::reveal_after_first_frame` / `FirstReveal`); IME routing/protocol coverage via the `just macos-ime` script (`ime_probe`, ADR-0069) | No native accessibility/assistive-technology check on any workflow; no physical Cmd+Q or menu-bar routing, nested modal loops, or foreign-loop embedding (only programmatic quit/terminate paths are proven); `just macos-ime` exercises routing and the `NSTextInputClient` protocol with synthesized key events — no genuine input method runs, so real IME composition is unverified; `open_window`'s `SharedRealm` policy is refused at admission (only `SeparateRealms` has content); a single unattributed first-run flake is recorded in "Live verification" and not reproduced; clipboard and OS suspend/resume are unverified |
-| iOS Simulator (iPhone 16e, iOS 26.2) | **experimental** | Touch input and Home/return state retention via XCUITest, since the backend publishes no accessibility tree (["iOS execution lifecycle foundation"](#ios-execution-lifecycle-foundation), `just ios-input-check`, `scripts/check-ios-input.py`); safe-area inset layout (["iOS safe-area layout"](#ios-safe-area-layout), `just ios-safe-area-check`); scene disconnect/reconnect protocol probe (["UIKit scene ownership"](#uikit-scene-ownership)) | No physical device tested; the oracle is pixels only (no a11y tree, so nothing is read by identifier); no IME or keyboard check; landscape orientation, keyboard occlusion, and other device classes are untested; background execution grants and full multiwindow/background-launch rendering remain unverified; the measured counter bundle was the CLI's 2026-09-19 build, not a fresh build of the current revision |
+| macOS (AppKit, Metal, ARM64) | **beta candidate** | Live operator-equivalent input through real OS channels — `CGEventPost`/`CGHIDEventTap` clicks and `CGWindowListCopyWindowInfo` capture, no accessibility-tree shim (["Live verification through direct OS interaction — 2026-09-20"](#live-verification-through-direct-os-interaction--2026-09-20)); native close/quit/reopen (["Native macOS last-window exit"](#native-macos-last-window-exit), `exit_policy_probe`, `just macos-close-path`); launch-route rendering across direct exec, `open`, and `open -g` (`just macos-launch-render`, cited in the same live-verification section); the deferred-first-reveal fix for the white-window observation, commit `fd9f2938` ("Reveal a macOS window only once its first frame has been presented", `PlatformWindow::reveal_after_first_frame` / `FirstReveal`); IME routing/protocol coverage via the `just macos-ime` script (`ime_probe`, ADR-0069) | The assistive-technology check covers one control through one `AXUIElement` client, not a VoiceOver session (["Accessibility on macOS"](#accessibility-on-macos-the-counter-through-an-assistive-technology--2026-09-22), `just macos-a11y`); no physical Cmd+Q or menu-bar routing, nested modal loops, or foreign-loop embedding (only programmatic quit/terminate paths are proven); `just macos-ime` exercises routing and the `NSTextInputClient` protocol with synthesized key events — no genuine input method runs, so real IME composition is unverified; `open_window`'s `SharedRealm` policy is refused at admission (only `SeparateRealms` has content); a single unattributed first-run flake is recorded in "Live verification" and not reproduced; clipboard and OS suspend/resume are unverified |
+| iOS Simulator (iPhone 16e, iOS 26.2) | **experimental** | Touch input and Home/return state retention via XCUITest, since the backend publishes no accessibility tree (["iOS execution lifecycle foundation"](#ios-execution-lifecycle-foundation), `just ios-input-check`, `scripts/check-ios-input.py`); safe-area inset layout (["iOS safe-area layout"](#ios-safe-area-layout), `just ios-safe-area-check`); scene disconnect/reconnect protocol probe (["UIKit scene ownership"](#uikit-scene-ownership)) | No physical device tested; the oracle is pixels only (no a11y tree, so nothing is read by identifier); no IME or keyboard check; landscape orientation, keyboard occlusion, and other device classes are untested; background execution grants and full multiwindow/background-launch rendering remain unverified; the measured counter bundle was the CLI's 2026-09-19 build, not a fresh build of the current revision; `just ios-sim` (static Material app renders, animated app's pixels change between two screenshots 2 s apart and the process survives) was re-run on 2026-09-22 at `51c8fe63` on an iPhone 17 Pro simulator and passed both arms — the XCUITest touch check was not re-run |
 | Linux (X11 / Wayland) | **experimental** | CI-executed live smoke only: the `live-smoke` job in `.github/workflows/ci.yml` builds `flui`'s `sliver_demo` example and `flui-live-smoke`, then drives a real window with real X11 input under Xvfb (pixel and exit-code checks, occlusion verified against a real cover window), plus a Wayland variant under headless weston for close-path teardown ordering (`live-smoke` / `live-smoke-wayland` recipes in `justfile`; also described in the README under "Resilience that is tested, not assumed") | No operator-equivalent input verification as used on macOS (only the harness's synthetic/scripted input); no IME check; no resident/background lifecycle coverage; native accessibility bridges are not exercised by this job; X11 and Wayland coverage differ in scope (Wayland covers only close-path teardown ordering) |
 | Windows (Win32) | **unverified** | Cross-compiled Clippy only: `just cross-typecheck` runs `cargo clippy -p flui-platform --target x86_64-pc-windows-msvc --features a11y` | No live window, input, lifecycle, or IME verification has been performed on Windows for this candidate; the "Window-independent owner turns" and "Resident main-window validation" sections explicitly note Windows show/worker paths as cross-compilation evidence only |
-| Android | **unverified** | Cross-compiled Clippy only, for `aarch64-linux-android`: `just cross-typecheck`'s `flui-platform` line plus its `flui-app`/`flui` mobile-runner lines; example crates (`examples/android_demo`, `examples/android_scene`, `examples/android_app`) are excluded from `[workspace.members]` and built separately with `cargo ndk` (`docs/crates.md`, `docs/getting-started.md`) | No simulator, emulator, or device run of any kind; no runtime, input, or lifecycle verification; the automatic-retry surface-recreation backoff (`21af0752`) is host-tested against a scripted backend only, not a real device or emulator failure |
+| Android (emulator, android-35 arm64) | **experimental** | First emulator run, 2026-09-22, from the CLI's `flui build android` / `flui run --device` work in the peer session (generated counter with `android_main`, `cargo ndk` arm64-v8a debug APK, android-35 google_apis arm64 on Apple Silicon, `-gpu host`, density 420, 1080×2400): first frame ~10 s after launch, the counter visible; two `adb shell input tap 540 1284` on Increment showed «2» on the screenshot taken right after — once the backend handed the framework logical pointer positions (`bf2725be`; before it every touch landed past the viewport's edge, diagnosed through the `28e048f1` first-motion-event trace: `x=540.0 y=1284.0 scale_factor=2.625`). Cross-compiled Clippy for `aarch64-linux-android` in `just cross-typecheck`. | One emulator, one host, debug build, an `adb` tap rather than a finger; no lifecycle (pause/resume/rotate) or keyboard verification; on `-gpu swiftshader_indirect` a debug build produced no first frame in four minutes (process at ~80 % CPU after "Selected GPU: SwiftShader", no errors in logcat) — software rendering is unverified; the debug APK is 406 MB because the `.so` ships uncompressed with full debug info; the automatic-retry surface-recreation backoff (`21af0752`) is host-tested against a scripted backend only, not a real device or emulator failure |
 | Web / WASM | **experimental** | The counter template's widget tree run through `flui::run_app` in a browser (`examples/web_counter`, `just web-counter-build`, WebGPU): rendered, three clicks on Increment advanced 0 → 3, a click with no target changed nothing, no console errors — see ["Web: the counter in a browser"](#web-the-counter-in-a-browser). Compile coverage stays `just wasm-check`. | One browser (the desktop app's Chromium-based pane) on one machine, served from `localhost`; no Firefox/Safari, no WebGL fallback (WebGPU only), no touch, no IME, no resize/visibility lifecycle check, hot-reload has no web runner. The shader uniformity defect this run exposed is fixed and guarded by `scripts/check-wgsl-uniformity.py`, whose rule is structural, not Tint itself. |
 
 ## Verification order
@@ -314,6 +314,19 @@ closure; the CLI, devtools, hot-reload and localizations packages are not in
 it. This is the first clean consumer build from the archives; it does not
 exercise a registry index, upload, or docs.rs.
 
+Second run, 2026-09-22 at `52509489`: since `3d52cf55` the template's
+non-local branch pins `flui` to the release git tag rather than a registry
+version, so the check would have built the tag, not the archives, and the
+consumer now ships a lockfile resolved against the live registry
+(`wasm-bindgen-futures 0.4.78` against the vendor set's 0.4.77) that an
+offline build cannot satisfy. The script now rewrites the two git-tag
+dependencies to `flui = { version = "=0.1.0" }` (keeping `features`) and
+drops the generated lockfile before the offline build, so the archives are
+what gets built and the resolution is the vendor set's. Result: 28 archives
+installed, the consumer built and its two generated tests passed offline,
+and the lockfile resolved 22 `flui-*` packages to archive digests — PASS.
+
+
 Baseline verification before the release-policy and surface-color changes:
 `just ci` completed on macOS with 9,439 workspace tests and 52 GPU tests passing,
 plus doctests (`/tmp/flui-beta-ci-facade-final.log`). That run skipped three
@@ -422,7 +435,10 @@ observations are consistent with warmth rather than with route: a cold launch's
 first frame was still undrawn 2.81 s after its window appeared, while on every
 warm launch since, the window was already drawn at its first sighting; the three
 launch routes were also measured directly and rendered 15/15 and 9/9 across all of
-them. The fix now exists: a macOS window opened visible is ordered front at
+them. The fix now exists: a macOS window opened visible with
+`WindowOptions::reveal = WindowReveal::AfterFirstFrame` — what `flui-app`'s
+runner asks for; a direct `flui-platform` consumer keeps the default
+`AtOpen`, having no first frame to report — is ordered front at
 `alphaValue` 0 and made opaque when the desktop runner reports the first
 presented frame (`PlatformWindow::reveal_after_first_frame`, driven by
 `flui-app`'s `FirstReveal` policy with a one-second fallback measured from the
@@ -686,6 +702,162 @@ three clicks on Increment advanced the count 0 → 1 → 2 → 3, a click on emp
 canvas left it at 3, and the console had no errors. This is one browser, one
 machine, `localhost`; it is evidence for the Web row's move from unverified
 to experimental, not a browser matrix.
+
+Second observation, 2026-09-22, from the CLI's `flui run --device browser`
+work: the canvas did not fill the viewport although the page's CSS said
+`100vw`/`100vh`. The web backend was pinning the canvas to `AppConfig::size`
+in inline CSS and never dispatching a resize. It now takes the canvas's CSS
+box as the window size and follows it (`ResizeObserver` plus the window's
+`resize` event, backing store at the device pixel ratio). Same browser pane,
+a page styling the canvas `100vw`/`100vh`: the canvas measured 1100×700 for
+an 1100×700 viewport with no inline style, followed a viewport change to
+980×1260 at device pixel ratio 2 (backing store 1960×2520) with the counter
+re-centred, and a click on the re-laid-out button advanced the count.
+
+## Accessibility on macOS: the counter through an assistive technology — 2026-09-22
+
+`examples/a11y_probe.rs` (`just macos-a11y`, release, `--features
+material,a11y`) is the CLI counter template's tree with the facade's new
+`a11y` feature, which forwards `flui-platform`'s AccessKit adapters
+(NSAccessibility / UIA / AT-SPI) — off by default, since the Linux adapter
+carries a D-Bus stack, and until today unreachable from the facade at all.
+`scripts/macos-ax-client.swift` is an `AXUIElement` client, the API every
+macOS screen reader uses: it reads the window's accessibility tree, finds the
+button by label, performs `AXPress`, and reads the count back as static text.
+No pointer or keyboard event is synthesised anywhere.
+
+The first run found two defects, both fixed the same day:
+
+- The window's tree held the button (`AXButton title="Increment"`) but
+  neither `Text` — a labelled node with no role-bearing flag resolved to
+  AccessKit's `GenericContainer`, which AccessKit's consumer filter drops
+  from what an assistive technology sees. A labelled, flagless node is now
+  `Role::Label` (static text, what Flutter's bridges publish for the same
+  node); both texts appear as `AXStaticText` with their values.
+- `AXPress` was accepted (status 0) and nothing happened: `GestureDetector`
+  advertised no semantics action, so the button's node had no tap for the
+  platform to route. The detector now publishes tap and long-press actions
+  (`_GestureSemantics` parity); the `Send + Sync` platform handler records
+  the request and schedules a rebuild, and the `Rc` callback runs through the
+  owner-local post-frame handle after that frame — one frame of latency, no
+  unsafe. A headless round-trip test pins it, and the Material `Checkbox`
+  test learned that a detector adds an annotation node of its own.
+
+Accepted run (M1, macOS 27.0): before the press the tree read
+`AXStaticText "You have pushed the button this many times:"`, `AXStaticText
+"0"`, `AXButton "Increment"`; `AXPress` returned success; the tree then read
+`AXStaticText "1"` — `AX_CLIENT_RESULT=PASS`. Limits: one client, not a
+VoiceOver session (no announcements, no cursor navigation, no rotor); one
+control (button and static text); Windows UIA and Linux AT-SPI adapters
+compile under `--features a11y` (cross-typecheck) and are not exercised; iOS
+publishes no accessibility tree at all (its row says so).
+
+## Window lifecycle on macOS: minimize, hide, resize — 2026-09-22
+
+`examples/lifecycle_probe.rs` (`just macos-lifecycle`, release build) runs a
+Material tree through the ordinary `flui::app::Application` path with a
+free-running `AnimationController` demanding frames, then drives its own
+window from a driver thread through AppKit on the main queue — no operator
+input, no synthetic OS events — and counts the frames the runner produces
+through each transition with a self-re-arming post-frame callback:
+
+| phase | driver | frames | budget | verdict |
+| --- | --- | --- | --- | --- |
+| first frame | wait | 0.892 s after the window factory | ≤ 15 s (hang guard) | PASS |
+| visible | — | 201 in 2 s | ≥ 30 | PASS |
+| minimized | `-[NSWindow miniaturize:]` (`isMiniaturized` confirmed) | 0 in 3 s | ≤ 5 | PASS |
+| restored | `-[NSWindow deminiaturize:]` | 199 in 2 s | ≥ 30 | PASS |
+| hidden | `-[NSApplication hide:]` (`isHidden` confirmed) | 0 in 3 s | ≤ 5 | PASS |
+| unhidden | `-[NSApplication unhide:]` | 200 in 2 s | ≥ 30 | PASS |
+| resized | `-[NSWindow setFrame:display:]` +200×+100 | layout saw 840×580 = the new content size | ±1 px within 1 s | PASS |
+
+Same host and display as the workload run (M1, macOS 27.0, 100 Hz). A
+minimized or hidden window costs the runner nothing at all — zero frames
+against a controller that never stops asking — and the loop is back at the
+panel rate within the half-second settle after each restore; the resize
+reaches the root's constraints exactly. Budgets were declared in the
+probe's module doc before its first run; the first run failed only its
+baseline, which had started before the cold GPU stack produced a frame,
+and the probe now waits for the first frame and reports the wait instead.
+Not covered: occlusion by another window (the runner's `occlusion_visible`
+path), display sleep, and a live drag-resize's intermediate frames.
+
+One observation from the run, fixed the same day: the rendering pipeline
+warned — `run_layout: no cached state.constraints() AND no
+root_constraints … skipping dirty entry` for a non-root render node —
+once at startup here, on the frame in which the `LayoutBuilder` child was
+first marked dirty before its parent laid it out, and once per frame in
+the workload probe's scrolling `ListView::builder` (children built during
+layout and left for the parent to lay out later). That is the ordinary
+ADR-0017 build-during-layout path, not a fault — the child keeps
+`NEEDS_LAYOUT` until its parent lays it out — so the non-root case is a
+`debug` line now and only a root without constraints (a binding bug)
+still warns. The run re-done after the change logs no warning.
+
+## Performance and resilience: the representative workload — 2026-09-22
+
+`examples/workload_probe.rs` (`just macos-workload`, release build) is the
+reproducible workload the row asks for: a `Scaffold` with an `AppBar`, a
+Material `TextField` and a 2,000-row `ListView::builder` of `ListTile`s,
+900×700 logical, driving itself from an `AnimationController` tick — 20 s of
+scrolling at 18 px per frame bouncing between both ends, then 500 characters
+inserted one per frame into the field, then 5 s of enforced idleness — with
+no operator input and no synthetic OS events. The probe prints one JSON
+line per phase; `scripts/check-macos-workload.py` samples RSS every 0.5 s,
+reads the main display's refresh period through CoreGraphics and hands it to
+the probe, and applies the budgets declared in its own header before the
+first run: scroll and type p99 within two display periods, under 1 % of
+scroll frames over two periods, RSS growth under 10 % from a baseline five
+seconds in, at most 5 frames during idleness. Every run writes
+`target/workload/<timestamp>.json` with the phase lines, the RSS series and
+the per-budget verdict.
+
+Host: MacBook Air (M1), macOS 27.0 (26A428), main display 3440×1440 at
+100 Hz (10.0 ms period, `CGDisplayCopyDisplayMode`), release profile.
+
+**First run — a finding, not a pass.** With the swapchain at
+`desired_maximum_frame_latency: 1` (the value the engine had carried since
+ADR-0029) every phase presented at a rock-steady **20.0 ms p50 — exactly
+two periods, 50 fps**: scroll 984 frames in 20 s (p90 20.3, p99 24.9, max
+131.7 ms), type 500 frames at p50 20.005 / p99 20.6 ms. The bare platform
+frame pump on the same display (`just macos-frame-pump`) ran 100.2 fps, so
+the halving was in the rendering path. Setting the latency to 2 and
+re-running: scroll p50 **9.998 ms**, type p50 9.998 ms — the full panel
+rate. The mechanism is the one ADR-0029's AppKit subsection had measured on
+a 3 % tail and judged tolerable: with two drawables, the acquire for the
+next frame waits for the previous drawable to leave scanout, so a frame
+whose own work does not fit in what remains of the period misses the next
+vsync — on every frame, once the frame does real work. The literal is now
+2 (wgpu's default); the reasoning, the earlier resize-axis measurement that
+made this a free choice there, and the numbers are in the literal's own
+comment and in ADR-0029's dated addendum.
+
+The first run's RSS check also failed — 75.6 MiB at 1 s to 201 MiB at the
+end, +166 % — and that one was the script's: the series reaches 199.6 MiB
+by 2.2 s (GPU stack, glyph atlas, the first laid-out screen) and is flat to
+within 1 % for the remaining 33 s. The baseline moved from 1 s to 5 s, past
+the startup ramp and inside the scroll phase; the 10 % budget did not
+change.
+
+**Accepted run, at latency 2 with the real period:**
+
+| Budget | Measured | Verdict |
+| --- | --- | --- |
+| scroll p99 ≤ 2 periods (20.0 ms) | p99 10.10 ms, 1,967 frames / 20 s | PASS |
+| scroll frames over 2 periods ≤ 1 % | 6 / 1,967 (0.31 %) | PASS |
+| type p99 ≤ 2 periods | p99 10.04 ms, 500 frames | PASS |
+| idle frames ≤ 5 in 5 s | 1 | PASS |
+| RSS growth ≤ 10 % from 5 s | 253.1 → 185.0 MiB (−26.9 %; peak 253.6) | PASS |
+
+The single idle frame is the one the controller's `stop()` lands on; the
+runner then produces nothing until the process quits, which is the "static
+applications become idle" half of the row measured rather than asserted.
+Limits: one host, one display, one build; the probe drives controllers, not
+the platform's input path (by design — a real operator's mouse and keyboard
+are in use on this machine), so input-translation cost is outside this
+number; and the probe cannot read the display period through the facade
+(`PlatformWindow::refresh_period` is not exposed to application code), so
+the script supplies it.
 
 ## Native iOS application delivery
 

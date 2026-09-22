@@ -24,6 +24,7 @@ use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
+    semantics::SemanticsConfiguration,
     traits::{RenderBox, TextBaseline},
 };
 
@@ -283,6 +284,48 @@ impl RenderBox for RenderParagraph {
             self.painter.paint(ctx.canvas(), Offset::ZERO);
         }
     }
+
+    /// Flutter parity: `RenderParagraph.describeSemanticsConfiguration`
+    /// (`paragraph.dart`, oracle tag `3.44.0`), narrowed to the plain-text
+    /// case this object supports (no `WidgetSpan` children, no gesture
+    /// recognizers on the span — see the module doc's "Out of scope" list).
+    /// The oracle's `needsAssembleSemanticsNode`/`childConfigurationsDelegate`
+    /// branches exist to handle inline recognizers and placeholders; with
+    /// neither possible here, only its `else` branch applies: `config.label
+    /// = text.toPlainText()` and `config.textDirection = textDirection`.
+    ///
+    /// Mapping decision (see `crates/flui-objects/ARCHITECTURE.md` "Mapping
+    /// decisions"): an EMPTY plain-text span sets neither `label` nor
+    /// `text_direction`, so the paragraph stays un-annotated and contributes
+    /// no semantics node of its own — Flutter's oracle sets both
+    /// unconditionally, but `SemanticsConfiguration::set_text_direction`
+    /// alone marks the configuration annotated in this port (see that
+    /// setter's doc comment), which would otherwise publish an empty,
+    /// unlabelled node for every text-less paragraph in the tree.
+    fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
+        let Some(span) = self.painter.text() else {
+            return;
+        };
+        let text = span.to_plain_text();
+        if text.is_empty() {
+            return;
+        }
+        config.set_label(text);
+        if let Some(direction) = self.painter.text_direction() {
+            config.set_text_direction(semantics_text_direction(direction));
+        }
+    }
+}
+
+/// Maps the painting-side [`TextDirection`] onto `flui-semantics`'s own
+/// parallel enum of the same name (two definitions of the same Flutter
+/// concept, consolidation tracked — see that type's `PORT-CHECK-OK-SP3`
+/// marker).
+fn semantics_text_direction(direction: TextDirection) -> flui_rendering::semantics::TextDirection {
+    match direction {
+        TextDirection::Ltr => flui_rendering::semantics::TextDirection::Ltr,
+        TextDirection::Rtl => flui_rendering::semantics::TextDirection::Rtl,
+    }
 }
 
 #[cfg(test)]
@@ -433,6 +476,46 @@ mod tests {
             "ellipsized width {} must be less than the untruncated single-line width {full} \
              (the finite max width must reach the painter despite soft_wrap=false)",
             dry.width.get(),
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // describe_semantics_configuration
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn describe_semantics_configuration_sets_label_and_direction_for_non_empty_text() {
+        let p = para("hello");
+        let mut config = flui_rendering::semantics::SemanticsConfiguration::new();
+
+        p.describe_semantics_configuration(&mut config);
+
+        assert_eq!(
+            config
+                .label()
+                .map(flui_rendering::semantics::AttributedString::as_str),
+            Some("hello"),
+        );
+        assert_eq!(
+            config.text_direction(),
+            Some(flui_rendering::semantics::TextDirection::Ltr),
+        );
+        assert!(config.has_been_annotated());
+    }
+
+    #[test]
+    fn describe_semantics_configuration_is_a_no_op_for_empty_text() {
+        let p = para("");
+        let mut config = flui_rendering::semantics::SemanticsConfiguration::new();
+
+        p.describe_semantics_configuration(&mut config);
+
+        assert_eq!(config.label(), None);
+        assert_eq!(config.text_direction(), None);
+        assert!(
+            !config.has_been_annotated(),
+            "an empty paragraph must not mark its configuration annotated — see \
+             ARCHITECTURE.md's \"RenderParagraph publishes no semantics node for empty text\"",
         );
     }
 }

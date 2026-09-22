@@ -158,8 +158,11 @@ where
                 realm_dispatch.address.realm_id,
                 move |size, scale_factor| {
                     if let Some(renderer) = renderer_resize.lock().as_mut() {
-                        let width = (size.width.0 * scale_factor) as u32;
-                        let height = (size.height.0 * scale_factor) as u32;
+                        // Rounded like the backend's `physical_size` and
+                        // the canvas backing store it sets, so all three
+                        // agree at fractional device pixel ratios.
+                        let width = (size.width.0 * scale_factor).round() as u32;
+                        let height = (size.height.0 * scale_factor).round() as u32;
                         renderer.resize(width, height);
                     }
                 },

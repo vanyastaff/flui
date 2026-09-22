@@ -50,8 +50,12 @@ fn themed(switch: Switch) -> Theme {
 fn mounting_a_switch_creates_a_semantics_annotated_tap_target() {
     let laid = lay_out(themed(Switch::new(false).on_changed(|_| {})), constraints());
 
+    // The wrapper node is the Switch's own; its `GestureDetector` adds
+    // a second, action-only annotation beneath it for assistive technology.
     let semantics = laid
-        .try_find_by_render_type("RenderSemanticsAnnotations")
+        .find_semantics_wrappers()
+        .into_iter()
+        .next()
         .expect("Switch must mount a Semantics wrapper");
     assert_eq!(
         laid.size(semantics),

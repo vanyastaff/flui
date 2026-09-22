@@ -110,6 +110,7 @@ mod appkit_frame_pump_probe {
             decorated: true,
             min_size: None,
             max_size: None,
+            ..Default::default()
         }) {
             Ok(pending) => match pending.try_ready() {
                 Ok(window) => window,

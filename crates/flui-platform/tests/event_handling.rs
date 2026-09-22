@@ -58,6 +58,7 @@ fn test_mouse_click_pointer_event() {
         decorated: true,
         min_size: None,
         max_size: None,
+        ..Default::default()
     };
 
     let window = platform
@@ -109,6 +110,7 @@ fn test_keyboard_with_modifiers() {
         decorated: true,
         min_size: None,
         max_size: None,
+        ..Default::default()
     };
 
     let _window = platform
@@ -178,6 +180,7 @@ fn test_window_resize_event() {
         decorated: true,
         min_size: Some(Size::new(px(320.0), px(240.0))),
         max_size: Some(Size::new(px(1920.0), px(1080.0))),
+        ..Default::default()
     };
 
     let window = platform
@@ -253,6 +256,7 @@ fn test_mouse_movement_pointer_event() {
         decorated: true,
         min_size: None,
         max_size: None,
+        ..Default::default()
     };
 
     let _window = platform
@@ -319,6 +323,7 @@ fn test_multi_touch_pointer_events() {
         decorated: true,
         min_size: None,
         max_size: None,
+        ..Default::default()
     };
 
     let _window = platform
@@ -409,6 +414,7 @@ fn test_event_coordinate_system() {
         decorated: true,
         min_size: None,
         max_size: None,
+        ..Default::default()
     };
 
     let window = platform

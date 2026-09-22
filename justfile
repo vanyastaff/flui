@@ -551,6 +551,7 @@ facade-combos:
                  "--no-default-features --features material,cupertino,localizations" \
                  "--no-default-features --features hot-reload" \
                  "--no-default-features --features serde" \
+                 "--no-default-features --features a11y" \
                  "--all-features" \
                  ""; do
         echo "==> cargo clippy -p flui --locked --all-targets ${combo:-(default features)}"
@@ -719,9 +720,39 @@ macos-hot-reload-loop work="target/hot-reload-loop/work":
     cargo build -p flui-cli --locked
     python3 -B scripts/check-hot-reload-loop.py {{work}}
 
+[group("test")]
+[doc("Representative-workload budget on a real Mac (docs/BETA.md's \"Performance and resilience\" row): builds examples/workload_probe in release and runs it through scripts/check-macos-workload.py, which samples RSS while the probe drives itself — 20 s of scrolling a 2,000-row ListView::builder, 500 characters typed into a Material TextField, 5 s of enforced idleness — with no operator input and no synthetic OS events, then applies the budgets the script declares in its header (scroll/type p99 within 2 display periods, under 1 % of scroll frames over 2 periods, RSS growth under 10 %, at most 5 idle frames). Every run writes target/workload/<timestamp>.json with the raw phase lines, the RSS series and the verdict per budget; a failed budget is a finding to record in BETA.md, not a number to tune. Needs a macOS GUI session; skips with a message on other hosts")]
+macos-workload:
+    python3 -B scripts/check-macos-workload.py
+
+[group("test")]
+[doc("Window-lifecycle budget on a real Mac (docs/BETA.md's lifecycle rows): builds examples/lifecycle_probe in release and runs it. The probe runs a Material tree through the ordinary Application path, then drives its own window through AppKit from a driver thread — miniaturize/deminiaturize, hide/unhide the application, setFrame:display: — with no operator input, counting the frames the runner produces through each transition (a minimized or hidden window must cost at most 5 frames in 3 s; a restored one must run at least 30 in 2 s) and checking that the resize reaches layout as the window's new content size. Prints one JSON line per phase and LIFECYCLE_PROBE_RESULT=PASS/FAIL. Needs a macOS GUI session; skips with a message on other hosts")]
+macos-lifecycle:
+    {{ if os() == "macos" {
+"cargo build -p flui --locked --release --example lifecycle_probe --features material
+rc=0; out=$(RUST_LOG=warn target/release/examples/lifecycle_probe 2>&1) || rc=$?
+printf '%s\\n' \"$out\"
+if [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'LIFECYCLE_PROBE_RESULT=PASS'; then
+  echo 'macos-lifecycle FAILED: a phase was over budget or the probe did not finish (phase lines above)'
+  exit 1
+fi"
+} else {
+"echo 'Skipping macos-lifecycle on this host: the probe drives AppKit window transitions on a real visible window, so it needs macOS with an active GUI session; on a Mac run: just macos-lifecycle'"
+} }}
+
+[group("test")]
+[doc("Assistive-technology check on a real Mac (docs/BETA.md's accessibility gap): builds examples/a11y_probe — the generated counter with the facade's `a11y` feature, so the AccessKit adapter is installed — runs it on a real window, and runs scripts/macos-ax-client.swift against the process: an AXUIElement client (what every macOS screen reader uses) that reads the window's accessibility tree, finds the Increment button by label, performs AXPress, and reads the count back as static text. No pointer or keyboard event is synthesised; if the count advances, a VoiceOver user could press the button. Exits 2 (CANNOT VERIFY) when this process is not trusted for accessibility, since a denied query decides nothing. Needs a macOS GUI session; skips with a message on other hosts")]
+macos-a11y:
+    {{ if os() == "macos" {
+"rc=0\npython3 -B scripts/check-macos-a11y.py || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'macos-a11y CANNOT VERIFY: this host could not take the measurement (accessibility trust not granted, or swiftc missing) — details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'macos-a11y FAILED: the button was not in the accessibility tree, AXPress was refused, or the count did not advance (tree dumps above)'\nfi\nexit \"$rc\""
+} else {
+"echo 'Skipping macos-a11y on this host: the check reads a real window through the macOS accessibility API, so it needs macOS with an active GUI session; on a Mac run: just macos-a11y'"
+} }}
+
 [group("quality")]
 [doc("Refuse a WGSL derivative (dpdx/dpdy/fwidth, or any function that takes one) inside a branch or after a conditional return: browsers' uniformity analysis rejects the module while native naga accepts it, and no host-side oracle catches the class (scripts/check-wgsl-uniformity.py)")]
 wgsl-uniformity-check:
+    python3 -B scripts/check-wgsl-uniformity.py --self-test
     python3 -B scripts/check-wgsl-uniformity.py
 
 [group("web")]

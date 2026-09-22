@@ -8,6 +8,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Hot-reload support for FLUI scene plugins via dynamic library loading"
+keywords = ["hot-reload", "gui", "flutter", "flui", "dylib"]
+categories = ["development-tools", "gui"]
 
 [features]
 default = []

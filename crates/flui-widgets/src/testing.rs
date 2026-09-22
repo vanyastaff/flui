@@ -1168,6 +1168,20 @@ impl LaidOut {
             resolve_logical_render_root(&mut self.binding, self.logical_root_type);
     }
 
+    /// Every `RenderSemanticsAnnotations` node that describes a control —
+    /// the nodes a widget's own `Semantics` wrapper mounts — as opposed to
+    /// the actions-only annotation a `GestureDetector` adds beneath it to
+    /// advertise its tap to assistive technology (see `GestureDetector`'s
+    /// "Assistive-technology activation" and
+    /// `SemanticsConfiguration::is_actions_only`). A widget test asserting
+    /// "my Semantics wrapper is there and sized so" wants these.
+    pub fn find_semantics_wrappers(&self) -> Vec<RenderId> {
+        self.find_all_by_render_type("RenderSemanticsAnnotations")
+            .into_iter()
+            .filter(|&id| self.render_property(id, "actions_only").is_none())
+            .collect()
+    }
+
     /// All render nodes whose short type name equals `render_type_name`.
     ///
     /// Walks the caller's logical render subtree and matches each node's

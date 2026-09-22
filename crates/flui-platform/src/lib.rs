@@ -227,7 +227,8 @@ pub use traits::{
     PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay,
     PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
     PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowShowError,
+    WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
+    WindowShowError,
 };
 // The owner-thread capability (ADR-0039 slice 2): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

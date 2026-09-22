@@ -44,6 +44,7 @@ fn main() {
                 decorated: true,
                 min_size: None,
                 max_size: None,
+                ..Default::default()
             };
 
             // `Ready` is guaranteed inside `on_ready` (ADR-0039 §1).

@@ -704,6 +704,10 @@ pub(super) fn open_secondary_window_impl(
         None
     };
     let reservation = reserve_window()?;
+    // Reveal at open (`From<&AppConfig>`'s default): a bare secondary
+    // window has no renderer and no frame loop, so nothing here would
+    // ever call `reveal_after_first_frame` — see
+    // `desktop::rendered_window_options` for the path that defers.
     let options: WindowOptions = (&config).into();
     let open = with_owner_platform(|owner| owner.open_window(options))
         .ok_or(AppWindowError::NoOwnerLoop)?
@@ -767,7 +771,9 @@ where
     }
 
     let reservation = reserve_window()?;
-    let options: WindowOptions = (&config).into();
+    // Deferred reveal: the content install below goes through
+    // `install_desktop_window`, which performs the reveal.
+    let options: WindowOptions = super::desktop::rendered_window_options(&config);
     let open = with_owner_platform(|owner| owner.open_window(options))
         .ok_or(AppWindowError::NoOwnerLoop)?
         .map_err(native_error)?;

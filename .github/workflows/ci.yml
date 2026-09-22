@@ -152,7 +152,9 @@ jobs:
       # Browsers' WGSL uniformity analysis rejects a derivative taken inside a
       # branch; native naga does not, so nothing else in CI can see the class.
       - name: scripts/check-wgsl-uniformity.py (derivatives in uniform control flow)
-        run: python3 -B scripts/check-wgsl-uniformity.py
+        run: |
+          python3 -B scripts/check-wgsl-uniformity.py --self-test
+          python3 -B scripts/check-wgsl-uniformity.py
 
       - name: actionlint (workflow semantics)
         run: actionlint

@@ -339,7 +339,7 @@ Bundled into Core.0 because they were cheap-now / catalog-wide-later: the `flui-
 
 ### Cross.D — Developer tooling
 
-**Goal.** The DX track — complete `flui-devtools` (inspector, frame profiler), `flui-build` (Android/iOS/Desktop/Web builders), `flui-cli` (`flui new`/`build`/`run`); harden `flui-hot-reload`. All four crates are already active workspace members (and default-members) — the remaining work is **functionality**, not crate re-enablement. **Honest serialization:** several flagship deliverables are gated downstream — the **frame profiler** cannot complete until App.1 ships the full vsync-driven frame loop, and **`flui-build`** depends on Cross.P's mobile backends for the Android/iOS targets. `flui new` scaffolding and hot-reload hardening genuinely run in parallel; the headline DX features are partially serialized behind App.1 and Cross.P. **Exit:** `flui new`/`build`/`run` work; inspector + profiler functional; hot-reload preserves scene state. The DX-day-1 ambition holds for the bookkeeping; the full-functionality bar lands post-App.1.
+**Goal.** The DX track — complete `flui-devtools` (inspector, frame profiler), `flui-cli` (`flui create`/`build`/`run`, with the Android/iOS/desktop/web builders in its `src/build/` module — formerly the `flui-build` crate); harden `flui-hot-reload`. All three crates are already active workspace members (and default-members) — the remaining work is **functionality**, not crate re-enablement. **Honest serialization:** several flagship deliverables are gated downstream — the **frame profiler** cannot complete until App.1 ships the full vsync-driven frame loop, and **`flui-cli`'s builders** depend on Cross.P's mobile backends for the Android/iOS targets. `flui new` scaffolding and hot-reload hardening genuinely run in parallel; the headline DX features are partially serialized behind App.1 and Cross.P. **Exit:** `flui new`/`build`/`run` work; inspector + profiler functional; hot-reload preserves scene state. The DX-day-1 ambition holds for the bookkeeping; the full-functionality bar lands post-App.1.
 
 ### Cross.H — Foundation hardening
 
@@ -361,7 +361,7 @@ MAIN VERTICAL (sequential — Core → Business → Catalog → App):
 
 CROSS layer — continuous, with cross-track gates marked:
   Cross.P (platform)  ═════════════════════════════════════► joins App.1
-       └──► Cross.P's mobile backends GATE Cross.D's flui-build
+       └──► Cross.P's mobile backends GATE Cross.D's flui-cli builders
 
   Cross.D (DX tooling) ═════════════════════════════════════►
        inspector + frame-profiler BLOCKED until App.1

@@ -123,6 +123,7 @@ fn main() {
         decorated: true,
         min_size: None,
         max_size: None,
+        ..Default::default()
     };
 
     // Create window before running the event loop (run() takes ownership)

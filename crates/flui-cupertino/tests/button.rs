@@ -11,8 +11,10 @@ use std::time::Duration;
 use common::{lay_out, lay_out_animated, loose, tight};
 use flui_animation::Vsync;
 use flui_cupertino::{CupertinoButton, CupertinoButtonSize, CupertinoColors};
+use flui_testing::a11y::Role;
 use flui_types::platform::Brightness;
 use flui_widgets::SizedBox;
+use flui_widgets::Text;
 use flui_widgets::animated::VsyncScope;
 use flui_widgets::{MediaQuery, MediaQueryData};
 
@@ -228,5 +230,41 @@ fn background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme() 
         decoration.contains("r: 84, g: 84, b: 88, a: 73"),
         "a Dynamic background under Dark theme must resolve the dark RGB but keep the \
          light-variant alpha (oracle-faithful, not a bug): {decoration}"
+    );
+}
+
+/// `CupertinoButton(Text("Tap"))` must announce as one button node labelled
+/// with its child's text — the same merge the Material button family gets
+/// from `ButtonStyleButtonCore`'s `Semantics` wrapper
+/// (`crates/flui-material/src/button_style_button.rs`), proven here for
+/// `CupertinoButton`'s own pre-existing `Semantics::new().button(true)` wrap
+/// (`crates/flui-cupertino/src/button.rs`) now that `RenderParagraph`
+/// publishes a label for its child to merge up. Flutter parity:
+/// `CupertinoButton`'s `Semantics(button: true, child: ...)` never sets
+/// `enabled` either (`cupertino/button.dart`), so unlike the Material case
+/// this node reports no enabled/disabled state at all — not asserted here
+/// because there is nothing to assert.
+#[test]
+fn cupertino_button_with_text_child_announces_one_labelled_button_node() {
+    let mut laid = lay_out(
+        CupertinoButton::new(Text::new("Tap")).on_pressed(|| {}),
+        loose(200.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let node = tree
+        .find_by_label("Tap")
+        .unwrap_or_else(|error| panic!("expected one node labelled \"Tap\": {error}"));
+
+    assert_eq!(node.role(), Role::Button);
+    assert!(
+        node.child_ids().is_empty(),
+        "the child paragraph's label must merge into the button's own node, not form a \
+         separate child node. Tree was:\n{}",
+        tree.describe()
     );
 }

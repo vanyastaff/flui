@@ -48,9 +48,19 @@ fn has_action(bits: u64, action: SemanticsAction) -> bool {
 /// The AccessKit role for one node.
 ///
 /// An explicit [`SemanticsRole`] wins. Otherwise the role-bearing flags are
-/// consulted in specificity order, and a node that claims none of them becomes
-/// [`Role::GenericContainer`] — present in the tree and navigable, but making no
+/// consulted in specificity order; a node that claims none of them but carries
+/// a label (a plain `Text`, a labelled `Semantics` wrapper) is a
+/// [`Role::Label`] — static text, which is what Flutter's platform bridges
+/// publish for the same node (`kStaticText`) — and a node with neither becomes
+/// [`Role::GenericContainer`], present in the tree for structure but making no
 /// claim about what it is.
+///
+/// The distinction is load-bearing at the OS boundary: AccessKit's consumer
+/// filter (`accesskit_consumer::common_filter`) drops `GenericContainer` nodes
+/// from what an assistive technology sees, so a labelled text that resolved to
+/// it was invisible to VoiceOver — observed on 2026-09-22 through
+/// `just macos-a11y`, where the counter's two `Text`s were absent from the
+/// `AXUIElement` tree while its button was present.
 #[must_use]
 pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
     if let Some(role) = explicit_role(data.role) {
@@ -119,6 +129,8 @@ pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
         Role::Image
     } else if has_flag(flags, SemanticsFlag::IsHeader) {
         Role::Header
+    } else if data.label.as_ref().is_some_and(|label| !label.is_empty()) {
+        Role::Label
     } else {
         Role::GenericContainer
     }
@@ -810,6 +822,38 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(translate(&button_only).role(), Role::Button);
+    }
+
+    /// A node with a label and no role-bearing flag is static text, not a
+    /// generic container: AccessKit's consumer filter drops
+    /// `GenericContainer` from what an assistive technology sees, so the
+    /// old resolution made every plain `Text` invisible to VoiceOver
+    /// (`just macos-a11y`, 2026-09-22). An unlabelled, flagless node stays a
+    /// container, and a label does not override a real flag.
+    #[test]
+    fn a_labelled_flagless_node_is_static_text() {
+        let text = SemanticsNodeData {
+            label: Some("You have pushed the button this many times:".into()),
+            ..Default::default()
+        };
+        assert_eq!(translate(&text).role(), Role::Label);
+
+        let empty_label = SemanticsNodeData {
+            label: Some("".into()),
+            ..Default::default()
+        };
+        assert_eq!(translate(&empty_label).role(), Role::GenericContainer);
+        assert_eq!(
+            translate(&SemanticsNodeData::default()).role(),
+            Role::GenericContainer
+        );
+
+        let labelled_button = SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsButton]),
+            label: Some("Increment".into()),
+            ..Default::default()
+        };
+        assert_eq!(translate(&labelled_button).role(), Role::Button);
     }
 
     /// `IsButton` outranks `IsLink` and `IsTextField`, and keeps doing so.

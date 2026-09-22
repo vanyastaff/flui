@@ -235,8 +235,14 @@ impl ProfilerInner {
         let Some(start) = self.frame_start.take() else {
             return;
         };
+        self.record_frame(start.elapsed());
+    }
 
-        let total_time = start.elapsed();
+    /// Record a frame that took `total_time`: the clock-free half of
+    /// [`Self::end_frame`], so the jank classification can be tested against
+    /// a duration rather than a `thread::sleep` that a loaded host stretches
+    /// past the threshold.
+    fn record_frame(&mut self, total_time: Duration) {
         let total_time_ms = total_time.as_secs_f64() * 1000.0;
 
         // Check if jank
@@ -545,18 +551,23 @@ mod tests {
 
         let profiler = Profiler::with_config(config);
 
+        // Durations are recorded directly rather than slept: a 5 ms sleep on
+        // a host running the rest of the test suite has been observed past
+        // the 10 ms threshold, which is a fact about the host, not the
+        // classifier.
         // Normal frame
-        profiler.begin_frame();
-        thread::sleep(Duration::from_millis(5));
-        profiler.end_frame();
+        profiler.inner.lock().begin_frame();
+        profiler.inner.lock().record_frame(Duration::from_millis(5));
 
         let stats = profiler.frame_stats().unwrap();
         assert!(!stats.is_jank());
 
         // Jank frame
-        profiler.begin_frame();
-        thread::sleep(Duration::from_millis(15));
-        profiler.end_frame();
+        profiler.inner.lock().begin_frame();
+        profiler
+            .inner
+            .lock()
+            .record_frame(Duration::from_millis(15));
 
         let stats = profiler.frame_stats().unwrap();
         assert!(stats.is_jank());

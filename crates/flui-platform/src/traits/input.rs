@@ -120,6 +120,20 @@ impl Default for DispatchEventResult {
 ///
 /// This enum wraps ui-events types for platform-specific dispatching.
 /// Platform implementations convert native events to these types.
+///
+/// # Pointer positions are logical pixels
+///
+/// `PointerState::position` is typed `PhysicalPosition` by `ui-events`, but
+/// every backend fills it with **logical** pixels — window points, not
+/// device pixels — and the framework reads it that way with no further
+/// scaling (`flui-interaction`'s `PointerEventExt::position`).
+/// `PointerState::scale_factor` travels alongside for a consumer that needs
+/// the device-pixel value back. A backend whose OS reports device pixels
+/// (winit, Android) divides before filling the field; one that reports
+/// points already (AppKit, UIKit, CSS pixels on the web) passes them
+/// through. Getting this wrong is invisible at scale 1 and moves every
+/// touch off-screen at any other scale, which is how the Android backend
+/// shipped its first emulator run (2026-09-22).
 #[derive(Debug, Clone)]
 pub enum PlatformInput {
     /// Pointer event (mouse, touch, pen) - W3C compliant

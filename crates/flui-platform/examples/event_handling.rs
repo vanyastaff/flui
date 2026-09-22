@@ -49,6 +49,7 @@ fn main() -> anyhow::Result<()> {
         decorated: true,
         min_size: Some(Size::new(px(400.0), px(300.0))),
         max_size: None,
+        ..Default::default()
     };
 
     tracing::info!("\n📱 Creating window...");

@@ -187,6 +187,13 @@ impl flui_foundation::Diagnosticable for RenderSemanticsAnnotations {
             self.configuration.has_been_annotated(),
             "has semantics",
         );
+        // The shape of a `GestureDetector`'s action-advertising helper node,
+        // so a test asking for a control's own wrapper can leave it out.
+        builder.add_flag(
+            "actions_only",
+            self.configuration.is_actions_only(),
+            "actions only",
+        );
     }
 }
 

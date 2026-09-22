@@ -23,6 +23,7 @@ use common::{lay_out, tight};
 use flui_material::{
     ButtonStyle, ElevatedButton, ElevatedButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
 };
+use flui_testing::a11y::Role;
 use flui_widgets::{Text, WidgetStateProperty};
 
 /// `_ElevatedButtonDefaultsM3`'s formatted `Debug` string for a given
@@ -263,5 +264,99 @@ fn widget_level_style_wins_over_the_elevated_button_theme() {
         laid.render_property(material, "color"),
         Some(color_property(widget_background)),
         "an explicit widget-level style must win over a configured elevated_button_theme",
+    );
+}
+
+// ===========================================================================
+// Accessibility semantics — `ButtonStyleButtonCore`'s `Semantics` wrapper
+// ===========================================================================
+//
+// Red before `ButtonStyleButtonCore::build` wrapped its composition in
+// `Semantics(container: true, button: true, enabled: ..)`
+// (`crates/flui-material/src/button_style_button.rs`): with no boundary
+// under `ElevatedButton`, `RenderParagraph`'s label (once it started
+// publishing one) had nowhere non-root to merge into and `find_by_label`
+// failed with `A11yQueryError::NotFound`. `ElevatedButton` again stands in
+// for the whole `ButtonStyleButtonCore` family here (see this file's own
+// module doc) — `FilledButton`/`OutlinedButton`/`TextButton`/`IconButton`/
+// `FloatingActionButton` share the identical wrapper.
+//
+// The a11y tap-action round trip `crates/flui-widgets/tests/semantics.rs`
+// covers for a hand-built `Semantics::on_tap` handler is NOT mirrored here:
+// `ButtonStyleButtonCore::on_pressed` is `Rc<dyn Fn()>` (owner-local, per
+// ADR-0027 — see that field's own doc comment), while
+// `flui_widgets::Semantics::on_tap` requires `Fn() + Send + Sync + 'static`
+// (see that builder's module doc, "The `Send + Sync` bound on action
+// handlers comes from storage, not from threading"). Routing `on_pressed`
+// through the `Semantics` wrapper's own tap action would need a `Send +
+// Sync`-compatible callback shape for the whole button family — a change to
+// `PressCallback` itself, well outside this change's scope (adding the
+// `Semantics` wrapper). A screen-reader "double-tap to activate" therefore
+// still reaches this button only via the platform's synthesized pointer
+// tap, not FLUI's own semantics-action dispatch, until that follow-up lands.
+
+/// One button, one label: the child `Text`'s `RenderParagraph` label merges
+/// into the `Semantics(container: true, button: true)` boundary
+/// `ButtonStyleButtonCore` wraps around the whole composition, rather than
+/// forming a second, separate node.
+#[test]
+fn elevated_button_with_text_child_announces_one_labelled_button_node() {
+    let mut laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            ElevatedButton::new(Text::new("Increment")).on_pressed(|| {}),
+        ),
+        tight(120.0, 48.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let node = tree
+        .find_by_label("Increment")
+        .unwrap_or_else(|error| panic!("expected one node labelled \"Increment\": {error}"));
+
+    assert_eq!(node.role(), Role::Button, "Tree was:\n{}", tree.describe());
+    assert!(
+        !node.is_disabled(),
+        "an ElevatedButton with on_pressed set must announce enabled. Tree was:\n{}",
+        tree.describe()
+    );
+    assert!(
+        node.child_ids().is_empty(),
+        "the child paragraph's label must merge into the button's own node, not form a \
+         separate child node. Tree was:\n{}",
+        tree.describe()
+    );
+}
+
+/// The disabled counterpart: no `on_pressed` must announce `enabled: false`
+/// on the very same merged node, matching `ButtonStyle.enabled =>
+/// onPressed != null` (`button_style_button.dart`).
+#[test]
+fn elevated_button_without_on_pressed_announces_disabled() {
+    let mut laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            ElevatedButton::new(Text::new("Increment")),
+        ),
+        tight(120.0, 48.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    let node = tree
+        .find_by_label("Increment")
+        .unwrap_or_else(|error| panic!("expected one node labelled \"Increment\": {error}"));
+
+    assert!(
+        node.is_disabled(),
+        "an ElevatedButton with no on_pressed handler must announce disabled. Tree was:\n{}",
+        tree.describe()
     );
 }

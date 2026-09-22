@@ -60,22 +60,92 @@ then `flui create` pins this tag as a git dependency.
   a warning instead of a silent no-op.
 
 - **No blank window at launch on macOS** (`flui-platform`, `flui-app`): a window
-  opened `visible: true` is ordered front fully transparent and made opaque only
-  once the first frame has been presented into it (new
+  opened `visible: true` with the new `WindowOptions::reveal =
+  WindowReveal::AfterFirstFrame` is ordered front fully transparent and made
+  opaque only once the first frame has been presented into it (new
   `PlatformWindow::reveal_after_first_frame`, default no-op; `flui-app`'s
-  desktop runner calls it on the first presented frame or after a one-second
-  fallback when a frame ran and presented nothing). Before, the bare window
-  background was on screen for as long as the GPU stack took to build — 2.81 s
-  on a cold launch. `WindowOptions::visible` now documents itself as the intended
-  state. Explicit `show`/`set_visible(true)`/`activate` reveal immediately.
-  Other backends are unchanged.
+  desktop runner asks for the deferral and calls it on the first presented
+  frame or after a one-second fallback when a frame ran and presented
+  nothing). Before, the bare window background was on screen for as long as
+  the GPU stack took to build — 2.81 s on a cold launch. The deferral is
+  opt-in: the default `WindowReveal::AtOpen` keeps every direct
+  `flui-platform` consumer's window visible at open, since only a frame-loop
+  owner can report a first frame. Explicit `show`/`set_visible(true)`/
+  `activate` reveal immediately. Other backends are unchanged.
+- **Reachable from a screen reader** (`flui`, `flui-app`, `flui-semantics`,
+  `flui-widgets`): the facade gains an `a11y` feature forwarding
+  `flui-platform`'s AccessKit adapters (off by default; the Linux adapter
+  carries a D-Bus stack), which no consumer could enable before. A labelled
+  node with no role flag now resolves to AccessKit's `Label` rather than
+  `GenericContainer` — which AccessKit's consumer filter hides from assistive
+  technology, so every plain `Text` was invisible to VoiceOver — and
+  `GestureDetector` publishes tap and long-press semantics actions, so a
+  screen reader's activate gesture presses a button with no pointer event.
+  `just macos-a11y` drives the generated counter through `AXUIElement`:
+  the texts read as static text, `AXPress` on the button advances the count.
+- **Android touches reach the framework** (`flui-platform`): the Android
+  backend filled `PointerState::position` with physical pixels where every
+  other backend — and the framework's reader — uses logical pixels, so on a
+  density-420 emulator every tap landed past the viewport's edge and
+  hit-tested nothing. It divides by the scale factor now, and
+  `PlatformInput`'s doc states the contract. The first `MotionEvent` of the
+  process is logged at `info` (later ones at `debug`) so a silent tap can be
+  told apart from an undelivered one. Verified on an android-35 arm64
+  emulator: two `adb shell input tap`s on the generated counter show «2».
+- **Window-lifecycle probe** (`examples/lifecycle_probe.rs`,
+  `just macos-lifecycle`): drives the running application's own window
+  through miniaturize/deminiaturize, hide/unhide and a resize from AppKit
+  and counts frames through each; the accepted run (zero frames while
+  minimized or hidden, the panel rate after each restore, the resize
+  reaching layout exactly) is recorded in `docs/BETA.md`.
+- **The web canvas is the page's to size** (`flui-platform`): the browser
+  backend's window is the canvas's CSS box, read from the live layout, and
+  a `ResizeObserver` on the canvas plus the window's `resize` event keep the
+  backing store at the device pixel ratio and dispatch a resize to the
+  embedder on every change. A page-provided `#flui-canvas` keeps its own
+  styling (`100vw`/`100vh`, a fixed frame, a flex child); a canvas the
+  backend creates fills the viewport. Before, the backend pinned the canvas
+  to `AppConfig::size` in inline CSS — overriding the page's `100vw`/`100vh`
+  with an 800×600 box — and never dispatched a resize, so a viewport change
+  or a zoom left the app at its first size. Verified in the desktop app's
+  browser pane: the counter fills 1100×700, follows a resize to 980×1260 at
+  DPR 2 (backing 1960×2520), and its button hit-tests after both.
+- **Full frame rate for frames that do real work** (`flui-engine`): the
+  swapchain's `desired_maximum_frame_latency` is 2 (wgpu's default) instead
+  of 1. At 1, `examples/workload_probe.rs` — a Scaffold with a 2,000-row list
+  and a text field on a 100 Hz display — presented every frame at exactly two
+  periods (50 fps) while the bare platform pump ran 100 fps; at 2 it runs the
+  full panel rate (scroll p99 10.1 ms). The value 1 had been kept for a
+  live-resize argument whose in-process half was already measured absent and
+  whose compositor half is unobservable; ADR-0029 carries the addendum.
+- **Representative-workload probe** (`examples/workload_probe.rs`,
+  `scripts/check-macos-workload.py`, `just macos-workload`): a self-driving
+  scroll / type / idle workload with per-phase frame-timing JSON, RSS
+  sampling, the real display period from CoreGraphics, and budgets declared
+  before the first run; the accepted run is recorded in `docs/BETA.md`.
+- **Text and Material/Cupertino buttons publish semantics** (`flui-objects`,
+  `flui-material`, `flui-cupertino`): `RenderParagraph` describes its plain
+  text as the semantics label with its text direction (Flutter's
+  `describeSemanticsConfiguration`; an empty paragraph publishes no node —
+  see `crates/flui-objects/ARCHITECTURE.md`), and `ButtonStyleButtonCore`
+  wraps every button it composes in `Semantics(container, button, enabled)`,
+  so a `Text("Increment")` inside an `ElevatedButton` is a labelled button
+  node an assistive technology — or `A11yTree::find_by_label` — can find.
+  The `flui create` counter template is screen-reader reachable out of the
+  box; `tests/agent_workflow.rs` queries it with no explicit `Semantics`
+  wrapper any more.
 - **Grapheme-cluster text editing** (`flui-widgets`): `TextEditingController`'s
   `backspace`, `delete_forward`, `move_caret_left`/`right` and
   `extend_selection_left`/`right` step by extended grapheme cluster (UAX #29)
   rather than by Unicode scalar, so a family emoji, a flag or a letter with
   combining marks is one keystroke — Flutter's `characters` unit. An obscured
   field masks one bullet per cluster, keeping the mask in step with the caret.
-  Adds `unicode-segmentation` as a direct dependency (already in the graph
+  The step is resolved over the whole buffer (`GraphemeCursor`), so a caret
+  that lands inside a cluster still steps to that cluster's edges, and
+  `set_selection`/`set_caret_byte_offset` snap an in-cluster offset forward
+  to a cluster boundary; only the IME preedit cursor keeps a mid-cluster
+  position, since that is the input method's own state. Adds
+  `unicode-segmentation` as a direct dependency (already in the graph
   through cosmic-text).
 - **Automatic retry of a failed mobile surface recreation** (`flui-app`): when
   the Android or iOS runner is told its native window is available again and
@@ -1001,8 +1071,14 @@ then `flui create` pins this tag as a git dependency.
   defect never showed on desktop. Both shaders now compute derivatives
   unconditionally and `select` afterwards. `scripts/check-wgsl-uniformity.py`
   (in `just gate` and CI) refuses the shape structurally, since no host-side
-  validator catches it. `examples/web_counter` and `just web-counter-build`
-  are the runnable browser evidence.
+  validator catches it: it walks tokens rather than lines, so `} else {`,
+  a one-line `if c { return x; }` and a split `for` header are all seen;
+  `textureSample` and its bias/compare forms count as derivatives (Tint
+  applies the same rule to them); a branch on a uniform value is admitted
+  only with a `wgsl-uniformity: uniform` comment saying why (the blur and
+  morphology loops); and `--self-test` pins every one of those layouts.
+  `examples/web_counter` and `just web-counter-build` are the runnable
+  browser evidence.
 - **`flui create` initialised a git repository in the caller's working
   directory** (`flui-cli`): `git init` ran without a directory, so the
   repository landed wherever the command was run from rather than in the

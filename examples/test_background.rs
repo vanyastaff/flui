@@ -33,6 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             decorated: true,
             min_size: None,
             max_size: None,
+            ..Default::default()
         };
 
         let window = owner

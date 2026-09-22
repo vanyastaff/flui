@@ -1,7 +1,14 @@
 //! [`GestureDetector`] — recognizes high-level gestures (tap, long-press,
 //! double-tap, and pan/drag) from the raw pointer stream a [`Listener`] delivers.
 
-use std::{cell::RefCell, rc::Rc, sync::Arc};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
@@ -11,7 +18,7 @@ use flui_interaction::{
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
-use crate::{GestureArenaScope, Listener};
+use crate::{GestureArenaScope, Listener, Semantics};
 
 /// A no-argument gesture callback (Flutter's `onTap` / `onLongPress` /
 /// `onDoubleTap`) — fired with no details when the gesture is recognized.
@@ -88,6 +95,25 @@ type HorizontalDragCancelHandler = Rc<dyn Fn()>;
 /// redundant here without waiting for a vertical family to complete the
 /// overlap. Combine the two into one family instead: `on_horizontal_drag_*`
 /// alone, or `on_pan_*` alone.
+///
+/// # Assistive-technology activation
+///
+/// Flutter parity: `RawGestureDetector`'s `_GestureSemantics` — a detector
+/// with `on_tap` advertises a semantics *tap* action, and one with
+/// `on_long_press` a *long press* action, so a screen reader's activate
+/// gesture (VoiceOver's VO-Space, `AXPress` on macOS) presses the control
+/// with no pointer event anywhere. The [`Semantics`] node is not a boundary:
+/// the action merges into the nearest ancestor node, which for a Material
+/// button is the button's own node (`ButtonStyleButtonCore`).
+///
+/// The platform's action arrives through a `Send + Sync` handler while the
+/// detector's callbacks are `Rc` (they capture the tree's own state), so the
+/// handler only records the request and schedules a rebuild
+/// (`RebuildHandle`); the next `build`, on the UI thread, hands the request
+/// to a `LocalPostFrameHandle` which runs the `Rc` callback after that
+/// frame — never inside `build`, where a callback that sets state would be
+/// re-entrant. One frame of latency, no unsafe, and a request that arrives
+/// while the detector is unmounted is dropped with its element.
 ///
 /// # Arena acquisition
 ///
@@ -389,6 +415,25 @@ pub struct GestureDetectorState {
     /// window between `create_state` and the first `init_state` — never observed
     /// by `build`, which always runs after `init_state`.
     recognizers: Option<Recognizers>,
+    /// Activation requests from assistive technology, recorded by the
+    /// `Send + Sync` semantics-action handlers and drained on the next
+    /// `build` — see the type doc's "Assistive-technology activation".
+    semantics_requests: Arc<SemanticsRequests>,
+    /// Minted in `init_state`; the handlers schedule the draining rebuild
+    /// through it.
+    rebuild: Option<RebuildHandle>,
+    /// Minted in `init_state`; the drained request's `Rc` callback runs
+    /// through it after the frame.
+    local_post_frame: Option<flui_view::LocalPostFrameHandle>,
+}
+
+/// The assistive-technology activations a detector has been asked for and
+/// not yet performed. Flags rather than a queue: a second request for the
+/// same action before the frame that performs the first is the same press.
+#[derive(Default)]
+struct SemanticsRequests {
+    tap: AtomicBool,
+    long_press: AtomicBool,
 }
 
 impl std::fmt::Debug for GestureDetectorState {
@@ -423,13 +468,87 @@ impl StatefulView for GestureDetector {
                 cancel: self.on_horizontal_drag_cancel.clone(),
             })),
             recognizers: None,
+            semantics_requests: Arc::new(SemanticsRequests::default()),
+            rebuild: None,
+            local_post_frame: None,
         }
+    }
+}
+
+impl GestureDetectorState {
+    /// Perform the assistive-technology activations recorded since the last
+    /// `build`: each pending request's live `Rc` callback is scheduled to
+    /// run after this frame. Called at the top of `build`, on the UI thread.
+    fn drain_semantics_requests(&self) {
+        let pending = [
+            (
+                self.semantics_requests.tap.swap(false, Ordering::AcqRel),
+                &self.tap_slot,
+            ),
+            (
+                self.semantics_requests
+                    .long_press
+                    .swap(false, Ordering::AcqRel),
+                &self.long_press_slot,
+            ),
+        ];
+        for (requested, slot) in pending {
+            if !requested {
+                continue;
+            }
+            let Some(callback) = slot.borrow().clone() else {
+                continue;
+            };
+            match self.local_post_frame.as_ref() {
+                Some(handle) => {
+                    if let Err(error) = handle.schedule_local(move |_timing| callback()) {
+                        tracing::warn!(
+                            ?error,
+                            "GestureDetector: dropping an assistive-technology activation — \
+                             the owning lane is gone"
+                        );
+                    }
+                }
+                // A context with no post-frame lane (a bare harness) has no
+                // later moment to offer; the activation still happens, on
+                // this frame, rather than being lost.
+                None => callback(),
+            }
+        }
+    }
+
+    /// The semantics node advertising this detector's activations to
+    /// assistive technology, or `None` when it has nothing to advertise.
+    fn semantics_actions(&self, view: &GestureDetector) -> Option<Semantics> {
+        if view.on_tap.is_none() && view.on_long_press.is_none() {
+            return None;
+        }
+        let rebuild = self.rebuild.clone()?;
+        let mut semantics = Semantics::new();
+        if view.on_tap.is_some() {
+            let requests = Arc::clone(&self.semantics_requests);
+            let rebuild = rebuild.clone();
+            semantics = semantics.on_tap(move || {
+                requests.tap.store(true, Ordering::Release);
+                rebuild.schedule(flui_view::RebuildReason::StateChange);
+            });
+        }
+        if view.on_long_press.is_some() {
+            let requests = Arc::clone(&self.semantics_requests);
+            semantics = semantics.on_long_press(move || {
+                requests.long_press.store(true, Ordering::Release);
+                rebuild.schedule(flui_view::RebuildReason::StateChange);
+            });
+        }
+        Some(semantics)
     }
 }
 
 impl ViewState<GestureDetector> for GestureDetectorState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
         let arena = GestureArenaScope::of(ctx);
+        self.rebuild = Some(ctx.rebuild_handle());
+        self.local_post_frame = ctx.local_post_frame_handle();
 
         // Each recognizer reads its live slot OUT before invoking it, so a slot
         // lock is never held across user code (no re-entrancy / poison hazard).
@@ -542,6 +661,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
 
     fn build(&self, view: &GestureDetector, _ctx: &dyn BuildContext) -> impl IntoView {
         assert_no_pan_horizontal_drag_conflict(view);
+        self.drain_semantics_requests();
 
         // Refresh the live callbacks the recognizers read, so a rebuild with new
         // closures is honored (the recognizers themselves persist).
@@ -579,9 +699,13 @@ impl ViewState<GestureDetector> for GestureDetectorState {
 
         let listener = self.make_listener(recognizers).behavior(view.behavior);
 
-        match view.child.clone().into_inner() {
+        let listener = match view.child.clone().into_inner() {
             Some(child) => listener.child(child),
             None => listener,
+        };
+        match self.semantics_actions(view) {
+            Some(semantics) => semantics.child(listener).boxed(),
+            None => listener.boxed(),
         }
     }
 

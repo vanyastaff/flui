@@ -6,7 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Core types for Flui framework - geometry, layout, styling"
+description = "Core types for FLUI - geometry, layout, styling"
+keywords = ["gui", "geometry", "layout", "flutter", "flui"]
+categories = ["gui", "data-structures"]
 repository.workspace = true
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 16

@@ -7,7 +7,7 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::GraphemeCursor;
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
@@ -377,9 +377,11 @@ impl TextEditingController {
 
     /// Place the caret at `offset`, discarding any selection.
     ///
-    /// `offset` is clamped to the buffer and to a UTF-8 char boundary, so a
-    /// caller working from a hit test cannot produce an offset that slices a
-    /// codepoint. Notifies only on an actual change.
+    /// `offset` is clamped to the buffer and snapped forward to an
+    /// extended-grapheme-cluster boundary (see the type doc's "Character
+    /// unit"), so a caller working from a hit test can neither slice a
+    /// codepoint nor park the caret inside one user-perceived character.
+    /// Notifies only on an actual change.
     ///
     /// Does **not** clear the composing region: moving the caret is not a text
     /// edit, and the IME keeps owning its composition. It does clear
@@ -396,9 +398,11 @@ impl TextEditingController {
     /// passes an `anchor` greater than the `extent` — so that a later
     /// extension moves the right end. [`Self::selection`] normalises.
     ///
-    /// Both offsets are clamped to the buffer and to char boundaries. Passing
-    /// the same value twice is a collapse, which is what
-    /// [`Self::set_caret_byte_offset`] is.
+    /// Both offsets are clamped to the buffer and snapped forward to
+    /// extended-grapheme-cluster boundaries (see the type doc's "Character
+    /// unit"): an offset inside a ZWJ sequence or a base-plus-combining-mark
+    /// lands after that cluster. Passing the same value twice is a collapse,
+    /// which is what [`Self::set_caret_byte_offset`] is.
     ///
     /// Notifies only on an actual change, so a drag that re-reports the same
     /// offset — which a pointer-move stream does constantly — does not
@@ -407,8 +411,8 @@ impl TextEditingController {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             let next = Selection {
-                anchor: clamp_to_char_boundary(&guard.text, anchor),
-                caret: clamp_to_char_boundary(&guard.text, extent),
+                anchor: clamp_to_grapheme_boundary(&guard.text, anchor),
+                caret: clamp_to_grapheme_boundary(&guard.text, extent),
             };
             let moved = guard.selection != next;
             guard.selection = next;
@@ -961,26 +965,60 @@ fn strip_active_composing(inner: &mut ControllerInner) -> bool {
 /// begins — one user-perceived character to the left. `0` at the start.
 ///
 /// `caret` must be a char boundary of `text` (every caller holds one: the
-/// controller clamps every offset it stores). A caret that landed strictly
-/// inside a cluster — a platform-supplied IME offset, say — is walked back to
-/// that cluster's start, which is the nearest boundary a user can see.
+/// controller clamps every offset it stores). It need not be a grapheme
+/// boundary: the cursor walks the WHOLE string, so a caret that landed
+/// strictly inside a cluster — a platform-supplied IME offset, say — is
+/// resolved with the cluster's full context (UAX #29 rules such as the
+/// ZWJ-sequence and regional-indicator-pair rules look at what precedes the
+/// caret) and steps to that cluster's start, the nearest boundary a user can
+/// see. Segmenting only the slice on one side of the caret would lose that
+/// context and could answer a boundary that is not one.
 fn prev_grapheme_boundary(text: &str, caret: usize) -> usize {
-    text[..caret]
-        .grapheme_indices(true)
-        .next_back()
-        .map_or(0, |(idx, _)| idx)
+    let mut cursor = GraphemeCursor::new(caret, text.len(), true);
+    // The whole string is the one chunk, starting at 0, so the cursor never
+    // needs more context and the `Err` arms (`PreContext`/`NextChunk`, asked
+    // for only when a chunk is partial) are unreachable.
+    cursor.prev_boundary(text, 0).ok().flatten().unwrap_or(0)
 }
 
-/// The byte offset where the extended grapheme cluster starting at `caret`
-/// ends — one user-perceived character to the right. `caret` itself at the
-/// end.
+/// The byte offset where the extended grapheme cluster starting at (or
+/// containing) `caret` ends — one user-perceived character to the right.
+/// `caret` itself at the end.
 ///
-/// Same precondition as [`prev_grapheme_boundary`].
+/// Same precondition and full-context walk as [`prev_grapheme_boundary`].
 fn next_grapheme_boundary(text: &str, caret: usize) -> usize {
-    text[caret..]
-        .graphemes(true)
-        .next()
-        .map_or(caret, |cluster| caret + cluster.len())
+    let mut cursor = GraphemeCursor::new(caret, text.len(), true);
+    cursor
+        .next_boundary(text, 0)
+        .ok()
+        .flatten()
+        .unwrap_or(text.len())
+}
+
+/// Clamp `offset` to the nearest extended-grapheme-cluster boundary of `s`,
+/// rounding forward like [`clamp_to_char_boundary`] (which it applies
+/// first, so an offset off a char boundary is safe too).
+///
+/// The controller's user-facing selection setters
+/// ([`TextEditingController::set_selection`],
+/// [`TextEditingController::set_caret_byte_offset`]) snap through this: a
+/// selection edge strictly inside a cluster — from a hit test that resolved
+/// to a scalar, or a caller's arithmetic — would render as a caret in the
+/// middle of one glyph and make the next `move_caret_*` step look like it
+/// skipped. The IME preedit path is the deliberate exception: a composition
+/// cursor inside a still-forming cluster is the input method's own state and
+/// stays where it was reported.
+fn clamp_to_grapheme_boundary(s: &str, offset: usize) -> usize {
+    let offset = clamp_to_char_boundary(s, offset);
+    let mut cursor = GraphemeCursor::new(offset, s.len(), true);
+    // `Err` is unreachable with the whole string as the one chunk; a char
+    // boundary is the safe answer if it ever were.
+    if cursor.is_boundary(s, 0) == Ok(false) {
+        // Not a boundary: the next one forward is the cluster's end.
+        next_grapheme_boundary(s, offset)
+    } else {
+        offset
+    }
 }
 
 /// Clamp `offset` to the nearest valid UTF-8 char boundary in `s`, rounding
@@ -1576,6 +1614,57 @@ mod tests {
             1..1,
             "Shift+Left shrinks the selection back by the whole flag"
         );
+    }
+
+    /// Red-check: with the helpers segmenting only the slice on one side of
+    /// the caret (the first implementation), a caret after the first person
+    /// of a ZWJ family — a char boundary, not a grapheme one — stepped
+    /// right by one ZWJ (3 bytes) onto ANOTHER in-cluster position, because
+    /// the slice began with a joiner that had lost its preceding
+    /// pictograph. Walking the whole string keeps that context: the step
+    /// lands at the cluster's end, and the step back at its start.
+    #[test]
+    fn in_cluster_caret_steps_to_the_cluster_edges_with_full_context() {
+        let text = format!("a{FAMILY}b");
+        let family_start = 1;
+        let family_end = 1 + FAMILY.len();
+        // After the first person (4-byte scalar), before the first ZWJ.
+        let mid = family_start + '\u{1F468}'.len_utf8();
+        assert!(text.is_char_boundary(mid));
+        assert!(mid < family_end);
+
+        assert_eq!(super::next_grapheme_boundary(&text, mid), family_end);
+        assert_eq!(super::prev_grapheme_boundary(&text, mid), family_start);
+
+        // Regional-indicator pairs are the other rule that needs what
+        // precedes the caret: between the two indicators of a flag.
+        let flag_text = format!("x{FLAG}y");
+        let between = 1 + '\u{1F1FA}'.len_utf8();
+        assert_eq!(
+            super::next_grapheme_boundary(&flag_text, between),
+            1 + FLAG.len()
+        );
+        assert_eq!(super::prev_grapheme_boundary(&flag_text, between), 1);
+    }
+
+    /// `set_selection` snaps an in-cluster edge forward to the cluster's
+    /// end (and a mid-codepoint one forward to a char boundary first), so a
+    /// following `move_caret_left` is one whole character, not a partial
+    /// glyph.
+    #[test]
+    fn set_selection_snaps_in_cluster_edges_to_grapheme_boundaries() {
+        let controller = TextEditingController::with_text(format!("a{FAMILY}b"));
+        let family_end = 1 + FAMILY.len();
+        let mid = 1 + '\u{1F468}'.len_utf8();
+
+        controller.set_caret_byte_offset(mid);
+        assert_eq!(controller.caret_byte_offset(), family_end);
+
+        controller.set_selection(mid + 1, 0);
+        assert_eq!(controller.selection(), 0..family_end);
+
+        controller.move_caret_left();
+        assert_eq!(controller.caret_byte_offset(), 0);
     }
 
     #[test]

@@ -25,6 +25,52 @@ pub fn register_event_listeners(window: &WebWindow) {
     register_focus_events(canvas, &callbacks);
     register_wheel_events(canvas, &callbacks);
     register_context_menu_block(canvas);
+    register_layout_events(window);
+}
+
+// ==================== Layout (size) ====================
+
+/// Keep the canvas's backing store and the window's tracked size in step
+/// with its CSS box — see `WebWindow::new`'s "Size" section. A
+/// `ResizeObserver` on the canvas sees every layout change (a viewport
+/// resize under `100vw`, a container reflow, a style change); the window's
+/// `resize` event is registered too because a browser-zoom change moves
+/// the device pixel ratio without necessarily moving the box, and the
+/// observer reports boxes, not ratios. `LayoutSync::sync` is a no-op when
+/// nothing changed, so the two overlapping sources cost nothing.
+fn register_layout_events(window: &WebWindow) {
+    let sync = Arc::new(window.layout_sync());
+
+    {
+        let sync = Arc::clone(&sync);
+        // The observer passes (entries, observer); neither is needed — the
+        // sync re-reads the live box — so the closure takes no arguments,
+        // which JavaScript permits.
+        let closure = Closure::<dyn FnMut()>::new(move || sync.sync());
+        match web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref()) {
+            Ok(observer) => {
+                observer.observe(window.canvas());
+                // The observer lives as long as the page, like every other
+                // listener here; dropping the handle does not disconnect it.
+                std::mem::forget(observer);
+                closure.forget();
+            }
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "ResizeObserver unavailable; canvas size follows the window's resize event only"
+                );
+            }
+        }
+    }
+
+    if let Some(browser_window) = web_sys::window() {
+        let closure =
+            Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| sync.sync());
+        let _ = browser_window
+            .add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref());
+        closure.forget();
+    }
 }
 
 // ==================== Pointer Events ====================

@@ -260,19 +260,28 @@ fn make_pointer_state(
     buttons: PointerButtons,
     count: u8,
 ) -> PointerState {
-    // Android reports coordinates in physical (device) pixels
-    let x = pointer.x() as f64;
-    let y = pointer.y() as f64;
+    // Android reports coordinates in physical (device) pixels; the
+    // framework reads `PointerState::position` as LOGICAL pixels — the
+    // winit backend divides by the scale factor here, iOS hands over view
+    // points, web hands over CSS pixels — so the division happens on this
+    // wire too. Left physical, a tap at the centre of a 1080-wide 2.625×
+    // screen arrived at (540, 1284) in a 411×914 logical viewport: past
+    // its edge, hit-testing nothing (the first Android emulator run,
+    // 2026-09-22, docs/BETA.md).
+    let (x, y) = logical_position(pointer.x(), pointer.y(), scale_factor);
 
     // Pressure: Android returns 0.0-1.0 for touch, 0.0 for no contact
     let pressure = pointer.pressure();
 
-    // Touch size as contact geometry (physical pixels)
+    // Touch size as contact geometry. Android's `size` is a normalised
+    // 0.0–1.0 value, not pixels; scaled by the touch major axis it would
+    // be a length, but the framework reads only presence today, so it is
+    // carried as-is when reported and as the neutral 1×1 otherwise.
     let size = pointer.size();
     let contact = if size > 0.0 {
         ContactGeometry {
-            width: size as f64,
-            height: size as f64,
+            width: f64::from(size),
+            height: f64::from(size),
         }
     } else {
         ContactGeometry {
@@ -293,6 +302,12 @@ fn make_pointer_state(
         tangential_pressure: 0.0,
         scale_factor,
     }
+}
+
+/// The framework-facing position for a pointer Android reports at physical
+/// `(x, y)` on a screen of `scale_factor` device pixels per logical pixel.
+fn logical_position(x: f32, y: f32, scale_factor: f64) -> (f64, f64) {
+    (f64::from(x) / scale_factor, f64::from(y) / scale_factor)
 }
 
 /// Convert Android `ToolType` to W3C `PointerType`.
@@ -409,5 +424,26 @@ fn keycode_to_character(keycode: i32) -> Option<char> {
         KEYCODE_POUND => Some('#'),
         KEYCODE_PLUS => Some('+'),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::logical_position;
+
+    /// The first emulator run's tap: `adb shell input tap 540 1284` on a
+    /// 1080×2400, density-420 (2.625×) screen is the centre of a 411×914
+    /// logical viewport, not a point past its edge.
+    #[test]
+    fn a_physical_tap_lands_in_the_logical_viewport() {
+        let (x, y) = logical_position(540.0, 1284.0, 2.625);
+        assert!((x - 205.714).abs() < 0.01, "{x}");
+        assert!((y - 489.143).abs() < 0.01, "{y}");
+        assert!(x < 1080.0 / 2.625 && y < 2400.0 / 2.625);
+    }
+
+    #[test]
+    fn a_one_to_one_screen_is_unchanged() {
+        assert_eq!(logical_position(10.0, 20.0, 1.0), (10.0, 20.0));
     }
 }

@@ -558,14 +558,16 @@ pub(super) fn report_surface_settlement(platform: &'static str, outcome: &Surfac
 /// Make the frame path's gated retry attempt, if one is owed and due.
 ///
 /// Runs BEFORE the frame, in its own lane-lock scope, so the generation mint
-/// happens under the lock and the caller's realm dispatch happens outside
-/// it — the same shape [`settle_surface_availability`] uses. Returns `None`
+/// happens under the lock and the caller's realm half happens outside it —
+/// the same shape [`settle_surface_availability`] uses. Returns `None`
 /// without touching the lane when no retry is armed, when the deadline has
 /// not elapsed, or when the lane is already held by an outer frame dispatch
 /// (logged, like a skipped frame; the deadline stays armed, so the next wake
 /// retries). On [`SurfaceLifecycleOutcome::Recreated`] the caller owes the
 /// realm a full repaint, exactly as it does after an availability-driven
-/// rebuild.
+/// rebuild — and, since the callers run inside the realm's own Frame task,
+/// they mark it on the realm directly so the frame that follows is the one
+/// that repaints, rather than queueing another task behind themselves.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(
     not(any(test, target_os = "android", target_os = "ios")),

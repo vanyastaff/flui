@@ -51,6 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             decorated: true,
             min_size: Some(Size::new(px(600.0), px(400.0))),
             max_size: None,
+            ..Default::default()
         };
 
         let _window = owner

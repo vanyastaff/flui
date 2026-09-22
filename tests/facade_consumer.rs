@@ -1,8 +1,31 @@
 //! Compile actual downstream packages: this package's own tests can see its
 //! implementation dependencies and cannot prove facade-only macro hygiene.
+//!
+//! Every test here points its consumer at the workspace checkout's `crates/`
+//! by path. The published `flui` archive ships this file (its `include`
+//! list carries `/tests/**`) but not `crates/`, so from an unpacked archive
+//! each test reports itself skipped through [`checkout_root`] rather than
+//! failing on a path that was never meant to exist there.
 
 use std::path::Path;
 use std::process::{Command, Output};
+
+/// The workspace checkout these consumer projects depend on by path, or
+/// `None` — with the reason on stderr — when this test runs from somewhere
+/// without one (an unpacked crates.io archive).
+fn checkout_root() -> Option<&'static Path> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if root.join("crates").is_dir() {
+        Some(root)
+    } else {
+        eprintln!(
+            "skipped: {} has no `crates/` directory, so there is no workspace checkout for \
+             the consumer project to depend on (running from a packaged archive?)",
+            root.display()
+        );
+        None
+    }
+}
 
 fn dependency(package: &str, path: &Path, defaults: bool) -> toml::Value {
     let mut value = toml::Table::new();
@@ -70,7 +93,7 @@ fn compile_consumer(dependencies: toml::Table, source: &str) -> Output {
 
 #[test]
 fn ordinary_facade_graph_excludes_test_support() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(root) = checkout_root() else { return };
     for defaults in [false, true] {
         let mut dependencies = toml::Table::new();
         dependencies.insert("flui".into(), dependency("flui", root, defaults));
@@ -114,7 +137,7 @@ fn ordinary_facade_graph_excludes_test_support() {
 
 #[test]
 fn external_consumers_can_name_custom_paint_contract() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(root) = checkout_root() else { return };
     let mut dependencies = toml::Table::new();
     dependencies.insert("flui".into(), dependency("flui", root, false));
     check_consumer(
@@ -126,7 +149,7 @@ fn external_consumers_can_name_custom_paint_contract() {
 
 #[test]
 fn external_consumers_extend_and_test_through_the_facade() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(root) = checkout_root() else { return };
     for alias in ["flui", "ui"] {
         let mut dependencies = toml::Table::new();
         dependencies.insert(alias.into(), dependency("flui", root, false));
@@ -185,7 +208,7 @@ fn check_consumer(dependencies: toml::Table, source: &str, scenario: &str) {
 
 #[test]
 fn missing_runtime_dependency_reports_how_to_fix_the_manifest() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(root) = checkout_root() else { return };
     let mut dependencies = toml::Table::new();
     dependencies.insert(
         "derive_support".into(),
@@ -203,7 +226,7 @@ fn missing_runtime_dependency_reports_how_to_fix_the_manifest() {
 
 #[test]
 fn external_consumers_use_only_the_facade_including_when_renamed() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(root) = checkout_root() else { return };
     for alias in ["flui", "ui"] {
         for defaults in [false, true] {
             let mut dependencies = toml::Table::new();
@@ -221,7 +244,7 @@ fn external_consumers_use_only_the_facade_including_when_renamed() {
 
 #[test]
 fn internal_consumers_can_rename_direct_owning_crates() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(root) = checkout_root() else { return };
     let mut dependencies = toml::Table::new();
     for (alias, package) in [
         ("views", "flui-view"),
@@ -249,8 +272,9 @@ fn internal_consumers_can_rename_direct_owning_crates() {
     );
 }
 
-fn hot_reload_dependencies(include_layer: bool) -> toml::Table {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+/// `None` when there is no checkout to depend on — see [`checkout_root`].
+fn hot_reload_dependencies(include_layer: bool) -> Option<toml::Table> {
+    let root = checkout_root()?;
     let mut framework = dependency("flui", root, false);
     framework.as_table_mut().expect("dependency table").insert(
         "features".into(),
@@ -264,7 +288,7 @@ fn hot_reload_dependencies(include_layer: bool) -> toml::Table {
             dependency("flui-layer", &root.join("crates/flui-layer"), false),
         );
     }
-    dependencies
+    Some(dependencies)
 }
 
 const SCENE_PLUGIN_SOURCE: &str = "fn build(_: f32, _: f32) -> flui_layer::Scene { flui_layer::Scene::default() } flui::hot_reload::scene_plugin!(build);";
@@ -273,8 +297,11 @@ const APP_PLUGIN_SOURCE: &str =
 
 #[test]
 fn plugin_factory_requires_the_canonical_scene() {
+    let Some(dependencies) = hot_reload_dependencies(true) else {
+        return;
+    };
     let output = compile_consumer(
-        hot_reload_dependencies(true),
+        dependencies,
         "fn build(_: f32, _: f32) -> u8 { 1 } flui::hot_reload::scene_plugin!(build);",
     );
     let diagnostics = String::from_utf8_lossy(&output.stderr);
@@ -286,7 +313,10 @@ fn reject_safe_teardown(source: &str, function: &str) {
     let source = format!(
         "{source}\npub fn invalid_safe_call() {{ {function}(std::ptr::dangling_mut::<u8>().cast()); }}"
     );
-    let output = compile_consumer(hot_reload_dependencies(true), &source);
+    let Some(dependencies) = hot_reload_dependencies(true) else {
+        return;
+    };
+    let output = compile_consumer(dependencies, &source);
     let diagnostics = String::from_utf8_lossy(&output.stderr);
     assert!(
         !output.status.success(),
@@ -322,7 +352,9 @@ fn plugin_macros_use_only_the_facade_including_when_renamed() {
             "fn build(_: f32, _: f32) -> flui::hot_reload::Scene { Default::default() } flui::hot_reload::scene_plugin!(build);",
             APP_PLUGIN_SOURCE,
         ] {
-            let mut dependencies = hot_reload_dependencies(false);
+            let Some(mut dependencies) = hot_reload_dependencies(false) else {
+                return;
+            };
             let framework = dependencies.remove("flui").expect("facade dependency");
             dependencies.insert(alias.into(), framework);
             check_consumer(
@@ -336,7 +368,7 @@ fn plugin_macros_use_only_the_facade_including_when_renamed() {
 
 #[test]
 fn external_consumer_names_presentation_lifecycle_capability() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(root) = checkout_root() else { return };
     let mut dependencies = toml::Table::new();
     dependencies.insert("flui".into(), dependency("flui", root, false));
     let output = compile_consumer(
@@ -358,7 +390,7 @@ pub fn observe(handle: &LifecycleHandle) -> Result<(Option<flui::view::AppLifecy
 
 #[test]
 fn external_consumer_names_resident_application_and_renamed_facade() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(root) = checkout_root() else { return };
     let source = r#"
 use flui::app::{Application, AppHandle, AppRunError, AppControlError, AppWindowError, MainWindowRequest, StartupWindow, ExitPolicy, AppConfig};
 use std::{cell::Cell, rc::Rc};

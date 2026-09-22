@@ -168,6 +168,15 @@ toml = "1.1"
 # BUILDER UTILITIES - Used by widgets
 bon = "3.8"
 
+# APPLE BINDINGS - the versions wgpu-hal already pins; flui-platform's macOS
+# backend and the facade's lifecycle probe both take them from here, with
+# their own feature lists, so the pin cannot drift between the two.
+objc2 = { version = "0.6.4", features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false }
+objc2-app-kit = { version = "0.3.2", default-features = false }
+objc2-core-foundation = { version = "0.3.2", default-features = false }
+dispatch2 = "0.3.1"
+
 # DX TOOLING - flui-cli / flui-devtools
 tempfile = "3" # scratch dirs/files (build staging and tests)
 which = "8"    # locate toolchain executables (build/cli)
@@ -542,6 +551,17 @@ image.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# === macOS lifecycle probe (examples/lifecycle_probe.rs drives AppKit's
+# miniaturize/hide/setFrame against the running application; the versions
+# are the ones crates/flui-platform already pins) ===
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# examples/lifecycle_probe.rs drives AppKit's miniaturize/hide/setFrame
+# against the running application; pins come from [workspace.dependencies].
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = ["std", "NSObject", "NSArray", "NSGeometry"] }
+objc2-app-kit = { workspace = true, features = ["NSApplication", "NSResponder", "NSWindow"] }
+dispatch2.workspace = true
+
 [features]
 testing = ["dep:flui-testing", "flui-widgets/testing", "flui-rendering/testing"]
 # Material-first by default: `cargo add flui` keeps working exactly as the
@@ -581,6 +601,11 @@ gpu-readback-tests = []
 # activates the facade's reload API and the application's reload driver.
 # Without it the normal application graph excludes flui-hot-reload.
 hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-app/hot-reload"]
+
+# Native accessibility: the per-OS AccessKit adapters that hand the semantics
+# tree to VoiceOver / Narrator / Orca. Off by default (the Linux adapter
+# carries a D-Bus stack); `just macos-a11y` is the executable check.
+a11y = ["flui-app/a11y"]
 
 # === Core Features ===
 # Serialization support (flui-types only today; other crates' serde features
@@ -637,6 +662,30 @@ required-features = ["material", "cupertino"]
 [[example]]
 name = "multi_window_demo"
 path = "examples/multi_window_demo.rs"
+required-features = ["material"]
+
+# Self-driving representative-workload probe for docs/BETA.md's "Performance
+# and resilience" row (`just macos-workload`); see the example's own doc.
+[[example]]
+name = "workload_probe"
+path = "examples/workload_probe.rs"
+required-features = ["material"]
+
+# The generated counter run for an assistive technology (`just macos-a11y`
+# reads its NSAccessibility tree and presses the button through AXPress);
+# see the example's own doc.
+[[example]]
+name = "a11y_probe"
+path = "examples/a11y_probe.rs"
+required-features = ["material", "a11y"]
+
+# Self-driving window-lifecycle probe for docs/BETA.md's lifecycle rows
+# (`just macos-lifecycle`): minimize/restore, hide/unhide, resize, with the
+# frame production observed through each transition. macOS only; see the
+# example's own doc.
+[[example]]
+name = "lifecycle_probe"
+path = "examples/lifecycle_probe.rs"
 required-features = ["material"]
 
 [[test]]

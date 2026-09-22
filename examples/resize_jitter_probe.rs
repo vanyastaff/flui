@@ -1,14 +1,19 @@
 //! Resize-jitter probe — can a live resize burst make the windowed renderer
 //! present a frame that was rendered for the *previous* window size?
 //!
-//! This probe was built to be the executable half of the rationale pinned on
-//! `desired_maximum_frame_latency: 1` in
-//! [`flui_engine::Renderer::derive_surface_config`]. That literal is held
+//! This probe was built to be the executable half of the rationale that once
+//! pinned `desired_maximum_frame_latency` at 1 in
+//! [`flui_engine::Renderer::derive_surface_config`]. That literal was held
 //! at its tightest possible value on the stated grounds that a latency of 2
 //! "lets the present queue hold frames rendered for an older size, which the
 //! compositor then stretches to the current window → visible resize jitter",
-//! and its own comment says re-coupling the two swapchain widths "needs its own
-//! resize-jitter regression test".
+//! and its comment said re-coupling the two swapchain widths "needs its own
+//! resize-jitter regression test". (The literal has since been raised to 2
+//! on a different measurement — `examples/workload_probe.rs` showed 1
+//! halving the frame rate of any frame with real work in it; see the
+//! literal's comment. This probe's result below settles the in-process half
+//! of the resize axis; the compositor-side half stays unobserved, as that
+//! comment says.)
 //!
 //! **It is not that test, and the measurement is why.** Driving a real
 //! 40-resize burst while rendering continuously into the Metal swapchain
@@ -219,6 +224,7 @@ mod appkit_resize_jitter_probe {
             decorated: true,
             min_size: None,
             max_size: None,
+            ..Default::default()
         }) {
             Ok(pending) => match pending.try_ready() {
                 Ok(window) => window,

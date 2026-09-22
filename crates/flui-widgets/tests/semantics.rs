@@ -2,7 +2,7 @@
 
 use crate::common::{lay_out, loose, size};
 use flui_rendering::semantics::{SemanticsAction, SemanticsActionHandler, semantics_action_for};
-use flui_widgets::{ExcludeSemantics, MergeSemantics, Semantics, SizedBox};
+use flui_widgets::{ExcludeSemantics, MergeSemantics, Semantics, SizedBox, Text};
 
 #[test]
 fn semantics_widget_mounts_annotations_render_object() {
@@ -44,6 +44,51 @@ fn exclude_semantics_widget_mounts_exclude_render_object() {
     let root = laid.find_by_render_type("RenderExcludeSemantics");
     assert_eq!(root, laid.root());
     assert_eq!(laid.size(root), size(24.0, 16.0));
+}
+
+// ===========================================================================
+// RenderParagraph — plain text publishes its own label
+// ===========================================================================
+
+/// `RenderParagraph::describe_semantics_configuration` (`crates/flui-objects/
+/// src/text/paragraph.rs`) must publish a labelled semantics node for
+/// non-empty text — without it, no screen reader ever announces a `Text`
+/// widget, and `A11yTree::find_by_label` cannot locate one. Red before that
+/// implementation existed: `describe_semantics_configuration` was the
+/// `RenderBox` trait default (a no-op), so `find_by_label("hello")` failed
+/// with `A11yQueryError::NotFound`.
+#[test]
+fn text_with_content_publishes_a_node_labelled_with_its_own_text() {
+    let mut laid = lay_out(Text::new("hello"), loose(200.0));
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    tree.find_by_label("hello")
+        .unwrap_or_else(|error| panic!("expected one node labelled \"hello\": {error}"));
+}
+
+/// The companion negative case: empty text contributes no label anywhere in
+/// the tree (see `crates/flui-objects/ARCHITECTURE.md`'s "`RenderParagraph`
+/// publishes no semantics node for empty text" mapping decision) — an empty
+/// `RenderParagraph` must not merge a spurious empty label into whatever
+/// boundary it sits under.
+#[test]
+fn empty_text_publishes_no_label_anywhere() {
+    let mut laid = lay_out(Text::new(""), loose(200.0));
+    laid.enable_semantics();
+    laid.pump();
+
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    assert!(
+        tree.nodes().all(|node| node.label().is_none()),
+        "an empty Text must not publish a label on any node. Tree was:\n{}",
+        tree.describe()
+    );
 }
 
 /// A viewport must not hand a screen reader a rect for content that is not on
@@ -1231,7 +1276,9 @@ fn exclude_semantics_removes_its_subtree_from_the_a11y_tree() {
 // ===========================================================================
 
 use std::assert_matches;
+use std::cell::Cell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -1318,6 +1365,67 @@ fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() {
         1,
         "the handler must have run exactly once",
     );
+}
+
+/// A `GestureDetector`'s `on_tap` is reachable from assistive technology
+/// without any pointer event: the detector advertises a click on the
+/// nearest node, and a platform click request runs the `Rc` callback after
+/// the frame the request schedules (see `GestureDetector`'s
+/// "Assistive-technology activation").
+///
+/// Red-check: before the detector published the action, `supports_action`
+/// was false on this node and the count stayed 0 — the live `AXPress` half
+/// of `just macos-a11y` showed exactly that on the generated counter.
+#[test]
+fn a_gesture_detector_tap_is_reachable_through_a_platform_click() {
+    let activations = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&activations);
+
+    let (mut laid, tree, node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .button(true)
+            .label(LABEL)
+            .child(
+                flui_widgets::GestureDetector::new()
+                    .on_tap(move || counted.set(counted.get() + 1))
+                    .child(SizedBox::new(40.0, 20.0)),
+            ),
+    );
+
+    assert!(
+        tree.find_by_label(LABEL)
+            .expect("node was located a moment ago")
+            .supports_action(Action::Click),
+        "a GestureDetector with on_tap must advertise a click on its nearest node. \
+         Tree was:\n{}",
+        tree.describe()
+    );
+
+    invoke_semantics_action(
+        &laid.pipeline_owner(),
+        request(Action::Click, node_id, None),
+    )
+    .expect("a click on a node advertising one must resolve");
+    assert_eq!(
+        activations.get(),
+        0,
+        "the request is recorded, not performed inline — the callback runs after \
+         the frame the request schedules"
+    );
+
+    // The scheduled rebuild drains the request; the callback runs after
+    // that frame.
+    laid.pump();
+    assert_eq!(
+        activations.get(),
+        1,
+        "the on_tap callback must have run exactly once"
+    );
+
+    // A control: the request was consumed, not left armed.
+    laid.pump();
+    assert_eq!(activations.get(), 1);
 }
 
 /// Without a handler the platform is told nothing.
