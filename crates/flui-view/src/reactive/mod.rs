@@ -300,8 +300,12 @@ impl Reactive {
     /// [`SignalError::CreatedDuringBuild`]).
     #[must_use]
     pub fn signal<T: 'static>(&self, value: T) -> Signal<T> {
-        self.try_signal(value)
-            .expect("signal created during build; create it in init_state and hold the handle")
+        match self.try_signal(value) {
+            Ok(signal) => signal,
+            Err(error) => {
+                panic!("Reactive::signal: {error} (use try_signal for a fallible creation)")
+            }
+        }
     }
 
     /// Create a signal released when `owner` unmounts — the canonical form for
@@ -326,8 +330,12 @@ impl Reactive {
     /// If called while an element is building.
     #[must_use]
     pub fn signal_owned_by<T: 'static>(&self, owner: ElementId, value: T) -> Signal<T> {
-        self.try_signal_owned_by(owner, value)
-            .expect("signal created during build; create it in init_state and hold the handle")
+        match self.try_signal_owned_by(owner, value) {
+            Ok(signal) => signal,
+            Err(error) => panic!(
+                "Reactive::signal_owned_by: {error} (use try_signal_owned_by for a fallible creation)"
+            ),
+        }
     }
 
     /// Release a slot explicitly: its value drops, its readers forget it, later
