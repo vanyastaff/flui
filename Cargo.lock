@@ -1912,6 +1912,7 @@ dependencies = [
  "flui-foundation",
  "flui-layer",
  "flui-rendering",
+ "flui-testing",
  "flui-view",
  "libc",
  "parking_lot",

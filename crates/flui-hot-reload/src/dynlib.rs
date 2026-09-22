@@ -108,7 +108,7 @@ pub fn file_mtime(path: impl AsRef<Path>) -> u64 {
 #[cfg(unix)]
 mod sys {
     use std::{
-        ffi::{CStr, CString, c_void},
+        ffi::{CString, c_void},
         path::Path,
     };
 
@@ -119,18 +119,8 @@ mod sys {
         // SAFETY: `c_path` is a NUL-terminated `CString` that outlives the
         // `dlopen` call, and the returned handle is null-checked before it
         // escapes this block.
-        //
-        // CAVEAT, not a justification: POSIX does NOT require `dlerror` to be
-        // thread-safe (§2.9.1 lists it among the exemptions). glibc and musl
-        // give it a per-thread slot, so the error read below is sound there,
-        // but on an implementation with a shared slot a concurrent `dlopen`
-        // could rewrite the buffer between `dlerror()` and `CStr::from_ptr`.
-        // `DynLib: Send` makes that reachable; it is unaddressed.
         #[expect(unsafe_code)]
         unsafe {
-            // Clear previous error
-            libc::dlerror();
-
             // RTLD_LOCAL prevents the plugin's symbols from polluting the global
             // symbol table. Without it, duplicate symbols between the host and
             // plugin (e.g., from shared crate dependencies like flui-types) cause
@@ -138,11 +128,7 @@ mod sys {
             // unloaded and a new one is loaded.
             let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
             if handle.is_null() {
-                let err = libc::dlerror();
-                if !err.is_null() {
-                    let msg = CStr::from_ptr(err).to_string_lossy();
-                    tracing::trace!("dlopen failed for {}: {}", path.display(), msg);
-                }
+                tracing::trace!(path = %path.display(), "dlopen failed");
                 return None;
             }
             Some(handle)
