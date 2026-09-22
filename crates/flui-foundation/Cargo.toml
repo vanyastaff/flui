@@ -40,7 +40,7 @@ serde_json = { workspace = true, optional = true }
 [dev-dependencies]
 # Checkout-only test edge; see docs/workspace-layers.toml release policy.
 flui-macros = { path = "../flui-macros" }
-flui-types = { path = "../flui-types", version = "=0.3.0-beta.1" }
+flui-types = { path = "../flui-types", version = "=0.1.0" }
 serde_json = { workspace = true }
 # Test-only: capturing emitted events is how `diagnostics`' field names are
 # checked against what `tracing` actually records. A *dev* edge only — the

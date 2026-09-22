@@ -5,9 +5,12 @@ All notable changes to the FLUI workspace are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 FLUI is pre-release and not published to crates.io; entries are grouped under
 `[Unreleased]` until a first tagged release cuts them over. Workspace version:
-`0.3.0-beta.1` (all crates share `[workspace.package].version`; every internal
-dependency pins that exact prerelease, so a published cohort can never mix
-with a later one). The first tag will be `v0.3.0-beta.1`. Fine-grained phase
+`0.1.0` (all crates share `[workspace.package].version`; every internal
+dependency pins that exact version, so a published cohort can never mix
+with a later one). The first tag will be `v0.1.0`: nothing was ever
+published, so the numbering starts where the public history does, and the
+beta status is stated in the README rather than in a pre-release suffix that
+`flui = "0.1"` would not match. Fine-grained phase
 history lives in [`docs/ROADMAP-TRACKER.md`](docs/ROADMAP-TRACKER.md); this
 file records the repo-consumer-visible summary.
 
@@ -146,9 +149,10 @@ file records the repo-consumer-visible summary.
   exists.
 
 
-- **Version `0.3.0-beta.1`, exact cohort pins, and archives that carry only
-  what a consumer compiles.** The workspace is a prerelease; every internal
-  `path` dependency now requires `=0.3.0-beta.1`. The `flui` facade package
+- **Version `0.1.0`, exact cohort pins, and archives that carry only
+  what a consumer compiles.** Every internal `path` dependency requires
+  `=0.1.0` (the cohort was first cut as `0.3.0-beta.1` and renumbered before
+  any publication, see the header). The `flui` facade package
   declares an `include` list (its archive went from 666 files — docs, scripts,
   CI, editor and research directories — to 67), and every published crate
   ships `LICENSE`, `LICENSE-APACHE` and `NOTICE`, which the archive check now

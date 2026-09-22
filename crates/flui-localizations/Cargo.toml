@@ -18,10 +18,10 @@ categories = ["gui", "internationalization"]
 # amendment 2026-07-16): the target DAG's `l10n --> types`-only edge predates
 # a concrete consumer; `GlobalWidgetsLocalizations` implementing a
 # flui-widgets trait is that consumer.
-flui-widgets = { path = "../flui-widgets", version = "=0.3.0-beta.1" }
+flui-widgets = { path = "../flui-widgets", version = "=0.1.0" }
 # `Locale` — the value type `GlobalWidgetsLocalizations::for_locale` resolves
 # against.
-flui-types = { path = "../flui-types", version = "=0.3.0-beta.1" }
+flui-types = { path = "../flui-types", version = "=0.1.0" }
 
 [lib]
 name = "flui_localizations"

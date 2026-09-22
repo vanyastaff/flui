@@ -18,8 +18,8 @@ categories = ["graphics", "gui", "rendering"]
 autotests = false
 
 [dependencies]
-flui-types = { path = "../flui-types", version = "=0.3.0-beta.1" }
-flui-foundation = { path = "../flui-foundation", version = "=0.3.0-beta.1" }
+flui-types = { path = "../flui-types", version = "=0.1.0" }
+flui-foundation = { path = "../flui-foundation", version = "=0.1.0" }
 
 thiserror = { workspace = true }
 tracing = { workspace = true }

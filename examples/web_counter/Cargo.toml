@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 # The same sole dependency a generated application has: everything below
 # `run_app` — widgets, Material, the web runner and its WebGPU renderer —
 # comes through the facade.
-flui = { path = "../..", version = "=0.3.0-beta.1" }
+flui = { path = "../..", version = "=0.1.0" }
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
 

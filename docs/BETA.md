@@ -256,8 +256,8 @@ The release closure includes optional and target-specific normal/build edges,
 and dev-dependencies that Cargo retains because their resolved declaration has a
 version. Versionless dev-dependencies are omitted. Workspace inheritance and
 renamed package identities are resolved before checking. The workspace is now
-the prerelease `0.3.0-beta.1`, and every internal requirement pins that exact
-cohort version (`=0.3.0-beta.1`), so a published facade can never resolve a
+version `0.1.0`, and every internal requirement pins that exact
+cohort version (`=0.1.0`), so a published facade can never resolve a
 sibling from a later cohort.
 
 Twelve backward or self dev declarations are explicitly checkout-only in
@@ -302,10 +302,10 @@ counter project with `flui create` *without* `--local`, and builds and tests
 it offline; the consumer's lockfile must resolve every `flui-*` package to an
 archive digest.
 
-First run, 2026-09-21 on the `0.3.0-beta.1` cut (`/tmp/flui-beta-consumer-check4.log`):
+First run, 2026-09-21 on the `0.1.0` cut (`/tmp/flui-beta-consumer-check4.log`):
 `cargo vendor` produced a 971 MiB third-party set; all 29 archives installed
 as a directory source; `flui create beta_consumer --template counter` without
-`--local` wrote `flui = "0.3.0-beta.1"`; `cargo build --offline` compiled the
+`--local` wrote `flui = "0.1.0"`; `cargo build --offline` compiled the
 consumer from the archives in 7 min 31 s (debug), and `cargo test --offline`
 ran the template's two generated tests (`counter_responds_to_pointer_input`,
 `counter_content_is_centred`), 2 passed. The consumer's lockfile resolved 22
