@@ -74,8 +74,9 @@
 //! `Clone` shares storage (both fields are `Rc`-backed): every clone reads
 //! and writes the same value and the same rebuild slot. Binding through any
 //! one clone binds all of them. Both types are `!Send`/`!Sync` by
-//! construction (`Rc` is neither) — see the `*_is_not_send`/`*_is_not_sync`
-//! tests below for a compile-time check of that property.
+//! construction (`Rc` is neither); the `compile_fail` doctests on each type
+//! pin that down at a concrete type, so a future field change that made
+//! either type shareable across threads would fail `cargo test --doc`.
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -88,6 +89,19 @@ use crate::owner::RebuildHandle;
 
 /// `Rc`-backed, `Copy`-typed local state bound to one element's rebuild
 /// trigger.
+///
+/// Neither `Send` nor `Sync` — `Rc`-backed local state belongs to the
+/// element that owns it:
+///
+/// ```compile_fail,E0277
+/// fn require_send<T: Send>(_: T) {}
+/// require_send(flui_view::StateCell::new(0_u32));
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn require_sync<T: Sync>(_: T) {}
+/// require_sync(flui_view::StateCell::new(0_u32));
+/// ```
 ///
 /// See the [module docs](self) for the full contract: unbound mutation is
 /// silent, mutation after unmount is a no-op, and clones share storage.
@@ -259,6 +273,18 @@ impl<T: Copy + fmt::Debug> fmt::Debug for StateCell<T> {
 /// name.update(|n| n.push_str("-updated"));
 /// assert_eq!(name.with(Clone::clone), "alice-updated");
 /// ```
+///
+/// Neither `Send` nor `Sync`, for the same reason as [`StateCell`]:
+///
+/// ```compile_fail,E0277
+/// fn require_send<T: Send>(_: T) {}
+/// require_send(flui_view::StateHandle::new(String::new()));
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn require_sync<T: Sync>(_: T) {}
+/// require_sync(flui_view::StateHandle::new(String::new()));
+/// ```
 #[derive(Clone)]
 pub struct StateHandle<T> {
     value: Rc<RefCell<T>>,
@@ -319,6 +345,14 @@ impl<T> StateHandle<T> {
     /// Borrow the current value for the duration of `f` and return its
     /// result.
     ///
+    /// # Panics
+    ///
+    /// `f` runs while the value is borrowed, so it must not reach back into
+    /// this handle (or a clone of it) with [`Self::update`]: that is a
+    /// re-entrant mutable borrow of the same `RefCell`, and it panics, as
+    /// [`Self::update`] documents. Nested [`Self::with`] calls are fine —
+    /// shared borrows stack.
+    ///
     /// # Example
     ///
     /// ```rust
@@ -338,6 +372,25 @@ impl<T> StateHandle<T> {
     /// Schedules unconditionally when bound: `f` mutates in place, so there
     /// is no cheap way to tell whether it actually changed anything, and
     /// [`StateCell::set`] makes the same unconditional choice.
+    ///
+    /// # Panics
+    ///
+    /// `f` runs under the value's mutable borrow, so it must not touch this
+    /// handle (or a clone of it) at all — neither [`Self::with`] nor another
+    /// `update` — for the duration; doing so is a re-entrant `RefCell`
+    /// borrow and panics with `already borrowed`. Read what you need into
+    /// locals before the call, or compute the new value outside and assign
+    /// it inside `f`. A `Copy` value in a [`StateCell`] has no such hazard:
+    /// its [`StateCell::update`] takes and returns the value.
+    ///
+    /// ```should_panic
+    /// use flui_view::StateHandle;
+    ///
+    /// let items = StateHandle::new(vec![1]);
+    /// let peek = items.clone();
+    /// // Re-entrant: `with` on the same storage while `update` holds it.
+    /// items.update(|v| v.push(peek.with(Vec::len)));
+    /// ```
     ///
     /// # Example
     ///
@@ -646,41 +699,8 @@ mod tests {
         let _ = format!("{handle:?}");
     }
 
-    // ── 7. !Send / !Sync by construction ─────────────────────────────────
-
-    /// A dependency-free negative-bound check: two blanket impls of
-    /// `AmbiguousIfImpl` only overlap (making the call ambiguous, a compile
-    /// error) when `T` implements the bound under test. If `T` does not,
-    /// only the unconditional impl applies and this compiles cleanly. This
-    /// is the same trick `static_assertions::assert_not_impl_any!` uses,
-    /// inlined so this crate does not need the dependency for one check.
-    #[allow(dead_code)]
-    fn assert_not_send<T>() {
-        trait AmbiguousIfSend<A> {
-            fn some_item() {}
-        }
-        impl<T: ?Sized> AmbiguousIfSend<()> for T {}
-        struct Invoke;
-        impl<T: ?Sized + Send> AmbiguousIfSend<Invoke> for T {}
-        <T as AmbiguousIfSend<_>>::some_item();
-    }
-
-    #[allow(dead_code)]
-    fn assert_not_sync<T>() {
-        trait AmbiguousIfSync<A> {
-            fn some_item() {}
-        }
-        impl<T: ?Sized> AmbiguousIfSync<()> for T {}
-        struct Invoke;
-        impl<T: ?Sized + Sync> AmbiguousIfSync<Invoke> for T {}
-        <T as AmbiguousIfSync<_>>::some_item();
-    }
-
-    #[test]
-    fn state_cell_and_state_handle_are_not_send_or_sync() {
-        assert_not_send::<StateCell<i32>>();
-        assert_not_sync::<StateCell<i32>>();
-        assert_not_send::<StateHandle<String>>();
-        assert_not_sync::<StateHandle<String>>();
-    }
+    // 7. `!Send`/`!Sync` is pinned by the `compile_fail` doctests on each
+    // type (see the struct docs): a negative trait bound cannot be asserted
+    // from inside a generic fn — the overlap trick only fires at a concrete
+    // type, which a doctest with a concrete call site gives.
 }
