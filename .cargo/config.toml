@@ -5,8 +5,10 @@
 # Build settings
 # ═══════════════════════════════════════════════════════════════════════════════
 [build]
-# Use all available CPU cores
-jobs = 8
+# No `jobs` pin. Cargo defaults to the logical CPU count; a checked-in number is
+# wrong for every other machine (it was 8, which on an 8-core / 8 GB laptop with
+# two cargo processes meant 16 rustc and swap). Cap per machine or per run with
+# `CARGO_BUILD_JOBS=<n>` in the environment, or `cargo ... -j <n>`.
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Linker configuration - faster linking
@@ -89,21 +91,12 @@ git-fetch-with-cli = false
 # Environment variables for build scripts
 # ═══════════════════════════════════════════════════════════════════════════════
 [env]
-# Hands `sccache` the value it checks before it will serve a request. This does NOT
-# by itself disable incremental compilation: `[env]` sets variables for the processes
-# Cargo executes, not for Cargo's own profile resolution, so with `[profile.dev]
-# incremental = true` a verbose build still emitted `-C incremental=...`. The actual
-# switch is `incremental = false` in the root `Cargo.toml` — keep the two in step.
-#
-# Why off at all: `sccache` (the usual `rustc-wrapper` here) caches whole crate-unit
-# outputs and cannot cache per-CGU incremental artifacts. On Windows the `sccache` +
-# incremental combination additionally crashes `rustc` with STATUS_ACCESS_VIOLATION
-# (0xc0000005) on the heavier test binaries (e.g. `flui-interaction --test`), blocking
-# the local test gate. CI already builds with it off, so this also matches CI.
-#
-# Not `force`d — `CARGO_INCREMENTAL=1` in the real environment still wins, which is
-# the opt-in for a contributor building without `sccache`.
-CARGO_INCREMENTAL = "0"
+# Incremental compilation is governed by `[profile.dev] incremental` in the root
+# `Cargo.toml` (ON for local development) and by `CARGO_INCREMENTAL=0` in each CI
+# workflow's environment. A `CARGO_INCREMENTAL` entry here would be inert for that
+# purpose: `[env]` sets variables for the processes Cargo executes, not for Cargo's
+# own profile resolution. Building through `sccache`? Export `CARGO_INCREMENTAL=0`
+# in your shell — the reasons are beside the profile key.
 
 # Faster shader compilation for wgpu
 # WGPU_BACKEND = "vulkan"  # or "dx12" on Windows
