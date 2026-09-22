@@ -43,5 +43,6 @@ outside the `View`/`Element` tree, or shared across more than one subtree withou
 ## What's not here
 
 This book does not describe a reactive "signals" system: there is no such primitive in `crates/`
-today. If you've seen a reference to one elsewhere, treat it as forward-looking/unverified rather
-than current API — the three mechanisms above are the whole state story as of this page.
+today. Planned: realm-scoped signals — see [PR #1242](https://github.com/vanyastaff/flui/pull/1242)
+(ADR-0074, status: draft) — but until that lands, the three mechanisms above are the whole state
+story.

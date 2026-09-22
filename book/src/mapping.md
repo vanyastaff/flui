@@ -33,8 +33,8 @@ deliberately changed.
 
 ## What this table deliberately does not claim
 
-An earlier draft of this task mentioned a "signals" state-management system tied to an ADR-0074.
-Neither exists in this repository as of this page: `docs/adr/` tops out at ADR-0073, and there is
-no reactive-signal primitive anywhere in `crates/` — every "signal" hit in the source is either
-gesture/pointer-signal routing (`flui-interaction`) or prose describing an event, not a state
-primitive. See [State](concepts/state.md) for the three mechanisms that actually exist.
+There is no reactive-signal primitive shipping in `crates/` today — every "signal" hit in the
+source is either gesture/pointer-signal routing (`flui-interaction`) or prose describing an event,
+not a state primitive. Realm-scoped signals are planned (ADR-0074, drafted in
+[PR #1242](https://github.com/vanyastaff/flui/pull/1242), not yet merged into `main`); see
+[State](concepts/state.md) for the three mechanisms that actually exist until it lands.
