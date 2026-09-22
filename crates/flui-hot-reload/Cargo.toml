@@ -10,6 +10,10 @@ repository.workspace = true
 description = "Hot-reload support for FLUI scene plugins via dynamic library loading"
 keywords = ["hot-reload", "gui", "flutter", "flui", "dylib"]
 categories = ["development-tools", "gui"]
+# All root tests/*.rs files are compiled as modules of ONE integration-test
+# binary (tests/main.rs); the per-file auto-discovered targets each linked the
+# whole dependency stack. Targets that write process-global state stay separate.
+autotests = false
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
@@ -48,3 +52,7 @@ flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-u
 
 [lints]
 workspace = true
+
+[[test]]
+name = "hot_reload_it"
+path = "tests/main.rs"

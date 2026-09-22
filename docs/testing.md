@@ -269,6 +269,19 @@ The constitution requires `///` doc comments on every public item and `//!` over
 
 - **Unit tests** live in the same file under `#[cfg(test)] mod tests { ... }`.
 - **Integration tests** live in `tests/` per crate. Cross-crate pipelines are tested in `flui-engine`.
+  A crate's root `tests/*.rs` files compile as modules of **one** integration-test
+  binary (`tests/main.rs` with `#[path]` module declarations, `autotests = false`
+  plus a `[[test]]` in `Cargo.toml`, named after the crate without its `flui-`
+  prefix: `widgets_it`, `scheduler_it`, `app_it`, …; `flui_testing_it` is the one
+  pre-existing exception), because every
+  auto-discovered per-file target links the whole dependency stack again. A test
+  that *writes* process-global state — a `#[global_allocator]`, the global
+  `tracing` subscriber slot or callsite-interest cache, an environment variable —
+  keeps its own `[[test]]`
+  target, with the reason in a comment beside it; so do `harness = false`,
+  trybuild/`compile_fail`, and feature-gated targets that CI runs by name.
+  `flui-log` is the deliberate exception: each of its files owns one scenario
+  that installs the global subscriber, so each stays a binary of its own.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
 - **Demo composition tests** live in `tests/demo_layer_snapshots.rs`: each demo mounts headless and its committed `LayerTree` is compared, as structured text, against an `insta` snapshot. See [Demo composition snapshots](#demo-composition-snapshots) below for the run/review workflow and why they are structural rather than pixels.
 - **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.

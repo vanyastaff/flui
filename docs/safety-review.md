@@ -114,7 +114,10 @@ passed (`/tmp/flui-plugin-clippy.log`). `cargo fmt --all -- --check` and the
 focused documentation/test `typos` check also passed.
 
 Miri command:
-`cargo +nightly miri test -p flui-hot-reload --test scene_ownership --offline`.
+`cargo +nightly miri test -p flui-hot-reload --test scene_ownership --offline`
+(the target name as of that review; since 2026-09-22 the file is a module of the
+crate's single integration-test binary, so the same run is
+`cargo +nightly miri test -p flui-hot-reload --test hot_reload_it scene_ownership --offline`).
 Passed: one test, zero failures, no UB or leak reports in
 `/tmp/flui-plugin-miri.log`. Miri emitted its standard warning that the workspace
 profile's optimization level is ignored; it reported no code warning. Scope
