@@ -14,8 +14,10 @@
 //! line by line as `run.app.log` so a tool driving `flui run` sees everything
 //! on one machine-readable stream.
 
+use crate::build::{BuilderContextBuilder, Platform, Profile, WebBuilder};
 use crate::config::{FluiConfig, HotReloadConfig};
 use crate::error::{CliError, CliResult, ResultExt};
+use crate::serve::DevServer;
 use crate::ui;
 use crate::watch::{SourceWatcher, timing};
 use console::style;
@@ -37,6 +39,7 @@ pub(crate) fn execute(
     hot_reload: bool,
     profile: Option<String>,
     verbose: bool,
+    web: WebOptions,
 ) -> CliResult<()> {
     let mode = if release { "release" } else { "debug" };
     ui::intro(style(" flui run ").on_green().black())?;
@@ -55,7 +58,15 @@ pub(crate) fn execute(
         return super::ios::run(udid, release, profile.as_deref());
     }
 
-    let result = run_session(project, hot_reload && !release, release, profile, verbose);
+    let result = run_session(
+        project,
+        &target,
+        hot_reload && !release,
+        release,
+        profile,
+        verbose,
+        web,
+    );
     // `run.stop` closes `run.start` on every outcome; the `error` event that
     // follows a failure carries the exit code.
     ui::emit(
@@ -70,11 +81,25 @@ pub(crate) fn execute(
 /// The part of `execute` whose outcome `run.stop` reports.
 fn run_session(
     project: Project,
+    target: &Target,
     hot_reload: bool,
     release: bool,
     profile: Option<String>,
     verbose: bool,
+    web: WebOptions,
 ) -> CliResult<()> {
+    if let Target::Browser(browser) = target {
+        if matches!(project, Project::Worker(_)) {
+            return Err(CliError::Unsupported {
+                what: "running a worker hot-reload project in a browser".into(),
+                reason:
+                    "the host/worker split targets the desktop; run the application project instead"
+                        .into(),
+            });
+        }
+        let mut strategy = BrowserSession::new(browser.clone(), release, hot_reload, web)?;
+        return dev_loop(&mut strategy);
+    }
     if hot_reload {
         match project {
             Project::Worker(project) => {
@@ -116,6 +141,17 @@ enum Target {
     Host,
     /// An iOS simulator, by exact UDID.
     IosSimulator(String),
+    /// An installed browser, opened on the dev server's URL.
+    Browser(Browser),
+}
+
+/// A browser `flui devices` found, with what launches it: a `.app` bundle
+/// on macOS, the executable elsewhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Browser {
+    id: String,
+    name: String,
+    launch: PathBuf,
 }
 
 impl Target {
@@ -123,6 +159,7 @@ impl Target {
         match self {
             Self::Host => host_device_id(),
             Self::IosSimulator(udid) => udid.clone(),
+            Self::Browser(browser) => browser.id.clone(),
         }
     }
 
@@ -130,6 +167,7 @@ impl Target {
         match self {
             Self::Host => format!("{} (this machine)", host_device_id()),
             Self::IosSimulator(udid) => format!("iOS simulator {udid}"),
+            Self::Browser(browser) => format!("{} (browser)", browser.name),
         }
     }
 }
@@ -214,10 +252,17 @@ fn match_target(device: &super::devices::Device) -> CliResult<Target> {
             what: format!("running on Android device {}", device.id),
             reason: "`flui run` cannot install to Android yet; build with `flui build android` and install the APK with adb, or use `flui run --scene` for scene hot reload".into(),
         }),
-        DevicePlatform::Web => Err(CliError::Unsupported {
-            what: format!("running in {}", device.name),
-            reason: "`flui run` has no browser target yet; build with `flui build web` and serve the output".into(),
-        }),
+        DevicePlatform::Web => {
+            let launch = device.details.get("path").ok_or_else(|| CliError::Unsupported {
+                what: format!("running in {}", device.name),
+                reason: "`flui devices` found no launch path for this browser".into(),
+            })?;
+            Ok(Target::Browser(Browser {
+                id: device.id.clone(),
+                name: device.name.clone(),
+                launch: PathBuf::from(launch),
+            }))
+        }
     }
 }
 
@@ -360,6 +405,12 @@ trait ReloadStrategy {
     }
     /// What `r` does, for the legend.
     fn reload_label(&self) -> &'static str;
+    /// Whether the last build left something running. A process strategy
+    /// answers from the child; a browser session has no child and answers
+    /// from its own state.
+    fn is_running(&self, child: Option<&Child>) -> bool {
+        child.is_some()
+    }
 }
 
 /// Drive `strategy` until `q`, Ctrl-C, or the watcher going away.
@@ -375,7 +426,7 @@ fn dev_loop(strategy: &mut dyn ReloadStrategy) -> CliResult<()> {
     let result = strategy
         .build_and_spawn(&mut child)
         .and_then(|()| {
-            if child.is_none() {
+            if !strategy.is_running(child.as_ref()) {
                 ui::warning(
                     "Build failed. Watching for changes... (fix errors and save to retry)",
                 )?;
@@ -438,11 +489,12 @@ fn drive(
                 ui::step("Restarting (R)...")?;
                 stop_and_report(child);
                 strategy.build_and_spawn(child)?;
+                let ok = strategy.is_running(child.as_ref());
                 ui::emit(
                     "run.reload",
-                    &serde_json::json!({ "kind": "restart", "ok": child.is_some() }),
+                    &serde_json::json!({ "kind": "restart", "ok": ok }),
                 );
-                if child.is_none() {
+                if !ok {
                     ui::warning("Build failed — fix errors and save to retry")?;
                 }
             }
@@ -863,6 +915,219 @@ impl ReloadStrategy for ProcessRestart {
     fn reload_label(&self) -> &'static str {
         "Rebuild and restart"
     }
+}
+
+// ============================================================================
+// Browser: build for wasm32, serve, reload the page
+// ============================================================================
+
+/// The `flui run` flags that only a browser target reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WebOptions {
+    /// Dev-server port; `0` lets the OS pick a free one.
+    pub(crate) port: u16,
+    /// Open the browser on the first successful build.
+    pub(crate) open: bool,
+}
+
+/// `flui run --device browser:…`: the web build served from its output
+/// directory, the browser opened once, and every later build turning into
+/// a page reload through [`DevServer::reload`]. No child process: the page
+/// is the running app, so [`ReloadStrategy::is_running`] is "the last build
+/// succeeded".
+struct BrowserSession {
+    root: PathBuf,
+    browser: Browser,
+    release: bool,
+    hot_reload: bool,
+    options: WebOptions,
+    /// Drives the async web builder; one runtime for the session.
+    runtime: tokio::runtime::Runtime,
+    server: Option<DevServer>,
+    built: bool,
+}
+
+impl BrowserSession {
+    fn new(
+        browser: Browser,
+        release: bool,
+        hot_reload: bool,
+        options: WebOptions,
+    ) -> CliResult<Self> {
+        Ok(Self {
+            root: std::env::current_dir()?,
+            browser,
+            release,
+            hot_reload,
+            options,
+            runtime: tokio::runtime::Runtime::new().context("start the build runtime")?,
+            server: None,
+            built: false,
+        })
+    }
+
+    fn builder(&self) -> (WebBuilder, crate::build::BuilderContext) {
+        let ctx = BuilderContextBuilder::new(self.root.clone())
+            .with_platform(Platform::Web {
+                target: "web".to_string(),
+            })
+            .with_profile(if self.release {
+                Profile::Release
+            } else {
+                Profile::Debug
+            })
+            .build();
+        (WebBuilder::new(&self.root), ctx)
+    }
+
+    /// Environment problems are errors that end the session (nothing a
+    /// file save fixes); a compile failure is `false`, and the loop keeps
+    /// watching.
+    fn build(&self) -> CliResult<bool> {
+        let (builder, ctx) = self.builder();
+        builder.validate_environment().map_err(environment_error)?;
+        std::fs::create_dir_all(&ctx.output_dir)?;
+        let ok = timed_build(|| {
+            let result = self
+                .runtime
+                .block_on(builder.build_rust(&ctx))
+                .and_then(|artifacts| {
+                    self.runtime
+                        .block_on(builder.build_platform(&ctx, &artifacts))
+                });
+            match result {
+                Ok(_) => true,
+                Err(error) => {
+                    let _ = ui::error(format!("web build failed: {error}"));
+                    false
+                }
+            }
+        });
+        Ok(ok)
+    }
+
+    fn output_dir(&self) -> PathBuf {
+        self.builder().1.output_dir
+    }
+}
+
+/// A missing tool or target is the environment's fault, not the build's:
+/// exit 3 with the install hint, like `flui doctor` would report it.
+fn environment_error(error: crate::build::error::BuildError) -> CliError {
+    use crate::build::error::BuildError;
+    match error {
+        BuildError::ToolNotFound { tool, install_hint } => CliError::ToolNotFound {
+            tool,
+            suggestion: format!("install with: {install_hint}"),
+        },
+        BuildError::TargetNotInstalled {
+            target,
+            install_cmd,
+        } => CliError::ToolNotFound {
+            tool: format!("Rust target {target}"),
+            suggestion: format!("install with: {install_cmd}"),
+        },
+        other => CliError::Build(other),
+    }
+}
+
+impl ReloadStrategy for BrowserSession {
+    fn watch_paths(&self) -> Vec<(PathBuf, bool)> {
+        if !self.hot_reload {
+            return Vec::new();
+        }
+        vec![
+            (self.root.join("src"), true),
+            (self.root.join("Cargo.toml"), false),
+            (self.root.join("platforms").join("web"), true),
+        ]
+    }
+
+    fn build_and_spawn(&mut self, _child: &mut Option<Child>) -> CliResult<()> {
+        self.built = self.build()?;
+        if !self.built {
+            return Ok(());
+        }
+        if let Some(server) = &self.server {
+            server.reload();
+            return Ok(());
+        }
+        let server = DevServer::start(self.output_dir(), self.options.port)
+            .context("start the dev server")?;
+        let url = server.url();
+        ui::emit(
+            "run.web.serve",
+            &serde_json::json!({ "url": url, "dir": server.root() }),
+        );
+        ui::success(format!("Serving at {}", style(&url).cyan().underlined()))?;
+        if self.options.open {
+            open_browser(&self.browser, &url)?;
+        } else {
+            ui::info(format!("Open {url} in {}", self.browser.name))?;
+        }
+        self.server = Some(server);
+        Ok(())
+    }
+
+    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<Child>) -> CliResult<()> {
+        ui::step("Rebuilding...")?;
+        self.build_and_spawn(child)?;
+        ui::emit(
+            "run.reload",
+            &serde_json::json!({ "kind": "page", "ok": self.built }),
+        );
+        if !self.built {
+            ui::warning("Build failed. Watching for changes... (fix errors and save to retry)")?;
+        }
+        Ok(())
+    }
+
+    fn reload_label(&self) -> &'static str {
+        "Rebuild and reload the page"
+    }
+
+    fn is_running(&self, _child: Option<&Child>) -> bool {
+        self.built
+    }
+}
+
+/// The command that opens `url` in `browser`: `open -a <bundle>` on macOS,
+/// the executable itself elsewhere. Detached from the CLI's stdio.
+fn browser_launch_command(launch: &Path, url: &str) -> Command {
+    let mut command = if cfg!(target_os = "macos") {
+        let mut command = Command::new("open");
+        command.arg("-a").arg(launch);
+        command
+    } else {
+        Command::new(launch)
+    };
+    command
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+/// Opening the browser is a convenience: when it fails the URL is printed
+/// and the session goes on, because the server is up either way.
+fn open_browser(browser: &Browser, url: &str) -> CliResult<()> {
+    match browser_launch_command(&browser.launch, url).spawn() {
+        Ok(_) => {
+            ui::info(format!("Opened {} in {}", url, browser.name))?;
+            ui::emit(
+                "run.web.open",
+                &serde_json::json!({ "browser": browser.id, "url": url }),
+            );
+        }
+        Err(error) => {
+            ui::warning(format!(
+                "could not open {} ({error}); open {url} yourself",
+                browser.name
+            ))?;
+        }
+    }
+    Ok(())
 }
 
 /// Run `cargo build` and return whether it succeeded.
@@ -1853,5 +2118,75 @@ mod tests {
         assert_eq!(fnv1a(b""), 0x811c_9dc5);
         assert_eq!(fnv1a(b"a"), fnv1a(b"a"));
         assert_ne!(fnv1a(b"a"), fnv1a(b"b"));
+    }
+}
+
+#[cfg(test)]
+mod browser_tests {
+    use super::{Browser, Target, browser_launch_command, match_target};
+    use crate::DevicePlatform;
+    use crate::commands::devices::{Device, Kind, Status};
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    fn browser_device(path: Option<&str>) -> Device {
+        let mut details = BTreeMap::new();
+        if let Some(path) = path {
+            details.insert("path".to_string(), path.to_string());
+        }
+        Device {
+            id: "browser:chrome".into(),
+            name: "Chrome".into(),
+            platform: DevicePlatform::Web,
+            kind: Kind::Browser,
+            status: Status::Available,
+            details,
+        }
+    }
+
+    #[test]
+    fn a_browser_device_becomes_a_browser_target_with_its_launch_path() {
+        let target = match_target(&browser_device(Some("/Applications/Google Chrome.app")))
+            .expect("browser target");
+        assert_eq!(
+            target,
+            Target::Browser(Browser {
+                id: "browser:chrome".into(),
+                name: "Chrome".into(),
+                launch: PathBuf::from("/Applications/Google Chrome.app"),
+            })
+        );
+        assert_eq!(target.id(), "browser:chrome");
+        assert_eq!(target.label(), "Chrome (browser)");
+    }
+
+    #[test]
+    fn a_browser_without_a_launch_path_is_unsupported_not_a_panic() {
+        let error = match_target(&browser_device(None)).expect_err("no path");
+        assert_eq!(error.exit_code(), 2, "{error}");
+        assert!(error.to_string().contains("launch path"), "{error}");
+    }
+
+    #[test]
+    fn the_launch_command_opens_the_url_detached() {
+        let command = browser_launch_command(
+            Path::new("/Applications/Safari.app"),
+            "http://127.0.0.1:8080/",
+        );
+        let program = command.get_program().to_string_lossy().into_owned();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        if cfg!(target_os = "macos") {
+            assert_eq!(program, "open");
+            assert_eq!(
+                args,
+                ["-a", "/Applications/Safari.app", "http://127.0.0.1:8080/"]
+            );
+        } else {
+            assert_eq!(program, "/Applications/Safari.app");
+            assert_eq!(args, ["http://127.0.0.1:8080/"]);
+        }
     }
 }

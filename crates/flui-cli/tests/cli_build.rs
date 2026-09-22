@@ -267,3 +267,152 @@ fn live_desktop_build_produces_an_artifact_on_disk() {
         "reported artifact path does not exist: {path}"
     );
 }
+
+/// Real end-to-end web path: scaffold against this checkout, `flui build
+/// web --json` must leave `pkg/app.js` + `pkg/app_bg.wasm` beside
+/// `index.html`, then `flui run --device browser:… --no-open --json` must
+/// serve that directory (the page carries the reload script) and close the
+/// session with `run.stop` on SIGINT. Gated behind `FLUI_CLI_LIVE_WEB=1`:
+/// it compiles the framework for wasm32 and needs `wasm-bindgen-cli`.
+#[cfg(unix)]
+#[test]
+fn live_web_build_and_run_serve_the_generated_project() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    if std::env::var_os("FLUI_CLI_LIVE_WEB").is_none() {
+        eprintln!(
+            "skipping live_web_build_and_run_serve_the_generated_project: set FLUI_CLI_LIVE_WEB=1"
+        );
+        return;
+    }
+    let repo_root = repo_root();
+    let workdir = TempDir::new().expect("scaffold workdir");
+    let name = "flui-live-web-check";
+    let project = workdir.path().join(name);
+    flui()
+        .current_dir(&repo_root)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args([
+            "create",
+            name,
+            "--org",
+            "com.test",
+            "--template",
+            "counter",
+            "--no-check",
+        ])
+        .arg(format!("--local={}", repo_root.display()))
+        .arg("--path")
+        .arg(workdir.path())
+        .assert()
+        .success();
+    std::fs::copy(repo_root.join("Cargo.lock"), project.join("Cargo.lock"))
+        .expect("seed the generated project with the workspace's resolved versions");
+    flui()
+        .current_dir(&project)
+        .args(["platform", "add", "web", "--json"])
+        .assert()
+        .success();
+
+    let output = flui()
+        .current_dir(&project)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args(["build", "web", "--json"])
+        .output()
+        .expect("run flui build web --json");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let events = ndjson_events(&output.stdout);
+    let done = events
+        .iter()
+        .find(|event| event["event"] == "build.done")
+        .unwrap_or_else(|| panic!("no `build.done` event in {events:?}"));
+    let dir = Path::new(
+        done["artifacts"][0]["path"]
+            .as_str()
+            .expect("artifact path"),
+    );
+    for file in ["index.html", "pkg/app.js", "pkg/app_bg.wasm"] {
+        assert!(
+            dir.join(file).is_file(),
+            "missing {file} in {}",
+            dir.display()
+        );
+    }
+
+    // The first browser flui devices lists on this machine; none means the
+    // serve half cannot be exercised here, and the build half already passed.
+    let devices = flui()
+        .current_dir(&project)
+        .args(["devices", "--json"])
+        .output()
+        .expect("flui devices --json");
+    let Some(browser) = ndjson_events(&devices.stdout)
+        .into_iter()
+        .find(|event| event["event"] == "device" && event["platform"] == "web")
+        .and_then(|event| event["id"].as_str().map(str::to_string))
+    else {
+        eprintln!("no browser installed; the serve half is not exercised here");
+        return;
+    };
+
+    let mut run = std::process::Command::new(assert_cmd::cargo::cargo_bin("flui"))
+        .current_dir(&project)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args([
+            "run",
+            "--device",
+            &browser,
+            "--no-open",
+            "--no-hot-reload",
+            "--json",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .expect("spawn flui run");
+    let mut lines = BufReader::new(run.stdout.take().expect("piped stdout")).lines();
+    let mut seen = Vec::new();
+    let url = loop {
+        let line = lines
+            .next()
+            .expect("flui run ended before serving")
+            .expect("stdout line");
+        let event: serde_json::Value = serde_json::from_str(&line).expect("NDJSON");
+        seen.push(event.clone());
+        if event["event"] == "run.web.serve" {
+            break event["url"].as_str().expect("url").to_string();
+        }
+    };
+
+    let addr = url
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_string();
+    let mut stream = std::net::TcpStream::connect(&addr).expect("connect to the dev server");
+    write!(stream, "GET / HTTP/1.1\r\nHost: {addr}\r\n\r\n").expect("request");
+    let mut page = String::new();
+    stream.read_to_string(&mut page).expect("response");
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(page.contains("/__flui/reload.js"), "{page}");
+    assert!(page.contains("./pkg/app.js"), "{page}");
+
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-INT", &run.id().to_string()])
+            .status()
+            .expect("kill")
+            .success()
+    );
+    let rest: Vec<String> = lines.map_while(Result::ok).collect();
+    let status = run.wait().expect("flui run exit status");
+    assert_eq!(status.code(), Some(130), "{rest:?}");
+    assert!(
+        rest.iter()
+            .any(|line| line.contains("\"event\":\"run.stop\"")),
+        "{rest:?}"
+    );
+}

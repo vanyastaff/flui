@@ -30,7 +30,6 @@ const GITIGNORE_TEMPLATE: &str = r"# Build artifacts
 # Platform-specific
 platforms/android/app/build/
 platforms/android/.gradle/
-platforms/web/pkg/
 platforms/ios/build/
 
 # IDE

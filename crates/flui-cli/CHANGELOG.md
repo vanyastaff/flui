@@ -6,6 +6,26 @@ the workspace version and follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `flui run --device browser:<name>` for any browser `flui devices` lists:
+  the project is built for `wasm32-unknown-unknown`, served by a built-in
+  dev server on `127.0.0.1` (`--web-port`, default a free port), the
+  browser is opened (`--no-open` prints the URL instead), and every rebuild
+  reloads the page. `--json` adds `run.web.serve {url, dir}`,
+  `run.web.open {browser, url}` and `run.reload {kind: "page", ok}`.
+
+### Changed
+
+- `flui build web` builds a generated project: the `fn main` binary is
+  compiled for wasm32 and `wasm-bindgen --target web` writes `pkg/app.js`
+  and `pkg/app_bg.wasm` beside `index.html` in the output directory. The
+  previous pipeline ran `wasm-pack` in a `crates/flui_app` directory no
+  template creates. `wasm-bindgen-cli` must match the project's
+  `wasm-bindgen` crate; the build checks and prints the exact
+  `cargo install` otherwise. `flui doctor` reports `wasm-bindgen`, not
+  `wasm-pack`.
+
 ## [0.1.0] - 2026-09-21
 
 First published release. `Changed`, `Fixed` and `Removed` describe what
