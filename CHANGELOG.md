@@ -59,6 +59,18 @@ then `flui create` pins this tag as a git dependency.
   `flui-platform` consumer's window visible at open, since only a frame-loop
   owner can report a first frame. Explicit `show`/`set_visible(true)`/
   `activate` reveal immediately. Other backends are unchanged.
+- **The web canvas is the page's to size** (`flui-platform`): the browser
+  backend's window is the canvas's CSS box, read from the live layout, and
+  a `ResizeObserver` on the canvas plus the window's `resize` event keep the
+  backing store at the device pixel ratio and dispatch a resize to the
+  embedder on every change. A page-provided `#flui-canvas` keeps its own
+  styling (`100vw`/`100vh`, a fixed frame, a flex child); a canvas the
+  backend creates fills the viewport. Before, the backend pinned the canvas
+  to `AppConfig::size` in inline CSS — overriding the page's `100vw`/`100vh`
+  with an 800×600 box — and never dispatched a resize, so a viewport change
+  or a zoom left the app at its first size. Verified in the desktop app's
+  browser pane: the counter fills 1100×700, follows a resize to 980×1260 at
+  DPR 2 (backing 1960×2520), and its button hit-tests after both.
 - **Full frame rate for frames that do real work** (`flui-engine`): the
   swapchain's `desired_maximum_frame_latency` is 2 (wgpu's default) instead
   of 1. At 1, `examples/workload_probe.rs` — a Scaffold with a 2,000-row list

@@ -690,6 +690,17 @@ canvas left it at 3, and the console had no errors. This is one browser, one
 machine, `localhost`; it is evidence for the Web row's move from unverified
 to experimental, not a browser matrix.
 
+Second observation, 2026-09-22, from the CLI's `flui run --device browser`
+work: the canvas did not fill the viewport although the page's CSS said
+`100vw`/`100vh`. The web backend was pinning the canvas to `AppConfig::size`
+in inline CSS and never dispatching a resize. It now takes the canvas's CSS
+box as the window size and follows it (`ResizeObserver` plus the window's
+`resize` event, backing store at the device pixel ratio). Same browser pane,
+a page styling the canvas `100vw`/`100vh`: the canvas measured 1100×700 for
+an 1100×700 viewport with no inline style, followed a viewport change to
+980×1260 at device pixel ratio 2 (backing store 1960×2520) with the counter
+re-centred, and a click on the re-laid-out button advanced the count.
+
 ## Performance and resilience: the representative workload — 2026-09-22
 
 `examples/workload_probe.rs` (`just macos-workload`, release build) is the

@@ -39,11 +39,57 @@ struct WebWindowState {
 unsafe impl Send for WebWindow {}
 unsafe impl Sync for WebWindow {}
 
+/// The canvas's current CSS box in CSS pixels and the device pixel ratio,
+/// read from the live layout. `None` when the box is empty — a canvas that
+/// is `display: none`, or not yet laid out — since an empty surface is not
+/// a size to configure a swapchain for.
+fn layout_size(canvas: &web_sys::HtmlCanvasElement) -> Option<(f32, f32, f64)> {
+    let window = web_sys::window()?;
+    let width = canvas.client_width();
+    let height = canvas.client_height();
+    (width > 0 && height > 0).then(|| (width as f32, height as f32, window.device_pixel_ratio()))
+}
+
+/// Set the canvas's backing store to `logical × scale`, rounded, so the
+/// surface renders one texel per device pixel. Skipped when unchanged:
+/// assigning `width`/`height` clears a canvas even to the same value.
+fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, width: f32, height: f32, scale: f64) {
+    let phys_width = (f64::from(width) * scale).round() as u32;
+    let phys_height = (f64::from(height) * scale).round() as u32;
+    if canvas.width() != phys_width {
+        canvas.set_width(phys_width);
+    }
+    if canvas.height() != phys_height {
+        canvas.set_height(phys_height);
+    }
+}
+
 impl WebWindow {
     /// Create a new WebWindow backed by a `<canvas>` element.
     ///
     /// Looks for an existing `<canvas id="flui-canvas">` in the document,
     /// or creates one and appends it to `<body>`.
+    ///
+    /// # Size: the canvas's CSS box is the window
+    ///
+    /// A browser has no window to size; it has a page with a layout. The
+    /// window's logical size is therefore the canvas's CSS box, read from
+    /// the live layout, and it is the page's to set: a canvas the page put
+    /// in the document keeps whatever styling the page gave it (`width:
+    /// 100vw; height: 100vh`, a fixed frame, a flex child — all fine), and
+    /// a canvas this constructor creates is styled to fill the viewport
+    /// (`display: block; width: 100vw; height: 100vh`), which is what an
+    /// application with no page of its own means. The requested
+    /// `width`/`height` are the fallback only for a canvas whose box is
+    /// empty at construction (`display: none`, or not yet laid out) and are
+    /// applied as its CSS size then; a caller that wants a fixed size
+    /// otherwise sets it in CSS. The backing store follows the box at the
+    /// device pixel ratio, and `super::events` keeps both in step with the
+    /// layout afterwards (a `ResizeObserver` on the canvas plus the window's
+    /// `resize` event for zoom), dispatching a resize to the embedder each
+    /// time they change — so the first version of this backend, which
+    /// pinned the canvas to the requested size in inline CSS and never
+    /// dispatched a resize, no longer overrides the page.
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when the browser environment lacks the
@@ -63,7 +109,6 @@ impl WebWindow {
 
         let window = web_sys::window().ok_or_else(|| backend("no global window"))?;
         let document = window.document().ok_or_else(|| backend("no document"))?;
-        let scale_factor = window.device_pixel_ratio();
 
         // Find existing canvas or create a new one
         let canvas = if let Some(el) = document.get_element_by_id("flui-canvas") {
@@ -76,6 +121,11 @@ impl WebWindow {
                 .dyn_into::<web_sys::HtmlCanvasElement>()
                 .map_err(|_| backend("failed to cast to HtmlCanvasElement"))?;
             canvas.set_id("flui-canvas");
+            // No page of its own: the canvas is the viewport.
+            let style = canvas.style();
+            let _ = style.set_property("display", "block");
+            let _ = style.set_property("width", "100vw");
+            let _ = style.set_property("height", "100vh");
             document
                 .body()
                 .ok_or_else(|| backend("no body element"))?
@@ -84,16 +134,15 @@ impl WebWindow {
             canvas
         };
 
-        // Set physical size (sharp rendering on HiDPI)
-        let phys_width = (width * scale_factor as f32) as u32;
-        let phys_height = (height * scale_factor as f32) as u32;
-        canvas.set_width(phys_width);
-        canvas.set_height(phys_height);
-
-        // Set CSS logical size
-        let style = canvas.style();
-        let _ = style.set_property("width", &format!("{width}px"));
-        let _ = style.set_property("height", &format!("{height}px"));
+        // The layout's box is the size; the requested size is the fallback
+        // for a canvas that has none yet, and becomes its CSS size then.
+        let (width, height, scale_factor) = layout_size(&canvas).unwrap_or_else(|| {
+            let style = canvas.style();
+            let _ = style.set_property("width", &format!("{width}px"));
+            let _ = style.set_property("height", &format!("{height}px"));
+            (width, height, window.device_pixel_ratio())
+        });
+        apply_backing_size(&canvas, width, height, scale_factor);
 
         // Make canvas focusable for keyboard events
         canvas.set_tab_index(0);
@@ -119,6 +168,20 @@ impl WebWindow {
         })
     }
 
+    /// A handle for the layout-tracking listeners `super::events` registers:
+    /// re-reads the canvas's CSS box and the device pixel ratio, and, when
+    /// either changed, resizes the backing store, updates the tracked size
+    /// and dispatches a resize followed by a frame request. A no-op when
+    /// nothing changed (a `ResizeObserver` reports once on registration,
+    /// and a `resize` event fires for scrolls on some mobile browsers).
+    pub(super) fn layout_sync(&self) -> LayoutSync {
+        LayoutSync {
+            canvas: self.canvas.clone(),
+            state: Arc::clone(&self.state),
+            callbacks: Arc::clone(&self.callbacks),
+        }
+    }
+
     /// Get a reference to the underlying canvas element
     pub fn canvas(&self) -> &web_sys::HtmlCanvasElement {
         &self.canvas
@@ -128,17 +191,44 @@ impl WebWindow {
     pub fn callbacks(&self) -> &Arc<WindowCallbacks> {
         &self.callbacks
     }
+}
 
-    /// Update tracked size (called from resize observer / events)
-    // Unused until the web backend registers a ResizeObserver; the platform
-    // currently dispatches only `Created` and `RedrawRequested`.
-    #[expect(dead_code)]
-    pub fn update_size(&self, width: f32, height: f32) {
-        let mut state = self.state.lock();
-        state.width = width;
-        state.height = height;
+/// See [`WebWindow::layout_sync`].
+pub(super) struct LayoutSync {
+    canvas: web_sys::HtmlCanvasElement,
+    state: Arc<Mutex<WebWindowState>>,
+    callbacks: Arc<WindowCallbacks>,
+}
+
+impl LayoutSync {
+    /// Bring the backing store and the tracked size up to the layout; see
+    /// [`WebWindow::layout_sync`]. The state lock is released before the
+    /// dispatch, which runs embedder callbacks.
+    pub(super) fn sync(&self) {
+        let Some((width, height, scale_factor)) = layout_size(&self.canvas) else {
+            return;
+        };
+        let changed = {
+            let mut state = self.state.lock();
+            let changed = state.width != width
+                || state.height != height
+                || state.scale_factor != scale_factor;
+            state.width = width;
+            state.height = height;
+            state.scale_factor = scale_factor;
+            changed
+        };
+        if !changed {
+            return;
+        }
+        apply_backing_size(&self.canvas, width, height, scale_factor);
+        self.callbacks
+            .dispatch_resize(Size::new(px(width), px(height)), scale_factor as f32);
+        self.callbacks.dispatch_request_frame();
     }
+}
 
+impl WebWindow {
     /// Update focus state (called from focus/blur events)
     // Unused until the web backend subscribes to focus/blur on the canvas.
     #[expect(dead_code)]
