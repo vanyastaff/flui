@@ -65,9 +65,18 @@ are tracked in [Beta release criteria](BETA.md).
 
 ## Run an Example
 
-The simplest entry point is the widget catalog gallery — it uses the public
-`flui::prelude` and `run_app` the same way an application does (see the
-[Hello World example in the README](../README.md#hello-world) for the source):
+The simplest entry point is the counter — one piece of state and a button,
+the same shape `flui create`'s `counter` template generates (see the
+[Hello World example in the README](../README.md#hello-world) for the
+source):
+
+```bash
+cargo run --example counter
+```
+
+A window should open showing a count and an "Increment" button; press it to
+watch the count go up. Close the window to terminate the process. For a
+tour of the wider widget catalog, run the gallery instead:
 
 ```bash
 cargo run --example widgets_gallery
@@ -79,20 +88,20 @@ card. Close it to terminate the process.
 
 ### Platform layer without widgets (advanced)
 
-`examples/hello_world.rs` drives the platform layer directly — a raw window
-and event loop, with no `View`/`Element`/render tree involved. It is useful
-when debugging platform integration itself, not as a first example of
+`examples/platform_window.rs` drives the platform layer directly — a raw
+window and event loop, with no `View`/`Element`/render tree involved. It is
+useful when debugging platform integration itself, not as a first example of
 application code:
 
 ```bash
-cargo run --example hello_world
+cargo run --example platform_window
 ```
 
 Expected output (truncated; the platform name and display details reflect
 your own OS and hardware, not the values below):
 
 ```
-INFO flui Hello World!
+INFO FLUI platform window example
 INFO Platform: <platform, e.g. macos / windows / linux>
 INFO Platform initialized: "<Platform>"
 INFO Found 1 display(s):
@@ -100,14 +109,16 @@ INFO   Display 1: <adapter name> (<width>x<height> @ <scale>x scale)
 INFO Creating window...
 ```
 
-A window titled "Hello FLUI!" should open. Close it to terminate the process.
+A window titled "FLUI Platform Window" should open. Close it to terminate
+the process.
 
 ### Other bundled examples
 
 | Example | Command | Purpose |
 |---------|---------|---------|
-| `widgets_gallery` | `cargo run --example widgets_gallery` | Widget catalog through `flui::prelude` + `run_app` (start here) |
-| `hello_world` | `cargo run --example hello_world` | Platform-layer smoke test (raw window, no widgets) |
+| `counter` | `cargo run --example counter` | Minimal stateful app — one `StateCell` and a button (start here) |
+| `widgets_gallery` | `cargo run --example widgets_gallery` | Widget catalog through `flui::prelude` + `run_app` |
+| `platform_window` | `cargo run --example platform_window` | Platform-layer smoke test (raw window, no widgets) |
 | `direct_render` | `cargo run --example direct_render` | Manual GPU pipeline driving |
 | `scene_render` | `cargo run --example scene_render` | Scene graph rendering |
 | `wgpu_window` | `cargo run --example wgpu_window` | Raw `wgpu` window setup |
@@ -152,7 +163,7 @@ If any of these fail, the toolchain or environment is misconfigured before any f
 All FLUI code logs through `tracing`. Set `RUST_LOG` to control verbosity:
 
 ```bash
-RUST_LOG=debug cargo run --example hello_world
+RUST_LOG=debug cargo run --example platform_window
 RUST_LOG=flui_platform=trace,flui_engine=info cargo test -p flui-platform
 ```
 

@@ -90,51 +90,70 @@ driver.
 ## Hello World
 
 An app is a `View` that builds other views — the widget layer drives the whole
-pipeline (element tree → render objects → layout → paint → `wgpu`):
+pipeline (element tree → render objects → layout → paint → `wgpu`). The
+minimal one is a piece of state and a button that updates it — the same
+`CounterView`/`CounterState` shape `flui create`'s `counter` template
+generates, kept in sync deliberately:
 
 ```rust
-//! examples/widgets_gallery.rs (excerpt)
+//! examples/counter.rs (excerpt)
 use flui::prelude::*;
-use flui::widgets::{column, row};
-
-/// A circular colour avatar: a coloured box clipped to an inscribed oval.
-fn avatar(color: Color) -> ClipOval {
-    ClipOval::new().child(ColoredBox::new(color).child(SizedBox::square(64.0)))
-}
+use flui::widgets::{SafeArea, column};
 
 #[derive(Clone, StatelessView)]
-struct Gallery;
+struct CounterApp;
 
-impl StatelessView for Gallery {
+impl StatelessView for CounterApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        Container::new()
-            .color(Color::rgb(18, 18, 24))
-            .padding(EdgeInsets::all(px(24.0)))
-            .child(Column::new(column![
-                Text::new("FLUI widget gallery"),
-                SizedBox::height(16.0),
-                Row::new(row![
-                    avatar(Color::rgb(229, 57, 53)),
-                    SizedBox::width(12.0),
-                    avatar(Color::rgb(30, 136, 229)),
-                ]),
-                Container::new()
-                    .color(Color::rgb(38, 38, 48))
-                    .padding(EdgeInsets::all(px(16.0)))
-                    .child(Center::new().child(Text::new("centered in a card"))),
-            ]))
+        Theme::new(ThemeData::light(), SafeArea::new().child(CounterView))
+    }
+}
+
+#[derive(Clone, StatefulView)]
+struct CounterView;
+
+struct CounterState {
+    count: StateCell<usize>,
+}
+
+impl StatefulView for CounterView {
+    type State = CounterState;
+
+    fn create_state(&self) -> Self::State {
+        CounterState { count: StateCell::new(0) }
+    }
+}
+
+impl ViewState<CounterView> for CounterState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.count.bind(ctx);
+    }
+
+    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> impl IntoView {
+        let count = self.count.clone();
+        Center::new().child(
+            Column::new(column![
+                Text::new(self.count.get().to_string()),
+                ElevatedButton::new(Text::new("Increment"))
+                    .on_pressed(move || count.update(|n| n + 1)),
+            ])
+            .main_axis_alignment(MainAxisAlignment::Center),
+        )
     }
 }
 
 fn main() {
-    run_app(Gallery);
+    run_app(CounterApp);
 }
 ```
 
-Run with `cargo run --example widgets_gallery`. For the platform layer without
-widgets (raw window + event loop), see `examples/hello_world.rs`; more examples
-live under `examples/` and per-target crates (`examples/desktop_scene/`,
-`examples/web_demo/`, `examples/painting_demo/`).
+Run with `cargo run --example counter`. For a tour of the wider widget
+catalog, see `examples/widgets_gallery.rs`; for the platform layer without
+widgets (raw window + event loop, useful when debugging platform integration
+itself), see `examples/platform_window.rs`. More examples live under
+`examples/` and per-target crates (`examples/desktop_scene/`,
+`examples/web_demo/`, `examples/painting_demo/`) — see
+[`examples/README.md`](examples/README.md) for the full index.
 
 ## Minimum Supported Rust Version
 

@@ -634,6 +634,15 @@ name = "material_demo"
 path = "examples/material_demo/main.rs"
 required-features = ["material"]
 
+# `default = ["material"]` does not make this redundant: `just facade-combos`
+# builds every isolated feature combination with `--no-default-features`, and
+# `counter.rs` uses `Theme`/`ThemeData`/`ElevatedButton` from the Material
+# catalog, so an isolated non-material build fails with E0433 without this.
+[[example]]
+name = "counter"
+path = "examples/counter.rs"
+required-features = ["material"]
+
 [[example]]
 name = "cupertino_demo"
 path = "examples/cupertino_demo/main.rs"
