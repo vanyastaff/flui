@@ -40,10 +40,11 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   tracks the latest stable release (bumped within a week of each new stable)
   rather than only when a stabilization is actually used; post-1.0 it will
   follow N-2. A new gate, `scripts/check-toolchain-consistency.sh` (wired
-  into `just gate` as `toolchain-consistency-check`), checks that
-  `Cargo.toml`, `clippy.toml`, the `msrv` CI job, and all five `flui-cli`
-  project templates agree with `rust-toolchain.toml`'s channel, so the
-  declaration can no longer drift silently across those files.
+  into `just gate` and the `checks` CI job as `toolchain-consistency-check`),
+  checks that `Cargo.toml`, `clippy.toml`, the `msrv` CI job, all five
+  `flui-cli` project templates, the README badge, and `llms.txt` agree with
+  `rust-toolchain.toml`'s channel, so the declaration can no longer drift
+  silently across those files.
 
 ## [0.1.0] - 2026-09-21
 

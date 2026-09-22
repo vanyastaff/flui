@@ -1,7 +1,7 @@
 name: CI
 
 # Job graph (every compiling job is gated on `checks` AND `paths-filter`):
-#   checks         — fmt + taplo + typos + inventory + runtime-conformance + panic-policy + port-check + actionlint + zizmor (seconds, no compile)
+#   checks         — fmt + taplo + typos + inventory + runtime-conformance + toolchain-consistency + panic-policy + port-check + actionlint + zizmor (seconds, no compile)
 #   paths-filter   — on a `pull_request` run only: is anything outside docs/config
 #                    changed? Every compiling job below is `if:`-gated on its
 #                    `non_docs` output and skips (not silently green — see the
@@ -93,8 +93,9 @@ env:
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # checks — fast source gate. fmt + inventory + runtime-conformance +
-  # panic-policy + port-check + typos + Taplo + the workflow
-  # linters (actionlint semantics, zizmor security audit). No compile. Every
+  # toolchain-consistency + panic-policy + port-check + typos + Taplo + the
+  # workflow linters (actionlint semantics, zizmor security audit). No
+  # compile. Every
   # downstream job (clippy, test, doc, bench-compile) depends on this, so a
   # malformed PR fails in seconds before any workspace build starts.
   # Ubuntu only — pure source analysis. clippy lives in its own parallel job.
@@ -183,6 +184,9 @@ jobs:
 
       - name: Runtime contract registry check
         run: bash scripts/check-runtime-conformance.sh
+
+      - name: Toolchain consistency check (MSRV agrees with rust-toolchain.toml everywhere it's declared)
+        run: bash scripts/check-toolchain-consistency.sh
 
       - name: 'panic-policy expect-message convention gate'
         run: bash scripts/check-panic-policy.sh

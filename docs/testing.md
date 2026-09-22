@@ -125,6 +125,7 @@ Expanded (see `ci:` in the `justfile` for the authoritative recipe list), that c
 cargo fmt --all -- --check                                # fmt-check: formatter gate (rustfmt.toml is authoritative)
 bash scripts/check-workspace-inventory.sh                  # inventory-check: crate inventory + layer-policy drift guard
 bash scripts/check-runtime-conformance.sh                  # runtime-conformance-check: docs/runtime-contract.toml vs. source tree
+bash scripts/check-toolchain-consistency.sh                # toolchain-consistency-check: MSRV agrees with rust-toolchain.toml everywhere it's declared
 bash scripts/port-check.sh                                 # port-check: architecture refusal triggers
 cargo clippy --workspace --all-targets -- -D warnings      # clippy: lint gate — zero warnings
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast  # test-ci (flui-platform gets its own invocation below — see CI Expectations)
@@ -132,6 +133,12 @@ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-fe
 cargo test --workspace --locked --doc                      # test-doc: doc-tests (flui-platform included — its doctests need neither device above)
 bash scripts/doc-strict.sh                                # doc-strict: cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 ```
+
+**Adding a new gate** means two changes together, not one: a `just` recipe (so a
+contributor can run it standalone) *and* a step in `.github/workflows/ci.yml`'s
+`checks` job (so CI actually runs it — `just gate`/`just ci` are not
+themselves invoked from CI; each script is its own explicit step there). A
+recipe with no CI step only runs when someone remembers to run it by hand.
 
 ## Build
 

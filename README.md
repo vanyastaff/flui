@@ -158,10 +158,12 @@ itself), see `examples/platform_window.rs`. More examples live under
 ## Minimum Supported Rust Version
 
 The MSRV is **Rust 1.98**, declared as `rust-version` in the workspace
-manifest, pinned by `rust-toolchain.toml`, and verified by a dedicated CI job
-plus `scripts/check-toolchain-consistency.sh` (part of `just gate`), which
-checks that `Cargo.toml`, `clippy.toml`, the `msrv` CI job, and the `flui-cli`
-project templates all agree with `rust-toolchain.toml`'s channel.
+manifest and verified by a dedicated CI job. `rust-toolchain.toml`'s
+`channel` is the separate *development* toolchain pin, not the MSRV itself —
+but under the policy below the two move together in practice, and
+`scripts/check-toolchain-consistency.sh` (part of `just gate`) checks that
+`Cargo.toml`, `clippy.toml`, the `msrv` CI job, and the `flui-cli` project
+templates all agree with it.
 
 **Policy:** pre-1.0, the MSRV tracks the latest stable release and is bumped
 within a week of each new stable (Rust ships every 6 weeks); after 1.0 it

@@ -1,6 +1,6 @@
 # FLUI
 
-> A Flutter-inspired declarative UI framework for Rust: immutable `View` → mutable `Element` → layout/paint `Render` trees, Flutter's box and sliver layout protocols, and a `wgpu` renderer. Pre-release; consumed from a git clone as a Cargo workspace (`MIT OR Apache-2.0`, MSRV 1.97).
+> A Flutter-inspired declarative UI framework for Rust: immutable `View` → mutable `Element` → layout/paint `Render` trees, Flutter's box and sliver layout protocols, and a `wgpu` renderer. Pre-release; consumed from a git clone as a Cargo workspace (`MIT OR Apache-2.0`, MSRV 1.98).
 
 FLUI takes inspiration from Flutter — the three-tree model, the lifecycle ordering, and the layout/paint/hit-test protocol start there — while structure, mechanisms, and code style are designed for Rust: type-safe child arity (`Leaf`/`Single`/`Optional`/`Variable`) checked at compile time, `Result` instead of exceptions, field-granular inherited dependencies, capability-scoped `BuildContext`, and per-window `UiRealm`s. Flutter is not an oracle it must match: a divergence we choose is recorded in an ADR or a crate's `## Mapping decisions`, and proven by a test. See `NOTICE` for the Flutter attribution.
 
