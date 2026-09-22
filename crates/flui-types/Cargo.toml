@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-types"
 version.workspace = true
 edition.workspace = true
@@ -16,7 +17,7 @@ autotests = false
 # Geometry primitives — split out into its own Layer-0 crate.
 # flui-types re-exports `pub use flui_geometry as geometry`
 # so existing `flui_types::geometry::*` consumers continue to compile.
-flui-geometry = { path = "../flui-geometry", version = "0.2.0" }
+flui-geometry = { path = "../flui-geometry", version = "=0.1.0" }
 
 # Serialization support (optional).
 # `rc` enables `Serialize`/`Deserialize` for `Arc<T>` — needed by

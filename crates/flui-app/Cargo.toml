@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-app"
 version.workspace = true
 edition.workspace = true
@@ -63,34 +64,34 @@ performance-overlay = []
 
 [dependencies]
 # Core FLUI crates
-flui-view = { path = "../flui-view", version = "0.2.0", features = ["runtime-internals"] }
-flui-rendering = { path = "../flui-rendering", version = "0.2.0" }
+flui-view = { path = "../flui-view", version = "=0.1.0", features = ["runtime-internals"] }
+flui-rendering = { path = "../flui-rendering", version = "=0.1.0" }
 # Concrete render-object catalog (moved out of flui-rendering per ADR-0008).
-flui-objects = { path = "../flui-objects", version = "0.2.0" }
-flui-types = { path = "../flui-types", version = "0.2.0" }
-flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+flui-objects = { path = "../flui-objects", version = "=0.1.0" }
+flui-types = { path = "../flui-types", version = "=0.1.0" }
+flui-foundation = { path = "../flui-foundation", version = "=0.1.0" }
 # Composition-only logging backend. `flui-app` is a composition root, so it is
 # one of the three crates allowed a normal edge here — see
 # docs/workspace-layers.toml. No framework crate may add this dependency.
 flui-log = { workspace = true }
-flui-interaction = { path = "../flui-interaction", version = "0.2.0" }
-flui-scheduler = { path = "../flui-scheduler", version = "0.2.0" }
-flui-painting = { path = "../flui-painting", version = "0.2.0" }
-flui-layer = { path = "../flui-layer", version = "0.2.0" }
-flui-semantics = { path = "../flui-semantics", version = "0.2.0" }
-flui-engine = { path = "../flui-engine", version = "0.2.0" }
-flui-platform = { path = "../flui-platform", version = "0.2.0" }
+flui-interaction = { path = "../flui-interaction", version = "=0.1.0" }
+flui-scheduler = { path = "../flui-scheduler", version = "=0.1.0" }
+flui-painting = { path = "../flui-painting", version = "=0.1.0" }
+flui-layer = { path = "../flui-layer", version = "=0.1.0" }
+flui-semantics = { path = "../flui-semantics", version = "=0.1.0" }
+flui-engine = { path = "../flui-engine", version = "=0.1.0" }
+flui-platform = { path = "../flui-platform", version = "=0.1.0" }
 # Development-only; see the `hot-reload` feature above.
-flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", features = [
+flui-hot-reload = { path = "../flui-hot-reload", version = "=0.1.0", features = [
     "app-plugin",
 ], optional = true }
-flui-animation = { path = "../flui-animation", version = "0.2.0" }
+flui-animation = { path = "../flui-animation", version = "=0.1.0" }
 # Widget catalog: provides `VsyncScope`, which `AppBinding::attach_root_widget*`
 # auto-wraps the root in so implicit-animation widgets work with zero boilerplate.
 # Zero new link-time deps: every crate flui-widgets pulls is already transitively
 # present in flui-app's closure (verified via `cargo tree -p flui-app`); this adds
 # only a direct Cargo edge + re-exports. FOUNDATIONS.md targets app → widgets.
-flui-widgets = { path = "../flui-widgets", version = "0.2.0" }
+flui-widgets = { path = "../flui-widgets", version = "=0.1.0" }
 
 # Utilities
 tracing.workspace = true
@@ -132,8 +133,8 @@ android-activity = { version = "0.6", features = ["native-activity"] }
 # without this the surface never gets a usable adapter (`SurfaceCreation`
 # fails at GPU init).
 [target.'cfg(target_os = "linux")'.dependencies]
-flui-platform = { path = "../flui-platform", version = "0.2.0", features = ["winit-backend"] }
-flui-engine = { path = "../flui-engine", version = "0.2.0", features = ["vulkan"] }
+flui-platform = { path = "../flui-platform", version = "=0.1.0", features = ["winit-backend"] }
+flui-engine = { path = "../flui-engine", version = "=0.1.0", features = ["vulkan"] }
 
 [dev-dependencies]
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
@@ -157,15 +158,15 @@ tracing-subscriber.workspace = true
 # Enable flui-interaction's `testing` feature in test builds so tests can
 # construct synthetic pointer events via `events::make_*_event`. Feature
 # unification keeps these helpers out of the release `flui-app` binary.
-flui-interaction = { path = "../flui-interaction", version = "0.2.0", features = ["testing"] }
+flui-interaction = { path = "../flui-interaction", version = "=0.1.0", features = ["testing"] }
 # Enable flui-rendering's `testing` feature in test builds so wiring tests can
 # seed pending child-build requests via `push_pending_child_request_for_test`.
 # Same dev-only feature-unification pattern; helper stays out of release builds.
-flui-rendering = { path = "../flui-rendering", version = "0.2.0", features = ["testing"] }
+flui-rendering = { path = "../flui-rendering", version = "=0.1.0", features = ["testing"] }
 # Enable flui-view's `test-utils` feature in test builds so the
 # wiring test can plant a layout-builder registry entry. Same pattern; the
 # `register_layout_builder_for_test` hook stays out of release builds.
-flui-view = { path = "../flui-view", version = "0.2.0", features = ["test-utils"] }
+flui-view = { path = "../flui-view", version = "=0.1.0", features = ["test-utils"] }
 
 [lints]
 workspace = true

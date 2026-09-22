@@ -3,32 +3,45 @@
 //! Generates shell completion scripts for various shells.
 
 use crate::error::CliResult;
+use crate::ui;
 use clap::CommandFactory;
 use clap_complete::{Shell, generate};
 use console::style;
 use std::io;
+use std::path::Path;
 
-/// Execute the completions command.
-///
-/// # Arguments
-///
-/// * `shell` - Target shell (auto-detected if not specified)
-///
-/// # Errors
-///
-/// Returns `CliError::ShellDetectionFailed` if shell cannot be detected.
-pub fn execute(shell: Option<Shell>) -> CliResult<()> {
+/// Print the completion script for `shell`, detected from `$SHELL` when not
+/// given.
+pub(crate) fn execute(shell: Option<Shell>) -> CliResult<()> {
     let shell = shell.unwrap_or_else(detect_shell);
 
-    cliclack::intro(style(" flui completions ").on_yellow().black())?;
+    // The completion script is the only thing that may ever reach stdout —
+    // everything else (banner, install instructions, closing line) goes to
+    // stderr through `ui::`, so `flui completions zsh > _flui` stays a
+    // clean script and `--quiet` suppresses all of it.
+    ui::intro(style(" flui completions ").on_yellow().black())?;
 
     let mut cmd = crate::Cli::command();
+    if ui::is_json() {
+        // Under `--json` stdout is an event stream, so the script travels
+        // inside an event instead of being written raw.
+        let mut script = Vec::new();
+        generate(shell, &mut cmd, "flui", &mut script);
+        ui::emit(
+            "completions",
+            &serde_json::json!({
+                "shell": format!("{shell:?}").to_ascii_lowercase(),
+                "script": String::from_utf8_lossy(&script),
+            }),
+        );
+        return Ok(());
+    }
     generate(shell, &mut cmd, "flui", &mut io::stdout());
 
     let instructions = installation_instructions(shell);
-    cliclack::note("Installation Instructions", instructions)?;
+    ui::note("Installation Instructions", instructions)?;
 
-    cliclack::outro(format!(
+    ui::outro(format!(
         "Completions generated for {}",
         style(format!("{shell:?}")).cyan()
     ))?;
@@ -36,27 +49,37 @@ pub fn execute(shell: Option<Shell>) -> CliResult<()> {
     Ok(())
 }
 
-/// Detect the user's shell from environment variables.
+/// Detect the user's shell from `$SHELL`'s basename.
+///
+/// Matching the *basename* rather than checking `contains` matters: a
+/// wrapper path like `/opt/zsh-bash/bin/fish` contains both "zsh" and
+/// "bash" as substrings of directory names that have nothing to do with
+/// the shell actually being run.
 fn detect_shell() -> Shell {
-    // Try SHELL environment variable (Unix)
     if let Ok(shell_path) = std::env::var("SHELL") {
-        if shell_path.contains("bash") {
-            return Shell::Bash;
-        } else if shell_path.contains("zsh") {
-            return Shell::Zsh;
-        } else if shell_path.contains("fish") {
-            return Shell::Fish;
+        let basename = Path::new(&shell_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(shell_path.as_str());
+        match basename {
+            "bash" => return Shell::Bash,
+            "zsh" => return Shell::Zsh,
+            "fish" => return Shell::Fish,
+            "pwsh" | "powershell" => return Shell::PowerShell,
+            _ => {}
         }
     }
 
-    // Try ComSpec (Windows)
-    if let Ok(comspec) = std::env::var("ComSpec")
-        && (comspec.contains("powershell") || comspec.contains("pwsh"))
-    {
-        return Shell::PowerShell;
+    if let Ok(comspec) = std::env::var("ComSpec") {
+        let basename = Path::new(&comspec)
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or(comspec.as_str());
+        if basename.eq_ignore_ascii_case("powershell") || basename.eq_ignore_ascii_case("pwsh") {
+            return Shell::PowerShell;
+        }
     }
 
-    // Platform-specific defaults
     #[cfg(unix)]
     return Shell::Bash;
 

@@ -4,7 +4,7 @@
 # not be acquired from a build / layout / paint / composite body.
 #
 # A lifecycle-only capability lets code affect presentation state outside the
-# build/layout/paint transaction. Seven are guarded:
+# build/layout/paint transaction. The guarded acquisition tokens are listed below:
 #
 #   rebuild_handle()    ADR-0018 — `RebuildHandle::schedule()` marks an element
 #                       dirty for the next frame.
@@ -23,6 +23,8 @@
 #                       a client with the presentation's text-input owner;
 #                       acquiring it from `build`/`layout`/`paint` would attach
 #                       on every rebuild instead of once per focus transition.
+#   lifecycle_handle() ADR-0035 — weak presentation lifecycle subscription;
+#                       acquired during widget initialization, not every build.
 #   focus_manager()     ADR-0037 — returns the presentation's concrete focus
 #                       owner; imperative focus changes synchronously notify
 #                       listeners and may schedule rebuilds.
@@ -40,7 +42,7 @@
 #                       platform capability; acquiring it from `build`/
 #                       `layout`/`paint` would let presentation code enqueue
 #                       owner-lane platform work (e.g. `open_window`) mid-frame
-#                       transaction, ahead of trigger #22's other six via the
+#                       transaction, alongside the other guarded capabilities via the
 #                       same ambient-authority hazard.
 #   pipeline_owner()    PipelineCell port (docs/runtime-contract.toml's
 #                       `semantics-two-phase-borrow` contract and `PipelineCell`
@@ -99,7 +101,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 guarded_fns='build|build_into_views|perform_layout|layout_node_with_children|paint|paint_raw|run_paint|run_layout|run_compositing|compose|composite'
 
 # The capabilities themselves. Adding one here is the whole cost of guarding it.
-capabilities='rebuild_handle|local_post_frame_handle|post_frame_handle|text_input_handle|focus_manager|keep_alive_lease|keep_alive_handle|owner_platform|pipeline_owner|hit_test_handle'
+capabilities='rebuild_handle|local_post_frame_handle|post_frame_handle|text_input_handle|focus_manager|lifecycle_handle|keep_alive_lease|keep_alive_handle|owner_platform|pipeline_owner|hit_test_handle'
 
 scan() {
   awk -v guarded="${guarded_fns}" -v caps="${capabilities}" '
@@ -145,17 +147,17 @@ self_test() {
     scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | sed 's/^/  /' || true
     local found
     found=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null | wc -l || true)
-    if [[ "${found}" -ne 13 ]]; then
-      echo "  FAIL: expected 13 violations across all ten lifecycle-only capability tokens, got ${found}"
+    if [[ "${found}" -ne 14 ]]; then
+      echo "  FAIL: expected 14 violations across all eleven lifecycle-only capability tokens, got ${found}"
       status=1
     else
-      echo "  ok: 13 violations reported"
+      echo "  ok: 14 violations reported"
     fi
     # Every capability token must actually be named — a scanner can otherwise
     # report the expected count while silently leaving a newer capability open.
     local reported
     reported=$(scan "${fixtures}/rejected.rs.fixture" 2>/dev/null || true)
-    for cap in rebuild_handle local_post_frame_handle post_frame_handle text_input_handle focus_manager keep_alive_lease keep_alive_handle owner_platform pipeline_owner hit_test_handle; do
+    for cap in rebuild_handle local_post_frame_handle post_frame_handle text_input_handle focus_manager lifecycle_handle keep_alive_lease keep_alive_handle owner_platform pipeline_owner hit_test_handle; do
       if ! grep -q "${cap}()" <<<"${reported}"; then
         echo "  FAIL: scanner never reported a ${cap}() violation"
         status=1

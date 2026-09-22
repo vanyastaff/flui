@@ -61,7 +61,6 @@
 # the panic-policy-gate PR notes instead of forced into either bucket.
 
 crates/flui-animation/src/controller.rs 4
-crates/flui-devtools/src/hot_reload.rs 1
 crates/flui-engine/src/advanced_blend/pipeline.rs 1
 crates/flui-engine/src/batches/images.rs 3
 crates/flui-engine/src/headless.rs 1
@@ -73,7 +72,6 @@ crates/flui-engine/src/renderer.rs 1
 crates/flui-engine/src/texture_pool.rs 3
 crates/flui-foundation/src/id.rs 3
 crates/flui-foundation/src/key.rs 4
-crates/flui-hot-reload/src/dev/source_watch.rs 1
 crates/flui-hot-reload/src/driver.rs 1
 crates/flui-interaction/src/binding.rs 1
 crates/flui-interaction/src/ids.rs 2

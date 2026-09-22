@@ -27,7 +27,7 @@ thread_local! {
     /// wasm. Absorbs what were, before the `AppRuntime` skeleton existed, two
     /// separate thread-locals: the transitional realm host (realm slot, queue,
     /// draining, owner thread, address cache, window registry, surface
-    /// applier, visible/focused) and the loop-scoped `OwnerPlatform` host —
+    /// applier) and the loop-scoped `OwnerPlatform` host —
     /// see [`AppRuntime`]'s own module doc for why one struct correctly
     /// carries both invariants. The platform callback surface still
     /// requires `Send`, so the `!Send` realm this holds remains in owner TLS
@@ -59,10 +59,61 @@ thread_local! {
 /// and full system-font enumeration on a path that can never consume
 /// either. `install_platform_realm` is the one call site that resolves —
 /// every realm-hosting backend goes through it, `run_direct` never does.
-pub(crate) fn install_owner_platform(owner: flui_platform::OwnerPlatform) {
-    APP_RUNTIME.with(|slot| {
-        slot.borrow_mut().owner_platform = Some(owner);
+#[cfg_attr(
+    any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "portable bootstrap keeps one fallible contract; desktop wake registration can fail, mobile only installs the owner"
+    )
+)]
+pub(crate) fn install_owner_platform(
+    owner: flui_platform::OwnerPlatform,
+) -> Result<(), flui_platform::WakeRegistrationError> {
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    let identity = {
+        let identity = Arc::new(());
+        let installed_identity = Arc::clone(&identity);
+        owner.on_wake(Box::new(move || {
+            if APP_RUNTIME
+                .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &installed_identity))
+            {
+                super::secondary_window::drain_pending_secondary_window_completions();
+                super::main_window::drive_main_window();
+            }
+        }))?;
+        identity
+    };
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    super::main_window::shutdown_main_window();
+    let previous = APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.owner_install_generation = state
+            .owner_install_generation
+            .checked_add(1)
+            .expect("BUG: owner install generation exhausted");
+        let previous = state.owner_platform.replace(std::rc::Rc::new(owner));
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        {
+            state.quit_notification = crate::app::runtime::QuitNotification::Active;
+            state.loop_identity = identity;
+            state.pending_window_reservations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        }
+        previous
     });
+    drop(previous);
+    Ok(())
 }
 
 /// Installs the exit-policy hook this thread's `AppRuntime` consults instead
@@ -102,6 +153,25 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
             let (should_exit, removed) =
                 APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
             drop(removed);
+            if !should_exit {
+                return false;
+            }
+            // Destructors may admit new windows. Recheck after all removed
+            // realms have dropped, then fence the same ingress as senders.
+            let (should_exit, removed) =
+                APP_RUNTIME.with(|slot| slot.borrow_mut().should_exit(policy));
+            drop(removed);
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            if should_exit {
+                let ingress = APP_RUNTIME.with(|slot| slot.borrow().main_ingress.clone());
+                if let Some(ingress) = ingress {
+                    return ingress.try_auto_quit();
+                }
+            }
             should_exit
         }));
         owner.shared()
@@ -133,6 +203,32 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
     }
     #[cfg(target_arch = "wasm32")]
     drop(shared);
+}
+
+/// Install the desktop platform's one quit notification callback.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(super) fn install_platform_quit_hook() {
+    let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
+    let owner_thread = std::thread::current().id();
+    with_owner_platform(|owner| {
+        owner.shared().on_quit(Box::new(move || {
+            assert_eq!(
+                std::thread::current().id(),
+                owner_thread,
+                "BUG: platform quit must run on its owner"
+            );
+            if !APP_RUNTIME.with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &loop_identity)) {
+                return;
+            }
+            super::main_window::shutdown_main_window();
+            tracing::info!("Platform quit");
+            super::realm_dispatch::request_quit_notification();
+        }));
+    });
 }
 
 /// Installs the wall-clock-wake hook this thread's platform
@@ -227,9 +323,9 @@ pub(super) fn merge_wake_deadlines(
 /// instant on every idle iteration once it comes due, which is
 /// `WinitApp::new_events`'s own named `WaitUntil(past)` busy-spin, forced by
 /// this hook instead of a stale realm deadline. The deadline is not lost by
-/// staying unreported while disabled: frames re-enabling already redirties
-/// the root unconditionally (`UiRealm::redirty_root_for_frames_reenable`),
-/// which wakes the loop through the ordinary `needs_redraw` channel and
+/// staying unreported while disabled: presentation lifecycle reconciliation
+/// redirties the restored root and wakes the loop through the ordinary
+/// `needs_redraw` channel, which
 /// lets a real `WakeAction::Render` resume the retry then.
 // Desktop-only, like its sole caller `bootstrap_desktop`: the mobile backends
 // have no `ControlFlow`/`WaitUntil` to feed and wasm has no loop, so compiling
@@ -351,7 +447,7 @@ mod merge_wake_deadlines_tests {
 ///
 /// Three fences (ADR-0039 §6), all landing in this one accessor:
 ///
-/// (a) **Borrow, not clone.** `pub(crate)` to `flui-app`'s `app` module,
+/// (a) **Borrowed public access.** `pub(crate)` to `flui-app`'s `app` module,
 ///     never re-exported; `OwnerPlatform` isn't `Clone`, so there is no way
 ///     to escape this closure with a durable owned copy — every access
 ///     re-crosses the fence.
@@ -402,22 +498,14 @@ mod merge_wake_deadlines_tests {
 /// }));
 /// ```
 ///
-/// # No host re-entry
+/// # Native re-entry
 ///
-/// `f` runs while this function holds an immutable `APP_RUNTIME.borrow()`.
-/// Since `AppRuntime` folded the realm-facing state and `owner_platform`
-/// into ONE thread-local `RefCell` (they were two disjoint cells before), `f`
-/// must never call back into any function that touches this same cell:
-/// `dispatch_platform_realm`,
-/// `install_platform_realm`, `teardown_platform_realm`,
-/// `install_surface_applier`, or `install_owner_platform` itself. Any of
-/// those does `slot.borrow_mut()` while this borrow is still live, which is
-/// a guaranteed `BorrowMutError` panic — in every build, not only debug
-/// (`RefCell`'s borrow tracking is not a `debug_assert`). No production
-/// caller does this today (`f` closures only call owner-affine `Platform`
-/// methods), so this is a documented invariant with a regression pin
-/// (`with_owner_platform_reentering_dispatch_panics` below), not a runtime
-/// guard.
+/// The runtime owns one `Rc<OwnerPlatform>`. The accessor takes a temporary
+/// internal strong reference, releases the TLS borrow, then invokes `f`.
+/// Native calls may synchronously dispatch focus/close events into the runtime.
+/// Public callers still receive only `&OwnerPlatform`; neither `Clone` nor
+/// cross-thread ownership is added to that capability. A native operation's
+/// result must separately be checked against its loop identity and admission.
 pub(crate) fn with_owner_platform<R>(
     f: impl FnOnce(&flui_platform::OwnerPlatform) -> R,
 ) -> Option<R> {
@@ -443,28 +531,26 @@ pub(crate) fn with_owner_platform<R>(
              not be acquired from build/layout/paint (ADR-0039 §6, trigger #22)"
         );
     }
-    APP_RUNTIME.with(|slot| slot.borrow().owner_platform.as_ref().map(f))
+    let owner = APP_RUNTIME.with(|slot| slot.borrow().owner_platform.clone());
+    owner.as_deref().map(f)
 }
 
 /// Unwind-safe TLS clearing. Arm this guard *before* calling
 /// `Platform::run(...)` on any backend whose `run` returns (winit,
-/// headless, Android) — not inside `on_ready` — so a panic anywhere inside
+/// headless, Android, AppKit) — not inside `on_ready` — so a panic anywhere inside
 /// `on_ready` or later in `run` unwinds through the guard's `Drop` and
 /// cannot leak the host into whatever runs on this thread next (notably,
 /// the next test). Clearing an already-empty slot is a no-op.
 ///
 /// Web deliberately arms no guard: the host stays resident for the page's
-/// lifetime (see the web runner's own comment on this). macOS is moot:
-/// `run` never returns there (`terminate:` exits the process).
+/// lifetime (see the web runner's own comment on this). Standalone AppKit
+/// stops its native loop and returns through this guard like other desktops.
 ///
-/// # No host re-entry, and no eager resolution
+/// # Cleanup outside borrows, and no eager resolution
 ///
-/// `Drop` touches only `owner_platform` (`self.owner_platform.take()`) —
-/// never `dispatch_platform_realm`/`install_platform_realm`/
-/// `teardown_platform_realm`/`install_surface_applier`, all of which would
-/// re-borrow the same `APP_RUNTIME` cell this drop already holds mutably
-/// (see `with_owner_platform`'s own "No host re-entry" doc for the general
-/// rule). Just as importantly, `AppRuntime::new()` is cheap and
+/// `Drop` takes the owner reference out of TLS and releases it only after the
+/// borrow ends. Captured native resources can therefore re-enter cleanup.
+/// Just as importantly, `AppRuntime::new()` is cheap and
 /// side-effect-free specifically so that a bare `.borrow_mut()` here — the
 /// *first* touch of `APP_RUNTIME` on a thread whose `on_ready` panicked
 /// before installing anything — can never trigger `SharedEngineServices`
@@ -475,20 +561,37 @@ pub(crate) fn with_owner_platform<R>(
 #[must_use = "the guard must stay alive across the Platform::run(...) call it \
               guards, or the TLS host clears immediately instead of at loop exit"]
 pub(crate) struct OwnerHostClearGuard {
-    _private: (),
+    expected_generation: u64,
 }
 
 impl OwnerHostClearGuard {
-    /// Arms the guard. Call immediately before `Platform::run(...)`.
+    /// Own the first successful owner installation after this point. A later
+    /// replacement has another generation and cannot be erased by this guard.
+    /// Call immediately before `Platform::run(...)`; no-install failure leaves
+    /// a previously installed owner untouched.
     pub(crate) fn arm() -> Self {
-        Self { _private: () }
+        let expected_generation = APP_RUNTIME.with(|slot| {
+            slot.borrow()
+                .owner_install_generation
+                .checked_add(1)
+                .expect("BUG: owner install generation exhausted")
+        });
+        Self {
+            expected_generation,
+        }
     }
 }
 
 impl Drop for OwnerHostClearGuard {
     fn drop(&mut self) {
-        APP_RUNTIME.with(|slot| {
-            slot.borrow_mut().owner_platform.take();
+        let removed = APP_RUNTIME.with(|slot| {
+            let mut runtime = slot.borrow_mut();
+            if runtime.owner_install_generation == self.expected_generation {
+                runtime.owner_platform.take()
+            } else {
+                None
+            }
         });
+        drop(removed);
     }
 }

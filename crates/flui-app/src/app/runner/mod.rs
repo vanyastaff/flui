@@ -16,13 +16,29 @@ mod android;
 ))]
 mod desktop;
 mod device_recovery;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod first_reveal;
 mod frame_pacing;
 mod host;
 #[cfg(target_os = "ios")]
-mod ios;
-mod lifecycle_ladder;
+pub(super) mod ios;
+
 mod realm_dispatch;
+// Unconditional, like `device_recovery` above: the backoff's trait and
+// outcome are portable and its tests are host-run, so a
+// `cfg(target_os = "android")` here would hide the whole file from every gate
+// this host can run.
+mod retry_backoff;
 mod secondary_window;
+#[cfg(any(
+    target_os = "ios",
+    all(test, not(target_os = "android"), not(target_arch = "wasm32"))
+))]
+mod session_controller;
 // Unconditional, like `device_recovery` above: the seam's trait and outcome
 // are portable and its tests are host-run, so a `cfg(target_os = "android")`
 // here would hide the whole file from every gate this host can run.
@@ -48,6 +64,12 @@ pub(in crate::app) use realm_dispatch::{RealmTask, SurfaceApplier};
     not(target_arch = "wasm32")
 ))]
 pub use secondary_window::open_secondary_window;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use secondary_window::open_window;
 #[cfg(target_arch = "wasm32")]
 use web::run_web;
 
@@ -454,7 +476,7 @@ mod tests {
             let _clear_guard = OwnerHostClearGuard::arm();
             let platform = headless_platform();
             let result = platform.run(Box::new(move |owner| {
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 let observed = with_owner_platform(|_owner| true);
                 seen_while_installed_for_closure.set(observed == Some(true));
                 Ok(())
@@ -486,7 +508,7 @@ mod tests {
         let _clear_guard = OwnerHostClearGuard::arm();
         let platform = headless_platform();
         let result = platform.run(Box::new(|owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             assert!(
                 !APP_RUNTIME.with(|slot| slot.borrow().services_resolved()),
                 "install_owner_platform alone must not resolve SharedEngineServices"
@@ -504,7 +526,7 @@ mod tests {
             let _clear_guard = OwnerHostClearGuard::arm();
             let platform = headless_platform();
             let _ = platform.run(Box::new(|owner| {
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 panic!("exercise on_ready panic cleanup");
             }));
         }));
@@ -532,7 +554,7 @@ mod tests {
             let _clear_guard = OwnerHostClearGuard::arm();
             let platform = headless_platform();
             platform.run(Box::new(|owner| {
-                install_owner_platform(owner);
+                install_owner_platform(owner).expect("install owner wake transport");
                 assert!(
                     with_owner_platform(|_| ()).is_some(),
                     "the host is installed while on_ready runs, even on the \
@@ -699,7 +721,7 @@ mod tests {
         let _clear_guard = OwnerHostClearGuard::arm();
         let platform = headless_platform();
         let result = platform.run(Box::new(move |owner| {
-            install_owner_platform(owner);
+            install_owner_platform(owner).expect("install owner wake transport");
             let before_teardown = with_owner_platform(|_owner| true) == Some(true);
 
             // Simulate hot-restart: a realm's teardown runs on this owner
@@ -727,36 +749,57 @@ mod tests {
         );
     }
 
-    /// Regression pin for the "No host re-entry" rule on `with_owner_platform`'s
-    /// own rustdoc: since `AppRuntime` folded the realm-facing state and
-    /// `owner_platform` into one `RefCell`, a closure that calls back into
-    /// any function touching that same cell while `with_owner_platform`
-    /// still holds its immutable borrow is a guaranteed `BorrowMutError`
-    /// panic. `dispatch_platform_realm` is the stand-in host op here; the
-    /// same panic would fire for `install_platform_realm`,
-    /// `teardown_platform_realm`, or `install_surface_applier` instead, for
-    /// the identical reason (all of them `borrow_mut()` the same cell).
     #[test]
-    // Substring match, not the full message: `RefCell`'s panic wording
-    // ("already borrowed: BorrowMutError" vs. "already mutably borrowed:
-    // BorrowError" depending on which side re-enters) has varied across
-    // Rust versions and could vary again; "borrow" is the one substring
-    // present in every variant, so this still fails on an unrelated panic
-    // while staying stable across toolchains.
-    #[should_panic(expected = "borrow")]
-    fn with_owner_platform_reentering_dispatch_panics() {
+    fn owner_accessor_and_old_cleanup_do_not_clobber_replacement_host() {
+        let old_guard = OwnerHostClearGuard::arm();
+        flui_platform::headless_platform()
+            .run(Box::new(|owner| {
+                install_owner_platform(owner)?;
+                with_owner_platform(|_old_owner| {
+                    flui_platform::headless_platform()
+                        .run(Box::new(|owner| {
+                            install_owner_platform(owner)?;
+                            Ok(())
+                        }))
+                        .expect("replacement");
+                    APP_RUNTIME.with(|slot| {
+                        let _runtime = slot.borrow_mut();
+                    });
+                });
+                Ok(())
+            }))
+            .expect("first owner");
+        let replacement = APP_RUNTIME.with(|slot| {
+            slot.borrow()
+                .owner_platform
+                .clone()
+                .expect("replacement present")
+        });
+        drop(old_guard);
+        assert!(APP_RUNTIME.with(|slot| {
+            std::rc::Rc::ptr_eq(
+                slot.borrow()
+                    .owner_platform
+                    .as_ref()
+                    .expect("old guard preserved replacement"),
+                &replacement,
+            )
+        }));
+        let removed = APP_RUNTIME.with(|slot| slot.borrow_mut().owner_platform.take());
+        drop(removed);
+    }
+
+    /// Native operations may synchronously dispatch lifecycle events back into
+    /// the runtime. The scoped owner reference must hold no TLS borrow.
+    #[test]
+    fn with_owner_platform_allows_reentrant_dispatch() {
         use flui_platform::headless_platform;
 
         let _clear_guard = OwnerHostClearGuard::arm();
         let platform = headless_platform();
-        let _ = platform.run(Box::new(|owner| {
-            install_owner_platform(owner);
+        let result = platform.run(Box::new(|owner| {
+            install_owner_platform(owner).expect("install owner wake transport");
             with_owner_platform(|_owner| {
-                // Any host op re-entering here panics: `with_owner_platform`
-                // still holds `APP_RUNTIME.borrow()` for the duration of
-                // this closure, and `dispatch_platform_realm` immediately
-                // tries `slot.borrow_mut()` on the very first line of its
-                // own TLS access.
                 let dispatcher = RealmDispatcher {
                     owner_thread: std::thread::current().id(),
                     address: flui_foundation::PresentationAddress {
@@ -774,5 +817,19 @@ mod tests {
             });
             Ok(())
         }));
+        assert!(result.is_ok());
     }
 }
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(in crate::app) mod main_window;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(in crate::app) use main_window::run_application;

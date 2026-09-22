@@ -103,6 +103,12 @@ pub use app::{
     not(target_arch = "wasm32")
 ))]
 pub use app::open_secondary_window;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use app::open_window;
 // Android-specific entry points
 #[cfg(target_os = "android")]
 pub use app::{run_app_android, run_app_android_with_config};
@@ -145,3 +151,13 @@ pub mod prelude {
         GestureBinding, PipelineOwner, RenderingFlutterBinding, UpdateScheduler, WidgetsBinding,
     };
 }
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use app::{
+    AppControlError, AppHandle, AppRunError, AppWindowError, Application, MainWindowRequest,
+    StartupWindow,
+};

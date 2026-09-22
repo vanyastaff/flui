@@ -70,8 +70,7 @@ These crates compose the rendering and platform substrate largely without knowin
 |-------|--------|---------|
 | `flui-widgets` | ✅ ACTIVE | User-facing Flutter-style widget catalog (configuration objects over `flui-objects`); owns the `Localizations`/`Directionality`/`WidgetsLocalizations` ambient-theming and localization substrate |
 | `flui-testing` | ✅ ACTIVE | Deterministic non-singleton headless frame driver: `HeadlessBinding::pump_frame(dt)` advances a virtual `ManualClock` and polls clock-bound gesture-arena deadlines — sleep-free time-based gesture tests (long-press, double-tap). It is the workspace's **test-support** package: `WidgetTester`, virtual time, fake platform capabilities, deterministic replay, and golden helpers belong here as they land. Runtime and framework crates take *development* edges into it only. |
-| `flui-hot-reload` | ✅ ACTIVE | Two-layer hot-reload: runtime `HotReloadDriver` (layer 2, dlopen) + optional `SourceWatcher` (layer 1, `source-watch` feature). See [hot-reload.md](hot-reload.md). It is an **optional** dependency of `flui-app` (feature `hot-reload`, off by default) and of the facade (feature `hot-reload`), so an ordinary production graph does not contain it. |
-| `flui-build` | ✅ ACTIVE | Async cross-platform build pipeline (`PlatformBuilder` typestate) |
+| `flui-hot-reload` | ✅ ACTIVE | Runtime half of hot reload: `HotReloadDriver`, `DynLib`, worker/host ABI (dlopen). The dev-time watcher lives in `flui-cli` |
 
 ## Layer 7 — Design systems
 
@@ -93,8 +92,8 @@ Neither design system may depend on `flui-localizations` — that direction is a
 | Crate | Status | Purpose |
 |-------|--------|---------|
 | `flui-app` | ✅ ACTIVE (migration) | App runner, root widget, application lifecycle. The **private composition root** for runtime ownership during Runtime.1 — a `flui-runtime` crate is not extracted from it until two entry points prove the boundary ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)). Owns **no design tokens** ([ADR-0042](adr/ADR-0042-theming-ownership.md)); hot reload is behind its optional `hot-reload` feature. |
-| `flui-cli` | ✅ ACTIVE | CLI tooling (`flui run` hot-reload orchestration, Android scene deploy). Depends on `flui-devtools` inside this layer. |
-| `flui-devtools` | ✅ ACTIVE (partial) | Profiler; `HotReloader` delegates to `flui-hot-reload` |
+| `flui-cli` | ✅ ACTIVE | The `flui` CLI: `create`/`run` (hot reload with hot-keys)/`build`/`doctor`/`devices`/`emulators`, one output policy (`--json`, `--quiet`, `--non-interactive`) and a documented exit-code table. Depends on `flui-build` and `flui-hot-reload`; no edge to `flui-devtools`. |
+| `flui-devtools` | ✅ ACTIVE (partial) | Profiler, timeline, inspector counters |
 
 ## Layer 10 — Facade
 

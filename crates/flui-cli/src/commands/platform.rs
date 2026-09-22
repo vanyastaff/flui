@@ -4,22 +4,26 @@
 //! Platform scaffolding creates the `platforms/<name>/` directory structure
 //! and updates `flui.toml` configuration.
 
-use crate::config::FluiConfig;
-use crate::error::{CliError, CliResult};
-use console::style;
-use flui_build::scaffold::{
+use crate::build::scaffold::{
     ScaffoldParams, is_valid_platform, scaffold_platform, valid_platform_names,
 };
+use crate::config::FluiConfig;
+use crate::error::{CliError, CliResult};
+use crate::ui;
+use console::style;
+use serde_json::json;
 
 /// Add platform support to the project.
 ///
 /// For each platform name, validates it, checks for duplicates, scaffolds the
-/// platform directory, and updates `flui.toml`.
-pub fn add(platforms: &[String]) -> CliResult<()> {
-    cliclack::intro(style(" flui platform add ").on_yellow().black())?;
+/// platform directory, and updates `flui.toml`. Invalid names are reported
+/// per-name and, unlike valid duplicates, fail the command overall: a typo
+/// must not exit 0.
+pub(crate) fn add(platforms: &[String]) -> CliResult<()> {
+    ui::intro(style(" flui platform add ").on_yellow().black())?;
 
     if platforms.is_empty() {
-        cliclack::outro(style("No platforms specified").dim())?;
+        ui::outro(style("No platforms specified").dim())?;
         return Ok(());
     }
 
@@ -31,15 +35,26 @@ pub fn add(platforms: &[String]) -> CliResult<()> {
     let lib_name = config.app.name.replace('-', "_");
     let package_name = config.app.app_id();
     let params = ScaffoldParams {
-        app_name: &config.app.name,
-        lib_name: &lib_name,
-        package_name: &package_name,
+        app: &config.app.name,
+        lib: &lib_name,
+        package: &package_name,
     };
 
     let mut added_count = 0u32;
+    let mut invalid = Vec::new();
 
     for platform in platforms {
         let platform_lower = platform.to_lowercase();
+
+        if !is_valid_platform(&platform_lower) {
+            ui::error(format!(
+                "invalid platform '{}'; valid values: {}",
+                platform,
+                valid_platform_names().join(", ")
+            ))?;
+            invalid.push(platform.clone());
+            continue;
+        }
 
         let is_duplicate = config
             .build
@@ -47,36 +62,28 @@ pub fn add(platforms: &[String]) -> CliResult<()> {
             .iter()
             .any(|p| p == &platform_lower);
 
-        match platform_lower.as_str() {
-            p if !is_valid_platform(p) => {
-                cliclack::log::error(format!(
-                    "Invalid platform '{}'. Valid: {}",
-                    platform,
-                    valid_platform_names().join(", ")
-                ))?;
-            }
-            _ if is_duplicate => {
-                cliclack::log::warning(format!("Platform '{platform_lower}' is already added"))?;
-            }
-            _ => {
-                // Scaffold the platform directory.
-                let spinner = cliclack::spinner();
-                spinner.start(format!("Creating platforms/{platform_lower}/"));
-
-                scaffold_platform(&platform_lower, &project_dir, &params)
-                    .map_err(|e| CliError::build_failed(&platform_lower, e.to_string()))?;
-
-                spinner.stop(format!("Created platforms/{platform_lower}/"));
-
-                // Update config.
-                config.build.target_platforms.push(platform_lower.clone());
-                added_count += 1;
-
-                cliclack::log::success(format!(
-                    "Updated flui.toml: added \"{platform_lower}\" to target_platforms"
-                ))?;
-            }
+        if is_duplicate {
+            ui::warning(format!("Platform '{platform_lower}' is already added"))?;
+            continue;
         }
+
+        // Scaffold the platform directory.
+        let spinner = ui::spinner();
+        spinner.start(format!("Creating platforms/{platform_lower}/"));
+
+        scaffold_platform(&platform_lower, &project_dir, &params)
+            .map_err(|e| CliError::build_failed(&platform_lower, e.to_string()))?;
+
+        spinner.stop(format!("Created platforms/{platform_lower}/"));
+
+        // Update config.
+        config.build.target_platforms.push(platform_lower.clone());
+        added_count += 1;
+
+        ui::success(format!(
+            "Updated flui.toml: added \"{platform_lower}\" to target_platforms"
+        ))?;
+        ui::emit("platform.added", &json!({ "platform": platform_lower }));
     }
 
     // Save updated config.
@@ -84,23 +91,47 @@ pub fn add(platforms: &[String]) -> CliResult<()> {
         config.save(&project_dir)?;
     }
 
-    cliclack::outro(format!(
+    ui::outro(format!(
         "{} platform{} added successfully",
         added_count,
         if added_count == 1 { "" } else { "s" }
     ))?;
+
+    if !invalid.is_empty() {
+        return Err(CliError::Usage(format!(
+            "invalid platform(s): {}; valid values: {}",
+            invalid.join(", "),
+            valid_platform_names().join(", ")
+        )));
+    }
 
     Ok(())
 }
 
 /// Remove platform support from the project.
 ///
-/// Verifies the platform exists, prompts for confirmation, removes the
-/// `platforms/<name>/` directory, and updates `flui.toml`.
-pub fn remove(platform: &str) -> CliResult<()> {
-    cliclack::intro(style(" flui platform remove ").on_red().black())?;
+/// Verifies the platform exists, prompts for confirmation (unless `yes` is
+/// set), removes the `platforms/<name>/` directory, and updates
+/// `flui.toml`.
+///
+/// # Errors
+///
+/// Returns `CliError::NonInteractive` when `yes` is `false` and the
+/// session cannot prompt (`--yes` is the way out).
+pub(crate) fn remove(platform: &str, yes: bool) -> CliResult<()> {
+    ui::intro(style(" flui platform remove ").on_red().black())?;
 
     let platform_lower = platform.to_lowercase();
+
+    if !is_valid_platform(&platform_lower) {
+        let message = format!(
+            "invalid platform '{}'; valid values: {}",
+            platform,
+            valid_platform_names().join(", ")
+        );
+        ui::outro_cancel(&message)?;
+        return Err(CliError::Usage(message));
+    }
 
     // Load project config.
     let mut config = FluiConfig::load()?;
@@ -114,7 +145,7 @@ pub fn remove(platform: &str) -> CliResult<()> {
         .position(|p| p == &platform_lower);
 
     let Some(idx) = idx else {
-        cliclack::outro(
+        ui::outro(
             style(format!(
                 "Platform '{platform_lower}' is not configured in this project"
             ))
@@ -127,32 +158,45 @@ pub fn remove(platform: &str) -> CliResult<()> {
 
     // Warn if this is the last platform.
     if config.build.target_platforms.len() == 1 {
-        cliclack::log::warning(
+        ui::warning(
             "This is the last remaining platform. Removing it will leave no target platforms.",
         )?;
     }
 
-    // Prompt for confirmation.
     let platform_dir = project_dir.join("platforms").join(&platform_lower);
-    let confirm = cliclack::confirm(format!(
-        "Remove {} platform? This will delete {}",
-        platform_lower,
-        platform_dir.display()
-    ))
-    .interact()?;
 
-    if !confirm {
-        cliclack::outro(style("Cancelled").dim())?;
-        return Ok(());
+    // `--yes` skips the prompt entirely; otherwise the confirmation needs a
+    // real terminal, or a CI job/piped input would hang or fail with an
+    // opaque I/O error.
+    if !yes {
+        if !ui::is_interactive() {
+            return Err(CliError::NonInteractive {
+                what: "confirming platform removal".into(),
+                hint: "pass --yes".into(),
+            });
+        }
+
+        // Prompt for confirmation.
+        let confirm = ui::prompt::confirm(&format!(
+            "Remove {} platform? This will delete {}",
+            platform_lower,
+            platform_dir.display()
+        ))?
+        .unwrap_or(false);
+
+        if !confirm {
+            ui::outro(style("Cancelled").dim())?;
+            return Ok(());
+        }
     }
 
     // Remove the directory if it exists.
     if platform_dir.exists() {
-        let spinner = cliclack::spinner();
+        let spinner = ui::spinner();
         spinner.start(format!("Removing platforms/{platform_lower}/"));
 
         std::fs::remove_dir_all(&platform_dir).map_err(|e| {
-            CliError::build_failed(&platform_lower, format!("Failed to remove directory: {e}"))
+            CliError::build_failed(&platform_lower, format!("failed to remove directory: {e}"))
         })?;
 
         spinner.stop(format!("Removed platforms/{platform_lower}/"));
@@ -162,11 +206,12 @@ pub fn remove(platform: &str) -> CliResult<()> {
     config.build.target_platforms.remove(idx);
     config.save(&project_dir)?;
 
-    cliclack::log::success(format!(
+    ui::success(format!(
         "Updated flui.toml: removed \"{platform_lower}\" from target_platforms"
     ))?;
+    ui::emit("platform.removed", &json!({ "platform": platform_lower }));
 
-    cliclack::outro(format!(
+    ui::outro(format!(
         "Platform {} removed",
         style(&platform_lower).green()
     ))?;
@@ -178,8 +223,8 @@ pub fn remove(platform: &str) -> CliResult<()> {
 ///
 /// Shows all platforms FLUI can target, with indicators for which ones
 /// are currently configured in the project.
-pub fn list() -> CliResult<()> {
-    cliclack::intro(style(" flui platforms ").on_blue().black())?;
+pub(crate) fn list() -> CliResult<()> {
+    ui::intro(style(" flui platforms ").on_blue().black())?;
 
     // Try to load project config for status indicators.
     let configured = FluiConfig::load()
@@ -211,13 +256,24 @@ pub fn list() -> CliResult<()> {
         ));
     }
 
-    cliclack::note("Supported Platforms", lines.join("\n"))?;
+    ui::note("Supported Platforms", lines.join("\n"))?;
 
     if !configured.is_empty() {
-        cliclack::log::info(format!("Active: {}", configured.join(", ")))?;
+        ui::info(format!("Active: {}", configured.join(", ")))?;
     }
 
-    cliclack::outro(format!("{} platforms available", style("6").cyan()))?;
+    ui::emit(
+        "platform.list",
+        &json!({
+            "platforms": platform_info.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            "active": configured,
+        }),
+    );
+
+    ui::outro(format!(
+        "{} platforms available",
+        style(platform_info.len()).cyan()
+    ))?;
 
     Ok(())
 }

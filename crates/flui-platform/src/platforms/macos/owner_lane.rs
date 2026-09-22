@@ -213,11 +213,71 @@ pub(super) fn exec_async_guarded(
     });
 }
 
+/// Cleanup is best effort if a user destructor panics. Isolate each resource
+/// group so remaining windows and the quit notification still get their turn.
+/// Forget only panic payloads: dropping an arbitrary payload can itself panic
+/// while bootstrap is already unwinding. This exceptional leak prevents abort.
+pub(super) fn run_cleanup_guarded(body: impl FnOnce()) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        report_contained_panic(payload);
+    }
+}
+
+pub(super) fn report_contained_panic(payload: Box<dyn std::any::Any + Send>) {
+    std::mem::forget(payload);
+    // Diagnostics must not introduce a second unwind if an installed subscriber
+    // also panics during teardown. Never inspect or destroy arbitrary payloads.
+    if let Err(payload) = std::panic::catch_unwind(|| {
+        tracing::error!("contained panic in AppKit lifecycle callback or cleanup");
+    }) {
+        std::mem::forget(payload);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn inline_cleanup_contains_hostile_panic_and_unwinds_local_resources() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct Released(Arc<AtomicBool>);
+        impl Drop for Released {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        struct HostilePayload;
+        impl Drop for HostilePayload {
+            fn drop(&mut self) {
+                panic!("panic payload must never be destroyed during cleanup");
+            }
+        }
+        let released = Arc::new(AtomicBool::new(false));
+        let local = Arc::clone(&released);
+        let escaped = match std::panic::catch_unwind(|| {
+            run_cleanup_guarded(|| {
+                let _resource = Released(local);
+                std::panic::panic_any(HostilePayload);
+            });
+        }) {
+            Ok(()) => false,
+            Err(payload) => {
+                std::mem::forget(payload);
+                true
+            }
+        };
+        assert!(!escaped, "cleanup panic must not escape the inline tail");
+        assert!(
+            released.load(Ordering::SeqCst),
+            "local resource release still runs during contained unwind"
+        );
+    }
 
     #[test]
     fn exec_on_owner_runs_inline_when_already_on_the_lane() {

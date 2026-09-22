@@ -99,7 +99,7 @@ pub trait BuildContext {
     /// installed one.
     ///
     /// Spawn subscriptions from `ViewState::init_state` / `did_change_dependencies`
-    /// and hold the returned `TaskToken` in the state — dropping it cancels.
+    /// and hold the returned [`crate::TaskToken`] in the state — dropping it cancels.
     ///
     /// `None` when the tree is not bound to a binding (a bare `ElementTree` in a
     /// unit test), reported honestly rather than by silently spawning into a
@@ -107,15 +107,15 @@ pub trait BuildContext {
     /// `UpdateScheduler` from a widget: `HeadlessBinding` drives its own
     /// binding-local `UpdateScheduler`, and a production `UiRealm` likewise owns
     /// its own — a task spawned into the wrong one would never run.
-    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver>;
+    fn async_driver(&self) -> Option<crate::AsyncDriver>;
 
     /// The binding's post-frame capability — schedule work that must observe this
-    /// frame's committed layout.
+    /// frame's committed layout. The callback receives [`crate::FrameTiming`].
     ///
     /// `None` when no binding installed one. Acquire it in a lifecycle hook
     /// (`init_state` / `did_change_dependencies`), never in `build`/layout/paint —
     /// the same rule `rebuild_handle` follows (port-check trigger #22).
-    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle>;
+    fn post_frame_handle(&self) -> Option<crate::PostFrameHandle>;
 
     /// The binding's OWNER-LOCAL post-frame capability — like
     /// [`post_frame_handle`](Self::post_frame_handle), but the returned handle
@@ -129,11 +129,13 @@ pub trait BuildContext {
     /// order — the order they were registered in, not "shared queue first" or
     /// "local queue first" — so interleaving the two is well-defined.
     ///
+    /// Scheduling returns [`crate::LocalPostFrameScheduleError`] if its lane has closed.
+    ///
     /// `None` when no binding installed one. Acquire it in a lifecycle hook
     /// (`init_state` / `did_change_dependencies`), never in
     /// `build`/layout/paint — the same rule `post_frame_handle` follows
     /// (port-check trigger #22).
-    fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle>;
+    fn local_post_frame_handle(&self) -> Option<crate::LocalPostFrameHandle>;
 
     /// The binding's IME/text-input attach-detach capability, if a binding
     /// installed one.
@@ -209,6 +211,13 @@ pub trait BuildContext {
     /// Acquire it in `init_state` / `did_change_dependencies`, never inside a
     /// frame phase — enforced by `scripts/check-frame-capability-scope.sh`.
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle;
+
+    /// Presentation-local lifecycle observation. Acquire in `init_state` or
+    /// `did_change_dependencies`, never in build/layout/paint. Bare owners
+    /// without a presentation source return `None`.
+    fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
+        None
+    }
 
     /// This element tree's exact focus manager.
     ///

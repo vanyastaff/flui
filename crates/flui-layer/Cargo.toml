@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-layer"
 version.workspace = true
 edition.workspace = true
@@ -25,11 +26,11 @@ default = []
 testing = []
 
 [dependencies]
-flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
-flui-tree = { path = "../flui-tree", version = "0.2.0" }
-flui-types = { path = "../flui-types", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "=0.1.0" }
+flui-tree = { path = "../flui-tree", version = "=0.1.0" }
+flui-types = { path = "../flui-types", version = "=0.1.0" }
 # Layers carry recorded painting (`DisplayList`, `Canvas`).
-flui-painting = { path = "../flui-painting", version = "0.2.0" }
+flui-painting = { path = "../flui-painting", version = "=0.1.0" }
 
 # `PerformanceOverlayOption` flag set.
 bitflags = { workspace = true }
@@ -38,7 +39,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 # Turns the off-by-default `testing` feature on for this crate's own
 # integration tests.
-flui-layer = { path = ".", version = "0.2.0", features = ["testing"] }
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-layer = { path = ".", features = ["testing"] }
 # Compile-time pins of the raster-boundary auto traits (`Send + Sync` on
 # `Layer`, `LayerTree`, `Scene`, `SceneSnapshot`).
 static_assertions.workspace = true

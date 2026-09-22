@@ -604,7 +604,7 @@ Where a runtime check and a compile-time check express the same constraint, the 
 
 - Arity types (`Leaf` / `Single` / `Optional` / `Variable`) over runtime child-count assertions.
 - Typestate builders (e.g., `BuilderContextBuilder<P, Pr>` in `flui-build`) over runtime config validation.
-- Sealed traits (e.g., `PlatformBuilder`) over open-world dispatch.
+- Sealed traits (e.g., `Arity`) over open-world dispatch.
 
 `TypeId` lookup for `InheritedView` ancestry is the single allowed runtime-reflection window per the strategy clause.
 

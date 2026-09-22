@@ -14,7 +14,7 @@ version := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 commit  := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 
 # Active workspace members (must match crates/* in Cargo.toml [workspace.members])
-active_crates := "flui-animation flui-app flui-assets flui-testing flui-build flui-cli flui-cupertino flui-devtools flui-engine flui-foundation flui-geometry flui-hot-reload flui-interaction flui-layer flui-localizations flui-log flui-macros flui-material flui-objects flui-painting flui-platform flui-rendering flui-scheduler flui-semantics flui-tree flui-types flui-view flui-widgets"
+active_crates := "flui-animation flui-app flui-assets flui-testing flui-cli flui-cupertino flui-devtools flui-engine flui-foundation flui-geometry flui-hot-reload flui-interaction flui-layer flui-localizations flui-log flui-macros flui-material flui-objects flui-painting flui-platform flui-rendering flui-scheduler flui-semantics flui-tree flui-types flui-view flui-widgets"
 
 # Default recipe — show help
 [doc("Show available recipes grouped by category")]
@@ -74,20 +74,19 @@ build-layered:
     cargo build -p flui-testing
     cargo build -p flui-app
     cargo build -p flui-devtools
-    cargo build -p flui-build
     cargo build -p flui-cli
 
 [group("build")]
 [doc("Type-check and clippy the wasm-capable crates for wasm32-unknown-unknown (mirrors the CI wasm-check job)")]
 wasm-check:
     cargo check --workspace --locked --target wasm32-unknown-unknown \
-      --exclude flui-assets --exclude flui-build --exclude flui-cli \
+      --exclude flui-assets --exclude flui-cli \
       --exclude flui-web-server --exclude hot-reload-counter-host \
       --exclude hot-reload-counter-logic --exclude hot-reload-counter-types
     # Lib/bin targets only: test targets pull native-only dev-deps (tokio).
     # This is the ONLY lint pass over flui-platform's wasm32-only web backend.
     cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown \
-      --exclude flui-assets --exclude flui-build --exclude flui-cli \
+      --exclude flui-assets --exclude flui-cli \
       --exclude flui-web-server --exclude hot-reload-counter-host \
       --exclude hot-reload-counter-logic --exclude hot-reload-counter-types \
       -- -D warnings
@@ -227,7 +226,7 @@ wasm-link-check:
 # Green here means "compiles clean under the workspace lints", nothing more.
 # Requires: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android
 [group("build")]
-[doc("Clippy flui-platform's Windows, macOS, Android, and iOS backends from this host (mirrors the CI cross-typecheck job)")]
+[doc("Clippy flui-platform's Windows, macOS, Android, and iOS backends plus flui-app's mobile runners from this host (mirrors the CI cross-typecheck job)")]
 cross-typecheck:
     # `--features a11y` on every line: the UIA/NSAccessibility bridges are
     # feature-gated and this job is the ONLY gate that compiles them at all
@@ -242,6 +241,15 @@ cross-typecheck:
     # targets: sim and device differ only in the slice, not in the API surface
     # this lint sees, and `just ios-sim` executes the simulator one.
     cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-ios -- -D warnings
+    # The mobile runners live in flui-app behind `cfg(target_os = ...)`, so
+    # the platform lines above never compile them; the `flui` facade rides
+    # along because its re-exports are what a consumer builds against there.
+    # Library targets only (the tests are host-run). Android's `psm` C shim
+    # (via stacker) is cross-compiled by the host clang — no NDK needed for a
+    # compile-only lint.
+    cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
+    CC_aarch64_linux_android=clang CFLAGS_aarch64_linux_android=--target=aarch64-linux-android21 AR_aarch64_linux_android=ar \
+        cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings
 
 # =============================================================================
 # Testing
@@ -303,12 +311,48 @@ macos-ime:
 } }}
 
 [group("test")]
+[doc("Executable launch-route render coverage on a real Mac: builds the colored_box_app example and runs it through scripts/check-macos-launch-render.py, which launches the SAME bundled artifact three ways (direct exec, `open` / LaunchServices, `open -g` / LaunchServices without activation), 5 launches each, finds each launch's window by owning PID in the CoreGraphics window list, and photographs it by window number. The oracle is the pixels of that window, not frames or survival: the fixture paints pure red, and every launch must show it, because a window can exist, hold a live frame pump, and still be blank. A genuinely blank window is the control and fails (see the checker's own validation) — so the gate discriminates instead of merely passing. Each launch is also given a bounded settle, because macOS orders a window front before its first frame is presented: the oracle is retried until it holds, so a window that is merely early is not mistaken for a blank one, and the time to the capture that passed is reported as first frame after. A window-scoped capture of an unpainted window is a flat dark image whatever the display shows, so on a failure the checker also takes one screen capture of the window rectangle, only when that window is frontmost, and reports what a viewer had on screen — as a diagnostic that decides nothing. Needs Screen Recording, which is preflighted: without it the checker exits 2 (CANNOT VERIFY) rather than reporting a blank window it never saw. This closes the LaunchServices half of the blank-window observation in docs/BETA.md. macOS-only by construction; skips with a message on other hosts")]
+macos-launch-render:
+    {{ if os() == "macos" {
+"cargo build -p flui --locked --example colored_box_app\nrc=0\npython3 scripts/check-macos-launch-render.py target/debug/examples/colored_box_app --runs 5 --expect 240,0,0 || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'macos-launch-render CANNOT VERIFY: this host could not take the measurement (Screen Recording not granted, or swiftc missing) — a denied capture is NOT a blank window, so nothing was decided; details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'macos-launch-render FAILED: a launch route was refused, put no window on screen, or put up a window that stayed blank for the whole settle - details and images above'\nfi\nexit \"$rc\""
+} else {
+"echo 'Skipping macos-launch-render on this host: the gate photographs a real window on a real display, so it needs macOS with an active GUI session; on a Mac run: just macos-launch-render'"
+} }}
+
+[group("test")]
 [doc("Runs the iOS demo on an iOS Simulator (the only executing coverage of the native UIKit backend). Builds examples/ios_demo for aarch64-apple-ios-sim, stages it into a minimal .app, boots a simulator, installs and launches it, captures a screenshot, and asserts the app got as far as a created Metal device and a rendered frame — read out of the simulator's unified log, since UIApplicationMain owns the process and no test harness can. macOS-host only (needs Xcode + simctl); skips with a message elsewhere.")]
 ios-sim:
     {{ if os() == "macos" {
 "set -e\nDEVICE=\"${FLUI_IOS_SIM_DEVICE:-iPhone 17 Pro}\"\nxcrun simctl boot \"$DEVICE\" 2>/dev/null || true\nxcrun simctl bootstatus \"$DEVICE\" -b >/dev/null 2>&1 || true\n\n# Arm 1 — a static Material app: Metal device created and a frame rendered.\nBUNDLE=dev.flui.ios-demo\nAPP=target/ios-sim/IosDemo.app\ncargo build -p flui --locked --features material --example ios_demo --target aarch64-apple-ios-sim\nrm -rf \"$APP\"\nmkdir -p \"$APP\"\ncp examples/Info.plist.ios_demo \"$APP/Info.plist\"\ncp target/aarch64-apple-ios-sim/debug/examples/ios_demo \"$APP/ios_demo\"\nxcrun simctl install booted \"$APP\"\nxcrun simctl terminate booted \"$BUNDLE\" 2>/dev/null || true\nxcrun simctl launch booted \"$BUNDLE\" >/dev/null\nsleep 12\nLOG=target/ios-sim/app.log\nxcrun simctl spawn booted log show --last 5m --process ios_demo > \"$LOG\" 2>/dev/null || true\nxcrun simctl io booted screenshot target/ios-sim/screen.png >/dev/null 2>&1 || true\nif ! grep -q 'Selected GPU:.*Metal' \"$LOG\" || ! grep -q 'First frame rendered' \"$LOG\"; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 1 (static app): expected \"Selected GPU ... Metal\" and \"First frame rendered\"; tail:';\n  grep 'flui]' \"$LOG\" | tail -20;\n  exit 1;\nfi\necho 'IOS_SIM arm1=PASS (Metal device created, first frame rendered)';\n\n# Arm 2 — an ANIMATED app, and the regression guard for the iOS frame-source\n# bug. Survival alone is NOT the discriminator: a request_redraw that\n# dispatches a frame synchronously AND calls setNeedsDisplay() can still\n# complete and log frames while the screen stays WHITE, because UIKit repaints\n# the opaque UIView's empty layer over the CAMetalLayer the renderer presented\n# into. The honest signal is the pixels: two screenshots of a live, animating\n# tree must DIFFER. A cropped centre square is compared so a ticking status-bar\n# clock can never masquerade as motion.\nANIM=dev.flui.anim-demo\nAAPP=target/ios-sim/AnimDemo.app\ncargo build -p flui --locked --example animated_box_app --target aarch64-apple-ios-sim\nrm -rf \"$AAPP\"\nmkdir -p \"$AAPP\"\ncp examples/Info.plist.ios_anim \"$AAPP/Info.plist\"\ncp target/aarch64-apple-ios-sim/debug/examples/animated_box_app \"$AAPP/animated_box_app\"\nxcrun simctl install booted \"$AAPP\"\nxcrun simctl terminate booted \"$ANIM\" 2>/dev/null || true\nxcrun simctl launch booted \"$ANIM\" >/dev/null\nsleep 12\ntarget_io=target/ios-sim\nxcrun simctl io booted screenshot \"$target_io/anim_a.png\" >/dev/null 2>&1 || true\nsleep 2\nxcrun simctl io booted screenshot \"$target_io/anim_b.png\" >/dev/null 2>&1 || true\ncp \"$target_io/anim_a.png\" \"$target_io/anim_a_crop.png\"\ncp \"$target_io/anim_b.png\" \"$target_io/anim_b_crop.png\"\nsips -c 240 240 \"$target_io/anim_a_crop.png\" >/dev/null 2>&1 || true\nsips -c 240 240 \"$target_io/anim_b_crop.png\" >/dev/null 2>&1 || true\nHA=$(md5 -q \"$target_io/anim_a_crop.png\")\nHB=$(md5 -q \"$target_io/anim_b_crop.png\")\nALIVE=$(pgrep -f animated_box_app | wc -l | tr -d ' ')\nxcrun simctl terminate booted \"$ANIM\" 2>/dev/null || true\nif [ \"$HA\" = \"$HB\" ]; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 2 (animated app): two screenshots 2 s apart are IDENTICAL, so no animation reached the screen (frozen or white) even though frames may be logged; see target/ios-sim/anim_{a,b}.png';\n  exit 1;\nfi\nif [ \"$ALIVE\" -lt 1 ]; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 2 (animated app): the app did not survive to the screenshot pass - request_redraw likely never returned to UIKit and iOS scene-create watchdog killed it';\n  exit 1;\nfi\necho 'IOS_SIM arm2=PASS (animated pixels differ, app survived)';\necho 'IOS_SIM_RESULT=PASS (static + animated, screenshots under target/ios-sim/)'"
 } else {
 "echo 'Skipping ios-sim on this host: it needs a macOS host with Xcode and the iOS Simulator (xcrun simctl) plus the aarch64-apple-ios-sim target; on a Mac run: just ios-sim'"
+} }}
+
+[group("test")]
+[doc("Executable iOS touch-and-resume coverage on the ALREADY BOOTED simulator named by <udid>: builds the Material demo for aarch64-apple-ios-sim, stages it into a minimal .app, and drives it through scripts/check-ios-input.py. The instrument is XCUITest, because nothing else can put a UITouch into the application: simctl has no touch subcommand, and host UI automation needs the Accessibility grant (and photographs the host's desktop) - XCUITest synthesizes the touch inside the simulator through the platform's own automation channel. The oracle is pixels, and has to be: the iOS backend publishes no accessibility tree, so a widget cannot be read by identifier. A real tap on a list row must change the displayed selection, Home-then-return must still display it, and two controls must behave - a fresh launch resets it (so the return comparison could have failed) and a tap on no target changes nothing (so the tap comparison distinguishes a hit from any touch). The demo's list rows are idempotent -- tapping an already-selected row changes nothing -- so retention here rests on display equality alone; a subject whose display keeps advancing can be held to the stronger oracle with `--post-return-tap`, which proves the resumed screen is live rather than the system's snapshot of the pre-Home frame. Exit 2 (CANNOT VERIFY) when the host cannot take the measurement. This closes the 'simulator UI automation timed out' gap in docs/BETA.md. macOS-host only; on a Mac run: just ios-input-check <udid>")]
+ios-input-check udid:
+    {{ if os() == "macos" {
+"set -e\nBUNDLE=dev.flui.ios-demo\nAPP=target/ios-input/IosDemo.app\ncargo build -p flui --locked --features material --example ios_demo --target aarch64-apple-ios-sim\nrm -rf \"$APP\"\nmkdir -p \"$APP\"\ncp examples/Info.plist.ios_demo \"$APP/Info.plist\"\ncp target/aarch64-apple-ios-sim/debug/examples/ios_demo \"$APP/ios_demo\"\n\n# Remove any previous install before the run. xcodebuild installs the artifact\n# it was pointed at, and XCUIApplication launches whatever is installed under\n# that bundle id - so a stale copy left here could be the binary actually\n# measured. With it gone, a failed install means nothing launches and the probe\n# reports CANNOT VERIFY instead of testing the wrong build.\nxcrun simctl uninstall " + quote(udid) + " \"$BUNDLE\" 2>/dev/null || true\nrc=0\npython3 -B scripts/check-ios-input.py " + quote(udid) + " \"$APP\" || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'ios-input-check CANNOT VERIFY: this host could not take the measurement (no Xcode toolchain, the simulator was not booted, or the probe produced no report) - nothing was decided about the framework; details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'ios-input-check FAILED: a real touch did not reach a widget, or the state it changed did not survive Home/return, or a control did not behave - details and per-stage screenshots above'\nfi\nexit \"$rc\""
+} else {
+"echo 'Skipping ios-input-check on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-input-check <udid>'"
+} }}
+
+[group("test")]
+[doc("Runs the same iOS touch-and-resume gate against an arbitrary staged .app, for candidates the CLI built rather than the in-repo demo. <app> is an already-staged .app directory (xcodebuild installs it) and <udid> an already booted simulator; extra arguments go to scripts/check-ios-input.py. Tap geometry is a property of the application, so a candidate whose widgets are not the demo's needs it: for the generated sole-flui counter, whose Increment button is at normalized y 0.097 and whose only changing text sits directly under the status-bar clock (so the region must be a centre band, or it crops out exactly what the tap changes): just ios-input-check-app <app> <udid> --target-tap 0.5,0.097 --empty-tap 0.5,0.5 --region 0.25,0.0,0.75,0.96 --post-return-tap. The last of those is the stronger resume oracle and the counter is the subject that can carry it: its button accumulates (0 -> 1 -> 2), so a tap after Home/return must advance the display, which a system snapshot of the pre-Home frame never does. It cannot be used on an idempotent subject -- the demo's rows -- where a second tap on the same row changes nothing and the requirement would fail a correct application; there the run's report names display-equality as the oracle that carried the claim. See scripts/check-ios-input.py for why each of those arguments exists. macOS-host only")]
+ios-input-check-app app udid +ARGS:
+    {{ if os() == "macos" {
+"python3 -B scripts/check-ios-input.py " + quote(udid) + " " + quote(app) + " " + ARGS
+} else {
+"echo 'Skipping ios-input-check-app on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-input-check-app <app> <udid>'"
+} }}
+
+[group("test")]
+[doc("Live iOS safe-area layout check: builds the sole-facade fixture for aarch64-apple-ios-sim through scripts/check-ios-safe-area.py and runs it on the ALREADY BOOTED simulator named by <udid>, asserting the marker the application writes after comparing both laid-out geometries against the view's own safeAreaInsets. Evidence belongs in docs/BETA.md § 'iOS safe-area layout'. Needs a macOS host with Xcode, the aarch64-apple-ios-sim target and a booted arm64 simulator; on a Mac run: just ios-safe-area-check <udid>")]
+ios-safe-area-check udid:
+    {{ if os() == "macos" {
+"python3 -B scripts/check-ios-safe-area.py " + quote(udid) + " target/ios-safe-area-check"
+} else {
+"echo 'Skipping ios-safe-area-check on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-safe-area-check <udid>'"
 } }}
 
 [group("test")]
@@ -400,6 +444,11 @@ test-assets:
 [doc("Dependency audit: advisories, bans, licenses, sources (requires cargo-deny)")]
 deny:
     cargo deny check
+
+[group("quality")]
+[doc("Unused dependencies, feature-aware (requires cargo-shear: cargo install cargo-shear)")]
+shear:
+    cargo shear
 
 # SCOPE: widened from `pipeline::owner::subtree_arena` to `pipeline::owner`
 # to pick up `cell.rs`'s PipelineCell checkout tests and two new
@@ -554,7 +603,7 @@ doc-strict:
 
 [group("quality")]
 [doc("Check crate inventories + the docs/workspace-layers.toml layer policy against Cargo metadata")]
-inventory-check:
+inventory-check: release-policy-test
     bash scripts/check-workspace-inventory.sh
 
 [group("quality")]
@@ -664,6 +713,24 @@ web-server:
 web-demo-build:
     cd examples/web_demo && wasm-pack build --target web --out-dir pkg
 
+[group("test")]
+[doc("Drive `flui run`'s worker hot-reload loop on a freshly generated --hot-reload project through the CLI's --json event stream: a label edit reloads in place (a witness the edit adds bumps and prints the host-owned counter), a syntax error is refused with the host alive, the fix reloads with the counter preserved, idle stays idle, Ctrl-C exits. Needs a macOS GUI session; the host window is brought to front before each edit because a hidden window defers the rebuild (scripts/check-hot-reload-loop.py)")]
+macos-hot-reload-loop work="target/hot-reload-loop/work":
+    cargo build -p flui-cli --locked
+    python3 -B scripts/check-hot-reload-loop.py {{work}}
+
+[group("quality")]
+[doc("Refuse a WGSL derivative (dpdx/dpdy/fwidth, or any function that takes one) inside a branch or after a conditional return: browsers' uniformity analysis rejects the module while native naga accepts it, and no host-side oracle catches the class (scripts/check-wgsl-uniformity.py)")]
+wgsl-uniformity-check:
+    python3 -B scripts/check-wgsl-uniformity.py
+
+[group("web")]
+[doc("Build examples/web_counter — the counter template through `flui::run_app` — to WASM with plain cargo + wasm-bindgen (no wasm-pack); serve examples/web_counter/ over HTTP and open index.html in a WebGPU-capable browser")]
+web-counter-build:
+    cargo build -p flui-web-counter --locked --release --target wasm32-unknown-unknown
+    wasm-bindgen --target web --out-dir examples/web_counter/pkg \
+        target/wasm32-unknown-unknown/release/flui_web_counter.wasm
+
 [group("web")]
 [doc("Build examples/painting_demo to WASM (requires wasm-pack)")]
 painting-demo-build:
@@ -764,7 +831,7 @@ text-check:
 
 [group("ci")]
 [doc("The non-test half of `ci` — what the pre-push hook runs")]
-gate: fmt-check text-check inventory-check runtime-conformance-check panic-policy-check port-check clippy doc-strict
+gate: fmt-check text-check font-assets-check inventory-check runtime-conformance-check panic-policy-check port-check wgsl-uniformity-check clippy doc-strict
 
 [group("ci")]
 [doc("Run local CI gates (gate + test + doctests)")]
@@ -806,3 +873,29 @@ audit:
 [doc("Show outdated dependencies (requires cargo-outdated)")]
 outdated:
     cargo outdated --workspace
+
+[group("quality")]
+[doc("Test release roles, declaration closure and Cargo archive normalization on tiny fixtures")]
+release-policy-test:
+    python3 -B -m unittest discover -s scripts/tests -p test_release_policy.py
+
+[group("quality")]
+[doc("Show the computed product/support release inventory without creating archives")]
+release-inventory:
+    python3 -B scripts/release_policy.py --json
+
+[group("quality")]
+[doc("Create and inspect local archives for the selected release set; no build or upload")]
+release-package-check *options:
+    python3 -B scripts/release_policy.py --package {{options}}
+
+[group("quality")]
+[doc("Build and test a fresh CLI-generated consumer against the release ARCHIVES, offline: packages the release set, vendors every third-party dependency, installs the archives as a Cargo directory source, and runs `flui create` without --local so the registry dependency form is what gets resolved. Pass --preview-dirty on an uncommitted tree. Slow (vendors the whole dependency set) and disk-hungry (target/release-consumer)")]
+release-consumer-check *options:
+    python3 -B scripts/release_consumer_check.py {{options}}
+
+[group("quality")]
+[doc("Verify font provenance/notices, generated fixture bytes, and Cargo package file selection offline")]
+font-assets-check:
+    python3 -B -m unittest discover -s scripts/tests -p test_font_assets.py
+    python3 -B scripts/font_assets.py --package-list

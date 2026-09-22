@@ -98,7 +98,7 @@ producing.
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Layer 1 — Build orchestration (dev-time)                           │
 │  SourceWatcher  →  cargo build / ndk build  →  artifact on disk     │
-│  Crates: flui-hot-reload (`source-watch`), flui-cli, flui-devtools  │
+│  Crate: flui-cli (`watch.rs`, `build/`)                             │
 └───────────────────────────────┬─────────────────────────────────────┘
                                 │ .so / .dll / binary updated
 ┌───────────────────────────────▼─────────────────────────────────────┐
@@ -164,12 +164,10 @@ Runs Build → Layout → Paint inside the `.so` via `PluginPipeline`. Hot reloa
 
 | Crate | Responsibility |
 |-------|----------------|
-| **`flui-hot-reload`** | Single source of truth: `DynLib`, `ScenePlugin`, `HotReloadDriver`, `ReloadStrategy`, optional `SourceWatcher` |
-| **`flui-cli`** | Layer 1 orchestration: `flui run`, `flui run --scene` |
-| **`flui-devtools`** | Callback wrapper `HotReloader` over `SourceWatcher` (future DevTools server) |
-| **`flui-build`** | Android NDK build + `adb push` for scene plugins |
+| **`flui-hot-reload`** | Runtime half, linked by the app: `DynLib`, `ScenePlugin`, `HotReloadDriver`, `ReloadStrategy`, the worker/host ABI |
+| **`flui-cli`** | Dev-machine half: the `SourceWatcher` (`src/watch.rs`), the build pipeline (`src/build/`, once `flui-build`), `flui run`, `flui run --scene` |
 
-Do **not** add a third file-watcher implementation. Extend `flui_hot_reload::dev::SourceWatcher`.
+Do **not** add a second file-watcher implementation. Extend `flui-cli`'s `watch::SourceWatcher`. The env-var names the CLI sets (`FLUI_HOT_RELOAD`, `FLUI_WORKER_PLUGIN`) are duplicated from `flui_hot_reload::{strategy, engine}::env` and pinned by a test in `commands/run.rs`.
 
 ## Desktop Plugin Workflow
 

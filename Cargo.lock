@@ -781,6 +781,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "camino"
+version = "1.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbad30e4b4c14a39e3cc8aed085a12a327257c316619c93581e017bc52be591"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "cargo-platform"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd0061da739915fae12ea00e16397555ed4371a6bb285431aab930f61b0aa4ba"
+dependencies = [
+ "serde",
+ "serde_core",
+]
+
+[[package]]
+name = "cargo_metadata"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef987d17b0a113becdd19d3d0022d04d7ef41f9efe4f3fb63ac44ba61df3ade9"
+dependencies = [
+ "camino",
+ "cargo-platform",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "case"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -902,20 +935,6 @@ name = "clap_lex"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
-
-[[package]]
-name = "cliclack"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "134778b6a125729ff495c23ba32f64e0c26d61edd52f1f6715a0d036785cf30b"
-dependencies = [
- "console",
- "indicatif",
- "once_cell",
- "strsim",
- "textwrap",
- "zeroize",
-]
 
 [[package]]
 name = "clipboard-win"
@@ -1373,31 +1392,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dialoguer"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25f104b501bf2364e78d0d3974cbc774f738f5865306ed128e1e0d7499c0ad96"
+dependencies = [
+ "console",
+ "shell-words",
+]
+
+[[package]]
 name = "difflib"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6184e33543162437515c2e2b48714794e37845ec9851711914eec9d308f6ebe8"
-
-[[package]]
-name = "dirs"
-version = "6.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
-dependencies = [
- "dirs-sys",
-]
-
-[[package]]
-name = "dirs-sys"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
-dependencies = [
- "libc",
- "option-ext",
- "redox_users",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "dispatch"
@@ -1662,7 +1670,7 @@ checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
 
 [[package]]
 name = "flui"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "flui-animation",
@@ -1675,6 +1683,7 @@ dependencies = [
  "flui-interaction",
  "flui-layer",
  "flui-localizations",
+ "flui-macros",
  "flui-material",
  "flui-objects",
  "flui-painting",
@@ -1682,6 +1691,7 @@ dependencies = [
  "flui-rendering",
  "flui-scheduler",
  "flui-testing",
+ "flui-tree",
  "flui-types",
  "flui-view",
  "flui-widgets",
@@ -1690,6 +1700,8 @@ dependencies = [
  "parking_lot",
  "pollster",
  "raw-window-handle",
+ "tempfile",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "wgpu",
@@ -1697,7 +1709,7 @@ dependencies = [
 
 [[package]]
 name = "flui-animation"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "flui-foundation",
@@ -1713,7 +1725,7 @@ dependencies = [
 
 [[package]]
 name = "flui-app"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "accesskit",
  "android-activity",
@@ -1752,7 +1764,7 @@ dependencies = [
 
 [[package]]
 name = "flui-assets"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-types",
  "image",
@@ -1765,49 +1777,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-build"
-version = "0.2.0"
-dependencies = [
- "indicatif",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "toml",
- "tracing",
- "which",
-]
-
-[[package]]
 name = "flui-cli"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "cargo_metadata",
  "clap",
  "clap_complete",
- "cliclack",
  "console",
- "dirs",
- "flui-build",
- "flui-devtools",
+ "dialoguer",
  "flui-hot-reload",
- "flui-log",
- "pollster",
+ "notify-debouncer-mini",
  "predicates",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "toml",
- "tracing",
- "tracing-subscriber",
  "which",
 ]
 
 [[package]]
 name = "flui-cupertino"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-animation",
  "flui-foundation",
@@ -1824,7 +1818,7 @@ dependencies = [
 
 [[package]]
 name = "flui-desktop-scene"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-hot-reload",
  "flui-layer",
@@ -1833,24 +1827,26 @@ dependencies = [
 
 [[package]]
 name = "flui-devtools"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-foundation",
- "flui-hot-reload",
+ "flui-log",
+ "flui-objects",
+ "flui-rendering",
  "flui-scheduler",
  "flui-testing",
+ "flui-view",
  "parking_lot",
  "serde",
  "serde_json",
  "tracing",
  "tracing-subscriber",
  "web-time",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "flui-engine"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "criterion",
@@ -1883,8 +1879,9 @@ dependencies = [
 
 [[package]]
 name = "flui-foundation"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
+ "flui-macros",
  "flui-types",
  "parking_lot",
  "serde",
@@ -1898,7 +1895,7 @@ dependencies = [
 
 [[package]]
 name = "flui-geometry"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glam",
@@ -1909,17 +1906,15 @@ dependencies = [
 
 [[package]]
 name = "flui-hot-reload"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "android_log-sys",
  "flui-foundation",
  "flui-layer",
  "flui-rendering",
  "flui-testing",
- "flui-types",
  "flui-view",
  "libc",
- "notify-debouncer-mini",
  "parking_lot",
  "tracing",
  "windows",
@@ -1927,7 +1922,7 @@ dependencies = [
 
 [[package]]
 name = "flui-hot-reload-lifecycle-fixture"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-hot-reload",
  "flui-layer",
@@ -1936,7 +1931,7 @@ dependencies = [
 
 [[package]]
 name = "flui-interaction"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "cursor-icon",
@@ -1960,7 +1955,7 @@ dependencies = [
 
 [[package]]
 name = "flui-layer"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
  "flui-foundation",
@@ -1974,7 +1969,7 @@ dependencies = [
 
 [[package]]
 name = "flui-live-smoke"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "x11rb 0.14.0",
@@ -1982,7 +1977,7 @@ dependencies = [
 
 [[package]]
 name = "flui-localizations"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-types",
  "flui-widgets",
@@ -1990,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "flui-log"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "android_log-sys",
  "thiserror 2.0.20",
@@ -2004,9 +1999,10 @@ dependencies = [
 
 [[package]]
 name = "flui-macros"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-foundation",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn 3.0.6",
@@ -2014,7 +2010,7 @@ dependencies = [
 
 [[package]]
 name = "flui-material"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-animation",
  "flui-foundation",
@@ -2032,7 +2028,7 @@ dependencies = [
 
 [[package]]
 name = "flui-objects"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-animation",
  "flui-foundation",
@@ -2050,7 +2046,7 @@ dependencies = [
 
 [[package]]
 name = "flui-painting"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "cosmic-text",
  "criterion",
@@ -2067,7 +2063,7 @@ dependencies = [
 
 [[package]]
 name = "flui-painting-demo"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "flui-engine",
@@ -2081,7 +2077,7 @@ dependencies = [
 
 [[package]]
 name = "flui-platform"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -2128,7 +2124,7 @@ dependencies = [
 
 [[package]]
 name = "flui-rendering"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
  "criterion",
@@ -2160,7 +2156,7 @@ dependencies = [
 
 [[package]]
 name = "flui-scheduler"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
  "criterion",
@@ -2178,7 +2174,7 @@ dependencies = [
 
 [[package]]
 name = "flui-semantics"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "accesskit",
  "criterion",
@@ -2196,7 +2192,7 @@ dependencies = [
 
 [[package]]
 name = "flui-testing"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "accesskit",
  "criterion",
@@ -2219,7 +2215,7 @@ dependencies = [
 
 [[package]]
 name = "flui-tree"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "bon",
  "flui-foundation",
@@ -2230,7 +2226,7 @@ dependencies = [
 
 [[package]]
 name = "flui-types"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "flui-geometry",
@@ -2243,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "flui-view"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "bon",
  "criterion",
@@ -2272,8 +2268,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-web-counter"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "flui",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "flui-web-demo"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "flui-platform",
@@ -2285,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "flui-web-server"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
@@ -2298,7 +2303,7 @@ dependencies = [
 
 [[package]]
 name = "flui-widgets"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
  "flui-animation",
@@ -2324,6 +2329,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -2722,7 +2728,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hot-reload-counter-host"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-app",
  "flui-hot-reload",
@@ -2732,7 +2738,7 @@ dependencies = [
 
 [[package]]
 name = "hot-reload-counter-logic"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-hot-reload",
  "flui-types",
@@ -2743,7 +2749,7 @@ dependencies = [
 
 [[package]]
 name = "hot-reload-counter-types"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "flui-hot-reload",
  "flui-view",
@@ -2881,31 +2887,10 @@ checksum = "d56e28588da92eee5c3201a6eff33fabdd49b62269c8938d4ff050ce4d900deb"
 dependencies = [
  "displaydoc",
  "litemap",
- "serde",
  "tinystr",
  "writeable",
  "zerovec",
 ]
-
-[[package]]
-name = "icu_locale_fallback"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "251af8e57c9400e3eb58242fe5b8b1152b2a64fdf4cf632f923c38ccee6f2fa9"
-dependencies = [
- "icu_locale_core",
- "icu_locale_fallback_data",
- "icu_provider",
- "potential_utf",
- "tinystr",
- "zerovec",
-]
-
-[[package]]
-name = "icu_locale_fallback_data"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "decf2a22ec8fa68f1a0c1129a3f8583f8f8bc24e8b9ccbe98ead99f62a4dc3a8"
 
 [[package]]
 name = "icu_normalizer"
@@ -2956,36 +2941,12 @@ checksum = "d27bbb9d3abbefac45d55f647c9de1d44aafcd1186eb91879afef17c396c3e73"
 dependencies = [
  "displaydoc",
  "icu_locale_core",
- "serde",
- "stable_deref_trait",
  "writeable",
  "yoke",
  "zerofrom",
  "zerotrie",
  "zerovec",
 ]
-
-[[package]]
-name = "icu_segmenter"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82d07aafccd67af15d02512a6adf5896fbc5ed00f2e99b471d2efa14016db3db"
-dependencies = [
- "icu_collections",
- "icu_locale_fallback",
- "icu_provider",
- "icu_segmenter_data",
- "potential_utf",
- "smallvec",
- "utf8_iter",
- "zerovec",
-]
-
-[[package]]
-name = "icu_segmenter_data"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae293c039020f9ec10710af98d29ce6aa2051486638b49c9a6409f3b4a9e98ad"
 
 [[package]]
 name = "ident_case"
@@ -3040,19 +3001,6 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
-]
-
-[[package]]
-name = "indicatif"
-version = "0.18.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9433806cd6b4ec1aba79c021c7e4c58fb4c3b9977c085062e611ac929998fb0c"
-dependencies = [
- "console",
- "portable-atomic",
- "unicode-width 0.2.2",
- "unit-prefix",
- "web-time",
 ]
 
 [[package]]
@@ -4040,6 +3988,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d87d638e33c06f577498cbcc50491496a3ed4246998a7fbba7ccb98b1e7eab22"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
@@ -4111,12 +4060,6 @@ name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
-
-[[package]]
-name = "option-ext"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orbclient"
@@ -4390,8 +4333,6 @@ version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661"
 dependencies = [
- "serde_core",
- "writeable",
  "zerovec",
 ]
 
@@ -4761,16 +4702,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "redox_users"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60dc65c0ff1a7ae1294b0c67b9f14baf70b644404010370171787bfac1038fc0"
-dependencies = [
- "libredox",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "regex"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5088,6 +5019,10 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+dependencies = [
+ "serde",
+ "serde_core",
+]
 
 [[package]]
 name = "serde"
@@ -5210,6 +5145,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5302,12 +5243,6 @@ checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
 dependencies = [
  "serde",
 ]
-
-[[package]]
-name = "smawk"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8e2fb0f499abb4d162f2bedad68f5ef91a1682b5a03596ddb67efd37768d100"
 
 [[package]]
 name = "smithay-client-toolkit"
@@ -5536,17 +5471,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
 
 [[package]]
-name = "textwrap"
-version = "0.16.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ecfad6c3abc80a577f2b91c1e412ee57e7a060d430b553c1b0c940974ebcd49"
-dependencies = [
- "icu_segmenter",
- "smawk",
- "unicode-width 0.2.2",
-]
-
-[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5641,7 +5565,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1e27c91459209c2986af3dcf603a5a74a4368754ce37414f59acc971167f643"
 dependencies = [
  "displaydoc",
- "serde_core",
  "zerovec",
 ]
 
@@ -6052,12 +5975,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "unit-prefix"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81e544489bf3d8ef66c953931f56617f423cd4b5494be343d9b9d3dda037b9a3"
 
 [[package]]
 name = "untrusted"
@@ -7280,20 +7197,6 @@ name = "zeroize"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
-dependencies = [
- "zeroize_derive",
-]
-
-[[package]]
-name = "zeroize_derive"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "zerotrie"
@@ -7304,7 +7207,6 @@ dependencies = [
  "displaydoc",
  "yoke",
  "zerofrom",
- "zerovec",
 ]
 
 [[package]]
@@ -7313,7 +7215,6 @@ version = "0.11.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb0464e17806c1d976d5cba29399c7f08e516e279e2ba493f63123b5fca67dd8"
 dependencies = [
- "serde",
  "yoke",
  "zerofrom",
  "zerovec-derive",

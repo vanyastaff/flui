@@ -42,5 +42,5 @@ slow-timeout = { period = "300s", terminate-after = 4 }
 gpu-readback = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine) & test(/_readback_tests::/))'
+filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(=renderer::tests::sdr_surface_selection_painter_readback_preserves_swatches_and_blending)))'
 test-group = 'gpu-readback'

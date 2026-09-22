@@ -5,7 +5,7 @@
 //! window's content `NSView` to implement the `NSAccessibility` protocol
 //! VoiceOver queries. Subclassing is chosen for the same reason as on
 //! Windows: it needs no edits to the backend's own view class, keeping the
-//! integration additive to a backend this repository can only type-check.
+//! integration additive to the native backend.
 //!
 //! # The activation model differs from AT-SPI
 //!
@@ -23,13 +23,13 @@
 //! focused view tracks the key window — load-bearing in any multi-window
 //! application.
 //!
-//! # Honesty note: type-checked, never executed
+//! # Verification scope
 //!
-//! Like the whole AppKit backend, this module is covered only by the
-//! `cross-typecheck` gate (clippy, no link, no tests). The retention and
-//! dispatch rules it relies on are executed on Linux via
-//! [`BridgeShared`]'s own tests; the adapter shell around them has not run
-//! on a real macOS machine yet.
+//! The native `exit_policy_probe`, built with `a11y`, executes adapter creation
+//! and last-window/explicit-quit teardown on macOS. Its native weak references
+//! must clear after autorelease-pool drain. `BridgeShared` tests cover retention
+//! and dispatch mechanics independently. These checks do not certify a VoiceOver
+//! client session, tree announcements, or action delivery end to end.
 
 use std::sync::Arc;
 

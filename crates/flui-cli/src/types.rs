@@ -1,31 +1,7 @@
-//! Type-safe wrappers for CLI values.
-//!
-//! This module provides newtypes that enforce invariants at compile time
-//! following the Rust API Guidelines:
-//!
-//! - **C-NEWTYPE**: Newtypes provide static distinctions
-//! - **C-VALIDATE**: Functions validate their arguments
-//! - **C-COMMON-TRAITS**: Types implement common traits (Debug, Clone, `PartialEq`, Eq, Hash)
-//! - **C-CONV-TRAITS**: Conversions use standard traits (From, `TryFrom`, `AsRef`)
-//! - **C-DEBUG**: All public types implement Debug
-//! - **C-DEFAULT**: Default for types with sensible defaults
-//!
-//! # Examples
-//!
-//! ```ignore
-//! use flui_cli::types::{ProjectName, OrganizationId, ProjectPath};
-//!
-//! // Create validated types
-//! let name = ProjectName::new("my-app")?;
-//! let org = OrganizationId::default(); // "com.example"
-//!
-//! // Use conversions
-//! let name: ProjectName = "my-app".parse()?;
-//! let org = OrganizationId::try_from("com.mycompany")?;
-//!
-//! // Get application ID
-//! let app_id = org.app_id(&name); // "com.example.my_app"
-//! ```
+//! Validated newtypes for the values `flui create` takes: a project name, an
+//! organization identifier and the project's destination path. Each one can
+//! only be constructed through its validation, so a command that holds one
+//! never re-checks it.
 
 use crate::error::{CliError, CliResult};
 use serde::{Deserialize, Serialize};
@@ -60,34 +36,13 @@ const RESERVED_KEYWORDS: &[&str] = &[
 ///
 /// # Implements
 ///
-/// - `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash` - C-COMMON-TRAITS
-/// - `Display` - C-DEBUG-NONEMPTY
-/// - `AsRef<str>`, `Borrow<str>` - C-CONV-TRAITS
-/// - `FromStr`, `TryFrom<String>`, `TryFrom<&str>` - C-CONV-TRAITS
-///
-/// # Examples
-///
-/// ```ignore
-/// use flui_cli::types::ProjectName;
-///
-/// // Create from &str
-/// let name = ProjectName::new("my-app")?;
-/// assert_eq!(name.as_str(), "my-app");
-///
-/// // Parse from string
-/// let name: ProjectName = "my-app".parse()?;
-///
-/// // TryFrom conversion
-/// let name = ProjectName::try_from("my-app")?;
-///
-/// // Invalid names return errors
-/// assert!(ProjectName::new("").is_err());
-/// assert!(ProjectName::new("123abc").is_err());
-/// assert!(ProjectName::new("fn").is_err());
-/// ```
+/// - `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash`
+/// - `Display`
+/// - `AsRef<str>`, `Borrow<str>`
+/// - `FromStr`, `TryFrom<String>`, `TryFrom<&str>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct ProjectName(String);
+pub(crate) struct ProjectName(String);
 
 impl ProjectName {
     /// Create a new validated project name.
@@ -99,56 +54,17 @@ impl ProjectName {
     /// - Contains characters other than alphanumeric, hyphens, or underscores
     /// - Starts with a number
     /// - Is a reserved Rust keyword
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let name = ProjectName::new("my-app")?;
-    /// ```
-    pub fn new(name: impl Into<String>) -> CliResult<Self> {
+    pub(crate) fn new(name: impl Into<String>) -> CliResult<Self> {
         let name = name.into();
         Self::validate(&name)?;
         Ok(Self(name))
     }
 
-    /// Create a project name without validation.
-    ///
-    /// # Safety Note
-    ///
-    /// This is not unsafe in the Rust sense, but the caller should ensure
-    /// the name is valid according to project name rules. This is useful
-    /// for trusted internal sources or deserialization.
-    pub fn new_unchecked(name: impl Into<String>) -> Self {
-        Self(name.into())
-    }
-
     /// Get the project name as a string slice.
     #[inline]
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Convert into the underlying String.
-    #[inline]
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-
-    /// Convert to a crate name (hyphens replaced with underscores).
-    ///
-    /// Rust crate names use underscores, not hyphens.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let name = ProjectName::new("my-app")?;
-    /// assert_eq!(name.to_crate_name(), "my_app");
-    /// ```
-    #[must_use]
-    pub fn to_crate_name(&self) -> String {
-        self.0.replace('-', "_")
     }
 
     /// Validate a project name.
@@ -188,14 +104,12 @@ impl ProjectName {
     }
 }
 
-// C-DEBUG-NONEMPTY: Debug representation is never empty
 impl Display for ProjectName {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         Display::fmt(&self.0, f)
     }
 }
 
-// C-CONV-TRAITS: AsRef for cheap reference conversions
 impl AsRef<str> for ProjectName {
     #[inline]
     fn as_ref(&self) -> &str {
@@ -203,7 +117,6 @@ impl AsRef<str> for ProjectName {
     }
 }
 
-// C-CONV-TRAITS: Borrow for HashMap key lookups
 impl Borrow<str> for ProjectName {
     #[inline]
     fn borrow(&self) -> &str {
@@ -211,7 +124,6 @@ impl Borrow<str> for ProjectName {
     }
 }
 
-// C-CONV-TRAITS: Deref for transparent access to &str methods
 impl Deref for ProjectName {
     type Target = str;
 
@@ -221,7 +133,6 @@ impl Deref for ProjectName {
     }
 }
 
-// C-CONV-TRAITS: FromStr for parsing
 impl FromStr for ProjectName {
     type Err = CliError;
 
@@ -230,7 +141,6 @@ impl FromStr for ProjectName {
     }
 }
 
-// C-CONV-TRAITS: TryFrom for fallible conversions
 impl TryFrom<String> for ProjectName {
     type Error = CliError;
 
@@ -247,7 +157,6 @@ impl TryFrom<&str> for ProjectName {
     }
 }
 
-// C-SERDE: Enable serialization to String
 impl From<ProjectName> for String {
     fn from(name: ProjectName) -> Self {
         name.0
@@ -265,30 +174,14 @@ impl From<ProjectName> for String {
 ///
 /// # Implements
 ///
-/// - `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash` - C-COMMON-TRAITS
-/// - `Default` - C-DEFAULT (defaults to "com.example")
-/// - `Display` - C-DEBUG-NONEMPTY
-/// - `AsRef<str>`, `Borrow<str>` - C-CONV-TRAITS
-/// - `FromStr`, `TryFrom<String>`, `TryFrom<&str>` - C-CONV-TRAITS
-///
-/// # Examples
-///
-/// ```ignore
-/// use flui_cli::types::OrganizationId;
-///
-/// // Create with default
-/// let org = OrganizationId::default();
-/// assert_eq!(org.as_str(), "com.example");
-///
-/// // Create from string
-/// let org = OrganizationId::new("com.mycompany")?;
-///
-/// // Parse from string
-/// let org: OrganizationId = "org.rust".parse()?;
-/// ```
+/// - `Debug`, `Clone`, `PartialEq`, `Eq`, `Hash`
+/// - `Default` (defaults to "com.example")
+/// - `Display`
+/// - `AsRef<str>`, `Borrow<str>`
+/// - `FromStr`, `TryFrom<String>`, `TryFrom<&str>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
-pub struct OrganizationId(String);
+pub(crate) struct OrganizationId(String);
 
 impl OrganizationId {
     /// Create a new organization identifier.
@@ -301,14 +194,7 @@ impl OrganizationId {
     /// - Is empty
     /// - Has empty segments (e.g., "com..example")
     /// - Contains non-alphanumeric characters (except underscores)
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let org = OrganizationId::new("com.example")?;
-    /// let org = OrganizationId::new("org.rust_lang")?;
-    /// ```
-    pub fn new(org: impl Into<String>) -> CliResult<Self> {
+    pub(crate) fn new(org: impl Into<String>) -> CliResult<Self> {
         let org = org.into();
         Self::validate(&org)?;
         Ok(Self(org))
@@ -317,60 +203,8 @@ impl OrganizationId {
     /// Get the organization ID as a string slice.
     #[inline]
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// Convert into the underlying String.
-    #[inline]
-    #[must_use]
-    pub fn into_inner(self) -> String {
-        self.0
-    }
-
-    /// Get the application ID by combining with a project name.
-    ///
-    /// The resulting ID is suitable for use as:
-    /// - Android package name
-    /// - iOS bundle identifier
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let org = OrganizationId::new("com.example")?;
-    /// let name = ProjectName::new("my-app")?;
-    /// let app_id = org.app_id(&name);
-    /// assert_eq!(app_id, "com.example.my_app");
-    /// ```
-    #[must_use]
-    pub fn app_id(&self, name: &ProjectName) -> String {
-        format!("{}.{}", self.0, name.to_crate_name())
-    }
-
-    /// Get the number of segments in the organization ID.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let org = OrganizationId::new("com.example.team")?;
-    /// assert_eq!(org.segment_count(), 3);
-    /// ```
-    #[must_use]
-    pub fn segment_count(&self) -> usize {
-        self.0.split('.').count()
-    }
-
-    /// Iterate over the segments of the organization ID.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let org = OrganizationId::new("com.example")?;
-    /// let segments: Vec<_> = org.segments().collect();
-    /// assert_eq!(segments, vec!["com", "example"]);
-    /// ```
-    pub fn segments(&self) -> impl Iterator<Item = &str> {
-        self.0.split('.')
     }
 
     fn validate(org: &str) -> CliResult<()> {
@@ -401,7 +235,6 @@ impl OrganizationId {
     }
 }
 
-// C-DEFAULT: Default for types with sensible defaults
 impl Default for OrganizationId {
     /// Returns the default organization ID: "com.example"
     fn default() -> Self {
@@ -429,7 +262,6 @@ impl Borrow<str> for OrganizationId {
     }
 }
 
-// C-CONV-TRAITS: Deref for transparent access to &str methods
 impl Deref for OrganizationId {
     type Target = str;
 
@@ -463,7 +295,6 @@ impl TryFrom<&str> for OrganizationId {
     }
 }
 
-// C-SERDE: Enable serialization to String
 impl From<OrganizationId> for String {
     fn from(org: OrganizationId) -> Self {
         org.0
@@ -481,21 +312,11 @@ impl From<OrganizationId> for String {
 ///
 /// # Implements
 ///
-/// - `Debug`, `Clone`, `PartialEq`, `Eq` - C-COMMON-TRAITS
+/// - `Debug`, `Clone`, `PartialEq`, `Eq`
 /// - `Display` - shows the path
-/// - `AsRef<Path>` - C-CONV-TRAITS
-///
-/// # Examples
-///
-/// ```ignore
-/// use flui_cli::types::{ProjectName, ProjectPath};
-///
-/// let name = ProjectName::new("my-app")?;
-/// let path = ProjectPath::new(&name, None)?;
-/// println!("Creating project at: {}", path);
-/// ```
+/// - `AsRef<Path>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ProjectPath(PathBuf);
+pub(crate) struct ProjectPath(PathBuf);
 
 impl ProjectPath {
     /// Create a new project path from a name, optionally within a base directory.
@@ -508,17 +329,7 @@ impl ProjectPath {
     /// # Errors
     ///
     /// Returns `CliError::DirectoryExists` if the resulting path already exists.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Create in current directory
-    /// let path = ProjectPath::new(&name, None)?;
-    ///
-    /// // Create in specific directory
-    /// let path = ProjectPath::new(&name, Some(PathBuf::from("/projects")))?;
-    /// ```
-    pub fn new(name: &ProjectName, base: Option<PathBuf>) -> CliResult<Self> {
+    pub(crate) fn new(name: &ProjectName, base: Option<PathBuf>) -> CliResult<Self> {
         let path = if let Some(base) = base {
             base.join(name.as_str())
         } else {
@@ -532,49 +343,11 @@ impl ProjectPath {
         Ok(Self(path))
     }
 
-    /// Create a project path without existence check.
-    ///
-    /// Useful when you want to check existence separately or
-    /// when working with paths that may be created later.
-    #[must_use]
-    pub fn new_unchecked(name: &ProjectName, base: Option<PathBuf>) -> Self {
-        let path = if let Some(base) = base {
-            base.join(name.as_str())
-        } else {
-            PathBuf::from(name.as_str())
-        };
-        Self(path)
-    }
-
     /// Get a reference to the underlying path.
     #[inline]
     #[must_use]
-    pub fn as_path(&self) -> &Path {
+    pub(crate) fn as_path(&self) -> &Path {
         &self.0
-    }
-
-    /// Convert into the underlying `PathBuf`.
-    #[inline]
-    #[must_use]
-    pub fn into_inner(self) -> PathBuf {
-        self.0
-    }
-
-    /// Check if the path exists.
-    #[must_use]
-    pub fn exists(&self) -> bool {
-        self.0.exists()
-    }
-
-    /// Get the parent directory.
-    #[must_use]
-    pub fn parent(&self) -> Option<&Path> {
-        self.0.parent()
-    }
-
-    /// Join a relative path.
-    pub fn join(&self, path: impl AsRef<Path>) -> PathBuf {
-        self.0.join(path)
     }
 }
 
@@ -585,7 +358,6 @@ impl AsRef<Path> for ProjectPath {
     }
 }
 
-// C-CONV-TRAITS: Deref for transparent access to Path methods
 impl Deref for ProjectPath {
     type Target = Path;
 
@@ -601,7 +373,6 @@ impl Display for ProjectPath {
     }
 }
 
-// C-CONV-TRAITS: From for infallible conversion to PathBuf
 impl From<ProjectPath> for PathBuf {
     fn from(path: ProjectPath) -> Self {
         path.0
@@ -636,15 +407,6 @@ mod tests {
             assert!(ProjectName::new("my.app").is_err());
             assert!(ProjectName::new("fn").is_err());
             assert!(ProjectName::new("struct").is_err());
-        }
-
-        #[test]
-        fn to_crate_name() {
-            let name = ProjectName::new("my-app").unwrap();
-            assert_eq!(name.to_crate_name(), "my_app");
-
-            let name = ProjectName::new("my_app").unwrap();
-            assert_eq!(name.to_crate_name(), "my_app");
         }
 
         #[test]
@@ -694,22 +456,6 @@ mod tests {
         fn default() {
             let org = OrganizationId::default();
             assert_eq!(org.as_str(), "com.example");
-        }
-
-        #[test]
-        fn app_id_generation() {
-            let org = OrganizationId::new("com.example").unwrap();
-            let name = ProjectName::new("my-app").unwrap();
-            assert_eq!(org.app_id(&name), "com.example.my_app");
-        }
-
-        #[test]
-        fn segments() {
-            let org = OrganizationId::new("com.example.team").unwrap();
-            assert_eq!(org.segment_count(), 3);
-
-            let segments: Vec<_> = org.segments().collect();
-            assert_eq!(segments, vec!["com", "example", "team"]);
         }
     }
 }

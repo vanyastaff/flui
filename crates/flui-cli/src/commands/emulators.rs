@@ -1,167 +1,123 @@
-//! Emulator and simulator management command.
+//! `flui emulators` — list and launch Android AVDs and iOS Simulators.
 //!
-//! Lists and launches Android emulators (AVDs) and iOS simulators.
-//! Uses external SDK tools:
-//! - Android: `emulator -list-avds`, `adb devices -l`
-//! - iOS: `xcrun simctl list devices --json` (macOS only)
+//! Reuses the [`Device`]/[`Kind`]/[`Status`] model and the bounded iOS
+//! `simctl` probe from `devices.rs`. Android AVD enumeration is separate
+//! from `devices.rs`'s Android probe: `devices` reports what `adb` can
+//! currently see (connected devices/booted emulators); `emulators` reports
+//! every *available* AVD, whether running or not, via `emulator -list-avds`.
 
-use crate::error::{CliResult, ResultExt};
+use crate::commands::devices::{self, Device, Kind, Status};
+use crate::error::{CliError, CliResult};
+use crate::proc::{PROBE_TIMEOUT, output_with_timeout, probe_stdout};
+use crate::ui;
 use console::style;
 use std::process::Command;
 
-// ── Data model ──────────────────────────────────────────────────────────────
-
-/// Platform for an emulator or simulator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EmulatorPlatform {
-    Android,
-    Ios,
-}
-
-impl std::fmt::Display for EmulatorPlatform {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Android => write!(f, "Android"),
-            Self::Ios => write!(f, "iOS"),
-        }
-    }
-}
-
-/// Status of an emulator or simulator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EmulatorStatus {
-    Running,
-    Stopped,
-}
-
-impl std::fmt::Display for EmulatorStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Running => write!(f, "Running"),
-            Self::Stopped => write!(f, "Stopped"),
-        }
-    }
-}
-
-/// An emulator or simulator device.
-#[derive(Debug, Clone)]
-struct Emulator {
-    name: String,
-    platform: EmulatorPlatform,
-    id: String,
-    status: EmulatorStatus,
-    version: String,
-}
-
-// ── Public API ──────────────────────────────────────────────────────────────
-
 /// List available emulators and simulators.
-///
-/// Queries Android SDK and iOS Simulator (macOS only) for available devices
-/// and displays them in a formatted table.
-pub fn execute_list(platform_filter: Option<&str>) -> CliResult<()> {
-    cliclack::intro(style(" flui emulators ").on_magenta().black())?;
-
-    let mut emulators = Vec::new();
-
+pub(crate) fn execute_list(platform_filter: Option<&str>) -> CliResult<()> {
     let show_android = platform_filter.is_none_or(|p| p.eq_ignore_ascii_case("android"));
     let show_ios = platform_filter.is_none_or(|p| p.eq_ignore_ascii_case("ios"));
 
+    let mut emulators = Vec::new();
+    let mut problems = Vec::new();
+
     if show_android {
         match list_android_avds() {
-            Ok(avds) => emulators.extend(avds),
-            Err(e) => {
-                tracing::debug!("Android SDK not available: {}", e);
-                cliclack::log::warning(format!(
-                    "Android SDK not found. {}",
-                    android_install_hint()
-                ))?;
-            }
+            Ok(found) => emulators.extend(found),
+            Err(problem) => problems.push(problem),
         }
     }
 
     if show_ios {
-        match list_ios_simulators() {
-            Ok(sims) => emulators.extend(sims),
-            Err(e) => {
-                tracing::debug!("iOS simulators not available: {}", e);
-                if cfg!(target_os = "macos") {
-                    cliclack::log::warning(format!(
-                        "Xcode tools not found. {}",
-                        ios_install_hint()
-                    ))?;
-                }
-            }
+        #[cfg(target_os = "macos")]
+        match devices::probe_ios() {
+            Ok(found) => emulators.extend(found),
+            Err(problem) => problems.push(problem),
         }
     }
 
-    if emulators.is_empty() {
-        cliclack::log::info("No emulators or simulators found.")?;
-        display_install_hints()?;
-        cliclack::outro(style("0 emulators found").dim())?;
+    if ui::is_json() {
+        for emulator in &emulators {
+            ui::emit("emulator", emulator);
+        }
+        ui::emit(
+            "emulators.summary",
+            &serde_json::json!({
+                "count": emulators.len(),
+                "problems": problems,
+            }),
+        );
         return Ok(());
     }
 
-    display_emulator_table(&emulators)?;
+    ui::intro(style(" flui emulators ").on_magenta().black())?;
 
-    cliclack::outro(format!(
-        "{} emulator{} found",
-        emulators.len(),
-        if emulators.len() == 1 { "" } else { "s" }
+    let mut lines = if emulators.is_empty() {
+        vec!["No emulators or simulators found.".to_string()]
+    } else {
+        emulator_table(&emulators)
+    };
+    for problem in &problems {
+        lines.push(format!(
+            "{} {}: {} — {}",
+            style("[!]").yellow(),
+            problem.platform_label(),
+            problem.message,
+            style(&problem.hint).dim()
+        ));
+    }
+    ui::note("Emulators & Simulators", lines.join("\n"))?;
+
+    let count = emulators.len();
+    ui::outro(format!(
+        "{count} emulator{} found",
+        if count == 1 { "" } else { "s" }
     ))?;
 
     Ok(())
 }
 
-/// Launch a specific emulator or simulator by name.
-///
-/// Searches across Android AVDs and iOS simulators, then launches the
-/// matching device.
-pub fn execute_launch(name: &str) -> CliResult<()> {
-    cliclack::intro(style(format!(" Launching: {name} ")).on_cyan().black())?;
-
-    // Collect all known emulators to find the target.
-    let mut all_emulators = Vec::new();
-
+/// Launch a specific emulator or simulator by exact id/name, then by unique
+/// case-insensitive prefix.
+pub(crate) fn execute_launch(name: &str) -> CliResult<()> {
+    let mut candidates = Vec::new();
     if let Ok(avds) = list_android_avds() {
-        all_emulators.extend(avds);
+        candidates.extend(avds);
     }
-    if let Ok(sims) = list_ios_simulators() {
-        all_emulators.extend(sims);
+    #[cfg(target_os = "macos")]
+    if let Ok(sims) = devices::probe_ios() {
+        candidates.extend(sims);
     }
 
-    // Find by name (case-insensitive).
-    let target = all_emulators
-        .iter()
-        .find(|e| e.name.eq_ignore_ascii_case(name) || e.id.eq_ignore_ascii_case(name));
+    let target = resolve_target(&candidates, name)?.clone();
 
-    let Some(target) = target else {
-        let available: Vec<_> = all_emulators.iter().map(|e| e.name.as_str()).collect();
-        let msg = if available.is_empty() {
-            "No emulators found. Install Android SDK or Xcode to get started.".to_string()
-        } else {
-            format!(
-                "Emulator '{}' not found. Available: {}",
-                name,
-                available.join(", ")
-            )
-        };
-        cliclack::outro(style(msg).red())?;
-        return Err(crate::error::CliError::Missing(format!(
-            "Emulator '{name}' not found"
-        )));
+    ui::intro(
+        style(format!(" Launching: {} ", target.name))
+            .on_cyan()
+            .black(),
+    )?;
+    let spinner = ui::spinner();
+    spinner.start(format!("Starting {}…", target.name));
+
+    let launch_result = match target.kind {
+        Kind::Emulator => launch_android_avd(&target.id),
+        Kind::Simulator => launch_ios_simulator(&target.id),
+        Kind::Host | Kind::Physical | Kind::Browser => {
+            unreachable!("candidates are only ever Emulator or Simulator kind")
+        }
     };
 
-    let spinner = cliclack::spinner();
-    spinner.start(format!("Starting {} emulator...", target.platform));
-
-    match target.platform {
-        EmulatorPlatform::Android => launch_android_avd(&target.id)?,
-        EmulatorPlatform::Ios => launch_ios_simulator(&target.id)?,
+    if let Err(error) = launch_result {
+        spinner.error(format!("failed to launch {}", target.name));
+        return Err(error);
     }
 
-    spinner.stop(format!("{} launched successfully", target.name));
-    cliclack::outro(format!(
+    spinner.stop(format!("{} launched", target.name));
+    ui::emit(
+        "emulator.launch",
+        &serde_json::json!({ "id": target.id, "name": target.name, "platform": target.platform }),
+    );
+    ui::outro(format!(
         "Emulator {} is starting",
         style(&target.name).green()
     ))?;
@@ -169,449 +125,297 @@ pub fn execute_launch(name: &str) -> CliResult<()> {
     Ok(())
 }
 
-// ── Android AVD listing ─────────────────────────────────────────────────────
-
-/// List Android AVDs by running `emulator -list-avds` and cross-referencing
-/// with `adb devices -l` for running status.
-fn list_android_avds() -> CliResult<Vec<Emulator>> {
-    let emulator_path = find_android_tool("emulator")?;
-
-    let output = Command::new(&emulator_path)
-        .arg("-list-avds")
-        .output()
-        .with_context(|| format!("Failed to run '{emulator_path}'"))?;
-
-    if !output.status.success() {
-        return Err(crate::error::CliError::CommandFailed {
-            context: "emulator -list-avds".to_string(),
-            exit_code: output.status.code(),
-        });
+/// Resolve `name` against `candidates`: exact id/name match first, then a
+/// unique case-insensitive prefix match.
+fn resolve_target<'a>(candidates: &'a [Device], name: &str) -> CliResult<&'a Device> {
+    if let Some(exact) = candidates
+        .iter()
+        .find(|d| d.id.eq_ignore_ascii_case(name) || d.name.eq_ignore_ascii_case(name))
+    {
+        return Ok(exact);
     }
 
-    let avd_names: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-
-    // Get running emulators from adb.
-    let running_devices = list_running_android_devices();
-
-    let emulators = avd_names
-        .into_iter()
-        .map(|name| {
-            let status = if running_devices
-                .iter()
-                .any(|d| d.eq_ignore_ascii_case(&name))
-            {
-                EmulatorStatus::Running
-            } else {
-                EmulatorStatus::Stopped
-            };
-
-            Emulator {
-                id: name.clone(),
-                name: name.clone(),
-                platform: EmulatorPlatform::Android,
-                status,
-                version: String::new(), // AVD names don't include API level in listing
-            }
+    let needle = name.to_ascii_lowercase();
+    let prefix_matches: Vec<&Device> = candidates
+        .iter()
+        .filter(|d| {
+            d.id.to_ascii_lowercase().starts_with(&needle)
+                || d.name.to_ascii_lowercase().starts_with(&needle)
         })
         .collect();
 
-    Ok(emulators)
+    match prefix_matches.as_slice() {
+        [one] => Ok(one),
+        [] => Err(CliError::DeviceNotFound {
+            name: name.to_string(),
+            hint: "run `flui emulators list`".to_string(),
+        }),
+        many => Err(CliError::DeviceNotFound {
+            name: name.to_string(),
+            hint: format!(
+                "ambiguous prefix; candidates: {}",
+                many.iter()
+                    .map(|d| d.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }),
+    }
 }
 
-/// Query `adb devices -l` for running Android emulators.
-/// Returns AVD names of running emulators (best-effort, empty on failure).
-fn list_running_android_devices() -> Vec<String> {
-    let Ok(adb_path) = find_android_tool("adb") else {
+// ============================================================================
+// Android AVDs
+// ============================================================================
+
+fn list_android_avds() -> Result<Vec<Device>, devices::Problem> {
+    let Some(emulator_path) = devices::find_android_tool("emulator", "emulator") else {
+        return Err(devices::Problem {
+            platform: crate::DevicePlatform::Android,
+            message: "`emulator` tool not found".to_string(),
+            hint: "install the Android Emulator package via Android Studio's SDK Manager, or set ANDROID_HOME"
+                .to_string(),
+        });
+    };
+
+    match output_with_timeout(
+        Command::new(&emulator_path).arg("-list-avds"),
+        PROBE_TIMEOUT,
+    ) {
+        Ok(output) if output.status.success() => {
+            let names: Vec<String> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect();
+            let running = running_android_avd_names();
+
+            Ok(names
+                .into_iter()
+                .map(|name| {
+                    let status = if running.iter().any(|r| r.eq_ignore_ascii_case(&name)) {
+                        Status::Booted
+                    } else {
+                        Status::Shutdown
+                    };
+                    Device {
+                        id: name.clone(),
+                        name,
+                        platform: crate::DevicePlatform::Android,
+                        kind: Kind::Emulator,
+                        status,
+                        details: std::collections::BTreeMap::new(),
+                    }
+                })
+                .collect())
+        }
+        Ok(output) => Err(devices::Problem {
+            platform: crate::DevicePlatform::Android,
+            message: "`emulator -list-avds` failed".to_string(),
+            hint: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::TimedOut => Err(devices::Problem {
+            platform: crate::DevicePlatform::Android,
+            message: format!("`emulator -list-avds` did not answer within {PROBE_TIMEOUT:?}"),
+            hint: "the Android Emulator tool may be hung".to_string(),
+        }),
+        Err(error) => Err(devices::Problem {
+            platform: crate::DevicePlatform::Android,
+            message: format!("failed to run `emulator`: {error}"),
+            hint: "check your Android SDK installation".to_string(),
+        }),
+    }
+}
+
+/// AVD names of currently-running Android emulators, via `adb devices` plus
+/// `adb -s <serial> emu avd name` for each `emulator-*` serial. Best-effort:
+/// any failure just yields an empty list, since this only affects the
+/// reported `Status`, not whether the AVD is listed at all.
+fn running_android_avd_names() -> Vec<String> {
+    let Some(adb) = devices::find_android_tool("adb", "platform-tools") else {
         return Vec::new();
     };
 
-    let output = match Command::new(&adb_path).args(["devices", "-l"]).output() {
-        Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
+    let Ok(output) = output_with_timeout(Command::new(&adb).args(["devices"]), PROBE_TIMEOUT)
+    else {
+        return Vec::new();
     };
+    if !output.status.success() {
+        return Vec::new();
+    }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Parse lines like: emulator-5554  device product:sdk_gphone64_x86_64 model:sdk_gphone64_x86_64 ...
-    // The AVD name isn't directly in `adb devices` output, but we can detect running emulators
-    // by their serial format "emulator-<port>".
-    stdout
+    String::from_utf8_lossy(&output.stdout)
         .lines()
-        .skip(1) // skip "List of devices attached" header
+        .skip(1) // "List of devices attached"
         .filter(|line| line.starts_with("emulator-") && line.contains("device"))
-        .filter_map(|line| {
-            // Extract the serial (emulator-NNNN)
-            line.split_whitespace().next().map(String::from)
+        .filter_map(|line| line.split_whitespace().next())
+        .filter_map(|serial| {
+            let raw = probe_stdout(
+                Command::new(&adb).args(["-s", serial, "emu", "avd", "name"]),
+                PROBE_TIMEOUT,
+            )?;
+            let name = raw.lines().next().unwrap_or_default().trim().to_string();
+            (!name.is_empty()).then_some(name)
         })
         .collect()
 }
 
-/// Find an Android SDK tool by name, checking PATH and standard SDK locations.
-fn find_android_tool(tool: &str) -> CliResult<String> {
-    // Check PATH first.
-    if which::which(tool).is_ok() {
-        return Ok(tool.to_string());
-    }
-
-    // Check ANDROID_HOME / ANDROID_SDK_ROOT.
-    let sdk_root = std::env::var("ANDROID_HOME")
-        .or_else(|_| std::env::var("ANDROID_SDK_ROOT"))
-        .ok();
-
-    if let Some(sdk) = sdk_root {
-        let subdirs = match tool {
-            "emulator" => &["emulator"][..],
-            "adb" => &["platform-tools"][..],
-            _ => &[][..],
-        };
-
-        for subdir in subdirs {
-            let candidate = std::path::Path::new(&sdk)
-                .join(subdir)
-                .join(tool_executable(tool));
-            if candidate.exists() {
-                return Ok(candidate.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    Err(crate::error::CliError::ToolNotFound {
-        tool: tool.to_string(),
-        suggestion: android_install_hint().to_string(),
-    })
-}
-
-/// Get the platform-specific executable name.
-fn tool_executable(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    }
-}
-
-/// Launch an Android AVD by name.
 fn launch_android_avd(avd_name: &str) -> CliResult<()> {
-    let emulator_path = find_android_tool("emulator")?;
+    let Some(emulator_path) = devices::find_android_tool("emulator", "emulator") else {
+        return Err(CliError::ToolNotFound {
+            tool: "emulator".to_string(),
+            suggestion: "install the Android Emulator package via Android Studio's SDK Manager"
+                .to_string(),
+        });
+    };
 
-    // Launch as a detached background process.
+    // Detached: the emulator is a long-running process, not a probe. We
+    // never wait for it to exit.
     Command::new(&emulator_path)
         .args(["-avd", avd_name])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .with_context(|| format!("Failed to launch Android emulator '{avd_name}'"))?;
+        .map_err(|error| {
+            CliError::context(
+                error,
+                format!("failed to launch Android emulator '{avd_name}'"),
+            )
+        })?;
 
     Ok(())
 }
 
-// ── iOS simulator listing ───────────────────────────────────────────────────
+// ============================================================================
+// iOS Simulators
+// ============================================================================
 
-/// List iOS simulators via `xcrun simctl list devices --json`.
-/// Returns an error if not on macOS or xcrun is not available.
-fn list_ios_simulators() -> CliResult<Vec<Emulator>> {
-    if !cfg!(target_os = "macos") {
-        return Ok(Vec::new());
-    }
+fn launch_ios_simulator(udid: &str) -> CliResult<()> {
+    let boot = output_with_timeout(
+        Command::new("xcrun").args(["simctl", "boot", udid]),
+        PROBE_TIMEOUT,
+    )
+    .map_err(|error| CliError::context(error, "failed to run `xcrun simctl boot`"))?;
 
-    if which::which("xcrun").is_err() {
-        return Err(crate::error::CliError::ToolNotFound {
-            tool: "xcrun".to_string(),
-            suggestion: ios_install_hint().to_string(),
-        });
-    }
-
-    let output = Command::new("xcrun")
-        .args(["simctl", "list", "devices", "--json"])
-        .output()
-        .context("Failed to run xcrun simctl")?;
-
-    if !output.status.success() {
-        return Err(crate::error::CliError::CommandFailed {
-            context: "xcrun simctl list devices".to_string(),
-            exit_code: output.status.code(),
-        });
-    }
-
-    let json_str = String::from_utf8_lossy(&output.stdout);
-    parse_simctl_json(&json_str)
-}
-
-/// Parse the JSON output from `xcrun simctl list devices --json`.
-///
-/// Expected structure:
-/// ```json
-/// {
-///   "devices": {
-///     "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
-///       { "udid": "...", "name": "iPhone 15", "state": "Shutdown", "isAvailable": true }
-///     ]
-///   }
-/// }
-/// ```
-fn parse_simctl_json(json_str: &str) -> CliResult<Vec<Emulator>> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(json_str).context("Failed to parse simctl JSON output")?;
-
-    let Some(devices_obj) = parsed.get("devices").and_then(|d| d.as_object()) else {
-        return Ok(Vec::new());
-    };
-
-    let mut emulators = Vec::new();
-
-    for (runtime_key, device_list) in devices_obj {
-        let Some(devices) = device_list.as_array() else {
-            continue;
-        };
-
-        // Extract OS version from runtime key like "com.apple.CoreSimulator.SimRuntime.iOS-17-0"
-        let version = extract_ios_version(runtime_key);
-
-        for device in devices {
-            let is_available = device
-                .get("isAvailable")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-
-            if !is_available {
-                continue;
-            }
-
-            let name = device
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown")
-                .to_string();
-
-            let udid = device
-                .get("udid")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-
-            let state = device
-                .get("state")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Shutdown");
-
-            let status = if state.eq_ignore_ascii_case("Booted") {
-                EmulatorStatus::Running
-            } else {
-                EmulatorStatus::Stopped
-            };
-
-            emulators.push(Emulator {
-                name,
-                platform: EmulatorPlatform::Ios,
-                id: udid,
-                status,
-                version: version.clone(),
+    if !boot.status.success() {
+        let stderr = String::from_utf8_lossy(&boot.stderr);
+        let already_booted = boot.status.code() == Some(164)
+            || stderr.contains("Unable to boot device in current state: Booted");
+        if !already_booted {
+            return Err(CliError::CommandFailed {
+                context: format!("xcrun simctl boot {udid}"),
+                exit_code: boot.status.code(),
             });
         }
+        crate::ui::debug(format!("simulator {udid} was already booted"));
     }
 
-    Ok(emulators)
-}
-
-/// Extract iOS version from a runtime key.
-/// e.g. "com.apple.CoreSimulator.SimRuntime.iOS-17-2" → "iOS 17.2"
-fn extract_ios_version(runtime_key: &str) -> String {
-    // Look for the last segment after "SimRuntime."
-    if let Some(suffix) = runtime_key.strip_prefix("com.apple.CoreSimulator.SimRuntime.") {
-        suffix.replace('-', ".").replacen('.', " ", 1)
-    } else {
-        runtime_key.to_string()
-    }
-}
-
-/// Launch an iOS simulator by UDID.
-fn launch_ios_simulator(udid: &str) -> CliResult<()> {
-    let output = Command::new("xcrun")
-        .args(["simctl", "boot", udid])
-        .output()
-        .context("Failed to run xcrun simctl boot")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Exit code 164 means "already booted" — not an error.
-        if output.status.code() == Some(164)
-            || stderr.contains("Unable to boot device in current state: Booted")
-        {
-            tracing::debug!("Simulator {} is already booted", udid);
-            return Ok(());
-        }
-        return Err(crate::error::CliError::CommandFailed {
-            context: format!("xcrun simctl boot {udid}"),
-            exit_code: output.status.code(),
-        });
-    }
+    // `open -a Simulator` returns as soon as the app is asked to activate;
+    // it does not block on the simulator finishing boot.
+    Command::new("open")
+        .args(["-a", "Simulator"])
+        .spawn()
+        .map_err(|error| CliError::context(error, "failed to open the Simulator app"))?;
 
     Ok(())
 }
 
-// ── Display helpers ─────────────────────────────────────────────────────────
+fn emulator_table(emulators: &[Device]) -> Vec<String> {
+    let platform_w = 8;
+    let name_w = emulators
+        .iter()
+        .map(|e| e.name.chars().count())
+        .max()
+        .unwrap_or(4)
+        .max(4);
 
-/// Display emulators as a formatted table.
-fn display_emulator_table(emulators: &[Emulator]) -> CliResult<()> {
-    // Column widths.
-    let platform_w = 10;
-    let name_w = 35;
-    let version_w = 15;
-
-    // Header.
-    let header = format!(
-        "  {:<platform_w$} {:<name_w$} {:<version_w$} {}",
+    let mut lines = vec![format!(
+        "{:<platform_w$} {:<name_w$} {:<9} {}",
         style("Platform").bold(),
         style("Name").bold(),
-        style("Version").bold(),
         style("Status").bold(),
-    );
-    cliclack::log::info(header)?;
+        style("Id (--device)").bold(),
+    )];
 
     for emu in emulators {
-        let status_styled = match emu.status {
-            EmulatorStatus::Running => style("Running").green().to_string(),
-            EmulatorStatus::Stopped => style("Stopped").dim().to_string(),
+        let status = match emu.status {
+            Status::Booted => style("booted").green().to_string(),
+            Status::Shutdown => style("shutdown").dim().to_string(),
+            Status::Online | Status::Offline | Status::Unauthorized | Status::Available => {
+                style("unknown").dim().to_string()
+            }
         };
-
-        let version_display = if emu.version.is_empty() {
-            "-".to_string()
-        } else {
-            emu.version.clone()
+        let platform_label = match emu.platform {
+            crate::DevicePlatform::Android => "Android",
+            crate::DevicePlatform::Ios => "iOS",
+            crate::DevicePlatform::Desktop | crate::DevicePlatform::Web => "-",
         };
-
-        let line = format!(
-            "  {:<platform_w$} {:<name_w$} {:<version_w$} {}",
-            emu.platform, emu.name, version_display, status_styled,
-        );
-        cliclack::log::info(line)?;
+        lines.push(format!(
+            "{platform_label:<platform_w$} {:<name_w$} {status:<9} {}",
+            emu.name,
+            style(&emu.id).dim()
+        ));
     }
 
-    Ok(())
+    lines
 }
 
-/// Display installation hints when no emulators are found.
-fn display_install_hints() -> CliResult<()> {
-    let hints = format!(
-        "{}\n  {}\n\n{}\n  {}",
-        style("Android").bold(),
-        "Install Android SDK: https://developer.android.com/studio",
-        style("iOS (macOS only)").bold(),
-        "Install Xcode from the App Store",
-    );
-    cliclack::note("Setup Guide", hints)?;
-    Ok(())
+impl devices::Problem {
+    fn platform_label(&self) -> &'static str {
+        match self.platform {
+            crate::DevicePlatform::Android => "Android",
+            crate::DevicePlatform::Ios => "iOS",
+            crate::DevicePlatform::Desktop => "Desktop",
+            crate::DevicePlatform::Web => "Web",
+        }
+    }
 }
-
-/// Installation hint for Android SDK.
-fn android_install_hint() -> &'static str {
-    "Install Android SDK: https://developer.android.com/studio"
-}
-
-/// Installation hint for iOS tools.
-fn ios_install_hint() -> &'static str {
-    "Install Xcode from the App Store, then run: xcode-select --install"
-}
-
-// ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
-    #[test]
-    fn test_extract_ios_version() {
-        assert_eq!(
-            extract_ios_version("com.apple.CoreSimulator.SimRuntime.iOS-17-2"),
-            "iOS 17.2"
-        );
-        assert_eq!(
-            extract_ios_version("com.apple.CoreSimulator.SimRuntime.tvOS-17-0"),
-            "tvOS 17.0"
-        );
-        assert_eq!(extract_ios_version("unknown-key"), "unknown-key");
-    }
-
-    #[test]
-    fn test_parse_simctl_json_empty() {
-        let json = r#"{"devices": {}}"#;
-        let result = parse_simctl_json(json).expect("should parse");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_parse_simctl_json_with_devices() {
-        let json = r#"{
-            "devices": {
-                "com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
-                    {
-                        "udid": "ABC-123",
-                        "name": "iPhone 15 Pro",
-                        "state": "Shutdown",
-                        "isAvailable": true
-                    },
-                    {
-                        "udid": "DEF-456",
-                        "name": "iPhone 15",
-                        "state": "Booted",
-                        "isAvailable": true
-                    },
-                    {
-                        "udid": "GHI-789",
-                        "name": "Unavailable Device",
-                        "state": "Shutdown",
-                        "isAvailable": false
-                    }
-                ]
-            }
-        }"#;
-
-        let result = parse_simctl_json(json).expect("should parse");
-        assert_eq!(result.len(), 2); // Unavailable device filtered out.
-        assert_eq!(result[0].name, "iPhone 15 Pro");
-        assert_eq!(result[0].status, EmulatorStatus::Stopped);
-        assert_eq!(result[0].version, "iOS 17.0");
-        assert_eq!(result[1].name, "iPhone 15");
-        assert_eq!(result[1].status, EmulatorStatus::Running);
-    }
-
-    #[test]
-    fn test_parse_simctl_json_invalid() {
-        let result = parse_simctl_json("not json");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_simctl_json_missing_devices() {
-        let json = r#"{"runtimes": []}"#;
-        let result = parse_simctl_json(json).expect("should parse");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_tool_executable() {
-        let name = tool_executable("emulator");
-        if cfg!(windows) {
-            assert_eq!(name, "emulator.exe");
-        } else {
-            assert_eq!(name, "emulator");
+    fn avd(name: &str, status: Status) -> Device {
+        Device {
+            id: name.to_string(),
+            name: name.to_string(),
+            platform: crate::DevicePlatform::Android,
+            kind: Kind::Emulator,
+            status,
+            details: BTreeMap::new(),
         }
     }
 
     #[test]
-    fn test_emulator_platform_display() {
-        assert_eq!(EmulatorPlatform::Android.to_string(), "Android");
-        assert_eq!(EmulatorPlatform::Ios.to_string(), "iOS");
+    fn resolve_target_matches_exact_name_case_insensitively() {
+        let candidates = vec![avd("Pixel_7_API_34", Status::Shutdown)];
+        let found = resolve_target(&candidates, "pixel_7_api_34").expect("exact match");
+        assert_eq!(found.name, "Pixel_7_API_34");
     }
 
     #[test]
-    fn test_emulator_status_display() {
-        assert_eq!(EmulatorStatus::Running.to_string(), "Running");
-        assert_eq!(EmulatorStatus::Stopped.to_string(), "Stopped");
+    fn resolve_target_matches_unique_prefix() {
+        let candidates = vec![avd("Pixel_7_API_34", Status::Shutdown)];
+        let found = resolve_target(&candidates, "pixel").expect("unique prefix");
+        assert_eq!(found.name, "Pixel_7_API_34");
+    }
+
+    #[test]
+    fn resolve_target_reports_ambiguous_prefix() {
+        let candidates = vec![
+            avd("Pixel_6", Status::Shutdown),
+            avd("Pixel_7", Status::Shutdown),
+        ];
+        let error = resolve_target(&candidates, "pixel").expect_err("ambiguous");
+        assert!(matches!(error, CliError::DeviceNotFound { .. }));
+    }
+
+    #[test]
+    fn resolve_target_reports_unknown_name() {
+        let candidates = vec![avd("Pixel_7", Status::Shutdown)];
+        let error = resolve_target(&candidates, "definitely-not-an-emulator").expect_err("unknown");
+        assert!(matches!(error, CliError::DeviceNotFound { .. }));
     }
 }

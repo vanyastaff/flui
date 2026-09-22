@@ -16,6 +16,7 @@ pub(crate) mod accessibility_bridge;
 pub mod events;
 pub mod gestures;
 mod handlers;
+pub(crate) mod owner_signal;
 // `pub`, not `pub(crate)`, for the same reason `keys`/`keys_macos` are:
 // these cfg-free rule modules are consumed only by one target's backend
 // (here Win32), so on every other target a crate-private visibility flags
@@ -31,5 +32,10 @@ pub mod scroll;
 // `hwnd_affinity` above (consumers: the Win32 and AppKit backends).
 pub mod visibility;
 
+#[cfg(target_os = "ios")]
+pub(crate) use handlers::LifecycleEvent;
 pub(crate) use handlers::impl_window_callback_setters;
 pub use handlers::{PlatformHandlers, WindowCallbacks};
+
+#[cfg(any(target_os = "ios", all(test, target_os = "macos")))]
+pub(crate) mod apple_scene_error;

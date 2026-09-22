@@ -109,6 +109,8 @@ mod rotated_box_layer_update;
 mod rotation_transition;
 #[path = "routes.rs"]
 mod routes;
+#[path = "safe_area.rs"]
+mod safe_area;
 #[path = "scale_transition.rs"]
 mod scale_transition;
 #[path = "scroll.rs"]

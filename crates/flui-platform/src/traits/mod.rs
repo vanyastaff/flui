@@ -60,7 +60,7 @@ pub use input::{
 pub use keyboard_types::NamedKey;
 pub use owner::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
-    WaitError, WindowOpen,
+    WaitError, WakeRegistrationError, WindowOpen,
 };
 pub use platform::{
     Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback,
@@ -69,4 +69,5 @@ pub use platform::{
 pub use text_input::PlatformTextInput;
 pub use window::{
     CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowExecutionState, WindowShowError,
 };

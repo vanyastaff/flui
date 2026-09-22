@@ -389,43 +389,12 @@ fn evict_subtree_cleans_descendants() {
     });
 }
 
-/// A globally-keyed lazy child pushed to the inactive queue by eviction
-/// must be slab-freed by `finalize_tree` — not left dangling.
-///
-/// A globally-keyed element is soft-removed by `tree.remove` (called inside
-/// `remove_subtree`): the slab entry stays alive, the element is placed into
-/// `BuildOwner::inactive_elements`, and `has_inactive_elements()` returns
-/// `true`. Only `finalize_tree` drains that queue and calls `remove_finalized`
-/// which actually frees the slab slot. Without `finalize_tree` the element
-/// would remain in the slab indefinitely.
-///
-/// The test uses a leaf view so the globally-keyed root has no descendants —
-/// the non-keyed descendant-leak concern for composite subtrees is a separate,
-/// orthogonal investigation.
-/// A GlobalKey moving between two lazy hosts must relocate the existing
-/// element, not panic.
-///
-/// TWO preconditions block it, and only the first is fixed:
-///
-/// 1. `ensure` called `ElementTree::insert` with no reconcile guard, so
-///    `retake_active_global_key`'s `is_reconciling_parent` check failed.
-///    Fixed — `ensure` now declares `host` for the duration of the insert.
-/// 2. **Still open.** `retake_active_global_key` then verifies the
-///    candidate is in `from_parent.child_ids`. A lazy host never populates
-///    `child_ids` — resident children live in the `SparseChildren` map —
-///    so that reverse-edge check fails, `try_retake_global_key` yields
-///    `GlobalKeyRetake::Rejected`, and `insert`'s `Rejected` arm panics.
-///
-/// Closing (2) is a design call, not a patch: either the membership check
-/// stops treating `child_ids` as authoritative, or the lazy path starts
-/// maintaining it. The latter has wider consequences — every walk that
-/// iterates `child_ids` (`collect_render_frontier`, `deactivate_subtree`,
-/// ancestry recompute) currently skips sparse children too.
+/// A GlobalKey moving between two lazy hosts preserves the element's
+/// identity and updates its parent. Lazy hosts keep resident children in
+/// `SparseChildren`, so relocation must not require membership in the
+/// donor's dense `child_ids` list. `ensure` supplies the reconciliation guard
+/// needed to move the child's render subtree.
 #[test]
-#[ignore = "known regression: a lazy host does not maintain child_ids, so \
-                retake_active_global_key's reverse-edge membership check rejects \
-                the relocation and insert's Rejected arm panics — see the test's \
-                own doc comment"]
 fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
     let (mut tree, mut build_owner, pipeline, host_a) = host_tree();
     let host_b = tree.insert(

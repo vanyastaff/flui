@@ -69,6 +69,7 @@ pub struct MacOSWindow {
     /// answerable long after the window is meaningless to hand a GPU handle
     /// for, and only this flag (not a nil check) can tell the two apart.
     closed: Arc<AtomicBool>,
+    loop_control: std::sync::OnceLock<std::sync::Weak<super::loop_control::LoopControl>>,
 
     /// Window configuration
     config: WindowConfiguration,
@@ -147,14 +148,12 @@ pub struct MacOSWindow {
 // before surface creation) plus `debug_assert_appkit_main_thread`-guarded
 // platform entries (ADR-0039) — their un-routed `contentView` getter is the
 // owner-sweep plan's recorded class-E residual, a deliberate carve-out of the
-// routing sweep rather than a local lapse; and [`Drop`] fire-and-forgets its
-// AppKit tail
-// (the a11y shutdown plus the window's balancing `release`) onto the owner
-// lane without blocking. If the lane is no longer servicing, the closure is
-// never run and the window is left over-retained — a leak, never a
-// use-after-free, so a dealloc never runs off-main. The same ownership +
-// affinity argument powers the lane-confined `OwnerLaneId` wrapper the drop
-// tail uses: the id it owns is consumed only under the owner-lane guard.
+// routing sweep rather than a local lapse. [`Drop`] releases its AppKit tail
+// inline on the owner; off-owner it queues the tail without blocking. If that
+// queue is no longer servicing, the window stays over-retained — a leak, never
+// an off-main deallocation. The close delegate's autorelease pin protects the
+// native receiver while callback-local Rust wrappers drop. `OwnerLaneId` is
+// consumed only on the owner thread (directly or under its queue guard).
 //
 // What the routing does NOT provide is the wake relay ADR-0045 decision 5
 // mandates end-to-end: the scheduler hook still calls `request_redraw`
@@ -199,6 +198,22 @@ struct MacOSWindowState {
     /// `true` — a freshly created window is treated as visible until AppKit
     /// says otherwise, matching every other backend's initial state.
     occlusion_visible: bool,
+
+    /// The window was opened `visible: true` and is ordered front, but at
+    /// `alphaValue` 0: the first reveal — alpha back to 1 — is deferred
+    /// until the embedder reports a presented frame
+    /// ([`PlatformWindow::reveal_after_first_frame`]) or asks for the window
+    /// explicitly (`show`/`set_visible(true)`/`activate`).
+    ///
+    /// Ordered-but-transparent rather than hidden, and measured rather than
+    /// assumed: a window that is not ordered on screen gets no Metal
+    /// drawable — wgpu reports the surface occluded and every frame comes
+    /// back `NotShown` — so a reveal that waited for a present into a hidden
+    /// window would wait for something that cannot happen (observed
+    /// 2026-09-21: 30+ withheld frames, then the embedder's fallback). A
+    /// transparent window is composited normally, so the first frame
+    /// presents into it, and nothing is on screen until it has.
+    first_reveal_pending: bool,
 }
 
 impl std::fmt::Debug for MacOSWindow {
@@ -214,6 +229,14 @@ impl std::fmt::Debug for MacOSWindow {
 }
 
 impl MacOSWindow {
+    /// Clear the deferred-first-reveal flag, returning whether it was set:
+    /// the one call that decides which caller performs the reveal. Taken
+    /// under the state lock and never inside an owner route, so it cannot
+    /// be held across an AppKit message.
+    fn take_pending_first_reveal(&self) -> bool {
+        std::mem::replace(&mut self.state.lock().first_reveal_pending, false)
+    }
+
     /// Create a new macOS window
     ///
     /// # Errors
@@ -339,6 +362,29 @@ impl MacOSWindow {
             // `setReleasedWhenClosed(false)` for its wrapped `NSWindow`.
             let _: () = msg_send![ns_window, setReleasedWhenClosed: NO];
 
+            // Background colour. AppKit's default for a fresh alloc/init'd
+            // window is `windowBackgroundColor`, a near-white
+            // (`rgb(240,240,240)` measured on this host) that sits behind
+            // the content view for as long as the first frame is still being
+            // set up — on a cold launch, up to several seconds
+            // (`docs/BETA.md`'s first-frame-race record shows 2.81 s). The
+            // user-facing glitch this default produces is documented in
+            // that file's "blank white window" paragraphs: the window is
+            // ordered front *before* `Renderer::render_scene` ever reaches
+            // `queue.present`, so the viewer sees the bare background, not
+            // the application. Setting the background to
+            // `underPageBackgroundColor` — the dark neutral AppKit uses for
+            // content chrome — doesn't remove the gap, it just stops
+            // screaming about it: the window arrives as a dark field, and
+            // the compositor's first frame lands on top of it without a
+            // jarring white flash in between. The color is also the exact
+            // one the launch-render gate's blank-window control measures
+            // against, so the control and the production path disagree by
+            // construction (a deliberately dark background is no longer
+            // `rgb(240,240,240)` flat).
+            let bg: ObjcId = msg_send![class!(NSColor), underPageBackgroundColor];
+            let _: () = msg_send![ns_window, setBackgroundColor: bg];
+
             // Set window title
             let title = NSString::from_str(&options.title);
             let _: () = msg_send![ns_window, setTitle: &*title];
@@ -356,8 +402,20 @@ impl MacOSWindow {
             // Get backing scale factor
             let scale: f64 = msg_send![ns_window, backingScaleFactor];
 
-            // Make window visible if requested
+            // A window opened `visible: true` is ordered front now but fully
+            // transparent. AppKit shows a window the moment it is ordered,
+            // and the first frame reaches the compositor only after the GPU
+            // stack behind it is built and the first present lands —
+            // measured at 2.81 s on a cold launch — so an opaque window
+            // here shows its bare background for that whole gap (the launch
+            // blank-window observation in `docs/BETA.md`). It cannot simply
+            // stay hidden either: an un-ordered window gets no Metal
+            // drawable (see `MacOSWindowState::first_reveal_pending`). Alpha
+            // 0 gives the surface a window to present into while the viewer
+            // sees nothing; `reveal_after_first_frame` restores alpha 1.
+            // `visible: false` stays hidden until asked, as before.
             if options.visible {
+                let _: () = msg_send![ns_window, setAlphaValue: 0.0f64];
                 let _: () = msg_send![ns_window, makeKeyAndOrderFront: NIL];
             }
 
@@ -392,10 +450,12 @@ impl MacOSWindow {
                     refresh_period,
                     cursor: CursorIcon::default(),
                     occlusion_visible: true,
+                    first_reveal_pending: options.visible,
                 })),
                 windows_map: Arc::clone(&windows_map),
                 callbacks,
                 closed: Arc::new(AtomicBool::new(false)),
+                loop_control: std::sync::OnceLock::new(),
                 config,
                 owner,
                 owner_is_main,
@@ -459,7 +519,15 @@ impl MacOSWindow {
         self.ns_window
     }
 
-    /// Get the per-window callbacks registry
+    /// Attach the owning standalone loop without creating a window/control cycle.
+    pub(super) fn install_loop_control(
+        &self,
+        control: std::sync::Weak<super::loop_control::LoopControl>,
+    ) {
+        let _ = self.loop_control.set(control);
+    }
+
+    /// Return this window's callback slots.
     pub fn callbacks(&self) -> &Arc<WindowCallbacks> {
         &self.callbacks
     }
@@ -1007,7 +1075,44 @@ impl PlatformWindow for MacOSWindow {
         });
     }
 
-    fn activate(&self) {
+    fn show(&self) -> Result<(), crate::WindowShowError> {
+        // An explicit show settles a deferred first reveal: the window is
+        // made opaque along with being ordered.
+        let settle_reveal = self.take_pending_first_reveal();
+        route_on_owner(self.owner, self.owner_is_main, || {
+            if self.closed.load(Ordering::SeqCst) {
+                return Err(crate::WindowShowError::Closed);
+            }
+            // SAFETY: self retains the native window; routing establishes its
+            // owner lane. Deminiaturizing and ordering do not toggle zoom/fullscreen.
+            unsafe {
+                if settle_reveal {
+                    let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+                }
+                let minimized: bool = msg_send![self.ns_window, isMiniaturized];
+                if minimized {
+                    let _: () = msg_send![self.ns_window, deminiaturize: NIL];
+                }
+                if self.closed.load(Ordering::SeqCst) {
+                    return Err(crate::WindowShowError::Closed);
+                }
+                let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
+            }
+            if self.closed.load(Ordering::SeqCst) {
+                Err(crate::WindowShowError::Closed)
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn reveal_after_first_frame(&self) {
+        // The flag is settled under the state lock and outside the owner
+        // route, so a second caller racing this one sees `false`: the
+        // window becomes opaque exactly once for its deferred reveal.
+        if !self.take_pending_first_reveal() || self.closed.load(Ordering::SeqCst) {
+            return;
+        }
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         route_on_owner(owner, owner_is_main, || unsafe {
@@ -1015,6 +1120,23 @@ impl PlatformWindow for MacOSWindow {
             // body runs on the owner thread — inline on the OS main thread for a main-lane
             // owner, or dispatched onto the lane under the reentrancy guard — before the
             // message is sent.
+            let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+        });
+        tracing::debug!("macOS: window revealed after its first presented frame");
+    }
+
+    fn activate(&self) {
+        let settle_reveal = self.take_pending_first_reveal();
+        let owner = self.owner;
+        let owner_is_main = self.owner_is_main;
+        route_on_owner(owner, owner_is_main, || unsafe {
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
+            // body runs on the owner thread — inline on the OS main thread for a main-lane
+            // owner, or dispatched onto the lane under the reentrancy guard — before the
+            // message is sent.
+            if settle_reveal {
+                let _: () = msg_send![self.ns_window, setAlphaValue: 1.0f64];
+            }
             let _: () = msg_send![self.ns_window, makeKeyAndOrderFront: NIL];
         });
     }
@@ -1271,6 +1393,7 @@ impl Clone for MacOSWindow {
             windows_map: Arc::clone(&self.windows_map),
             callbacks: Arc::clone(&self.callbacks),
             closed: Arc::clone(&self.closed),
+            loop_control: self.loop_control.clone(),
             config: self.config.clone(),
             // The lane is a property of the window, not of any one handle:
             // every clone of this wrapper routes through the same owner.
@@ -1352,37 +1475,44 @@ impl Drop for MacOSWindow {
         let window_id = self.ns_window as u64;
         let _prev = self.windows_map.lock().remove(&window_id);
 
-        // The AppKit tail, dispatched ONTO the owner lane and NOT awaited:
-        // `Drop` never blocks, so teardown cannot hang (by construction),
-        // and the closure OWNS every capture — nothing borrowed from this
-        // dying value crosses the lane (the `'static` bound on
-        // `exec_async_guarded`). If the lane is un-servicing (pre-`run`, or
-        // the run loop is gone) the closure never runs and both halves fall
-        // out soundly: the NSWindow is left over-retained — never released,
-        // so no dealloc ever runs off-main — and the a11y adapter leaks +
-        // warns via its own existing off-owner fallback.
+        // On-owner teardown executes now, including after NSApplication.run
+        // returns. The close delegate pins its native receiver in the outer
+        // autorelease pool, so a final callback-local wrapper drop cannot
+        // deallocate the receiver under AppKit's close stack. Off-owner Drop
+        // remains nonblocking; an unserviced owner queue can still leak its
+        // retained native tail, never release AppKit objects on a worker.
         let owner = self.owner;
         let ns_window = OwnerLaneId(self.ns_window);
         #[cfg(feature = "a11y")]
         let a11y = self.accessibility.get().cloned(); // Option<Arc<...>>, Send
-        super::owner_lane::exec_async_guarded(owner, move || unsafe {
-            // SAFETY: the tail runs under the owner-lane guard — on-lane — so
+        let teardown = move || unsafe {
+            // SAFETY: the tail runs on the owner thread, directly or under its
+            // queue guard, so
             // the a11y unhook and the Window release both execute
             // owner-affine. `shutdown()` runs before the release in the same
             // block, preserving accesskit's documented precondition (unhook
             // the dynamic subclass while the content view is still alive).
             #[cfg(feature = "a11y")]
             if let Some(a11y) = a11y {
-                a11y.shutdown();
+                // A bridge failure must not skip the native window's balancing
+                // release. Keep it inside its own cleanup boundary.
+                super::owner_lane::run_cleanup_guarded(|| a11y.shutdown());
             }
             // SAFETY: `send_release` consumes the whole `OwnerLaneId` (the
             // closure's capture is then that `Send` newtype, never its raw
             // field), and its own contract — live still-retained window, send
             // on the owner lane — is met here: the wrapper was built from this
             // value's `ns_window` before the last clone dropped, and this body
-            // runs under the owner-lane guard.
+            // runs on the owner thread.
             ns_window.send_release();
-        });
+        };
+        if super::owner_lane::on_owner_thread(owner, self.owner_is_main) {
+            super::owner_lane::run_cleanup_guarded(teardown);
+        } else {
+            super::owner_lane::exec_async_guarded(owner, move || {
+                super::owner_lane::run_cleanup_guarded(teardown);
+            });
+        }
     }
 }
 
@@ -1534,10 +1664,17 @@ impl WindowTrait for MacOSWindow {
     }
 
     fn set_visible(&mut self, visible: bool) {
+        // Either direction settles a deferred first reveal: a show makes the
+        // window opaque along with ordering it, a hide orders it out and
+        // restores alpha so a later show is an ordinary one.
+        let settle_reveal = self.take_pending_first_reveal();
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         let this = &*self;
         route_on_owner(owner, owner_is_main, || unsafe {
+            if settle_reveal {
+                let _: () = msg_send![this.ns_window, setAlphaValue: 1.0f64];
+            }
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
             // `this` reborrows), and the body runs on the owner thread — inline on
             // the OS main thread for a main-lane owner, or dispatched onto the
@@ -2181,6 +2318,14 @@ fn get_or_create_delegate_class() -> &'static Class {
         extern "C-unwind" fn window_will_close(this: &Object, _sel: Sel, _notification: ObjcId) {
             // SAFETY: AppKit invokes delegate methods on live delegate objects.
             if let Some(window) = unsafe { get_window_from_delegate(this) } {
+                // SAFETY: the wrapper retains this live NSWindow. Pin it before
+                // user callbacks can drop the final wrapper; transferring that
+                // extra retain to AppKit's surrounding autorelease pool keeps
+                // the receiver alive until the native close stack has returned.
+                // Nested callback pools cannot drain this already-enqueued pin.
+                if let Some(pin) = unsafe { objc2::rc::Retained::retain(window.ns_window) } {
+                    let _ = objc2::rc::Retained::autorelease_ptr(pin);
+                }
                 window.handle_close();
             }
         }
@@ -2444,7 +2589,9 @@ impl MacOSWindow {
     /// `on_close` callback registered above still fires normally before its
     /// slot — and every other slot — is released.
     fn handle_close(&self) {
-        self.closed.store(true, Ordering::SeqCst);
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return;
+        }
 
         // Untrack from the platform's window map here, on the owner thread the
         // delegate notification runs on, rather than from `Drop` — `Drop` is the
@@ -2487,6 +2634,9 @@ impl MacOSWindow {
         // SAFETY: `ns_window` is alive for the lifetime of `self`.
         unsafe {
             let _: () = msg_send![self.ns_window, setDelegate: NIL];
+        }
+        if let Some(control) = self.loop_control.get().and_then(std::sync::Weak::upgrade) {
+            control.request(false);
         }
     }
 

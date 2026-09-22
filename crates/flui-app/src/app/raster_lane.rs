@@ -299,16 +299,18 @@ impl<B: RasterBackend> RasterLane<B> {
     /// latest known size — NOT the backend's readback, which predates any
     /// resize that arrived while the old surface was gone.
     ///
-    /// Two production causes reach here, and the caller is the one that knows
-    /// which: device-loss recovery (`Renderer::recover`) on every backend, and
-    /// the platform's surface-availability signal — `false` then `true` from
-    /// `PlatformWindow::on_surface_status_change` — which today only Android
-    /// emits, from four arms: `false` on `MainEvent::Pause` and
-    /// `MainEvent::TerminateWindow`, `true` on `MainEvent::Resume` and
-    /// `MainEvent::InitWindow` (`flui-app`'s Android runner). The window pair
-    /// is the activity-recreation path; the lifecycle pair means a `Resume`
-    /// whose window survived the pause also lands here, with no `InitWindow`
-    /// involved.
+    /// Three production causes reach here, and the caller is the one that
+    /// knows which: device-loss recovery (`Renderer::recover`) on every
+    /// backend; the platform's surface-availability signal — `false` then
+    /// `true` from `PlatformWindow::on_surface_status_change` — which the
+    /// mobile backends emit (Android from four arms: `false` on
+    /// `MainEvent::Pause` and `MainEvent::TerminateWindow`, `true` on
+    /// `MainEvent::Resume` and `MainEvent::InitWindow`; iOS on scene
+    /// disconnect/connect); and the deadline-paced retry of a rebuild that
+    /// failed after such a signal (`runner::surface_lifecycle`). On Android
+    /// the window pair is the activity-recreation path; the lifecycle pair
+    /// means a `Resume` whose window survived the pause also lands here, with
+    /// no `InitWindow` involved.
     pub(crate) fn note_surface_recreated(&mut self) {
         let (width, height) = self.stamp.physical_size();
         let Some(generation) = self.handle.resize(width, height) else {

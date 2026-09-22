@@ -18,6 +18,40 @@ use super::{
     text_input::PlatformTextInput,
 };
 
+/// Native execution eligibility, independent of focus, visibility and GPU surface readiness.
+///
+/// `Detached` is a reversible native attachment observation. Terminal window
+/// closure is a separate lifetime event and cannot be reversed with this state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WindowExecutionState {
+    /// The platform permits UI execution; this does not guarantee a usable GPU surface.
+    #[default]
+    Running,
+    /// UI execution is suspended, even if stale native focus/visibility remain true.
+    Suspended,
+    /// The native presentation is detached, but may subsequently attach again.
+    Detached,
+}
+
+/// Failure to show an existing window without changing its display mode.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum WindowShowError {
+    /// This backend cannot show and request focus for an existing window.
+    #[error("showing an existing window is unsupported")]
+    Unsupported,
+    /// The native window has closed.
+    #[error("the window is closed")]
+    Closed,
+    /// A native operation failed.
+    #[error("could not show the window: {message}")]
+    Native {
+        /// Native failure description.
+        message: String,
+    },
+}
+
 // ==================== Value Types ====================
 
 /// Window appearance (light/dark theme)
@@ -331,7 +365,35 @@ pub trait PlatformWindow: Send + Sync {
         let _ = title;
     }
 
-    /// Activate (bring to front / focus) the window
+    /// Show this window, unminimizing it and requesting foreground focus.
+    /// Preserves maximized/fullscreen mode and the existing widget tree.
+    /// Focus is a request: the window manager may decline to grant it.
+    ///
+    /// # Errors
+    /// Returns unsupported when the backend cannot perform this operation,
+    /// closed after native teardown, or a native operation failure.
+    fn show(&self) -> Result<(), WindowShowError> {
+        Err(WindowShowError::Unsupported)
+    }
+
+    /// The embedder has presented the first frame into this window's
+    /// surface — or has waited as long as it is willing to for one.
+    ///
+    /// A backend that defers the physical reveal of a window opened
+    /// [`WindowOptions::visible`](crate::traits::WindowOptions::visible)
+    /// `== true` performs it now, exactly once; a window opened hidden, one
+    /// already shown explicitly (`show`/`set_visible(true)`/`activate`),
+    /// or a backend that reveals at open, ignores the call. Calling it
+    /// again is harmless.
+    ///
+    /// The embedder calls this after the first frame whose present
+    /// succeeded, and at a bounded fallback after a frame that ran and
+    /// presented nothing, so a surface that never presents still yields a
+    /// window the user can see and close rather than a process with no
+    /// window at all.
+    fn reveal_after_first_frame(&self) {}
+
+    /// Activate (bring to front / focus) the window.
     fn activate(&self) {}
 
     /// Minimize the window
@@ -464,6 +526,34 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
+    /// Safe-area intrusions in logical pixels, relative to the content view.
+    /// Backends without native inset reporting return zero. Detached windows
+    /// retain their last accepted geometry; this is not keyboard occlusion.
+    fn safe_area_insets(&self) -> flui_types::geometry::EdgeInsets {
+        flui_types::geometry::EdgeInsets::ZERO
+    }
+
+    /// Observe safe-area changes on the owner thread. Register, then resample
+    /// `safe_area_insets` to cover changes before callback installation.
+    fn on_safe_area_change(
+        &self,
+        callback: Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>,
+    ) {
+        let _ = callback;
+    }
+
+    /// Current native execution eligibility. Backends without suspension use Running.
+    fn execution_state(&self) -> WindowExecutionState {
+        WindowExecutionState::Running
+    }
+
+    /// Observe native execution changes on the window's owner thread.
+    /// Registration does not emit a snapshot; register first, then read execution_state.
+    /// This does not signal focus or GPU surface success. Detached is reversible.
+    fn on_execution_state_change(&self, callback: Box<dyn FnMut(WindowExecutionState) + Send>) {
+        let _ = callback;
+    }
+
     /// Register a callback for visibility (occlusion) changes.
     ///
     /// Called with `true` when the window becomes visible/unoccluded,
@@ -528,11 +618,12 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// # Delivery is backend-conditional, and the asymmetry costs
     ///
-    /// **Android** is the only emitter today: `MainEvent::TerminateWindow`
+    /// **Android** emits: `MainEvent::TerminateWindow`
     /// and `MainEvent::Pause` produce `false`, `MainEvent::InitWindow` and
     /// `MainEvent::Resume` produce `true`. Winit's own Android support
     /// forwards `suspended()`/`resumed()` for the same pair, so a second
-    /// emitter is available to the winit backend.
+    /// emitter is available to the winit backend. Native **iOS** emits on true
+    /// background/foreground transitions, never on temporary focus loss.
     ///
     /// A backend that never emits either signal is harmless: the surface is
     /// never released and the window is always treated as available. A
@@ -779,5 +870,6 @@ mod tests {
         assert_eq!(window.scale_factor(), 2.0);
         assert!(window.is_focused());
         assert!(window.is_visible());
+        assert_eq!(window.show(), Err(WindowShowError::Unsupported));
     }
 }

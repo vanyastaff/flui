@@ -388,3 +388,20 @@ tests.
 - **`Save`/`Restore` carry a transform nobody reads.** Every command is
   stamped, the markers included; a marker-only shape would save 64 bytes
   per scope at the cost of a second command type on the wire.
+
+### Font fixtures and distribution provenance
+
+Font-selection regressions use a generated FLUI Probe Sans family instead of a
+restricted third-party test font. Its static, non-monospaced W400/Normal metadata
+keeps the fallback tie with Roboto intact, and explicit `A`, `B`, `o`, and space
+coverage gives the `Ao Bo` probe real glyph IDs and positive advances. Empty
+outlines are sufficient for shaping metrics; no rasterization claim is made.
+Both fixture load orders remain asserted, and bypassing family resolution fails
+the family-selection regression. The four older generated fixtures are unchanged.
+
+`assets/fonts/inventory.toml` binds each font to reviewed bytes, source provenance,
+and complete local license/attribution texts. The font asset gate discovers
+unlisted fonts, checks hashes/notices, regenerates all fixtures into a temporary
+directory, and checks Cargo package file selection. This is a Rust test-fixture
+and packaging decision; it changes no Flutter-derived shaping contract. It also
+does not solve registry dependency cycles or certify complete release archives.

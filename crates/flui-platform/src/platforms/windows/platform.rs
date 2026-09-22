@@ -337,6 +337,7 @@ pub(super) fn teardown_route(
 
 /// Windows platform state
 pub struct WindowsPlatform {
+    owner_control: super::owner_control::OwnerControl,
     /// Message-only window for platform messages
     message_window: HWND,
 
@@ -508,6 +509,7 @@ impl WindowsPlatform {
         tracing::info!("Windows platform initialized with Tokio executors");
 
         let platform = Self {
+            owner_control: super::owner_control::OwnerControl::new()?,
             message_window,
             windows: Arc::new(Mutex::new(HashMap::new())),
             handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
@@ -1428,7 +1430,7 @@ impl WindowsPlatform {
     }
 
     /// Run the Windows message loop (internal implementation)
-    fn run_message_loop() {
+    fn run_message_loop() -> Result<(), PlatformError> {
         tracing::info!("Starting Windows message loop");
 
         // SAFETY: `msg` is a stack-local `MSG`; `&raw mut msg`/`&raw const
@@ -1440,13 +1442,23 @@ impl WindowsPlatform {
         unsafe {
             let mut msg = MSG::default();
 
-            while GetMessageW(&raw mut msg, None, 0, 0).as_bool() {
+            loop {
+                let result = GetMessageW(&raw mut msg, None, 0, 0).0;
+                if result == 0 {
+                    break;
+                }
+                if result == -1 {
+                    return Err(PlatformError::EventLoop {
+                        message: windows::core::Error::from_thread().to_string(),
+                    });
+                }
                 let _ = TranslateMessage(&raw const msg);
                 DispatchMessageW(&raw const msg);
             }
 
             tracing::info!("Message loop exited with code: {}", msg.wParam.0);
         }
+        Ok(())
     }
 }
 
@@ -1467,22 +1479,36 @@ impl Platform for WindowsPlatform {
         // message-only window's queue is bound to the constructing thread).
         self.affinity.bind_current();
 
-        // No owner lane on this backend: every `OwnerPlatform::open_window`
-        // call creates directly and is always `Ready` (ADR-0039 slice 2).
-        // `PlatformProxy` is permanently unsupported until slice 3 adopts a
-        // lane here.
-        let platform: Arc<dyn Platform> = Arc::new(*self);
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)));
-        // `on_ready` runs before the message pump starts: on `Err`, skip
-        // the pump entirely and return rather than servicing messages for a
-        // half-built app.
-        on_ready(OwnerPlatform::new(platform, hooks)).map_err(PlatformError::bootstrap)?;
-
-        Self::run_message_loop();
-        Ok(())
+        let platform = Arc::new(*self);
+        struct RunGuard(Arc<WindowsPlatform>);
+        impl Drop for RunGuard {
+            fn drop(&mut self) {
+                self.0.owner_control.close();
+                let callback = self.0.handlers.lock().quit.take();
+                if let Some(callback) = callback {
+                    crate::shared::panic_boundary::invoke_and_drop_owner_callback(callback);
+                }
+            }
+        }
+        let _guard = RunGuard(Arc::clone(&platform));
+        let erased: Arc<dyn Platform> = platform.clone();
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+            Arc::clone(&erased),
+            Arc::clone(&platform.owner_control.signal),
+        ));
+        on_ready(OwnerPlatform::new(erased, hooks)).map_err(PlatformError::bootstrap)?;
+        platform
+            .owner_control
+            .signal
+            .start()
+            .map_err(|error| PlatformError::EventLoop {
+                message: error.to_string(),
+            })?;
+        Self::run_message_loop()
     }
 
     fn quit(&self) {
+        self.owner_control.signal.close();
         // PostQuitMessage posts to the CALLING thread's message queue — off
         // the owner thread it silently quits nothing (ADR-0039).
         self.affinity.debug_assert_owner("WindowsPlatform::quit");
@@ -1532,6 +1558,11 @@ impl Platform for WindowsPlatform {
         // minted off the owner thread is silently mis-affined (ADR-0039).
         self.affinity
             .debug_assert_owner("WindowsPlatform::open_window");
+        if !self.owner_control.signal.accepting() {
+            return Err(OpenWindowError::OwnerGone {
+                rejected: Some(options),
+            });
+        }
         tracing::info!("Opening window: {:?}", options.title);
 
         let window = WindowsWindow::new(

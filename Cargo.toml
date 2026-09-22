@@ -9,7 +9,7 @@ members = [
     "crates/flui-geometry",   # Geometry primitives (split from flui-types)
     "crates/flui-types",      # Base types with Unit system (ACTIVE)
     "crates/flui-foundation", # Foundation types and utilities (ACTIVE)
-    "crates/flui-macros",     # Proc-macros (skeleton — derives land as a follow-up)
+    "crates/flui-macros",     # Proc-macros (view, diagnostics, and animation derives)
     "crates/flui-log",        # Composition-only cross-platform tracing backend (ACTIVE)
     "crates/flui-tree",       # Tree abstractions (ACTIVE)
     "crates/flui-platform",   # Platform abstraction (ACTIVE)
@@ -55,6 +55,7 @@ members = [
     #   cd examples/web_demo && wasm-pack build --target web --out-dir pkg
     "examples/web_demo",      # Web/WASM platform demo (cdylib)
     "examples/painting_demo", # Web/WASM painting + engine demo (cdylib)
+    "examples/web_counter",   # The counter template through `flui::run_app` on the web (cdylib)
 
     # === Tools ===
     "tools/web-server", # Built-in web dev server (wasm-pack + HTTP serve)
@@ -64,9 +65,8 @@ members = [
     "crates/flui-animation", # Animation system (ACTIVE)
 
     # === DX tooling ===
-    "crates/flui-devtools", # Profiler / timeline / file-watch (no tree inspector yet — see the crate docs)
-    "crates/flui-build",    # Build orchestration (android / cross)
-    "crates/flui-cli",      # `flui` CLI (run / build / devtools / templates)
+    "crates/flui-devtools", # Profiler / timeline / inspector counters
+    "crates/flui-cli",      # `flui` CLI (create / run / build / doctor / devices); owns the build pipeline and the source watcher
     # NOTE: there is deliberately NO signals crate. flui-reactivity (a signals/
     # hooks experiment) was removed 2026-07-28: it had zero consumers, could not
     # build even standalone (inherited workspace deps that were never declared),
@@ -111,12 +111,11 @@ default-members = [
     "crates/flui-assets",
     "crates/flui-animation",
     "crates/flui-devtools",
-    "crates/flui-build",
     "crates/flui-cli",
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT OR Apache-2.0"
@@ -162,28 +161,28 @@ smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }
 # SERIALIZATION - Core functionality
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
+cargo_metadata = "0.23.1"
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
 
 # BUILDER UTILITIES - Used by widgets
 bon = "3.8"
 
-# DX TOOLING - flui-cli / flui-build / flui-devtools
-indicatif = "0.18" # progress bars (build/cli)
-tempfile = "3"     # scratch dirs/files (build/cli tests)
-which = "8"        # locate toolchain executables (build/cli)
+# DX TOOLING - flui-cli / flui-devtools
+tempfile = "3" # scratch dirs/files (build staging and tests)
+which = "8"    # locate toolchain executables (build/cli)
 
 # WORKSPACE PROC-MACROS
-flui-macros = { path = "crates/flui-macros", version = "0.2.0" }
+flui-macros = { path = "crates/flui-macros", version = "=0.1.0" }
 
 # OBJECT CATALOG — sits above flui-rendering (depends on it), below flui-view/app
-flui-objects = { path = "crates/flui-objects", version = "0.2.0" }
+flui-objects = { path = "crates/flui-objects", version = "=0.1.0" }
 
 # TEST SUPPORT — the deterministic headless frame driver (`pump_frame(dt)` over
 # the gesture arena + virtual clock) and the home for future test harness APIs.
 # Sits above flui-widgets, below flui-app, and is only ever a *dev*-dependency of
 # a shipped library: a normal edge would link the test driver into production.
-flui-testing = { path = "crates/flui-testing", version = "0.2.0" }
+flui-testing = { path = "crates/flui-testing", version = "=0.1.0" }
 
 # ERROR HANDLING - Used everywhere
 thiserror = "2.0"
@@ -209,7 +208,7 @@ tracing-wasm = "0.2"
 # COMPOSITION-ONLY LOGGING BACKEND — sits at the substrate layer with no
 # in-workspace dependencies. See docs/workspace-layers.toml for the rule that
 # keeps framework crates off it.
-flui-log = { path = "crates/flui-log", version = "0.2.0" }
+flui-log = { path = "crates/flui-log", version = "=0.1.0" }
 
 # === Shared GPU/Window dependencies ===
 # Used by flui-engine, flui-app, and root examples
@@ -296,6 +295,10 @@ cursor-icon = "1.2"
 
 # UTILITIES - Used by multiple crates
 bitflags = "2.10"
+# Extended grapheme cluster segmentation (UAX #29) for text editing: caret
+# movement and deletion step by user-perceived character, as Flutter's
+# `characters` package does. Already in the graph through cosmic-text.
+unicode-segmentation = "1.12"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 static_assertions = "1.1"
@@ -420,11 +423,31 @@ struct_excessive_bools = "allow"
 # no runtime difference. It also has no answer for the feature-gated stub pairs
 # (`flui-assets`'s `network`-off `load_url`/`load_text`), where the `async` is
 # what keeps the two configurations' signatures identical. Fires on `flui-assets`
-# and `flui-build` today; new in Rust 1.98's pedantic set.
+# and `flui-cli`'s build pipeline today; new in Rust 1.98's pedantic set.
 unused_async_trait_impl = "allow"
 
 [package]
+publish = ["crates-io"]
 name = "flui"
+# What the published archive carries. Without this list `cargo package`
+# archived the whole checkout root — docs/, scripts/, CI, editor and
+# research directories, 666 files — none of which a consumer compiles.
+# Nested packages under examples/ are excluded by Cargo on their own.
+# Patterns are gitignore-style, so each is anchored with a leading `/`: an
+# unanchored `README.md` would also match every README under the ignored
+# `.flutter/` reference mirror, which `include` otherwise overrides.
+include = [
+    "/Cargo.toml",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/LICENSE-APACHE",
+    "/NOTICE",
+    "/llms.txt",
+    "/src/**",
+    "/examples/**",
+    "/tests/**",
+]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -439,8 +462,8 @@ categories = ["gui", "rendering::engine"]
 workspace = true
 
 # The facade surface (src/lib.rs): the layers an application author consumes.
-# Lower layers (rendering/painting/engine/platform) stay dev-deps — examples
-# reach them directly, app authors go through the widget layer.
+# Custom painting, rendering, and gestures have curated authoring modules.
+# Engine/platform internals stay dev-deps for framework integration examples.
 #
 # The catalogs (flui-material/flui-cupertino) and the global localization
 # implementation (flui-localizations) are *optional* normal dependencies, not
@@ -451,40 +474,48 @@ workspace = true
 # ADR-0028's design-system-dependent allowlist alongside `flui-app` — see
 # `scripts/check-workspace-inventory.sh`.
 [dependencies]
-flui-types = { path = "crates/flui-types", version = "0.2.0" }
-flui-geometry = { path = "crates/flui-geometry", version = "0.2.0" }
-flui-foundation = { path = "crates/flui-foundation", version = "0.2.0" }
-flui-view = { path = "crates/flui-view", version = "0.2.0" }
-flui-widgets = { path = "crates/flui-widgets", version = "0.2.0" }
-flui-animation = { path = "crates/flui-animation", version = "0.2.0" }
-flui-app = { path = "crates/flui-app", version = "0.2.0" }
-flui-material = { path = "crates/flui-material", version = "0.2.0", optional = true }
-flui-cupertino = { path = "crates/flui-cupertino", version = "0.2.0", optional = true }
-flui-localizations = { path = "crates/flui-localizations", version = "0.2.0", optional = true }
+flui-macros = { path = "crates/flui-macros", version = "=0.1.0" }
+flui-types = { path = "crates/flui-types", version = "=0.1.0" }
+flui-geometry = { path = "crates/flui-geometry", version = "=0.1.0" }
+flui-foundation = { path = "crates/flui-foundation", version = "=0.1.0" }
+flui-view = { path = "crates/flui-view", version = "=0.1.0" }
+flui-widgets = { path = "crates/flui-widgets", version = "=0.1.0" }
+flui-animation = { path = "crates/flui-animation", version = "=0.1.0" }
+flui-app = { path = "crates/flui-app", version = "=0.1.0" }
+flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.1.0", optional = true }
+flui-tree = { path = "crates/flui-tree", version = "=0.1.0" }
+flui-painting = { path = "crates/flui-painting", version = "=0.1.0" }
+flui-rendering = { path = "crates/flui-rendering", version = "=0.1.0" }
+flui-interaction = { path = "crates/flui-interaction", version = "=0.1.0" }
+flui-testing = { workspace = true, optional = true }
+flui-material = { path = "crates/flui-material", version = "=0.1.0", optional = true }
+flui-cupertino = { path = "crates/flui-cupertino", version = "=0.1.0", optional = true }
+flui-localizations = { path = "crates/flui-localizations", version = "=0.1.0", optional = true }
 
 [dev-dependencies]
+tempfile.workspace = true
+toml.workspace = true
 # === Foundation Layer ===
 # flui-tree = { path = "crates/flui-tree" }
 
 # === Core Layer ===
-flui-layer = { path = "crates/flui-layer", version = "0.2.0" }
-flui-painting = { path = "crates/flui-painting", version = "0.2.0" }
+flui-layer = { path = "crates/flui-layer", version = "=0.1.0" }
 # === Rendering Layer (colored_box_app / animated_box_app examples; "testing"
 # for the vertical_slice_demo acceptance test's render-tree inspection) ===
-flui-rendering = { path = "crates/flui-rendering", version = "0.2.0", features = ["testing"] }
-flui-objects = { path = "crates/flui-objects", version = "0.2.0" }
+flui-rendering = { path = "crates/flui-rendering", version = "=0.1.0", features = ["testing"] }
+flui-objects = { path = "crates/flui-objects", version = "=0.1.0" }
 # === Interaction Layer ("testing" for the vertical_slice_demo acceptance
 # test's synthetic pointer events) ===
-flui-interaction = { path = "crates/flui-interaction", version = "0.2.0", features = ["testing"] }
+flui-interaction = { path = "crates/flui-interaction", version = "=0.1.0", features = ["testing"] }
 
 # === Reactive Layer (animated_box_app example) ===
-flui-scheduler = { path = "crates/flui-scheduler", version = "0.2.0" }
+flui-scheduler = { path = "crates/flui-scheduler", version = "=0.1.0" }
 
 # === Platform Layer (for examples) ===
-flui-platform = { path = "crates/flui-platform", version = "0.2.0" }
+flui-platform = { path = "crates/flui-platform", version = "=0.1.0" }
 
 # === Hot-Reload (for examples) ===
-flui-hot-reload = { path = "crates/flui-hot-reload", version = "0.2.0" }
+flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.1.0" }
 
 # === Test support (for the vertical_slice_demo acceptance test) ===
 flui-testing = { workspace = true }
@@ -496,7 +527,7 @@ parking_lot.workspace = true
 # facade's own src/lib.rs re-exports them as `flui::material`/`flui::cupertino`.
 
 # === Engine Layer (for GPU examples) ===
-flui-engine = { path = "crates/flui-engine", version = "0.2.0", features = ["dx12"] }
+flui-engine = { path = "crates/flui-engine", version = "=0.1.0", features = ["dx12"] }
 pollster = { workspace = true }
 wgpu = { workspace = true }
 raw-window-handle.workspace = true
@@ -512,6 +543,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [features]
+testing = ["dep:flui-testing", "flui-widgets/testing", "flui-rendering/testing"]
 # Material-first by default: `cargo add flui` keeps working exactly as the
 # README and the crate-level docs teach it. An author who wants a different
 # catalog — or none — turns the default off and selects explicitly. The base
@@ -546,12 +578,9 @@ localizations = ["dep:flui-localizations"]
 gpu-readback-tests = []
 
 # Development-only reload machinery, off in an ordinary production graph. This
-# forwards to `flui-app`'s own feature, which is what actually makes the
-# `flui-hot-reload` edge appear; `cargo tree -p flui-app` shows no
-# `flui-hot-reload` without it. Desktop and Android runners consume the
-# capability; unsupported runners still compile with the feature enabled so
-# Cargo feature unification cannot turn a cross-target build into an error.
-hot-reload = ["flui-app/hot-reload"]
+# activates the facade's reload API and the application's reload driver.
+# Without it the normal application graph excludes flui-hot-reload.
+hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-app/hot-reload"]
 
 # === Core Features ===
 # Serialization support (flui-types only today; other crates' serde features
@@ -604,6 +633,12 @@ name = "screenshot"
 path = "examples/screenshot.rs"
 required-features = ["material", "cupertino"]
 
+# Secondary window opened from a Material button; see the example's own doc.
+[[example]]
+name = "multi_window_demo"
+path = "examples/multi_window_demo.rs"
+required-features = ["material"]
+
 [[test]]
 name = "material_demo"
 path = "tests/material_demo.rs"
@@ -628,6 +663,16 @@ required-features = ["gpu-readback-tests"]
 name = "demo_layer_snapshots"
 path = "tests/demo_layer_snapshots.rs"
 required-features = ["material", "cupertino"]
+
+# The "Agent workflow" acceptance test (docs/BETA.md): mounts the counter
+# template's tree through `flui::testing`, so it needs both the `testing`
+# feature (for `flui::testing` to exist at all) and `material` (the tree
+# includes an `ElevatedButton`). Without this entry a `--no-default-features
+# --features testing` build would still try to compile it and fail.
+[[test]]
+name = "agent_workflow"
+path = "tests/agent_workflow.rs"
+required-features = ["testing", "material"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Build Profiles

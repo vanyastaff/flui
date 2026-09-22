@@ -11,7 +11,7 @@ FLUI takes inspiration from Flutter — the three-tree model, the lifecycle orde
 - [Architecture](docs/architecture.md): the three-tree pipeline in one page.
 - [Foundations](docs/FOUNDATIONS.md): the architecture contract and locked contracts.
 - [Crates](docs/crates.md): the layered crate map and per-crate status.
-- [Testing](docs/testing.md): the headless frame driver, snapshots, the render-object harness, the live smoke suite.
+- [Testing](docs/testing.md): the headless frame driver, snapshots, the render-object harness, the live smoke suite, and the facade-only "Agent workflow" acceptance test (`tests/agent_workflow.rs`).
 - [Hot reload](docs/hot-reload.md): the `dlopen` plugin host for desktop iteration.
 
 ## Writing a view

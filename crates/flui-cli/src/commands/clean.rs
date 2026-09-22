@@ -1,12 +1,12 @@
-//! Clean command for removing build artifacts.
-//!
-//! Supports cleaning cargo build artifacts and platform-specific
-//! build directories (Android, iOS, Web).
-
-use crate::error::CliResult;
+use crate::error::{CliError, CliResult};
 use crate::runner::{CargoCommand, OutputStyle};
+use crate::ui;
 use console::style;
-use std::path::Path;
+use serde_json::json;
+use std::path::{Path, PathBuf};
+
+/// Platform names `flui clean --platform` accepts.
+const VALID_PLATFORMS: &[&str] = &["android", "ios", "web"];
 
 /// Execute the clean command.
 ///
@@ -17,17 +17,29 @@ use std::path::Path;
 ///
 /// # Errors
 ///
-/// Returns `CliError::CleanFailed` if cargo clean fails.
-pub fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
-    cliclack::intro(style(" flui clean ").on_red().white())?;
-
-    let spinner = cliclack::spinner();
+/// Returns `CliError::CleanFailed` if cargo clean fails, or `CliError::Missing`
+/// if `platform` names something other than `android`, `ios` or `web`.
+pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
+    ui::intro(style(" flui clean ").on_red().white())?;
 
     if let Some(ref plat) = platform {
-        spinner.start(format!("Cleaning {plat} artifacts..."));
-        clean_platform(plat)?;
-        spinner.stop(format!("{} {} cleaned", style("✓").green(), plat));
+        let plat_lower = plat.to_lowercase();
+        if !VALID_PLATFORMS.contains(&plat_lower.as_str()) {
+            let message = format!(
+                "invalid platform '{plat}'; valid values: {}",
+                VALID_PLATFORMS.join(", ")
+            );
+            ui::outro_cancel(&message)?;
+            return Err(CliError::Missing(message));
+        }
+
+        let spinner = ui::spinner();
+        spinner.start(format!("Cleaning {plat_lower} artifacts..."));
+        let removed = clean_platform(&plat_lower)?;
+        spinner.stop(format!("{} {plat_lower} cleaned", style("✓").green()));
+        report_removed(&removed)?;
     } else {
+        let spinner = ui::spinner();
         spinner.start("Cleaning cargo artifacts...");
         let _ = CargoCommand::clean()
             .output_style(OutputStyle::Silent)
@@ -35,58 +47,84 @@ pub fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
         spinner.stop(format!("{} Cargo artifacts cleaned", style("✓").green()));
 
         if deep {
-            let spinner = cliclack::spinner();
+            let spinner = ui::spinner();
             spinner.start("Cleaning platform directories...");
-            clean_platform_dirs();
+            let mut removed = Vec::new();
+            for platform in VALID_PLATFORMS {
+                removed.extend(clean_platform(platform)?);
+            }
             spinner.stop(format!(
                 "{} Platform directories cleaned",
                 style("✓").green()
             ));
+            report_removed(&removed)?;
         }
     }
 
     let mode = if deep { "deep" } else { "standard" };
-    cliclack::outro(format!("Clean completed ({})", style(mode).cyan()))?;
+    ui::emit("clean.done", &json!({ "ok": true, "mode": mode }));
+    ui::outro(format!("Clean completed ({})", style(mode).cyan()))?;
 
     Ok(())
 }
 
-/// Clean build artifacts for a specific platform.
-fn clean_platform(platform: &str) -> CliResult<()> {
+/// Emit a `clean.removed` event per path and, in human mode, list them.
+fn report_removed(removed: &[PathBuf]) -> CliResult<()> {
+    for path in removed {
+        ui::emit(
+            "clean.removed",
+            &json!({ "path": path.display().to_string() }),
+        );
+    }
+    for path in removed {
+        ui::info(format!("Removed {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Clean build artifacts for a specific platform, returning the paths that
+/// were actually removed.
+fn clean_platform(platform: &str) -> CliResult<Vec<PathBuf>> {
     let platform_dir = Path::new("platforms").join(platform);
 
     if !platform_dir.exists() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
-    match platform {
-        "android" => {
-            remove_dir_if_exists(&platform_dir.join("app").join("build"))?;
-            remove_dir_if_exists(&platform_dir.join(".gradle"))?;
+    let sub_dirs: &[&str] = match platform {
+        "android" => &["app/build", ".gradle"],
+        "web" => &["pkg"],
+        "ios" => &["build"],
+        _ => &[],
+    };
+
+    let mut removed = Vec::new();
+    for sub_dir in sub_dirs {
+        let dir = platform_dir.join(sub_dir);
+        if remove_dir_if_exists(&dir)? {
+            removed.push(dir);
         }
-        "web" => {
-            remove_dir_if_exists(&platform_dir.join("pkg"))?;
-        }
-        "ios" => {
-            remove_dir_if_exists(&platform_dir.join("build"))?;
-        }
-        _ => {}
     }
 
-    Ok(())
+    Ok(removed)
 }
 
-/// Clean all platform-specific build directories.
-fn clean_platform_dirs() {
-    for platform in &["android", "ios", "web"] {
-        let _ = clean_platform(platform);
-    }
-}
-
-/// Remove a directory if it exists.
-fn remove_dir_if_exists(path: &Path) -> CliResult<()> {
+/// Remove a directory if it exists; returns whether it was removed.
+fn remove_dir_if_exists(path: &Path) -> CliResult<bool> {
     if path.exists() {
         std::fs::remove_dir_all(path)?;
+        Ok(true)
+    } else {
+        Ok(false)
     }
-    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_platforms_are_exactly_the_documented_three() {
+        assert_eq!(VALID_PLATFORMS, &["android", "ios", "web"]);
+    }
 }

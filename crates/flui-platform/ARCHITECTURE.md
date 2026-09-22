@@ -9,6 +9,115 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### AppKit reopen signals use a loop-owned serialized callback pump
+
+The owned application delegate implements
+[`applicationShouldHandleReopen:hasVisibleWindows:`](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldhandlereopen(_:hasvisiblewindows:)).
+It always returns false: FLUI owns window policy and does not ask AppKit to create
+an untitled document. Both visible-window flag values deliver the same existing
+`on_reopen` signal. Apple's flag counts miniaturized windows as visible; it is
+not a substitute for presentation visibility or frame eligibility.
+
+The Objective-C method only records a signal and schedules weak loop control.
+A pending count, queued flag and active guard serialize owner-lane delivery,
+including callbacks that pump nested native events. Starting-phase signals wait
+until the loop runs. The registration current at delivery receives each signal;
+a replacement installed before that turn receives it. During delivery, callbacks
+are leased outside locks and restored only if no replacement exists and quit has
+not been requested. Active remains set through callback destruction, so a nested
+signal is retained until its predecessor's lease and cleanup finish.
+
+Explicit quit fences registration, delivery, restoration and window admission
+immediately, including before deferred termination evaluation. Old delegates
+reference only their old loop; stopped loops cannot act on a later run. Handler
+replacement/destruction happens outside locks, preserving the existing
+handlers-then-state lock order. Callback, destructor and native/dispatch boundary
+panics use hostile-payload-safe containment; a panicking registration does not
+prevent another pending signal from reaching its replacement or restored slot.
+
+`reopen_probe` and `scripts/check-macos-reopen.py` separate direct delegate
+routing from actual LaunchServices reopen AppleEvents. The latter invokes
+`open -a` on the exact running temporary bundle and requires callback and normal
+return in the original PID. These checks cover the platform signal, not a
+rendered resident application or a framework root-window creation API.
+Run the native matrix on macOS with an active GUI session:
+
+```sh
+cargo build -p flui-platform --locked --example reopen_probe
+python3 scripts/check-macos-reopen.py target/debug/examples/reopen_probe
+```
+
+### Headless explicit quit consumes its callback outside platform state
+
+`HeadlessPlatform::quit` uses the same take-then-invoke discipline as its window
+close and exit-policy re-evaluation paths: it marks the loop stopped and takes
+the current quit callback under the state lock, then invokes and drops it after
+the lock is released. Recursive or repeated quit does not re-invoke that
+registration. This is consumption of the existing callback slot, not a new
+process-wide latch; registering a later callback still replaces the slot.
+Callback panics propagate to the Rust caller after releasing state, and the
+consumed callback is not restored. Tests exercise the actual `Platform::quit`
+seam with a reentrant getter/quit, a captured-data drop sentinel, and an original
+panic payload. Their first nonblocking lock assertion makes a regression fail
+immediately instead of hanging while trying to re-enter the same mutex.
+
+
+### Standalone AppKit stops its loop and returns through Rust cleanup
+
+The existing `Platform` exit-policy hook remains the boundary: `flui-app`
+owns realm/service policy; `flui-platform` owns window bookkeeping and native
+loop actuation. AppKit now implements both policy installation and coalesced,
+any-thread re-evaluation. Close callbacks finish before the deferred owner turn
+consults the hook. Hooks run outside locks, and both loop phase and window count
+are checked again afterward because a hook may open a replacement window.
+Reentrant requests get another owner turn; a replaced hook is never overwritten
+by restoring the old leased callback. No public policy variant is added.
+
+`LoopOwnership` accepts only a standalone NSApplication: a running application
+or existing delegate is rejected before bootstrap or activation mutation. The
+constructor merely acquires the singleton. The run scope retains its delegate,
+sets Regular activation, and restores the previous policy only while its own
+delegate and installed policy are still current. External replacements survive.
+The delegate routes native termination into the same deferred quit path and
+returns TerminateCancel, preventing AppKit from exiting the process itself.
+
+Explicit quit bypasses the last-window veto. `stop(None)` plus an application
+NSEvent wakes the native wait; quit during bootstrap skips `run()` entirely.
+This follows [Apple's stop contract](https://developer.apple.com/documentation/appkit/nsapplication/stop(_:))
+and the installed winit 0.30.13 `stop_app_immediately` implementation. This is the
+standalone main loop contract; nested modal loops and foreign-loop embedding are
+not supported by this owner. Physical keyboard/menu wiring is a separate input
+concern, not proved by sending `terminate:` in a probe.
+
+Shutdown first closes admission, clears callback cycles and closes remaining
+windows on main, then invokes quit once outside locks. Cleanup also runs on
+bootstrap error/unwind. User callback/destructor panics are contained per cleanup
+step and logged; exceptional panic payloads are deliberately leaked rather than
+risk a second panic during unwinding. Resource cleanup after such a panic is
+best effort, while the guard still detaches its own delegate.
+
+Native window release now executes inline on its owner, including after the
+loop returns, through the same panic boundary used by lifecycle cleanup. The
+`inline_cleanup_contains_hostile_panic_and_unwinds_local_resources` test injects
+a panic payload whose destructor also panics: the boundary retains that payload
+without destruction while ordinary local resource destructors still execute. `windowWillClose:` pins its receiver with an extra retain transferred
+to the surrounding autorelease pool before callbacks can drop the final wrapper.
+That prevents deallocation under the native close stack. Worker drops remain
+nonblocking queued tails; if the owner no longer services them, that existing
+fallback can leak native resources and never releases them off-main.
+
+**Verification:** `cargo build -p flui-platform --locked --example exit_policy_probe`
+then `python3 scripts/check-macos-exit.py target/debug/examples/exit_policy_probe`
+stages a fresh bundled subprocess per case with an eight-second kill/reap limit.
+Cases require post-return, quit, callback-drop and stack-drop markers, and weak
+NSWindow references must be nil after an explicit autorelease pool drains.
+Replacement windows must survive a later owner turn before the probe closes them;
+replacement hooks must actually execute. Foreign ownership, pre-run/bootstrap
+quit, bootstrap failure/unwind and quit panic each have their own case. Unsupported
+hosts and unknown case names fail explicitly. The older close-path and frame-pump
+probes retain their narrower lifecycle/frame assertions.
+
+
 ### The winit backend delegates the whole keyboard event to `ui-events-winit`; Win32/AppKit keep hand-written tables
 
 **Rule:** every native keyboard event this crate receives must be normalized
@@ -623,3 +732,146 @@ The newer macro is a stricter oracle; that is part of the migration's value.
 they assert and all PASS on `objc2`, driving the migrated `msg_send!` sites
 through the production launch path; the five real-`NSPasteboard` tests and the
 `display.rs` arithmetic run in the normal suite.
+
+### Window-independent owner turns
+
+`shared::owner_signal` owns coalescing, callback leases and quit admission for
+native desktop and headless. Physical posting is serialized with queued-state
+acknowledgement: a concurrent sender cannot receive success for another sender's
+failed post. Callbacks and capture drops execute outside locks; active delivery
+covers both, so nested owner dispatch cannot recursively invoke a replacement.
+Quit fences admission before posting and remains retryable after posting failure.
+Per-run weak proxy stamps retain the original owner thread even after expiry.
+
+macOS posts through GCD, winit through its existing EventLoopProxy, and Win32
+through a dedicated message-only class with its own typed userdata. Headless
+provides `HeadlessOwnerTurns`, an owner-local driver and one-shot posting failure
+injection for deterministic app recovery tests. Successful headless run return
+leaves the retained logical owner alive; failed bootstrap, quit and destruction
+close it. The app uses this transport for pending-window completion without a
+window or realm frame. It is not a generic closure executor.
+
+Run the live macOS oracle with a GUI session:
+
+```sh
+cargo build -p flui-platform --locked --example owner_wake_probe
+python3 scripts/check-owner-wake.py target/debug/examples/owner_wake_probe
+```
+
+External counters assert owner affinity, nonrecursive delivery, shutdown capture
+release and rejected work after quit. Windows evidence is cross-compilation,
+not native runtime verification. Mobile/web registration remains explicitly
+unsupported; proxy window creation support is separate from wake/quit support.
+
+### Reveal without changing window mode
+
+`PlatformWindow::show` is distinct from `restore`: restoring also removes
+maximization, while revealing a resident application's existing main window must
+preserve maximized/fullscreen mode and geometry. The operation reveals and
+requests focus; operating-system focus policy still decides whether focus moves.
+AppKit deminiaturizes then orders the window forward. Win32 queries
+`WINDOWPLACEMENT` fallibly and interprets `WPF_RESTORETOMAXIMIZED` only for minimized
+placement, using `SW_SHOW` for non-minimized windows. Winit 0.30.13 Wayland reveal
+is rejected as `WindowShowError::Unsupported` before mutation because unminimize
+and focus are unsupported there. Closed retained windows return `Closed`.
+
+Sources: [winit Window](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html),
+[Win32 WINDOWPLACEMENT](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-windowplacement).
+Headless tests model minimized independently from maximized/fullscreen. Native
+macOS `window_show_probe` covers visible, hidden, minimized, maximized,
+minimized-after-maximized and observed fullscreen transitions; Windows evidence
+is strict cross-compilation, not a native runtime claim.
+
+Win32 show verifies retained callback-Arc identity under the owner context guard
+before reveal and again after callback-capable show/foreground calls. Recycled
+HWND or context addresses cannot redirect a retained wrapper's show operation.
+The portable operation-sequence test asserts that stale identity causes neither
+reveal nor focus. This does not change the separate legacy teardown route or
+claim native Windows runtime verification.
+
+### The first reveal waits for the first presented frame, behind alpha 0
+
+AppKit shows a window the moment it is ordered front, and the first frame
+reaches the compositor only once the GPU stack behind it exists and the first
+present lands — 2.81 s on a measured cold launch — so ordering an opaque window
+at open shows its bare background for that whole gap (the launch blank-window
+observation in `docs/BETA.md`). `WindowOptions::visible` is therefore the
+*intended* state: macOS orders a `visible: true` window front at `alphaValue`
+0 and restores alpha 1 when the embedder reports the first presented frame
+through `PlatformWindow::reveal_after_first_frame`, or when the window is shown
+explicitly (`show`, `set_visible(true)`, `activate`). The flag is settled under
+the window's state lock, never inside an owner route, so exactly one caller
+performs the reveal.
+
+Transparent rather than hidden, because a hidden alternative was tried and
+measured on 2026-09-21: an un-ordered window gets no Metal drawable — wgpu
+reports the surface occluded on every acquire (30+ withheld frames in the log)
+— so a reveal that waited for a present into a hidden window waited for
+something that cannot happen and fell through to the embedder's 1 s fallback.
+Ordered at alpha 0, the first acquire still comes back occluded once (a
+post-configure quirk of the Metal surface) and the second presents; the reveal
+followed the first frame by 85 ms, and the window's first on-screen sighting
+through the CoreGraphics window list was already painted.
+
+The embedder's half is `flui-app`'s `FirstReveal` policy: the first presented
+frame earns the reveal, and a frame that ran and presented nothing arms a
+bounded fallback (one second from that outcome, not from install, so a slow
+cold frame still inside its render arms nothing) after which the window is
+revealed regardless — a surface that never presents yields a window the user
+can see and close rather than a process with no window. The fallback deadline
+joins the desktop wake-deadline hook and the frame closure's dirty predicate
+like every other wake-deadline source there.
+
+The winit backend reveals at open, unchanged: whether a hidden X11 or Win32
+window hands out swapchain images could not be verified here, and a wrong guess
+would cost every Linux launch the fallback's second. Wayland maps a surface at
+its first commit, which is the first present, so the deferral there is the
+protocol's own. Win32's native backend is likewise unchanged.
+
+### Per-window execution eligibility
+
+`WindowExecutionState` separates native execution permission from focus, visibility
+and GPU readiness (ADR-0072). The callback slot is private. iOS serializes native
+observations in a separate queue and delivers effects through immediate callback
+leases, independently of the general input/frame FIFO. Invocation and capture
+destruction are contained separately, outside storage locks. Only resource intents
+advance the generation: focus reentry cannot cancel a resource transition, while
+superseded resource continuations and queued restorations are rejected. A queued
+background pauses native ticks immediately, including during nested UIKit loops. Temporary inactivity preserves the surface;
+true background suspension pauses the display link and releases it. Foreground
+restores execution while unfocused; duplicate foreground preserves established
+focus. Headless simulation exercises the same observation contract.
+
+The iOS protocol probe is reproducible with a dedicated booted simulator:
+
+```sh
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo build -p flui-platform --example ios_execution_probe --target aarch64-apple-ios-sim --no-default-features
+python3.12 scripts/check-ios-execution.py <UDID> target/aarch64-apple-ios-sim/debug/examples/ios_execution_probe
+```
+
+Use `--case foreground-reentered-background`, `background-reentered-foreground`,
+`duplicate-foreground`, or `foreground-callback-panic` for the original cases.
+Additional cases cover `background-nested-active`, `background-nested-inactive`,
+`foreground-nested-active`, `foreground-nested-inactive`,
+`nested-foreground-then-panic`, `superseded-foreground`, and
+`background-nested-run-loop`. The latter verifies that a queued background stops
+frames before the observer pumps a nested native run loop.
+The runner terminates only its owned probe after marker completion; this is not a
+claim of normal UIKit loop return or a real OS background transition. Xcode 26.2
+is the verified SDK. UIScene ownership and migration remain separate work.
+
+### UIKit scene attachments
+
+UIKit process bootstrap and scene connection are separate ownership boundaries
+(ADR-0073). `IOSPlatform::on_scene_event` registers the fallible, owner-thread
+consumer before UIKit connections. A stable logical view backs a session; native
+windows/controllers and display links belong to individual attachments. A
+reversible disconnect retains the logical owner but denies new raw handles.
+Terminal close fences callbacks and retires the attachment before disposal.
+
+`MainThreadBound` protects native storage. Final worker drops enqueue retirement
+on main rather than synchronously waiting for it. Plain cached metrics remain
+readable without touching UIKit. The native weak-view probe verifies both
+retention through logical close and eventual release after a worker's final drop.
+OwnerSignal/GCD carries typed process wake/quit independently of display links;
+it grants no operating-system background execution entitlement.

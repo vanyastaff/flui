@@ -30,11 +30,8 @@
 //!
 //! ## Generated-code path strategy
 //!
-//! The emitted `impl` references runtime items via the absolute
-//! `::flui_foundation::…` path: every consumer of the derive must have
-//! `flui-foundation` as a direct dependency. This matches the
-//! `::flui_view::…` strategy used by the `StatelessView` / `StatefulView`
-//! derives.
+//! Runtime paths resolve the direct owning crate first, otherwise its module
+//! in the `flui` facade. Cargo dependency aliases are respected.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -53,6 +50,7 @@ struct IncludedField<'a> {
 
 /// Expand `#[derive(Diagnosticable)]` into an `impl Diagnosticable` block.
 pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
+    let runtime = crate::runtime_path::Runtime::Foundation.resolve(input.ident.span())?;
     let ident = &input.ident;
 
     // Q4: only named-field structs are supported. Reject enums, unions,
@@ -135,12 +133,12 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 
     Ok(quote! {
         #[automatically_derived]
-        impl #impl_generics ::flui_foundation::Diagnosticable for #ident #ty_generics
+        impl #impl_generics #runtime::Diagnosticable for #ident #ty_generics
         #augmented_where
         {
             fn debug_fill_properties(
                 &self,
-                builder: &mut ::flui_foundation::DiagnosticsBuilder,
+                builder: &mut #runtime::DiagnosticsBuilder,
             ) {
                 #(
                     builder.add(

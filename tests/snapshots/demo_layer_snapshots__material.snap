@@ -161,17 +161,26 @@ Offset dx=0.00 dy=0.00
       DrawPath bounds=(0.00,0.00 900.00x56.00) pts=1 fill #FEF7FFFF
       Restore
     ClipPath bounds=(0.00,0.00 900.00x56.00) pts=1 clip=none
-      Picture bounds=(0.00,8.00 860.00x40.00)
+      Picture bounds=(0.00,8.00 820.00x40.00)
         Save
         Paragraph offset=(0.00,0.00) "Material Demo" #1D1B20FF lines=1 runs=[len=13 family=Name("Roboto") weight=400 style=Normal size=22.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,14.03,0.00,1.00]
         Restore
+        Save
+        DrawPath bounds=(0.00,0.00 40.00x40.00) pts=10 fill #00000000 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,780.00,8.00,0.00,1.00]
+        Restore
+      ClipPath bounds=(780.00,8.00 40.00x40.00) pts=10 clip=none
+        Picture bounds=(788.00,16.00 24.00x24.00)
+          Save
+          Paragraph offset=(0.00,0.00) "\u{e8d2}" #49454FFF lines=1 runs=[len=3 family=Name("Material Icons") weight=400 style=Normal size=24.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,788.00,16.00,0.00,1.00]
+          Restore
+      Picture bounds=(820.00,8.00 40.00x40.00)
         Save
         DrawPath bounds=(0.00,0.00 40.00x40.00) pts=10 fill #00000000 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,820.00,8.00,0.00,1.00]
         Restore
       ClipPath bounds=(820.00,8.00 40.00x40.00) pts=10 clip=none
         Picture bounds=(828.00,16.00 24.00x24.00)
           Save
-          Paragraph offset=(0.00,0.00) "\u{e8d2}" #49454FFF lines=1 runs=[len=3 family=Name("Material Icons") weight=400 style=Normal size=24.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,828.00,16.00,0.00,1.00]
+          Paragraph offset=(0.00,0.00) "\u{e8b8}" #49454FFF lines=1 runs=[len=3 family=Name("Material Icons") weight=400 style=Normal size=24.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,828.00,16.00,0.00,1.00]
           Restore
       Picture bounds=(860.00,8.00 40.00x40.00)
         Save
@@ -180,7 +189,7 @@ Offset dx=0.00 dy=0.00
       ClipPath bounds=(860.00,8.00 40.00x40.00) pts=10 clip=none
         Picture bounds=(868.00,16.00 24.00x24.00)
           Save
-          Paragraph offset=(0.00,0.00) "\u{e8b8}" #49454FFF lines=1 runs=[len=3 family=Name("Material Icons") weight=400 style=Normal size=24.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,868.00,16.00,0.00,1.00]
+          Paragraph offset=(0.00,0.00) "\u{e8a5}" #49454FFF lines=1 runs=[len=3 family=Name("Material Icons") weight=400 style=Normal size=24.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,868.00,16.00,0.00,1.00]
           Restore
     Picture bounds=(822.00,682.00 68.00x68.00)
       Save

@@ -2,12 +2,13 @@
 
 Procedural macros for FLUI.
 
-This crate is a proc-macro leaf crate. It emits code into the consuming crate
-using absolute `::flui_view::...` paths, so every consumer must depend on
-`flui-view` directly. Most authors get the derives through:
+This crate emits code into the consuming crate. Derives resolve a direct runtime
+dependency first (`flui-view`, `flui-foundation`, or `flui-animation`), then fall
+back to the corresponding module in the `flui` facade. Cargo dependency aliases
+are respected in either case. Applications can use a single `flui` dependency:
 
 ```rust,ignore
-use flui_view::prelude::*;
+use flui::prelude::*;
 ```
 
 ## Derives
@@ -18,7 +19,7 @@ Generates the object-safe `impl View for T` boilerplate for a type that already
 implements the typed authoring trait `StatelessView`:
 
 ```rust,ignore
-use flui_view::prelude::*;
+use flui::prelude::*;
 
 #[derive(Clone, StatelessView)]
 struct Greeting {
@@ -32,10 +33,10 @@ impl StatelessView for Greeting {
 }
 ```
 
-The generated implementation calls:
+With only the facade dependency, the generated implementation calls:
 
 ```rust,ignore
-::flui_view::element::ElementKind::stateless(self)
+::flui::view::element::ElementKind::stateless(self)
 ```
 
 and preserves the user's generic parameters and where clauses.
@@ -46,7 +47,7 @@ Generates the matching `impl View for T` boilerplate for a type that implements
 `StatefulView`:
 
 ```rust,ignore
-use flui_view::prelude::*;
+use flui::prelude::*;
 
 #[derive(Clone, StatefulView)]
 struct Counter {
@@ -72,10 +73,10 @@ impl ViewState<Counter> for CounterState {
 }
 ```
 
-The generated implementation calls:
+With only the facade dependency, the generated implementation calls:
 
 ```rust,ignore
-::flui_view::element::ElementKind::stateful(self)
+::flui::view::element::ElementKind::stateful(self)
 ```
 
 ## Keys

@@ -52,7 +52,7 @@ The Runtime.1 execution plan freezes public runtime surfaces immediately after t
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
 | L4 — Render machine + render catalog | `flui-engine`, `flui-rendering`, `flui-objects` |
 | L5 — Framework spine | `flui-view` |
-| L6 — Widget catalog + DX tooling | `flui-widgets`, `flui-testing`, `flui-hot-reload`, `flui-build` |
+| L6 — Widget catalog + DX tooling | `flui-widgets`, `flui-testing`, `flui-hot-reload` |
 | L7 — Design systems | `flui-material`, `flui-cupertino` |
 | L8 — Global localizations | `flui-localizations` |
 | L9 — Application / tooling | `flui-app`, `flui-devtools`, `flui-cli` |

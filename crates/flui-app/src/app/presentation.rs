@@ -156,6 +156,11 @@ struct SegmentProbe {
 /// this presentation's generational identity.
 pub(crate) struct PresentationState {
     id: PresentationId,
+    pub(super) media_query: Rc<crate::app::media_query_root::MediaQuerySource>,
+    pub(super) window_visible: Cell<bool>,
+    pub(super) window_focused: Cell<bool>,
+    pub(super) window_execution: Cell<flui_platform::WindowExecutionState>,
+    pub(super) closing_requested: Cell<bool>,
     lifecycle: Cell<PresentationLifecycle>,
     pipeline: PipelineCell,
     /// This presentation's liveness, as a token others may watch weakly.
@@ -579,6 +584,13 @@ impl PresentationState {
 
         let state = Self {
             id,
+            media_query: Rc::new(crate::app::media_query_root::MediaQuerySource::from_window(
+                window.as_ref(),
+            )),
+            window_visible: Cell::new(window.is_visible()),
+            window_focused: Cell::new(window.is_focused()),
+            window_execution: Cell::new(window.execution_state()),
+            closing_requested: Cell::new(false),
             lifecycle: Cell::new(PresentationLifecycle::Created),
             pipeline,
             alive,
@@ -608,6 +620,7 @@ impl PresentationState {
             flush_count: Cell::new(0),
         };
         state.attach_surface();
+        state.clock.set_hidden(!state.window_visible.get());
         state
     }
 
@@ -644,6 +657,13 @@ impl PresentationState {
 
         let state = Self {
             id,
+            media_query: Rc::new(crate::app::media_query_root::MediaQuerySource::from_window(
+                window.as_ref(),
+            )),
+            window_visible: Cell::new(window.is_visible()),
+            window_focused: Cell::new(window.is_focused()),
+            window_execution: Cell::new(window.execution_state()),
+            closing_requested: Cell::new(false),
             lifecycle: Cell::new(PresentationLifecycle::Created),
             pipeline,
             alive,
@@ -673,6 +693,7 @@ impl PresentationState {
             flush_count: Cell::new(0),
         };
         state.attach_surface();
+        state.clock.set_hidden(!state.window_visible.get());
         state
     }
 
@@ -1247,10 +1268,12 @@ impl PresentationState {
         &self,
         request: SemanticsActionRequest,
     ) -> Result<(), SemanticsActionError> {
-        if matches!(
-            self.lifecycle.get(),
-            PresentationLifecycle::Closing | PresentationLifecycle::Closed
-        ) {
+        if self.closing_requested.get()
+            || matches!(
+                self.lifecycle.get(),
+                PresentationLifecycle::Closing | PresentationLifecycle::Closed
+            )
+        {
             return Err(SemanticsActionError::PresentationClosed);
         }
         let invocation = self
@@ -1327,54 +1350,89 @@ impl PresentationState {
             | PresentationLifecycle::Suspended => {}
         }
         self.lifecycle.set(PresentationLifecycle::Closing);
-
-        self.gestures.cancel_all_pointer_sequences();
-        self.gestures.mouse_tracker().clear_cursor_change_callback();
-        // A stray announce/event racing this teardown must not reach a
-        // platform accessibility bridge that is itself about to go away —
-        // see `SemanticsHost::clear_announce_callback`'s doc for the
-        // announce-after-close decision this pins.
-        self.semantics.clear_announce_callback();
-        self.semantics.clear_event_callback();
-        // Withdraw from the platform accessibility bridge: detach both
-        // listeners so an activation flip or action request arriving after
-        // close is dropped at the platform seam (an action that slips
-        // through anyway is still dropped at the drain's forest-membership
-        // check — two independent gates, same verdict), and stop assembly
-        // so the owner's disposed notifier fires while the pipeline is
-        // still alive. Guarded on `is_free()` because `close()` also runs
-        // from `Drop`, where a panicking unwind may hold the checkout.
-        if let Some(window) = self.window.upgrade()
-            && let Some(bridge) = window.accessibility()
-        {
-            bridge.set_activation_listener(Arc::new(|_| {}));
-            bridge.set_action_listener(Arc::new(|_| {}));
-        }
-        if self.pipeline.is_free() {
-            self.pipeline.with_mut(|owner| {
-                if owner.semantics_enabled() {
-                    owner.set_semantics_enabled(false);
-                }
-            });
-        }
-        if let Some(window) = self.window.upgrade()
-            && let Err(error) = window.set_cursor(CursorIcon::Default)
-            && !matches!(error, CursorError::Unsupported)
-        {
-            tracing::warn!(
-                { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
-                ?error,
-                "failed to restore the default cursor while closing the presentation"
-            );
-        }
-        self.focus.close();
-        self.text_input.close();
-        // Detach LAST: a no-op if nothing was ever attached (many tests never
-        // mount a root), and otherwise unmounts through this presentation's
-        // OWN element tree only -- never a sibling's, since each
-        // PresentationState owns an exclusive WidgetsBinding.
-        self.widgets.detach_root_widget();
+        // Normal owner reconciliation has already delivered the terminal
+        // ladder. Direct teardown still delivers final Detached and invalidates
+        // weak subscriptions before any callback can dispose the tree.
+        let source = self.widgets.lifecycle_source();
+        source.begin_close();
+        let _ = source.commit_terminal(flui_scheduler::AppLifecycleState::Detached);
+        let mut first =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.drain())).err();
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.finish_close())).err(),
+            "lifecycle direct close",
+        );
+        let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.gestures.cancel_all_pointer_sequences();
+            self.gestures.mouse_tracker().clear_cursor_change_callback();
+            // A stray announce/event racing this teardown must not reach a
+            // platform accessibility bridge that is itself about to go away —
+            // see `SemanticsHost::clear_announce_callback`'s doc for the
+            // announce-after-close decision this pins.
+            self.semantics.clear_announce_callback();
+            self.semantics.clear_event_callback();
+            // Withdraw from the platform accessibility bridge: detach both
+            // listeners so an activation flip or action request arriving after
+            // close is dropped at the platform seam (an action that slips
+            // through anyway is still dropped at the drain's forest-membership
+            // check — two independent gates, same verdict), and stop assembly
+            // so the owner's disposed notifier fires while the pipeline is
+            // still alive. Guarded on `is_free()` because `close()` also runs
+            // from `Drop`, where a panicking unwind may hold the checkout.
+            if let Some(window) = self.window.upgrade()
+                && let Some(bridge) = window.accessibility()
+            {
+                bridge.set_activation_listener(Arc::new(|_| {}));
+                bridge.set_action_listener(Arc::new(|_| {}));
+            }
+            if self.pipeline.is_free() {
+                self.pipeline.with_mut(|owner| {
+                    if owner.semantics_enabled() {
+                        owner.set_semantics_enabled(false);
+                    }
+                });
+            }
+            if let Some(window) = self.window.upgrade()
+                && let Err(error) = window.set_cursor(CursorIcon::Default)
+                && !matches!(error, CursorError::Unsupported)
+            {
+                tracing::warn!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
+                    ?error,
+                    "failed to restore the default cursor while closing the presentation"
+                );
+            }
+            self.focus.close();
+            self.text_input.close();
+            // Detach LAST: a no-op if nothing was ever attached (many tests never
+            // mount a root), and otherwise unmounts through this presentation's
+            // OWN element tree only -- never a sibling's, since each
+            // PresentationState owns an exclusive WidgetsBinding.
+        }))
+        .err();
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            cleanup,
+            "presentation input disposal",
+        );
+        let disposal = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.widgets.detach_root_widget();
+        }))
+        .err();
         self.lifecycle.set(PresentationLifecycle::Closed);
+        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+            &mut first,
+            disposal,
+            "presentation widget disposal",
+        );
+        if let Some(payload) = first {
+            if std::thread::panicking() {
+                std::mem::forget(payload);
+            } else {
+                std::panic::resume_unwind(payload);
+            }
+        }
     }
 }
 

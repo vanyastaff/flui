@@ -10,6 +10,9 @@ FLUI brings the proven three-tree architecture (View → Element → Render) to 
 
 **Project stage: pre-release — build from source.** FLUI is not published to crates.io; the workspace builds and runs from a clone (instructions below), and APIs may still change between commits. See [`CHANGELOG.md`](CHANGELOG.md) for notable changes and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what lands next.
 
+The next milestone is a beta release; its user workflows and required evidence
+are defined in [Beta release criteria](docs/BETA.md).
+
 ## Status
 
 - ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`, `flui-log`, `flui-tree`, `flui-platform`
@@ -73,7 +76,7 @@ driver.
 - **Three-tree pipeline.** Immutable `View` → mutable `Element` → layout/paint `Render`. Build / Layout / Paint phases run on demand only.
 - **Type-safe arity.** Render children parameterized by `Leaf`, `Single`, `Optional`, `Variable` — child-count mismatches become compile-time errors.
 - **GPU-first rendering.** `wgpu` 30 backend with `lyon` tessellation, `cosmic-text` shaping, and an engine-owned glyph atlas for text.
-- **Cross-platform.** Native Win32 and AppKit backends, headless mode for CI, Android NDK target, WASM/WebGPU, plus a `winit` fallback.
+- **Cross-platform, unevenly verified.** Native Win32 and AppKit backends, headless mode for CI, an Android NDK target, WASM/WebGPU, and a `winit` fallback all build, but how far each has actually been run and checked differs sharply by platform — macOS has live, operator-equivalent input evidence; Windows, Android, and Web/WASM are compile-checked only; Linux and iOS Simulator are experimental. See the [per-platform status table](docs/BETA.md#platform-status--candidate-fd9f2938) before relying on a platform this project has not verified for you.
 - **Hot-reload scenes.** `dlopen`-based plugin host (`flui-hot-reload`) for desktop iteration without process restarts.
 - **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is *not* confined to a fixed crate list — it concentrates wherever a crate touches an FFI or ABI boundary. By unsafe-site count in `src/` (`rg -c '\bunsafe\s+(fn|impl|trait|extern)\b|\bunsafe\s*\{'`, measured 2026-08-04): `flui-platform` (Win32/AppKit/Android FFI) dominates by a wide margin, followed by `flui-rendering` (a miri-audited arena, `subtree_arena.rs`), `flui-hot-reload` (the `dlopen` ABI boundary), and `flui-engine` (wgpu/raw-window-handle FFI); smaller counts exist in `flui-layer`, `flui-foundation`, `flui-types`, `flui-log`, `flui-view`, and `flui-app`. `flui-painting` carries zero unsafe code today. Reviewed at the workspace level — see `docs/PANIC-POLICY.md` and each crate's `ARCHITECTURE.md`.
 
@@ -90,9 +93,8 @@ pipeline (element tree → render objects → layout → paint → `wgpu`):
 
 ```rust
 //! examples/widgets_gallery.rs (excerpt)
-use flui_app::run_app;
-use flui_widgets::prelude::*;
-use flui_widgets::{column, row};
+use flui::prelude::*;
+use flui::widgets::{column, row};
 
 /// A circular colour avatar: a coloured box clipped to an inscribed oval.
 fn avatar(color: Color) -> ClipOval {
@@ -152,7 +154,7 @@ pin, this section, and CI together (the procedure lives in
 | [Architecture](docs/architecture.md) | Three-tree pipeline + layered crate DAG overview (current state) |
 | [Crates Map](docs/crates.md) | Per-layer crate inventory with status and purpose |
 | [Testing](docs/testing.md) | Build / test / clippy / fmt commands, coverage targets, benchmarks |
-| [Contributing](docs/contributing.md) | Constitution, commits, speckit workflow, AI Factory skills |
+| [Contributing](docs/contributing.md) | Quality gates, planning a large change, conventional commits, git hygiene, code style, architectural constraints |
 
 For deep architectural rules (dependency DAG, pipeline contracts, anti-patterns) see [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md).
 For AI-agent guidance (build commands, architecture, troubleshooting) see [`AGENTS.md`](AGENTS.md).

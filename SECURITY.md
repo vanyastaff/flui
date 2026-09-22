@@ -6,6 +6,10 @@ FLUI is pre-1.0 and not yet published to crates.io. Security fixes are made on
 `main`; downstream users should track the latest commit until the first stable
 release line exists.
 
+Until the first beta tag is cut, only `main` is supported — there is no
+released version to patch separately. Once a beta is tagged, the supported
+beta series will be listed here.
+
 ## Reporting a Vulnerability
 
 Do not open a public issue for a suspected vulnerability.

@@ -260,6 +260,23 @@ mod enabled {
     }
 
     #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+    #[cfg(test)]
+    impl WorkerWatcherGuard {
+        pub(crate) fn test_lifetime(
+            &self,
+        ) -> (std::thread::ThreadId, Arc<std::sync::atomic::AtomicBool>) {
+            (
+                self.handle
+                    .as_ref()
+                    .expect("watcher is live until Drop")
+                    .thread()
+                    .id(),
+                Arc::clone(&self.stop),
+            )
+        }
+    }
+
+    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     impl Drop for WorkerWatcherGuard {
         fn drop(&mut self) {
             // Signal first, then join: the thread sleeps in short intervals, so

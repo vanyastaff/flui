@@ -31,7 +31,17 @@ pub struct WindowOptions {
     pub size: Size<Pixels>,
     /// Whether window is resizable
     pub resizable: bool,
-    /// Whether window should be visible initially
+    /// Whether the window should be visible initially.
+    ///
+    /// `true` is the INTENDED state, not a promise that the window is on
+    /// screen the moment `open_window` returns: a backend may defer the
+    /// physical reveal until the embedder reports its first presented frame
+    /// through [`PlatformWindow::reveal_after_first_frame`], so the window
+    /// never shows a bare background while the GPU stack behind it is
+    /// built. Such a backend answers `is_visible() == true` meanwhile.
+    /// `false` stays hidden until shown explicitly.
+    ///
+    /// [`PlatformWindow::reveal_after_first_frame`]: crate::traits::PlatformWindow::reveal_after_first_frame
     pub visible: bool,
     /// Whether window is decorated (has title bar)
     pub decorated: bool,
@@ -236,9 +246,8 @@ pub trait Platform: Send + Sync + 'static {
     /// Takes `self: Box<Self>` because some backends (e.g. winit) require
     /// ownership of the event loop to run it.
     ///
-    /// This function only returns when the application quits (never, on
-    /// backends whose native run loop does not return control — e.g. macOS,
-    /// where `terminate:` exits the process).
+    /// Desktop event loops, including standalone AppKit, return after orderly
+    /// shutdown. Backends tied to a page/process lifetime may not return.
     ///
     /// # Errors
     /// Propagates `on_ready`'s own `Err` as [`PlatformError::Bootstrap`],
@@ -273,11 +282,10 @@ pub trait Platform: Send + Sync + 'static {
     /// this backend's native window count decide alone.
     ///
     /// Default no-op: a backend that never overrides this (every backend
-    /// except `winit` and `headless` today — Win32/AppKit/Android/Web/iOS
+    /// except `winit`, AppKit, and `headless` today — Win32/Android/Web/iOS
     /// remain cross-typecheck-only for this specific mechanism, stated
     /// honestly rather than silently assumed) keeps its pre-existing
-    /// unconditional "last window closed -> exit" behavior exactly as
-    /// before; installing a hook there is inert.
+    /// native lifecycle behavior; installing a hook there is inert.
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
         let _ = hook;
     }
@@ -303,7 +311,7 @@ pub trait Platform: Send + Sync + 'static {
     /// are still open, or while the hook still vetoes, is a no-op.
     ///
     /// Default no-op: a backend that never overrides this (every backend
-    /// except `winit` and `headless` today — Win32/AppKit/Android/Web/iOS
+    /// except `winit`, AppKit, and `headless` today — Win32/Android/Web/iOS
     /// remain cross-typecheck-only for this mechanism, stated honestly
     /// rather than silently assumed) simply never re-evaluates: on those
     /// backends a keep-alive holder's release does not end the process
@@ -491,7 +499,16 @@ pub trait Platform: Send + Sync + 'static {
     /// Register a callback for when the application should quit
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
 
-    /// Register a callback for when the application is reopened (macOS)
+    /// Register the macOS application's reopen signal callback.
+    ///
+    /// AppKit delivers this signal for both visible-window and no-window reopen
+    /// events. FLUI suppresses AppKit's default untitled-document creation; the
+    /// callback decides whether to show or create UI. Delivery is deferred to the
+    /// owner lane and uses the registration current at that turn. Nested events
+    /// wait until the active callback and its cleanup finish. Replacement is safe
+    /// from inside a callback. Explicit quit rejects pending signals and later
+    /// registrations; callbacks are released when the native run ends.
+    /// Other backends may leave this optional native transport unsupported.
     fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
     }

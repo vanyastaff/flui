@@ -52,6 +52,129 @@
 #   optionalize          — capability must become removable via a feature
 #   deferred-extraction  — a responsibility leaves this crate later, under a gate
 
+# Release roles share this inventory; they do not change architectural layers.
+# `facade` is the flui application API; `cli` is flui-cli's flui executable.
+# `support` packages are registry dependencies of those products, not separate
+# application APIs. `private` members must set publish = false. Examples/tools
+# outside [[member]] are private when their manifest explicitly says so.
+# Product/support manifests restrict publication to crates-io. The release
+# checker follows all retained Cargo declarations (normal/build, optional,
+# target-specific, and versioned dev), unlike the normal-edge layer graph.
+# Prerelease internal requirements pin the exact coordinated version.
+# scripts/release_policy.py reports closure paths and retained dependency SCCs;
+# legal dev cycles are not claimed to be packageable against an empty registry.
+
+# Explicit checkout-only dev declarations. Paths are resolved repository-relative;
+# target = "all" denotes an unconditional declaration. Cargo omits these declarations
+# because they have no version. All local test sources/features remain unchanged;
+# the complete regression suite is a matching-checkout contract, not a standalone
+# registry archive contract. Normal/build and forward dev declarations stay versioned.
+# The release checker validates every raw declaration before applying this omission.
+
+[[checkout_only_dev]]
+source = "flui-devtools"
+package = "flui-testing"
+alias = "flui-testing"
+target = "all"
+path = "crates/flui-testing"
+why = "Use shared log capture and test support from the checkout without a published reverse test edge."
+
+[[checkout_only_dev]]
+source = "flui-foundation"
+package = "flui-macros"
+alias = "flui-macros"
+target = "all"
+path = "crates/flui-macros"
+why = "Exercise derives inside the runtime owner without a published reverse test edge."
+
+[[checkout_only_dev]]
+source = "flui-interaction"
+package = "flui-interaction"
+alias = "flui-interaction"
+target = "all"
+path = "crates/flui-interaction"
+why = "Enable the crate testing feature for checkout integration tests and benches."
+
+[[checkout_only_dev]]
+source = "flui-interaction"
+package = "flui-testing"
+alias = "flui-testing"
+target = "all"
+path = "crates/flui-testing"
+why = "Use shared log capture and test support from the checkout without a published reverse test edge."
+
+[[checkout_only_dev]]
+source = "flui-layer"
+package = "flui-layer"
+alias = "flui-layer"
+target = "all"
+path = "crates/flui-layer"
+why = "Enable the crate testing feature for checkout integration tests and benches."
+
+[[checkout_only_dev]]
+source = "flui-objects"
+package = "flui-objects"
+alias = "flui-objects"
+target = "all"
+path = "crates/flui-objects"
+why = "Enable the crate testing feature for checkout integration tests and benches."
+
+[[checkout_only_dev]]
+source = "flui-painting"
+package = "flui-painting"
+alias = "flui-painting"
+target = "all"
+path = "crates/flui-painting"
+why = "Enable the crate testing feature for checkout integration tests and benches."
+
+[[checkout_only_dev]]
+source = "flui-rendering"
+package = "flui-objects"
+alias = "flui-objects"
+target = "all"
+path = "crates/flui-objects"
+why = "Run render protocol tests against the higher-layer concrete object catalog in the checkout."
+
+[[checkout_only_dev]]
+source = "flui-rendering"
+package = "flui-rendering"
+alias = "flui-rendering"
+target = "all"
+path = "crates/flui-rendering"
+why = "Enable the crate testing feature for checkout integration tests and benches."
+
+[[checkout_only_dev]]
+source = "flui-scheduler"
+package = "flui-testing"
+alias = "flui-testing"
+target = "all"
+path = "crates/flui-testing"
+why = "Use shared log capture and test support from the checkout without a published reverse test edge."
+
+[[checkout_only_dev]]
+source = "flui-view"
+package = "flui-testing"
+alias = "flui-testing"
+target = "all"
+path = "crates/flui-testing"
+why = "Use shared log capture and test support from the checkout without a published reverse test edge."
+
+[[checkout_only_dev]]
+source = "flui-widgets"
+package = "flui-widgets"
+alias = "flui-widgets"
+target = "all"
+path = "crates/flui-widgets"
+why = "Enable the crate testing feature for checkout integration tests and benches."
+
+[[checkout_only_dev]]
+source = "flui-cli"
+package = "flui-hot-reload"
+alias = "flui-hot-reload"
+target = "all"
+path = "crates/flui-hot-reload"
+why = "Pin the FLUI_HOT_RELOAD / FLUI_WORKER_PLUGIN env-var names the CLI sets against the runtime's constants; the CLI publishes alone and must not wait for the framework."
+
 # =============================================================================
 # Layers
 # =============================================================================
@@ -106,18 +229,21 @@ name = "Facade"
 
 [[member]]
 name = "flui-geometry"
+release_role = "support"
 layer = 0
 disposition = "keep"
 note = "Unit-safe coordinate primitives; separate from the broader value catalog."
 
 [[member]]
 name = "flui-types"
+release_role = "support"
 layer = 0
 disposition = "keep"
 note = "Value/unit catalog. Depends on flui-geometry inside L0 (see same_layer_edge)."
 
 [[member]]
 name = "flui-foundation"
+release_role = "support"
 layer = 1
 disposition = "keep"
 note = """
@@ -131,12 +257,14 @@ dev-dependency only.\
 
 [[member]]
 name = "flui-macros"
+release_role = "support"
 layer = 1
 disposition = "keep"
 note = "Proc-macro crate for framework derives."
 
 [[member]]
 name = "flui-log"
+release_role = "support"
 layer = 2
 disposition = "keep"
 allowed_dependents = ["flui-app", "flui-cli", "flui", "flui-android-demo"]
@@ -162,12 +290,14 @@ subscriber, Install returns a typed error rather than panicking.\
 
 [[member]]
 name = "flui-tree"
+release_role = "support"
 layer = 2
 disposition = "keep"
 note = "Tree protocol and arity vocabulary."
 
 [[member]]
 name = "flui-platform"
+release_role = "support"
 layer = 2
 disposition = "narrow"
 note = """
@@ -179,6 +309,7 @@ runtime's default executor, not a per-Platform responsibility.\
 
 [[member]]
 name = "flui-scheduler"
+release_role = "support"
 layer = 2
 disposition = "narrow"
 note = """
@@ -190,54 +321,63 @@ execution.\
 
 [[member]]
 name = "flui-painting"
+release_role = "support"
 layer = 2
 disposition = "keep"
 note = "Canvas/DisplayList recording; a distinct retained pipeline product."
 
 [[member]]
 name = "flui-interaction"
+release_role = "support"
 layer = 2
 disposition = "keep"
 note = "Hit-testing, gestures, focus, pointer, owner-local text input. Depends on flui-platform inside L2 (ADR-0037)."
 
 [[member]]
 name = "flui-assets"
+release_role = "support"
 layer = 2
 disposition = "keep"
 note = "Asset loading/decoding; one of the three sanctioned async edges (contract C8)."
 
 [[member]]
 name = "flui-semantics"
+release_role = "support"
 layer = 3
 disposition = "keep"
 note = "Accessibility tree; a distinct retained pipeline product."
 
 [[member]]
 name = "flui-layer"
+release_role = "support"
 layer = 3
 disposition = "keep"
 note = "Compositor input tree; a distinct retained pipeline product."
 
 [[member]]
 name = "flui-animation"
+release_role = "support"
 layer = 3
 disposition = "keep"
 note = "Curves, tweens, controllers, implicit animations."
 
 [[member]]
 name = "flui-engine"
+release_role = "support"
 layer = 4
 disposition = "keep"
 note = "GPU pipeline; owns all wgpu state. Separate from OS-facing flui-platform."
 
 [[member]]
 name = "flui-rendering"
+release_role = "support"
 layer = 4
 disposition = "keep"
 note = "The render machine: RenderObject, RenderBox<Arity>, layout protocol, paint context."
 
 [[member]]
 name = "flui-objects"
+release_role = "support"
 layer = 4
 disposition = "keep"
 note = """
@@ -251,18 +391,21 @@ contradicts.\
 
 [[member]]
 name = "flui-view"
+release_role = "support"
 layer = 5
 disposition = "keep"
 note = "View + Element tree, BuildContext. The framework spine."
 
 [[member]]
 name = "flui-widgets"
+release_role = "support"
 layer = 6
 disposition = "keep"
 note = "Author-facing widget catalog; owns the Localizations/Directionality/WidgetsLocalizations contracts."
 
 [[member]]
 name = "flui-testing"
+release_role = "support"
 layer = 6
 disposition = "keep"
 note = """
@@ -277,40 +420,41 @@ conceptually with the transitional `AppBinding` graph Runtime.1 removes, and the
 package name becomes a public testing contract once conformance tests import it. \
 Runtime and \
 framework crates take *development* edges into it only — a normal edge from a \
-shipped library would link the test driver into production. One sanctioned \
-exception: `flui-widgets` declares an *optional* edge, activated solely by its \
+shipped library would link the test driver into production. Two sanctioned \
+exceptions: `flui-widgets` declares an *optional* edge, activated solely by its \
 `testing` feature, so the canonical `flui_widgets::testing` harness (shared \
 by the flui-material/flui-cupertino test suites) can be built on \
 `HeadlessBinding` without per-crate copies; no default or production feature \
-set activates it (see same_layer_edge).\
+set activates it (see same_layer_edge). The application facade `flui` also \
+declares an optional edge activated solely by its `testing` feature, exposing \
+the same driver and widget harness to consumer dev-dependencies without asking \
+applications to depend on implementation crates.\
 """
 
 [[member]]
 name = "flui-hot-reload"
+release_role = "support"
 layer = 6
 disposition = "optionalize"
 note = "Development capability; optional in both flui-app and the facade, and absent from their ordinary production graphs."
 
 [[member]]
-name = "flui-build"
-layer = 6
-disposition = "keep"
-note = "Async cross-platform build pipeline; one of the three sanctioned async edges (contract C8)."
-
-[[member]]
 name = "flui-material"
+release_role = "support"
 layer = 7
 disposition = "keep"
 note = "Terminal design system. Never depends on flui-localizations (see forbidden_edge)."
 
 [[member]]
 name = "flui-cupertino"
+release_role = "support"
 layer = 7
 disposition = "keep"
 note = "Terminal design system, independent sibling of flui-material (ADR-0028)."
 
 [[member]]
 name = "flui-localizations"
+release_role = "support"
 layer = 8
 disposition = "keep"
 note = """
@@ -326,6 +470,7 @@ translations must not compile Cupertino, or vice versa.\
 
 [[member]]
 name = "flui-app"
+release_role = "support"
 layer = 9
 disposition = "narrow"
 note = """
@@ -338,18 +483,21 @@ extracted only under the gate in [[planned]], not speculatively.\
 
 [[member]]
 name = "flui-devtools"
+release_role = "support"
 layer = 9
 disposition = "keep"
-note = "Profiler and inspector adapters over `tracing`. Consumes flui-hot-reload; nothing in the framework consumes it."
+note = "Profiler, timeline and inspector adapters over `tracing`. Nothing in the framework consumes it; flui-testing takes its inspector counters."
 
 [[member]]
 name = "flui-cli"
+release_role = "cli"
 layer = 9
 disposition = "keep"
-note = "CLI tooling. Depends on flui-devtools inside L9 (see same_layer_edge)."
+note = "The `flui` binary. Owns the build pipeline (once `flui-build`) and the source watcher; has no internal dependency at all (not even flui-log: its diagnostics go through its own output policy), so the hot-reload env-var contract is checked by a dev-dependency test instead of a normal edge."
 
 [[member]]
 name = "flui"
+release_role = "facade"
 layer = 10
 disposition = "optionalize"
 note = """
@@ -388,11 +536,6 @@ existing L5+ numbering stays stable, but the edge is directional: \
 `flui-rendering -> flui-objects` remains forbidden, which is the inversion that \
 would actually break the layering.\
 """
-
-[[same_layer_edge]]
-from = "flui-cli"
-to = "flui-devtools"
-why = "`flui run` drives the profiler/hot-reload orchestration devtools exposes. Devtools never depends on the CLI."
 
 [[same_layer_edge]]
 from = "flui-widgets"

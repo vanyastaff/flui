@@ -1,0 +1,22 @@
+[package]
+name = "flui-web-counter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "The counter template's widget tree run through `flui::run_app` in a browser"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The same sole dependency a generated application has: everything below
+# `run_app` — widgets, Material, the web runner and its WebGPU renderer —
+# comes through the facade.
+flui = { path = "../..", version = "=0.1.0" }
+wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
+
+[lints]
+workspace = true

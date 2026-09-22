@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-cli"
 version.workspace = true
 edition.workspace = true
@@ -9,6 +10,9 @@ repository.workspace = true
 description = "Command-line interface for FLUI - Project creation, building, and deployment automation"
 keywords = ["cli", "flui", "ui", "cross-platform", "build-tool"]
 categories = ["command-line-utilities", "development-tools", "gui"]
+# ARCHITECTURE.md records design decisions for people working on the crate;
+# the published archive carries the README and CHANGELOG a user reads.
+exclude = ["ARCHITECTURE.md"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 5
 # separate binaries). See the `[[test]] name = "cli_it"` target below.
@@ -24,56 +28,84 @@ path = "src/main.rs"
 # documenting; the crate's docs live in its lib and README.
 doc = false
 
+# `cargo flui …` — an exec shim over the `flui` binary installed beside it
+# (see src/bin/cargo-flui.rs). It parses nothing, so there is one CLI.
+[[bin]]
+name = "cargo-flui"
+path = "src/bin/cargo-flui.rs"
+doc = false
+
+# Prebuilt binaries for `cargo binstall flui-cli`: the release workflow
+# (.github/workflows/release.yml) uploads one archive per target to the
+# GitHub release of the `v<version>` tag, with both binaries at its root.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/flui-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [dependencies]
-# Build system
-flui-build = { path = "../flui-build", version = "0.2.0" }
-flui-hot-reload = { path = "../flui-hot-reload", version = "0.2.0", features = ["source-watch"] }
+# The CLI has no internal dependency at all: the build pipeline (`src/build/`)
+# and the source watcher (`src/watch.rs`) are modules here, the hot-reload
+# runtime half stays in `flui-hot-reload`, linked by the app, with the env-var
+# contract checked by a dev-dependency test in `commands/run.rs`, and there is
+# no logging framework — `-v` diagnostics go through `ui::debug` like every
+# other line the CLI prints (see `ui.rs`).
+
+# Build pipeline: cargo metadata for artifact selection, staging
+# directories, and `process`/`io-util` for the async builders.
+cargo_metadata = { workspace = true }
+tempfile = { workspace = true }
+
+# Source watcher for the dev loop.
+notify-debouncer-mini = "0.7"
 
 # Async runtime — `run` blocks on the async Android build/push pipeline via
-# a multi-thread `Runtime`. There is no `devtools` server (see
-# commands/devtools.rs), so no `signal` feature is needed here.
-tokio = { workspace = true, features = ["rt-multi-thread"] }
-
-# Logging backend. The CLI chooses and installs its own subscriber policy and
-# reuses flui-log's backend construction; it is a composition root, so this
-# normal edge is sanctioned — see docs/workspace-layers.toml.
-flui-log = { workspace = true }
+# a multi-thread `Runtime`; `signal` hosts the Ctrl-C listener of the dev loop;
+# `process`/`io-util` drive the builders' child processes.
+tokio = { workspace = true, features = ["rt-multi-thread", "time", "signal", "process", "io-util"] }
 
 # CLI framework
-clap = { version = "4.5", features = ["derive", "cargo", "env", "color"] }
+clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 
 # Error handling
 thiserror = { workspace = true }
 
 # Serialization
-serde = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = { workspace = true }
 
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 toml = "1.1"
 
 # Utilities
 which = "8.0"
-cliclack = "0.5"
+
+# Terminal drawing (`ui.rs`) and the prompts of `flui create` / `platform
+# remove`. `console` alone draws the bar, the glyphs and the spinner;
+# `dialoguer` without its default features is the prompts and nothing else
+# (no password editor, no fuzzy matcher).
 console = "0.16"
-dirs = "6.0"
+dialoguer = { version = "0.12", default-features = false }
 
-# Async runtime (for flui-build async builders)
-pollster = { workspace = true }
 
-# Optional: DevTools integration
-flui-devtools = { path = "../flui-devtools", version = "0.2.0", optional = true }
-
-[features]
-default = []
-devtools = ["dep:flui-devtools"]
+# Terminal mode for `flui run`'s hot-keys (see commands/run.rs `raw_mode`):
+# canonical mode and echo off for the session, restored on every exit path.
+# `rustix` gives safe termios wrappers, so the CLI stays free of `unsafe`.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", default-features = false, features = ["std", "termios", "stdio"] }
 
 [dev-dependencies]
-tempfile = "3.10"
 assert_cmd = "2.0"
 predicates = "3.1"
+# `#[tokio::test]` in the build pipeline's artifact tests.
+tokio = { workspace = true, features = ["macros"] }
+# Only for the env-var contract test in `commands/run.rs`; never in the
+# `cargo install` graph. No `version`: a path-only dev-dependency is dropped
+# from the published manifest, so the CLI publishes without the framework.
+flui-hot-reload = { path = "../flui-hot-reload" }
 
 # Consolidated integration-test binary (see `autotests = false` above).
 # All five suites drive the built `flui` binary in subprocesses via

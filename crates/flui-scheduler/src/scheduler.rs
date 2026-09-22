@@ -1905,6 +1905,17 @@ impl UpdateScheduler {
     /// it to keep their existing `-> R` signature, while
     /// `execute_frame`/`execute_frame_with_lane` discard `R` (always `()`
     /// there) and return the id instead.
+    ///
+    /// # The `frame` span
+    ///
+    /// Opens a `DEBUG` span named `frame` for exactly the stretch the
+    /// scheduler counts as "in a frame" -- `handle_begin_frame` through
+    /// `end_frame` (or `abort_frame`) -- so the pipeline's `build`, `layout`,
+    /// `paint` and `compositing` spans nest inside it. This is the profiler
+    /// contract: `flui-devtools`' `FrameTimingLayer` delimits frames by this
+    /// name, and its end-to-end test drives this method through
+    /// `HeadlessBinding::pump_frame`. Rename it on either side and that test
+    /// fails, which is the point of the test.
     fn drive_frame_impl<R>(
         &self,
         vsync_time: Instant,
@@ -1916,6 +1927,13 @@ impl UpdateScheduler {
 
         // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.idle_deadline.lock() = Some(deadline.0);
+
+        // Entered for the whole frame, the panic path included: on a panic
+        // the guard drops during unwinding, after `abort_frame`, so the span
+        // closes exactly when the frame does either way. The id is recorded
+        // once `handle_begin_frame` has minted it.
+        let frame_span = tracing::debug_span!("frame", id = tracing::field::Empty);
+        let _in_frame = frame_span.enter();
 
         // ONE recovery boundary over the whole frame lifetime this method
         // owns -- `handle_begin_frame`, `handle_draw_frame`, AND `pipeline`
@@ -1933,6 +1951,7 @@ impl UpdateScheduler {
             };
 
             let frame_id = self.handle_begin_frame(vsync_time);
+            frame_span.record("id", tracing::field::debug(&frame_id));
             self.handle_draw_frame();
             // The deadline only ever needs to be visible for this frame's
             // own `handle_draw_frame` call, immediately above; drop the

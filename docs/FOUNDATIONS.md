@@ -72,7 +72,7 @@ A port is not a transliteration. Flutter's *behavior* is the specification; Flut
 | 2 | **Error model** | Dart exceptions; `FlutterError` | `Result<T, E>` + `thiserror`, `#[non_exhaustive]` error enums; `build()` stays infallible behind an internal `catch_unwind` error-view boundary | Errors are typed and exhaustive; the compiler forces handling. No `unwrap()`/`panic!` in library code (Constitution Principle 6). Ousterhout — "define errors out of existence." |
 | 3 | **References & memory** | `Element? _parent`, GC-managed pointers | `NonZeroUsize` newtype IDs; `Option<ElementId>` is **8 bytes** via niche optimization; `Slab` arena, library-owns-nodes | 8 bytes saved on every optional tree link; the whole tree is iterable for an inspector or focus routing without walking the ownership chain. *The Rust Performance Book* — niche optimization; Masonry RFC. |
 | 4 | **Subtree memoization** | Internal `const`-constructor + `Widget.canUpdate` short-circuit; not author-visible | `View::can_update` (type + key matchability gate) + `View::should_skip_rebuild` defaulting to `false` (always rebuild — Flutter parity); `PartialEq`-skip is opt-in via `Memo<V>` or a per-view override | The `build()`-skip optimization is **first-class and composable**, not a framework-internal trick. Default is always-rebuild (safe); `Memo<V>` is the opt-in. No blanket `PartialEq` bound on `View` (the Druid trap). Xilem's `memoize` lesson. |
-| 5 | **Dispatch** | Open class hierarchies | Sealed traits (`Arity`, `PlatformBuilder`); enum dispatch over `dyn` by default | Exhaustive `match`; the closed set is enforced; `dyn` is the justified exception, not the default. *Rust for Rustaceans* — sealed traits. |
+| 5 | **Dispatch** | Open class hierarchies | Sealed traits (`Arity`); enum dispatch over `dyn` by default | Exhaustive `match`; the closed set is enforced; `dyn` is the justified exception, not the default. *Rust for Rustaceans* — sealed traits. |
 | 6 | **Resource lifecycle** | Manual `LayerHandle` ref-counting; GC for everything else | RAII — `Drop`; `LayerHandle<L>` releases the retained engine layer deterministically | Deterministic release is **more correct** than Dart's manual ref-counting and removes a whole class of leak. *Programming Rust* — RAII guards. |
 | 7 | **Frame cadence** | Event-driven | `ControlFlow::Wait` — an idle UI burns zero CPU; render only when dirty | Battery and thermal headroom by construction; Constitution Principle 7. |
 | 8 | **Developer surface** | One import: `package:flutter/material.dart` | A `flui` **facade crate** + `flui::prelude`; app authors depend on one crate, framework authors on the granular crates | A 24-crate workspace presents as a single dependency to an app author — the product legibility metric, served. GPUI/`xilem` facade precedent. |
@@ -155,7 +155,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
 | L4 — Render machine + render catalog | `flui-engine`, `flui-rendering`, `flui-objects` |
 | L5 — Framework spine | `flui-view` |
-| L6 — Widget catalog + DX tooling | `flui-widgets`, `flui-testing`, `flui-hot-reload`, `flui-build` |
+| L6 — Widget catalog + DX tooling | `flui-widgets`, `flui-testing`, `flui-hot-reload` |
 | L7 — Design systems | `flui-material`, `flui-cupertino` |
 | L8 — Global localizations | `flui-localizations` |
 | L9 — Application / tooling | `flui-app`, `flui-devtools`, `flui-cli` |
@@ -182,7 +182,6 @@ graph TD
     view[flui-view]
     devtools[flui-devtools]
     cli[flui-cli]
-    build[flui-build]
     hotreload[flui-hot-reload]
     widgets[flui-widgets]
     testing[flui-testing]
@@ -239,7 +238,6 @@ graph TD
     app --> hotreload
     devtools --> hotreload
     cli --> devtools
-    cli --> build
     cli --> hotreload
     facade --> app
     facade --> material

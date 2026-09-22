@@ -225,3 +225,6 @@ flamegraph.svg
 # Per-developer agent-runtime state: personal permission allowlists, which are
 # machine state rather than something to grant every contributor by default.
 .qwen/
+
+# wasm-bindgen output of the web examples (built by `just web-counter-build` and friends)
+examples/*/pkg/

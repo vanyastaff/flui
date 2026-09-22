@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-assets"
 version.workspace = true
 edition.workspace = true
@@ -13,7 +14,7 @@ documentation = "https://docs.rs/flui-assets"
 
 [dependencies]
 # Internal dependencies
-flui-types = { path = "../flui-types", version = "0.2.0" }
+flui-types = { path = "../flui-types", version = "=0.1.0" }
 
 # Async runtime. "sync" backs the bridged-load completion channel
 # (`registry::bridge`); "rt-multi-thread" builds the single-worker background

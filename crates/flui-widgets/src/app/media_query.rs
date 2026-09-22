@@ -51,7 +51,7 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 pub struct MediaQueryData {
     /// Logical size of the current display surface (window or full screen).
     ///
-    /// In logical pixels: divide by [`device_pixel_ratio`](Self::device_pixel_ratio)
+    /// In logical pixels: multiply by [`device_pixel_ratio`](Self::device_pixel_ratio)
     /// to get physical pixels.
     pub size: Size,
 
@@ -104,7 +104,7 @@ impl Default for MediaQueryData {
 /// Mirrors Flutter's `MediaQuery` inherited widget
 /// (`widgets/media_query.dart`). Flutter's `MediaQueryData.fromWindow` /
 /// `.fromView` constructors, which bootstrap data from the platform window,
-/// are deferred: in FLUI the platform layer will construct [`MediaQueryData`]
+/// are platform-specific: the app runner constructs [`MediaQueryData`]
 /// and provide it here. The inherited-data mechanism itself is identical.
 ///
 /// ## Example

@@ -53,35 +53,18 @@ fn test_point_vec2_size_interop() {
 // GPU Conversion Tests
 // =============================================================================
 
-// NOTE: These tests are disabled because f32 doesn't implement Unit trait
-// (f32 cannot implement Eq/Hash due to NaN). GPU coordinates should use
-// Pixels type and extract raw values with .get() when needed for GPU buffers.
-
+/// Geometry stays unit-typed until raw components cross the GPU buffer boundary.
 #[test]
-#[ignore = "f32 doesn't implement Unit trait - use Pixels and extract with .get()"]
-fn test_gpu_conversion_pipeline() {
-    // UI coordinates
+fn test_gpu_coordinate_extraction() {
     let ui_pos = Point::<Pixels>::new(px(100.0), px(200.0));
-    let _ui_size = Size::<Pixels>::new(px(400.0), px(300.0));
+    let gpu_pos: [f32; 2] = [ui_pos.x.get(), ui_pos.y.get()];
+    assert_eq!(gpu_pos, [100.0, 200.0]);
 
-    // Scale for 2x display
     let scale_factor = 2.0;
     let scaled = ui_pos.x.scale(scale_factor);
-
-    // Convert to device pixels
+    assert_eq!(scaled.get(), 200.0);
     let device = scaled.to_device_pixels(1.0);
     assert_eq!(device.0, 200);
-
-    // Convert to GPU f32 - NOT SUPPORTED, use .get() instead
-    // let gpu_pos: Point<f32> = ui_pos.cast();
-    // Instead: [ui_pos.x.get(), ui_pos.y.get()]
-}
-
-#[test]
-#[ignore = "f32 doesn't implement Unit trait - use Pixels and extract with .get()"]
-fn test_cast_conversions() {
-    // These conversions are not supported - f32 cannot implement Unit
-    // Use Pixels type throughout and extract raw f32 with .get() when needed
 }
 
 // =============================================================================

@@ -11,11 +11,10 @@
 //!
 //! Run with: cargo run --example widgets_gallery
 
-use flui_app::run_app;
-use flui_widgets::prelude::*;
+use flui::prelude::*;
 // `column!`/`row!` are imported explicitly (not via the prelude glob) to shadow
 // std's same-named macros.
-use flui_widgets::{column, row};
+use flui::widgets::{column, row};
 
 /// A solid colour square — a small reusable builder returning a concrete
 /// `View` so it slots into the `row!` tuple sequence.

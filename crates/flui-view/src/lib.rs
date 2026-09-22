@@ -79,6 +79,13 @@
 // Modules
 // ============================================================================
 
+// Derive expansions use the same absolute owner path in library and integration targets.
+#[allow(
+    unused_extern_crates,
+    reason = "derive expansions resolve the owner by its absolute crate name"
+)]
+extern crate self as flui_view;
+
 pub mod binding;
 pub mod child;
 pub mod context;
@@ -87,6 +94,7 @@ pub mod key;
 pub mod macros; // PORT-CHECK-OK-SP4: macros consumed via #[macro_export] (no qualified path); intentional API surface
 pub mod owner;
 pub mod seq; // PORT-CHECK-OK-SP4: seq/Children API surface; consumed via prelude re-exports
+pub mod state_cell;
 pub mod tree;
 pub mod view;
 
@@ -149,6 +157,12 @@ mod test_only_global_key_registry {
 
 // View traits
 // Binding
+mod lifecycle;
+#[cfg(feature = "runtime-internals")]
+#[doc(hidden)]
+pub use lifecycle::LifecycleSource;
+pub use lifecycle::{LifecycleClosed, LifecycleHandle, LifecycleSubscription};
+
 pub use binding::{
     AppExitResponse, AppLifecycleState, AttachError, PredictiveBackEvent, RouteInformation,
     ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
@@ -181,6 +195,13 @@ pub use element::{StatefulBehavior, StatelessBehavior};
 // Re-export from flui-foundation
 pub use flui_foundation::{ElementId, RenderId};
 pub use flui_rendering::RenderUpdateImpact;
+
+// Nameable lifecycle capabilities and callback values for widget authors.
+pub use flui_scheduler::{
+    AsyncDriver, BoxedTask, BudgetPercentage, FrameDuration, FramePhase, FrameTiming, Instant,
+    LocalPostFrameHandle, LocalPostFrameScheduleError, Microseconds, Milliseconds, PostFrameHandle,
+    Seconds, TaskToken, duration::InvalidDurationConfig,
+};
 // Keys
 pub use key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey};
 // Legacy test-only handle for `GlobalKey::current_*` lookup. Production code
@@ -193,6 +214,8 @@ pub use owner::{
     BuildOwner, DuplicateGlobalKey, ElementOwner, GlobalKeyScope, LifecycleHook, RebuildHandle,
     RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
 };
+// Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
+pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
     AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementExt, ErrorView,
@@ -217,6 +240,7 @@ pub mod prelude {
     // opinion about where they go, so nothing here reaches the backend.
     pub use flui_foundation::{ElementId, RenderId};
     pub use flui_rendering::RenderUpdateImpact;
+
     pub use tracing::{debug, error, info, trace, warn};
     // The proc-macro derives ship from `flui-macros` but are surfaced
     // here so a single `use flui_view::prelude::*;` picks them up
@@ -246,6 +270,7 @@ pub mod prelude {
         },
         key::{GlobalKey, GlobalKeyId, ObjectKey, ValueKey},
         owner::{BuildOwner, ElementOwner, RebuildHandle, RebuildReason, RebuildReasons},
+        state_cell::{StateCell, StateHandle},
         tree::{ElementNode, ElementTree},
         view::{
             AnimatedView, BoxedView, InheritedView, IntoView, Memo, ParentDataConfig,
@@ -253,4 +278,49 @@ pub mod prelude {
             StatefulView, StatelessView, View, ViewExt, ViewState,
         },
     };
+}
+
+#[cfg(test)]
+mod derive_owner_tests {
+    use super::{BuildContext, IntoView, StatefulView, StatelessView, View, ViewState};
+
+    #[derive(Clone, flui_macros::StatelessView)]
+    struct Leaf;
+
+    impl StatelessView for Leaf {
+        fn build(&self, _context: &dyn BuildContext) -> impl IntoView {
+            Self
+        }
+    }
+
+    #[derive(Clone, flui_macros::StatefulView)]
+    struct StatefulLeaf;
+
+    struct State;
+
+    impl StatefulView for StatefulLeaf {
+        type State = State;
+
+        fn create_state(&self) -> Self::State {
+            State
+        }
+    }
+
+    impl ViewState<StatefulLeaf> for State {
+        fn build(&self, _view: &StatefulLeaf, _context: &dyn BuildContext) -> impl IntoView {
+            Leaf
+        }
+    }
+
+    #[test]
+    fn derives_resolve_owner_inside_library() {
+        assert!(matches!(
+            Leaf.create_element(),
+            super::element::ElementKind::Stateless(_)
+        ));
+        assert!(matches!(
+            StatefulLeaf.create_element(),
+            super::element::ElementKind::Stateful { .. }
+        ));
+    }
 }

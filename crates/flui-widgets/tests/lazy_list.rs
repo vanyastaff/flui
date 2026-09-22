@@ -91,29 +91,11 @@ impl StatelessView for CompositeItem {
     }
 }
 
-/// KNOWN GAP — a lazy list cannot yet take a composite child when the
-/// per-item repaint boundary is switched off.
-///
-/// The sliver maps `logical -> dense slot` from parent data alone, so every
-/// child's render node is stamped with its logical index at
-/// `SparseChildren::ensure` time. A *composite* child (one whose top-level
-/// view owns no render object — a bare `Text`, a `StatefulView`, an extracted
-/// widget) has no render node at that moment: its first render descendant
-/// only appears after the follow-up build pass expands the subtree. The stamp
-/// therefore has nowhere to land, and `stamp_logical_index` reports it with a
-/// `debug_assert!(false)`.
-///
-/// The default path hides this, which is why no other test here sees it:
-/// `addRepaintBoundaries` defaults to `true`, and the boundary owns a render
-/// node, so the composite view is never itself the top-level sparse child.
-/// Turning the boundary off is what exposes the gap.
-///
-/// This test is `#[ignore]`d rather than deleted so the gap stays
-/// reproducible in-tree instead of living in a branch. Deferring the stamp
-/// until after the build pass removes the assertion but is NOT sufficient on
-/// its own — measured: the items still do not materialise (2 render nodes
-/// instead of 5), so the sliver's own layout path needs the matching work
-/// before this can be un-ignored.
+/// Composite children settle even when per-item repaint boundaries are off.
+/// Their render descendants appear during the follow-up build pass, so the
+/// lazy layout path must associate those descendants with their logical
+/// indices before settling. The default boundary would supply an immediate
+/// render node and conceal a regression in this path.
 #[test]
 fn lazy_list_view_builder_settles_composite_children() {
     let mut laid = lay_out(

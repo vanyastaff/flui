@@ -3,15 +3,87 @@
 All notable changes to the FLUI workspace are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-FLUI is pre-release and not published to crates.io; entries are grouped under
-`[Unreleased]` until a first tagged release cuts them over. Workspace version:
-`0.2.0` (all crates share `[workspace.package].version`). Fine-grained phase
-history lives in [`docs/ROADMAP-TRACKER.md`](docs/ROADMAP-TRACKER.md); this
-file records the repo-consumer-visible summary.
+All crates share `[workspace.package].version`, and every internal
+dependency pins that exact version, so a published cohort can never mix
+with a later one. The numbering starts at `0.1.0` where the public history
+does: nothing was published before, and the beta status is stated in the
+README rather than in a pre-release suffix that `flui = "0.1"` would not
+match. Fine-grained phase history lives in
+[`docs/ROADMAP-TRACKER.md`](docs/ROADMAP-TRACKER.md); this file records the
+repo-consumer-visible summary.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-21
+
+First tagged release of the workspace. On crates.io this cut ships
+`flui-cli` alone; the framework crates publish from a later tag, and until
+then `flui create` pins this tag as a git dependency.
+
 ### Added
+
+- **A form and an async section in the Material demo**
+  (`examples/material_demo`): a validated `TextField` with an inline error
+  and a Submit that enables only when valid, plus a scheduler-driven
+  simulated fetch with loading, error → Retry, and cancellation on route
+  pop — with facade-only headless tests for each, including that a fetch
+  cancelled by navigating away never delivers.
+- **`tests/agent_workflow.rs`**: the "agent workflow" acceptance test —
+  mount the counter tree, dump the render diagnostics, find the button by
+  its accessible label, tap its bounds through pointer replay, and assert
+  the rendered count advanced, using only `flui::…`; a second test shows
+  the actionable failure a missing label produces. `docs/testing.md` walks
+  the same five steps. `flui::testing::rendering` now re-exports
+  `render_diagnostics`.
+- **`StateCell<T>` / `StateHandle<T>`** (`flui-view`, in `flui::prelude`):
+  local state for a `StatefulView` that schedules its own rebuild. Replace the
+  `Rc<Cell<T>>` field plus a hand-threaded `RebuildHandle` with one field,
+  `bind(ctx)` it once in `init_state`, and write `count.update(|n| n + 1)` in a
+  callback. The generated counter template and the multi-window and
+  vertical-slice examples use it. Additive; `RebuildHandle` stays for widgets
+  that choose their own `RebuildReason`.
+- `AppConfig::with_*` and `Application`'s builder methods are `#[must_use]`:
+  dropping the returned builder (`AppConfig::new().with_title("x");`) is now
+  a warning instead of a silent no-op.
+
+- **No blank window at launch on macOS** (`flui-platform`, `flui-app`): a window
+  opened `visible: true` is ordered front fully transparent and made opaque only
+  once the first frame has been presented into it (new
+  `PlatformWindow::reveal_after_first_frame`, default no-op; `flui-app`'s
+  desktop runner calls it on the first presented frame or after a one-second
+  fallback when a frame ran and presented nothing). Before, the bare window
+  background was on screen for as long as the GPU stack took to build — 2.81 s
+  on a cold launch. `WindowOptions::visible` now documents itself as the intended
+  state. Explicit `show`/`set_visible(true)`/`activate` reveal immediately.
+  Other backends are unchanged.
+- **Grapheme-cluster text editing** (`flui-widgets`): `TextEditingController`'s
+  `backspace`, `delete_forward`, `move_caret_left`/`right` and
+  `extend_selection_left`/`right` step by extended grapheme cluster (UAX #29)
+  rather than by Unicode scalar, so a family emoji, a flag or a letter with
+  combining marks is one keystroke — Flutter's `characters` unit. An obscured
+  field masks one bullet per cluster, keeping the mask in step with the caret.
+  Adds `unicode-segmentation` as a direct dependency (already in the graph
+  through cosmic-text).
+- **Automatic retry of a failed mobile surface recreation** (`flui-app`): when
+  the Android or iOS runner is told its native window is available again and
+  the wgpu surface rebuild fails for a reason other than the window not being
+  there yet, the runner now retries under the same deadline-paced exponential
+  backoff device-loss recovery uses (16 ms doubling to a 1 s cap, reset on
+  success), driven through the platform's wake-deadline hook rather than a
+  sleep on the event-loop thread. Previously the presentation stayed released
+  and every later frame was skipped until some unrelated lifecycle event
+  happened to re-emit the availability signal. The expected
+  `SurfaceTargetUnavailable` answer — the signal arriving before a window
+  exists — is never polled. Both runners settle each availability callback
+  through one shared classification, so they cannot disagree about which
+  failure is genuine.
+- **CI lints the mobile runners and the facade for their own targets**: the
+  `cross-typecheck` job now runs clippy on `flui-app` and `flui` for
+  `aarch64-apple-ios` and `aarch64-linux-android`. Until this, the
+  `cfg(target_os = ...)` runner code and the facade's target-gated re-exports
+  had no compile gate at all; `flui` did not build for iOS because it
+  re-exported `WindowPolicy` and `open_window`, which `flui-app` gates out
+  there, unconditionally.
 
 - `DisplayList::append_isolated` scopes each composed paint run, preventing a
   parent's canvas clip from leaking across `paint_child`. Serialized display
@@ -165,6 +237,170 @@ file records the repo-consumer-visible summary.
   pixel-for-pixel at a clipped corner.
 
 ### Changed
+
+- **`flui-cli` reads like a binary, not a library** (`flui-cli`). Error
+  messages now follow the `thiserror` convention — lowercase, no trailing
+  period, and the wrapping variants (`I/O error`, `build failed`, …) no
+  longer repeat the cause that the `Caused by:` chain already prints; a
+  command that dies by signal says so instead of printing `None`. Every
+  `pub` item is `pub(crate)` (nothing outside the binary can see it), which
+  let the compiler find the library-era leftovers that went with it: a
+  `prelude`, a sealed trait with nothing to seal against, unused builder
+  methods, error variants no code constructs, `new_unchecked` constructors
+  that bypassed validation, 47 doc examples no tool ever compiled, and
+  `flui.toml` sections (`[assets]`, `fonts`, `lto`, `opt_level`, per-mode
+  build tables) that nothing read but `flui platform` wrote back into the
+  user's file. `flui.toml` now models exactly the keys the README documents;
+  unknown keys from older files are ignored.
+- **`flui-cli` build pipeline: one streaming process runner, no builder
+  trait** (`flui-cli`). The `PlatformBuilder` trait had four implementations
+  and no polymorphic caller (`flui build` matches on the target), and it hid
+  what the compiler now reports: two builders whose environment check and
+  staging step never touched `self` or awaited anything, and two dead
+  `types.rs` methods. The platform tools (Gradle, `wasm-pack`, `xcodebuild`,
+  `cargo ndk`, `adb`) go through one `process::run` that kills the child
+  when the build is cancelled, `JAVA_HOME` reaches the Gradle wrapper (it
+  was resolved and never used, while the warning promised the APK step
+  would be skipped — now it is), and the iOS simulator probes use the
+  bounded runner in `proc.rs` instead of a fresh tokio runtime per call.
+- **`flui create` builds without the framework on crates.io** (`flui-cli`).
+  A generated project's `flui` dependency is the git tag matching the CLI's
+  version (`{ git = "https://github.com/vanyastaff/flui", tag = "v0.1.0" }`,
+  `features` preserved) until `FRAMEWORK_ON_CRATES_IO` in
+  `templates/source.rs` is flipped, which is the CLI release after the
+  framework's first publication; `--local` is unchanged. This lets
+  `flui-cli` ship alone: the framework's 25-crate publish closure no longer
+  gates it.
+- **`flui-cli` release gates** (`flui-cli`, `.github/workflows/ci.yml`,
+  `.github/workflows/weekly.yml`, `docs/workspace-layers.toml`).
+  `cargo publish --dry-run -p flui-cli` passes: the `flui-hot-reload`
+  dev-dependency is path-only (Cargo drops it from the published manifest,
+  and the layers inventory records it as checkout-only), so the CLI no
+  longer waits for the framework to be on crates.io. `cargo deny` is clean.
+  New CI job `cli-macos` runs the CLI suite on macOS, the only execution of
+  its simulator, Xcode, `.app` staging and termios arms; the weekly
+  workflow gains `cli-live-build`, which scaffolds a project against the
+  checkout and builds it for desktop end to end.
+- **`cargo flui` and prebuilt CLI binaries** (`flui-cli`,
+  `.github/workflows/release.yml`). `flui-cli` ships a second binary,
+  `cargo-flui`, an exec shim over the `flui` installed beside it, so
+  `cargo flui run` is the same CLI with the same exit codes. A `v*` tag
+  builds `flui-<target>` archives for five targets with the workspace
+  release profile (thin LTO, ~3 MiB versus ~4 MiB from `cargo install`) and
+  drafts a GitHub release with `SHA256SUMS`; `[package.metadata.binstall]`
+  points `cargo binstall flui-cli` at them. Publishing the draft and
+  `cargo publish` stay human steps.
+- **Dependency audit with `cargo shear`** (`flui-cli`, `flui-hot-reload`,
+  `justfile`). `just shear` runs the feature-aware unused-dependency check.
+  `flui-cli` drops clap's `cargo` and `env` features (no `crate_*!` macro,
+  no `#[arg(env)]` in the code) and declares `serde` locally with `derive`
+  only; `flui-hot-reload` drops `flui-types`, an optional dependency of
+  `app-plugin` that nothing imported. `cargo outdated` finds every direct
+  dependency of the CLI on its latest release.
+- **`flui-cli` draws its own terminal output** (`flui-cli`). `cliclack` is
+  gone: it brought 42 of the CLI's 116 crates — ICU text segmentation with
+  its data tables and proc-macros, to word-wrap prompt text — for a dozen
+  lines of glyphs and a spinner, which now live in `ui.rs` over `console`.
+  The prompts of `flui create` and `platform remove` run on `dialoguer`
+  without its default features (one extra crate). `pollster` is gone too:
+  the build command already enters a tokio runtime, so its handle drives
+  the async builders. The CLI's normal dependency graph is 76 crates, down
+  from 116; the output keeps the same shape (a bar down the left, one glyph
+  per line kind), the same `--json`/`--quiet`/`--color` behaviour, and the
+  spinner prints its start and end lines once when stderr is not a terminal.
+- **`flui-cli` has no internal dependency and no logging framework**
+  (`flui-cli`; breaking for `RUST_LOG` users). The CLI dropped `flui-log`,
+  `tracing` and `tracing-subscriber`. With no framework crate in its graph a
+  `RUST_LOG` filter could only select the CLI's own 57 call sites, 28 of them
+  `INFO` lines inherited from the build library that duplicated what the
+  commands already report, so stderr carried two voices. Warnings and errors
+  now go through the same `ui::` functions as every other line; diagnostics
+  (the commands flui runs, the probes it makes, the paths it skips) are
+  dimmed `debug:` lines on stderr under `-v` only, in JSON mode too, and a
+  test pins that they never reach stdout. `RUST_LOG` is no longer read.
+  `cargo install flui-cli` compiles no FLUI code: the normal dependency graph
+  is down from 135 crates to 116, all external.
+- **`flui-devtools` is only what exists** (`flui-devtools`; breaking). Default
+  features now enable the crate's three modules (a crate that exists only to
+  provide them shipped with nothing on by default), so `cargo doc` also
+  documents them. `DevToolsConfig` is `ProfilerConfig` with just the two
+  fields the profiler reads; the unread `profiling_enabled`,
+  `inspector_enabled` and `target_fps` are gone, as are the unused
+  `FrameNumber`/`Timestamp`/`DurationNanos` types, the `VERSION` constant, an
+  unused `windows-sys` dependency, and `FEATURES.md`. The README describes
+  the profiler, the timeline and the observation counters, and no longer
+  promises an inspector UI, a network monitor or a memory profiler.
+- **`flui-build` is gone; the build pipeline is a module of `flui-cli`**
+  (`flui-cli`, `flui-hot-reload`, `flui-devtools`; breaking for anyone who
+  depended on those surfaces). `flui-build` had one consumer, the CLI, and no
+  framework dependency, so it moved to `crates/flui-cli/src/build/`. The
+  dev-loop `SourceWatcher` moved from `flui-hot-reload`'s `source-watch`
+  feature to `crates/flui-cli/src/watch.rs`: it is dev-machine code, and
+  keeping it in the runtime crate made `cargo install flui-cli` compile the
+  rendering stack. The CLI now links no framework crate but `flui-log`; its
+  normal dependency graph fell from 199 crates to 135, and it no longer has
+  to wait for the framework's own release to be published. The two env-var
+  names shared with the runtime (`FLUI_HOT_RELOAD`, `FLUI_WORKER_PLUGIN`) are
+  pinned by a dev-dependency test. `flui-hot-reload` loses the `source-watch`
+  feature and `dev` module; `flui-devtools` loses the `hot-reload` feature and
+  `HotReloader` (a callback wrapper with no consumer). Merging also exposed
+  library API the CLI never used, deleted rather than gated: the progress
+  reporter and `indicatif`, the build-output parser, `BuilderContextExt`,
+  `--features` plumbing no command could set, and the builders' `clean`.
+- **`flui` CLI brought to release quality** (`flui-cli`). One output policy
+  for every command: human text on stderr, `--json` NDJSON events on stdout
+  (`doctor.check`, `device`, `run.app.log`, `build.done`, …), `--quiet`,
+  `--color auto|always|never` honouring `NO_COLOR`/`CLICOLOR_FORCE`, and
+  `--non-interactive` (implied by `CI`, `FLUI_NON_INTERACTIVE`, or a
+  non-terminal stdin) that turns every would-be prompt into an exit-7 error
+  with the flags to pass. Exit codes are now a documented contract (0/1/2/3
+  environment/4 build/5 device/6 not a project/7 needs a terminal/130 Ctrl-C).
+  `flui run` gained hot-keys (`r` reload, `R` restart, `c`, `h`, `q`), a
+  Ctrl-C path that always stops the app first, `--device` resolution against
+  the same discovery `flui devices` uses (unknown → exit 5, Android/browser
+  → exit 2 with the command to use instead), and a library-crate refusal.
+  `flui doctor` models checks as data with `[✓]/[!]/[✗]` lines and fix hints,
+  distinguishes required from optional toolchains, checks the MSRV, and
+  `--fix` installs missing `rustup` targets. `flui devices` and
+  `flui emulators` share one device model, read simulators from `simctl`
+  JSON, and print the ids `--device` takes. `flui build` prints every artifact
+  with its size and a timing line. `flui create` plans files before writing
+  them (`--dry-run`), and every listed template is real: `counter`, `basic`,
+  `empty`, `widget` (`--lib`), plus `--hot-reload`. The CLI README documents
+  all of it, including a Flutter command mapping. Breaking: the placeholder
+  templates `todo`, `dashboard` and `plugin` are gone; `flui run --scene` no
+  longer defaults `--package`/`--scene-crate` to the author's project; the
+  no-op `build --split-per-abi`/`--optimize-wasm` flags are removed;
+  `flui upgrade` updates dependencies only unless `--self` is given, and
+  `--self-update` is now `--self`; `flui test --platform` (never implemented)
+  is gone; the `flui devtools` placeholder command is removed until a server
+  exists.
+
+- **Version `0.1.0`, exact cohort pins, and archives that carry only
+  what a consumer compiles.** Every internal `path` dependency requires
+  `=0.1.0` (the cohort was first cut as `0.3.0-beta.1` and renumbered before
+  any publication, see the header). The `flui` facade package
+  declares an `include` list (its archive went from 666 files — docs, scripts,
+  CI, editor and research directories — to 67), and every published crate
+  ships `LICENSE`, `LICENSE-APACHE` and `NOTICE`, which the archive check now
+  requires. `just release-consumer-check` packages the release set, vendors
+  every third-party dependency, installs the archives as a Cargo directory
+  source and builds and tests a `flui create` project against them offline —
+  the first proof that a registry consumer can build without this checkout.
+
+- **Typed window errors on the facade** (`flui-app`, `flui`): `open_window` and
+  `open_secondary_window` return `Result<(), AppWindowError>` instead of
+  `anyhow::Result<()>`, so a caller can match on what failed. `AppWindowError`
+  gains `AdmissionClosed` (the application is quitting or the loop is gone),
+  `NoOwnerLoop` (called off the owner thread) and `UnsupportedPolicy { reason }`
+  (`SharedRealm` where no realm is hosted, or with mounted content). The
+  facade now re-exports `AppWindowError`, `AppRunError`, `AppControlError`,
+  `Application`, `AppHandle`, `StartupWindow` and `run_app_with_config` at
+  `flui::` (and `AppWindowError`/`run_app_with_config` in `flui::prelude`),
+  so a sole-`flui` consumer can reach the resident-application builder and
+  name every error the entry points produce without a second dependency.
+  **Breaking:** code that relied on `anyhow::Error` from those two functions
+  must switch to `AppWindowError` (or `.map_err(anyhow::Error::from)`).
 
 - **Build-side lifecycle and reconciliation failures are contained at the
   failing child** (#561): a parented state whose `init_state` or
@@ -707,6 +943,61 @@ file records the repo-consumer-visible summary.
 
 ### Fixed
 
+- **`flui-devtools`' frame profiler never saw a frame** (`flui-devtools`,
+  `flui-scheduler`). `FrameTimingLayer` delimited frames by a span named
+  `render_frame_entered` that no crate opened, so in a real app the profiler
+  recorded nothing while its unit tests, which emitted that span themselves,
+  stayed green. `UpdateScheduler::drive_frame`, the one frame driver every
+  runner and `HeadlessBinding::pump_frame` share, now opens a `DEBUG` span
+  named `frame` around the whole frame, the layer listens for it, and a new
+  end-to-end test drives a real tree through the headless binding and reads
+  the profile back. The layer now also carries its own per-layer filter:
+  FLUI's default `INFO` log filter no longer starves it, and attaching it no
+  longer declares interest in every callsite in the process.
+- **`flui-cli` did not compile on Windows** (`flui-cli`, `flui-build`): the
+  Ctrl-C listener's runtime asked for `enable_io`, which tokio's `signal`
+  feature only exposes on Unix; it now uses `enable_all`. Under the
+  workspace's `-D warnings` the Windows build then tripped on code that only
+  macOS or Unix reaches (simctl parsing, iOS targets, hot-key bindings,
+  `flui-build`'s bundle-staging `Path` import); each is now gated to the
+  platform that uses it. The `cross-typecheck` CI job gains a Windows clippy
+  step for the CLI so this class cannot return.
+- **`flui devices` hung forever on macOS** (`flui-cli`): browser detection
+  ran `Safari -v`, which launches Safari instead of printing a version.
+  Versions are now read from each app's `Info.plist`, and every external
+  probe the CLI makes (`adb`, `xcrun`, `rustup`, `java`, …) runs with a
+  10-second deadline through `flui_cli::proc`.
+- **`flui doctor` reported Apple's Java stub as installed and exited 0 after
+  "Some checks failed"** (`flui-cli`): the check now requires the probe to
+  exit successfully, and a failed required check exits 3. The always-green
+  "wgpu: Available" line is gone.
+- **Desktop logs carried ANSI escape codes into pipes** (`flui-log`): the
+  compact formatter coloured unconditionally, so `flui run --json` forwarded
+  log lines full of `\u001b[…` sequences. Colour now follows `NO_COLOR`,
+  `CLICOLOR_FORCE`, and whether the stream is a terminal.
+- **`flui upgrade` installed a crate that does not exist** (`flui-cli`): it
+  asked Cargo for `flui_cli`; the package is `flui-cli`, and a source
+  install now gets the matching `cargo install --path` hint.
+
+- **Nothing rendered in a browser** (`flui-engine`): every clip-capable
+  pipeline failed to compile under WebGPU because two shaders took
+  screen-space derivatives in non-uniform control flow — `clipAlpha` called
+  `sdfToAlpha` inside a branch on the per-instance clip kind, and the arc
+  shader took its angular gradient after a per-instance early return. Tint
+  (every browser) rejects that; native naga accepted it, which is why the
+  defect never showed on desktop. Both shaders now compute derivatives
+  unconditionally and `select` afterwards. `scripts/check-wgsl-uniformity.py`
+  (in `just gate` and CI) refuses the shape structurally, since no host-side
+  validator catches it. `examples/web_counter` and `just web-counter-build`
+  are the runnable browser evidence.
+- **`flui create` initialised a git repository in the caller's working
+  directory** (`flui-cli`): `git init` ran without a directory, so the
+  repository landed wherever the command was run from rather than in the
+  generated project. It now runs inside the project; a regression test runs
+  the CLI from an unrelated directory and checks both locations. (A stray
+  empty `.git` this left inside `crates/flui-cli` during a test run also made
+  `cargo package` refuse every file in that crate as uncommitted.)
+
 - **Ticker callbacks survive a reentrant restart, mute, or panic** (#1059):
   `flui-scheduler`'s `Ticker` restored a checked-out callback whenever the
   ticker was active, without asking whether that run was still the one that
@@ -777,3 +1068,6 @@ there.
   content bounds; deterministic-replay IR purity witness.
 - **Business.1 (in flight)**: Flutter widget-catalog port continues
   (`RichText`/`Icon` landed); tracked in `docs/ROADMAP.md`.
+
+[Unreleased]: https://github.com/vanyastaff/flui/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/vanyastaff/flui/releases/tag/v0.1.0

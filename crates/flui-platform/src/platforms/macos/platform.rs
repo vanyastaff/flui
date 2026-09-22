@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use flui_foundation::OwnerAffinity;
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+use objc2_app_kit::NSApplication;
 use parking_lot::Mutex;
 
 use super::{display, window::MacOSWindow};
@@ -42,6 +42,8 @@ pub struct MacOSPlatform {
     /// actuates it (see `super::wake_pump`). Each window holds a `Weak` back
     /// to it and arms it from `request_redraw`.
     wake_pump: Arc<super::wake_pump::WakePump>,
+
+    loop_control: Arc<super::loop_control::LoopControl>,
 
     /// Background executor (GCD-based)
     background_executor: Arc<BackgroundExecutor>,
@@ -129,9 +131,6 @@ impl MacOSPlatform {
             // Initialize NSApplication (the process-wide singleton).
             let app = NSApplication::sharedApplication(mtm);
 
-            // Set activation policy to regular app (shows in Dock)
-            app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-
             // Create executors
             let background_executor = Arc::new(BackgroundExecutor::new());
 
@@ -161,7 +160,10 @@ impl MacOSPlatform {
 
             tracing::info!("macOS platform initialized with AppKit");
 
+            let loop_control =
+                super::loop_control::LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
             let platform = Self {
+                loop_control,
                 app,
                 windows,
                 handlers,
@@ -202,35 +204,17 @@ impl Platform for MacOSPlatform {
         // `Arc<dyn Platform>` the capability needs.
         let app = Retained::clone(&self.app);
 
-        // No owner lane on this backend: every `OwnerPlatform::open_window`
-        // call creates directly and is always `Ready` (ADR-0039 slice 2).
-        // `run` never returns on macOS (`terminate:` exits the process), so
-        // there is no loop-scoped TLS host to clear here either.
-        //
-        // Call the launch callback. This is an ordinary (safe) call — keep
-        // it outside the `unsafe` block below rather than widening that
-        // block's scope to cover code that needs no unsafe justification.
-        // `on_finish_launching` runs before `app.run()` starts: on `Err`,
-        // return without ever starting the NSApplication event loop rather
-        // than launching over a half-built app.
+        let ownership =
+            super::loop_control::LoopOwnership::acquire(&app, Arc::clone(&self.loop_control))?;
+        let signal = Arc::clone(&self.loop_control.owner_signal);
         let platform: Arc<dyn Platform> = Arc::new(*self);
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)));
+        let hooks: Arc<dyn OwnerHooks> =
+            Arc::new(DirectOwnerHooks::with_signal(Arc::clone(&platform), signal));
         on_finish_launching(OwnerPlatform::new(platform, hooks))
             .map_err(PlatformError::bootstrap)?;
+        ownership.run();
+        drop(ownership);
 
-        // Runs on the main thread; `app` is the live NSApplication singleton.
-        // Activate the app (bring to foreground).
-        app.activateIgnoringOtherApps(true);
-
-        // Run the NSApplication event loop. Window lifecycle events are
-        // delivered via NSWindowDelegate; input events via the content view's
-        // NSResponder chain.
-        tracing::info!("Starting NSApplication event loop");
-        app.run();
-
-        // Unreachable in practice: `app.run()` never returns on macOS
-        // (`terminate:` exits the process) — this satisfies the trait's
-        // `Result` return type for the compiler, not a real code path.
         Ok(())
     }
 
@@ -238,7 +222,7 @@ impl Platform for MacOSPlatform {
         self.affinity.debug_assert_owner("MacOSPlatform::quit");
         debug_assert_appkit_main_thread("MacOSPlatform::quit");
         tracing::info!("Requesting application quit");
-        self.app.terminate(None);
+        self.loop_control.quit();
     }
 
     fn open_window(
@@ -248,10 +232,16 @@ impl Platform for MacOSPlatform {
         self.affinity
             .debug_assert_owner("MacOSPlatform::open_window");
         debug_assert_appkit_main_thread("MacOSPlatform::open_window");
+        if !self.loop_control.accepts_windows() {
+            return Err(OpenWindowError::OwnerGone {
+                rejected: Some(options),
+            });
+        }
         let window = MacOSWindow::new(options, Arc::clone(&self.windows), self.config.clone())?;
         // Installed immediately after construction, before the window can be
         // handed to anyone who might redraw it — the slot is a `OnceLock`, so
         // a later install would be silently ignored rather than racing.
+        window.install_loop_control(Arc::downgrade(&self.loop_control));
         window.install_wake_pump(Arc::downgrade(&self.wake_pump));
 
         Ok(window)
@@ -302,9 +292,22 @@ impl Platform for MacOSPlatform {
         "macOS (AppKit)"
     }
 
+    fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
+        let previous = self.handlers.lock().exit_policy.replace(hook);
+        drop(previous);
+    }
+
+    fn request_exit_policy_reevaluation(&self) {
+        self.loop_control.request(false);
+    }
+
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
         let mut handlers = self.handlers.lock();
         handlers.quit = Some(callback);
+    }
+
+    fn on_reopen(&self, callback: Box<dyn FnMut() + Send>) {
+        self.loop_control.set_reopen(callback);
     }
 
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {

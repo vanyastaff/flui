@@ -82,17 +82,23 @@
 //! app.
 
 use std::cell::{Cell, RefCell};
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::task::{Context, Poll};
 
+use flui::foundation::{AsyncSnapshot, ConnectionState, Listenable, ListenerId};
 use flui::material::{
     AlertDialog, AppBar, Card, DefaultTabController, ElevatedButton, FilledButton,
-    FloatingActionButton, IconButton, InkWell, Scaffold, ScaffoldMessenger,
+    FloatingActionButton, IconButton, InkWell, InputDecoration, Scaffold, ScaffoldMessenger,
     ScaffoldMessengerHandle, ScaffoldMessengerScope, SnackBar, Tab, TabBar, TabBarView, TextButton,
-    Theme, ThemeData, show_dialog,
+    TextField, Theme, ThemeData, show_dialog,
 };
 use flui::prelude::*;
 use flui::view::RebuildHandle;
-use flui::widgets::column;
+use flui::widgets::{BoxedResultFuture, FutureFactory, SnapshotBuilder, column};
 
 /// How many cards the list starts with — enough to overflow any reasonably
 /// sized window, so the scroll acceptance test exercises a real overflow.
@@ -173,6 +179,330 @@ pub fn tabs_icon_data() -> IconData {
     IconData::new(0xE8D2).with_font_family("Material Icons")
 }
 
+/// A `list_alt`-shaped glyph's codepoint from the classic `MaterialIcons`
+/// font table — the app bar action that pushes [`form_route`]. Same
+/// tofu-rendering gap as [`settings_icon_data`]; `pub` for the identical
+/// reason.
+#[must_use]
+pub fn form_icon_data() -> IconData {
+    IconData::new(0xE8A5).with_font_family("Material Icons")
+}
+
+// ============================================================================
+// Form route — validated `TextField` + a scriptable simulated async fetch
+// ============================================================================
+
+/// The Form route's app bar title.
+pub const FORM_ROUTE_TITLE: &str = "Form";
+/// The `Name` field's label.
+pub const NAME_FIELD_LABEL: &str = "Name";
+/// [`InputDecoration::error_text`] shown below the `Name` field while
+/// [`is_valid_name`] rejects its current text.
+pub const NAME_VALIDATION_ERROR: &str = "Name must be 3-20 letters";
+/// The form's submit button label.
+pub const SUBMIT_LABEL: &str = "Submit";
+/// Prefix on the confirmation text shown once Submit runs (only reachable
+/// with a valid name — see [`FormPageState::build`]).
+pub const FORM_SUBMITTED_PREFIX: &str = "Submitted: ";
+/// The async section's button label before the first attempt, and again
+/// after a successful fetch has nothing left to retry.
+pub const LOAD_BUTTON_LABEL: &str = "Load";
+/// The async section's button label once a fetch has failed.
+pub const RETRY_BUTTON_LABEL: &str = "Retry";
+/// Shown in the async section while [`SimulatedFetch`] is in flight. No
+/// `CircularProgressIndicator` exists in this substrate yet (named
+/// deferral — see the module docs' "Honest caveats"), so this is the
+/// `Text`-only fallback the task brief allows.
+pub const LOADING_TEXT: &str = "Loading…";
+/// [`SimulatedFetch`]'s successful payload.
+pub const FETCH_SUCCESS_TEXT: &str = "Loaded: server data";
+/// [`SimulatedFetch`]'s error message.
+pub const FETCH_ERROR_TEXT: &str = "Error: network unreachable";
+
+/// `name` is a valid submission: 3–20 ASCII letters, no digits, spaces, or
+/// punctuation. The task brief's own example rule, ported verbatim.
+fn is_valid_name(name: &str) -> bool {
+    let letter_count = name.chars().count();
+    (3..=20).contains(&letter_count) && name.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// Shared knob and delivery counter for the Form route's simulated async
+/// fetch — owned by [`MaterialDemoRoot`] (not by the Form route or
+/// [`FormPage`] itself), for the same reason `home_create_count` is: a
+/// value threaded through and captured *before* the route carrying the
+/// short-lived state is ever pushed survives that state being torn down,
+/// so the acceptance test can still observe it (specifically,
+/// [`delivered_count`](Self::delivered_count)) after the [`FormPage`] that
+/// ran the fetch has been popped and disposed.
+///
+/// Both fields are `Arc`-backed atomics rather than `Rc<Cell<_>>`:
+/// [`SimulatedFetch`] runs on the scheduler's `AsyncDriver` and reads
+/// `should_fail`/bumps `delivered` from inside `Future::poll`, and
+/// [`BoxedResultFuture`] requires `Send + 'static`.
+#[derive(Clone, Debug, Default)]
+pub struct SimulatedFetchControl {
+    should_fail: Arc<AtomicBool>,
+    delivered: Arc<AtomicU32>,
+}
+
+impl SimulatedFetchControl {
+    /// A fresh control: the next fetch succeeds, nothing delivered yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Script the *next* fetch — and every one after, until this is called
+    /// again — to resolve as a failure (`true`) or a success (`false`).
+    ///
+    /// `#[allow(dead_code)]`: this binary (the running example) never
+    /// scripts a failure itself — only `tests/material_demo.rs`, a second,
+    /// separate `#[path]`-inclusion of this same file, calls it (see
+    /// [`SimulatedFetchControl`]'s own doc for why the control is threaded
+    /// down from [`MaterialDemoRoot`] rather than created where it's used).
+    #[allow(dead_code)]
+    pub fn set_should_fail(&self, should_fail: bool) {
+        self.should_fail.store(should_fail, Ordering::Relaxed);
+    }
+
+    /// How many fetches have run all the way to completion (success or
+    /// failure) and written their result into [`SimulatedFetch::poll`]'s
+    /// `Ready` branch. A fetch cancelled — its future dropped — before
+    /// reaching that branch never increments this, which is exactly what
+    /// distinguishes real cancellation from a merely-ignored late value.
+    ///
+    /// `#[allow(dead_code)]`: read only from `tests/material_demo.rs` — see
+    /// [`set_should_fail`](Self::set_should_fail)'s doc.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn delivered_count(&self) -> u32 {
+        self.delivered.load(Ordering::Relaxed)
+    }
+}
+
+/// How many polls [`SimulatedFetch`] stays `Pending` before resolving.
+/// Large enough that a test can observe [`LOADING_TEXT`] and pop the Form
+/// route mid-flight before the fetch ever completes — see
+/// [`SimulatedFetch`]'s own docs for why each poll spans one whole frame.
+const SIMULATED_FETCH_POLL_DELAY: u32 = 2;
+
+/// The Form route's simulated network call — no thread, no `tokio`, just a
+/// hand-rolled [`Future`] the scheduler's own `AsyncDriver` polls on the
+/// frame thread (see `flui_widgets::FutureBuilder`'s module docs), so it is
+/// exactly as headless-testable as a real request and needs no wall-clock
+/// delay.
+///
+/// Each poll before the last re-arms its own waker (`wake_by_ref`) instead
+/// of completing inline: `AsyncDriver::poll_ready` never re-polls a task
+/// woken during its own pump ("the driver never spins" — see that method's
+/// docs), so a self-waking future genuinely spans
+/// [`SIMULATED_FETCH_POLL_DELAY`] separate frame pumps, exactly the window
+/// a real in-flight request would leave open for a test (or a user) to
+/// navigate away mid-load.
+struct SimulatedFetch {
+    remaining_polls: u32,
+    control: SimulatedFetchControl,
+}
+
+impl Future for SimulatedFetch {
+    type Output = Result<String, String>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if this.remaining_polls == 0 {
+            this.control.delivered.fetch_add(1, Ordering::Relaxed);
+            return Poll::Ready(if this.control.should_fail.load(Ordering::Relaxed) {
+                Err(FETCH_ERROR_TEXT.to_string())
+            } else {
+                Ok(FETCH_SUCCESS_TEXT.to_string())
+            });
+        }
+        this.remaining_polls -= 1;
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+
+/// Build the [`FutureFactory`] `FormPageState::build` hands to
+/// [`FutureBuilder::keyed`] on every build — cheap (an `Rc::new` closure
+/// over one `Clone`), and required fresh each time because `FutureFactory`
+/// itself is `Fn`, not stored state (see `FutureBuilder`'s "Identity is an
+/// explicit key" module docs).
+fn simulated_fetch_factory(control: SimulatedFetchControl) -> FutureFactory<String, String> {
+    Rc::new(move || -> BoxedResultFuture<String, String> {
+        Box::pin(SimulatedFetch {
+            remaining_polls: SIMULATED_FETCH_POLL_DELAY,
+            control: control.clone(),
+        })
+    })
+}
+
+/// Build the [`SnapshotBuilder`] the async section's [`FutureBuilder`]
+/// renders from: the `Load`/`Retry` button (an unstarted or errored fetch),
+/// [`LOADING_TEXT`] (`Waiting`), or the fetched text (`Done` with data).
+/// `attempt` is the same [`StateCell`] [`FormPageState::build`] derives the
+/// `FutureBuilder`'s key from — incrementing it is what forces a fresh
+/// subscription on `Load`/`Retry`, per that same module doc.
+fn async_section_builder(attempt: StateCell<u32>) -> SnapshotBuilder<String, String> {
+    Rc::new(move |_ctx, snapshot: &AsyncSnapshot<String, String>| {
+        match snapshot.connection_state() {
+            ConnectionState::None => {
+                let attempt_for_load = attempt.clone();
+                ElevatedButton::new(Text::new(LOAD_BUTTON_LABEL))
+                    .on_pressed(move || attempt_for_load.update(|n| n + 1))
+                    .boxed()
+            }
+            ConnectionState::Waiting | ConnectionState::Active => Text::new(LOADING_TEXT).boxed(),
+            ConnectionState::Done => match snapshot.error() {
+                Some(error) => {
+                    let attempt_for_retry = attempt.clone();
+                    Column::new(column![
+                        Text::new(error.as_str()),
+                        ElevatedButton::new(Text::new(RETRY_BUTTON_LABEL))
+                            .on_pressed(move || attempt_for_retry.update(|n| n + 1)),
+                    ])
+                    .boxed()
+                }
+                None => Text::new(snapshot.data().map(String::as_str).unwrap_or_default()).boxed(),
+            },
+        }
+    })
+}
+
+/// The Form route's content: a validated `Name` [`TextField`] plus an async
+/// section driven by [`SimulatedFetch`] — the Catalog "editable form with
+/// validation, and async loading with error → retry and cancellation on
+/// unmount" exit criterion.
+///
+/// `name_controller`/`fetch_control` are handed down from
+/// [`MaterialDemoRoot`] (through [`MaterialDemoHome`] and [`form_route`]),
+/// not created here — see [`SimulatedFetchControl`]'s doc for why the async
+/// control specifically must outlive this element.
+#[derive(Clone, StatefulView)]
+struct FormPage {
+    name_controller: TextEditingController,
+    fetch_control: SimulatedFetchControl,
+}
+
+/// Persistent state for [`FormPage`].
+struct FormPageState {
+    name_controller: TextEditingController,
+    fetch_control: SimulatedFetchControl,
+    /// Listens for edits so a keystroke — which only `MaterialTextFieldState`
+    /// (the `TextField`'s own, unrelated state) would otherwise hear —
+    /// re-runs *this* `build`, recomputing [`is_valid_name`] and the
+    /// Submit button's enabled state.
+    name_listener_id: Option<ListenerId>,
+    rebuild: Option<RebuildHandle>,
+    /// `0` before the first `Load` tap; `Load`/`Retry` increments it. See
+    /// [`async_section_builder`]'s doc for why the increment itself is what
+    /// forces a fresh subscription.
+    attempt: StateCell<u32>,
+    /// `None` until Submit runs (reachable only with a valid name).
+    submitted_name: StateHandle<Option<String>>,
+}
+
+impl StatefulView for FormPage {
+    type State = FormPageState;
+
+    fn create_state(&self) -> Self::State {
+        FormPageState {
+            name_controller: self.name_controller.clone(),
+            fetch_control: self.fetch_control.clone(),
+            name_listener_id: None,
+            rebuild: None,
+            attempt: StateCell::new(0),
+            submitted_name: StateHandle::new(None),
+        }
+    }
+}
+
+impl ViewState<FormPage> for FormPageState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        let rebuild = ctx.rebuild_handle();
+        self.rebuild = Some(rebuild.clone());
+        self.attempt.bind(ctx);
+        self.submitted_name.bind(ctx);
+
+        let rebuild_on_edit = rebuild;
+        self.name_listener_id = Some(self.name_controller.add_listener(Arc::new(move || {
+            rebuild_on_edit.schedule(flui_view::RebuildReason::StateChange);
+        })));
+    }
+
+    fn dispose(&mut self) {
+        if let Some(id) = self.name_listener_id.take() {
+            self.name_controller.remove_listener(id);
+        }
+        self.rebuild = None;
+    }
+
+    fn build(&self, _view: &FormPage, _ctx: &dyn BuildContext) -> impl IntoView {
+        let name = self.name_controller.text();
+        let valid = is_valid_name(&name);
+
+        let decoration = InputDecoration {
+            label_text: Some(NAME_FIELD_LABEL.to_string()),
+            error_text: (!valid).then(|| NAME_VALIDATION_ERROR.to_string()),
+            ..Default::default()
+        };
+        let name_field = TextField::new(self.name_controller.clone()).decoration(decoration);
+
+        let mut submit_button = ElevatedButton::new(Text::new(SUBMIT_LABEL));
+        if valid {
+            let submitted_name = self.submitted_name.clone();
+            submit_button = submit_button.on_pressed(move || {
+                submitted_name.update(|current| *current = Some(name.clone()));
+            });
+        }
+
+        let submitted_row: BoxedView = match self.submitted_name.with(Clone::clone) {
+            Some(submitted) => Text::new(format!("{FORM_SUBMITTED_PREFIX}{submitted}")).boxed(),
+            None => SizedBox::shrink().boxed(),
+        };
+
+        let attempt_key = match self.attempt.get() {
+            0 => None,
+            attempt => Some(attempt),
+        };
+        let async_section = FutureBuilder::keyed(
+            attempt_key,
+            simulated_fetch_factory(self.fetch_control.clone()),
+            async_section_builder(self.attempt.clone()),
+        );
+
+        Column::new(column![
+            Padding::new(EdgeInsets::all(px(16.0))).child(name_field),
+            Padding::new(EdgeInsets::symmetric(px(0.0), px(16.0))).child(submit_button),
+            Padding::new(EdgeInsets::symmetric(px(8.0), px(16.0))).child(submitted_row),
+            Padding::new(EdgeInsets::all(px(16.0))).child(async_section),
+        ])
+    }
+}
+
+/// The Form route: pushes [`FormPage`] under a titled `Scaffold`/`AppBar`.
+/// Same "no explicit `leading`" implied-`BackButton` shape as
+/// [`settings_route`]/[`tabs_route`] — popping it (the `BackButton`, or a
+/// test's synthetic tap on the same glyph) disposes [`FormPage`], which
+/// cancels any in-flight [`SimulatedFetch`] via `FutureBuilder::dispose`
+/// (see that type's own module docs on cancellation).
+fn form_route(
+    name_controller: TextEditingController,
+    fetch_control: SimulatedFetchControl,
+) -> PageRoute<()> {
+    PageRoute::new(move |_ctx, _animation, _secondary| {
+        Scaffold::new()
+            .app_bar(AppBar::new().title(Text::new(FORM_ROUTE_TITLE)))
+            .body(FormPage {
+                name_controller: name_controller.clone(),
+                fetch_control: fetch_control.clone(),
+            })
+            .into_view()
+            .boxed()
+    })
+    .named("form")
+}
+
 /// The Material demo root: a `Navigator` shell over the home route.
 ///
 /// `items`/`selected`/`home_create_count` are `Rc`-shared so a caller (the
@@ -195,6 +525,13 @@ pub struct MaterialDemoRoot {
     /// apart. This counter can, because `create_state` runs once per element
     /// lifetime — the acceptance test reads it, not the running app.
     pub home_create_count: Rc<Cell<u32>>,
+    /// The Form route's `Name` field controller — shared (not created
+    /// inside [`FormPage`] itself) so the acceptance test can type into it
+    /// before the Form route is ever pushed. See [`SimulatedFetchControl`]'s
+    /// doc for why the Form route's testable state lives up here.
+    pub name_controller: TextEditingController,
+    /// The Form route's simulated-fetch knob and delivery counter.
+    pub fetch_control: SimulatedFetchControl,
 }
 
 impl MaterialDemoRoot {
@@ -208,6 +545,8 @@ impl MaterialDemoRoot {
             items: Rc::new(RefCell::new(items)),
             selected: Rc::new(RefCell::new(None)),
             home_create_count: Rc::new(Cell::new(0)),
+            name_controller: TextEditingController::new(),
+            fetch_control: SimulatedFetchControl::new(),
         }
     }
 }
@@ -234,6 +573,8 @@ impl StatefulView for MaterialDemoRoot {
         let items = Rc::clone(&self.items);
         let selected = Rc::clone(&self.selected);
         let home_create_count = Rc::clone(&self.home_create_count);
+        let name_controller = self.name_controller.clone();
+        let fetch_control = self.fetch_control.clone();
         let navigator_for_home = navigator.clone();
         navigator.seed_initial(
             SimpleRoute::<()>::new(move |_ctx| {
@@ -242,6 +583,8 @@ impl StatefulView for MaterialDemoRoot {
                     selected: Rc::clone(&selected),
                     navigator: navigator_for_home.clone(),
                     create_count: Rc::clone(&home_create_count),
+                    name_controller: name_controller.clone(),
+                    fetch_control: fetch_control.clone(),
                 }
                 .into_view()
                 .boxed()
@@ -276,6 +619,11 @@ struct MaterialDemoHome {
     /// see the field doc on [`MaterialDemoRoot::home_create_count`], which
     /// owns the `Rc` this clones.
     create_count: Rc<Cell<u32>>,
+    /// Forwarded to [`form_route`] when the app bar's Form action pushes it
+    /// — see [`MaterialDemoRoot::name_controller`]'s doc.
+    name_controller: TextEditingController,
+    /// Forwarded to [`form_route`] alongside `name_controller`.
+    fetch_control: SimulatedFetchControl,
 }
 
 /// Persistent state for [`MaterialDemoHome`].
@@ -295,6 +643,8 @@ struct MaterialDemoHomeState {
     /// `None` only before `init_state` has run; every `build` call happens
     /// after it (`ViewState` lifecycle order), so it is always `Some` there.
     rebuild: Option<RebuildHandle>,
+    name_controller: TextEditingController,
+    fetch_control: SimulatedFetchControl,
 }
 
 impl StatefulView for MaterialDemoHome {
@@ -310,6 +660,8 @@ impl StatefulView for MaterialDemoHome {
             navigator: self.navigator.clone(),
             scroll_controller: ScrollController::new(),
             rebuild: None,
+            name_controller: self.name_controller.clone(),
+            fetch_control: self.fetch_control.clone(),
         }
     }
 }
@@ -372,6 +724,9 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
 
         let navigator_for_settings_action = self.navigator.clone();
         let navigator_for_tabs_action = self.navigator.clone();
+        let navigator_for_form_action = self.navigator.clone();
+        let name_controller_for_form_action = self.name_controller.clone();
+        let fetch_control_for_form_action = self.fetch_control.clone();
         let app_bar = AppBar::new()
             .title(Text::new(APP_TITLE))
             // The home route is the navigator's root — it never wants an
@@ -392,6 +747,14 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
                 IconButton::new(Icon::new(settings_icon_data()))
                     .on_pressed(move || {
                         navigator_for_settings_action.push(settings_route());
+                    })
+                    .boxed(),
+                IconButton::new(Icon::new(form_icon_data()))
+                    .on_pressed(move || {
+                        navigator_for_form_action.push(form_route(
+                            name_controller_for_form_action.clone(),
+                            fetch_control_for_form_action.clone(),
+                        ));
                     })
                     .boxed(),
             ]);
@@ -529,13 +892,21 @@ impl ViewState<CounterTab> for CounterTabState {
         let displayed_count = self.count.get();
         let count_for_tap = Rc::clone(&self.count);
 
-        Center::new().child(Column::new(column![
-            Text::new(format!("{COUNTER_LABEL_PREFIX}{displayed_count}")),
-            ElevatedButton::new(Text::new(COUNTER_INCREMENT_LABEL)).on_pressed(move || {
-                count_for_tap.set(count_for_tap.get() + 1);
-                rebuild.schedule(flui_view::RebuildReason::StateChange);
-            }),
-        ]))
+        // `Center` alone centres nothing here: a `Column` fills the height it
+        // is given (`MainAxisSize::Max` is the default) and packs its children
+        // at the top, so the alignment is what actually puts the counter in the
+        // middle of the tab. Flutter's own counter sample passes the same
+        // thing for the same reason.
+        Center::new().child(
+            Column::new(column![
+                Text::new(format!("{COUNTER_LABEL_PREFIX}{displayed_count}")),
+                ElevatedButton::new(Text::new(COUNTER_INCREMENT_LABEL)).on_pressed(move || {
+                    count_for_tap.set(count_for_tap.get() + 1);
+                    rebuild.schedule(flui_view::RebuildReason::StateChange);
+                }),
+            ])
+            .main_axis_alignment(MainAxisAlignment::Center),
+        )
     }
 }
 

@@ -7,6 +7,7 @@ use std::{
     rc::Rc,
     sync::Arc,
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 use flui_foundation::ListenerId;
 use flui_foundation::notifier::Listenable;
@@ -53,8 +54,9 @@ const DEFAULT_OBSCURING_CHARACTER: char = '\u{2022}';
 /// mapped by a different rule than the caret would paint a highlight that does
 /// not line up with the caret inside it.
 ///
-/// One mask character per SOURCE `char` — Unicode scalar, not grapheme
-/// cluster and not UTF-16 code unit.
+/// One mask character per SOURCE **extended grapheme cluster** — the
+/// user-perceived character, not the Unicode scalar and not the UTF-16 code
+/// unit.
 ///
 /// **Why not the reference's unit.** Flutter builds the mask as
 /// `obscuringCharacter * text.length`, and Dart's `String.length` counts
@@ -66,27 +68,25 @@ const DEFAULT_OBSCURING_CHARACTER: char = '\u{2022}';
 /// (`editable_text.dart:1440-1444`) — the obscuring path just predates or
 /// ignores that.
 ///
-/// **Why not grapheme clusters either**, which would be the ideal unit:
-/// `TextEditingController` moves and deletes by `char`, and its own docs
-/// record grapheme segmentation as a deferred unit needing a new dependency
-/// (ROADMAP Cross.H). Masking per grapheme while the caret steps per scalar
-/// would put the two out of step — a Backspace would remove one scalar of a
-/// ZWJ sequence while the mask still showed one bullet, so the visible width
-/// would not change and the field would look frozen. Matching the caret's own
-/// granularity is the honest choice until that unit lands, and this function's
-/// doc is where it should be revisited when it does.
+/// **Why the grapheme.** `TextEditingController` moves and deletes by
+/// grapheme cluster (see its "Character unit" doc), so the mask counts the
+/// same unit: one Backspace removes one cluster and one bullet. Masking per
+/// scalar while the caret stepped per cluster would put the two out of step —
+/// a Backspace on a family emoji would remove five bullets at once — and the
+/// caret would land between bullets that correspond to no boundary the
+/// controller can produce.
 ///
-/// Average and worst case O(chars × offsets); `offsets` is three entries at
-/// its largest, so this is the single walk the mask needs either way.
+/// Every offset in `offsets` sits at a grapheme boundary (the controller only
+/// ever produces those), so "clusters strictly before it" is the count that
+/// maps. Average and worst case O(clusters × offsets); `offsets` is three
+/// entries at its largest, so this is the single walk the mask needs either
+/// way.
 fn obscure(text: &str, offsets: &mut [usize], mask: char) -> String {
     let mask_len = mask.len_utf8();
-    let mut masked = String::with_capacity(text.chars().count() * mask_len);
+    let mut masked = String::with_capacity(text.len());
     let mut mapped = vec![0_usize; offsets.len()];
-    for (byte_offset, _) in text.char_indices() {
+    for (byte_offset, _) in text.grapheme_indices(true) {
         for (slot, source) in mapped.iter_mut().zip(offsets.iter()) {
-            // Every offset sits at a char boundary (the controller clamps
-            // both ends), so "chars strictly before it" is the count that
-            // maps.
             if byte_offset < *source {
                 *slot += mask_len;
             }
@@ -160,9 +160,9 @@ fn source_offset_at_global(
 /// diverge at the very first character.
 ///
 /// The correspondence is the one [`obscure`] establishes — exactly one mask
-/// character per source `char` — read backwards: the masked offset divided by
-/// the mask's width is a char index, and that char's byte offset is the
-/// answer.
+/// character per source grapheme cluster — read backwards: the masked offset
+/// divided by the mask's width is a cluster index, and that cluster's byte
+/// offset is the answer.
 ///
 /// A masked offset past the end clamps to the source's end, and one that is
 /// not a multiple of the mask width rounds down to the mask character it falls
@@ -170,10 +170,10 @@ fn source_offset_at_global(
 /// boundaries, which for masked text are multiples of the mask width — but
 /// clamping rather than asserting keeps a wrong offset from panicking a field.
 fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: char) -> usize {
-    let char_index = masked_offset / mask.len_utf8();
+    let cluster_index = masked_offset / mask.len_utf8();
     source
-        .char_indices()
-        .nth(char_index)
+        .grapheme_indices(true)
+        .nth(cluster_index)
         .map_or(source.len(), |(byte_offset, _)| byte_offset)
 }
 
@@ -1523,17 +1523,17 @@ mod tests {
     use super::*;
     use crate::text::controller::TextEditingController;
 
-    /// The mask is one character per SOURCE `char`, and the caret lands where
-    /// it should in the masked string.
+    /// The mask is one character per SOURCE grapheme cluster, and the caret
+    /// lands where it should in the masked string.
     ///
     /// "£" is two UTF-8 bytes and "😀" is four, so a byte-count mask would
     /// show 2 and 4 bullets and a byte-copied caret offset would land in the
     /// middle of one. The reference's UTF-16 unit count would show 1 and 2.
-    /// One per `char` shows one each — matching what
+    /// One per cluster shows one each — matching what
     /// `TextEditingController` moves and deletes by, which is the granularity
     /// that has to agree.
     #[test]
-    fn the_mask_is_one_character_per_source_char_whatever_it_encodes_to() {
+    fn the_mask_is_one_character_per_source_grapheme_whatever_it_encodes_to() {
         let mut offsets = [0];
         let masked = obscure("a£😀b", &mut offsets, '\u{2022}');
         let [caret] = offsets;
@@ -1582,6 +1582,33 @@ mod tests {
         let masked_end = obscure(source, &mut end_offsets, mask);
         let [caret_end] = end_offsets;
         assert_eq!(caret_end, masked_end.len(), "end maps to end");
+    }
+
+    /// A multi-scalar cluster is ONE bullet, and the caret after it maps to
+    /// one mask character in — the granularity the controller's Backspace
+    /// removes at, so one keystroke removes one bullet.
+    #[test]
+    fn a_zwj_sequence_masks_to_a_single_bullet_and_maps_back() {
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}";
+        let source = format!("a{family}b");
+        let mask = '\u{2022}';
+        let mask_len = mask.len_utf8();
+
+        let mut offsets = [1 + family.len()];
+        let masked = obscure(&source, &mut offsets, mask);
+        let [caret] = offsets;
+        assert_eq!(masked.chars().count(), 3, "a, the family, b: three bullets");
+        assert_eq!(
+            caret,
+            2 * mask_len,
+            "a caret after the family sits after the second bullet"
+        );
+        assert_eq!(
+            source_offset_for_masked_offset(&source, 2 * mask_len, mask),
+            1 + family.len(),
+            "the second bullet's end maps back to the cluster boundary, never \
+             inside the sequence"
+        );
     }
 
     /// An empty field masks to nothing, with the caret at zero.

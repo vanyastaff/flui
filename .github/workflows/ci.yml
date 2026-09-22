@@ -9,6 +9,7 @@ name: CI
 #   wasm-check     — cargo check for the wasm-capable crates + real cdylib link of the two web
 #                    demos + import-surface check against scripts/wasm-import-allowlist.txt
 #   cross-typecheck — cargo clippy (no link, no tests) of flui-platform's windows + macos + android backends
+#   cli-macos      — nextest of flui-cli on macos-latest (simctl, Xcode probes, .app staging, termios hot-keys) + clippy of the flui-app iOS runner (needs xcrun)
 #   test           — build + nextest (lib + integration), ubuntu, plus a
 #                    dedicated flui-platform (Linux-runnable subset) step
 #   gpu-test       — full testing readback suite on windows/WARP (merge-blocking)
@@ -53,7 +54,7 @@ env:
   #     | grep -oE -- '--manifest-path [^ ]+' | sort | uniq -c | sort -rn
   FM_GROUP_1: flui-engine flui-app flui-platform flui-widgets flui-devtools
   FM_GROUP_2: flui flui-types flui-geometry flui-rendering flui-assets flui-view flui-objects flui-log
-  FM_GROUP_3: flui-interaction flui-hot-reload flui-tree flui-semantics flui-scheduler flui-painting flui-layer flui-foundation flui-cli flui-animation flui-macros flui-testing flui-material flui-localizations flui-cupertino flui-build flui-desktop-scene flui-live-smoke flui-web-demo flui-web-server flui-painting-demo flui-hot-reload-lifecycle-fixture hot-reload-counter-host hot-reload-counter-logic hot-reload-counter-types
+  FM_GROUP_3: flui-interaction flui-hot-reload flui-tree flui-semantics flui-scheduler flui-painting flui-layer flui-foundation flui-cli flui-animation flui-macros flui-testing flui-material flui-localizations flui-cupertino flui-desktop-scene flui-live-smoke flui-web-demo flui-web-server flui-painting-demo flui-hot-reload-lifecycle-fixture hot-reload-counter-host hot-reload-counter-logic hot-reload-counter-types flui-web-counter
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   # Strict workspace-wide; matches the local `just ci` gate.
@@ -147,6 +148,11 @@ jobs:
 
       - name: scripts/port-check.sh (22 refusal triggers + FR-033)
         run: bash scripts/port-check.sh -v
+
+      # Browsers' WGSL uniformity analysis rejects a derivative taken inside a
+      # branch; native naga does not, so nothing else in CI can see the class.
+      - name: scripts/check-wgsl-uniformity.py (derivatives in uniform control flow)
+        run: python3 -B scripts/check-wgsl-uniformity.py
 
       - name: actionlint (workflow semantics)
         run: actionlint
@@ -1091,12 +1097,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # flui-assets / flui-build / flui-cli / flui-web-server: mio + uuid
+      # flui-assets / flui-cli / flui-web-server: mio + uuid
       # (tokio-net / CLI stack) have no wasm32-unknown-unknown support.
       # hot-reload-counter-*: dlopen-based hot-reload, host-only by design.
       NO_WASM_PKGS: >-
         --exclude flui-assets
-        --exclude flui-build
         --exclude flui-cli
         --exclude flui-web-server
         --exclude hot-reload-counter-host
@@ -1293,6 +1298,64 @@ jobs:
   # `gpu-test` uses) and aarch64 macOS — plus aarch64 Android, with
   # `--all-targets` so per-OS test targets compile too.
   # ─────────────────────────────────────────────────────────────────────────
+  # cli-macos — the CLI's own suite on macOS. `test` runs it on Linux, which
+  # never executes the macOS arms: simulator selection through `simctl`,
+  # Xcode probes in `flui doctor`, browser versions read from `Info.plist`,
+  # the `.app` staging of `flui build macos`, and the termios hot-keys of
+  # `flui run`. The CLI has no FLUI crate in its normal graph, so this is a
+  # small build (~75 crates) and the only per-OS coverage it gets before a
+  # release; the shim test drives `cargo-flui` as well.
+  # ─────────────────────────────────────────────────────────────────────────
+  cli-macos:
+    name: cli-macos
+    needs: checks
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable (+ iOS target for the runner lint below)
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: aarch64-apple-ios
+
+      # Same pitfall as `cross-typecheck`: the action adds the target to the
+      # `stable` toolchain, but the committed rust-toolchain.toml makes the
+      # pinned patch release the active one, and that install needs the
+      # target too (E0463 "can't find crate for `std`" otherwise).
+      - name: Add the iOS target to the pinned toolchain
+        run: rustup target add aarch64-apple-ios
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Per tokio: binary caching breaks on macOS.
+          cache-bin: false
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo nextest run -p flui-cli
+        run: cargo nextest run -p flui-cli --locked
+
+      # The iOS RUNNER in flui-app (`app/runner/ios.rs`) is behind
+      # `cfg(target_os = "ios")`; its Android twin is linted in
+      # `cross-typecheck`, but this one needs a macOS host: `psm` (via
+      # `stacker`, via flui-rendering) compiles its shim through `cc`, which
+      # finds the Apple SDK with `xcrun`. The `flui` facade rides along
+      # because it is what a consumer builds against on this target.
+      # Library targets only: the tests are host-run elsewhere and
+      # `--all-targets` would pull dev-dependencies that cannot build for
+      # the mobile triple.
+      - name: cargo clippy (ios runner)
+        run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
+
   cross-typecheck:
     name: cross-typecheck
     needs: checks
@@ -1342,6 +1405,41 @@ jobs:
       - name: cargo clippy (ios backend)
         run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-ios -- -D warnings
 
+      # The mobile RUNNERS live in flui-app (`app/runner/{android,ios}.rs`),
+      # behind `cfg(target_os = ...)`, so the four platform lines above never
+      # compile them: until these two steps, a broken Android or iOS runner
+      # was invisible to every gate (found the day they were added — an
+      # unused import and a `map_or_else` finding on the Android runner, and
+      # a facade re-export of an item flui-app gates out on iOS). The `flui`
+      # facade rides along for that last class: it is what a consumer builds
+      # against on these targets. Library targets only: the tests are
+      # host-run by the `test` job, and `--all-targets` would pull
+      # dev-dependencies this runner cannot build for the mobile triples.
+      # The iOS half of this pair lives in the `cli-macos` job: `psm` (via
+      # `stacker`, via flui-rendering) compiles its shim through `cc`, which
+      # resolves the Apple SDK with `xcrun`, and this Linux runner has no
+      # xcrun and no iOS SDK to point it at.
+
+      # `stacker` (via flui-rendering) builds `psm`'s C shim through the `cc`
+      # crate, which needs a C compiler for the target. The NDK is not on
+      # this runner's path, and it is not needed for a compile-only lint:
+      # the host `clang` cross-compiles that one file when told the target
+      # triple. Nothing is linked.
+      - name: cargo clippy (android runner)
+        env:
+          CC_aarch64_linux_android: clang
+          CFLAGS_aarch64_linux_android: --target=aarch64-linux-android21
+          AR_aarch64_linux_android: ar
+        run: cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings
+
+      # The CLI ships on Windows but the `test` matrix is Linux-only and no
+      # Windows job exists, so a Windows-only compile break in `flui-cli`
+      # was invisible (found the day this step was added: tokio's `signal`
+      # feature does not expose `enable_io` on Windows). `--all-targets`
+      # so the integration suite's Windows arms type-check too.
+      - name: cargo clippy (cli, windows)
+        run: cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
   # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern). Branch protection
   # requires this ONE check instead of enumerating the graph, so adding or
@@ -1352,7 +1450,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
+    needs: [checks, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -11,16 +11,16 @@ Offset dx=0.00 dy=0.00
     DrawRect rect=(0.00,0.00 900.00x760.00) fill #FFFFFFFF
     Restore
     Save
-    Paragraph offset=(0.00,0.00) "Item 1" #3C3C434C lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal size=17.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,427.29,60.00,0.00,1.00]
+    Paragraph offset=(0.00,0.00) "Item 1" #3C3C434C lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal size=17.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,427.29,339.40,0.00,1.00]
     Restore
     Save
-    DrawRRect rrect=(0.00,0.00 129.55x52.40 r=12.00/12.00/12.00/12.00) fill #007AFFFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,385.22,96.40,0.00,1.00]
+    DrawRRect rrect=(0.00,0.00 129.55x52.40 r=12.00/12.00/12.00/12.00) fill #007AFFFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,385.22,375.80,0.00,1.00]
     Restore
     Save
-    Paragraph offset=(0.00,0.00) "Push Details" #FFFFFFFF lines=1 runs=[len=12 family=SansSerif weight=400 style=Normal size=17.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,405.22,112.40,0.00,1.00]
+    Paragraph offset=(0.00,0.00) "Push Details" #FFFFFFFF lines=1 runs=[len=12 family=SansSerif weight=400 style=Normal size=17.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,405.22,391.80,0.00,1.00]
     Restore
     Save
-    Paragraph offset=(0.00,0.00) "Item 2" #3C3C434C lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal size=17.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,427.29,164.80,0.00,1.00]
+    Paragraph offset=(0.00,0.00) "Item 2" #3C3C434C lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal size=17.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,427.29,444.20,0.00,1.00]
     Restore
     Save
     DrawRect rect=(0.00,0.00 900.00x44.00) fill #F9F9F9F0

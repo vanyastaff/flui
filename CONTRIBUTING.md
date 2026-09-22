@@ -8,9 +8,10 @@ Before opening a pull request, run the local gate:
 just ci
 ```
 
-Rust code must follow the workspace-wide engineering standards, injected by the
-Rust Code Studio plugin when you edit a matching file. Accepted architecture
-decisions may impose stricter rules for a subsystem.
+Rust code must follow the workspace-wide engineering standards in
+[`AGENTS.md`](AGENTS.md) and [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md).
+Accepted architecture decisions (`docs/adr/`) may impose stricter rules for a
+subsystem.
 
 If `just` is not installed, run the equivalent commands listed in
 [`docs/testing.md`](docs/testing.md). Render, layout, paint, lifecycle, and

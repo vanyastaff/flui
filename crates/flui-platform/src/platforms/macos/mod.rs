@@ -63,6 +63,7 @@ mod display;
 mod display_pass;
 mod events;
 mod liquid_glass;
+mod loop_control;
 mod owner_lane;
 mod platform;
 mod text_input;

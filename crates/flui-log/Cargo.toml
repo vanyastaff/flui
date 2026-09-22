@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-log"
 version.workspace = true
 edition.workspace = true

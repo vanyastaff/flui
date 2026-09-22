@@ -20,7 +20,7 @@
 //!
 //! `AppRuntime` absorbs the transitional `RealmHost`'s fields (realm slot,
 //! queue, draining flag, owner thread, address cache, window registry,
-//! surface applier, visible/focused) plus the loop-scoped
+//! surface applier) plus the loop-scoped
 //! `OwnerPlatform` capability (formerly a second, separate thread-local) and
 //! [`SharedEngineServices`]. The single-threaded dispatch machinery that
 //! operates on this struct — `install_platform_realm`,
@@ -354,14 +354,14 @@ impl RealmRegistry {
     /// Every installed `RealmId`, in insertion (mount) order — the read
     /// `for_each_installed_realm` (`super::runner`) snapshots before it
     /// starts checking realms out one at a time.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "for_each_installed_realm's only production driver is a follow-up; \
-                      exercised by this module's own tests via that function"
+    #[cfg(any(
+        test,
+        all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
         )
-    )]
+    ))]
     pub(super) fn keys(&self) -> Vec<RealmId> {
         self.slots.iter().map(|(id, _)| *id).collect()
     }
@@ -385,14 +385,7 @@ enum RealmMapMutation {
     /// queueing it) from paying that size for every entry regardless of
     /// variant.
     #[cfg_attr(
-        not(any(
-            test,
-            all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            )
-        )),
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
         expect(
             dead_code,
             reason = "constructed only by request_realm_install, whose one production caller \
@@ -444,6 +437,8 @@ pub enum ExitPolicy {
     /// The default policy.
     #[default]
     OnLastWindowClosed,
+    /// Remain alive without windows until explicitly asked to quit.
+    ExplicitQuit,
 }
 
 /// Governs what a SECOND top-level window becomes, relative to the realm(s)
@@ -540,11 +535,25 @@ impl FrameWakeHandle {
     }
 }
 
+/// Owner-loop quit notification progress; reset only when installing a new owner.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum QuitNotification {
+    Active,
+    Requested,
+    Notifying,
+    Notified,
+}
+
 /// The loop-scoped composition root: platform event-loop demux, the single
 /// realm slot, and the once-resolved [`SharedEngineServices`].
 ///
 /// Absorbs the former `RealmHost` (realm slot, queue, draining flag, owner
-/// thread, address cache, window registry, surface applier, visible/focused)
+/// thread, address cache, window registry, surface applier)
 /// wholesale, plus the loop-scoped `OwnerPlatform` capability (formerly the
 /// separate `OWNER_PLATFORM_HOST` thread-local) and `services`. One struct,
 /// one thread-local slot (`runner.rs`'s `APP_RUNTIME`) — the same two
@@ -585,33 +594,11 @@ pub(crate) struct AppRuntime {
     /// [`CloseRequestRouter`](super::close_request::CloseRequestRouter)'s
     /// own doc.
     close_requests: Arc<super::close_request::CloseRequestRouter>,
-    /// Single-window `(visible, focused)` tracking for the
-    /// `AppLifecycleState` derivation (ADR-0035). Both default `true`.
-    ///
-    /// **Known limitation, stated rather than silently overclaimed:** this
-    /// pair is still loop-scoped, not per-realm — with more than one
-    /// hosted REALM, a focus/visibility change on any one window's OS
-    /// signal drives the SAME derivation for every realm on this loop.
-    /// Issue #555's addressed-routing slice narrowed this for the
-    /// WITHIN-one-realm case (more than one PRESENTATION of the same
-    /// realm): `runner.rs`'s `PlatformToUi::WindowFocus` handling now
-    /// checks `UiRealm::is_active_presentation` before applying a `false`
-    /// signal to this field, so a non-active presentation's own window
-    /// losing OS focus (a normal consequence of focus having already moved
-    /// to a sibling presentation of that SAME realm) no longer suspends it
-    /// — only the realm's currently active presentation's own focus-loss
-    /// is authoritative. The remaining, unaddressed gap is strictly
-    /// cross-REALM: this field has no realm identity at all, so a focus
-    /// change on realm A's window still drives realm B's own lifecycle
-    /// derivation too. A genuinely per-realm `(visible, focused)` pair
-    /// (moving these fields onto `RealmSlot`) is the fix for that
-    /// remainder, out of this slice's scope.
-    pub(super) visible: bool,
-    pub(super) focused: bool,
     /// The loop-scoped owner-thread platform capability (ADR-0039 §6).
     /// Deliberately *not* cleared by realm teardown — the loop may host
     /// another realm before it exits (hot-restart does exactly this).
-    pub(super) owner_platform: Option<OwnerPlatform>,
+    pub(super) owner_platform: Option<std::rc::Rc<OwnerPlatform>>,
+    pub(super) owner_install_generation: u64,
     /// A clone of the currently-dispatched realm's scheduler, held ONLY
     /// while `dispatch_platform_realm` (in `runner.rs`) has taken that
     /// realm's slot out of `realms` above for the duration of a queued task.
@@ -657,6 +644,43 @@ pub(crate) struct AppRuntime {
     /// so a mutation triggered by a callback running mid-visit never
     /// changes the set of realms that same visit is still walking.
     pub(super) iterating_all_realms: bool,
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) quit_notification: QuitNotification,
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) loop_identity: Arc<()>,
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) main_controller: Option<super::runner::main_window::MainController>,
+    #[cfg(target_os = "ios")]
+    pub(super) ios_controller: Option<super::runner::ios::IOSController>,
+    #[cfg(target_os = "ios")]
+    pub(super) ios_running: bool,
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) main_ingress: Option<Arc<super::application_control::Ingress>>,
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) main_host_lifecycle: flui_scheduler::AppLifecycleState,
+    /// Accepted loop-owned window requests, including currently polled/installing entries.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) pending_window_reservations: Arc<std::sync::atomic::AtomicUsize>,
     /// Realm-map mutations requested while
     /// [`Self::request_realm_install`]/[`Self::request_realm_uninstall`]
     /// decided they must defer. Applied, in request order, by
@@ -750,12 +774,47 @@ impl AppRuntime {
             owner_thread: None,
             registry: WindowRegistry::new(),
             close_requests: Arc::new(super::close_request::CloseRequestRouter::new()),
-            visible: true,
-            focused: true,
             owner_platform: None,
+            owner_install_generation: 0,
             dispatched_scheduler: None,
             dispatched_realm_id: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            pending_window_reservations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             iterating_all_realms: false,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            quit_notification: QuitNotification::Active,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            loop_identity: Arc::new(()),
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            main_controller: None,
+            #[cfg(target_os = "ios")]
+            ios_controller: None,
+            #[cfg(target_os = "ios")]
+            ios_running: false,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            main_ingress: None,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            main_host_lifecycle: flui_scheduler::AppLifecycleState::Detached,
             pending_realm_mutations: Vec::new(),
             services: OnceCell::new(),
             execution: OnceCell::new(),
@@ -816,14 +875,7 @@ impl AppRuntime {
     // Its one production caller (bootstrap_desktop's config wiring) is
     // desktop-only; android/wasm have no host-injection entry point yet.
     #[cfg_attr(
-        not(any(
-            test,
-            all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            )
-        )),
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
         expect(
             dead_code,
             reason = "host executors are injected via AppConfig on the desktop bootstrap \
@@ -1191,14 +1243,7 @@ impl AppRuntime {
     /// itself inside a live `APP_RUNTIME` borrow) must drop it only after
     /// that borrow releases.
     #[cfg_attr(
-        not(any(
-            test,
-            all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            )
-        )),
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
         expect(
             dead_code,
             reason = "runner.rs::install_realm_alongside (its one production caller) is \
@@ -1359,6 +1404,7 @@ impl AppRuntime {
     pub(super) fn should_exit(&mut self, policy: ExitPolicy) -> (bool, Vec<RealmSlot>) {
         let removed = self.drain_pending_realm_mutations();
         let exit = match policy {
+            ExitPolicy::ExplicitQuit => false,
             // A running service that declared `ServiceLifetime::KeepsAppAlive`
             // (issue #558) vetoes exit the same way a queued install does:
             // messenger-like applications survive their last window closing
@@ -1368,7 +1414,12 @@ impl AppRuntime {
             // exits anyway.
             #[cfg(not(target_arch = "wasm32"))]
             ExitPolicy::OnLastWindowClosed => {
-                self.realms.is_empty() && !self.service_registry.keeps_app_alive()
+                self.realms.is_empty()
+                    && self
+                        .pending_window_reservations
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        == 0
+                    && !self.service_registry.keeps_app_alive()
             }
             #[cfg(target_arch = "wasm32")]
             ExitPolicy::OnLastWindowClosed => self.realms.is_empty(),
@@ -1393,7 +1444,16 @@ impl AppRuntime {
     /// none of which may resolve this thread-local `AppRuntime` at fire time
     /// (see [`FrameWakeHandle`]'s doc).
     pub(super) fn frame_wake_callback(&self) -> Arc<dyn Fn() + Send + Sync> {
-        self.wake_handle().into_callback()
+        let wake = self.wake_handle().into_callback();
+        #[cfg(target_os = "ios")]
+        if let Some(owner) = &self.owner_platform {
+            let proxy = owner.proxy();
+            return Arc::new(move || {
+                wake();
+                let _ = proxy.wake();
+            });
+        }
+        wake
     }
 
     /// Wake the platform event loop so the next frame is rendered: sets
@@ -1632,8 +1692,6 @@ mod app_runtime_tests {
             runtime.owner_platform.is_none(),
             "a freshly constructed AppRuntime hosts no owner platform yet"
         );
-        assert!(runtime.visible, "a fresh runtime assumes a visible window");
-        assert!(runtime.focused, "a fresh runtime assumes a focused window");
         assert!(
             runtime.registry.is_empty(),
             "AppRuntime owns the WindowRegistry directly -- a fresh one has no mappings"
@@ -1975,10 +2033,8 @@ mod wake_and_clipboard_tests {
     /// ORIGINAL runtime anyway. A hook built by re-resolving `APP_RUNTIME` at
     /// fire time instead of capturing this `Send` handle would see an empty
     /// thread-local on the foreign thread and never flip this flag — the
-    /// revert recipe for this test. (A real instance of exactly this mistake
-    /// shipped once, in the frames-reenable-redirty logic — see
-    /// `emit_lifecycle_transition`'s doc in `runner.rs` for that story and
-    /// its fix.)
+    /// revert recipe for this test. Presentation lifecycle reconciliation
+    /// uses the same captured wake path when restoring frame eligibility.
     #[test]
     fn frame_wake_callback_survives_a_cross_thread_fire_once_wired_to_a_scheduler() {
         use std::sync::mpsc;

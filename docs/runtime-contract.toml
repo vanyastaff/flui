@@ -73,17 +73,31 @@ schema = 1
 [[export_root]]
 file = "src/lib.rs"
 declarations = [
+    "pub mod interaction;",
+    "pub mod painting;",
+    "pub mod rendering;",
+    "pub mod testing;",
     "pub use flui_animation as animation;",
     "pub use flui_app as app;",
     "pub use flui_cupertino as cupertino;",
     "pub use flui_foundation as foundation;",
+    "pub use flui_foundation::Diagnosticable;",
+    "pub use flui_macros::Diagnosticable;",
     "pub use flui_geometry as geometry;",
+    "pub use flui_hot_reload as hot_reload;",
     "pub use flui_localizations as localizations;",
     "pub use flui_material as material;",
     "pub use flui_types as types;",
     "pub use flui_view as view;",
     "pub use flui_widgets as widgets;",
     "pub use flui_app::run_app;",
+    "pub use flui_app::run_app_with_config;",
+    "pub use flui_app::app::open_window;",
+    "pub use flui_app::app::open_secondary_window;",
+    "pub use flui_app::app::AppConfig;",
+    "pub use flui_app::app::WindowPolicy;",
+    "pub use flui_app::app::AppWindowError;",
+    "pub use flui_app::app::{AppControlError, AppHandle, AppRunError, Application, StartupWindow};",
     "pub mod prelude {",
 ]
 
@@ -101,11 +115,13 @@ declarations = [
     "pub use app::{ExitPolicy, WindowPolicy};",
     "pub use app::{ CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse, request_presentation_close, };",
     "pub use app::open_secondary_window;",
+    "pub use app::open_window;",
     "pub use app::{run_app_android, run_app_android_with_config};",
     "pub use bindings::{ GestureBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding, UpdateScheduler, WidgetsBinding, };",
     "pub use flui_log::{AppIdentity, AppleBundleId};",
     "pub use flui_view::{ BuildContext, BuildContextExt, BuildOwner, ElementBase, ElementTree, StatefulView, StatelessElement, StatelessView, View, };",
     "pub mod prelude {",
+    "pub use app::{ AppControlError, AppHandle, AppRunError, AppWindowError, Application, MainWindowRequest, StartupWindow, };",
 ]
 
 [[export_root]]
@@ -121,11 +137,14 @@ declarations = [
     "pub use lifecycle::{ CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition, ServiceEvents, ServiceFuture, ServiceLifetime, ServicePublisher, ServiceStartError, TaskContext, TaskHandle, TaskOutcome, TaskSpawner, WorkerGeneration, WorkerHandle, service_events, };",
     "pub use runner::{run_app_android, run_app_android_with_config};",
     "pub use runner::open_secondary_window;",
+    "pub use runner::open_window;",
     "pub use runner::request_presentation_close;",
     "pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};",
     "pub use runtime::{ExitPolicy, WindowPolicy};",
     "pub use flui_view::{LifecycleHook, RecoveredAt};",
     "pub use flui_view::{RootRenderElement, RootRenderView};",
+    "pub use application::{AppRunError, Application, StartupWindow};",
+    "pub use application_control::{AppControlError, AppHandle, AppWindowError, MainWindowRequest};",
 ]
 
 [[export_root]]
@@ -149,14 +168,14 @@ declarations = [
     "pub use platforms::IOSPlatform;",
     "pub use platforms::LinuxPlatform;",
     "pub use platforms::MacOSPlatform;",
-    "pub use platforms::{ FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessPlatform, MockWindow, };",
+    "pub use platforms::{ FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow, };",
     "pub use platforms::WebPlatform;",
     "pub use platforms::WindowsPlatform;",
     "pub use platforms::WinitPlatform;",
     "pub use shared::{PlatformHandlers, WindowCallbacks};",
     "pub use task::{Task, TaskLabel};",
-    "pub use traits::{ AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowId, WindowMode, WindowOptions, };",
-    "pub use traits::{ OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform, WaitError, WindowOpen, };",
+    "pub use traits::{ AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowShowError, };",
+    "pub use traits::{ OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform, WaitError, WakeRegistrationError, WindowOpen, };",
     "pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {",
     "pub fn headless_platform() -> Box<dyn Platform> {",
 ]
@@ -368,10 +387,16 @@ installs it under the caller's policy -- `SeparateRealms` through \
 nothing`), `SharedRealm` through `install_presentation_alongside` (a second \
 presentation of the FIRST realm hosted on this thread, real forest \
 membership and a real `WindowRegistry` mapping; \
-`one_realm_two_windows_policy_routes_by_presentation`). `ExitPolicy` is \
+`one_realm_two_windows_policy_routes_by_presentation`). Explicit desktop quit \
+notifies every surviving installed realm once, using each realm's existing \
+Detached ladder; it closes secondary admission before deferred tails drain, \
+cancels unresolved opens, and rejects completions from older loop identities. \
+Observers may reenter or panic without skipping siblings; an already-active \
+dispatch panic remains the first failure. Each realm now applies terminal lifecycle to every live presentation binding; \
+public owner-local registration uses weak lifecycle handles. `ExitPolicy` is \
 LIVE-WIRED, not merely mechanism: `flui_platform::traits::Platform:: \
 set_exit_policy_hook` (a new default-no-op trait method, overridden by the \
-winit and headless backends only) lets `runner/host.rs::install_exit_policy_hook` \
+winit, AppKit, and headless backends) lets `runner/host.rs::install_exit_policy_hook` \
 install a hook that consults `AppRuntime::should_exit` INSTEAD of a \
 backend's own unconditional "every window I track just closed -> exit" \
 bookkeeping -- proven through the REAL platform seam (not a direct \
@@ -450,107 +475,37 @@ spurious request a no-op. \
 `closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits` \
 pins both halves: that the tail parks a request at all (the assertion the \
 fix adds -- without the tail change nothing is parked), and that driving it \
-produces the quit. Reverting either half turns it red. Backend note, \
-unchanged: since issue #919 this shape only ever arose on the HEADLESS \
-double, because the winit backend's `close()` never runs its teardown \
+produces the quit. Reverting either half turns it red. The winit backend's `close()` never runs its teardown \
 synchronously (it is posted to the owner lane and run on the owner's next \
 turn, top-level, with no realm checked out), so a programmatic close from \
 inside a dispatched callback tore down un-nested there and the hook already \
 saw the emptied registry. The headless `close()` stays synchronous, which \
-is what that test drives.
+is what that test drives. AppKit also closes synchronously, then defers its \
+exit-policy consultation to the next owner turn. Its native evidence is \
+`exit_policy_probe` through `scripts/check-macos-exit.py`: last-window exit, \
+policy veto, worker re-evaluation, replacement windows and hooks, normal \
+return/drop, native weak release after autorelease-pool drain, bootstrap \
+failures and standalone NSApplication ownership. Native termination is \
+tested by sending `terminate:`, not by asserting physical Cmd+Q/menu wiring. \
+No keep-alive enum variant is added; the native veto case uses the platform \
+hook and the existing app service-completion test verifies notifier wiring.
 
-**A second product gap this required fixing: `open_secondary_window` \
-assumed `OwnerPlatform::open_window` always resolves `Ready`.** It does, \
-inside `on_ready`, and on the headless backend (no owner lane at all) -- but \
-the real winit backend defers any call after `on_ready` \
-(`WinitOwnerHooks::open_owner_window`), which is exactly the calling \
-convention this function's own doc names as its intended use (a callback the \
-FIRST window already registered). An earlier revision called `WindowOpen::\
-try_ready` directly and surfaced `Pending` as a hard error, so the advertised \
-"open a second window at runtime" flow could never work on the real desktop \
-backend it is meant for. `open_secondary_window_impl` now matches both arms: \
-`Ready` installs inline (unchanged, calling `finish_open_secondary_window` \
-directly); `Pending` is accepted and its completion is spawned on the first \
-realm hosted on this thread's own `flui_scheduler::AsyncDriver` \
-(`spawn_pending_secondary_window_completion`) -- never a hand-rolled \
-busy-loop: the `PendingWindow`'s own wake (fired when the owner lane \
-delivers) requests a fresh frame, and that frame's `UpdateScheduler::\
-drive_async_tasks` polls the task to completion.
+Secondary-window creation handles Ready inline and Pending through a loop-owned \
+finite polling batch. A reservation exists before native creation and while a \
+batch is checked out. Separate-realm requests survive origin-realm closure; \
+shared requests retain the exact target RealmId and never retarget. Worker \
+completion sends a stamped owner wake independent of windows and realm frames. \
+Only ready futures are polled; installation waits for realm checkouts to clear. \
+Quit and loop replacement fence completion admission. Failed physical posting \
+releases the reservation and records an error; owner-local payload cleanup \
+requires a later successful owner turn or shutdown, without busy retries. \
+Headless tests drive the public owner-turn transport after worker resolution \
+with zero realms and after the originating window closes.
 
-A first revision of this fix had the spawned future call \
-`finish_open_secondary_window` directly from inside its own poll -- which \
-review caught as broken for `WindowPolicy::SharedRealm` specifically: \
-`UpdateScheduler::drive_async_tasks` always runs from INSIDE a dispatched \
-`RealmTask::Frame` (`dispatched_realm_id` is `Some` for the whole checkout), \
-and `install_presentation_alongside` (SharedRealm's own install primitive) \
-has no defer-to-idle queue of its own -- it hard-refuses \
-(`InstallPresentationError::DispatchInFlight`, a `debug_assert!` panic in \
-debug builds) while a dispatch is in flight, which a `Pending` completion \
-always is. `SeparateRealms` happened to work anyway (`install_realm_\
-alongside` already defers through `AppRuntime::request_realm_install`'s own \
-queue), masking that `SharedRealm` could never complete on the real desktop \
-backend this whole fix targets. The corrected shape: the spawned future \
-never calls `finish_open_secondary_window` itself -- it only enqueues the \
-resolved `(WindowPolicy, window)` pair onto a new thread-local queue \
-(`PENDING_SECONDARY_WINDOW_COMPLETIONS`), drained only once this thread's \
-dispatch/hot-restart-visit checkout state clears (`dispatch_platform_realm`'s \
-own tail, mirroring where `AppRuntime`'s own deferred realm-map mutations \
-already apply; `for_each_installed_realm`'s tail drains it too, for \
-symmetry, though no production driver visits every realm yet). One \
-completion path (`finish_open_secondary_window`) for both `WindowPolicy` \
-variants -- only the trigger point differs between `Ready` (inline) and \
-`Pending` (deferred to the enclosing dispatch's own tail) -- so "both arms \
-install and wire identically" is genuinely true now, not merely for the \
-policy that happened to already have a queue.
-
-Tested end-to-end -- Pending -> resolved -> both-window close/exit -- on \
-the headless backend's own deferred-open test seam (`HeadlessPlatform::\
-enable_deferred_window_open`, `HeadlessDeferredWindowOpens::resolve_next`) \
-for BOTH policies: `crates/flui-platform`'s own `deferred_window_open_\
-resolves_via_the_pending_arm_like_the_real_winit_owner_lane` pins the \
-mechanism in isolation; `crates/flui-app`'s `open_secondary_window_\
-completes_through_the_pending_arm_like_the_real_winit_owner_lane` \
-(`SeparateRealms`) and `shared_realm_completes_through_the_pending_arm_\
-like_the_real_winit_owner_lane` (`SharedRealm` -- the harder case this \
-correction targets, since its own install target IS the realm whose \
-dispatch checkout the completion's poll runs inside of) each pin the full \
-embedder-seam flow; `dead_driver_realm_before_pending_resolution_\
-disclaims_cleanly_without_zombie_installing` additionally pins the \
-fail-closed path when the driver realm dies before its own pending \
-completion resolves (the captured `PendingWindow` drops along with the \
-realm's `AsyncDriver`, disclaiming the request rather than zombie-installing \
-anything later). A `Pending` completion's own failure (the resolve itself \
-failing, or `finish_open_secondary_window` failing on the resolved window) \
-is traced, never silently dropped. Named residual: this proves the \
-completion seam generically, not a full winit event-loop integration test \
--- no CI gate exercises the real winit backend end-to-end at all (see \
-`flui-platform`'s own evidence-must-live-outside-the-test-gate constraint), \
-so confidence that `WinitOwnerHooks::open_owner_window`'s own `Pending` \
-construction and its lane's reply-delivery path compose correctly with this \
-completion is still design-level, not test-level -- named honestly rather \
-than silently assumed covered.
-
-**Named, deliberately out-of-scope residual:** a window `open_secondary_ \
-window` opens shows no widget content and never renders a frame. Two \
-distinct reasons, neither papered over. First, rendering in this crate is \
-one canonical frame-pump closure PER BACKEND (desktop/Android/web), pinned \
-by `runner_frame_ordering.rs`'s own mechanical guards \
-(`every_runner_frame_site_uses_the_shared_drive_frame_helper`, \
-`every_pump_async_arm_calls_finish_then_drive_async_tasks`) at exactly three \
-call sites -- giving a second window its own independently-rendering frame \
-pump means generalizing those three sites (and this guard's own pinned \
-count) into one shared per-window helper, real work belonging to its own \
-reviewed slice, not folded silently in here. Second, `UiRealm:: \
-attach_root_widget` (and everything built on it -- gesture arena, focus \
-root, vsync scope) reads a realm's PRIMARY presentation only, so mounting a \
-tree into a `SharedRealm` window's non-primary presentation has no capability \
-to call yet -- neither the forest slice (#607) nor the routing slice (#608) \
-added one. What IS real regardless: the window opens, is live-addressed, and \
-its registry/forest membership and input/close/focus/visibility/resize \
-dispatch are genuine and exactly as isolated (or shared) as `WindowPolicy`'s \
-own doc claims -- `hot_restart_with_two_realms_and_with_two_presentations` \
-pins that hot-restart's own visit primitive sees exactly what each policy \
-installed.
+Secondary windows still have no widget root, renderer or frame callback. \
+The resident Application now owns a rendered designated main-window factory; \
+rendered secondary windows remain separate work. Native macOS owner delivery is separately exercised \
+by the bounded owner_wake_probe; Windows has compile-only evidence here.
 
 It remains one TLS-scoped instance per owner thread (`APP_RUNTIME` in \
 `runner/host.rs`), not one per process -- unchanged by this slice, and not this \
@@ -565,20 +520,19 @@ is the real native embedder call site that drives both \
 `install_realm_alongside` and `install_presentation_alongside` in \
 production, closing the native-lifecycle gap named above for both paths.
 
-**Named residual, now durable here rather than only in a private field's \
-own doc comment:** `AppRuntime.visible`/`.focused` (`runtime.rs`) are still \
-LOOP-scoped, not per-realm -- with more than one hosted REALM, a \
-focus/visibility change on any one window's OS signal drives the SAME \
-`AppLifecycleState` derivation for every realm on this loop. Issue #555's \
-addressed-routing slice (#608) narrowed this for the WITHIN-one-realm \
-case (`WindowPolicy::SharedRealm`'s more-than-one-presentation shape): a \
-non-active presentation's own window losing OS focus no longer suspends its \
-realm (`UiRealm::is_active_presentation` gates it). The remaining gap is \
-strictly cross-REALM (`WindowPolicy::SeparateRealms`): this field pair has \
-no realm identity at all, so realm A's window gaining/losing focus still \
-drives realm B's own lifecycle derivation too. The fix is a genuinely \
-per-realm `(visible, focused)` pair (moving these fields onto `RealmSlot`), \
-out of this slice's scope; not attempted here.
+Window focus and visibility facts now belong to each `PresentationState`, \
+initialized from the native window snapshot. Local lifecycle transitions notify \
+the addressed binding and clean up its input independently of the realm's \
+scheduler aggregate. The aggregate folds live presentations: Resumed when any \
+is visible and focused, Inactive when any is visible, otherwise Hidden; an \
+empty forest is Detached. Host Paused retains window facts and dominates them \
+until resume. Unobserved presentations notify their first effective target \
+directly. Scheduler listeners report executable aggregate changes, not synthetic \
+local ladder steps; resource and redraw eligibility use the same host/native facts. Explicit stop is terminal; an observed Detached state remains \
+reversible. Closing presentations leave the aggregate before notification, \
+deliver Detached before widget disposal, and are removed even when an observer \
+panics. No loop-global visibility/focus authority remains. These are internal \
+binding delivery and scoped weak-subscription guarantees; native platform transport remains separately verified.
 
 `with_owner_platform`'s fence (c) (ADR-0039 §6, trigger #22's runtime \
 backstop) re-points onto this struct: `AppRuntime::installed_realm_phase` \
@@ -650,6 +604,10 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub enum WindowPolicy" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "pub fn open_secondary_window" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/host.rs", contains = "fn install_exit_policy_hook" },
+    { kind = "symbol", file = "crates/flui-app/src/app/runner/host.rs", contains = "fn install_platform_quit_hook" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn explicit_platform_quit_detaches_every_installed_realm" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn quit_notification_preserves_dispatch_panic_and_finishes_siblings_after_observer_panic" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "fn quit_notification_old_completion_cannot_enter_a_new_loop" },
     { kind = "symbol", file = "crates/flui-platform/src/traits/platform.rs", contains = "fn set_exit_policy_hook" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn complete_window_close" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/control.rs", contains = "fn request_close_window" },
@@ -677,7 +635,7 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "fn drain_pending_secondary_window_completions" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane" },
-    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn dead_driver_realm_before_pending_resolution_disclaims_cleanly_without_zombie_installing" },
+    { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn pending_open_survives_origin_realm_close_and_worker_resolution" },
 ]
 
 [[contract]]
@@ -906,7 +864,7 @@ owner_issue = 556
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn set_presentation_hidden(&self, presentation_id: PresentationId, hidden: bool)" },
-    { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "realm.set_presentation_hidden(presentation_id, !visible);" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/presentation_lifecycle.rs", contains = "self.set_presentation_hidden(id, !visible);" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn window_visibility_gates_exactly_the_addressed_presentations_clock" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_and_animating_presentation_does_not_spin" },
@@ -2630,17 +2588,13 @@ claim-slot at-most-once replies. The winit lane's `ControlSender` composes \
 `flui-foundation`'s `ClaimSlot`/`ClaimHandle` for its reply protocol \
 (bounded, typed `Full`/`OwnerGone` at enqueue; claimed-or-abandoned at \
 resolution) and is `PlatformProxy`'s public transport on that backend. \
-macOS/Windows/web/Android/headless transports are `ClosedTransport`, which \
-returns `ProxySendError::Unsupported` (PERMANENTLY, until slice 3 gives \
-them a lane) for both `open_window` and `request_quit` -- a maintainer fix \
-round correction: the vocabulary originally overloaded `OwnerGone` for this \
-(a name that means "a lane existed and died"), which `Unsupported` now \
-replaces on every lane-less backend; `OwnerGone` is reserved for the winit \
-lane after its loop has actually stopped. `request_quit` itself is now \
-fallible (`Result<(), ProxySendError<()>>`, `#[must_use]`): winit returns \
-`Ok(())` (coalesced, as before) or `OwnerGone` if the loop already stopped; \
-lane-less backends return `Unsupported`. The drain-anchor gate contract \
-(ADR-0039 §4) is scoped to slice 3's lane generalization. \
+macOS, Win32 and headless support window-independent wake and quit signals; \
+winit uses the same coalesced signal pump over its existing EventLoopProxy. \
+Signals carry no UI closures. OwnerPlatform::on_wake is fallible with typed \
+Unsupported/OwnerGone. ProxySendError::WakeFailed reports physical posting \
+failure separately from owner death. Quit fences new wake and native window \
+admission immediately. Direct native/headless proxy open_window remains \
+Unsupported; mobile/web owner wake remains Unsupported. \
 Registry-occupancy bound is honest, not admission-time: queued entries ≤ \
 lane capacity (256); delivered-but-unclaimed entries persist as the \
 requester's pinned liability until claim or drop. `ClaimHandle<T>` also \
@@ -2787,9 +2741,9 @@ kind = "function"
 declared_in = "crates/flui-app/src/app/runner/mod.rs"
 contains = "pub fn run_app_impl"
 classification = "stable-candidate"
-thread_affinity = "call on the process main thread; blocks until the event loop exits (never returns on macOS)"
+thread_affinity = "call on the process main thread; blocks until the event loop exits; standalone AppKit returns through Rust teardown"
 owner = "application composition root (runner)"
-failure_semantics = "returns unit; bootstrap failures are logged and the loop exits — no Result surface today"
+failure_semantics = "legacy desktop wrapper delegates Application and panics after cleanup on fatal startup error; Application::run exposes a typed Result"
 consumers = ["flui facade re-export", "examples"]
 
 [[surface]]
@@ -2801,7 +2755,7 @@ contains = "pub fn run_app_with_config_impl"
 classification = "stable-candidate"
 thread_affinity = "call on the process main thread; blocks until the event loop exits"
 owner = "application composition root (runner)"
-failure_semantics = "returns unit; bootstrap failures are logged and the loop exits — no Result surface today"
+failure_semantics = "legacy desktop wrapper delegates Application and panics after cleanup on fatal startup error; Application::run exposes a typed Result"
 consumers = ["flui facade re-export", "examples"]
 
 [[surface]]
@@ -2912,7 +2866,7 @@ thread_affinity = "TaskSpawner/ServicePublisher/CancellationSignal are Clone + S
 owner = "the lifecycle layer over the execution lanes (issue #558, ADR-0049): every unit of background work has a named owner — tasks/workers are owned by #[must_use] cancel-on-drop handles (no detach; work that must outlive its owner is a named Service), services are owned by AppRuntime's registry, started from AppConfig::with_service and shut down cancel-first with a shared deadline BEFORE the pools close"
 failure_semantics = "spawns return Result<_, SpawnError>; join evidence is TaskOutcome (Completed | Cancelled | Panicked) on a dedicated capacity-one channel per unit, joins are deadline-bounded (join_within returns the still-owning handle on timeout); publishing into a dead receiver is PublishError::OwnerGone (late results are inert, never a wake); panics are contained at the lifecycle boundary and reported as evidence"
 consumers = [
-    "AppConfig::with_service -> bootstrap_desktop -> AppRuntime::start_service (production wiring)",
+    "AppConfig::with_service -> run_application loop bootstrap -> AppRuntime::start_service (production wiring)",
     "teardown_platform_realm (staged shutdown before pool shutdown)",
     "AppRuntime::should_exit (KeepsAppAlive veto)",
 ]
@@ -3000,8 +2954,14 @@ contains = "pub struct PlatformProxy"
 classification = "experimental"
 thread_affinity = "Clone + Send + Sync; callable from any thread, including the owner (is_owner_thread() is diagnostic only)"
 owner = "OwnerPlatform::proxy() mint; carried by workers/realms/tasks that need to reach the owner"
-failure_semantics = "open_window returns Result<PendingWindow, ProxySendError<WindowOptions>>; request_quit returns Result<(), ProxySendError<()>> (#[must_use]). ProxySendError::Unsupported is permanent on lane-less backends (windows/macos/web/android/headless) until slice 3; ProxySendError::OwnerGone is reserved for the winit lane after its loop has actually stopped."
-consumers = ["winit lane (real transport)", "windows/macos/headless/web/android (ClosedTransport)"]
+failure_semantics = "open_window returns typed Unsupported on direct native/headless/mobile/web transports; winit supports claim-slot requests. wake/request_quit return typed Unsupported, OwnerGone or WakeFailed. Quit fences admission even when posting fails and remains retryable."
+consumers = [
+    "winit control lane",
+    "macOS GCD owner signal",
+    "Win32 message-only owner signal",
+    "headless manual owner turns",
+    "app pending-window completion wakers",
+]
 owner_issue = 551
 
 [[surface]]
@@ -3977,3 +3937,183 @@ allow_files = []
 [[forbidden_path]]
 path = "crates/flui-presentation"
 why = "the presentation composition contract: no flui-presentation crate; flui-app privately composes the three owners"
+
+
+[[contract]]
+key = "presentation-lifecycle-subscriptions"
+statement = """
+BuildContext lifecycle_handle exposes optional owner-local weak observation of the \
+presentation's sole local lifecycle ledger. Subscription atomically returns the \
+initial optional snapshot without invoking a callback. Commit captures subscriber \
+identities; cancellation suppresses callbacks not yet started, and new subscribers \
+do not replay queued events. FIFO reentry and per-callback panic containment preserve \
+sibling delivery. Begin-close fences admission, final Detached precedes invalidation \
+and disposal, and retained handles or BuildOwners do not retain the source. \
+Scheduler aggregate state is not the subscription stream.
+"""
+state = "implemented"
+domain = "presentation"
+mechanical = true
+mechanism = "weak ownership, source queue and capability acquisition gate; runtime regression tests"
+evidence = [
+    { kind = "symbol", file = "crates/flui-view/src/lifecycle.rs", contains = "pub struct LifecycleHandle" },
+    { kind = "test", file = "crates/flui-view/src/lifecycle.rs", contains = "fn lifecycle_subscription_terminal_reentry_drains_before_invalidating" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/presentation_lifecycle.rs", contains = "fn lifecycle_subscription_app_init_state_is_local_and_terminal_precedes_dispose_despite_legacy_panic" },
+    { kind = "test", file = "tests/fixtures/facade_extensions.rs", contains = "fn presentation_lifecycle_subscription_runs_through_the_facade" },
+]
+
+[[surface]]
+path = "flui_view::LifecycleHandle"
+crate = "flui-view"
+kind = "type"
+declared_in = "crates/flui-view/src/lifecycle.rs"
+contains = "pub struct LifecycleHandle"
+classification = "stable-candidate"
+thread_affinity = "Clone; owner-local, not Send or Sync"
+owner = "weak reference minted by the presentation source"
+failure_semantics = "snapshot and subscribe return LifecycleClosed after their respective close fences"
+consumers = ["flui::view widget lifecycle hooks", "headless mounted facade consumer"]
+
+[[surface]]
+path = "flui_view::LifecycleSubscription"
+crate = "flui-view"
+kind = "type"
+declared_in = "crates/flui-view/src/lifecycle.rs"
+contains = "pub struct LifecycleSubscription"
+classification = "stable-candidate"
+thread_affinity = "owner-local, not Send or Sync; RAII cancellation"
+owner = "weak callback and source identity"
+failure_semantics = "drop cancels before capture disposal; callback destructor panic does not undo cancellation"
+consumers = ["flui::view widget lifecycle hooks", "headless mounted facade consumer"]
+
+[[surface]]
+path = "flui_view::LifecycleClosed"
+crate = "flui-view"
+kind = "type"
+declared_in = "crates/flui-view/src/lifecycle.rs"
+contains = "pub struct LifecycleClosed"
+classification = "stable-candidate"
+thread_affinity = "Send + Sync; copyable error value"
+owner = "returned by weak lifecycle capability operations"
+failure_semantics = "typed closed capability result"
+consumers = ["flui::view widget lifecycle hooks", "headless mounted facade consumer"]
+
+[[surface]]
+path = "flui_app::Application"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application.rs"
+contains = "pub struct Application"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::StartupWindow"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application.rs"
+contains = "pub enum StartupWindow"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::AppRunError"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application.rs"
+contains = "pub enum AppRunError"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::AppHandle"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application_control.rs"
+contains = "pub struct AppHandle"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::MainWindowRequest"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application_control.rs"
+contains = "pub struct MainWindowRequest"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::AppControlError"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application_control.rs"
+contains = "pub enum AppControlError"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_app::AppWindowError"
+crate = "flui-app"
+kind = "type"
+declared_in = "crates/flui-app/src/app/application_control.rs"
+contains = "pub enum AppWindowError"
+classification = "stable-candidate"
+thread_affinity = "desktop application owner; AppHandle and request replies are Send + Sync control, factories remain owner-local"
+owner = "AppRuntime designated main-window controller"
+failure_semantics = "typed admission/completion/run errors; shared original sources, policy-filtered panic text; reply receiver drop does not cancel admitted intent"
+consumers = ["flui::app", "resident_app standalone fixture", "legacy desktop run_app wrapper"]
+
+[[surface]]
+path = "flui_platform::platforms::ios::IOSSceneEvent"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/platforms/ios/scene.rs"
+contains = "pub enum IOSSceneEvent"
+classification = "stable-candidate"
+thread_affinity = "UIKit main-thread consumer; logical window capability may be retained across disconnect"
+owner = "IOSPlatform process and logical scene session"
+failure_semantics = "fallible connection acknowledgment before native publication; InstallationAborted permits same-session retry; Discarded permanently rejects that identity; reversible disconnect retains UI; native Running is not GPU readiness"
+consumers = ["flui-app UIKit runner", "native owned-scene protocol probe"]
+
+[[surface]]
+path = "flui_platform::platforms::ios::IOSSceneSessionId"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/platforms/ios/scene.rs"
+contains = "pub struct IOSSceneSessionId"
+classification = "stable-candidate"
+thread_affinity = "UIKit main-thread consumer; logical window capability may be retained across disconnect"
+owner = "IOSPlatform process and logical scene session"
+failure_semantics = "fallible connection acknowledgment before native publication; InstallationAborted permits same-session retry; Discarded permanently rejects that identity; reversible disconnect retains UI; native Running is not GPU readiness"
+consumers = ["flui-app UIKit runner", "native owned-scene protocol probe"]
+
+[[surface]]
+path = "flui_platform::platforms::ios::IOSSceneAttachmentId"
+crate = "flui-platform"
+kind = "type"
+declared_in = "crates/flui-platform/src/platforms/ios/scene.rs"
+contains = "pub struct IOSSceneAttachmentId"
+classification = "stable-candidate"
+thread_affinity = "UIKit main-thread consumer; logical window capability may be retained across disconnect"
+owner = "IOSPlatform process and logical scene session"
+failure_semantics = "fallible connection acknowledgment before native publication; InstallationAborted permits same-session retry; Discarded permanently rejects that identity; reversible disconnect retains UI; native Running is not GPU readiness"
+consumers = ["flui-app UIKit runner", "native owned-scene protocol probe"]

@@ -27,6 +27,9 @@ name: Weekly
 #                 Read it alongside This Week in Rust's "Calls for Testing"
 #                 and "Final Comment Period" sections. Local mirror:
 #                 `just nightly-check`.
+#   cli-live-build — `flui create --local` + `flui build desktop` of the
+#                 generated project (FLUI_CLI_LIVE_BUILD=1), the only run of
+#                 the CLI test that compiles a scaffolded app end to end.
 # Runs Monday ~05:17 UTC (off the :00/:30 herd marks). Not a merge gate;
 # failures surface in the Actions tab.
 
@@ -249,3 +252,38 @@ jobs:
 
       - name: cargo clippy --release (workspace, all targets)
         run: cargo clippy --workspace --all-targets --release --locked --keep-going -- -D warnings
+
+  # cli-live-build — the one flui-cli test that runs a real `cargo build`:
+  # `flui create --local <checkout>` then `flui build desktop --json` on the
+  # generated project, asserting the `build.done` artifact exists on disk.
+  # PR CI skips it (it compiles the framework a second time, in the generated
+  # project's own target dir), so this is where the scaffold → build path is
+  # proven end to end. `cargo fetch` first: the test copies the workspace
+  # lockfile into the project and builds offline.
+  cli-live-build:
+    name: flui create + build desktop (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo fetch (the generated project builds offline from this lockfile)
+        run: cargo fetch --locked
+
+      - name: live desktop build of a generated project
+        env:
+          FLUI_CLI_LIVE_BUILD: "1"
+        run: cargo nextest run -p flui-cli --locked -E 'test(live_desktop_build_produces_an_artifact_on_disk)'

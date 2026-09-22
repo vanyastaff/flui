@@ -1,0 +1,12 @@
+Font attributions
+
+Roboto-Regular.ttf: Copyright 2011 Google Inc. All Rights Reserved.
+MaterialIcons-Regular.ttf: Copyright 2018 Google, Inc. All Rights Reserved.
+These notices are preserved from the bundled fonts' name tables. Both files
+are distributed under Apache-2.0; full license texts are in this directory.
+
+CupertinoIcons.ttf: Copyright (c) 2016 Vladimir Kharlampidi.
+The full upstream MIT copyright and permission notice is in Cupertino-MIT.txt.
+
+Generated FLUI test fonts are first-party fixtures licensed under MIT OR
+Apache-2.0, like their generator. See FLUI-MIT.txt and FLUI-Apache-2.0.txt.

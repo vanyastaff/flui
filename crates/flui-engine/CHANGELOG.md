@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — SDR presentation transfer
+
+- Windowed surfaces require an advertised plain UNorm format with explicit `Srgb`
+  presentation. Metal/DX12 no longer prefer FP16 based on the backend name, which
+  caused encoded shader colors to be interpreted as linear and appear too bright.
+- Unsupported format/color-space pairs return the nonretryable
+  `EngineError::UnsupportedSurfaceColorConfiguration` before surface configuration.
+
+### Breaking — remove inferred HDR capability
+
+- Removed `GpuCapabilities::supports_hdr`: the backend name cannot establish
+  display HDR capability or a compatible renderer color pipeline.
+
 `flui-engine` is in active pre-1.0 development; breaking changes land freely until a
 0.1.0 release is cut. The entries below capture the engine's evolution since the
 **wgpu 25 → 29 migration** (the `0.1.0`-dev baseline).

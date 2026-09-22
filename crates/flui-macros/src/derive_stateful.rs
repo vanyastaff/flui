@@ -31,7 +31,7 @@
 //! generated body calls.
 //!
 //! See [`crate::derive_stateless`] for the cross-crate path strategy
-//! (absolute `::flui_view::…` paths, derived generics forwarding,
+//! (Cargo-resolved runtime paths, derived generics forwarding,
 //! `Self: StatefulView` predicate for upfront diagnostics).
 
 use proc_macro2::TokenStream;
@@ -41,12 +41,9 @@ use syn::{DeriveInput, parse_quote};
 /// Expand `#[derive(StatefulView)]` into the canonical `impl View` block.
 ///
 /// See [`crate::derive_stateless::expand`] for the rationale behind the
-/// `&DeriveInput` shape and the `syn::Result` future-proofing wrap.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "future-proof against attribute parsing"
-)]
+/// `&DeriveInput` shape and runtime-path error reporting.
 pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
+    let runtime = crate::runtime_path::Runtime::View.resolve(input.ident.span())?;
     let ident = &input.ident;
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
@@ -54,15 +51,15 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     let mut augmented_where = where_clause.cloned().unwrap_or_else(|| parse_quote!(where));
     augmented_where
         .predicates
-        .push(parse_quote!(Self: ::flui_view::StatefulView));
+        .push(parse_quote!(Self: #runtime::StatefulView));
 
     Ok(quote! {
         #[automatically_derived]
-        impl #impl_generics ::flui_view::View for #ident #ty_generics
+        impl #impl_generics #runtime::View for #ident #ty_generics
         #augmented_where
         {
-            fn create_element(&self) -> ::flui_view::element::ElementKind {
-                ::flui_view::element::ElementKind::stateful(self)
+            fn create_element(&self) -> #runtime::element::ElementKind {
+                #runtime::element::ElementKind::stateful(self)
             }
         }
     })

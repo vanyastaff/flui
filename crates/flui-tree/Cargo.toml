@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-tree"
 version.workspace = true
 edition.workspace = true
@@ -13,7 +14,7 @@ categories = ["gui", "data-structures"]
 
 [dependencies]
 # Internal dependencies
-flui-foundation = { path = "../flui-foundation", version = "0.2.0" }
+flui-foundation = { path = "../flui-foundation", version = "=0.1.0" }
 
 # Core dependencies
 thiserror = { workspace = true }

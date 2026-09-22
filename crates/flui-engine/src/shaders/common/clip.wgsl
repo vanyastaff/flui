@@ -127,53 +127,60 @@ fn clipAlpha(
 ) -> f32 {
     let clip_kind = clip_kind_packed & CLIP_KIND_MASK;
     let clip_hard = (clip_kind_packed & CLIP_HARD_BIT) != 0u;
-    var alpha = 1.0;
-    if (clip_kind != 0u && clip_bounds.z > 0.0 && clip_bounds.w > 0.0) {
-        let local = vec2<f32>(
-            device_to_local.x * world_pos.x + device_to_local.z * world_pos.y + local_origin.x,
-            device_to_local.y * world_pos.x + device_to_local.w * world_pos.y + local_origin.y,
-        );
+    let clip_active = clip_kind != 0u && clip_bounds.z > 0.0 && clip_bounds.w > 0.0;
 
-        let clip_center = clip_bounds.xy + clip_bounds.zw * 0.5;
-        let clip_p = local - clip_center;
-        let clip_half = clip_bounds.zw * 0.5;
+    // Everything below runs for EVERY fragment, clipped or not, and the
+    // choice is made afterwards with `select`. `sdfToAlpha` takes
+    // screen-space derivatives, and WebGPU's uniformity analysis (Tint, in
+    // every browser) admits a derivative only in uniform control flow: the
+    // clip kind and mode arrive per instance, so a branch on them is
+    // non-uniform, and a derivative inside it fails module creation — which
+    // is what made every clip-capable pipeline invalid in the browser on
+    // 2026-09-21 while native naga accepted the same source. An inactive
+    // clip evaluates a unit box at the origin so the arithmetic stays finite
+    // (the superellipse divides by its corner radius) and the derivatives a
+    // neighbouring fragment reads are never NaN.
+    let local = vec2<f32>(
+        device_to_local.x * world_pos.x + device_to_local.z * world_pos.y + local_origin.x,
+        device_to_local.y * world_pos.x + device_to_local.w * world_pos.y + local_origin.y,
+    );
+    let clip_center = clip_bounds.xy + clip_bounds.zw * 0.5;
+    let clip_p = select(vec2<f32>(0.0), local - clip_center, clip_active);
+    let clip_half = select(vec2<f32>(1.0), clip_bounds.zw * 0.5, clip_active);
+    let radii = select(vec4<f32>(0.0), clip_radii, clip_active);
 
-        var clip_dist = 0.0;
-        if (clip_kind == 2u) {
-            clip_dist = sdRoundedSuperellipse(clip_p, clip_half, clip_radii);
-        } else {
-            clip_dist = sdRoundedBox(clip_p, clip_half, clip_radii);
-        }
+    let clip_dist = select(
+        sdRoundedBox(clip_p, clip_half, radii),
+        sdRoundedSuperellipse(clip_p, clip_half, radii),
+        clip_kind == 2u,
+    );
 
-        if (clip_hard) {
-            // `Clip::HardEdge`: inside or out, no partial coverage. The
-            // half-open rule matches the SDF's own sign convention — a
-            // fragment exactly on the boundary is inside.
-            alpha = select(0.0, 1.0, clip_dist <= 0.0);
-        } else {
-            alpha = sdfToAlpha(clip_dist);
-        }
+    // `Clip::HardEdge`: inside or out, no partial coverage. The half-open
+    // rule matches the SDF's own sign convention — a fragment exactly on
+    // the boundary is inside. `Clip::AntiAlias` feathers the boundary.
+    let hard_alpha = select(0.0, 1.0, clip_dist <= 0.0);
+    let soft_alpha = sdfToAlpha(clip_dist);
+    let alpha = select(1.0, select(soft_alpha, hard_alpha, clip_hard), clip_active);
 
-        // Fully clipped-out fragments are DISCARDED, not merely made
-        // transparent.
-        //
-        // Returning zero alpha is enough for `SrcOver` — nothing is
-        // contributed either way — but not for a destination-destructive mode.
-        // A TRANSPARENT SOURCE still zeroes or replaces the destination there:
-        // `Clear` is `(Zero, Zero)`, `Src` is `(One, Zero)`, `SrcIn` is
-        // `(DstAlpha, Zero)`, and `DstIn` is `(Zero, SrcAlpha)` — which does
-        // read source alpha, and reads it as zero, scaling the destination to
-        // nothing. So `alpha = 0` is not equivalent to being clipped, and a
-        // full-surface `Clear` through a rounded clip wiped the clip's whole
-        // bounding box, corners included.
-        //
-        // The threshold is exactly zero, not "small". At any partial coverage
-        // the fragment must still reach the blender: `sdfToAlpha` feathers the
-        // edge, and discarding a fringe fragment because its coverage is
-        // merely low would harden every anti-aliased clip.
-        if (alpha <= 0.0) {
-            discard;
-        }
+    // Fully clipped-out fragments are DISCARDED, not merely made
+    // transparent.
+    //
+    // Returning zero alpha is enough for `SrcOver` — nothing is
+    // contributed either way — but not for a destination-destructive mode.
+    // A TRANSPARENT SOURCE still zeroes or replaces the destination there:
+    // `Clear` is `(Zero, Zero)`, `Src` is `(One, Zero)`, `SrcIn` is
+    // `(DstAlpha, Zero)`, and `DstIn` is `(Zero, SrcAlpha)` — which does
+    // read source alpha, and reads it as zero, scaling the destination to
+    // nothing. So `alpha = 0` is not equivalent to being clipped, and a
+    // full-surface `Clear` through a rounded clip wiped the clip's whole
+    // bounding box, corners included.
+    //
+    // The threshold is exactly zero, not "small". At any partial coverage
+    // the fragment must still reach the blender: `sdfToAlpha` feathers the
+    // edge, and discarding a fringe fragment because its coverage is
+    // merely low would harden every anti-aliased clip.
+    if (clip_active && alpha <= 0.0) {
+        discard;
     }
     return alpha;
 }

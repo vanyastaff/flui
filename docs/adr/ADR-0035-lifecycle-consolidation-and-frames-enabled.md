@@ -85,7 +85,7 @@ PR1 was consolidation + the scheduler-internal parity leg only, with no platform
 - A dedicated Android `MainEvent` → lifecycle callback distinct from the generic window active-status hook `run_android` already has — PR2 fixed the *mapping* (Pause/Resume now ladder to `Paused`/`Resumed`) without splitting the transport apart from plain focus changes (`GainedFocus`/`LostFocus` still share the same `dispatch_active_status_change` call in `flui-platform`'s Android backend); a real split needs its own platform-side change.
 - Multi-window hidden-state aggregation (today's single-window assumption: one window's visibility is the whole app's visibility; a multi-window app needs "all windows hidden" aggregation before reporting `Hidden`).
 - `onExitRequested`-style negotiated-exit (the app getting a chance to veto or delay a platform-initiated exit) — today `Terminating`/`Detached` is a one-way notification.
-- A widget-tree-facing lifecycle capability (a `BuildContext` seam a widget could use to read/observe lifecycle state directly, analogous to the `text_input_handle()` precedent) — no consumer exists yet to justify the seam.
+- The former widget-tree lifecycle capability deferral is superseded by the scoped subscription decision below.
 - A DOM `visibilitychange` occlusion signal for the web backend — `run_web` wires `WindowFocus` only in PR2; `RealmEvent::WindowVisibility` is not constructed on `wasm32` yet.
 
 ## Alternatives rejected
@@ -125,3 +125,164 @@ PR1 was consolidation + the scheduler-internal parity leg only, with no platform
   - `handle_app_lifecycle_state_changed_observer_can_remove_itself_mid_dispatch` (`flui-view/src/binding.rs`): removing the observer's `remove_observer` call made the post-dispatch `observer_count() == 0` assertion fail; restoring it turned it green.
   - `every_runner_frame_site_uses_the_shared_drive_frame_helper` (`flui-app/tests/runner_frame_ordering.rs`): inserting a direct `handle_begin_frame` call into `run_desktop`'s production body made the "banned call" assertion fail, confirming the production-only scan (excludes `#[cfg(test)]` regions, needed because unit tests legitimately call `Scheduler::drive_frame`/`drive_async_tasks` directly) still catches a real regression.
   - `test_on_visibility_status_change` (`flui-platform`): removing `MockWindow::simulate_visibility`'s `dispatch_visibility_status_change` call made the assertion fail; restoring it turned it green.
+
+## Desktop quit across installed realms
+
+A platform quit belongs to the application loop, not the primary window's
+presentation address. The desktop callback therefore visits every surviving
+installed realm once, including after the original primary realm has closed.
+Each realm receives the existing transition ladder to `Detached`, disabling
+frames and completing its existing gesture and lifecycle cleanup. A shared realm
+with several presentations is visited once. Initially this used only the primary
+binding; the presentation-owned lifecycle decision below supersedes that
+restriction and delivers terminal state to each live presentation binding.
+Public live observer registration remains separate work.
+
+This is a deliberate multi-realm extension of the single lifecycle stream in
+Flutter, consistent with ADR-0027's runtime ownership model. Window closure and
+application termination remain distinct, as in AppKit's
+[`applicationShouldTerminateAfterLastWindowClosed`](https://developer.apple.com/documentation/appkit/nsapplicationdelegate/applicationshouldterminateafterlastwindowclosed(_:)).
+No new public lifecycle enum or process-wide singleton is introduced.
+
+Quit closes secondary-window admission immediately. Notification waits until an
+active realm dispatch or realm visitor restores its checked-out state. Realm
+installs already accepted into that dispatch's deferred mutation queue join the
+notification; unresolved secondary requests are cancelled and resolved but
+uninstalled windows are closed outside runtime borrows. Every asynchronous
+completion and the registered quit callback carry the identity of their loop,
+so a callback or completion from an earlier
+loop cannot affect a later one. Only installing a new loop owner resets
+admission; generic realm teardown does not.
+
+A panicking observer cannot skip sibling realms or leave notification in
+progress. The first panic resumes only after realm restoration and notification
+completion. If the triggering dispatch was already panicking, its original
+payload wins. Removed realms are dropped individually outside runtime borrows;
+a destructor panic cannot skip notification or unwind through another removed
+realm. Secondary panic payloads are safely forgotten before protected
+diagnostics. Reentrant quit requests cannot restart the notification walk.
+
+Regression evidence lives in the `quit_notification_*` tests in
+`runner/realm_dispatch.rs` and `runner/secondary_window.rs`, plus
+`explicit_platform_quit_detaches_every_installed_realm`. They drive the registered
+desktop `on_quit` callback through the headless platform's exit reevaluation
+handle, without holding the owner accessor's runtime borrow. The primary-only
+callback fails the latter test with a surviving secondary realm still `Resumed`.
+These are application wiring tests, not native keyboard/menu or complete public
+lifecycle-consumer certification.
+
+## Presentation-owned lifecycle facts and realm aggregation
+
+The earlier loop-global `visible`/`focused` derivation and install-time reset
+above are superseded. Each presentation owns its native visibility/focus snapshot
+and last delivered local lifecycle state. A realm derives scheduler state from
+its live presentations: any visible focused presentation yields Resumed, otherwise
+any visible presentation yields Inactive, otherwise Hidden. An empty live forest
+is Detached. Keyboard routing history does not manufacture native focus.
+
+This follows the per-window observations exposed by
+[winit WindowEvent](https://docs.rs/winit/0.30.13/winit/event/enum.WindowEvent.html),
+while making the realm aggregate explicit. Occlusion and visibility are distinct
+native concepts; backend transport certification remains separate. The aggregate
+resembles [SwiftUI's scene aggregation](https://developer.apple.com/documentation/swiftui/scenephase/active),
+but FLUI's Resumed state specifically uses its existing visible-and-focused
+contract, not SwiftUI's definition of active.
+
+Host observations cap local states. Paused preserves native facts and resumes
+from them; installing a shared secondary synchronizes it without resuming its
+host. Observed Detached is reversible and rejects input without disposing the
+tree. Explicit stopping is a separate terminal intent that cannot be undone by
+later native or bootstrap observations. The existing loop quit latch still owns
+application admission.
+
+Local facts and the next local ladder step commit before user callbacks. Input
+cancellation precedes lifecycle callbacks and may observe the previous aggregate.
+The existing scheduler commit-and-notify operation then updates aggregate state;
+binding observers see committed local and aggregate state. Local effects execute
+even when the aggregate is unchanged. Restoring a presentation redirties its own
+root and wakes a frame. Focus transfer cancels the former presentation's active
+sequences immediately; a delayed duplicate loss does not cancel the new window.
+
+Closing excludes the presentation from the aggregate and closes admission before
+callbacks. Detached is delivered while its widget tree remains alive, followed by
+disposal and membership removal. Observer panics cannot skip removal; the first
+panic resumes after cleanup. Existing same-binding observer iteration may stop at
+a panicking observer, so this does not promise delivery to every observer after a
+panic. Public subscription ownership is a separate API decision.
+
+Implementation lives in `app/lifecycle_state.rs` (pure ladder and panic aggregation)
+and `app/ui_realm/presentation_lifecycle.rs` (presentation reconciliation).
+The `window_lifecycle_*` tests cover independent/shared windows, native initial
+snapshots, both focus orders, suspended secondary installation, observer state,
+cancellation ordering, terminal reentry and panic cleanup, and actual restoration
+frame production. `runner_frame_ordering` continues to inspect the extracted
+ladder source. Native/mobile transport behavior is not inferred from these tests.
+
+An unobserved presentation is represented by `None`, not a fabricated Detached
+observation. Its first notification is its effective target directly. This follows
+Flutter's nullable previous-state branch, inspected at
+`559ffa3f75e7402d65a8def9c28389a9b2e6fe42` (3.44.0),
+[`ServicesBinding._generateStateTransitions`](https://github.com/flutter/flutter/blob/559ffa3f75e7402d65a8def9c28389a9b2e6fe42/packages/flutter/lib/src/services/binding.dart#L312).
+A genuinely observed Detached state remains reversible and uses the known-state
+local ladder.
+
+Scheduler listeners report executable realm aggregate changes, deliberately not
+Flutter's local notification ladder. Host/native eligibility controls that aggregate
+and resource/resume/redirty decisions throughout every local notification step.
+A paused or hidden host therefore cannot transiently enable frames or attach
+resources while a new or previously detached presentation synchronizes. Resource
+eligibility commits before scheduler listeners, with restoration redraw
+and wake effects following the scheduler commit. The scheduler commits the
+effective aggregate directly; local binding observers retain the known-state
+ladder. The history regression records both streams separately,
+along with frame eligibility and resources at each local callback, including
+initially hidden native windows. This distinction supersedes earlier statements
+that the scheduler itself always synthesizes the complete local ladder.
+
+
+## Weak presentation lifecycle subscriptions
+
+`BuildContext::lifecycle_handle()` returns an optional owner-local capability,
+acquired in `init_state` or `did_change_dependencies`. A bare build owner returns
+None. The presentation binding owns a concrete source outside its element lock;
+BuildOwner and captured build contexts carry weak handles only. The source owns
+the sole optional local history previously stored on PresentationState. The
+scheduler aggregate remains a separate execution decision.
+
+`subscribe` atomically returns the current optional observation and an RAII token,
+without invoking the callback before the caller can store the token. Callbacks
+accept owner-local Rc captures. Commit snapshots subscriber identities; a new
+subscription gets the latest state but no replay of previously committed events.
+Dropping a token cancels not-started callbacks, including in the same dispatch.
+This follows the scoped cancellation approach in
+[GPUI subscriptions](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/subscription.rs),
+using Rust weak ownership instead of
+[Flutter AppLifecycleListener's explicit dispose](https://api.flutter.dev/flutter/widgets/AppLifecycleListener-class.html).
+
+All local snapshots commit before scheduler callbacks. Subscription delivery is
+FIFO and outside source borrows; nested drains defer to the active walk. Callback
+arguments describe their event, while snapshot reads the latest committed state,
+which can be newer after a reentrant commit. Panicking callbacks and capture
+destructors cannot skip siblings: the first panic resumes after delivery and
+cleanup, and secondary payloads are safely forgotten. Legacy binding observers
+retain snapshot iteration and first-panic short-circuiting, but their panic cannot
+skip the new subscription stream.
+
+Explicit begin-close fences subscription admission before cancellation or user
+callbacks. The owner may still commit its authorized terminal ladder; ordinary
+late commits are rejected. Final Detached is delivered before source invalidation
+and widget disposal. Reentrant finalization waits for queued terminal delivery.
+Observed Detached alone is reversible. Source destruction invalidates weak
+handles even if a caller retains a BuildOwner. Direct presentation teardown sends
+final Detached if normal reconciliation has not already done so, invalidates the
+source, and attempts widget disposal despite notification failure; a teardown
+panic cannot replace an already-unwinding outer panic.
+
+HeadlessBinding owns the same source and installs its handle under the Installed
+capability policy. Its explicit observation/close methods are deterministic
+notification oracles, not native transport or realm aggregation simulations;
+close_lifecycle invalidates observation without disposing the mounted tree.
+The sole-facade fixture runs these operations with both flui and renamed ui.
+Application tests mount an init_state subscriber into each shared presentation,
+observe a local hide while the aggregate stays Resumed, and prove terminal
+delivery and handle invalidation precede dispose despite legacy observer panic.

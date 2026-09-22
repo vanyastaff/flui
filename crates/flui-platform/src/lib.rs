@@ -204,7 +204,7 @@ pub use platforms::LinuxPlatform;
 pub use platforms::MacOSPlatform;
 pub use platforms::{
     FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
-    HeadlessExitReevaluation, HeadlessPlatform, MockWindow,
+    HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]
@@ -227,13 +227,13 @@ pub use traits::{
     PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay,
     PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
     PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowEvent, WindowId, WindowMode, WindowOptions,
+    WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowShowError,
 };
 // The owner-thread capability (ADR-0039 slice 2): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use traits::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
-    WaitError, WindowOpen,
+    WaitError, WakeRegistrationError, WindowOpen,
 };
 
 /// Get the current platform implementation

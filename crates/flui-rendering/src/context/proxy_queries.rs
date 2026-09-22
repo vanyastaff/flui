@@ -166,7 +166,7 @@ macro_rules! forward_single_child_box_queries {
             &self,
             constraints: $crate::constraints::BoxConstraints,
             ctx: &mut $crate::context::BoxDryLayoutCtx<'_>,
-        ) -> flui_types::Size {
+        ) -> $crate::__MacroSize {
             $crate::context::proxy_queries::forward_dry_layout(constraints, ctx)
         }
 
@@ -212,7 +212,7 @@ macro_rules! forward_single_child_box_layout {
                 $crate::prelude::Single,
                 $crate::parent_data::BoxParentData,
             >,
-        ) -> flui_types::Size {
+        ) -> $crate::__MacroSize {
             $crate::context::proxy_queries::forward_layout(&mut self.has_child, ctx)
         }
     };

@@ -1,4 +1,5 @@
 [package]
+publish = ["crates-io"]
 name = "flui-foundation"
 version.workspace = true
 edition.workspace = true
@@ -37,7 +38,9 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
-flui-types = { path = "../flui-types", version = "0.2.0" }
+# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+flui-macros = { path = "../flui-macros" }
+flui-types = { path = "../flui-types", version = "=0.1.0" }
 serde_json = { workspace = true }
 # Test-only: capturing emitted events is how `diagnostics`' field names are
 # checked against what `tracing` actually records. A *dev* edge only — the

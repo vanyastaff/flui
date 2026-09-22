@@ -17,6 +17,11 @@
 //! arbitrary later misbehavior (see `docs/PANIC-POLICY.md` — a panic is a
 //! bug report, never control flow).
 //!
+//! Recoverable owner callbacks use a different boundary: their state and callback
+//! lease are restored independently, and callback invocation and capture cleanup
+//! are contained separately. This does not relax the abort policy for a torn
+//! visible-window WNDPROC transaction described above.
+//!
 //! The payload-to-message rule is the pure, decidable part; it lives here,
 //! cfg-free, so the Linux-executed suite pins it (the Win32 shell that
 //! applies it is lint-only in CI).
@@ -39,11 +44,86 @@ pub fn panic_payload_message(payload: &(dyn Any + Send)) -> &str {
     payload_text(payload).unwrap_or(OPAQUE_PANIC_PAYLOAD)
 }
 
+/// Contain owner callback and capture cleanup panics without dropping hostile payloads.
+pub(crate) fn contain_owner_callback(body: impl FnOnce()) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        std::mem::forget(payload);
+        if let Err(payload) = std::panic::catch_unwind(|| {
+            tracing::error!("contained owner callback or cleanup panic");
+        }) {
+            std::mem::forget(payload);
+        }
+    }
+}
+
+/// Invoke and destroy a leased callback in separate panic boundaries. Moving
+/// both into one catch would double-panic if invocation and capture Drop panic.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn invoke_and_drop_owner_callback(mut callback: Box<dyn FnMut() + Send>) {
+    contain_owner_callback(&mut callback);
+    contain_owner_callback(|| drop(callback));
+}
+
 #[cfg(test)]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use super::*;
+
+    #[test]
+    fn owner_callback_and_capture_panics_do_not_replace_an_existing_unwind() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Hostile;
+        impl Drop for Hostile {
+            fn drop(&mut self) {
+                panic!("hostile payload drop");
+            }
+        }
+        struct Capture(Arc<AtomicUsize>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                std::panic::panic_any(Hostile);
+            }
+        }
+        struct Guard(Option<Box<dyn FnMut() + Send>>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                invoke_and_drop_owner_callback(self.0.take().expect("callback"));
+            }
+        }
+        for already_unwinding in [false, true] {
+            let invoked = Arc::new(AtomicUsize::new(0));
+            let dropped = Arc::new(AtomicUsize::new(0));
+            let capture = Capture(Arc::clone(&dropped));
+            let observed = Arc::clone(&invoked);
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                let guard = Guard(Some(Box::new(move || {
+                    let _ = &capture;
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    std::panic::panic_any(Hostile);
+                })));
+                assert!(!already_unwinding, "original bootstrap panic");
+                drop(guard);
+            }));
+            if already_unwinding {
+                assert_eq!(
+                    *outcome
+                        .expect_err("original panic")
+                        .downcast::<&str>()
+                        .expect("original identity"),
+                    "original bootstrap panic"
+                );
+            } else {
+                assert!(outcome.is_ok());
+            }
+            assert_eq!(invoked.load(Ordering::SeqCst), 1);
+            assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        }
+    }
 
     #[test]
     fn a_literal_panic_payload_is_a_static_str_and_comes_through_verbatim() {

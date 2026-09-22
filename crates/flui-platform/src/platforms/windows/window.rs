@@ -920,6 +920,71 @@ impl PlatformWindow for WindowsWindow {
         }
     }
 
+    fn show(&self) -> Result<(), crate::WindowShowError> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, WPF_RESTORETOMAXIMIZED,
+        };
+        crate::shared::hwnd_affinity::show_owned_window(
+            || {
+                use crate::shared::hwnd_affinity::TeardownRoute;
+                let route = super::platform::teardown_route(self.hwnd, self.context);
+                if route != TeardownRoute::DestroyDirect {
+                    return route;
+                }
+                // Both the retained wrapper and live context own this Arc. Unlike
+                // the raw context address, its identity cannot be recycled while
+                // this wrapper survives. Only inspect it under the owner guard.
+                if super::platform::with_window_context(self.hwnd, "show identity", |context| {
+                    Arc::ptr_eq(&context.callbacks, &self.callbacks)
+                }) == Some(true)
+                {
+                    route
+                } else {
+                    TeardownRoute::StaleHandle
+                }
+            },
+            || {
+                super::platform::with_window_context(self.hwnd, "show", |_| {
+                    // SAFETY: the identity check proves this wrapper's live HWND
+                    // on its owner thread. The context guard pins userdata through
+                    // ShowWindow reentry; placement is an initialized out pointer.
+                    unsafe {
+                        let mut placement = WINDOWPLACEMENT {
+                            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                            ..Default::default()
+                        };
+                        GetWindowPlacement(self.hwnd, &raw mut placement).map_err(|error| {
+                            crate::WindowShowError::Native {
+                                message: error.to_string(),
+                            }
+                        })?;
+                        let command = if placement.showCmd == SW_SHOWMINIMIZED.0 as u32 {
+                            if placement.flags.0 & WPF_RESTORETOMAXIMIZED.0 != 0 {
+                                SW_SHOWMAXIMIZED
+                            } else {
+                                SW_RESTORE
+                            }
+                        } else {
+                            SW_SHOW
+                        };
+                        // Return value describes previous visibility, not success.
+                        let _ = ShowWindow(self.hwnd, command);
+                        Ok(())
+                    }
+                })
+                .unwrap_or(Err(crate::WindowShowError::Closed))
+            },
+            || {
+                // SAFETY: the adapter rechecked wrapper identity after ShowWindow,
+                // on the same owner thread, before this callback-capable call.
+                // Foreground policy may deny the request without failing show.
+                unsafe {
+                    let _ = SetForegroundWindow(self.hwnd);
+                }
+            },
+        )
+    }
+
     fn activate(&self) {
         // SAFETY: `SetForegroundWindow` takes `self.hwnd` by value, no
         // pointer arguments.

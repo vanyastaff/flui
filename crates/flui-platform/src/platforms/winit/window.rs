@@ -24,6 +24,7 @@ use crate::traits::{CursorError, PlatformTextInput, PlatformWindow, WindowAppear
 /// dispatch pattern for reentrancy safety.
 pub struct WinitWindow {
     id: WindowId,
+    closed: std::sync::atomic::AtomicBool,
     window: Arc<Window>,
     is_focused: parking_lot::Mutex<bool>,
     is_visible: parking_lot::Mutex<bool>,
@@ -89,6 +90,7 @@ impl WinitWindow {
     pub(super) fn new(id: WindowId, window: Arc<Window>, close_lane: ControlSender) -> Self {
         Self {
             id,
+            closed: std::sync::atomic::AtomicBool::new(false),
             window,
             is_focused: parking_lot::Mutex::new(true),
             is_visible: parking_lot::Mutex::new(true),
@@ -97,6 +99,11 @@ impl WinitWindow {
             accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
             close_lane,
         }
+    }
+
+    pub(super) fn mark_closed(&self) {
+        self.closed
+            .store(true, std::sync::atomic::Ordering::Release);
     }
 
     /// Get the underlying `Arc<Window>`
@@ -210,6 +217,33 @@ impl PlatformWindow for WinitWindow {
         self.window.set_title(title);
     }
 
+    fn show(&self) -> Result<(), crate::WindowShowError> {
+        if self.closed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(crate::WindowShowError::Closed);
+        }
+        let display =
+            self.window
+                .display_handle()
+                .map_err(|error| crate::WindowShowError::Native {
+                    message: error.to_string(),
+                })?;
+        // Winit cannot unminimize or focus Wayland windows. Mobile/web and
+        // other transports do not implement the complete desktop operation either.
+        if !matches!(
+            display.as_raw(),
+            raw_window_handle::RawDisplayHandle::Windows(_)
+                | raw_window_handle::RawDisplayHandle::AppKit(_)
+                | raw_window_handle::RawDisplayHandle::Xlib(_)
+                | raw_window_handle::RawDisplayHandle::Xcb(_)
+        ) {
+            return Err(crate::WindowShowError::Unsupported);
+        }
+        self.window.set_visible(true);
+        self.window.set_minimized(false);
+        self.window.focus_window();
+        Ok(())
+    }
+
     fn minimize(&self) {
         self.window.set_minimized(true);
     }
@@ -235,6 +269,7 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn close(&self) {
+        self.mark_closed();
         // Hide now, from whichever thread this is called on: the visible
         // effect of a close should not wait for the owner's next turn. The
         // close itself — `on_close`, map removal, callback clear, exit

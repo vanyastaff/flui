@@ -35,203 +35,25 @@ impl DeviceRecovery for flui_engine::Renderer {
     }
 }
 
-/// Exponential backoff for the [`DeviceRecovery::try_recover_device`] retry
-/// loop: paces how often an ATTEMPT is made while the device stays lost,
-/// growing from one frame interval up to a capped ceiling and resetting on
-/// the first successful recovery.
-///
-/// Deliberately never gives up permanently (no attempt-count ceiling):
-/// device loss is expected to clear eventually on every platform this runs
-/// on — a driver TDR reset, an app coming back from the background, an
-/// eGPU replug — so a hard cap would turn a recoverable condition into a
-/// dead app. An UNBOUNDED, un-backed-off retry loop is equally wrong (a
-/// full `recover()` rebuilds the instance/adapter/device/surface/painter/
-/// offscreen target — not cheap to repeat every wake), so this paces the
-/// ATTEMPT itself, not just the log line.
-///
-/// This is a DEADLINE, not a sleep: [`Self::next_attempt_at`] reports the
-/// earliest instant an attempt is allowed, and the caller's only obligation
-/// is to skip attempting before it — never to block the calling thread
-/// waiting for it. A `thread::sleep` sized to this backoff's own interval
-/// (climbing to a full second at the cap) was tried and rejected: on the
-/// platform event-loop thread that call runs on, it blocks input dispatch
-/// for its duration on every backend, and on Android specifically it also
-/// blocks `MainEvent` lifecycle delivery (`AndroidPlatform::run`'s poll
-/// loop calls `process_input_events`/`dispatch_request_frame` inline, on
-/// the SAME thread) — repeated one-second stalls there are ANR territory.
-/// Both desktop and Android wire [`DeviceRecoveryBackoff::next_attempt_at`]
-/// into a wall-clock wake-deadline hook (`install_wake_deadline_hook` for
-/// desktop; `Platform::set_wake_deadline_hook` on `AndroidPlatform` directly
-/// for Android, added alongside this backoff since the trait's default
-/// implementation is a no-op there) so the platform's own idle wait — or,
-/// on Android, its own already-running ~16ms idle poll — carries the
-/// deadline instead of this crate sleeping on it. See each hook's own doc
-/// for exactly what it can express and at what granularity. **A deadline
-/// wired into either hook is necessary but not sufficient on its own**: it
-/// must also appear in the owning frame closure's `dirty` predicate (`wake_
-/// action`'s input) or the wake it actuates reaches `WakeAction::Skip` and
-/// returns before this backoff is ever consulted again — both closures'
-/// `dirty` computations OR in `next_attempt_at().is_some()` for exactly
-/// this reason.
-///
-/// `Send + Sync`: captured behind an `Arc` by the platform's
-/// `on_request_frame` callback, which every backend's `Window::
-/// on_request_frame` requires to be `Send` (`flui-platform/src/traits/
-/// window.rs`). State lives behind one `parking_lot::Mutex` rather than
-/// several independent atomics — this is read/written at most once per
-/// frame wake, and a single lock rules out the counters and the deadline
-/// ever being updated out of step with each other.
-///
-/// This mutex has TWO callers, not one: the frame closure itself
-/// (`attempt_device_recovery`/[`Self::record_failure`]/[`Self::record_success`])
-/// and the wake-deadline hook closure ([`Self::next_attempt_at`], called
-/// from desktop's `about_to_wait` or Android's own poll loop). Both run on
-/// this platform's single event-loop thread, never concurrently with each
-/// other — that same-thread invariant is what makes holding this
-/// `parking_lot::Mutex` (non-reentrant: a same-thread re-lock while already
-/// held deadlocks, it does not block-and-wait) safe with no actual
-/// contention today. It is still deliberately never held across a
-/// `tracing` call (whose subscriber may perform I/O) — see
-/// [`Self::record_failure`]'s own comment for where the guard is dropped
-/// before logging, defensively, not because a reentrant call from within a
-/// subscriber has been observed.
-///
-/// [`web_time::Instant`], not `std::time::Instant`: a deliberate match to
-/// every other clock on this frame-driver path (`web_time::Instant::now()`
-/// at the top of both closures, `AppRuntime::next_wake`'s own return type)
-/// rather than an accident of this type compiling only because the two
-/// happen to be the same type off-`wasm32` (this backoff's own `cfg` gate
-/// already excludes `wasm32`, so the distinction is moot today, but the
-/// convention is the same one this whole module already follows).
+/// Alias for the shared [`super::retry_backoff::RetryBackoff`], carrying the
+/// subject label device-loss recovery's log lines use. The policy lives in one
+/// place (`retry_backoff.rs`); this alias is what keeps every call site in this
+/// module reading `DeviceRecoveryBackoff` while the implementation is shared
+/// with surface-recreation retry.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) struct DeviceRecoveryBackoff {
-    state: parking_lot::Mutex<DeviceRecoveryBackoffState>,
-}
+pub(super) type DeviceRecoveryBackoff = super::retry_backoff::RetryBackoff;
 
+/// The label this recovery's backoff logs under.
 #[cfg(not(target_arch = "wasm32"))]
-struct DeviceRecoveryBackoffState {
-    /// Consecutive failures since the last success (or since construction).
-    consecutive_failures: u32,
-    /// Whether the "backoff reached its cap" error has already been logged
-    /// once this losing streak — re-armed on the next success.
-    cap_logged: bool,
-    /// The earliest instant the next attempt is allowed. `None` before the
-    /// first failure of a streak (attempt immediately) or right after a
-    /// success.
-    next_attempt_at: Option<web_time::Instant>,
-}
+pub(super) const DEVICE_RECOVERY_LABEL: &str = "GPU device recovery";
 
+/// Construct this module's backoff: the shared [`super::retry_backoff::RetryBackoff`]
+/// with device recovery's own label already bound. A free function rather than
+/// an inherent `new` because the type is an alias for the shared one, and this
+/// is the one place the label is chosen.
 #[cfg(not(target_arch = "wasm32"))]
-impl DeviceRecoveryBackoff {
-    /// The base interval: roughly one frame at 60 Hz. A retry cadence, not
-    /// a pacing constant — it deliberately does NOT track the display (a
-    /// device that just died is not presenting anything to pace), which is
-    /// why it stopped aliasing the frame-pacing constant when that became
-    /// display-derived (ADR-0058).
-    const BASE: std::time::Duration = std::time::Duration::from_millis(16);
-    /// The ceiling: "on the order of a second", per this module's device-
-    /// recovery retry policy.
-    const CAP: std::time::Duration = std::time::Duration::from_secs(1);
-    /// `BASE << SHIFT_CAP >= CAP` already holds well before this shift is
-    /// reached, so capping the shift itself (rather than only the final
-    /// `.min(CAP)`) avoids ever computing `1u32 << n` for an
-    /// unboundedly long losing streak.
-    const SHIFT_CAP: u32 = 6;
-
-    pub(super) fn new() -> Self {
-        Self {
-            state: parking_lot::Mutex::new(DeviceRecoveryBackoffState {
-                consecutive_failures: 0,
-                cap_logged: false,
-                next_attempt_at: None,
-            }),
-        }
-    }
-
-    /// The earliest instant the next attempt is allowed, if a failure has
-    /// armed one. `None` when ready right now (never failed, or the last
-    /// outcome was a success).
-    pub(super) fn next_attempt_at(&self) -> Option<web_time::Instant> {
-        self.state.lock().next_attempt_at
-    }
-
-    /// Record a failed recovery attempt at `now`, arm the next deadline,
-    /// and return it.
-    ///
-    /// Logs the first failure of a losing streak at `error`, every
-    /// subsequent one at `debug`, and re-emits `error` exactly once more
-    /// when the backoff reaches [`Self::CAP`] — a permanently dead GPU
-    /// says so once more at that point, not on every attempt after it.
-    fn record_failure(
-        &self,
-        error: &flui_engine::EngineError,
-        now: web_time::Instant,
-    ) -> web_time::Instant {
-        /// Which line to log, decided while the state lock is held (it
-        /// reads/mutates `cap_logged`); the actual `tracing` call happens
-        /// AFTER the guard drops — see this method's own call site below.
-        enum LogKind {
-            FirstFailure,
-            ReachedCap,
-            Retrying,
-        }
-
-        let (deadline, interval, log_kind) = {
-            let mut state = self.state.lock();
-            let shift = state.consecutive_failures.min(Self::SHIFT_CAP);
-            let interval = (Self::BASE * (1u32 << shift)).min(Self::CAP);
-            let at_cap = interval >= Self::CAP;
-            let is_first = state.consecutive_failures == 0;
-            state.consecutive_failures += 1;
-            let deadline = now + interval;
-            state.next_attempt_at = Some(deadline);
-
-            let log_kind = if is_first {
-                LogKind::FirstFailure
-            } else if at_cap && !state.cap_logged {
-                state.cap_logged = true;
-                LogKind::ReachedCap
-            } else {
-                LogKind::Retrying
-            };
-            (deadline, interval, log_kind)
-            // `state` (the `MutexGuard`) drops here, before any `tracing`
-            // call: this mutex's other caller is the wake-deadline hook
-            // closure (see this type's own doc for why holding it across a
-            // subscriber's possible I/O is undesirable even though no
-            // reentrant call is reachable today).
-        };
-
-        match log_kind {
-            LogKind::FirstFailure => {
-                tracing::error!(error = ?error, "GPU device recovery failed; retrying with backoff");
-            }
-            LogKind::ReachedCap => {
-                tracing::error!(
-                    error = ?error,
-                    backoff = ?interval,
-                    "GPU device recovery still failing at the backoff cap; retries continue \
-                     silently from here"
-                );
-            }
-            LogKind::Retrying => {
-                tracing::debug!(
-                    error = ?error,
-                    backoff = ?interval,
-                    "GPU device recovery failed; retrying"
-                );
-            }
-        }
-        deadline
-    }
-
-    /// Reset the backoff after a successful recovery.
-    fn record_success(&self) {
-        let mut state = self.state.lock();
-        state.consecutive_failures = 0;
-        state.cap_logged = false;
-        state.next_attempt_at = None;
-    }
+pub(super) fn new_device_recovery_backoff() -> DeviceRecoveryBackoff {
+    DeviceRecoveryBackoff::new(DEVICE_RECOVERY_LABEL)
 }
 
 /// Outcome of one call to [`attempt_device_recovery`].
@@ -494,7 +316,10 @@ mod device_recovery_tests {
     use web_time::Instant;
 
     use super::super::frame_pacing::frame_is_dirty;
-    use super::{DeviceRecovery, DeviceRecoveryBackoff, render_frame_with_device_recovery};
+    use super::{
+        DeviceRecovery, DeviceRecoveryBackoff, new_device_recovery_backoff,
+        render_frame_with_device_recovery,
+    };
 
     #[derive(Clone)]
     struct LeafView;
@@ -633,7 +458,7 @@ mod device_recovery_tests {
         let realm = mount_root();
         let mut lane = lane_over(ScriptedDeviceBackend::healthy());
         realm.mark_rendered();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
@@ -671,7 +496,7 @@ mod device_recovery_tests {
             ..ScriptedDeviceBackend::healthy()
         });
         realm.mark_rendered();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
@@ -717,7 +542,7 @@ mod device_recovery_tests {
     fn a_successful_recovery_forces_the_recovered_devices_next_frame_to_actually_paint() {
         let realm = mount_root();
         let mut lane = lane_over(ScriptedDeviceBackend::healthy());
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
         // Consume the mount's own pending paint FIRST, so the presentation's
@@ -781,7 +606,7 @@ mod device_recovery_tests {
             ..ScriptedDeviceBackend::healthy()
         });
         realm.mark_rendered();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
@@ -822,7 +647,7 @@ mod device_recovery_tests {
     #[test]
     fn a_deferred_attempt_before_the_deadline_does_not_touch_the_renderer() {
         let realm = mount_root();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
         let mut lane = lane_over(ScriptedDeviceBackend {
@@ -943,7 +768,7 @@ mod device_recovery_tests {
         let realm = mount_root();
         let mut lane = lane_over(AlwaysRecoversButDiesOnFirstRenderBackend::new());
         realm.mark_rendered();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
@@ -983,7 +808,7 @@ mod device_recovery_tests {
             ..ScriptedDeviceBackend::healthy()
         });
         realm.mark_rendered();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
@@ -1034,7 +859,7 @@ mod device_recovery_tests {
             ..ScriptedDeviceBackend::healthy()
         });
         realm.mark_rendered();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
         let outcome = render_frame_with_device_recovery(&realm, &mut lane, &backoff, now);
@@ -1091,7 +916,7 @@ mod device_recovery_tests {
 
         let realm = mount_root();
         realm.mark_rendered();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
         let arena = realm.gestures().arena().clone();
@@ -1156,7 +981,7 @@ mod device_recovery_tests {
     fn needs_redraw_stays_armed_across_three_consecutive_frames_against_a_permanently_dead_device()
     {
         let realm = mount_root();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let mut now = Instant::now();
 
         for frame in 1..=3u32 {
@@ -1210,7 +1035,7 @@ mod device_recovery_tests {
     #[test]
     fn the_real_closure_gate_keeps_retrying_across_the_immediate_poke_and_the_deadline_wake() {
         let realm = mount_root();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let mut now = Instant::now();
 
         fn permanently_dead_backend() -> ScriptedDeviceBackend {
@@ -1345,7 +1170,7 @@ mod device_recovery_tests {
     fn the_real_closure_gate_keeps_retrying_on_android_across_the_immediate_poke_and_the_16ms_poll()
     {
         let realm = mount_root();
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let mut now = Instant::now();
 
         fn permanently_dead_backend() -> ScriptedDeviceBackend {
@@ -1424,7 +1249,7 @@ mod device_recovery_tests {
     /// suite at ~1s; it no longer sleeps at all.
     #[test]
     fn device_recovery_backoff_bounds_a_persistently_failing_retry_loop() {
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let mut now = Instant::now();
         let window = Duration::from_mins(10);
         let window_end = now + window;
@@ -1454,7 +1279,7 @@ mod device_recovery_tests {
 
     #[test]
     fn device_recovery_backoff_resets_to_the_base_interval_after_a_success() {
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
 
         let first = backoff.record_failure(&EngineError::DeviceLost, now);
@@ -1477,7 +1302,7 @@ mod device_recovery_tests {
 
     #[test]
     fn device_recovery_backoff_caps_at_the_ceiling_and_never_gives_up() {
-        let backoff = DeviceRecoveryBackoff::new();
+        let backoff = new_device_recovery_backoff();
         let now = Instant::now();
         let mut last = now;
 

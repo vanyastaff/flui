@@ -181,6 +181,7 @@ struct TreeBinding {
 /// move or share the binding itself.
 #[derive(Debug)]
 pub struct HeadlessBinding {
+    lifecycle: flui_view::LifecycleSource,
     /// The single virtual time authority. Every time-based read flows from here.
     clock: ManualClock,
     /// The canonical input owner. Its arena, pointer routes, coalescing queues,
@@ -284,6 +285,7 @@ impl HeadlessBinding {
         let local_post_frame = scheduler.new_local_post_frame_lane();
         let interaction_lane = InteractionLane::try_new()?;
         Ok(Self {
+            lifecycle: flui_view::LifecycleSource::new(),
             clock,
             gestures,
             vsync: Vsync::new(),
@@ -299,11 +301,47 @@ impl HeadlessBinding {
         })
     }
 
+    /// Deliver an observed local lifecycle state to the mounted presentation.
+    /// This test oracle models notification, not native OS transport or realm aggregation.
+    /// # Errors
+    /// Returns `LifecycleClosed` after terminal closure.
+    pub fn set_lifecycle_state(
+        &self,
+        state: flui_view::AppLifecycleState,
+    ) -> Result<(), flui_view::LifecycleClosed> {
+        self.lifecycle.commit(state)?;
+        self.lifecycle.drain();
+        Ok(())
+    }
+
+    /// Deliver terminal Detached and invalidate subscriptions. This notification
+    /// oracle does not itself dispose the mounted tree.
+    pub fn close_lifecycle(&self) {
+        self.lifecycle.begin_close();
+        let _ = self
+            .lifecycle
+            .commit_terminal(flui_view::AppLifecycleState::Detached);
+        let notification =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.lifecycle.drain()));
+        let cleanup = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.lifecycle.finish_close();
+        }));
+        if let Err(payload) = notification {
+            if let Err(secondary) = cleanup {
+                std::mem::forget(secondary);
+            }
+            std::panic::resume_unwind(payload);
+        }
+        if let Err(payload) = cleanup {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
     /// Install this binding's build-time capabilities on `build_owner`.
     ///
-    /// The **one** place a headless caller wires the two capabilities a view can
-    /// acquire from its `BuildContext`, both naming *this* binding's scheduler:
-    /// the async driver and the post-frame handle.
+    /// Installs this binding's scheduler, post-frame, interaction and weak
+    /// lifecycle capabilities before widget initialization. The lifecycle
+    /// handle observes this presentation source, not the scheduler aggregate.
     ///
     /// Must run **before** the root is mounted: a `ViewState::init_state` during
     /// that first `build_scope` already asks for them. `bind_tree` re-installs for
@@ -314,6 +352,7 @@ impl HeadlessBinding {
     /// process drives frames for a scheduler this binding does not itself own and
     /// pump.
     pub fn install_build_capabilities(&self, build_owner: &mut flui_view::BuildOwner) {
+        build_owner.set_lifecycle_handle(self.lifecycle.handle());
         build_owner.set_async_driver(self.scheduler.async_driver().clone());
         build_owner.set_post_frame_handle(flui_scheduler::PostFrameHandle::new(&self.scheduler));
         build_owner.set_local_post_frame_handle(self.local_post_frame.local_handle());
@@ -478,6 +517,7 @@ impl HeadlessBinding {
         let mut build_owner = build_owner;
         build_owner.set_async_driver(self.scheduler.async_driver().clone());
         if capabilities == bootstrap::BuildCapabilities::Installed {
+            build_owner.set_lifecycle_handle(self.lifecycle.handle());
             // The post-frame capability must name THIS binding's
             // scheduler — the one `pump_frame`'s `drive_frame` drains — never
             // some other binding's or realm's `UpdateScheduler`, which nothing drives
@@ -1308,5 +1348,47 @@ mod committed_layer_tree_tests {
         assert!(binding.layer_tree().is_none());
         assert!(!binding.did_paint_last_frame());
         assert_eq!(binding.painted_frame_count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_capability_tests {
+    use super::*;
+    use flui_rendering::pipeline::PipelineOwner;
+
+    #[test]
+    fn lifecycle_capability_installation_respects_the_headless_policy() {
+        for installed in [false, true] {
+            let mut binding = HeadlessBinding::new();
+            binding.bind_tree_with_capabilities(
+                BuildOwner::new(),
+                ElementTree::new(),
+                PipelineCell::new(PipelineOwner::new()),
+                None,
+                if installed {
+                    BuildCapabilities::Installed
+                } else {
+                    BuildCapabilities::AsyncDriverOnly
+                },
+            );
+            let handle = binding
+                .tree
+                .as_ref()
+                .expect("bound")
+                .build_owner
+                .lifecycle_handle();
+            assert_eq!(handle.is_some(), installed);
+            binding
+                .set_lifecycle_state(flui_view::AppLifecycleState::Hidden)
+                .expect("open");
+            if let Some(handle) = handle {
+                assert_eq!(
+                    handle.snapshot(),
+                    Ok(Some(flui_view::AppLifecycleState::Hidden))
+                );
+                binding.close_lifecycle();
+                assert_eq!(handle.snapshot(), Err(flui_view::LifecycleClosed));
+            }
+        }
     }
 }

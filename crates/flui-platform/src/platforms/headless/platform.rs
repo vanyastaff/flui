@@ -30,7 +30,7 @@ use crate::{
         PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput, PlatformReadyCallback,
         PlatformTextInput, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
         WindowBounds, WindowEvent, WindowId, WindowOpen, WindowOptions,
-        owner::{ClosedTransport, DirectOwnerHooks, OwnerHooks, ProxyTransport},
+        owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport},
     },
 };
 
@@ -65,11 +65,14 @@ fn next_headless_window_id() -> WindowId {
 /// - CI environments without display servers
 /// - Benchmarking without rendering overhead
 pub struct HeadlessPlatform {
+    signal: Arc<crate::shared::owner_signal::OwnerSignal>,
+    wake_failure: Arc<std::sync::atomic::AtomicBool>,
     capabilities: DesktopCapabilities,
     state: Arc<Mutex<HeadlessState>>,
 }
 
 struct HeadlessState {
+    owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
     clipboard: Arc<MockClipboard>,
@@ -105,6 +108,7 @@ impl HeadlessPlatform {
     /// Create a new headless platform
     pub fn new() -> Self {
         let state = HeadlessState {
+            owner_signal: Weak::new(),
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
             clipboard: Arc::new(MockClipboard::new()),
@@ -119,9 +123,37 @@ impl HeadlessPlatform {
             exit_reevaluation_requested: false,
         };
 
-        Self {
+        let wake_failure = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let failure = Arc::clone(&wake_failure);
+        let platform = Self {
+            wake_failure,
+            signal: crate::shared::owner_signal::OwnerSignal::new(Arc::new(move || {
+                if failure.swap(false, Ordering::AcqRel) {
+                    Err(PlatformError::EventLoop {
+                        message: "injected headless owner wake failure".into(),
+                    })
+                } else {
+                    Ok(())
+                }
+            })),
             capabilities: DesktopCapabilities,
             state: Arc::new(Mutex::new(state)),
+        };
+        {
+            let mut state = platform.state.lock();
+            state.owner_signal = Arc::downgrade(&platform.signal);
+        }
+        platform
+    }
+
+    /// Obtain the manual owner-turn driver before `run` consumes this platform.
+    #[must_use]
+    pub fn owner_turns(&self) -> HeadlessOwnerTurns {
+        HeadlessOwnerTurns {
+            signal: Arc::downgrade(&self.signal),
+            wake_failure: Arc::downgrade(&self.wake_failure),
+            state: Arc::downgrade(&self.state),
+            owner_affinity: std::marker::PhantomData,
         }
     }
 
@@ -186,6 +218,17 @@ impl Platform for HeadlessPlatform {
         // underlying `Mutex<HeadlessState>`, just a durable handle to it
         // that survives the move.
         let state_handle = Arc::clone(&self.state);
+        let signal = Arc::clone(&self.signal);
+        signal.bind_owner();
+        struct BootstrapGuard(Option<Arc<crate::shared::owner_signal::OwnerSignal>>);
+        impl Drop for BootstrapGuard {
+            fn drop(&mut self) {
+                if let Some(signal) = self.0.take() {
+                    signal.close();
+                }
+            }
+        }
+        let mut bootstrap_guard = BootstrapGuard(Some(Arc::clone(&signal)));
 
         self.with_state(|state| {
             state.is_running = true;
@@ -206,29 +249,46 @@ impl Platform for HeadlessPlatform {
         let hooks: Arc<dyn OwnerHooks> = if deferred_window_open {
             Arc::new(HeadlessDeferredOwnerHooks {
                 state: state_handle,
+                signal: Arc::clone(&signal),
                 owner_thread,
             })
         } else {
-            Arc::new(DirectOwnerHooks::new(Arc::clone(&platform)))
+            Arc::new(DirectOwnerHooks::with_signal(
+                Arc::clone(&platform),
+                Arc::clone(&signal),
+            ))
         };
 
         // In headless mode, just call on_ready and return immediately. A
         // fallible bootstrap has nowhere else to go on this backend since
         // there is no loop to keep running with a half-built app --
         // propagate straight out of `run`.
-        on_ready(OwnerPlatform::new(platform, hooks)).map_err(PlatformError::bootstrap)?;
+        if let Err(error) = on_ready(OwnerPlatform::new(platform, hooks)) {
+            signal.close();
+            return Err(PlatformError::bootstrap(error));
+        }
+        signal.start().map_err(|error| PlatformError::EventLoop {
+            message: error.to_string(),
+        })?;
 
+        bootstrap_guard.0 = None;
         tracing::info!("Headless platform ready");
         Ok(())
     }
 
     fn quit(&self) {
+        self.signal.close();
         tracing::info!("Quitting headless platform");
 
-        self.with_state(|state| {
+        // Consume before calling: callback bodies and captured-data destructors
+        // may re-enter the platform. Matches the close/reevaluation quit paths.
+        let callback = self.with_state(|state| {
             state.is_running = false;
-            state.handlers.invoke_quit();
+            state.handlers.quit.take()
         });
+        if let Some(mut callback) = callback {
+            callback();
+        }
     }
 
     fn set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>) {
@@ -374,16 +434,29 @@ fn create_mock_window(
 /// [`HeadlessDeferredWindowOpens::resolve_next`] completes the oldest one on
 /// demand.
 struct HeadlessDeferredOwnerHooks {
+    signal: Arc<crate::shared::owner_signal::OwnerSignal>,
     state: Arc<Mutex<HeadlessState>>,
     owner_thread: ThreadId,
 }
 
 impl OwnerHooks for HeadlessDeferredOwnerHooks {
+    fn on_wake(
+        &self,
+        callback: Box<dyn FnMut() + Send>,
+    ) -> Result<(), crate::WakeRegistrationError> {
+        self.signal.register(callback)
+    }
+
     fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
         // No wake-worthy event loop to notify on abandonment (this backend
         // never parks a real loop on the request) -- see `claim_slot`'s own
         // doc for why a no-op wake is the correct choice for a generic
         // caller like this one.
+        if !self.signal.accepting() {
+            return Err(OpenWindowError::OwnerGone {
+                rejected: Some(options),
+            });
+        }
         let (slot, handle) = claim_slot::<OpenWindowResult>(Arc::new(|| {}));
         self.state.lock().pending_opens.push((slot, options));
         Ok(WindowOpen::Pending(PendingWindow::new(
@@ -393,10 +466,57 @@ impl OwnerHooks for HeadlessDeferredOwnerHooks {
     }
 
     fn transport(&self) -> Arc<dyn ProxyTransport> {
-        // This test mode defers window creation only; it does not add a
-        // cross-thread request lane, so `PlatformProxy` stays permanently
-        // unsupported here exactly as it is under `DirectOwnerHooks`.
-        Arc::new(ClosedTransport::new(self.owner_thread))
+        Arc::new(crate::shared::owner_signal::SignalTransport::new(
+            &self.signal,
+        ))
+    }
+}
+
+/// Deterministic headless owner-turn driver. `run` returning does not close it.
+#[derive(Clone)]
+pub struct HeadlessOwnerTurns {
+    wake_failure: Weak<std::sync::atomic::AtomicBool>,
+    owner_affinity: std::marker::PhantomData<std::rc::Rc<()>>,
+    signal: Weak<crate::shared::owner_signal::OwnerSignal>,
+    state: Weak<Mutex<HeadlessState>>,
+}
+static_assertions::assert_not_impl_any!(HeadlessOwnerTurns: Send, Sync);
+impl std::fmt::Debug for HeadlessOwnerTurns {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessOwnerTurns").finish_non_exhaustive()
+    }
+}
+impl HeadlessOwnerTurns {
+    /// Inject one physical notification failure for deterministic recovery tests.
+    /// The following post succeeds normally; this does not close the owner.
+    pub fn fail_next_wake(&self) {
+        if let Some(failure) = self.wake_failure.upgrade() {
+            failure.store(true, Ordering::Release);
+        }
+    }
+    /// Perform one owner turn, including a pending explicit quit. No worker callback execution.
+    pub fn drive(&self) {
+        let Some(signal) = self.signal.upgrade() else {
+            return;
+        };
+        assert_eq!(
+            signal.owner(),
+            thread::current().id(),
+            "headless owner turn must run on its owner"
+        );
+        if signal.drive() {
+            signal.close();
+            if let Some(state) = self.state.upgrade() {
+                let callback = {
+                    let mut state = state.lock();
+                    state.is_running = false;
+                    state.handlers.quit.take()
+                };
+                if let Some(mut callback) = callback {
+                    callback();
+                }
+            }
+        }
     }
 }
 
@@ -496,11 +616,14 @@ impl HeadlessExitReevaluation {
             return false;
         }
 
-        let quit_callback = {
+        let (quit_callback, signal) = {
             let mut state = platform_state.lock();
             state.is_running = false;
-            state.handlers.quit.take()
+            (state.handlers.quit.take(), state.owner_signal.upgrade())
         };
+        if let Some(signal) = signal {
+            signal.close();
+        }
         if let Some(mut callback) = quit_callback {
             callback();
         }
@@ -641,7 +764,11 @@ struct MockWindowState {
     scale_factor: f64,
     focused: bool,
     visible: bool,
+    execution: crate::WindowExecutionState,
+    safe_area: flui_types::geometry::EdgeInsets,
     maximized: bool,
+    minimized: bool,
+    closed: bool,
     fullscreen: bool,
     hovered: bool,
     modifiers: keyboard_types::Modifiers,
@@ -657,8 +784,12 @@ impl Clone for MockWindowState {
             bounds: self.bounds,
             scale_factor: self.scale_factor,
             focused: self.focused,
+            execution: self.execution,
+            safe_area: self.safe_area,
             visible: self.visible,
             maximized: self.maximized,
+            minimized: self.minimized,
+            closed: self.closed,
             fullscreen: self.fullscreen,
             hovered: self.hovered,
             modifiers: self.modifiers,
@@ -685,8 +816,12 @@ impl MockWindow {
                 },
                 scale_factor: 1.0,
                 focused: true,
+                execution: crate::WindowExecutionState::Running,
+                safe_area: flui_types::geometry::EdgeInsets::ZERO,
                 visible: options.visible,
                 maximized: false,
+                minimized: false,
+                closed: false,
                 fullscreen: false,
                 hovered: false,
                 modifiers: keyboard_types::Modifiers::empty(),
@@ -771,7 +906,11 @@ impl MockWindow {
     /// Reached from both routes — [`crate::traits::PlatformWindow::close`] and
     /// [`Self::simulate_close`] — so the two cannot drift apart.
     fn complete_close(&self) {
-        self.state.lock().visible = false;
+        {
+            let mut state = self.state.lock();
+            state.visible = false;
+            state.closed = true;
+        }
         self.callbacks.dispatch_close();
         self.notify_closed();
         // After the global `Closed`, never before: a handler that inspects the
@@ -851,11 +990,14 @@ impl MockWindow {
             return;
         }
 
-        let quit_callback = {
+        let (quit_callback, signal) = {
             let mut state = platform_state.lock();
             state.is_running = false;
-            state.handlers.quit.take()
+            (state.handlers.quit.take(), state.owner_signal.upgrade())
         };
+        if let Some(signal) = signal {
+            signal.close();
+        }
         if let Some(mut callback) = quit_callback {
             callback();
         }
@@ -904,6 +1046,34 @@ impl MockWindow {
     pub fn simulate_focus(&self, focused: bool) {
         self.state.lock().focused = focused;
         self.callbacks.dispatch_active_status_change(focused);
+    }
+
+    /// Simulate an owner-thread safe-area report; the callback fires without
+    /// holding window state. Closed and detached windows ignore the report.
+    pub fn simulate_safe_area(&self, insets: flui_types::geometry::EdgeInsets) {
+        {
+            let mut state = self.state.lock();
+            if state.closed
+                || state.execution == crate::WindowExecutionState::Detached
+                || state.safe_area == insets
+            {
+                return;
+            }
+            state.safe_area = insets;
+        }
+        self.callbacks.dispatch_safe_area_change(insets);
+    }
+
+    /// Simulate reversible native execution eligibility; terminal close stays terminal.
+    pub fn simulate_execution_state(&self, execution: crate::WindowExecutionState) {
+        {
+            let mut state = self.state.lock();
+            if state.closed {
+                return;
+            }
+            state.execution = execution;
+        }
+        self.callbacks.dispatch_execution_state_change(execution);
     }
 
     /// Simulate a visibility/occlusion change for testing.
@@ -1007,6 +1177,19 @@ impl crate::traits::PlatformWindow for MockWindow {
         self.state.lock().focused
     }
 
+    fn safe_area_insets(&self) -> flui_types::geometry::EdgeInsets {
+        self.state.lock().safe_area
+    }
+
+    fn execution_state(&self) -> crate::WindowExecutionState {
+        let state = self.state.lock();
+        if state.closed {
+            crate::WindowExecutionState::Detached
+        } else {
+            state.execution
+        }
+    }
+
     fn is_visible(&self) -> bool {
         self.state.lock().visible
     }
@@ -1086,14 +1269,25 @@ impl crate::traits::PlatformWindow for MockWindow {
         self.state.lock().title = title.to_string();
     }
 
+    fn show(&self) -> Result<(), crate::WindowShowError> {
+        let mut state = self.state.lock();
+        if state.closed {
+            return Err(crate::WindowShowError::Closed);
+        }
+        state.minimized = false;
+        state.visible = true;
+        state.focused = true;
+        Ok(())
+    }
+
     fn activate(&self) {
         self.state.lock().focused = true;
     }
 
     fn minimize(&self) {
         let mut state = self.state.lock();
-        state.maximized = false;
-        state.fullscreen = false;
+        state.minimized = true;
+        state.focused = false;
     }
 
     fn maximize(&self) {
@@ -1104,6 +1298,7 @@ impl crate::traits::PlatformWindow for MockWindow {
 
     fn restore(&self) {
         let mut state = self.state.lock();
+        state.minimized = false;
         state.maximized = false;
         state.fullscreen = false;
     }
@@ -1465,9 +1660,251 @@ impl Clipboard for MockClipboard {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn show_preserves_window_modes_and_rejects_closed_windows() {
+        let platform = HeadlessPlatform::new();
+        for (maximized, fullscreen, minimized, visible) in [
+            (false, false, false, true),
+            (false, false, false, false),
+            (false, false, true, true),
+            (true, false, false, true),
+            (true, false, true, true),
+            (false, true, false, true),
+        ] {
+            let window = platform
+                .open_window(WindowOptions::default())
+                .expect("window");
+            let mock = window.as_any().downcast_ref::<MockWindow>().expect("mock");
+            if maximized {
+                window.maximize();
+            }
+            if fullscreen {
+                window.toggle_fullscreen();
+            }
+            if minimized {
+                window.minimize();
+            }
+            mock.state.lock().visible = visible;
+            let bounds = window.bounds();
+            window.show().expect("show");
+            window.show().expect("repeated show");
+            assert!(window.is_visible());
+            assert!(window.is_focused());
+            assert!(!mock.state.lock().minimized);
+            assert_eq!(window.bounds(), bounds);
+            assert_eq!(mock.state.lock().maximized, maximized);
+            assert_eq!(mock.state.lock().fullscreen, fullscreen);
+            window.close();
+            assert!(matches!(window.show(), Err(crate::WindowShowError::Closed)));
+        }
+    }
+
+    #[test]
+    fn automatic_exit_closes_retained_owner_signal_before_quit_callback() {
+        for close_window in [false, true] {
+            let platform = HeadlessPlatform::new();
+            let turns = platform.owner_turns();
+            let reevaluation = platform.exit_reevaluation();
+            let saved = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let retained = std::rc::Rc::clone(&saved);
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let observed = Arc::clone(&calls);
+            let callback_fenced = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let fenced = Arc::clone(&callback_fenced);
+            Box::new(platform)
+                .run(Box::new(move |owner| {
+                    owner
+                        .on_wake(Box::new(move || {
+                            observed.fetch_add(1, Ordering::SeqCst);
+                        }))
+                        .expect("register");
+                    let proxy = owner.proxy();
+                    owner.shared().on_quit(Box::new(move || {
+                        fenced.store(
+                            matches!(proxy.wake(), Err(crate::ProxySendError::OwnerGone { .. })),
+                            Ordering::SeqCst,
+                        );
+                    }));
+                    owner.shared().set_exit_policy_hook(Box::new(|| true));
+                    let window = if close_window {
+                        Some(
+                            owner
+                                .open_window(WindowOptions::default())
+                                .expect("open")
+                                .try_ready()
+                                .expect("ready"),
+                        )
+                    } else {
+                        None
+                    };
+                    retained.replace(Some(owner));
+                    if let Some(window) = window {
+                        window.close();
+                    }
+                    Ok(())
+                }))
+                .expect("run");
+            if !close_window {
+                saved
+                    .borrow()
+                    .as_ref()
+                    .expect("owner")
+                    .shared()
+                    .request_exit_policy_reevaluation();
+                assert!(reevaluation.drive());
+            }
+            let owner = saved.borrow();
+            let owner = owner.as_ref().expect("retained owner");
+            assert!(callback_fenced.load(Ordering::SeqCst));
+            assert!(matches!(
+                owner.proxy().wake(),
+                Err(crate::ProxySendError::OwnerGone { .. })
+            ));
+            assert!(matches!(
+                owner.on_wake(Box::new(|| {})),
+                Err(crate::WakeRegistrationError::OwnerGone)
+            ));
+            turns.drive();
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn moved_platform_binds_manual_driver_to_run_thread_and_failed_bootstrap_closes_proxy() {
+        let platform = HeadlessPlatform::new();
+        std::thread::spawn(move || {
+            let turns = platform.owner_turns();
+            let saved = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let saved_callback = std::rc::Rc::clone(&saved);
+            let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let recorded = Arc::clone(&calls);
+            Box::new(platform)
+                .run(Box::new(move |owner| {
+                    owner
+                        .on_wake(Box::new(move || {
+                            recorded.fetch_add(1, Ordering::SeqCst);
+                        }))
+                        .expect("registration");
+                    owner.proxy().wake().expect("wake");
+                    saved_callback.replace(Some(owner));
+                    Ok(())
+                }))
+                .expect("run");
+            turns.drive();
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            saved.borrow().as_ref().expect("owner").quit();
+            assert!(
+                saved
+                    .borrow()
+                    .as_ref()
+                    .expect("owner")
+                    .proxy()
+                    .wake()
+                    .is_err()
+            );
+
+            let retained = std::rc::Rc::new(std::cell::RefCell::new(None));
+            let retained_callback = std::rc::Rc::clone(&retained);
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Box::new(HeadlessPlatform::new()).run(Box::new(move |owner| {
+                    retained_callback.replace(Some(owner));
+                    panic!("bootstrap panic");
+                }))
+            }));
+            assert!(panic.is_err());
+            let proxy = retained.borrow().as_ref().expect("retained owner").proxy();
+            assert!(matches!(
+                proxy.wake(),
+                Err(crate::ProxySendError::OwnerGone { .. })
+            ));
+        })
+        .join()
+        .expect("owner thread");
+    }
+
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
+
+    #[test]
+    fn explicit_quit_reenters_and_drops_its_callback_outside_the_state_lock() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        struct CallbackDrop {
+            platform: std::sync::Weak<HeadlessPlatform>,
+            released: Arc<AtomicBool>,
+        }
+        impl Drop for CallbackDrop {
+            fn drop(&mut self) {
+                let platform = self
+                    .platform
+                    .upgrade()
+                    .expect("platform still owned by test");
+                // Record rather than assert in Drop: on RED the callback body
+                // itself panics, so a second panic here would abort the process.
+                self.released
+                    .store(platform.state.try_lock().is_some(), Ordering::SeqCst);
+            }
+        }
+        let platform = Arc::new(HeadlessPlatform::new());
+        platform.state.lock().is_running = true;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let released = Arc::new(AtomicBool::new(false));
+        let callback_drop = CallbackDrop {
+            platform: Arc::downgrade(&platform),
+            released: Arc::clone(&released),
+        };
+        let callback_platform = Arc::clone(&platform);
+        let callback_calls = Arc::clone(&calls);
+        platform.on_quit(Box::new(move || {
+            let _ = &callback_drop;
+            assert!(
+                callback_platform.state.try_lock().is_some(),
+                "quit callback must run outside the state lock"
+            );
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            let _appearance = callback_platform.window_appearance();
+            callback_platform.quit();
+        }));
+        platform.quit();
+        platform.quit();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the registered callback is consumed before reentry"
+        );
+        assert!(
+            released.load(Ordering::SeqCst),
+            "captured callback data drops outside the state lock"
+        );
+        assert!(!platform.state.lock().is_running);
+    }
+
+    #[test]
+    fn explicit_quit_preserves_callback_panic_without_restoring_the_callback() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let platform = Arc::new(HeadlessPlatform::new());
+        platform.state.lock().is_running = true;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let callback_platform = Arc::clone(&platform);
+        let callback_calls = Arc::clone(&calls);
+        platform.on_quit(Box::new(move || {
+            assert!(
+                callback_platform.state.try_lock().is_some(),
+                "quit callback must run outside the state lock"
+            );
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            panic!("intentional headless quit panic");
+        }));
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| platform.quit()))
+            .expect_err("callback panic remains observable to the Rust caller");
+        assert_eq!(
+            panic.downcast_ref::<&str>(),
+            Some(&"intentional headless quit panic")
+        );
+        assert!(!platform.state.lock().is_running);
+        platform.quit();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn separate_headless_platforms_mint_distinct_window_ids() {
@@ -1886,6 +2323,65 @@ mod tests {
     }
 
     #[test]
+    fn execution_snapshot_is_committed_before_callbacks_and_close_is_terminal() {
+        let window = Arc::new(MockWindow::new(
+            WindowId(0),
+            WindowOptions::default(),
+            Weak::new(),
+        ));
+        window.simulate_execution_state(crate::WindowExecutionState::Suspended);
+        assert_eq!(
+            window.execution_state(),
+            crate::WindowExecutionState::Suspended
+        );
+        let observer = Arc::clone(&window);
+        let history = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&history);
+        window.on_execution_state_change(Box::new(move |state| {
+            assert_eq!(observer.execution_state(), state);
+            observed.lock().push(state);
+        }));
+        for state in [
+            crate::WindowExecutionState::Detached,
+            crate::WindowExecutionState::Running,
+        ] {
+            window.simulate_execution_state(state);
+        }
+        assert_eq!(history.lock().len(), 2);
+        assert!(window.simulate_close());
+        window.simulate_execution_state(crate::WindowExecutionState::Running);
+        assert_eq!(
+            window.execution_state(),
+            crate::WindowExecutionState::Detached
+        );
+        assert_eq!(history.lock().len(), 2);
+    }
+
+    #[test]
+    fn execution_callback_can_close_without_resurrection_or_late_delivery() {
+        let window = Arc::new(MockWindow::new(
+            WindowId(0),
+            WindowOptions::default(),
+            Weak::new(),
+        ));
+        let inner = Arc::clone(&window);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        window.on_execution_state_change(Box::new(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            assert!(inner.simulate_close());
+            inner.simulate_execution_state(crate::WindowExecutionState::Running);
+        }));
+        window.simulate_execution_state(crate::WindowExecutionState::Suspended);
+        window.simulate_execution_state(crate::WindowExecutionState::Running);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            window.execution_state(),
+            crate::WindowExecutionState::Detached
+        );
+    }
+
+    #[test]
     fn test_on_active_status_change() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1958,6 +2454,84 @@ mod tests {
         assert!(
             has_surface.load(Ordering::SeqCst),
             "the rebuild edge must reach the same closure"
+        );
+    }
+
+    /// The wire test for `on_safe_area_change` / `safe_area_insets`:
+    /// registration goes through the `PlatformWindow` trait method, the
+    /// `simulate_*` affordance drives the platform's own dispatch, and the
+    /// accessor the app runner seeds its root `MediaQuery` from reports the
+    /// same value.
+    ///
+    /// Three edges beyond delivery, at this window's own boundary. An
+    /// unchanged report must NOT re-dispatch: the runner turns each callback
+    /// into a root-tree rebuild, and the native backend re-samples on every
+    /// resize and layout pass, so "always dispatch" would rebuild on every
+    /// pass. A closed window must drop the report. And the accessor must agree
+    /// with the callback, because a consumer that mounts after the change
+    /// reads it instead of replaying the callback.
+    ///
+    /// These are the mock's own admissions, which is what a backend adapter
+    /// has to get right before the seam is ever reached; the seam's own
+    /// closed-latch guard is pinned where it is reachable
+    /// (`shared::handlers::tests::safe_area_report_inside_a_closing_drain_is_dropped_by_the_latch`),
+    /// since no window-facing path can arrive there with its observer still
+    /// installed.
+    #[test]
+    fn test_on_safe_area_change() {
+        use flui_types::geometry::{EdgeInsets, px};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
+
+        let dispatches = Arc::new(AtomicUsize::new(0));
+        let last = Arc::new(Mutex::new(EdgeInsets::ZERO));
+        let dispatches_clone = dispatches.clone();
+        let last_clone = last.clone();
+
+        window.on_safe_area_change(Box::new(move |insets| {
+            dispatches_clone.fetch_add(1, Ordering::SeqCst);
+            let mut recorded = last_clone.lock();
+            *recorded = insets;
+        }));
+
+        assert_eq!(
+            window.safe_area_insets(),
+            EdgeInsets::ZERO,
+            "a window without native inset reporting starts at zero"
+        );
+
+        let insets = EdgeInsets::new(px(44.0), px(0.0), px(34.0), px(0.0));
+        window.simulate_safe_area(insets);
+        assert_eq!(
+            dispatches.load(Ordering::SeqCst),
+            1,
+            "the report must reach the closure registered through the trait method"
+        );
+        assert_eq!(
+            *last.lock(),
+            insets,
+            "the closure observes the reported insets"
+        );
+        assert_eq!(
+            window.safe_area_insets(),
+            insets,
+            "a consumer mounting after the change reads what the callback saw"
+        );
+
+        window.simulate_safe_area(insets);
+        assert_eq!(
+            dispatches.load(Ordering::SeqCst),
+            1,
+            "re-reporting unchanged insets must not rebuild the root tree again"
+        );
+
+        assert!(window.simulate_close(), "nothing vetoes this close");
+        window.simulate_safe_area(EdgeInsets::new(px(1.0), px(1.0), px(1.0), px(1.0)));
+        assert_eq!(
+            dispatches.load(Ordering::SeqCst),
+            1,
+            "a closed window drops the report instead of reaching a disposing owner"
         );
     }
 

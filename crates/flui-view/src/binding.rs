@@ -471,6 +471,7 @@ impl<T: Copy> FramePhaseMarker<T> {
 ///
 /// WidgetsBinding uses internal RwLock for thread-safe mutable access.
 pub struct WidgetsBinding {
+    lifecycle: crate::lifecycle::LifecycleSource,
     /// Inner mutable state. `Arc` so the GlobalKey registry closures can
     /// hold a `Weak` back-reference to *this* binding's tree (a dead
     /// binding's keys resolve to `None` — the weak-callback pattern);
@@ -634,8 +635,11 @@ impl WidgetsBinding {
     /// The manager is passed directly into the binding's `BuildOwner`; no
     /// ambient registry or later setter participates in focus ownership.
     pub fn with_focus_manager(focus_manager: Rc<FocusManager>) -> Self {
+        let lifecycle = crate::lifecycle::LifecycleSource::new();
+        let mut build_owner = BuildOwner::with_focus_manager(focus_manager);
+        build_owner.set_lifecycle_handle(lifecycle.handle());
         let inner = Arc::new(RwLock::new(WidgetsBindingInner {
-            build_owner: BuildOwner::with_focus_manager(focus_manager),
+            build_owner,
             element_tree: ElementTree::new(),
             root_element: None,
             pipeline_owner: None,
@@ -647,6 +651,7 @@ impl WidgetsBinding {
         #[cfg(any(test, feature = "runtime-internals"))]
         let global_key_registry = Self::make_global_key_registry(&inner);
         Self {
+            lifecycle,
             inner,
             #[cfg(any(test, feature = "runtime-internals"))]
             global_key_registry,
@@ -1465,14 +1470,43 @@ impl WidgetsBinding {
         }
     }
 
-    /// Notify all observers of app lifecycle change.
-    ///
-    /// See [`Self::handle_locale_changed`] for the snapshot-then-fire
-    /// rationale.
+    /// Composition-root access to this binding's exact local lifecycle source.
+    #[cfg(any(test, feature = "runtime-internals"))]
+    #[doc(hidden)]
+    pub fn lifecycle_source(&self) -> &crate::lifecycle::LifecycleSource {
+        &self.lifecycle
+    }
+
+    /// Commit a local lifecycle observation and notify legacy and scoped listeners.
+    /// Legacy observers retain their snapshot iteration behavior. Scoped
+    /// subscriptions still drain when a legacy observer panics.
     pub fn handle_app_lifecycle_state_changed(&self, state: AppLifecycleState) {
-        let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_change_app_lifecycle_state(state);
+        if self.lifecycle.commit(state).is_ok() {
+            self.notify_lifecycle(state);
+        }
+    }
+
+    #[cfg(any(test, feature = "runtime-internals"))]
+    #[doc(hidden)]
+    pub fn notify_committed_lifecycle(&self, state: AppLifecycleState) {
+        self.notify_lifecycle(state);
+    }
+
+    fn notify_lifecycle(&self, state: AppLifecycleState) {
+        let mut first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let observers: Vec<Arc<dyn WidgetsBindingObserver>> =
+                self.inner.read().observers.clone();
+            for observer in &observers {
+                observer.did_change_app_lifecycle_state(state);
+            }
+        }))
+        .err();
+        crate::lifecycle::preserve(
+            &mut first,
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.lifecycle.drain())).err(),
+        );
+        if let Some(payload) = first {
+            std::panic::resume_unwind(payload);
         }
     }
 

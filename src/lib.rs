@@ -102,9 +102,10 @@ fn main() {
 //! | `localizations` | `flui-localizations` | `localizations` | global (multi-language) localized resources |
 //! | [`app`] | `flui-app` | — | `run_app` + bindings |
 //!
-//! Lower layers (rendering, painting, engine, platform) are deliberately not
-//! re-exported: their surfaces are consumed *through* the widget layer and
-//! remain path-dependencies for the rare integrator who needs them directly.
+//! [`painting`], [`rendering`], and [`interaction`] expose selected authoring
+//! contracts for custom drawing, render objects, and gestures. Arena storage,
+//! the engine, and platform implementations remain outside this facade.
+//! Enable `testing` in a development dependency for deterministic headless tests.
 //! `flui::material` and `flui::cupertino` sit *above* [`widgets`] (ADR-0028's
 //! design-system decoupling contract — `material --> widgets`,
 //! `cupertino --> widgets`, never the reverse), which is why `flui` is on
@@ -116,6 +117,12 @@ fn main() {
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
+pub mod interaction;
+pub mod painting;
+pub mod rendering;
+#[cfg(feature = "testing")]
+pub mod testing;
+
 pub use flui_animation as animation;
 pub use flui_app as app;
 /// The iOS-style design system (`flui-cupertino`). Requires the `cupertino`
@@ -123,12 +130,19 @@ pub use flui_app as app;
 #[cfg(feature = "cupertino")]
 pub use flui_cupertino as cupertino;
 pub use flui_foundation as foundation;
+/// Structured diagnostic properties for application-defined types.
+pub use flui_foundation::Diagnosticable;
 pub use flui_geometry as geometry;
+/// Development hot-reload support. Requires the `hot-reload` feature.
+#[cfg(feature = "hot-reload")]
+pub use flui_hot_reload as hot_reload;
 /// Global (multi-language) implementations of the catalogs' localization
 /// contracts (`flui-localizations`) — FLUI's analog of Flutter's
 /// `flutter_localizations`. Requires the `localizations` feature.
 #[cfg(feature = "localizations")]
 pub use flui_localizations as localizations;
+/// Derive structured diagnostic properties without a direct implementation-crate dependency.
+pub use flui_macros::Diagnosticable;
 /// The Material Design system (`flui-material`). Requires the `material`
 /// feature, which is on by default.
 #[cfg(feature = "material")]
@@ -137,9 +151,55 @@ pub use flui_types as types;
 pub use flui_view as view;
 pub use flui_widgets as widgets;
 
+/// Application configuration. Re-exported from [`app`] (`flui-app`).
+pub use flui_app::app::AppConfig;
+/// The errors a window request can fail with — what [`open_window`] and
+/// [`AppHandle`] report, and what an [`Application`] window-error observer
+/// receives. Re-exported from [`app`] (`flui-app`); desktop only, like the
+/// entry points that produce it.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use flui_app::app::AppWindowError;
+/// Whether an additional window joins the caller's realm or gets its own.
+/// Re-exported from [`app`] (`flui-app`); absent on iOS, where no
+/// secondary-window entry point exists.
+#[cfg(not(target_os = "ios"))]
+pub use flui_app::app::WindowPolicy;
+/// Open an additional top-level window without widget content.
+/// Re-exported from [`app`] (`flui-app`).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use flui_app::app::open_secondary_window;
+/// Open an additional top-level window with mounted widget content.
+/// Re-exported from [`app`] (`flui-app`).
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use flui_app::app::open_window;
+/// The resident-application builder and its control surface: a reusable
+/// main-window factory, windowless startup, and a `Send + Sync` handle that
+/// can show the window or quit from any thread. Re-exported from [`app`]
+/// (`flui-app`); desktop only.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub use flui_app::app::{AppControlError, AppHandle, AppRunError, Application, StartupWindow};
 /// The application entry point — builds the tree, opens a window, and drives
 /// the frame loop. Re-exported from [`app`] (`flui-app`).
 pub use flui_app::run_app;
+/// [`run_app`] with an explicit [`AppConfig`] (window title, size, services,
+/// failure policy). Re-exported from [`app`] (`flui-app`).
+pub use flui_app::run_app_with_config;
 
 /// Everything an application author needs in scope to write widget code:
 /// the widget catalog prelude, [`run_app`], and — with the `material` feature
@@ -185,7 +245,16 @@ pub use flui_app::run_app;
 /// `CupertinoTabScaffold`, …), so it stays at `flui::cupertino` rather than
 /// joining this glob.
 pub mod prelude {
-    pub use flui_app::run_app;
+    pub use flui_app::app::AppConfig;
+    #[cfg(not(target_os = "ios"))]
+    pub use flui_app::app::WindowPolicy;
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub use flui_app::app::{AppWindowError, open_secondary_window, open_window};
+    pub use flui_app::{run_app, run_app_with_config};
     #[cfg(feature = "material")]
     pub use flui_material::{
         AlertDialog, AppBar, BackButton, Card, Checkbox, Chip, ColorScheme, DefaultTabController,

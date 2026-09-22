@@ -56,7 +56,7 @@ fn make_build_ctx(core: &ElementCore, owner: &ElementOwner) -> BuildCtx<'_> {
     )
 }
 
-// `pipeline_owner()` is acquired in `init_state`, same as the other five, but
+// `pipeline_owner()` is acquired in `init_state`, same as the other lifecycle-only capabilities, but
 // stored under a name that does not repeat the guarded token
 // (`pipeline_cell`, not `pipeline_owner`) — real production code
 // (`InteractiveViewerState`) clones the stored handle forward into `build`'s
@@ -79,5 +79,26 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             };
             GestureDetector::new().on_pan_update(pan_update)
         })
+    }
+}
+
+
+// Lifecycle observation is acquired once during initialization, with a stored
+// cancellation token. Build reads callback-updated state rather than subscribing.
+impl ViewState<LifecycleView> for LifecycleState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.lifecycle = ctx.lifecycle_handle();
+        if let Some(handle) = &self.lifecycle {
+            let events = self.events.clone();
+            let (initial, token) = handle
+                .subscribe(move |state| events.borrow_mut().push(state))
+                .expect("live presentation");
+            self.initial = initial;
+            self.subscription = Some(token);
+        }
+    }
+
+    fn build(&self, _view: &LifecycleView, _ctx: &dyn BuildContext) -> impl IntoView {
+        Text::new(format!("{:?}", self.events.borrow().last()))
     }
 }

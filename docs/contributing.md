@@ -91,10 +91,10 @@ Allowed prefixes: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`. The option
 ## Code Style
 
 `STYLE.md` was retired in 2026-09. What governs a change here is the enforced set: `rustfmt.toml`,
-`clippy.toml`, the workspace lints, `just port-check`'s architecture refusal triggers, the
-architecture contract that ships with each crate, and accepted ADRs — plus the studio's path-scoped
-Rust standards, injected when you edit a matching file. Do not copy a subset into a crate and let it
-drift.
+`clippy.toml`, the workspace lints in the root `Cargo.toml`, `just port-check`'s architecture
+refusal triggers, the architecture contract that ships with each crate, accepted ADRs
+(`docs/adr/`), and [`AGENTS.md`](../AGENTS.md) together with [`docs/FOUNDATIONS.md`](FOUNDATIONS.md).
+Do not copy a subset into a crate and let it drift.
 
 ## Architectural Constraints
 
