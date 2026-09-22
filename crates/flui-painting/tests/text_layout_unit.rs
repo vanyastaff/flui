@@ -127,3 +127,68 @@ fn get_word_boundary_handles_non_ascii() {
     assert_eq!(word.start, 0, "word should start at 'c' (byte 0)");
     assert_eq!(word.end, 5, "word should end after 'é' (byte 5)");
 }
+
+/// A run of plain whitespace is one UAX #29 segment, not a sequence of
+/// one-byte gaps — a double-tap landing inside a multi-space run selects
+/// the whole run, matching what most editors do.
+#[test]
+fn get_word_boundary_selects_a_whole_whitespace_run() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    let layout = TextLayout::new("foo   bar", None, 14.0, None, None, TextDirection::Ltr);
+    let _ = layout.metrics();
+
+    // Cursor in the middle of the three-space gap (byte 4).
+    let pos = TextPosition::new(4, TextAffinity::Downstream);
+    let word = layout.get_word_boundary(pos);
+
+    assert_eq!(word.start, 3, "the whole gap, not one space");
+    assert_eq!(word.end, 6, "the whole gap, not one space");
+}
+
+/// `"don't"` is ONE word under UAX #29's `MidLetter` rule (a straight
+/// apostrophe between letters does not break) — the case an
+/// ASCII-whitespace scan would also pass (no whitespace to split on
+/// either), so this specifically exercises the segmentation crate's own
+/// rule, not just whitespace-skipping.
+#[test]
+fn get_word_boundary_does_not_split_on_an_apostrophe() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    let layout = TextLayout::new("don't stop", None, 14.0, None, None, TextDirection::Ltr);
+    let _ = layout.metrics();
+
+    let pos = TextPosition::new(3, TextAffinity::Downstream);
+    let word = layout.get_word_boundary(pos);
+
+    assert_eq!(word.start, 0);
+    assert_eq!(word.end, 5, "the whole word \"don't\", apostrophe included");
+}
+
+/// UAX #29 word segmentation finds an internal boundary in CJK text even
+/// though it contains no ASCII whitespace at all — the case the previous
+/// ASCII-whitespace-run implementation could not pass by construction:
+/// with nothing to split on, it would return the entire line as one
+/// "word" (the same degenerate shape
+/// `get_word_boundary_returns_word_not_whole_line` guards against, here
+/// triggered by script rather than by its glyph-count bug).
+#[test]
+fn get_word_boundary_finds_an_internal_boundary_in_cjk_text_with_no_whitespace() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    let text = "日本語のテスト"; // "Japanese test" -- no ASCII whitespace anywhere.
+    let layout = TextLayout::new(text, None, 14.0, None, None, TextDirection::Ltr);
+    let _ = layout.metrics();
+
+    let pos = TextPosition::new(0, TextAffinity::Downstream);
+    let word = layout.get_word_boundary(pos);
+
+    assert!(
+        word.end < text.len(),
+        "a script-aware segmenter must stop before the end of the line, not return the whole \
+         line the way the old ASCII-whitespace scan did"
+    );
+}

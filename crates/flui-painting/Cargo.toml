@@ -39,6 +39,11 @@ cosmic-text = { version = "0.19" }
 # direct edge onto a crate the tree was building anyway, not a new dependency.
 # Needed by `EmojiForbiddenFallback` (issue #930).
 unicode-script = { version = "=0.5.8" }
+# UAX #29 word segmentation for `TextLayout::get_word_boundary` (double-tap
+# word selection) — was already resolved transitively through cosmic-text;
+# this is a direct edge onto the same copy, not a new one. See the
+# workspace-level comment on this dependency in the root `Cargo.toml`.
+unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
 serde_json.workspace = true
