@@ -245,10 +245,14 @@ fn an_unchanged_provider_swap_rebuilds_nobody() {
 
 #[test]
 fn padding_and_insets_masks_are_distinct_fields() {
-    let mut a = MediaQueryData::default();
-    a.padding = EdgeInsets::all(px(8.0));
-    let mut b = a.clone();
-    b.view_insets = EdgeInsets::all(px(16.0));
+    let a = MediaQueryData {
+        padding: EdgeInsets::all(px(8.0)),
+        ..MediaQueryData::default()
+    };
+    let b = MediaQueryData {
+        view_insets: EdgeInsets::all(px(16.0)),
+        ..a.clone()
+    };
     let changed = flui_view::InheritedData::field_mask_diff(&a, &b);
     assert!(changed.intersects(MediaQueryData::FIELD_VIEW_INSETS));
     assert!(!changed.intersects(MediaQueryData::FIELD_PADDING));

@@ -101,9 +101,7 @@ impl Theme {
     /// The color scheme, depending on `color_scheme` only.
     #[must_use]
     pub fn color_scheme_of(ctx: &dyn BuildContext) -> Option<crate::color_scheme::ColorScheme> {
-        Self::depend_on_fields(ctx, ThemeData::FIELD_COLOR_SCHEME, |d| {
-            d.color_scheme.clone()
-        })
+        Self::depend_on_fields(ctx, ThemeData::FIELD_COLOR_SCHEME, |d| d.color_scheme)
     }
 
     /// The text theme, depending on `text_theme` only.
