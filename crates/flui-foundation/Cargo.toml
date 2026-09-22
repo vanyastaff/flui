@@ -12,6 +12,10 @@ documentation = "https://docs.rs/flui-foundation"
 keywords = ["ui", "gui", "foundation", "flui"]
 categories = ["gui", "data-structures"]
 
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md", "/docs/"]
+
 [lints]
 workspace = true
 

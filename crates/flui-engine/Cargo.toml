@@ -13,6 +13,10 @@ readme = "README.md"
 keywords = ["rendering", "gpu", "wgpu", "ui", "graphics"]
 categories = ["rendering::engine", "graphics", "gui"]
 
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md", "/CONTRIBUTING.md", "/benches/"]
+
 [features]
 default = []
 

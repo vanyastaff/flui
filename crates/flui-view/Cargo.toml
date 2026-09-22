@@ -10,6 +10,10 @@ description = "View traits and abstractions for FLUI framework"
 repository.workspace = true
 keywords = ["ui", "view", "widget", "flui", "framework"]
 categories = ["gui"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md", "/UNIFIED_ELEMENT.md", "/benches/"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 24
 # separate binaries). See the `[[test]] name = "view_it"` target below.

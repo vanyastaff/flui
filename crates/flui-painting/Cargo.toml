@@ -10,6 +10,10 @@ rust-version.workspace = true
 description = "Canvas-based painting abstraction for FLUI - records drawing commands into DisplayList"
 keywords = ["gui", "canvas", "painting", "2d-graphics", "rendering"]
 categories = ["graphics", "gui", "rendering"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md", "/benches/"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 12
 # separate binaries). See the `[[test]] name = "painting_it"` target below.

@@ -10,6 +10,10 @@ repository.workspace = true
 description = "Platform abstraction layer for FLUI - cross-platform window and input handling"
 keywords = ["gui", "window", "platform", "input", "flui"]
 categories = ["gui", "os"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 11
 # separate binaries). See the `[[test]] name = "platform_it"` target below.

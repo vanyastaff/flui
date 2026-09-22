@@ -11,6 +11,10 @@ description = "Hot-reload support for FLUI scene plugins via dynamic library loa
 keywords = ["hot-reload", "gui", "flutter", "flui", "dylib"]
 categories = ["development-tools", "gui"]
 
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md"]
+
 [features]
 default = []
 app-plugin = [

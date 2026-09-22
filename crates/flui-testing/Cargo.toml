@@ -10,6 +10,10 @@ repository.workspace = true
 description = "Test support for FLUI: a deterministic headless frame driver on a virtual clock, the canonical mount bootstrap, gesture replay, and race-free tracing capture"
 keywords = ["ui", "gesture", "headless", "testing"]
 categories = ["gui"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/benches/"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 2
 # separate binaries). See the `[[test]] name = "flui_testing_it"` target below.

@@ -10,6 +10,10 @@ description = "User-facing Flutter-style widget catalog for FLUI (configuration 
 repository.workspace = true
 keywords = ["ui", "widget", "flutter", "flui", "gui"]
 categories = ["gui"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md"]
 # Root tests/*.rs are consolidated into the single `widgets_it` binary below
 # (one link of the wgpu stack instead of 49) — disable per-file auto-discovery.
 autotests = false

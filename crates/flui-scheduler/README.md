@@ -41,11 +41,14 @@ this crate.
 
 ```toml
 [dependencies]
-flui-scheduler = "0.1"
+flui-scheduler = "0.2"
 
 # With serialization support
-flui-scheduler = { version = "0.1", features = ["serde"] }
+flui-scheduler = { version = "0.2", features = ["serde"] }
 ```
+
+This crate isn't published to crates.io yet; until the first release, depend
+on it via a git tag or path — see the [flui facade's README](../../README.md).
 
 ## Usage
 

@@ -9,6 +9,10 @@ authors.workspace = true
 repository.workspace = true
 description = "Event routing, interaction handling, and gesture recognition for FLUI"
 categories = ["gui"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/benches/", "/docs/", "/proptest-regressions/"]
 keywords = ["gui", "ui", "events", "gestures", "interaction"]
 
 [dependencies]

@@ -10,6 +10,10 @@ repository.workspace = true
 description = "Compositor layer tree for FLUI — the fourth of its five trees"
 keywords = ["ui", "gpu", "compositor", "layer", "rendering"]
 categories = ["gui", "graphics", "rendering"]
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md"]
 # One integration-test binary (`tests/main.rs`, target `layer_it`) instead of
 # one link of the full dependency stack per test file. No root test writes
 # process-global state (`LayerLink::new`'s counter is a benign monotonic
