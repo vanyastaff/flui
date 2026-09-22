@@ -1,8 +1,11 @@
 # ADR-0074: Realm-scoped signals as the canonical application-state layer
 
-Status: **Draft** — design spike, phase 1 (no code). Phase 2 is a prototype behind a
-feature flag with the go/no-go measurement in §8. Amends FOUNDATIONS **C1** (§7) if
-accepted; until then C1 stands as written.
+Status: **Draft, phase 2 in progress** — prototype behind `flui-view` feature `signals`
+with the go/no-go measurement in §8.
+Supersedes: FOUNDATIONS C1 (signals clause), ADR-0008 §"signals-as-default are rejected"
+— by the beta-roadmap mandate that locked contracts are revisable explicitly (AGENTS.md
+ADR policy). The C1 text in `docs/FOUNDATIONS.md` is rewritten to §7's wording and ADR-0008
+gains a `Superseded-by: ADR-0074` note in the same PR as the prototype.
 
 ## 1. Context
 
@@ -169,9 +172,11 @@ impl<T> Signal<T> {
   (`RealmServices::construct`, `crates/flui-app/src/app/ui_realm.rs`), and is dropped with
   the realm — every signal of a dead realm is `OwnerGone`, by generation, the same rule as
   `RealmId` and `GlobalKey`.
-- **No trait bound on `T` beyond `'static`.** `Signal<T>::set` marks readers
-  unconditionally; `Memo<T>` and the optional `set_if_changed` use `PartialEq` only where
-  the *author* opts in (C1's Druid warning is respected).
+- **No trait bound on `T` beyond `'static`.** `Signal<T>::set` and `update` mark readers
+  **always**, whether or not the value changed — there is no equality check and no
+  `PartialEq` bound. `set_if_changed` (requires `T: PartialEq`) is the opt-in that skips
+  marking on an equal write; `Memo<T>` requires `PartialEq` on its output by construction.
+  This is the rule, not a default (§5.7); it is what keeps C1's Druid warning honoured.
 - `Signal<T>` is `Copy`: closures in `on_tap` capture it by value, no `Rc<RefCell<>>`
   choreography, no listener registration, no `RebuildHandle` in `init_state`.
 
@@ -223,10 +228,13 @@ signal.set(v)                         // owner thread, outside build
 ### 5.4 `Effect`
 
 An `Effect` is a closure that reads signals and does something that is not a build:
-persist to disk, push to an `AnimationController`, log. It runs **once after the build
-phase and before layout** of the frame in which one of its sources changed — a named
-scheduler phase, so it can request a rebuild (via `RebuildHandle`) but that rebuild lands
-in the next frame, never re-entering the current build. Effects are owned by the
+persist to disk, push to an `AnimationController`, log. The frame order is fixed:
+**build → effects → layout → paint**. An effect runs once, in the effects phase of the
+frame in which one of its sources changed. An effect that writes a signal or calls
+`RebuildHandle::schedule` marks readers for the **next** frame: the current frame's build
+phase is already closed, so nothing it does re-enters this frame's build. Phase 2 carries a
+test that pins both halves (an effect runs after the build that wrote its source, and a
+rebuild it requests is observed one `pump_frame` later, not in the same one). Effects are owned by the
 `ViewState` that created them (RAII drop on `dispose`) or by the realm (app-level
 effects). This is the `Mounted<'_>`/`EffectScope` slot ADR-0008 §3 reserved.
 
@@ -307,6 +315,8 @@ driven by `fields[3].set(r, "x".into())`; the assertion is on the memo, not on a
   index; `build` may read signals in any order, conditionally, or in loops.
 - `build` is still a pure function of `(View, State, reads)`; the reads are recorded, not
   ordered.
+- Equality is opt-in, never implied: a plain `set` marks readers even for an equal value;
+  only `set_if_changed` and `Memo` compare, and both say so in their bounds.
 - Lifetime is ownership, not call structure: a signal created by a `ViewState` is released
   when that state is disposed (the `Reactive` arena tracks the creating element and frees
   its slots on unmount, LIFO); an app-level signal is released with the realm.
