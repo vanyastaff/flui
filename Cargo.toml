@@ -369,30 +369,31 @@ pedantic = { level = "warn", priority = -1 }
 # ship-quality waves. `expect_used` stays off — expect() with the BUG:
 # message convention IS the sanctioned invariant idiom.
 unwrap_used = "warn"
-# `undocumented_unsafe_blocks` is deliberately NOT enabled. It was tried and
-# reverted, for two reasons worth recording so it is not re-adopted casually:
-#
-#   * It can only see what the Linux clippy job compiles. `cfg(windows)`'s
-#     flui-platform backend — every file under `platforms::windows`
-#     (`window.rs`, `platform.rs`, `clipboard.rs`, `display.rs`, `events.rs`,
-#     `util.rs`) — is now fully SAFETY-documented: every unsafe block carries
-#     an invariant comment (or, for `unsafe fn`, a `# Safety` rustdoc
-#     section), verified via `cargo clippy --target x86_64-pc-windows-msvc`.
-#     `cfg(target_os = "macos")` and the Android/`wasm32` backends are not:
-#     as of the last full audit (docs/audits/2026-08-04-full-audit.md §2.1),
-#     macOS carried ~11 undocumented sites, Android ~14 (mostly outside the
-#     now-scoped `platforms::android::memory` FFI island), web ~9 — none of
-#     which the Linux clippy job reaches. A green workspace run would still
-#     license the claim "every unsafe site is documented" while that remains
-#     false for two of three desktop targets plus mobile/web. Enabling it is
-#     only meaningful once the cross-target jobs run `clippy`, not `cargo
-#     check`. They now do — `cross-typecheck` lints msvc/darwin/android and
-#     `wasm-check` lints wasm32 — so this first reason no longer holds and
-#     the lint is due a re-evaluation; the second reason below still does.
-#   * Turning it on first and writing comments to satisfy it produces prose, not
-#     review. That is how several comments in flui-hot-reload came to state
-#     invariants the code does not establish. Document unsafe because the
-#     invariant was checked, not because a lint failed.
+# `undocumented_unsafe_blocks` — re-evaluated (W0-5): the reason it was off
+# ("only the Linux clippy job sees it, so a green run can't back the claim")
+# no longer holds now that `cross-typecheck` lints msvc/darwin/android and
+# `wasm-check` lints wasm32, not just `cargo check`. Left at `warn`, not
+# `deny`: this workspace runs every clippy-capable job under `-D warnings`,
+# so `warn` here means "CI enforces it once true" — the per-target hit counts
+# measured when this was turned on (docs/audits/2026-08-04-full-audit.md
+# §2.1's ~11 macOS / ~14 Android / ~9 web undocumented sites were the last
+# full count before this change) are recorded in the PR that flipped this
+# lint on; if they were too many for `-D warnings` to pass, that PR reverted
+# to `allow` with the fresh numbers instead of forcing it green with prose.
+# The second original reason still applies either way: write a SAFETY
+# comment because the invariant was checked, not because a lint failed —
+# several stale ones in flui-hot-reload came from writing the comment first.
+undocumented_unsafe_blocks = "warn"
+# `dbg_macro`/`todo`/`unimplemented`: restriction lints, off by default even
+# under `all`/`pedantic`. A `dbg!()` left in is a debug-session leftover, not
+# a review comment. `todo!()`/`unimplemented!()` are placeholders; the
+# codebase's real ones (platform-init stubs on linux/ios/android, per
+# AGENTS.md's stated exception) carry a per-site
+# `#[expect(clippy::unimplemented, reason = "...")]` instead of a blanket
+# allow, so a *new* one anywhere else still fails CI.
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"

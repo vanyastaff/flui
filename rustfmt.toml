@@ -3,6 +3,11 @@
 
 # Edition
 edition = "2024"
+# Style edition: the formatting *rules* to apply, decoupled from the crate
+# edition above so a style change doesn't ride in silently on an edition
+# bump. Explicit 2024 to match `edition` rather than relying on the
+# toolchain's current default, which moves independently of this file.
+style_edition = "2024"
 
 # Line width
 max_width = 100

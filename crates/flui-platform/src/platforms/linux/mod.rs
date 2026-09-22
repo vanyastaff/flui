@@ -113,6 +113,10 @@ impl LinuxPlatform {
     /// # Panics
     ///
     /// Always panics with "Linux platform not yet implemented"
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     pub fn new() -> Result<Self, PlatformError> {
         unimplemented!(
             "Linux platform not yet implemented - use winit backend or wait for native Wayland/X11 implementation"
@@ -124,6 +128,10 @@ impl LinuxPlatform {
     /// # Panics
     ///
     /// Always panics (stub implementation)
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     pub fn is_wayland() -> bool {
         unimplemented!("Wayland detection not implemented")
     }
@@ -133,16 +141,28 @@ impl LinuxPlatform {
     /// # Panics
     ///
     /// Always panics (stub implementation)
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     pub fn is_x11() -> bool {
         unimplemented!("X11 detection not implemented")
     }
 }
 
 impl Platform for LinuxPlatform {
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         unimplemented!("Linux Tokio executor integration not implemented")
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn run(
         self: Box<Self>,
         _on_finish_launching: PlatformReadyCallback,
@@ -150,22 +170,42 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux event loop (Wayland/X11) not implemented")
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn quit(&self) {
         unimplemented!("Linux quit not implemented")
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn active_window(&self) -> Option<WindowId> {
         unimplemented!("Linux active window query not implemented")
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
         unimplemented!("Linux display enumeration (wl_output/Xrandr) not implemented")
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
         unimplemented!("Linux primary display query not implemented")
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn open_window(
         &self,
         _options: WindowOptions,
@@ -173,6 +213,10 @@ impl Platform for LinuxPlatform {
         unimplemented!("Linux window creation (Wayland/X11) not implemented")
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn clipboard(&self) -> Arc<dyn Clipboard> {
         unimplemented!("Linux clipboard (wayland-data-device/X11 CLIPBOARD) not implemented")
     }
@@ -182,6 +226,10 @@ impl Platform for LinuxPlatform {
         Arc::new(NullDataTransferSource)
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn capabilities(&self) -> &dyn PlatformCapabilities {
         unimplemented!("Linux capabilities not implemented")
     }
@@ -190,14 +238,26 @@ impl Platform for LinuxPlatform {
         "Linux (stub)"
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn on_quit(&self, _callback: Box<dyn FnMut() + Send>) {
         unimplemented!("Linux quit callback not implemented")
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn on_window_event(&self, _callback: Box<dyn FnMut(WindowEvent) + Send>) {
         unimplemented!("Linux window event callback not implemented")
     }
 
+    #[expect(
+        clippy::unimplemented,
+        reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
+    )]
     fn app_path(&self) -> Result<std::path::PathBuf, PlatformError> {
         unimplemented!("Linux app path query (/proc/self/exe) not implemented")
     }
