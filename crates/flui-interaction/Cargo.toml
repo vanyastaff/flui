@@ -8,6 +8,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Event routing, interaction handling, and gesture recognition for FLUI"
+categories = ["gui"]
 keywords = ["gui", "ui", "events", "gestures", "interaction"]
 
 [dependencies]

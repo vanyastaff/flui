@@ -8,6 +8,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Platform abstraction layer for FLUI - cross-platform window and input handling"
+keywords = ["gui", "window", "platform", "input", "flui"]
+categories = ["gui", "os"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 11
 # separate binaries). See the `[[test]] name = "platform_it"` target below.

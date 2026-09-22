@@ -8,6 +8,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Runtime developer tooling for FLUI - frame profiler, timeline and tree-observation counters"
+keywords = ["gui", "profiler", "devtools", "flutter", "flui"]
+categories = ["development-tools::profiling", "gui"]
 
 # The crate exists only to provide these modules, so the docs must show them.
 [package.metadata.docs.rs]

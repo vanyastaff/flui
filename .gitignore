@@ -86,6 +86,9 @@ platforms/web/pkg/
 # Node modules (if using npm/yarn for web tooling)
 node_modules/
 package-lock.json
+# A root package.json only ever held a local agent's MCP server; the project
+# has no npm surface of its own.
+/package.json
 yarn.lock
 
 # ═══════════════════════════════════════════════════════════════════════════════

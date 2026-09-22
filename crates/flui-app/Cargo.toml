@@ -7,7 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Application framework for FLUI - Flutter-inspired UI"
+description = "Application runner for FLUI - bootstraps the platform, renderer and UI realm on desktop, mobile and web"
+keywords = ["gui", "ui", "flutter", "application", "runtime"]
+categories = ["gui"]
 
 [lib]
 crate-type = ["rlib"]

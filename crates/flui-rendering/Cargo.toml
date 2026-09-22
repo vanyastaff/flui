@@ -6,7 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Rendering layer for Flui framework"
+description = "Render-object protocol for FLUI - layout, paint, hit testing and semantics over the render tree"
+keywords = ["gui", "rendering", "layout", "flutter", "flui"]
+categories = ["gui", "rendering"]
 repository.workspace = true
 # Benches are declared explicitly below; disable auto-discovery so the shared
 # `benches/helpers.rs` module is not itself compiled as a standalone bench target.
