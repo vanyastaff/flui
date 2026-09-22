@@ -61,11 +61,13 @@ toml = "1.1"
 
 # Utilities
 which = "8.0"
-cliclack = "0.5"
-console = "0.16"
 
-# Blocks on the async builders from synchronous command code.
-pollster = { workspace = true }
+# Terminal drawing (`ui.rs`) and the prompts of `flui create` / `platform
+# remove`. `console` alone draws the bar, the glyphs and the spinner;
+# `dialoguer` without its default features is the prompts and nothing else
+# (no password editor, no fuzzy matcher).
+console = "0.16"
+dialoguer = { version = "0.12", default-features = false }
 
 
 

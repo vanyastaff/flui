@@ -32,7 +32,7 @@ use std::path::PathBuf;
 
 /// Custom styles for CLI help output.
 ///
-/// Uses cyan for headers and literals to match cliclack styling.
+/// Uses cyan for headers and literals to match the `ui` module's palette.
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Cyan.on_default().effects(Effects::BOLD))
     .usage(AnsiColor::Cyan.on_default().effects(Effects::BOLD))

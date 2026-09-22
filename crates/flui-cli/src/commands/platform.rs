@@ -177,12 +177,12 @@ pub fn remove(platform: &str, yes: bool) -> CliResult<()> {
         }
 
         // Prompt for confirmation.
-        let confirm = cliclack::confirm(format!(
+        let confirm = ui::prompt::confirm(&format!(
             "Remove {} platform? This will delete {}",
             platform_lower,
             platform_dir.display()
-        ))
-        .interact()?;
+        ))?
+        .unwrap_or(false);
 
         if !confirm {
             ui::outro(style("Cancelled").dim())?;

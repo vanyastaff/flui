@@ -110,6 +110,13 @@ impl Artifact {
 }
 
 /// Render a byte count the way a person reads it: KB below one MB, MB above.
+/// Drive one of the async builders to completion on the build runtime
+/// `execute` entered; a plain executor cannot, because the builders spawn
+/// `tokio::process` children that need the runtime's reactor.
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    tokio::runtime::Handle::current().block_on(future)
+}
+
 fn human_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -347,15 +354,15 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building Rust libraries...");
-    let artifacts = pollster::block_on(android_builder.build_rust(&ctx))
-        .context("Failed to build Rust libraries")?;
+    let artifacts =
+        block_on(android_builder.build_rust(&ctx)).context("Failed to build Rust libraries")?;
 
     ui::emit(
         "build.phase",
         &serde_json::json!({ "name": "build_platform" }),
     );
     spinner.start("Building APK...");
-    let final_artifacts = pollster::block_on(android_builder.build_platform(&ctx, &artifacts))
+    let final_artifacts = block_on(android_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build APK")?;
 
     spinner.stop(format!("{} Android APK built", style("✓").green()));
@@ -421,15 +428,15 @@ fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building iOS Rust target...");
-    let artifacts = pollster::block_on(ios_builder.build_rust(&ctx))
-        .context("Failed to build iOS Rust target")?;
+    let artifacts =
+        block_on(ios_builder.build_rust(&ctx)).context("Failed to build iOS Rust target")?;
 
     ui::emit(
         "build.phase",
         &serde_json::json!({ "name": "build_platform" }),
     );
     spinner.start("Building iOS app...");
-    let final_artifacts = pollster::block_on(ios_builder.build_platform(&ctx, &artifacts))
+    let final_artifacts = block_on(ios_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build iOS app")?;
 
     if let Some(simulator) = simulator {
@@ -486,15 +493,14 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building WASM...");
-    let artifacts =
-        pollster::block_on(web_builder.build_rust(&ctx)).context("Failed to build WASM")?;
+    let artifacts = block_on(web_builder.build_rust(&ctx)).context("Failed to build WASM")?;
 
     ui::emit(
         "build.phase",
         &serde_json::json!({ "name": "build_platform" }),
     );
     spinner.start("Building web package...");
-    let final_artifacts = pollster::block_on(web_builder.build_platform(&ctx, &artifacts))
+    let final_artifacts = block_on(web_builder.build_platform(&ctx, &artifacts))
         .context("Failed to build web package")?;
 
     spinner.stop(format!("{} Web package built", style("✓").green()));
@@ -551,15 +557,14 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building binary...");
-    let artifacts =
-        pollster::block_on(desktop_builder.build_rust(&ctx)).context("Failed to build binary")?;
+    let artifacts = block_on(desktop_builder.build_rust(&ctx)).context("Failed to build binary")?;
 
     ui::emit(
         "build.phase",
         &serde_json::json!({ "name": "build_platform" }),
     );
     spinner.start("Copying binary...");
-    let final_artifacts = pollster::block_on(desktop_builder.build_platform(&ctx, &artifacts))
+    let final_artifacts = block_on(desktop_builder.build_platform(&ctx, &artifacts))
         .context("Failed to copy binary")?;
 
     spinner.stop(format!("{} Desktop binary built", style("✓").green()));
@@ -630,15 +635,14 @@ fn build_specific_platform(
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building...");
-    let artifacts =
-        pollster::block_on(desktop_builder.build_rust(&ctx)).context("Failed to build")?;
+    let artifacts = block_on(desktop_builder.build_rust(&ctx)).context("Failed to build")?;
 
     ui::emit(
         "build.phase",
         &serde_json::json!({ "name": "build_platform" }),
     );
     spinner.start("Copying artifacts...");
-    let final_artifacts = pollster::block_on(desktop_builder.build_platform(&ctx, &artifacts))
+    let final_artifacts = block_on(desktop_builder.build_platform(&ctx, &artifacts))
         .context("Failed to copy artifacts")?;
 
     spinner.stop(format!(
@@ -726,11 +730,10 @@ fn build_macos_universal(
         builder_inst
             .validate_environment()
             .context("Environment validation failed")?;
-        let artifacts = pollster::block_on(builder_inst.build_rust(&slice_ctx))
+        let artifacts = block_on(builder_inst.build_rust(&slice_ctx))
             .with_context(|| format!("Failed to build {triple}"))?;
-        let final_artifacts =
-            pollster::block_on(builder_inst.build_platform(&slice_ctx, &artifacts))
-                .with_context(|| format!("Failed to stage {triple}"))?;
+        let final_artifacts = block_on(builder_inst.build_platform(&slice_ctx, &artifacts))
+            .with_context(|| format!("Failed to stage {triple}"))?;
         slice_paths.push(final_artifacts.app_binary);
     }
 

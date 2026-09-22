@@ -15,6 +15,17 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **`flui-cli` draws its own terminal output** (`flui-cli`). `cliclack` is
+  gone: it brought 42 of the CLI's 116 crates — ICU text segmentation with
+  its data tables and proc-macros, to word-wrap prompt text — for a dozen
+  lines of glyphs and a spinner, which now live in `ui.rs` over `console`.
+  The prompts of `flui create` and `platform remove` run on `dialoguer`
+  without its default features (one extra crate). `pollster` is gone too:
+  the build command already enters a tokio runtime, so its handle drives
+  the async builders. The CLI's normal dependency graph is 76 crates, down
+  from 116; the output keeps the same shape (a bar down the left, one glyph
+  per line kind), the same `--json`/`--quiet`/`--color` behaviour, and the
+  spinner prints its start and end lines once when stderr is not a terminal.
 - **`flui-cli` has no internal dependency and no logging framework**
   (`flui-cli`; breaking for `RUST_LOG` users). The CLI dropped `flui-log`,
   `tracing` and `tracing-subscriber`. With no framework crate in its graph a

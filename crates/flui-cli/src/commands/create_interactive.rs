@@ -1,10 +1,9 @@
 //! Interactive project creation command.
 //!
 //! This module provides an interactive CLI wizard for creating new FLUI projects
-//! using cliclack for beautiful prompts.
+//! over the prompts in `ui::prompt`.
 
 use crate::error::{CliError, CliResult};
-use crate::runner::{input, select};
 use crate::types::{OrganizationId, ProjectName};
 use crate::ui;
 use crate::{Platform, Template};
@@ -35,55 +34,58 @@ pub fn interactive_create() -> CliResult<ProjectConfig> {
     ui::intro(style(" Create FLUI Project ").on_cyan().black())?;
 
     // Ask for project name with validation
-    let name: String = input("Project name")
-        .placeholder("my-app")
-        .validate(|input: &String| {
-            ProjectName::new(input)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        })
-        .interact()
-        .map_err(|_| CliError::UserCancelled)?;
+    let name = ui::prompt::input("Project name", None, |input| {
+        ProjectName::new(input)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    })?
+    .ok_or(CliError::UserCancelled)?;
 
     // Ask for organization with validation
-    let org: String = input("Organization (reverse domain notation)")
-        .default_input("com.example")
-        .validate(|input: &String| {
+    let org = ui::prompt::input(
+        "Organization (reverse domain notation)",
+        Some("com.example"),
+        |input| {
             OrganizationId::new(input)
                 .map(|_| ())
                 .map_err(|e| e.to_string())
-        })
-        .interact()
-        .map_err(|_| CliError::UserCancelled)?;
+        },
+    )?
+    .ok_or(CliError::UserCancelled)?;
 
     // Ask for template
-    let template = select("Choose a template")
-        .item(
-            Template::Counter,
-            "Counter",
-            "Simple counter with state management",
-        )
-        .item(
-            Template::Basic,
-            "Basic",
-            "Hello, FLUI! with a Material theme",
-        )
-        .item(Template::Empty, "Empty", "Smallest runnable app")
-        .item(Template::Widget, "Widget", "Reusable widget library")
-        .interact()
-        .map_err(|_| CliError::UserCancelled)?;
+    let template = ui::prompt::select(
+        "Choose a template",
+        &[
+            (
+                Template::Counter,
+                "Counter",
+                "Simple counter with state management",
+            ),
+            (
+                Template::Basic,
+                "Basic",
+                "Hello, FLUI! with a Material theme",
+            ),
+            (Template::Empty, "Empty", "Smallest runnable app"),
+            (Template::Widget, "Widget", "Reusable widget library"),
+        ],
+    )?
+    .ok_or(CliError::UserCancelled)?;
 
     // Ask for target platforms
-    let platforms: Vec<Platform> = cliclack::multiselect("Select target platforms")
-        .item(Platform::Windows, "Windows", "Desktop")
-        .item(Platform::Linux, "Linux", "Desktop")
-        .item(Platform::Macos, "macOS", "Desktop")
-        .item(Platform::Android, "Android", "Mobile")
-        .item(Platform::Ios, "iOS", "Mobile (macOS only)")
-        .item(Platform::Web, "Web", "WASM")
-        .required(false)
-        .interact()
-        .map_err(|_| CliError::UserCancelled)?;
+    let platforms: Vec<Platform> = ui::prompt::multiselect(
+        "Select target platforms",
+        &[
+            (Platform::Windows, "Windows", "Desktop"),
+            (Platform::Linux, "Linux", "Desktop"),
+            (Platform::Macos, "macOS", "Desktop"),
+            (Platform::Android, "Android", "Mobile"),
+            (Platform::Ios, "iOS", "Mobile (macOS only)"),
+            (Platform::Web, "Web", "WASM"),
+        ],
+    )?
+    .ok_or(CliError::UserCancelled)?;
 
     let platforms = if platforms.is_empty() {
         None

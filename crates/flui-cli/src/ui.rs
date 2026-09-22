@@ -1,10 +1,11 @@
 //! Output policy for the CLI: where text goes, in which shape, and how much.
 //!
-//! Every command talks to the terminal through this module rather than
-//! through `cliclack` directly, so one global switch changes the whole tool:
+//! Every command talks to the terminal through this module, so one global
+//! switch changes the whole tool:
 //!
-//! - **Human mode** (default): `cliclack`-styled text on **stderr**. Nothing
-//!   is written to stdout except payloads a user would pipe (completion
+//! - **Human mode** (default): styled text on **stderr** — a bar down the
+//!   left, one glyph per line kind — drawn here with `console`. Nothing is
+//!   written to stdout except payloads a user would pipe (completion
 //!   scripts). That is what makes `flui devices > list.txt` sane.
 //! - **JSON mode** (`--json`): one JSON object per line on **stdout**
 //!   (NDJSON) — every object carries an `event` field — and *no* human
@@ -16,16 +17,27 @@
 //! Interactivity is a separate axis: prompts and hot-keys need a terminal
 //! on both ends *and* no `CI`/`--non-interactive` opt-out. Anything that
 //! would block on a prompt asks [`is_interactive`] first and fails with an
-//! actionable error instead of hanging a CI job.
+//! actionable error instead of hanging a CI job. The prompts themselves
+//! live in [`prompt`], over `dialoguer`.
 //!
 //! The policy is process-global (`OnceLock`) because a CLI has exactly one
 //! terminal; commands are free functions and threading a context through
 //! every helper only for this would be noise.
+//!
+//! The drawing used to be `cliclack`'s. It went because it brought 42 of the
+//! CLI's 116 crates — ICU text segmentation, with its data tables and
+//! proc-macros, to word-wrap prompt text — for a dozen lines of glyphs and a
+//! spinner that fit in this file.
 
 use serde::Serialize;
 use std::fmt::Display;
 use std::io::{IsTerminal, Write};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use console::{StyledObject, Term, style};
 
 /// Shape of the CLI's output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -45,7 +57,7 @@ pub enum Verbosity {
     /// The usual progress narration.
     #[default]
     Normal,
-    /// Also debug logs from FLUI's own crates (`-v`).
+    /// Also [`debug`] diagnostics: commands run, probes made, paths skipped.
     Verbose,
 }
 
@@ -195,13 +207,38 @@ pub fn emit<T: Serialize>(event: &str, payload: &T) {
 // ============================================================================
 // Human-mode narration (stderr)
 // ============================================================================
+//
+// The shape: a bar `│` runs down the left edge from `┌  title` to
+// `└  closing line`; every line in between opens with one glyph that says
+// what kind of line it is, and continuation lines of a multi-line message
+// hang under the bar.
+
+const BAR: &str = "│";
+
+fn bar() -> StyledObject<&'static str> {
+    style(BAR).dim()
+}
+
+/// One glyph-led block: the first line after the glyph, the rest under the
+/// bar, then an empty bar line to separate it from the next block.
+fn block(glyph: StyledObject<&'static str>, message: &str) -> std::io::Result<()> {
+    let mut err = std::io::stderr().lock();
+    let mut lines = message.lines();
+    writeln!(err, "{glyph}  {}", lines.next().unwrap_or_default())?;
+    for line in lines {
+        writeln!(err, "{}  {line}", bar())?;
+    }
+    writeln!(err, "{}", bar())
+}
 
 /// Command banner, e.g. `flui doctor`.
 pub fn intro(title: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
-    cliclack::intro(title)
+    let mut err = std::io::stderr().lock();
+    writeln!(err, "{}  {title}", style("┌").dim())?;
+    writeln!(err, "{}", bar())
 }
 
 /// Closing line after success.
@@ -209,7 +246,9 @@ pub fn outro(message: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
-    cliclack::outro(message)
+    let mut err = std::io::stderr().lock();
+    writeln!(err, "{}  {message}", style("└").dim())?;
+    writeln!(err)
 }
 
 /// Closing line after failure. Shown even when quiet — a failure is never
@@ -218,7 +257,9 @@ pub fn outro_cancel(message: impl Display) -> std::io::Result<()> {
     if is_json() {
         return Ok(());
     }
-    cliclack::outro_cancel(message)
+    let mut err = std::io::stderr().lock();
+    writeln!(err, "{}  {}", style("└").red(), style(message).red())?;
+    writeln!(err)
 }
 
 /// Informational line.
@@ -226,7 +267,7 @@ pub fn info(message: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
-    cliclack::log::info(message)
+    block(style("●").cyan(), &message.to_string())
 }
 
 /// Success line.
@@ -234,7 +275,7 @@ pub fn success(message: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
-    cliclack::log::success(message)
+    block(style("◆").green(), &message.to_string())
 }
 
 /// Progress step line.
@@ -242,7 +283,7 @@ pub fn step(message: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
-    cliclack::log::step(message)
+    block(style("◇").green(), &message.to_string())
 }
 
 /// Low-emphasis remark.
@@ -250,7 +291,7 @@ pub fn remark(message: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
-    cliclack::log::remark(message)
+    block(bar(), &style(message).dim().to_string())
 }
 
 /// Diagnostic line for `--verbose`: which command ran, which probe failed,
@@ -268,7 +309,7 @@ pub fn debug(message: impl Display) {
     let _ = writeln!(
         std::io::stderr(),
         "{}",
-        console::style(format!("debug: {message}")).dim()
+        style(format!("debug: {message}")).dim()
     );
 }
 
@@ -278,7 +319,7 @@ pub fn warning(message: impl Display) -> std::io::Result<()> {
     if is_json() {
         return writeln!(std::io::stderr(), "warning: {message}");
     }
-    cliclack::log::warning(message)
+    block(style("▲").yellow(), &message.to_string())
 }
 
 /// Error line. Always shown; plain text in JSON mode.
@@ -286,16 +327,26 @@ pub fn error(message: impl Display) -> std::io::Result<()> {
     if is_json() {
         return writeln!(std::io::stderr(), "error: {message}");
     }
-    cliclack::log::error(message)
+    block(style("■").red(), &message.to_string())
 }
 
-/// Boxed note with a title.
+/// Titled note: the title on the glyph line, the body hanging under the bar.
 pub fn note(title: impl Display, body: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
-    cliclack::note(title, body)
+    block(
+        style("◇").green(),
+        &format!("{}\n{body}", style(title).bold()),
+    )
 }
+
+// ============================================================================
+// Spinner
+// ============================================================================
+
+const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const FRAME_INTERVAL: Duration = Duration::from_millis(80);
 
 /// A spinner that is silent when narration is suppressed.
 #[must_use]
@@ -303,12 +354,26 @@ pub fn spinner() -> Spinner {
     if is_quiet() {
         Spinner(None)
     } else {
-        Spinner(Some(cliclack::spinner()))
+        Spinner(Some(Active {
+            message: Arc::new(Mutex::new(String::new())),
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: Mutex::new(None),
+        }))
     }
 }
 
 /// Progress spinner handle; see [`spinner`].
-pub struct Spinner(Option<cliclack::ProgressBar>);
+///
+/// On a terminal it animates in place on stderr; into a pipe it prints the
+/// start message once and the final message once, so a log of the run
+/// reads like the terminal did, minus the animation.
+pub struct Spinner(Option<Active>);
+
+struct Active {
+    message: Arc<Mutex<String>>,
+    stop: Arc<AtomicBool>,
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
 
 impl std::fmt::Debug for Spinner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -321,23 +386,189 @@ impl std::fmt::Debug for Spinner {
 impl Spinner {
     /// Start spinning with a message.
     pub fn start(&self, message: impl Display) {
-        if let Some(bar) = &self.0 {
-            bar.start(message);
+        let Some(active) = &self.0 else { return };
+        let message = message.to_string();
+        let term = Term::stderr();
+        if !term.is_term() {
+            let _ = writeln!(std::io::stderr(), "{}  {message}", style("◇").dim());
+            return;
         }
+        *active
+            .message
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = message;
+        active.stop.store(false, Ordering::SeqCst);
+        let shared = Arc::clone(&active.message);
+        let stop = Arc::clone(&active.stop);
+        let handle = std::thread::Builder::new()
+            .name("flui-spinner".into())
+            .spawn(move || {
+                let _ = term.hide_cursor();
+                let mut frame = 0usize;
+                while !stop.load(Ordering::SeqCst) {
+                    let text = shared
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    let _ = term.clear_line();
+                    let _ = term.write_str(&format!(
+                        "{}  {text}",
+                        style(FRAMES[frame % FRAMES.len()]).magenta()
+                    ));
+                    frame += 1;
+                    std::thread::sleep(FRAME_INTERVAL);
+                }
+                let _ = term.clear_line();
+                let _ = term.show_cursor();
+            })
+            .ok();
+        *active
+            .thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = handle;
+    }
+
+    fn finish(&self, glyph: StyledObject<&'static str>, message: impl Display) {
+        let Some(active) = &self.0 else { return };
+        active.stop.store(true, Ordering::SeqCst);
+        if let Some(handle) = active
+            .thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = handle.join();
+        }
+        let _ = block(glyph, &message.to_string());
     }
 
     /// Stop with a final message.
     pub fn stop(&self, message: impl Display) {
-        if let Some(bar) = &self.0 {
-            bar.stop(message);
-        }
+        self.finish(style("◇").green(), message);
     }
 
     /// Stop with a failure message.
     pub fn error(&self, message: impl Display) {
-        if let Some(bar) = &self.0 {
-            bar.error(message);
+        self.finish(style("■").red(), message);
+    }
+}
+
+impl Drop for Spinner {
+    fn drop(&mut self) {
+        // A spinner dropped mid-flight (an early `?`) must not leave a thread
+        // redrawing over whatever the error path prints next.
+        if let Some(active) = &self.0 {
+            active.stop.store(true, Ordering::SeqCst);
+            if let Some(handle) = active
+                .thread
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                let _ = handle.join();
+            }
         }
+    }
+}
+
+// ============================================================================
+// Prompts
+// ============================================================================
+
+/// Interactive prompts, on stderr, for callers that checked
+/// [`is_interactive`] first.
+///
+/// Every function returns `Ok(None)` when the user backed out (Esc, `q` or
+/// Ctrl-C) so the caller can map that to its own cancellation error, and
+/// `Err` only for a real terminal failure.
+pub mod prompt {
+    use console::{Term, style};
+    use dialoguer::theme::ColorfulTheme;
+    use dialoguer::{Confirm, Input, MultiSelect, Select};
+
+    fn theme() -> ColorfulTheme {
+        ColorfulTheme::default()
+    }
+
+    /// Ctrl-C surfaces as an interrupted I/O error; that is a cancellation,
+    /// not a failure.
+    fn cancel_aware<T>(result: dialoguer::Result<T>) -> std::io::Result<Option<T>> {
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(dialoguer::Error::IO(error)) if error.kind() == std::io::ErrorKind::Interrupted => {
+                Ok(None)
+            }
+            Err(dialoguer::Error::IO(error)) => Err(error),
+        }
+    }
+
+    fn cancel_aware_opt<T>(result: dialoguer::Result<Option<T>>) -> std::io::Result<Option<T>> {
+        cancel_aware(result).map(Option::flatten)
+    }
+
+    /// Label with a dimmed description, for menu items.
+    fn item(name: &str, description: &str) -> String {
+        format!("{name}  {}", style(description).dim())
+    }
+
+    /// Free-text input with validation; `default` is offered when set.
+    pub fn input(
+        label: &str,
+        default: Option<&str>,
+        validate: impl Fn(&str) -> Result<(), String>,
+    ) -> std::io::Result<Option<String>> {
+        let theme = theme();
+        let mut prompt = Input::<String>::with_theme(&theme).with_prompt(label);
+        if let Some(default) = default {
+            prompt = prompt.default(default.to_string());
+        }
+        let prompt = prompt.validate_with(move |value: &String| validate(value));
+        cancel_aware(prompt.interact_text_on(&Term::stderr()))
+    }
+
+    /// Single choice among `(value, name, description)` items.
+    pub fn select<T: Clone>(label: &str, items: &[(T, &str, &str)]) -> std::io::Result<Option<T>> {
+        let labels: Vec<String> = items
+            .iter()
+            .map(|(_, name, description)| item(name, description))
+            .collect();
+        let chosen = cancel_aware_opt(
+            Select::with_theme(&theme())
+                .with_prompt(label)
+                .items(&labels)
+                .default(0)
+                .interact_on_opt(&Term::stderr()),
+        )?;
+        Ok(chosen.map(|index| items[index].0.clone()))
+    }
+
+    /// Any number of choices among `(value, name, description)` items; an
+    /// empty selection is a valid answer.
+    pub fn multiselect<T: Clone>(
+        label: &str,
+        items: &[(T, &str, &str)],
+    ) -> std::io::Result<Option<Vec<T>>> {
+        let labels: Vec<String> = items
+            .iter()
+            .map(|(_, name, description)| item(name, description))
+            .collect();
+        let chosen = cancel_aware_opt(
+            MultiSelect::with_theme(&theme())
+                .with_prompt(label)
+                .items(&labels)
+                .interact_on_opt(&Term::stderr()),
+        )?;
+        Ok(chosen.map(|indices| indices.into_iter().map(|i| items[i].0.clone()).collect()))
+    }
+
+    /// Yes/no question, defaulting to no.
+    pub fn confirm(label: &str) -> std::io::Result<Option<bool>> {
+        cancel_aware_opt(
+            Confirm::with_theme(&theme())
+                .with_prompt(label)
+                .default(false)
+                .interact_on_opt(&Term::stderr()),
+        )
     }
 }
 

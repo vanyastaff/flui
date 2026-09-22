@@ -730,13 +730,6 @@ impl GitCommand {
     }
 }
 
-// ============================================================================
-// Console Output (cliclack) - Re-exports for interactive prompts
-// ============================================================================
-
-/// Re-export cliclack interactive prompt types.
-pub use cliclack::{confirm, input, multiselect, password, select};
-
 #[cfg(test)]
 mod tests {
     use super::*;
