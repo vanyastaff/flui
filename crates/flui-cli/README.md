@@ -69,8 +69,11 @@ flui run                         # build, launch, watch; r / R / q keys
 flui build macos --release       # a signed-ready .app, path printed at the end
 ```
 
-Inside the FLUI checkout, generate against the local source instead of the
-registry: `flui create my_app --local --path ../apps`.
+Until the framework itself is on crates.io, a generated project depends on
+the FLUI git tag that matches the CLI's version (`flui = { git = "…", tag =
+"v0.1.0" }`), which every release creates; the first `cargo build` clones
+it. Inside the FLUI checkout, generate against the local source instead:
+`flui create my_app --local --path ../apps`.
 
 ## Commands
 

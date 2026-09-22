@@ -43,6 +43,14 @@ file records the repo-consumer-visible summary.
   was resolved and never used, while the warning promised the APK step
   would be skipped — now it is), and the iOS simulator probes use the
   bounded runner in `proc.rs` instead of a fresh tokio runtime per call.
+- **`flui create` builds without the framework on crates.io** (`flui-cli`).
+  A generated project's `flui` dependency is the git tag matching the CLI's
+  version (`{ git = "https://github.com/vanyastaff/flui", tag = "v0.1.0" }`,
+  `features` preserved) until `FRAMEWORK_ON_CRATES_IO` in
+  `templates/source.rs` is flipped, which is the CLI release after the
+  framework's first publication; `--local` is unchanged. This lets
+  `flui-cli` ship alone: the framework's 25-crate publish closure no longer
+  gates it.
 - **`flui-cli` release gates** (`flui-cli`, `.github/workflows/ci.yml`,
   `.github/workflows/weekly.yml`, `docs/workspace-layers.toml`).
   `cargo publish --dry-run -p flui-cli` passes: the `flui-hot-reload`

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 /// not a positional argument every caller has to count.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CreateOptions {
-    /// Use local path dependencies instead of crates.io versions.
+    /// Use local path dependencies instead of the published framework.
     pub(crate) local: Option<PathBuf>,
     /// Skip the post-scaffold `cargo check`. The check only reports — it
     /// never fails the command — so skipping it changes nothing about the

@@ -659,8 +659,13 @@ fn invalid_local_source_does_not_create_output() {
     }
 }
 
+/// Without `--local`, a generated project pins the FLUI git tag that
+/// matches this CLI's version: the framework is not on crates.io yet, and
+/// the release workflow creates `v<version>` for every release. When the
+/// framework is published this becomes a bare version requirement (see
+/// `FRAMEWORK_ON_CRATES_IO` in templates/source.rs) and this test with it.
 #[test]
-fn registry_source_remains_versioned() {
+fn default_source_pins_the_release_tag_until_the_framework_is_published() {
     let tmp = TempDir::new().expect("temp dir");
     flui()
         .args(["create", "registry-app", "--no-check", "--path"])
@@ -671,10 +676,19 @@ fn registry_source_remains_versioned() {
         .expect("manifest")
         .parse()
         .expect("TOML");
+    let flui = manifest["dependencies"]["flui"]
+        .as_table()
+        .expect("git dependency is an inline table");
     assert_eq!(
-        manifest["dependencies"]["flui"].as_str(),
-        Some(env!("CARGO_PKG_VERSION"))
+        flui["git"].as_str(),
+        Some("https://github.com/vanyastaff/flui")
     );
+    assert_eq!(
+        flui["tag"].as_str(),
+        Some(format!("v{}", env!("CARGO_PKG_VERSION")).as_str())
+    );
+    assert!(flui.get("version").is_none());
+    assert!(flui.get("path").is_none());
 }
 
 #[cfg(unix)]
