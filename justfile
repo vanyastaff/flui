@@ -884,6 +884,11 @@ install-hooks:
     @echo "core.hooksPath -> scripts/githooks (git push --no-verify still bypasses it)"
 
 [group("maintenance")]
+[doc("Drop target/debug/incremental only (it reached 8.1 GB after one workspace test build); the next build is a full one for changed crates, nothing else is touched")]
+clean-incremental:
+    rm -rf "${CARGO_TARGET_DIR:-target}/debug/incremental"
+
+[group("maintenance")]
 [doc("Prune stale build artifacts: current-toolchain sweep + anything older than 7 days (requires cargo-sweep)")]
 sweep:
     cargo sweep --installed

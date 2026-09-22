@@ -740,19 +740,22 @@ required-features = ["testing", "material"]
 
 [profile.dev]
 opt-level = 1 # Some optimization for faster runtime
-# This key — not `.cargo/config.toml`'s `[env] CARGO_INCREMENTAL = "0"` — is what
-# actually turns incremental off. `[env]` sets variables for the processes Cargo
-# *executes*; it does not feed back into Cargo's own profile resolution, so with
-# that pin in place and this key reading `true`, `cargo build -v` still emitted
-# `-C incremental=<target>/debug/incremental`. The workspace-wide intent recorded
-# in `.cargo/config.toml` (sccache cannot cache per-CGU incremental artifacts, and
-# CI already runs with it off) only lands here.
+# Incremental compilation is ON for local development. Measured on an M1 (8 cores,
+# jobs=6, warm target) after a one-line edit in `flui-widgets`: `cargo check
+# --workspace` 4.3 s -> 1.5 s, `cargo nextest run -p flui-widgets --no-run`
+# 48 s -> 10 s, `cargo nextest run --workspace --no-run` 158 s -> 45 s. The
+# price is disk: `target/debug/incremental` reached 8.1 GB after one workspace
+# test build — `just clean-incremental` drops it without touching anything else.
 #
-# Opting back in still works: `CARGO_INCREMENTAL=1` in the real environment reaches
-# Cargo and overrides this. Under an sccache wrapper it then hard-errors
-# ("incremental compilation is prohibited") rather than silently degrading — the
-# correct outcome for a cache that cannot serve those artifacts.
-incremental = false
+# CI builds with it OFF: every workflow sets `CARGO_INCREMENTAL=0` in its
+# environment, and that variable overrides this key (it reaches Cargo's own
+# profile resolution, unlike the `[env]` table in `.cargo/config.toml`, which
+# only feeds the processes Cargo executes). Set the same variable locally when
+# building through an `sccache` wrapper: it cannot cache per-CGU incremental
+# artifacts and hard-errors ("incremental compilation is prohibited") instead
+# of silently degrading, and on Windows the sccache + incremental combination
+# crashed rustc (STATUS_ACCESS_VIOLATION) on the heavier test binaries.
+incremental = true
 # `line-tables-only` keeps file:line in panic backtraces and profiler stacks
 # but drops ALL variable/scope/type DWARF — on this 28-crate wgpu/cosmic-text/
 # lyon/naga workspace that debuginfo was the bulk of `target/debug/deps`
