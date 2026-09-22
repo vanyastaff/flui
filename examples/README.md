@@ -10,6 +10,7 @@ separate crates or WASM targets with their own build step.
 | Example | Run |
 |---|---|
 | **counter** — the minimal FLUI app: one `StateCell` and a button (start here — this is the README's own "Hello World" code sample, and the exact shape `flui create`'s `counter` template generates) | `cargo run --example counter` |
+| **todo** — the step past `counter`: a list in `StateHandle<Vec<Item>>` (not `StateCell`, which needs `T: Copy`), with add/toggle/delete. See the book's [Tutorial: counter → todo](../book/src/getting-started/tutorial-todo.md) | `cargo run --example todo --features material` |
 | **widgets_gallery** — a tour of the wider `flui-widgets` catalog through `flui::prelude` + `run_app` | `cargo run --example widgets_gallery` |
 | **platform_window** — the platform layer *without* widgets: a raw window and event loop, no `View`/`Element`/render tree. Useful for debugging platform integration itself, not as a first example of the framework | `cargo run --example platform_window` |
 | **colored_box_app** — the first FLUI application through the real pipeline, at the low-level `flui-view`/`flui-objects` layer (no facade) | `cargo run --example colored_box_app` |

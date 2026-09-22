@@ -656,6 +656,14 @@ name = "counter"
 path = "examples/counter.rs"
 required-features = ["material"]
 
+# Same reason as `counter.rs` above: `todo.rs` uses `Checkbox`/`ElevatedButton`/
+# `IconButton`/`TextField`/`Theme`/`ThemeData` from the Material catalog, so
+# an isolated non-material `just facade-combos` build fails without this.
+[[example]]
+name = "todo"
+path = "examples/todo.rs"
+required-features = ["material"]
+
 [[example]]
 name = "cupertino_demo"
 path = "examples/cupertino_demo/main.rs"
