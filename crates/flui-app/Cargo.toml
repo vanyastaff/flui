@@ -133,9 +133,7 @@ android-activity = { version = "0.6", features = ["native-activity"] }
 # without this the surface never gets a usable adapter (`SurfaceCreation`
 # fails at GPU init).
 [target.'cfg(target_os = "linux")'.dependencies]
-flui-platform = { path = "../flui-platform", version = "=0.1.0", features = [
-    "winit-backend",
-] }
+flui-platform = { path = "../flui-platform", version = "=0.1.0", features = ["winit-backend"] }
 flui-engine = { path = "../flui-engine", version = "=0.1.0", features = ["vulkan"] }
 
 [dev-dependencies]
@@ -160,9 +158,7 @@ tracing-subscriber.workspace = true
 # Enable flui-interaction's `testing` feature in test builds so tests can
 # construct synthetic pointer events via `events::make_*_event`. Feature
 # unification keeps these helpers out of the release `flui-app` binary.
-flui-interaction = { path = "../flui-interaction", version = "=0.1.0", features = [
-    "testing",
-] }
+flui-interaction = { path = "../flui-interaction", version = "=0.1.0", features = ["testing"] }
 # Enable flui-rendering's `testing` feature in test builds so wiring tests can
 # seed pending child-build requests via `push_pending_child_request_for_test`.
 # Same dev-only feature-unification pattern; helper stays out of release builds.

@@ -63,9 +63,7 @@ flui-painting = { path = "../flui-painting", version = "=0.1.0" }
 # (`ink_well.rs`, `text_field.rs`, `material.rs`). Pointer-event construction
 # moved into the shared harness (`flui_widgets::testing`), which enables this
 # same `testing` feature itself.
-flui-interaction = { path = "../flui-interaction", version = "=0.1.0", features = [
-    "testing",
-] }
+flui-interaction = { path = "../flui-interaction", version = "=0.1.0", features = ["testing"] }
 
 [lints]
 workspace = true

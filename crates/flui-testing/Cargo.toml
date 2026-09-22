@@ -29,9 +29,7 @@ workspace = true
 # support and never enters a production graph (dev edges only, plus the one
 # sanctioned optional edge from flui-widgets' `testing` feature, which already
 # enables flui-interaction/testing itself), so the feature travels nowhere new.
-flui-interaction = { path = "../flui-interaction", version = "=0.1.0", features = [
-    "testing",
-] }
+flui-interaction = { path = "../flui-interaction", version = "=0.1.0", features = ["testing"] }
 # PresentationId, the multi-presentation clock registry's key -- it now
 # appears directly in HeadlessBinding's own public method signatures
 # (install_presentation_clock/pump_presentation/pump_all/etc.), which is what

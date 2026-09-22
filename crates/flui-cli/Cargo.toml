@@ -91,7 +91,6 @@ console = "0.16"
 dialoguer = { version = "0.12", default-features = false }
 
 
-
 # Terminal mode for `flui run`'s hot-keys (see commands/run.rs `raw_mode`):
 # canonical mode and echo off for the session, restored on every exit path.
 # `rustix` gives safe termios wrappers, so the CLI stays free of `unsafe`.
