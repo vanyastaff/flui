@@ -887,7 +887,7 @@ watch-test crate="":
 # the hook's text fast path. Every gate this repository lost time to recently
 # was caught by something in here, not by a test.
 [group("ci")]
-[doc("Spell-check (typos) and TOML formatting (taplo) — the two CI gates with no cargo step")]
+[doc("Spell-check (typos), TOML formatting (taplo), and the nextest nested-cargo filter's three copies agreeing — the gates with no cargo step")]
 text-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -905,6 +905,8 @@ text-check:
     else
         echo "taplo: not installed, skipped (cargo install taplo-cli)"
     fi
+    # No tool to skip for: this one needs only a Python >= 3.11.
+    {{ flui_python }} -B scripts/check-nextest-partition.py
 
 [group("ci")]
 [doc("The non-test half of `ci` — what the pre-push hook runs")]

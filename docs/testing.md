@@ -143,12 +143,16 @@ recipe with no CI step only runs when someone remembers to run it by hand.
 
 ### Nested-cargo tests
 
-About two dozen tests run a `cargo` of their own on a project they generate:
+The group is the nested-cargo tests that dominate the suite's wall-clock:
+24 tests that run a `cargo` build of their own on a project they generate —
 the trybuild `compile_fail` suites (`flui-engine`, `flui-rendering`,
 `flui-view`'s `trybuild_ui`, `flui-types`' `unit_mixing_compile_fail`), the
 `flui-cli` template tests (`cli_create::generated_*`), and every
-`flui::facade_consumer` test. Most take one to five minutes, so they set the
-suite's wall-clock while the other ~9,700 tests are quick. `.config/nextest.toml`
+`flui::facade_consumer` test. Locally, with their build caches cold, most take
+one to five minutes; the other ~9,700 tests are quick. Tests that spawn a
+`cargo` only for a trivial crate (`flui-cli`'s `cli_maintenance`, which runs
+`cargo new` and tests an empty project in seconds) are deliberately left out
+of the group. `.config/nextest.toml`
 names them with one filter and two profiles that partition the suite
 exactly: `no-nested-cargo` and `nested-cargo`.
 
@@ -183,7 +187,10 @@ checkouts that share it, while the FLUI crates themselves rebuild per checkout,
 because a path dependency's location is part of its build hash). Before this,
 they wrote to `<checkout>/target` whatever `CARGO_TARGET_DIR` said: 5-9 GB of
 private cache per checkout. trybuild keeps its own `tests/trybuild/` there, since
-it builds with a different `--cfg` and would thrash a shared cache.
+it builds with a different `--cfg` and would thrash a shared cache. Nothing
+prunes these three directories: they grow with every FLUI version and feature
+set built through them (1.5-3 GB each is normal), and `just clean-stale` or
+deleting them by hand is safe whenever no test run is using them.
 
 **Limitation of a shared `CARGO_TARGET_DIR`.** trybuild writes each suite's
 generated project into `<target>/tests/trybuild/<crate>/`. Two checkouts
