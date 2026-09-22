@@ -114,12 +114,30 @@ for crate in "${order[@]}"; do
   rc=$?
   set -e
 
+  status="UNEXPECTED FAILURE"
   if [[ "$rc" -eq 0 ]]; then
     status="ok"
-  elif [[ -n "$deps_field" ]] && echo "$out" | grep -qE "failed to select a version for the requirement|not found in registry|does not exist in registry"; then
-    status="expected (dependency not published)"
-  else
-    status="UNEXPECTED FAILURE"
+  elif [[ -n "$deps_field" ]]; then
+    # Match against cargo's ACTUAL messages (verified against a real cargo
+    # 1.98 run, not guessed): "no matching package named `X`" and "failed to
+    # select a version for the requirement `X ..."`. Matched by one of THIS
+    # crate's own internal dependency names specifically, via `<<<`, not a
+    # pipe into `grep -q` (which SIGPIPEs the writer once `-q` finds its
+    # match and exits — harmless for `echo`, but this project's convention
+    # under `set -o pipefail` is to avoid the pattern rather than rely on
+    # `echo`'s SIGPIPE being silently tolerated) — so a genuinely unrelated
+    # failure (a bad license field, a missing readme, cargo's own bug) on a
+    # non-leaf crate is never miscounted as "expected".
+    IFS=',' read -r -a deps_array <<<"$deps_field"
+    for dep in "${deps_array[@]}"; do
+      [[ -z "$dep" ]] && continue
+      if grep -qE "no matching package named \`${dep}\`|failed to select a version for the requirement \`${dep}[ \`]" <<<"$out"; then
+        status="expected (dependency not published: $dep)"
+        break
+      fi
+    done
+  fi
+  if [[ "$status" == "UNEXPECTED FAILURE" ]]; then
     unexpected=$((unexpected + 1))
   fi
 

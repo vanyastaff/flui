@@ -303,7 +303,7 @@ jobs:
         id: wasm_bindgen_version
         run: |
           set -euo pipefail
-          version="$(python3 -c "import tomllib;print(next(p['version'] for p in tomllib.load(open('Cargo.lock','rb'))['package'] if p['name']=='wasm-bindgen'))")"
+          version="$(bash scripts/locked-version.sh wasm-bindgen)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "locked wasm-bindgen: $version"
 

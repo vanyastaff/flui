@@ -26,7 +26,12 @@ name: CI
 #   msrv           — cargo check on the declared 1.97 MSRV
 #   miri           — UB check on flui-rendering's pipeline owner and
 #                    flui-view's GlobalKey plane (advisory)
-#   ci             — aggregator: the single required check for branch protection
+#   ci             — aggregator: designed to be the one status check branch
+#                    protection would name, if a ruleset required one — as of
+#                    this writing `main` has no required-status-checks rule
+#                    (verified: GET /branches/main/protection -> 404), so
+#                    nothing here actually blocks a merge yet; that's a repo-
+#                    settings decision for the maintainer, not this file
 # Patterns borrowed from linebender/xilem (gated `checks` job, cargo-hack
 # feature matrix, Swatinem cache + taiki-e/install-action for pinned tool
 # versions) and tokio (aggregator `ci` job; nextest as primary runner).
@@ -98,6 +103,11 @@ jobs:
     name: checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Single source of truth for the cache key below and the download URL
+      # in "Install actionlint" — a literal duplicated in both let the cache
+      # key silently outlive a version bump made only in the other spot.
+      ACTIONLINT_VERSION: 1.7.12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -134,12 +144,10 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.local/bin/actionlint
-          key: actionlint-${{ runner.os }}-1.7.12
+          key: actionlint-${{ runner.os }}-${{ env.ACTIONLINT_VERSION }}
 
       - name: Install actionlint
         if: steps.actionlint-cache.outputs.cache-hit != 'true'
-        env:
-          ACTIONLINT_VERSION: 1.7.12
         run: |
           set -euo pipefail
           mkdir -p ~/.local/bin
@@ -152,8 +160,14 @@ jobs:
       - name: Put actionlint on PATH
         run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      # Exact match on the first line (`actionlint --version` prints the bare
+      # version, e.g. "1.7.12", then build metadata on following lines), not
+      # just "did --version print something": a cache hit serving a binary
+      # from a previous ACTIONLINT_VERSION (key mismatch notwithstanding)
+      # should fail loudly here instead of silently linting with the wrong
+      # actionlint.
       - name: Verify actionlint
-        run: actionlint --version
+        run: actionlint --version | head -1 | grep -qx "${ACTIONLINT_VERSION}"
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -183,6 +197,12 @@ jobs:
           python3 -B scripts/check-wgsl-uniformity.py --self-test
           python3 -B scripts/check-wgsl-uniformity.py
 
+      # Keeps the `paths-filter` job's docs-only allowlist honest: fails if
+      # any file it treats as skippable is actually include_str!()'d into
+      # compiled/tested content.
+      - name: scripts/check-paths-filter-allowlist.py (docs-only allowlist vs. real include_str! targets)
+        run: python3 -B scripts/check-paths-filter-allowlist.py
+
       - name: actionlint (workflow semantics)
         run: actionlint
 
@@ -209,14 +229,16 @@ jobs:
     name: paths-filter
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      # dorny/paths-filter's default (no explicit `base`) reads the PR's
+      # changed-file list from the GitHub API (`listFiles`), not from a local
+      # git diff — no checkout step exists here for that reason. That API
+      # call only works today because this repo is public; a private repo
+      # needs this scope explicitly.
+      pull-requests: read
     outputs:
       non_docs: ${{ github.event_name != 'pull_request' || steps.filter.outputs.non_docs }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: github.event_name == 'pull_request'
-        with:
-          persist-credentials: false
-
       - id: filter
         if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -230,17 +252,37 @@ jobs:
           # `non_docs` still came back `true` for a CHANGELOG.md-only diff).
           # With it: a file matches `non_docs` only if it matches `**` AND
           # none of the negated patterns — i.e. everything except this
-          # docs-only allowlist. Keep the allowlist in sync with AGENTS.md's
-          # worktree policy if the "docs-only" definition ever changes.
+          # docs-only allowlist.
+          #
+          # NOT `!**/*.md` (every .md file, any depth): several crate-level
+          # markdown files are compiled/tested content, not documentation —
+          # `crates/flui-animation/{README.md,docs/GUIDE.md,docs/PERFORMANCE.md}`
+          # and `crates/flui-scheduler/README.md` are pulled into a doctest via
+          # `#[doc = include_str!(...)]`, and
+          # `crates/flui-cli/templates/platforms/ios/README.md` is
+          # `include_str!()`'d by `scaffold.rs` and asserted on by a test. A
+          # PR touching only one of those must NOT skip clippy/cross-typecheck/
+          # wasm-check. `!*.md` below matches only ROOT-level .md files
+          # (picomatch: a pattern with no `/` matches the whole path, and `*`
+          # does not cross `/`, so a nested path can never satisfy it) —
+          # per-crate README.md is deliberately NOT in this allowlist.
+          # `scripts/check-paths-filter-allowlist.py` (part of `checks`)
+          # re-derives every `include_str!()` target in the workspace and
+          # fails if any of them lands inside this allowlist, so the two
+          # can't silently drift apart again.
           predicate-quantifier: some-with-excludes
           filters: |
             non_docs:
               - '**'
-              - '!**/*.md'
+              - '!*.md'
               - '!docs/**'
+              - '!.rust-studio/**'
+              - '!.github/**/*.md'
               - '!.github/ISSUE_TEMPLATE/**'
               - '!.github/CODEOWNERS'
               - '!.editorconfig'
+              - '!crates/*/ARCHITECTURE.md'
+              - '!crates/*/CHANGELOG.md'
 
   # ─────────────────────────────────────────────────────────────────────────
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
@@ -1269,7 +1311,7 @@ jobs:
         id: wasm_bindgen_version
         run: |
           set -euo pipefail
-          version="$(python3 -c "import tomllib;print(next(p['version'] for p in tomllib.load(open('Cargo.lock','rb'))['package'] if p['name']=='wasm-bindgen'))")"
+          version="$(bash scripts/locked-version.sh wasm-bindgen)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "locked wasm-bindgen: $version"
 
@@ -1538,9 +1580,11 @@ jobs:
         run: cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
-  # ci — aggregator over every job above (tokio pattern). Branch protection
-  # requires this ONE check instead of enumerating the graph, so adding or
-  # renaming a job never silently drops a gate. `if: always()` so it still
+  # ci — aggregator over every job above (tokio pattern), designed so that a
+  # required-status-checks rule would only need to name this ONE check
+  # instead of enumerating the graph — no such rule is configured today (see
+  # the header comment above). Adding or renaming a job never silently drops
+  # a gate from THIS aggregator either way. `if: always()` so it still
   # runs when a dependency failed; miri is advisory (continue-on-error turns
   # its result into `success`).
   # ─────────────────────────────────────────────────────────────────────────
@@ -1589,11 +1633,27 @@ jobs:
             clippy feature-matrix wasm-check cross-typecheck cli-macos test
             test-features live-smoke gpu-test bench-compile doc deny doc-test
             msrv miri
+          # Whether a `skipped` result is EVER excusable depends on both of
+          # these, not on the job's name alone: a job in ALLOWED_SKIPS that
+          # was skipped for some OTHER reason (a bug in its `if:`, a
+          # cancellation) is still a real problem, not "the docs-only path
+          # working as designed".
+          NON_DOCS: ${{ needs.paths-filter.outputs.non_docs }}
+          EVENT: ${{ github.event_name }}
         run: |
           python3 - <<'EOF'
           import json, os, sys, yaml
           needs = json.loads(os.environ["NEEDS"])
           allowed_skips = set(os.environ["ALLOWED_SKIPS"].split())
+          event = os.environ["EVENT"]
+          non_docs = os.environ["NON_DOCS"]
+          # A skip is only the *designed* docs-only fast path on a
+          # `pull_request` run whose `paths-filter` output says the diff is
+          # docs-only (`non_docs == 'false'`). On `push`/`merge_group`, or on
+          # a `pull_request` that touched real code, every listed job must
+          # have actually run — a skip there is a bug to fail on, not a skip
+          # to excuse.
+          skips_excusable = event == "pull_request" and non_docs == "false"
           with open(".github/workflows/ci.yml", encoding="utf-8") as f:
               workflow = yaml.safe_load(f)
           declared = set(workflow["jobs"]) - {"ci"}
@@ -1603,16 +1663,31 @@ jobs:
           if missing:
               print(f"::error::jobs declared in ci.yml but absent from the ci aggregator's needs: {missing}")
           bad = {}
+          skipped_allowed = set()
           for job, data in needs.items():
               r = data["result"]
               if r == "success":
                   continue
-              if r == "skipped" and job in allowed_skips:
+              if r == "skipped" and skips_excusable and job in allowed_skips:
+                  skipped_allowed.add(job)
                   continue
               bad[job] = r
+          # On the docs-only fast path, a PARTIAL skip (some ALLOWED_SKIPS
+          # jobs ran, others didn't) means the `if:` conditions on those jobs
+          # disagree with each other or with `paths-filter` — that is exactly
+          # the drift this aggregator exists to catch, not something to wave
+          # through because each individual job's own result looked fine.
+          if skips_excusable and skipped_allowed != allowed_skips:
+              missing_skips = sorted(allowed_skips - skipped_allowed)
+              print(
+                  f"::error::docs-only PR (non_docs=false) but not every ALLOWED_SKIPS job "
+                  f"was skipped — {missing_skips} ran instead; their `if:` disagrees with "
+                  f"paths-filter's non_docs output"
+              )
+              bad["_partial_docs_only_skip"] = sorted(missing_skips)
           if bad:
-              print(f"::error::required jobs not green (skipped counts as red): {bad}")
+              print(f"::error::required jobs not green (skipped counts as red unless the docs-only fast path excuses it): {bad}")
           if missing or bad:
               sys.exit(1)
-          print(f"ok: {len(declared)} jobs, all gated, all green")
+          print(f"ok: {len(declared)} jobs, all gated, all green (event={event}, non_docs={non_docs})")
           EOF
