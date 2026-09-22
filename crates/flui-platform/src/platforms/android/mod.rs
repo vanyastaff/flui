@@ -219,6 +219,21 @@ impl AndroidPlatform {
                     let handled = match event {
                         InputEvent::MotionEvent(motion) => {
                             let events = input::convert_motion_event(motion, scale_factor);
+                            // The one place a touch is visible between the
+                            // OS and the framework: a tap that changes
+                            // nothing on screen is diagnosed from this line
+                            // (present → the framework's hit test or
+                            // arena; absent → the queue never delivered it).
+                            tracing::debug!(
+                                target: "flui_platform::android::input",
+                                action = ?motion.action(),
+                                pointers = motion.pointer_count(),
+                                converted = events.len(),
+                                x = motion.pointer_at_index(0).x(),
+                                y = motion.pointer_at_index(0).y(),
+                                scale_factor,
+                                "motion event"
+                            );
                             let mut any_handled = false;
                             for platform_input in events {
                                 let result = callbacks.dispatch_input(platform_input);
