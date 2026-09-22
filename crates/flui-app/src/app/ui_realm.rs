@@ -4005,7 +4005,10 @@ mod tests {
         realm
             .command_sender()
             .send_signal_write(Box::new(move |r: &flui_view::Reactive| {
-                sender.attach().update(r, |c| *c += 41).expect("signal alive");
+                sender
+                    .attach()
+                    .update(r, |c| *c += 41)
+                    .expect("signal alive");
             }))
             .expect("send");
         assert_eq!(counter.peek(&graph, |c| *c), Ok(1), "nothing runs at send");

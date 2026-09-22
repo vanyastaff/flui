@@ -8,8 +8,8 @@
 //!
 //! - `elements_built` and its `RebuildReason` split, from
 //!   `BuildOwner::last_frame_build_report` (the drain's own telemetry);
-//! - `layout_roots`, from `PipelineOwner::layout_roots_last_run` (dirty layout
-//!   entries the frame drained);
+//! - `layout_roots`, the frame's difference of `PipelineOwner::layout_roots_total`
+//!   (dirty layout entries the frame's `run_layout` passes drained);
 //! - the wall time of `change + pump_frame`, from criterion.
 //!
 //! The counts are deterministic and printed once as a markdown table (that
@@ -33,6 +33,20 @@ const CELLS_PER_SCREEN: usize = 200;
 
 fn cell(v: u32) -> SizedBox {
     SizedBox::square(1.0 + (v % 7) as f32)
+}
+
+/// A: one cell, one plain value. Same element shape as [`CellB`] (a
+/// stateless view over a `SizedBox`), so both variants carry two elements
+/// per cell and the rebuild counts compare like for like.
+#[derive(Clone, Debug, StatelessView)]
+struct CellA {
+    v: u32,
+}
+
+impl StatelessView for CellA {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        cell(self.v)
+    }
 }
 
 // ---------------------------------------------------------------- variant A
@@ -64,10 +78,12 @@ impl ViewState<ListA> for ListAState {
     }
     fn build(&self, _view: &ListA, _ctx: &dyn BuildContext) -> impl IntoView {
         use flui_view::ViewExt;
-        Column::new(
-            self.values
-                .with(|values| values.iter().map(|v| cell(*v).boxed()).collect::<Vec<_>>()),
-        )
+        Column::new(self.values.with(|values| {
+            values
+                .iter()
+                .map(|v| CellA { v: *v }.boxed())
+                .collect::<Vec<_>>()
+        }))
     }
 }
 
@@ -98,7 +114,7 @@ impl ViewState<FormA> for FormAState {
     fn build(&self, _view: &FormA, _ctx: &dyn BuildContext) -> impl IntoView {
         use flui_view::ViewExt;
         self.fields.with(|fields| {
-            let mut children: Vec<_> = fields.iter().map(|v| cell(*v).boxed()).collect();
+            let mut children: Vec<_> = fields.iter().map(|v| CellA { v: *v }.boxed()).collect();
             let invalid = fields.iter().filter(|v| **v == 0).count() as u32;
             children.push(SizedBox::square(1.0 + invalid as f32).boxed());
             Column::new(children)
@@ -137,7 +153,7 @@ impl ViewState<AppA> for AppAState {
                 .map(|_| {
                     Column::new(
                         (0..CELLS_PER_SCREEN)
-                            .map(|_| cell(unit).boxed())
+                            .map(|_| CellA { v: unit }.boxed())
                             .collect::<Vec<_>>(),
                     )
                     .boxed()
@@ -265,14 +281,19 @@ struct Measured {
 
 impl Scenario {
     fn step(&mut self, i: u64) -> Measured {
+        let before = self
+            .laid
+            .pipeline_owner()
+            .with(flui_rendering::pipeline::PipelineOwner::layout_roots_total);
         (self.change)(&mut self.laid, i);
         self.laid.tick();
+        let after = self
+            .laid
+            .pipeline_owner()
+            .with(flui_rendering::pipeline::PipelineOwner::layout_roots_total);
         Measured {
             build: self.laid.build_owner_mut().last_frame_build_report(),
-            layout_roots: self
-                .laid
-                .pipeline_owner()
-                .with(flui_rendering::pipeline::PipelineOwner::layout_roots_last_run),
+            layout_roots: (after - before) as usize,
         }
     }
 }

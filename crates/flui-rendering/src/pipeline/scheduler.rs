@@ -97,9 +97,11 @@ pub(super) struct DirtyTracker {
 
     /// True while `run_semantics` is iterating `dirty.needs_semantics`.
     debug_doing_semantics: bool,
-    /// Dirty layout entries drained by the most recent `run_layout` — the
-    /// per-frame relayout figure ADR-0074 §8 measures (reset at each run).
-    layout_drained_last_run: usize,
+    /// Dirty layout entries drained by every `run_layout` so far — monotonic,
+    /// so a caller measures a frame as the difference across it (`run_layout`
+    /// can run several times per frame, so a per-run reset would report only
+    /// the last, usually empty, pass; ADR-0074 §8 telemetry).
+    layout_drained_total: u64,
 
     /// Shared wake sink — the same `Arc` that `PipelineOwner` holds for its
     /// callback setters. Both clones point at the same
@@ -119,7 +121,7 @@ impl DirtyTracker {
             debug_doing_layout: false,
             debug_doing_paint: false,
             debug_doing_semantics: false,
-            layout_drained_last_run: 0,
+            layout_drained_total: 0,
             notifier,
             #[cfg(test)]
             eviction_passes: 0,
@@ -778,18 +780,13 @@ impl DirtyTracker {
     pub(super) fn take_layout_batch_shallow_first(&mut self) -> Vec<DirtyNode> {
         self.dirty.needs_layout.sort_shallow_first();
         let batch: Vec<DirtyNode> = self.dirty.needs_layout.drain().collect();
-        self.layout_drained_last_run += batch.len();
+        self.layout_drained_total += batch.len() as u64;
         batch
     }
 
-    /// Start a new `run_layout` accounting window.
-    pub(super) fn reset_layout_drain_count(&mut self) {
-        self.layout_drained_last_run = 0;
-    }
-
-    /// Dirty layout entries drained by the most recent `run_layout`.
-    pub(super) fn layout_drained_last_run(&self) -> usize {
-        self.layout_drained_last_run
+    /// Dirty layout entries drained by every `run_layout` so far.
+    pub(super) fn layout_drained_total(&self) -> u64 {
+        self.layout_drained_total
     }
 
     // =========================================================================
