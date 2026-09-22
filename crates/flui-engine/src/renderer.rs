@@ -1000,33 +1000,40 @@ impl Renderer {
             present_mode: Self::select_present_mode(&surface_caps),
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
-            // 1 (not 2): during a live resize the displayed frame must track the
-            // window size as tightly as possible, and this is the only lever
-            // that trades that tracking away.
+            // 2 (wgpu's own default), raised from 1 on 2026-09-22 on a
+            // measurement that settled a judgement call the other way.
             //
-            // The reason this comment used to give — "a latency of 2 lets the
-            // present queue hold frames rendered for an older size, which the
-            // compositor then stretches to the current window" — is **not
-            // reproduced on the native AppKit/Metal backend**, and the correction
-            // belongs here rather than in a commit message. `just
-            // macos-resize-jitter` drives a real 40-resize burst through a real
-            // visible window at both settings and counts
-            // `warn_on_size_mismatch`, the acquired-texture/configured-size
-            // divergence: **zero at 1 and zero at 2**, four runs, including runs
-            // with the surface deliberately held three frames behind the window.
-            // It is structural, not luck — `render_scene` acquires and presents
-            // inside one call and `resize` reconfigures before it, so no drawable
-            // is ever alive across a `Surface::configure`, and Metal allocates
-            // drawables at the layer's *current* `drawableSize`. What stays
-            // unmeasured is the compositor-side half, and it is the honest reason
-            // to leave this at 1: at a latency of 2 the window server may hold the
-            // previously presented frame for one extra display period after a
-            // resize, so the window's content lags its own edge by ~10 ms during a
-            // live drag. Nothing in-process can observe that — it is a judgement
-            // call, not a measurement, and it must not be reported as either had.
-            // (The measured benefit of widening is real and in the other
-            // direction: 147 of 148 stalled acquires disappear and late frames go
-            // from 12.6–14.1 % to 0.1 % — ADR-0029's AppKit subsection.)
+            // The literal sat at 1 for a live-resize argument: the tightest
+            // pool means the displayed frame tracks the window edge as closely
+            // as possible during a drag. The in-process half of that argument
+            // was refuted first (`just macos-resize-jitter`: the acquired
+            // texture never diverges from the configured size at either
+            // setting, four runs — `render_scene` acquires and presents
+            // inside one call and `resize` reconfigures before it, so no
+            // drawable is alive across a `Surface::configure`), leaving only
+            // an unmeasurable compositor-side lag of ~one display period after
+            // a resize as the reason to stay at 1. ADR-0029's AppKit
+            // subsection had already measured the cost of 1 on the tail —
+            // 3 % of frames stalling a full period in `get_current_texture()`
+            // — and judged it tolerable.
+            //
+            // It is not tolerable once the frame does real work. With two
+            // drawables (`maximum_frame_latency + 1`) the acquire for frame
+            // N+1 waits until frame N's drawable is released by scanout, so
+            // a frame whose own work is longer than what is left of the
+            // period after that release misses the next vsync EVERY time, not
+            // on a 3 % tail: `examples/workload_probe.rs` (a Scaffold with a
+            // 2,000-row ListView and a Material TextField, 900×700 logical
+            // on a 100 Hz panel) presented at a rock-steady 20.0 ms p50 —
+            // exactly two periods, 50 fps — through both its scrolling and
+            // its typing phases, while `flui-platform`'s bare frame pump on
+            // the same display ran 100 fps. At 2 the same probe ran 10.0 ms
+            // p50 (p99 12.3 ms scrolling, 10.05 ms typing). Half the frame
+            // rate of every non-trivial app is a measured cost; a possible
+            // one-period edge lag during a live drag is a conjecture nothing
+            // in-process can observe. The pool is widened on that basis, and
+            // `just macos-workload` is the regression gate: its scroll and
+            // type p99 budgets are stated in display periods.
             //
             // Pinned independently of the clock-side produce-capacity threshold
             // (`flui_scheduler::FrameClock::set_max_in_flight`, issue #556): that
@@ -1048,7 +1055,7 @@ impl Renderer {
             // plus whatever bakes its format — so the literal is written in
             // exactly one place in the source, not scattered across call sites
             // that could drift out of sync.
-            desired_maximum_frame_latency: 1,
+            desired_maximum_frame_latency: 2,
         };
 
         Ok((config, supports_copy_src))

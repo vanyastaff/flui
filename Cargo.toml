@@ -639,6 +639,13 @@ name = "multi_window_demo"
 path = "examples/multi_window_demo.rs"
 required-features = ["material"]
 
+# Self-driving representative-workload probe for docs/BETA.md's "Performance
+# and resilience" row (`just macos-workload`); see the example's own doc.
+[[example]]
+name = "workload_probe"
+path = "examples/workload_probe.rs"
+required-features = ["material"]
+
 [[test]]
 name = "material_demo"
 path = "tests/material_demo.rs"

@@ -59,6 +59,19 @@ then `flui create` pins this tag as a git dependency.
   `flui-platform` consumer's window visible at open, since only a frame-loop
   owner can report a first frame. Explicit `show`/`set_visible(true)`/
   `activate` reveal immediately. Other backends are unchanged.
+- **Full frame rate for frames that do real work** (`flui-engine`): the
+  swapchain's `desired_maximum_frame_latency` is 2 (wgpu's default) instead
+  of 1. At 1, `examples/workload_probe.rs` — a Scaffold with a 2,000-row list
+  and a text field on a 100 Hz display — presented every frame at exactly two
+  periods (50 fps) while the bare platform pump ran 100 fps; at 2 it runs the
+  full panel rate (scroll p99 10.1 ms). The value 1 had been kept for a
+  live-resize argument whose in-process half was already measured absent and
+  whose compositor half is unobservable; ADR-0029 carries the addendum.
+- **Representative-workload probe** (`examples/workload_probe.rs`,
+  `scripts/check-macos-workload.py`, `just macos-workload`): a self-driving
+  scroll / type / idle workload with per-phase frame-timing JSON, RSS
+  sampling, the real display period from CoreGraphics, and budgets declared
+  before the first run; the accepted run is recorded in `docs/BETA.md`.
 - **Text and Material/Cupertino buttons publish semantics** (`flui-objects`,
   `flui-material`, `flui-cupertino`): `RenderParagraph` describes its plain
   text as the semantics label with its text direction (Flutter's

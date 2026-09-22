@@ -32,7 +32,7 @@ so `publish = false` is not a substitute for designing that closure.
 | Platform behavior | Every platform advertised as beta runs the application, accepts its native input, resizes, suspends/resumes where applicable, and exits cleanly. | Per-platform execution evidence below. Compilation alone cannot certify runtime support. |
 | Developer iteration | Documented reload modes apply edits predictably and state preservation matches their advertised contract. Failed edits can be corrected without corrupting the running application. | Tests and live checks for repeated edits, idle applications, failed builds, state preservation, and shutdown. Publish target-specific limitations. |
 | Agent workflow | An agent can discover the public API, create a UI, inspect structure/semantics, drive an interaction, and assert the result through documented interfaces. | A reproducible consumer example using the existing diagnostics and testing APIs, with meaningful assertions and actionable command failures. |
-| Performance and resilience | Static applications become idle; representative scrolling and editing workloads have recorded frame timing and memory behavior; supported recovery paths work. | Reproducible workload, hardware/OS, build profile, timing distribution, memory measurements, and explicit budgets chosen before acceptance. No invented performance claim. |
+| Performance and resilience | Static applications become idle; representative scrolling and editing workloads have recorded frame timing and memory behavior; supported recovery paths work. | Reproducible workload, hardware/OS, build profile, timing distribution, memory measurements, and explicit budgets chosen before acceptance. No invented performance claim. Recorded for macOS in ["Performance and resilience: the representative workload — 2026-09-22"](#performance-and-resilience-the-representative-workload--2026-09-22) (`just macos-workload`); recovery paths are the device-loss and surface-recreation retries, exercised by their unit tests and not yet by a live fault. |
 | Distribution | The candidate installs and builds outside this checkout, with its full dependency closure available through the chosen distribution channel. | Package/dependency audit, clean consumer build, licenses, changelog, version/migration notes, and reproducible release instructions. |
 
 The user-facing mental model remains declarative composition over the retained
@@ -689,6 +689,71 @@ three clicks on Increment advanced the count 0 → 1 → 2 → 3, a click on emp
 canvas left it at 3, and the console had no errors. This is one browser, one
 machine, `localhost`; it is evidence for the Web row's move from unverified
 to experimental, not a browser matrix.
+
+## Performance and resilience: the representative workload — 2026-09-22
+
+`examples/workload_probe.rs` (`just macos-workload`, release build) is the
+reproducible workload the row asks for: a `Scaffold` with an `AppBar`, a
+Material `TextField` and a 2,000-row `ListView::builder` of `ListTile`s,
+900×700 logical, driving itself from an `AnimationController` tick — 20 s of
+scrolling at 18 px per frame bouncing between both ends, then 500 characters
+inserted one per frame into the field, then 5 s of enforced idleness — with
+no operator input and no synthetic OS events. The probe prints one JSON
+line per phase; `scripts/check-macos-workload.py` samples RSS every 0.5 s,
+reads the main display's refresh period through CoreGraphics and hands it to
+the probe, and applies the budgets declared in its own header before the
+first run: scroll and type p99 within two display periods, under 1 % of
+scroll frames over two periods, RSS growth under 10 % from a baseline five
+seconds in, at most 5 frames during idleness. Every run writes
+`target/workload/<timestamp>.json` with the phase lines, the RSS series and
+the per-budget verdict.
+
+Host: MacBook Air (M1), macOS 27.0 (26A428), main display 3440×1440 at
+100 Hz (10.0 ms period, `CGDisplayCopyDisplayMode`), release profile.
+
+**First run — a finding, not a pass.** With the swapchain at
+`desired_maximum_frame_latency: 1` (the value the engine had carried since
+ADR-0029) every phase presented at a rock-steady **20.0 ms p50 — exactly
+two periods, 50 fps**: scroll 984 frames in 20 s (p90 20.3, p99 24.9, max
+131.7 ms), type 500 frames at p50 20.005 / p99 20.6 ms. The bare platform
+frame pump on the same display (`just macos-frame-pump`) ran 100.2 fps, so
+the halving was in the rendering path. Setting the latency to 2 and
+re-running: scroll p50 **9.998 ms**, type p50 9.998 ms — the full panel
+rate. The mechanism is the one ADR-0029's AppKit subsection had measured on
+a 3 % tail and judged tolerable: with two drawables, the acquire for the
+next frame waits for the previous drawable to leave scanout, so a frame
+whose own work does not fit in what remains of the period misses the next
+vsync — on every frame, once the frame does real work. The literal is now
+2 (wgpu's default); the reasoning, the earlier resize-axis measurement that
+made this a free choice there, and the numbers are in the literal's own
+comment and in ADR-0029's dated addendum.
+
+The first run's RSS check also failed — 75.6 MiB at 1 s to 201 MiB at the
+end, +166 % — and that one was the script's: the series reaches 199.6 MiB
+by 2.2 s (GPU stack, glyph atlas, the first laid-out screen) and is flat to
+within 1 % for the remaining 33 s. The baseline moved from 1 s to 5 s, past
+the startup ramp and inside the scroll phase; the 10 % budget did not
+change.
+
+**Accepted run, at latency 2 with the real period:**
+
+| Budget | Measured | Verdict |
+| --- | --- | --- |
+| scroll p99 ≤ 2 periods (20.0 ms) | p99 10.10 ms, 1,967 frames / 20 s | PASS |
+| scroll frames over 2 periods ≤ 1 % | 6 / 1,967 (0.31 %) | PASS |
+| type p99 ≤ 2 periods | p99 10.04 ms, 500 frames | PASS |
+| idle frames ≤ 5 in 5 s | 1 | PASS |
+| RSS growth ≤ 10 % from 5 s | 253.1 → 185.0 MiB (−26.9 %; peak 253.6) | PASS |
+
+The single idle frame is the one the controller's `stop()` lands on; the
+runner then produces nothing until the process quits, which is the "static
+applications become idle" half of the row measured rather than asserted.
+Limits: one host, one display, one build; the probe drives controllers, not
+the platform's input path (by design — a real operator's mouse and keyboard
+are in use on this machine), so input-translation cost is outside this
+number; and the probe cannot read the display period through the facade
+(`PlatformWindow::refresh_period` is not exposed to application code), so
+the script supplies it.
 
 ## Native iOS application delivery
 
