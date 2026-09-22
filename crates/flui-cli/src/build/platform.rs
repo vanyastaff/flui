@@ -2,49 +2,40 @@ use std::path::PathBuf;
 
 use crate::build::error::{BuildError, BuildResult};
 
-/// Private module to seal the `PlatformBuilder` trait.
-///
-/// This prevents external implementations of `PlatformBuilder`,
-/// allowing us to add methods to the trait in the future without
-/// breaking changes.
-pub(crate) mod private {
-    pub trait Sealed {}
-}
-
 /// Build context containing configuration and paths.
 ///
 /// Use [`BuilderContextBuilder`](crate::build::BuilderContextBuilder) to construct instances.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct BuilderContext {
+pub(crate) struct BuilderContext {
     /// Root directory of the workspace
-    pub workspace_root: PathBuf,
+    pub(crate) workspace_root: PathBuf,
     /// Target platform to build for
-    pub platform: Platform,
+    pub(crate) platform: Platform,
     /// Which cargo package or example to compile.
-    pub target: BuildUnit,
+    pub(crate) target: BuildUnit,
     /// Build profile (debug or release)
-    pub profile: Profile,
+    pub(crate) profile: Profile,
     /// Output directory for build artifacts
-    pub output_dir: PathBuf,
+    pub(crate) output_dir: PathBuf,
     /// Application bundle metadata, when the target stages a platform bundle.
     ///
     /// `None` keeps the backend's plain-artifact behaviour (a bare executable
     /// copy). On macOS a `Some` stages a `.app` whose `Info.plist` names the
     /// application — the bundle a double-clickable, foreground-activatable app
     /// needs, and which a bare Mach-O cannot substitute for.
-    pub bundle: Option<AppBundle>,
+    pub(crate) bundle: Option<AppBundle>,
 }
 
 /// Identity an application bundle is staged under.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AppBundle {
+pub(crate) struct AppBundle {
     /// Human-readable application name (the `.app` stem and `CFBundleName`).
-    pub name: String,
+    pub(crate) name: String,
     /// Reverse-DNS bundle identifier (`CFBundleIdentifier`).
-    pub identifier: String,
+    pub(crate) identifier: String,
     /// Full application SemVer. Apple bundles store its numeric core separately.
-    pub version: String,
+    pub(crate) version: String,
 }
 
 impl AppBundle {
@@ -54,7 +45,7 @@ impl AppBundle {
     /// lowercase alphanumerics — the shape a bundle id may legally take, so a
     /// name like `My App` does not produce an invalid plist value.
     #[must_use]
-    pub fn new(name: &str, identifier_prefix: &str) -> Self {
+    pub(crate) fn new(name: &str, identifier_prefix: &str) -> Self {
         let slug: String = name
             .chars()
             .map(|c| {
@@ -82,7 +73,7 @@ impl AppBundle {
 /// This is the knob that keeps `DesktopBuilder` from hard-coding one of them.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
-pub enum BuildUnit {
+pub(crate) enum BuildUnit {
     /// Build the current package's default binary (`cargo build` in `workspace_root`).
     #[default]
     DefaultBinary,
@@ -102,8 +93,7 @@ impl BuildUnit {}
 
 /// Platform to build for
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Platform {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub(crate) enum Platform {
     /// Android platform with target architectures
     Android {
         /// Target architectures (e.g., "aarch64-linux-android")
@@ -129,7 +119,7 @@ pub enum Platform {
 impl Platform {
     /// Returns the platform name as a string
     #[must_use]
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         match self {
             Platform::Android { .. } => "android",
             Platform::Ios { .. } => "ios",
@@ -141,7 +131,7 @@ impl Platform {
 
 /// Build profile (debug or release)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum Profile {
+pub(crate) enum Profile {
     /// Debug profile (default) - faster compilation, includes debug symbols
     #[default]
     Debug,
@@ -166,7 +156,7 @@ impl Profile {
     ///
     /// Returns `None` for Debug (default), `Some("--release")` for Release
     #[must_use]
-    pub fn cargo_flag(&self) -> Option<&'static str> {
+    pub(crate) fn cargo_flag(&self) -> Option<&'static str> {
         match self {
             Profile::Debug => None,
             Profile::Release => Some("--release"),
@@ -175,7 +165,7 @@ impl Profile {
 
     /// Returns the profile name as a string
     #[must_use]
-    pub fn as_str(&self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Profile::Debug => "debug",
             Profile::Release => "release",
@@ -216,27 +206,27 @@ impl TryFrom<&str> for Platform {
 
 /// Build artifacts produced by Rust compilation
 #[derive(Debug)]
-pub struct BuildArtifacts {
+pub(crate) struct BuildArtifacts {
     /// Paths to compiled Rust libraries (.a, .so, .dll, .dylib, .wasm)
-    pub rust_libs: Vec<PathBuf>,
+    pub(crate) rust_libs: Vec<PathBuf>,
     /// Path to a compiled executable, when the target produces one.
     ///
     /// Desktop builds and executable iOS examples produce an executable. Other mobile/web builds produce
     /// libraries consumed by a platform bundle step and leave this `None`.
-    pub executable: Option<PathBuf>,
+    pub(crate) executable: Option<PathBuf>,
     /// Platform-specific metadata (JSON)
-    pub metadata: serde_json::Value,
+    pub(crate) metadata: serde_json::Value,
 }
 
 /// Delivered file or bundle directory after a platform-specific build.
 #[derive(Debug)]
-pub struct FinalArtifacts {
+pub(crate) struct FinalArtifacts {
     /// Path to the delivered artifact: a file (APK, WASM, executable, etc.) or
     /// a bundle directory (`.app` or `.xcframework`). iOS library delivery
     /// without a consumer Xcode project returns an XCFramework directory.
-    pub app_binary: PathBuf,
+    pub(crate) app_binary: PathBuf,
     /// File size, or the sum of contained file sizes for a bundle, in bytes.
-    pub size_bytes: u64,
+    pub(crate) size_bytes: u64,
 }
 
 /// Platform-specific builder trait.
@@ -244,16 +234,7 @@ pub struct FinalArtifacts {
 /// This trait is sealed and cannot be implemented outside of `crate::build`.
 /// Only the built-in builders (`AndroidBuilder`, `IosBuilder`, `WebBuilder`, `DesktopBuilder`)
 /// implement this trait.
-///
-/// # Sealed Trait
-///
-/// This trait is sealed using the [sealed trait pattern](https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed).
-/// External crates cannot implement this trait, which allows us to add methods
-/// in the future without breaking changes.
-// Sealed trait — only implemented within this binary, so Send bounds on
-// futures are guaranteed (and `async_fn_in_trait` has nothing to warn about:
-// no downstream crate can name the returned futures).
-pub trait PlatformBuilder: private::Sealed + Send + Sync {
+pub(crate) trait PlatformBuilder: Send + Sync {
     /// Validate environment (check tools, SDK, etc.)
     fn validate_environment(&self) -> BuildResult<()>;
 

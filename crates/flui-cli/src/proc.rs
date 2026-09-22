@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 /// The budget for a quick version/list probe of a well-behaved tool.
-pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Run `command` to completion, capturing both streams, or kill it once
 /// `timeout` elapses.
@@ -26,7 +26,7 @@ pub const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 ///   `ErrorKind::NotFound`: not on `PATH`);
 /// - `ErrorKind::TimedOut` when the deadline passes; the child has been
 ///   killed and reaped by then.
-pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
+pub(crate) fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -62,7 +62,7 @@ pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Resu
 ///
 /// This is the shape most environment probes want: "what version is it,
 /// if it is there at all".
-pub fn probe_stdout(command: &mut Command, timeout: Duration) -> Option<String> {
+pub(crate) fn probe_stdout(command: &mut Command, timeout: Duration) -> Option<String> {
     match output_with_timeout(command, timeout) {
         Ok(output) if output.status.success() => {
             Some(String::from_utf8_lossy(&output.stdout).trim().to_string())

@@ -1,28 +1,24 @@
 use std::path::{Path, PathBuf};
 
 use crate::build::error::{BuildError, BuildResult};
-use crate::build::platform::{
-    BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private,
-};
+use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::build::util::{check_command_exists, process};
 
 /// Builder for Web/WASM platform (via wasm-pack)
 #[derive(Debug)]
-pub struct WebBuilder {
+pub(crate) struct WebBuilder {
     workspace_root: PathBuf,
 }
 
 impl WebBuilder {
     /// Creates a new `WebBuilder`
     #[must_use]
-    pub fn new(workspace_root: &Path) -> Self {
+    pub(crate) fn new(workspace_root: &Path) -> Self {
         Self {
             workspace_root: workspace_root.to_path_buf(),
         }
     }
 }
-
-impl private::Sealed for WebBuilder {}
 
 impl PlatformBuilder for WebBuilder {
     fn validate_environment(&self) -> BuildResult<()> {

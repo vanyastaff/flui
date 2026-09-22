@@ -2,27 +2,6 @@
 ///
 /// This module provides type-safe error handling with detailed error messages
 /// and context. All build errors are represented by the `BuildError` enum.
-///
-/// # Example
-///
-/// ```rust
-/// use crate::build::{BuildError, BuildResult};
-/// use std::path::PathBuf;
-///
-/// fn check_tool() -> BuildResult<()> {
-///     Err(BuildError::ToolNotFound {
-///         tool: "cargo-ndk".to_string(),
-///         install_hint: "cargo install cargo-ndk".to_string(),
-///     })
-/// }
-///
-/// match check_tool() {
-///     Err(BuildError::ToolNotFound { tool, install_hint }) => {
-///         println!("{} not found. Install with: {}", tool, install_hint);
-///     }
-///     _ => {}
-/// }
-/// ```
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -36,38 +15,12 @@ use thiserror::Error;
 ///
 /// ## Tool Not Found
 ///
-/// ```rust
-/// use crate::build::BuildError;
-///
-/// let error = BuildError::ToolNotFound {
-///     tool: "wasm-pack".to_string(),
-///     install_hint: "cargo install wasm-pack".to_string(),
-/// };
-///
-/// println!("{}", error);
-/// // Output: wasm-pack not found. Install with: cargo install wasm-pack
-/// ```
-///
 /// ## Command Failed
-///
-/// ```rust
-/// use crate::build::BuildError;
-///
-/// let error = BuildError::CommandFailed {
-///     command: "cargo build".to_string(),
-///     exit_code: 1,
-///     stderr: "error: could not compile".to_string(),
-/// };
-///
-/// println!("{}", error);
-/// // Output: Command 'cargo build' failed with exit code 1
-/// //         Stderr: error: could not compile
-/// ```
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum BuildError {
+pub(crate) enum BuildError {
     /// Required tool not found (cargo, wasm-pack, gradle, etc.)
-    #[error("{tool} not found. Install with: {install_hint}")]
+    #[error("{tool} not found; install with: {install_hint}")]
     ToolNotFound {
         /// Name of the missing tool
         tool: String,
@@ -76,7 +29,7 @@ pub enum BuildError {
     },
 
     /// Platform target not installed
-    #[error("Rust target '{target}' not installed. Install with: {install_cmd}")]
+    #[error("Rust target '{target}' is not installed; install with: {install_cmd}")]
     TargetNotInstalled {
         /// Rust target triple (e.g., "aarch64-linux-android")
         target: String,
@@ -85,7 +38,7 @@ pub enum BuildError {
     },
 
     /// Environment variable missing or invalid
-    #[error("Environment variable {var} error: {reason}")]
+    #[error("environment variable {var}: {reason}")]
     EnvVarError {
         /// Environment variable name (e.g., "`ANDROID_HOME`")
         var: String,
@@ -94,7 +47,7 @@ pub enum BuildError {
     },
 
     /// Build command failed
-    #[error("Command '{command}' failed with exit code {exit_code}\nStderr: {stderr}")]
+    #[error("`{command}` failed with exit code {exit_code}: {stderr}")]
     CommandFailed {
         /// Command that was executed
         command: String,
@@ -105,7 +58,7 @@ pub enum BuildError {
     },
 
     /// File or directory not found
-    #[error("Path not found: {path:?} ({context})")]
+    #[error("path not found: {} ({context})", .path.display())]
     PathNotFound {
         /// Path that was not found
         path: PathBuf,
@@ -114,14 +67,14 @@ pub enum BuildError {
     },
 
     /// Invalid platform configuration
-    #[error("Invalid platform: {reason}")]
+    #[error("invalid platform: {reason}")]
     InvalidPlatform {
         /// Error description
         reason: String,
     },
 
     /// Invalid build configuration
-    #[error("Invalid config for '{field}': {reason}")]
+    #[error("invalid config for '{field}': {reason}")]
     InvalidConfig {
         /// Field name that is invalid
         field: String,
@@ -155,112 +108,11 @@ impl From<&str> for BuildError {
 /// Result type alias for build operations.
 ///
 /// This is a convenience alias for `Result<T, BuildError>`.
-///
-/// # Examples
-///
-/// ```rust
-/// use crate::build::{BuildResult, BuildError};
-///
-/// fn check_environment() -> BuildResult<()> {
-///     // Check environment...
-///     Ok(())
-/// }
-///
-/// fn build_project() -> BuildResult<String> {
-///     check_environment()?;
-///     Ok("Success".to_string())
-/// }
-/// ```
-pub type BuildResult<T> = Result<T, BuildError>;
+pub(crate) type BuildResult<T> = Result<T, BuildError>;
 
-// Helper functions for creating common errors
 impl BuildError {
-    /// Create a `ToolNotFound` error.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::BuildError;
-    ///
-    /// let error = BuildError::tool_not_found("cargo-ndk", "cargo install cargo-ndk");
-    /// ```
-    pub fn tool_not_found(tool: impl Into<String>, install_hint: impl Into<String>) -> Self {
-        Self::ToolNotFound {
-            tool: tool.into(),
-            install_hint: install_hint.into(),
-        }
-    }
-
-    /// Create a `TargetNotInstalled` error.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::BuildError;
-    ///
-    /// let error = BuildError::target_not_installed(
-    ///     "aarch64-linux-android",
-    ///     "rustup target add aarch64-linux-android"
-    /// );
-    /// ```
-    pub fn target_not_installed(target: impl Into<String>, install_cmd: impl Into<String>) -> Self {
-        Self::TargetNotInstalled {
-            target: target.into(),
-            install_cmd: install_cmd.into(),
-        }
-    }
-
-    /// Create an `EnvVarError`.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::BuildError;
-    ///
-    /// let error = BuildError::env_var_error("ANDROID_HOME", "not set");
-    /// ```
-    pub fn env_var_error(var: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::EnvVarError {
-            var: var.into(),
-            reason: reason.into(),
-        }
-    }
-
-    /// Create a `CommandFailed` error.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::BuildError;
-    ///
-    /// let error = BuildError::command_failed("cargo build", 1, "compilation error");
-    /// ```
-    pub fn command_failed(
-        command: impl Into<String>,
-        exit_code: i32,
-        stderr: impl Into<String>,
-    ) -> Self {
-        Self::CommandFailed {
-            command: command.into(),
-            exit_code,
-            stderr: stderr.into(),
-        }
-    }
-
     /// Create a `PathNotFound` error.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::BuildError;
-    /// use std::path::PathBuf;
-    ///
-    /// let error = BuildError::path_not_found(
-    ///     PathBuf::from("Cargo.toml"),
-    ///     "looking for workspace root"
-    /// );
-    /// ```
-    pub fn path_not_found(path: PathBuf, context: impl Into<String>) -> Self {
+    pub(crate) fn path_not_found(path: PathBuf, context: impl Into<String>) -> Self {
         Self::PathNotFound {
             path,
             context: context.into(),
@@ -268,30 +120,14 @@ impl BuildError {
     }
 
     /// Create an `InvalidPlatform` error.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::BuildError;
-    ///
-    /// let error = BuildError::invalid_platform("unsupported target architecture");
-    /// ```
-    pub fn invalid_platform(reason: impl Into<String>) -> Self {
+    pub(crate) fn invalid_platform(reason: impl Into<String>) -> Self {
         Self::InvalidPlatform {
             reason: reason.into(),
         }
     }
 
     /// Create an `InvalidConfig` error.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::BuildError;
-    ///
-    /// let error = BuildError::invalid_config("output_dir", "path does not exist");
-    /// ```
-    pub fn invalid_config(field: impl Into<String>, reason: impl Into<String>) -> Self {
+    pub(crate) fn invalid_config(field: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::InvalidConfig {
             field: field.into(),
             reason: reason.into(),
@@ -304,35 +140,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tool_not_found_display() {
-        let error = BuildError::tool_not_found("cargo-ndk", "cargo install cargo-ndk");
-        let msg = format!("{error}");
-        assert!(msg.contains("cargo-ndk"));
-        assert!(msg.contains("cargo install"));
-    }
-
-    #[test]
-    fn test_target_not_installed_display() {
-        let error = BuildError::target_not_installed(
-            "aarch64-linux-android",
-            "rustup target add aarch64-linux-android",
-        );
-        let msg = format!("{error}");
-        assert!(msg.contains("aarch64-linux-android"));
-        assert!(msg.contains("rustup target add"));
-    }
-
-    #[test]
-    fn test_env_var_error_display() {
-        let error = BuildError::env_var_error("ANDROID_HOME", "not set");
-        let msg = format!("{error}");
-        assert!(msg.contains("ANDROID_HOME"));
-        assert!(msg.contains("not set"));
-    }
-
-    #[test]
     fn test_command_failed_display() {
-        let error = BuildError::command_failed("cargo build", 1, "error: compilation failed");
+        let error = BuildError::CommandFailed {
+            command: "cargo build".into(),
+            exit_code: 1,
+            stderr: "error: compilation failed".into(),
+        };
         let msg = format!("{error}");
         assert!(msg.contains("cargo build"));
         assert!(msg.contains("exit code 1"));
@@ -379,22 +192,5 @@ mod tests {
     fn test_from_str() {
         let build_err: BuildError = "custom error".into();
         assert!(matches!(build_err, BuildError::Other(_)));
-    }
-
-    #[test]
-    fn test_build_result() {
-        // Intentionally always-Ok: paired with `failure()` to exercise both
-        // arms of `BuildResult`; the wrap is the point, not a smell.
-        #[expect(clippy::unnecessary_wraps)]
-        fn success() -> BuildResult<i32> {
-            Ok(42)
-        }
-
-        fn failure() -> BuildResult<i32> {
-            Err(BuildError::tool_not_found("test", "install test"))
-        }
-
-        assert!(success().is_ok());
-        assert!(failure().is_err());
     }
 }

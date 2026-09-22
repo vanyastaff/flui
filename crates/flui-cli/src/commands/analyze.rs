@@ -14,7 +14,7 @@ use serde_json::json;
 /// # Errors
 ///
 /// Returns `CliError::AnalysisFailed` if clippy finds issues.
-pub fn execute(fix: bool, pedantic: bool) -> CliResult<()> {
+pub(crate) fn execute(fix: bool, pedantic: bool) -> CliResult<()> {
     ui::intro(style(" flui analyze ").on_blue().black())?;
 
     let mut cmd = CargoCommand::clippy()

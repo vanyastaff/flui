@@ -24,24 +24,24 @@ const FIX_TIMEOUT: Duration = Duration::from_mins(10);
 
 /// Options of `flui doctor`.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct DoctorOptions {
+pub(crate) struct DoctorOptions {
     /// Show paths and full version strings.
-    pub verbose: bool,
+    pub(crate) verbose: bool,
     /// Check only the Android toolchain.
-    pub android: bool,
+    pub(crate) android: bool,
     /// Check only the iOS toolchain.
-    pub ios: bool,
+    pub(crate) ios: bool,
     /// Check only the Web toolchain.
-    pub web: bool,
+    pub(crate) web: bool,
     /// Run automatable fixes (currently: missing `rustup` targets), then
     /// re-check.
-    pub fix: bool,
+    pub(crate) fix: bool,
 }
 
 /// Severity of one [`Check`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Status {
+pub(crate) enum Status {
     /// The tool or capability is present and usable.
     Ok,
     /// Missing, but only a required piece if the caller opted into this
@@ -192,7 +192,7 @@ fn summarize(checks: &[Check]) -> Summary {
 }
 
 /// Execute `flui doctor`.
-pub fn execute(options: DoctorOptions) -> CliResult<()> {
+pub(crate) fn execute(options: DoctorOptions) -> CliResult<()> {
     let _ = ui::intro(style(" flui doctor ").on_cyan().black());
 
     let mut checks = run_checks(&options);

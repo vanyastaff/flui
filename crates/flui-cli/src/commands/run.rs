@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 ///
 /// When `hot_reload` is true (and not in release mode), watches the project's
 /// sources and rebuilds/restarts (or hot-reloads the worker) on change.
-pub fn execute(
+pub(crate) fn execute(
     device: Option<String>,
     release: bool,
     hot_reload: bool,
@@ -287,9 +287,9 @@ fn run_once(release: bool, profile: Option<String>, verbose: bool) -> CliResult<
 /// below keeps the two in step.
 mod env {
     /// Set to `1` when the app is launched by `flui run` with hot reload on.
-    pub const HOT_RELOAD: &str = "FLUI_HOT_RELOAD";
+    pub(crate) const HOT_RELOAD: &str = "FLUI_HOT_RELOAD";
     /// Path of the worker `cdylib` a `--hot-reload` host should load.
-    pub const WORKER_PLUGIN: &str = "FLUI_WORKER_PLUGIN";
+    pub(crate) const WORKER_PLUGIN: &str = "FLUI_WORKER_PLUGIN";
 }
 
 // ============================================================================
@@ -499,7 +499,7 @@ fn start_watcher(paths: Vec<(PathBuf, bool)>) -> CliResult<SourceWatcher> {
         }
         watcher
             .watch(&path, recursive)
-            .map_err(|e| CliError::context(e, format!("Failed to watch {}", path.display())))?;
+            .map_err(|e| CliError::context(e, format!("failed to watch {}", path.display())))?;
         ui::info(format!("Watching {}", style(path.display()).dim()))?;
     }
     Ok(watcher)
@@ -705,7 +705,7 @@ fn stop_child(child: Option<&mut Child>) -> bool {
         return false;
     }
     if let Err(e) = child.kill() {
-        crate::ui::debug(format!("Could not kill child process: {e}"));
+        crate::ui::debug(format!("could not kill child process: {e}"));
     }
     wait_with_timeout(child, Duration::from_secs(5));
     true
@@ -881,7 +881,7 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool) -> bool {
     match cmd.status() {
         Ok(status) => status.success(),
         Err(e) => {
-            let _ = crate::ui::error(format!("Failed to run cargo build: {e}"));
+            let _ = crate::ui::error(format!("failed to run cargo build: {e}"));
             false
         }
     }
@@ -1095,7 +1095,7 @@ fn stage_worker_artifact(built: &Path, canonical: &Path, use_staging: bool) -> C
         platform: "desktop".to_string(),
         details: "worker dylib path has no parent directory".to_string(),
     })?;
-    std::fs::create_dir_all(parent).context("Failed to create worker staging directory")?;
+    std::fs::create_dir_all(parent).context("failed to create worker staging directory")?;
 
     let ext = canonical
         .extension()
@@ -1109,8 +1109,12 @@ fn stage_worker_artifact(built: &Path, canonical: &Path, use_staging: bool) -> C
     // Read once and hash the exact bytes that are written, so the name can never
     // disagree with the content (a read-then-copy would open a window where the
     // file changes between hashing and copying).
-    let bytes = std::fs::read(built)
-        .with_context(|| format!("Failed to read freshly built worker at {}", built.display()))?;
+    let bytes = std::fs::read(built).with_context(|| {
+        format!(
+            "failed to read the freshly built worker at {}",
+            built.display()
+        )
+    })?;
     let dest = parent.join(format!("{stem}{STAGING_INFIX}{:08x}{ext}", fnv1a(&bytes)));
 
     // An existing file with this hash already holds these exact bytes. Leave it
@@ -1121,7 +1125,7 @@ fn stage_worker_artifact(built: &Path, canonical: &Path, use_staging: bool) -> C
     }
 
     std::fs::write(&dest, &bytes)
-        .with_context(|| format!("Failed to stage worker to {}", dest.display()))?;
+        .with_context(|| format!("failed to stage worker to {}", dest.display()))?;
 
     // Defensive only: cargo already ad-hoc linker-signs dylibs on macOS
     // (`flags=adhoc,linker-signed`), and the host runs the worker under the same
@@ -1209,10 +1213,10 @@ fn codesign_ad_hoc(path: &Path) {
 fn publish_worker_plugin(canonical: &Path, load_path: &Path) -> CliResult<()> {
     let manifest = worker_plugin_manifest_path(canonical);
     if let Some(parent) = manifest.parent() {
-        std::fs::create_dir_all(parent).context("Failed to create worker manifest directory")?;
+        std::fs::create_dir_all(parent).context("failed to create worker manifest directory")?;
     }
     std::fs::write(&manifest, load_path.as_os_str().as_encoded_bytes())
-        .with_context(|| format!("Failed to write {}", manifest.display()))?;
+        .with_context(|| format!("failed to write {}", manifest.display()))?;
     Ok(())
 }
 
@@ -1293,7 +1297,7 @@ fn run_cargo_build_packages(
     match cmd.status() {
         Ok(status) => status.success(),
         Err(e) => {
-            let _ = crate::ui::error(format!("Failed to run cargo build for {packages:?}: {e}"));
+            let _ = crate::ui::error(format!("failed to run cargo build for {packages:?}: {e}"));
             false
         }
     }
@@ -1336,7 +1340,7 @@ fn find_worker_hot_reload_project() -> CliResult<Option<WorkerHotReloadProject>>
 }
 
 fn find_flui_config() -> CliResult<Option<(PathBuf, FluiConfig)>> {
-    let mut dir = std::env::current_dir().context("Could not read current directory")?;
+    let mut dir = std::env::current_dir().context("could not read current directory")?;
     loop {
         let path = dir.join("flui.toml");
         if path.exists() {
@@ -1413,15 +1417,15 @@ fn has_flui_dependency(dependencies: &[ProjectDependency]) -> bool {
 
 fn metadata_identifies_project(bytes: &[u8], manifest: &Path) -> CliResult<bool> {
     let metadata: ProjectMetadata = serde_json::from_slice(bytes)
-        .context("Could not decode Cargo metadata; expected --format-version 1 JSON")?;
+        .context("could not decode Cargo metadata; expected --format-version 1 JSON")?;
     let manifest = manifest
         .canonicalize()
-        .context("Could not resolve project Cargo.toml")?;
+        .context("could not resolve project Cargo.toml")?;
     for package in metadata.packages {
         let package_manifest = package
             .manifest_path
             .canonicalize()
-            .context("Could not resolve a package manifest reported by Cargo")?;
+            .context("could not resolve a package manifest reported by Cargo")?;
         if package_manifest == manifest {
             if !has_flui_dependency(&package.dependencies) {
                 return Ok(false);
@@ -1467,7 +1471,7 @@ fn ensure_flui_project() -> CliResult<Project> {
         ])
         .arg(cargo_toml)
         .output()
-        .context("Could not run cargo metadata; ensure Cargo is installed and on PATH")?;
+        .context("could not run cargo metadata; ensure Cargo is installed and on PATH")?;
     if !output.status.success() {
         return Err(CliError::NotFluiProject {
             reason: format!(
@@ -1490,7 +1494,7 @@ fn ensure_flui_project() -> CliResult<Project> {
 /// Watches the scene crate's `src/` directory for changes and rebuilds/pushes
 /// the scene plugin `.so` to the device without restarting the app.
 /// The host app detects the new `.so` via mtime polling and reloads automatically.
-pub fn execute_scene(
+pub(crate) fn execute_scene(
     scene_crate: &str,
     package: &str,
     target: &str,
@@ -1731,7 +1735,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("Could not decode Cargo metadata")
+                .contains("could not decode Cargo metadata")
         );
     }
 

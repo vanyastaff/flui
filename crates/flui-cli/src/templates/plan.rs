@@ -91,17 +91,17 @@ impl ProjectPlan {
         for dir in &self.dirs {
             let target = root.join(dir);
             std::fs::create_dir_all(&target)
-                .with_context(|| format!("Failed to create directory '{}'", target.display()))?;
+                .with_context(|| format!("failed to create directory '{}'", target.display()))?;
         }
         for file in &self.files {
             let target = root.join(&file.path);
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent).with_context(|| {
-                    format!("Failed to create directory '{}'", parent.display())
+                    format!("failed to create directory '{}'", parent.display())
                 })?;
             }
             std::fs::write(&target, &file.contents)
-                .with_context(|| format!("Failed to create '{}'", target.display()))?;
+                .with_context(|| format!("failed to create '{}'", target.display()))?;
         }
         Ok(())
     }

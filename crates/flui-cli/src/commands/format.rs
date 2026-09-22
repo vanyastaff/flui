@@ -14,7 +14,7 @@ use serde_json::json;
 ///
 /// Returns `CliError::FormattingCheckFailed` if check mode finds unformatted code.
 /// Returns `CliError::FormattingFailed` if formatting fails.
-pub fn execute(check: bool) -> CliResult<()> {
+pub(crate) fn execute(check: bool) -> CliResult<()> {
     ui::intro(style(" flui format ").on_magenta().black())?;
 
     let mode = if check { "check" } else { "format" };

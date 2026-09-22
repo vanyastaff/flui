@@ -2,22 +2,22 @@
 
 `flui-cli` owns command parsing, project template selection, generation of
 consumer dependency declarations, platform scaffolding and build
-orchestration (`src/build/`, once the `flui-build` crate), and the dev-loop
-source watcher (`src/watch.rs`). It links no FLUI crate at all: the runtime
-half of hot reload stays in `flui-hot-reload`, which the *app* links, and the
-only contract between the two is a pair of environment-variable names pinned
-by a dev-dependency test.
+orchestration (`src/build/`), and the dev-loop source watcher
+(`src/watch.rs`). It links no FLUI crate: the runtime half of hot reload
+lives in `flui-hot-reload`, which the *app* links, and the only contract
+between the two is a pair of environment-variable names pinned by a
+dev-dependency test.
 
-## No logging framework
+## One output policy, no logging framework
 
-The CLI once carried `tracing`, `tracing-subscriber` and `flui-log` to print
-`RUST_LOG`-filtered logs beside its own narration. With no framework crate in
-its graph there was nothing for that filter to select but the CLI's own 57
-call sites, 28 of them `INFO` lines from the former build library that
-duplicated what the commands already report — two voices on stderr. All of it
-now goes through `ui::`: warnings and errors through the same functions as
-every other line, diagnostics through `ui::debug`, shown under `-v` only.
-`flui-log` stays what it is, the application's logging backend.
+Everything the CLI prints goes through `ui::`. Human narration is styled
+text on stderr; `--json` is NDJSON on stdout; warnings and errors survive
+`--quiet`; diagnostics (the commands run, the probes made, the paths skipped)
+are `ui::debug` lines shown under `-v` only. There is no `tracing`
+subscriber and no `RUST_LOG`: with no framework crate in the graph, a log
+filter would have nothing to select but the CLI's own lines, and a second
+voice on stderr would compete with the narration. `flui-log` is the
+application's logging backend, not the CLI's.
 
 ## Mapping decisions
 
@@ -175,19 +175,16 @@ leaves an orphaned app; a real SIGINT with nobody at the keyboard exits 130.
 
 ## The build pipeline is a module, not a crate
 
-`flui-build` had exactly one consumer, this binary, and no framework
-dependency, so it became `src/build/`. Merging exposed what a library hides:
-a progress reporter, an output parser, a context-extension trait, `--features`
-plumbing no command could set, and a `clean` method on every builder that
-`flui clean` never called. All of it was deleted rather than gated. The
-integration tests moved to `src/build/tests/` as unit modules; they still
-build real Cargo fixtures and re-execute the test binary as a worker.
+`src/build/` has one consumer, this binary, and no framework dependency, so
+it is a module rather than a crate: every builder, scaffold and cargo helper
+in it exists because a command calls it. Its artifact-selection tests live
+in `src/build/tests/` as unit modules; they build real Cargo fixtures and
+re-execute the test binary as a worker.
 
 ## The watcher is dev-machine code
 
-`SourceWatcher` watches files on the developer's machine; nothing in a
-running app does. It lives here, so `cargo install flui-cli` no longer pulls
-`flui-hot-reload` and the rendering crates behind it (the normal dependency
-graph fell from 199 crates to 135). `flui-devtools` lost its `hot-reload`
-feature for the same reason: a callback wrapper over the watcher with no
-consumer.
+`SourceWatcher` (`src/watch.rs`) watches files on the developer's machine;
+nothing in a running app does. Keeping it here is what lets
+`cargo install flui-cli` compile no framework code: the runtime half of hot
+reload, `flui-hot-reload`, is linked by the app, and the two halves share
+only a pair of environment-variable names.

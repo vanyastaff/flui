@@ -2,22 +2,6 @@
 //!
 //! This module provides template generation for new FLUI projects using
 //! the builder pattern for flexible configuration.
-//!
-//! # Examples
-//!
-//! ```ignore
-//! use flui_cli::templates::TemplateBuilder;
-//! use flui_cli::types::{ProjectName, OrganizationId};
-//! use flui_cli::Template;
-//!
-//! let name = ProjectName::new("my-app")?;
-//! let org = OrganizationId::new("com.example")?;
-//!
-//! TemplateBuilder::new(name, org)
-//!     .template(Template::Counter)
-//!     .with_git(true)
-//!     .generate(&project_dir)?;
-//! ```
 
 mod basic;
 mod counter;
@@ -70,25 +54,11 @@ Cargo.lock
 
 /// Builder for generating FLUI project templates.
 ///
-/// Uses the builder pattern (C-BUILDER from Rust API Guidelines) for flexible
-/// configuration of project generation.
-///
 /// # Builder Methods
 ///
 /// - [`template`](Self::template) - Set the template type (default: Counter)
 /// - [`with_git`](Self::with_git) - Enable/disable git initialization (default: true)
 /// - [`with_cargo_check`](Self::with_cargo_check) - Enable/disable cargo check (default: true)
-///
-/// # Examples
-///
-/// ```ignore
-/// let project = TemplateBuilder::new(name, org)
-///     .template(Template::Basic)
-///     .with_git(false)
-///     .generate(&dir)?;
-///
-/// println!("Created project at: {}", project.path.display());
-/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateBuilder {
     name: ProjectName,
@@ -174,8 +144,7 @@ impl TemplateBuilder {
     /// writes: the same plan either way, so a dry run shows exactly what a
     /// real run would create — including `.gitignore` and, for a
     /// non-library, non-hot-reload template, the platform scaffolding
-    /// (`platforms/<name>/…`) that used to be written directly by
-    /// the build module outside the plan. The template match is exhaustive on
+    /// (`platforms/<name>/…`). The template match is exhaustive on
     /// purpose — a new [`Template`] variant must get its own generator
     /// here, not fall back to another template's files.
     ///

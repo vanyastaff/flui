@@ -118,36 +118,36 @@ fn platform_templates(platform: &str) -> &'static [TemplateFile] {
 
 /// Returns the list of valid platform names.
 #[must_use]
-pub fn valid_platform_names() -> &'static [&'static str] {
+pub(crate) fn valid_platform_names() -> &'static [&'static str] {
     VALID_PLATFORMS
 }
 
 /// Check if a platform name is valid.
 #[must_use]
-pub fn is_valid_platform(name: &str) -> bool {
+pub(crate) fn is_valid_platform(name: &str) -> bool {
     VALID_PLATFORMS.contains(&name.to_lowercase().as_str())
 }
 
 /// Parameters for template placeholder substitution.
 #[derive(Debug)]
-pub struct ScaffoldParams<'a> {
+pub(crate) struct ScaffoldParams<'a> {
     /// Application display name (e.g. "My App").
-    pub app: &'a str,
+    pub(crate) app: &'a str,
     /// Rust library crate name / native lib name (e.g. "`my_app`").
-    pub lib: &'a str,
+    pub(crate) lib: &'a str,
     /// Reverse-domain package name (e.g. "`com.example.my_app`").
-    pub package: &'a str,
+    pub(crate) package: &'a str,
 }
 
 /// One file [`scaffold_platform`] would write, rendered but not yet on
 /// disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScaffoldFile {
+pub(crate) struct ScaffoldFile {
     /// Path relative to the platform's destination directory
     /// (`platforms/<name>/`), e.g. `app/build.gradle.kts`.
-    pub rel_path: std::path::PathBuf,
+    pub(crate) rel_path: std::path::PathBuf,
     /// The file's contents, with placeholders already substituted.
-    pub contents: String,
+    pub(crate) contents: String,
 }
 
 /// Render the files [`scaffold_platform`] would write for `platform`,
@@ -161,7 +161,7 @@ pub struct ScaffoldFile {
 /// # Errors
 ///
 /// Returns an error if the platform name is invalid.
-pub fn scaffold_platform_plan(
+pub(crate) fn scaffold_platform_plan(
     platform: &str,
     params: &ScaffoldParams<'_>,
 ) -> BuildResult<Vec<ScaffoldFile>> {
@@ -169,7 +169,7 @@ pub fn scaffold_platform_plan(
 
     if !is_valid_platform(&platform_lower) {
         return Err(BuildError::invalid_platform(format!(
-            "Invalid platform '{}'. Valid platforms: {}",
+            "invalid platform '{}'; valid platforms: {}",
             platform,
             VALID_PLATFORMS.join(", ")
         )));
@@ -193,7 +193,7 @@ pub fn scaffold_platform_plan(
 /// # Errors
 ///
 /// Returns an error if the platform name is invalid or filesystem operations fail.
-pub fn scaffold_platform(
+pub(crate) fn scaffold_platform(
     platform: &str,
     project_dir: &Path,
     params: &ScaffoldParams<'_>,
@@ -368,7 +368,7 @@ mod tests {
         let result = scaffold_platform("fuchsia", &dir, &params);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Invalid platform"));
+        assert!(err.to_string().contains("invalid platform"));
     }
 
     #[test]

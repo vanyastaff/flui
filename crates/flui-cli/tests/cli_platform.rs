@@ -130,7 +130,7 @@ fn platform_add_rejects_an_unknown_platform_and_lists_valid_ones() {
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains("Invalid platform").and(predicate::str::contains("android")),
+            predicate::str::contains("invalid platform").and(predicate::str::contains("android")),
         );
 }
 
@@ -143,7 +143,7 @@ fn platform_remove_rejects_an_unknown_platform_name() {
         .args(["platform", "remove", "fuchsia"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Invalid platform"));
+        .stderr(predicate::str::contains("invalid platform"));
 }
 
 #[test]

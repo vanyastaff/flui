@@ -45,23 +45,13 @@ const STYLES: Styles = Styles::styled()
 mod build;
 mod commands;
 mod config;
-pub mod error;
-pub mod proc;
-pub mod runner;
+mod error;
+mod proc;
+mod runner;
 mod templates;
-pub mod types;
-pub mod ui;
-mod utils;
+mod types;
+mod ui;
 mod watch;
-
-/// Prelude module re-exporting commonly used types.
-///
-/// Import with `use crate::prelude::*;` for convenient access.
-pub mod prelude {
-    pub use crate::error::{CliError, CliResult, OptionExt, ResultExt};
-    pub use crate::runner::{CargoCommand, CommandResult, GitCommand, OutputStyle};
-    pub use crate::types::{OrganizationId, ProjectName, ProjectPath};
-}
 
 /// Command-line interface for FLUI - A declarative UI framework for Rust.
 #[derive(Debug, Parser)]
@@ -80,7 +70,7 @@ Environment:
 
 flui sends no telemetry and never touches the network unless a command
 explicitly downloads something (`flui upgrade`, `cargo` fetching crates).")]
-pub struct Cli {
+pub(crate) struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
     command: Commands,
@@ -420,7 +410,7 @@ enum EmulatorSubcommand {
 /// Every variant listed here generates a distinct, compile-tested project;
 /// the CLI never silently substitutes another template.
 #[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash, Default)]
-pub enum Template {
+pub(crate) enum Template {
     /// Counter app: a stateful widget, a button, and a widget test (default)
     #[default]
     Counter,
@@ -446,7 +436,7 @@ impl Display for Template {
 impl Template {
     /// Get a human-readable description of the template.
     #[must_use]
-    pub const fn description(&self) -> &'static str {
+    pub(crate) const fn description(&self) -> &'static str {
         match self {
             Self::Basic => "Hello, FLUI! stateless app with a Material theme",
             Self::Counter => "Counter app with a stateful widget and a widget test",
@@ -457,7 +447,7 @@ impl Template {
 
     /// Whether this template produces a library crate rather than a binary.
     #[must_use]
-    pub const fn is_library(&self) -> bool {
+    pub(crate) const fn is_library(&self) -> bool {
         matches!(self, Self::Widget)
     }
 }
@@ -465,7 +455,7 @@ impl Template {
 /// Platform filter for `flui devices`.
 #[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum DevicePlatform {
+pub(crate) enum DevicePlatform {
     /// This machine
     Desktop,
     /// Android devices and emulators (via `adb`)
@@ -478,8 +468,7 @@ pub enum DevicePlatform {
 
 /// Target platforms for FLUI applications.
 #[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash)]
-pub enum Platform {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub(crate) enum Platform {
     /// Microsoft Windows
     Windows,
     /// Linux distributions
@@ -507,33 +496,9 @@ impl Display for Platform {
     }
 }
 
-impl Platform {
-    /// Check if this platform requires a specific host OS.
-    #[must_use]
-    pub const fn requires_host_os(&self) -> Option<&'static str> {
-        match self {
-            Self::Ios | Self::Macos => Some("macOS"),
-            _ => None,
-        }
-    }
-
-    /// Get the Rust target triple for this platform.
-    #[must_use]
-    pub const fn target_triple(&self) -> &'static str {
-        match self {
-            Self::Windows => "x86_64-pc-windows-msvc",
-            Self::Linux => "x86_64-unknown-linux-gnu",
-            Self::Macos => "x86_64-apple-darwin",
-            Self::Android => "aarch64-linux-android",
-            Self::Ios => "aarch64-apple-ios",
-            Self::Web => "wasm32-unknown-unknown",
-        }
-    }
-}
-
 /// Build targets for the FLUI application.
 #[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq, Hash)]
-pub enum BuildTarget {
+pub(crate) enum BuildTarget {
     /// Google Android
     Android,
     /// Apple iOS
@@ -565,22 +530,6 @@ impl Display for BuildTarget {
 }
 
 impl BuildTarget {
-    /// Get the corresponding Platform, if applicable.
-    ///
-    /// Returns `None` for `Desktop` which is host-dependent.
-    #[must_use]
-    pub const fn platform(&self) -> Option<Platform> {
-        match self {
-            Self::Android => Some(Platform::Android),
-            Self::Ios => Some(Platform::Ios),
-            Self::Web => Some(Platform::Web),
-            Self::Windows => Some(Platform::Windows),
-            Self::Linux => Some(Platform::Linux),
-            Self::Macos => Some(Platform::Macos),
-            Self::Desktop => None,
-        }
-    }
-
     /// Get the Rust target triple for this build target.
     ///
     /// `macos` resolves to the *host* architecture's darwin triple: a build is
@@ -589,7 +538,7 @@ impl BuildTarget {
     /// Silicon. `--universal` (handled by the builder, not here) widens it to
     /// both architectures.
     #[must_use]
-    pub const fn target_triple(&self) -> &'static str {
+    pub(crate) const fn target_triple(&self) -> &'static str {
         match self {
             Self::Windows => "x86_64-pc-windows-msvc",
             Self::Linux => "x86_64-unknown-linux-gnu",
@@ -620,7 +569,7 @@ impl BuildTarget {
 
     /// The darwin triple matching the machine the CLI itself was built for.
     #[must_use]
-    pub const fn host_darwin_triple() -> &'static str {
+    pub(crate) const fn host_darwin_triple() -> &'static str {
         #[cfg(target_arch = "aarch64")]
         {
             "aarch64-apple-darwin"
@@ -854,10 +803,10 @@ mod desktop_error_tests {
                 "/custom target/app".into(),
                 "Cargo executable absent",
             ),
-            "Failed to build binary",
+            "failed to build the binary",
         );
         let text = super::format_error_chain(&error);
-        assert!(text.contains("Failed to build binary"));
+        assert!(text.contains("failed to build the binary"));
         assert!(text.contains("/custom target/app"));
         assert!(text.contains("Cargo executable absent"));
     }

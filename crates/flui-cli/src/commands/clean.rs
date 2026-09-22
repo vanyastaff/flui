@@ -19,14 +19,14 @@ const VALID_PLATFORMS: &[&str] = &["android", "ios", "web"];
 ///
 /// Returns `CliError::CleanFailed` if cargo clean fails, or `CliError::Missing`
 /// if `platform` names something other than `android`, `ios` or `web`.
-pub fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
+pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
     ui::intro(style(" flui clean ").on_red().white())?;
 
     if let Some(ref plat) = platform {
         let plat_lower = plat.to_lowercase();
         if !VALID_PLATFORMS.contains(&plat_lower.as_str()) {
             let message = format!(
-                "Invalid platform '{plat}'. Valid values: {}",
+                "invalid platform '{plat}'; valid values: {}",
                 VALID_PLATFORMS.join(", ")
             );
             ui::outro_cancel(&message)?;

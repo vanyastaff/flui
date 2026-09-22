@@ -65,29 +65,29 @@ pub(crate) enum Status {
 pub(crate) struct Device {
     /// What `flui run --device` takes: a UDID for iOS, a serial for Android,
     /// a fixed sentinel for the desktop, a synthetic id for browsers.
-    pub id: String,
+    pub(crate) id: String,
     /// Human-readable name.
-    pub name: String,
-    pub platform: DevicePlatform,
-    pub kind: Kind,
-    pub status: Status,
+    pub(crate) name: String,
+    pub(crate) platform: DevicePlatform,
+    pub(crate) kind: Kind,
+    pub(crate) status: Status,
     /// Free-form extra fields (model, OS version, runtime, browser path, …).
-    pub details: BTreeMap<String, String>,
+    pub(crate) details: BTreeMap<String, String>,
 }
 
 /// A probe that could not run at all (tool missing, timed out, or failed).
 /// Never fails the command — it is folded into [`Discovery::problems`].
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct Problem {
-    pub platform: DevicePlatform,
-    pub message: String,
-    pub hint: String,
+    pub(crate) platform: DevicePlatform,
+    pub(crate) message: String,
+    pub(crate) hint: String,
 }
 
 /// Result of a full device scan.
 pub(crate) struct Discovery {
-    pub devices: Vec<Device>,
-    pub problems: Vec<Problem>,
+    pub(crate) devices: Vec<Device>,
+    pub(crate) problems: Vec<Problem>,
 }
 
 /// Scan every platform (or just `filter`, when given) for run targets.
@@ -627,7 +627,7 @@ fn windows_browsers() -> Vec<Device> {
 // ============================================================================
 
 /// Execute `flui devices`.
-pub fn execute(details: bool, platform: Option<DevicePlatform>) -> CliResult<()> {
+pub(crate) fn execute(details: bool, platform: Option<DevicePlatform>) -> CliResult<()> {
     let discovery = discover(platform, details);
 
     if ui::is_json() {

@@ -14,7 +14,7 @@ use console::style;
 use std::process::Command;
 
 /// List available emulators and simulators.
-pub fn execute_list(platform_filter: Option<&str>) -> CliResult<()> {
+pub(crate) fn execute_list(platform_filter: Option<&str>) -> CliResult<()> {
     let show_android = platform_filter.is_none_or(|p| p.eq_ignore_ascii_case("android"));
     let show_ios = platform_filter.is_none_or(|p| p.eq_ignore_ascii_case("ios"));
 
@@ -79,7 +79,7 @@ pub fn execute_list(platform_filter: Option<&str>) -> CliResult<()> {
 
 /// Launch a specific emulator or simulator by exact id/name, then by unique
 /// case-insensitive prefix.
-pub fn execute_launch(name: &str) -> CliResult<()> {
+pub(crate) fn execute_launch(name: &str) -> CliResult<()> {
     let mut candidates = Vec::new();
     if let Ok(avds) = list_android_avds() {
         candidates.extend(avds);

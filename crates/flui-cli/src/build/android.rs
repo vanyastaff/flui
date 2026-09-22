@@ -1,14 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use crate::build::error::{BuildError, BuildResult};
-use crate::build::platform::{
-    BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private,
-};
+use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::build::util::{check_command_exists, environment, process};
 
 /// Builder for Android platform (APK builds via Gradle and cargo-ndk)
 #[derive(Debug)]
-pub struct AndroidBuilder {
+pub(crate) struct AndroidBuilder {
     workspace_root: PathBuf,
     android_home: PathBuf,
     ndk_home: PathBuf,
@@ -21,7 +19,7 @@ impl AndroidBuilder {
     /// # Errors
     ///
     /// Returns error if `ANDROID_HOME` or NDK is not configured
-    pub fn new(workspace_root: &Path) -> BuildResult<Self> {
+    pub(crate) fn new(workspace_root: &Path) -> BuildResult<Self> {
         let android_home = environment::resolve_android_home()?;
         let ndk_home = environment::resolve_ndk_home(&android_home)?;
 
@@ -55,7 +53,7 @@ impl AndroidBuilder {
     /// * `target` - Android target triple (e.g., "arm64-v8a")
     /// * `scene_crate` - Package name of the scene crate (e.g., "flui-android-scene")
     /// * `release` - Whether to build in release mode
-    pub async fn build_scene_plugin(
+    pub(crate) async fn build_scene_plugin(
         &self,
         target: &str,
         scene_crate: &str,
@@ -129,7 +127,7 @@ impl AndroidBuilder {
     /// * `so_path` - Local path to the `.so` file
     /// * `package` - Android package name (e.g., "com.vanya.flui.counter")
     /// * `lib_name` - Library filename on device (e.g., "libflui_scene.so")
-    pub async fn push_scene_plugin(
+    pub(crate) async fn push_scene_plugin(
         &self,
         so_path: &Path,
         package: &str,
@@ -137,7 +135,7 @@ impl AndroidBuilder {
     ) -> BuildResult<()> {
         let so_str = so_path
             .to_str()
-            .ok_or_else(|| BuildError::Other(format!("Invalid path: {}", so_path.display())))?;
+            .ok_or_else(|| BuildError::Other(format!("invalid path: {}", so_path.display())))?;
 
         let tmp_path = format!("/data/local/tmp/{lib_name}");
         let app_path = format!("/data/data/{package}/files/{lib_name}");
@@ -153,8 +151,6 @@ impl AndroidBuilder {
         Ok(())
     }
 }
-
-impl private::Sealed for AndroidBuilder {}
 
 impl PlatformBuilder for AndroidBuilder {
     fn validate_environment(&self) -> BuildResult<()> {

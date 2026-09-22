@@ -6,17 +6,17 @@ use serde_json::json;
 
 /// Options of `flui test`.
 #[derive(Debug, Clone, Default)]
-pub struct TestOptions {
+pub(crate) struct TestOptions {
     /// Optional test name filter.
-    pub filter: Option<String>,
+    pub(crate) filter: Option<String>,
     /// Run only unit tests (`--lib`).
-    pub unit: bool,
+    pub(crate) unit: bool,
     /// Run only integration tests (`--tests`).
-    pub integration: bool,
+    pub(crate) integration: bool,
     /// Build the tests in release mode.
-    pub release: bool,
+    pub(crate) release: bool,
     /// Arguments forwarded to the test harness after `--`.
-    pub harness_args: Vec<String>,
+    pub(crate) harness_args: Vec<String>,
 }
 
 /// Execute the test command.
@@ -24,7 +24,7 @@ pub struct TestOptions {
 /// # Errors
 ///
 /// Returns `CliError::TestsFailed` if any tests fail.
-pub fn execute(options: TestOptions) -> CliResult<()> {
+pub(crate) fn execute(options: TestOptions) -> CliResult<()> {
     let TestOptions {
         filter,
         unit,

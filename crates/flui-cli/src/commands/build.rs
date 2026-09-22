@@ -12,19 +12,19 @@ use std::time::Instant;
 
 /// Build options collected into a struct to avoid excessive bool parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct BuildOptions {
+pub(crate) struct BuildOptions {
     /// Build in release mode.
-    pub release: bool,
+    pub(crate) release: bool,
     /// iOS: Build device and simulator libraries (XCFramework without an Xcode project).
-    pub universal: bool,
+    pub(crate) universal: bool,
     /// Select iOS static-library/XCFramework delivery instead of an application.
-    pub library: bool,
+    pub(crate) library: bool,
     /// Exact iOS simulator UDID (resolved before compilation).
-    pub simulator: Option<String>,
+    pub(crate) simulator: Option<String>,
     /// Build a named example rather than the current package's binary.
-    pub example: Option<String>,
+    pub(crate) example: Option<String>,
     /// Build a named workspace package's binary.
-    pub package: Option<String>,
+    pub(crate) package: Option<String>,
 }
 
 impl BuildOptions {
@@ -109,7 +109,6 @@ impl Artifact {
     }
 }
 
-/// Render a byte count the way a person reads it: KB below one MB, MB above.
 /// Drive one of the async builders to completion on the build runtime
 /// `execute` entered; a plain executor cannot, because the builders spawn
 /// `tokio::process` children that need the runtime's reactor.
@@ -117,6 +116,7 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     tokio::runtime::Handle::current().block_on(future)
 }
 
+/// Render a byte count the way a person reads it: KB below one MB, MB above.
 fn human_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -150,7 +150,7 @@ fn ensure_flui_project(root: &Path) -> CliResult<()> {
 ///
 /// Returns an error if the build fails for the target platform.
 #[expect(clippy::too_many_arguments, reason = "mirrors clap argument structure")]
-pub fn execute(
+pub(crate) fn execute(
     target: BuildTarget,
     release: bool,
     output: Option<PathBuf>,
@@ -226,7 +226,7 @@ fn run(target: BuildTarget, options: BuildOptions, output: Option<PathBuf>) -> C
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .context("Failed to start the build runtime")?;
+        .context("failed to start the build runtime")?;
     let _reactor = runtime.enter();
 
     let started = Instant::now();
@@ -287,7 +287,7 @@ fn run(target: BuildTarget, options: BuildOptions, output: Option<PathBuf>) -> C
 /// still gets staged, with a derived identifier, rather than the build silently
 /// degrading to a bare binary.
 fn macos_bundle() -> CliResult<AppBundle> {
-    let root = std::env::current_dir().context("Failed to resolve application directory")?;
+    let root = std::env::current_dir().context("failed to resolve application directory")?;
     macos_bundle_at(&root)
 }
 
@@ -311,7 +311,7 @@ fn macos_bundle_at(root: &std::path::Path) -> CliResult<AppBundle> {
         }
         Err(error) => Err(crate::error::CliError::context(
             error,
-            format!("Failed to inspect {}", manifest.display()),
+            format!("failed to inspect {}", manifest.display()),
         )),
     }
 }
@@ -330,7 +330,7 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
     };
 
     let android_builder =
-        AndroidBuilder::new(&workspace_root).context("Failed to initialize Android builder")?;
+        AndroidBuilder::new(&workspace_root).context("failed to initialize Android builder")?;
 
     let mut builder = BuilderContextBuilder::new(workspace_root)
         .with_platform(Platform::Android {
@@ -355,7 +355,7 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building Rust libraries...");
     let artifacts =
-        block_on(android_builder.build_rust(&ctx)).context("Failed to build Rust libraries")?;
+        block_on(android_builder.build_rust(&ctx)).context("failed to build Rust libraries")?;
 
     ui::emit(
         "build.phase",
@@ -363,7 +363,7 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
     );
     spinner.start("Building APK...");
     let final_artifacts = block_on(android_builder.build_platform(&ctx, &artifacts))
-        .context("Failed to build APK")?;
+        .context("failed to build APK")?;
 
     spinner.stop(format!("{} Android APK built", style("✓").green()));
 
@@ -429,7 +429,7 @@ fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building iOS Rust target...");
     let artifacts =
-        block_on(ios_builder.build_rust(&ctx)).context("Failed to build iOS Rust target")?;
+        block_on(ios_builder.build_rust(&ctx)).context("failed to build iOS Rust target")?;
 
     ui::emit(
         "build.phase",
@@ -437,7 +437,7 @@ fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
     );
     spinner.start("Building iOS app...");
     let final_artifacts = block_on(ios_builder.build_platform(&ctx, &artifacts))
-        .context("Failed to build iOS app")?;
+        .context("failed to build iOS app")?;
 
     if let Some(simulator) = simulator {
         super::ios::check_runtime(&simulator, &final_artifacts.app_binary)?;
@@ -493,7 +493,7 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building WASM...");
-    let artifacts = block_on(web_builder.build_rust(&ctx)).context("Failed to build WASM")?;
+    let artifacts = block_on(web_builder.build_rust(&ctx)).context("failed to build WASM")?;
 
     ui::emit(
         "build.phase",
@@ -501,7 +501,7 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
     );
     spinner.start("Building web package...");
     let final_artifacts = block_on(web_builder.build_platform(&ctx, &artifacts))
-        .context("Failed to build web package")?;
+        .context("failed to build web package")?;
 
     spinner.stop(format!("{} Web package built", style("✓").green()));
 
@@ -553,11 +553,12 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
     spinner.start("Validating Desktop environment...");
     desktop_builder
         .validate_environment()
-        .context("Desktop environment validation failed")?;
+        .context("desktop environment validation failed")?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building binary...");
-    let artifacts = block_on(desktop_builder.build_rust(&ctx)).context("Failed to build binary")?;
+    let artifacts =
+        block_on(desktop_builder.build_rust(&ctx)).context("failed to build the binary")?;
 
     ui::emit(
         "build.phase",
@@ -565,7 +566,7 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
     );
     spinner.start("Copying binary...");
     let final_artifacts = block_on(desktop_builder.build_platform(&ctx, &artifacts))
-        .context("Failed to copy binary")?;
+        .context("failed to copy binary")?;
 
     spinner.stop(format!("{} Desktop binary built", style("✓").green()));
 
@@ -631,11 +632,11 @@ fn build_specific_platform(
     spinner.start("Validating environment...");
     desktop_builder
         .validate_environment()
-        .context("Environment validation failed")?;
+        .context("environment validation failed")?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "build_rust" }));
     spinner.start("Building...");
-    let artifacts = block_on(desktop_builder.build_rust(&ctx)).context("Failed to build")?;
+    let artifacts = block_on(desktop_builder.build_rust(&ctx)).context("failed to build")?;
 
     ui::emit(
         "build.phase",
@@ -643,7 +644,7 @@ fn build_specific_platform(
     );
     spinner.start("Copying artifacts...");
     let final_artifacts = block_on(desktop_builder.build_platform(&ctx, &artifacts))
-        .context("Failed to copy artifacts")?;
+        .context("failed to copy artifacts")?;
 
     spinner.stop(format!(
         "{} {} binary built",
@@ -729,11 +730,11 @@ fn build_macos_universal(
 
         builder_inst
             .validate_environment()
-            .context("Environment validation failed")?;
+            .context("environment validation failed")?;
         let artifacts = block_on(builder_inst.build_rust(&slice_ctx))
-            .with_context(|| format!("Failed to build {triple}"))?;
+            .with_context(|| format!("failed to build {triple}"))?;
         let final_artifacts = block_on(builder_inst.build_platform(&slice_ctx, &artifacts))
-            .with_context(|| format!("Failed to stage {triple}"))?;
+            .with_context(|| format!("failed to stage {triple}"))?;
         slice_paths.push(final_artifacts.app_binary);
     }
 
@@ -809,7 +810,7 @@ mod bundle_tests {
             std::fs::write(root.path().join("flui.toml"), text).expect("config");
             let error =
                 super::macos_bundle_at(root.path()).expect_err("present invalid config must fail");
-            assert!(error.to_string().contains("Failed to parse"));
+            assert!(error.to_string().contains("failed to parse"));
         }
     }
 

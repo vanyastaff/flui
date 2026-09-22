@@ -11,18 +11,18 @@ use std::path::{Path, PathBuf};
 /// The options of `flui create`, grouped so adding one is a field,
 /// not a positional argument every caller has to count.
 #[derive(Debug, Clone, Default)]
-pub struct CreateOptions {
+pub(crate) struct CreateOptions {
     /// Use local path dependencies instead of crates.io versions.
-    pub local: Option<PathBuf>,
+    pub(crate) local: Option<PathBuf>,
     /// Skip the post-scaffold `cargo check`. The check only reports — it
     /// never fails the command — so skipping it changes nothing about the
     /// scaffold, only how long `create` takes.
-    pub skip_check: bool,
+    pub(crate) skip_check: bool,
     /// Generate the Flutter-parity hot-reload workspace (host/worker/types).
-    pub hot_reload: bool,
+    pub(crate) hot_reload: bool,
     /// Build the plan and report it without writing anything: no directory,
     /// no git init, no cargo check.
-    pub dry_run: bool,
+    pub(crate) dry_run: bool,
 }
 
 /// Execute the create command.
@@ -42,7 +42,7 @@ pub struct CreateOptions {
 /// - Directory already exists
 /// - Template generation fails
 /// - Git initialization fails
-pub fn execute(
+pub(crate) fn execute(
     project_name: ProjectName,
     org_id: OrganizationId,
     template: Template,
@@ -94,7 +94,7 @@ pub fn execute(
 
     let spinner = ui::spinner();
     spinner.start("Creating project directory...");
-    std::fs::create_dir_all(project_dir).context("Failed to create project directory")?;
+    std::fs::create_dir_all(project_dir).context("failed to create project directory")?;
     spinner.stop(format!("{} Created project directory", style("✓").green()));
 
     ui::info(format!(
@@ -274,7 +274,7 @@ fn run_cargo_check(dir: &Path) -> CliResult<bool> {
         .args(["check", "--quiet"])
         .current_dir(dir)
         .output()
-        .context("Failed to run cargo check")?;
+        .context("failed to run cargo check")?;
 
     if output.status.success() {
         return Ok(true);

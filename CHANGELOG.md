@@ -15,6 +15,20 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **`flui-cli` reads like a binary, not a library** (`flui-cli`). Error
+  messages now follow the `thiserror` convention — lowercase, no trailing
+  period, and the wrapping variants (`I/O error`, `build failed`, …) no
+  longer repeat the cause that the `Caused by:` chain already prints; a
+  command that dies by signal says so instead of printing `None`. Every
+  `pub` item is `pub(crate)` (nothing outside the binary can see it), which
+  let the compiler find the library-era leftovers that went with it: a
+  `prelude`, a sealed trait with nothing to seal against, unused builder
+  methods, error variants no code constructs, `new_unchecked` constructors
+  that bypassed validation, 47 doc examples no tool ever compiled, and
+  `flui.toml` sections (`[assets]`, `fonts`, `lto`, `opt_level`, per-mode
+  build tables) that nothing read but `flui platform` wrote back into the
+  user's file. `flui.toml` now models exactly the keys the README documents;
+  unknown keys from older files are ignored.
 - **`flui-cli` draws its own terminal output** (`flui-cli`). `cliclack` is
   gone: it brought 42 of the CLI's 116 crates — ICU text segmentation with
   its data tables and proc-macros, to word-wrap prompt text — for a dozen

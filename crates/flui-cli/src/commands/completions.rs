@@ -10,16 +10,9 @@ use console::style;
 use std::io;
 use std::path::Path;
 
-/// Execute the completions command.
-///
-/// # Arguments
-///
-/// * `shell` - Target shell (auto-detected if not specified)
-///
-/// # Errors
-///
-/// Returns `CliError::ShellDetectionFailed` if shell cannot be detected.
-pub fn execute(shell: Option<Shell>) -> CliResult<()> {
+/// Print the completion script for `shell`, detected from `$SHELL` when not
+/// given.
+pub(crate) fn execute(shell: Option<Shell>) -> CliResult<()> {
     let shell = shell.unwrap_or_else(detect_shell);
 
     // The completion script is the only thing that may ever reach stdout —

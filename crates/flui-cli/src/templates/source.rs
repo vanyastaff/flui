@@ -131,7 +131,7 @@ fn read_manifest(path: &Path) -> CliResult<toml::Table> {
         )
     })?;
     toml::from_str(&text)
-        .with_context(|| format!("Invalid FLUI source manifest '{}'", path.display()))
+        .with_context(|| format!("invalid FLUI source manifest '{}'", path.display()))
 }
 
 fn require_utf8(path: &Path) -> CliResult<&str> {

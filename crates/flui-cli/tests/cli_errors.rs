@@ -22,7 +22,7 @@ fn create_with_rust_keyword_fails() {
         .arg(tmp.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Invalid project name"));
+        .stderr(predicate::str::contains("invalid project name"));
 }
 
 #[test]
@@ -35,7 +35,7 @@ fn create_with_another_keyword_fails() {
         .arg(tmp.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Invalid project name"));
+        .stderr(predicate::str::contains("invalid project name"));
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn create_with_leading_digit_fails() {
         .arg(tmp.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Invalid project name"));
+        .stderr(predicate::str::contains("invalid project name"));
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn create_with_invalid_org_fails() {
         .arg(tmp.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Invalid organization ID"));
+        .stderr(predicate::str::contains("invalid organization ID"));
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn desktop_build_reports_its_underlying_selection_error() {
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains("Failed to build binary")
+            predicate::str::contains("failed to build the binary")
                 .and(predicate::str::contains("expected one executable"))
                 .and(predicate::str::contains("package.default-run")),
         );
@@ -211,6 +211,6 @@ fn desktop_build_rejects_invalid_present_app_configuration() {
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains("Failed to parse").and(predicate::str::contains("flui.toml")),
+            predicate::str::contains("failed to parse").and(predicate::str::contains("flui.toml")),
         );
 }

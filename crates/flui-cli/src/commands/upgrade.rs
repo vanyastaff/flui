@@ -41,7 +41,7 @@ const DEPENDENCIES_CHECK_TIMEOUT: Duration = Duration::from_mins(5);
 ///
 /// Returns `CliError::UpgradeFailed` if the CLI's own upgrade fails.
 /// Returns `CliError::UpdateFailed` if the dependency update fails.
-pub fn execute(self_update: bool, dependencies: bool, check: bool) -> CliResult<()> {
+pub(crate) fn execute(self_update: bool, dependencies: bool, check: bool) -> CliResult<()> {
     ui::intro(style(" flui upgrade ").on_blue().white())?;
 
     if check {

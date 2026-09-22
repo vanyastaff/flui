@@ -11,15 +11,15 @@ use console::style;
 
 /// Configuration collected from interactive prompts.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectConfig {
+pub(crate) struct ProjectConfig {
     /// Validated project name.
-    pub name: ProjectName,
+    pub(crate) name: ProjectName,
     /// Validated organization ID.
-    pub org: OrganizationId,
+    pub(crate) org: OrganizationId,
     /// Selected project template.
-    pub template: Template,
+    pub(crate) template: Template,
     /// Selected target platforms (None means use defaults).
-    pub platforms: Option<Vec<Platform>>,
+    pub(crate) platforms: Option<Vec<Platform>>,
 }
 
 /// Run the interactive project creation wizard.
@@ -30,7 +30,7 @@ pub struct ProjectConfig {
 /// - User input is invalid
 /// - User cancels the operation
 /// - Dialog interaction fails
-pub fn interactive_create() -> CliResult<ProjectConfig> {
+pub(crate) fn interactive_create() -> CliResult<ProjectConfig> {
     ui::intro(style(" Create FLUI Project ").on_cyan().black())?;
 
     // Ask for project name with validation

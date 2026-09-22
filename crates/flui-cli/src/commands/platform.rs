@@ -17,9 +17,9 @@ use serde_json::json;
 ///
 /// For each platform name, validates it, checks for duplicates, scaffolds the
 /// platform directory, and updates `flui.toml`. Invalid names are reported
-/// per-name and, unlike valid duplicates, fail the command overall — a typo
-/// used to be silently ignored and still exit 0.
-pub fn add(platforms: &[String]) -> CliResult<()> {
+/// per-name and, unlike valid duplicates, fail the command overall: a typo
+/// must not exit 0.
+pub(crate) fn add(platforms: &[String]) -> CliResult<()> {
     ui::intro(style(" flui platform add ").on_yellow().black())?;
 
     if platforms.is_empty() {
@@ -48,7 +48,7 @@ pub fn add(platforms: &[String]) -> CliResult<()> {
 
         if !is_valid_platform(&platform_lower) {
             ui::error(format!(
-                "Invalid platform '{}'. Valid values: {}",
+                "invalid platform '{}'; valid values: {}",
                 platform,
                 valid_platform_names().join(", ")
             ))?;
@@ -99,7 +99,7 @@ pub fn add(platforms: &[String]) -> CliResult<()> {
 
     if !invalid.is_empty() {
         return Err(CliError::Usage(format!(
-            "Invalid platform(s): {}. Valid values: {}",
+            "invalid platform(s): {}; valid values: {}",
             invalid.join(", "),
             valid_platform_names().join(", ")
         )));
@@ -118,14 +118,14 @@ pub fn add(platforms: &[String]) -> CliResult<()> {
 ///
 /// Returns `CliError::NonInteractive` when `yes` is `false` and the
 /// session cannot prompt (`--yes` is the way out).
-pub fn remove(platform: &str, yes: bool) -> CliResult<()> {
+pub(crate) fn remove(platform: &str, yes: bool) -> CliResult<()> {
     ui::intro(style(" flui platform remove ").on_red().black())?;
 
     let platform_lower = platform.to_lowercase();
 
     if !is_valid_platform(&platform_lower) {
         let message = format!(
-            "Invalid platform '{}'. Valid values: {}",
+            "invalid platform '{}'; valid values: {}",
             platform,
             valid_platform_names().join(", ")
         );
@@ -196,7 +196,7 @@ pub fn remove(platform: &str, yes: bool) -> CliResult<()> {
         spinner.start(format!("Removing platforms/{platform_lower}/"));
 
         std::fs::remove_dir_all(&platform_dir).map_err(|e| {
-            CliError::build_failed(&platform_lower, format!("Failed to remove directory: {e}"))
+            CliError::build_failed(&platform_lower, format!("failed to remove directory: {e}"))
         })?;
 
         spinner.stop(format!("Removed platforms/{platform_lower}/"));
@@ -223,7 +223,7 @@ pub fn remove(platform: &str, yes: bool) -> CliResult<()> {
 ///
 /// Shows all platforms FLUI can target, with indicators for which ones
 /// are currently configured in the project.
-pub fn list() -> CliResult<()> {
+pub(crate) fn list() -> CliResult<()> {
     ui::intro(style(" flui platforms ").on_blue().black())?;
 
     // Try to load project config for status indicators.

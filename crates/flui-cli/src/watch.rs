@@ -14,19 +14,19 @@ use std::{
 use notify_debouncer_mini::{DebouncedEvent, DebouncedEventKind, Debouncer, new_debouncer};
 
 /// Debounce and polling intervals for the dev loop.
-pub mod timing {
+pub(crate) mod timing {
     use std::time::Duration;
 
     /// Debounce window for source changes on a desktop host.
-    pub const SOURCE_DEBOUNCE: Duration = Duration::from_millis(500);
+    pub(crate) const SOURCE_DEBOUNCE: Duration = Duration::from_millis(500);
     /// Debounce window for Android scene-plugin sources, where `adb push`
     /// follows every rebuild and a shorter window keeps the round trip tight.
-    pub const ANDROID_SCENE_DEBOUNCE: Duration = Duration::from_millis(300);
+    pub(crate) const ANDROID_SCENE_DEBOUNCE: Duration = Duration::from_millis(300);
 }
 
 /// Error creating or configuring a [`SourceWatcher`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WatchError {
+pub(crate) struct WatchError {
     message: String,
 }
 
@@ -57,26 +57,30 @@ impl std::error::Error for WatchError {}
 /// On change, returns the affected paths through [`recv`](Self::recv) or
 /// [`recv_timeout`](Self::recv_timeout). This is layer 1 of the hot-reload stack;
 /// callers are responsible for running `cargo build` and/or restarting processes.
-pub struct SourceWatcher {
+pub(crate) struct SourceWatcher {
     rx: Receiver<Result<Vec<DebouncedEvent>, notify_debouncer_mini::notify::Error>>,
     debouncer: Debouncer<notify_debouncer_mini::notify::RecommendedWatcher>,
 }
 
 impl SourceWatcher {
     /// Create a watcher with the default desktop debounce interval.
-    pub fn new() -> Result<Self, WatchError> {
+    pub(crate) fn new() -> Result<Self, WatchError> {
         Self::with_debounce(timing::SOURCE_DEBOUNCE)
     }
 
     /// Create a watcher with a custom debounce interval.
-    pub fn with_debounce(debounce: Duration) -> Result<Self, WatchError> {
+    pub(crate) fn with_debounce(debounce: Duration) -> Result<Self, WatchError> {
         let (tx, rx) = mpsc::channel();
         let debouncer = new_debouncer(debounce, tx).map_err(WatchError::create)?;
         Ok(Self { rx, debouncer })
     }
 
     /// Watch a path for changes.
-    pub fn watch(&mut self, path: impl AsRef<Path>, recursive: bool) -> Result<(), WatchError> {
+    pub(crate) fn watch(
+        &mut self,
+        path: impl AsRef<Path>,
+        recursive: bool,
+    ) -> Result<(), WatchError> {
         let path = path.as_ref();
         let mode = if recursive {
             notify_debouncer_mini::notify::RecursiveMode::Recursive
@@ -91,7 +95,7 @@ impl SourceWatcher {
     }
 
     /// Wait up to `timeout` for changed paths.
-    pub fn recv_timeout(
+    pub(crate) fn recv_timeout(
         &self,
         timeout: Duration,
     ) -> Result<Option<Vec<PathBuf>>, RecvTimeoutError> {

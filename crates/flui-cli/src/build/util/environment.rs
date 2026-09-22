@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::build::error::{BuildError, BuildResult};
 
 /// Check if a command exists in PATH
-pub fn check_command_exists(command: &str) -> BuildResult<PathBuf> {
+pub(crate) fn check_command_exists(command: &str) -> BuildResult<PathBuf> {
     which::which(command).map_err(|_| BuildError::ToolNotFound {
         tool: command.to_string(),
         install_hint: format!("Ensure {command} is installed and in PATH"),
@@ -12,7 +12,7 @@ pub fn check_command_exists(command: &str) -> BuildResult<PathBuf> {
 }
 
 /// Get environment variable with error context
-pub fn get_env_var(name: &str) -> BuildResult<String> {
+pub(crate) fn get_env_var(name: &str) -> BuildResult<String> {
     env::var(name).map_err(|_| BuildError::EnvVarError {
         var: name.to_string(),
         reason: "not set".to_string(),
@@ -20,7 +20,7 @@ pub fn get_env_var(name: &str) -> BuildResult<String> {
 }
 
 /// Resolve `ANDROID_HOME` from environment or common paths
-pub fn resolve_android_home() -> BuildResult<PathBuf> {
+pub(crate) fn resolve_android_home() -> BuildResult<PathBuf> {
     // Try environment variable first
     if let Ok(android_home) = env::var("ANDROID_HOME") {
         let path = PathBuf::from(android_home);
@@ -62,7 +62,7 @@ pub fn resolve_android_home() -> BuildResult<PathBuf> {
 }
 
 /// Resolve `JAVA_HOME` from environment
-pub fn resolve_java_home() -> BuildResult<PathBuf> {
+pub(crate) fn resolve_java_home() -> BuildResult<PathBuf> {
     let java_home = get_env_var("JAVA_HOME")?;
     let path = PathBuf::from(java_home);
 
@@ -77,7 +77,7 @@ pub fn resolve_java_home() -> BuildResult<PathBuf> {
 }
 
 /// Resolve Android NDK home (from `ANDROID_HOME/ndk`)
-pub fn resolve_ndk_home(android_home: &Path) -> BuildResult<PathBuf> {
+pub(crate) fn resolve_ndk_home(android_home: &Path) -> BuildResult<PathBuf> {
     // Try ANDROID_NDK_HOME first
     if let Ok(ndk_home) = env::var("ANDROID_NDK_HOME") {
         let path = PathBuf::from(ndk_home);

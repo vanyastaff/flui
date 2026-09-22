@@ -8,43 +8,25 @@
 ///
 /// - `NoPlatform` / `HasPlatform` - Platform configuration
 /// - `NoProfile` / `HasProfile` - Build profile (debug/release)
-///
-/// # Example
-///
-/// ```rust
-/// use crate::build::*;
-/// use std::path::PathBuf;
-///
-/// // ✅ This compiles - all required fields set
-/// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
-///     .with_platform(Platform::Android { targets: vec!["aarch64-linux-android".to_string()] })
-///     .with_profile(Profile::Release)
-///     .build();
-///
-/// // ❌ This doesn't compile - missing profile
-/// // let ctx = BuilderContextBuilder::new(PathBuf::from("."))
-/// //     .with_platform(Platform::Android { targets: vec![] })
-/// //     .build();
-/// ```
 use std::path::PathBuf;
 
 use crate::build::platform::{AppBundle, BuildUnit, BuilderContext, Platform, Profile};
 
 /// Type state: No platform set
 #[derive(Debug)]
-pub struct NoPlatform;
+pub(crate) struct NoPlatform;
 
 /// Type state: Platform is set
 #[derive(Debug)]
-pub struct HasPlatform(pub(crate) Platform);
+pub(crate) struct HasPlatform(pub(crate) Platform);
 
 /// Type state: No profile set
 #[derive(Debug)]
-pub struct NoProfile;
+pub(crate) struct NoProfile;
 
 /// Type state: Profile is set
 #[derive(Debug)]
-pub struct HasProfile(pub(crate) Profile);
+pub(crate) struct HasProfile(pub(crate) Profile);
 
 /// Builder for `BuilderContext` with compile-time validation.
 ///
@@ -59,42 +41,11 @@ pub struct HasProfile(pub(crate) Profile);
 ///
 /// ## Basic Usage
 ///
-/// ```rust
-/// use crate::build::*;
-/// use std::path::PathBuf;
-///
-/// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
-///     .with_platform(Platform::Android { targets: vec!["aarch64-linux-android".to_string()] })
-///     .with_profile(Profile::Release)
-///     .build();
-/// ```
-///
 /// ## With Optional Features
 ///
-/// ```rust
-/// use crate::build::*;
-/// use std::path::PathBuf;
-///
-/// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
-///     .with_platform(Platform::Web { target: "web".to_string() })
-///     .with_profile(Profile::Debug)
-///     .with_output_dir(PathBuf::from("custom/output"))
-///     .build();
-/// ```
-///
 /// ## Type Safety
-///
-/// ```compile_fail
-/// use crate::build::*;
-/// use std::path::PathBuf;
-///
-/// // This will not compile - missing profile
-/// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
-///     .with_platform(Platform::Android { targets: vec![] })
-///     .build();
-/// ```
 #[derive(Debug)]
-pub struct BuilderContextBuilder<P = NoPlatform, Pr = NoProfile> {
+pub(crate) struct BuilderContextBuilder<P = NoPlatform, Pr = NoProfile> {
     workspace_root: PathBuf,
     platform: P,
     target: BuildUnit,
@@ -110,17 +61,8 @@ impl BuilderContextBuilder<NoPlatform, NoProfile> {
     /// # Arguments
     ///
     /// * `workspace_root` - Root directory of the workspace
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::*;
-    /// use std::path::PathBuf;
-    ///
-    /// let builder = BuilderContextBuilder::new(PathBuf::from("."));
-    /// ```
     #[must_use]
-    pub fn new(workspace_root: PathBuf) -> Self {
+    pub(crate) fn new(workspace_root: PathBuf) -> Self {
         Self {
             workspace_root,
             platform: NoPlatform,
@@ -139,19 +81,10 @@ impl<Pr> BuilderContextBuilder<NoPlatform, Pr> {
     /// # Arguments
     ///
     /// * `platform` - Target platform (Android, Web, or Desktop)
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::*;
-    /// use std::path::PathBuf;
-    ///
-    /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
-    ///     .with_platform(Platform::Android {
-    ///         targets: vec!["aarch64-linux-android".to_string()],
-    ///     });
-    /// ```
-    pub fn with_platform(self, platform: Platform) -> BuilderContextBuilder<HasPlatform, Pr> {
+    pub(crate) fn with_platform(
+        self,
+        platform: Platform,
+    ) -> BuilderContextBuilder<HasPlatform, Pr> {
         BuilderContextBuilder {
             workspace_root: self.workspace_root,
             platform: HasPlatform(platform),
@@ -170,17 +103,7 @@ impl<P> BuilderContextBuilder<P, NoProfile> {
     /// # Arguments
     ///
     /// * `profile` - Build profile (Debug or Release)
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::*;
-    /// use std::path::PathBuf;
-    ///
-    /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
-    ///     .with_profile(Profile::Release);
-    /// ```
-    pub fn with_profile(self, profile: Profile) -> BuilderContextBuilder<P, HasProfile> {
+    pub(crate) fn with_profile(self, profile: Profile) -> BuilderContextBuilder<P, HasProfile> {
         BuilderContextBuilder {
             workspace_root: self.workspace_root,
             platform: self.platform,
@@ -199,35 +122,15 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     /// # Arguments
     ///
     /// * `target` - The [`BuildUnit`] to compile
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::*;
-    /// use std::path::PathBuf;
-    ///
-    /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
-    ///     .with_target(BuildUnit::Example("material_demo".to_string()));
-    /// ```
     #[must_use]
-    pub fn with_target(mut self, target: BuildUnit) -> Self {
+    pub(crate) fn with_target(mut self, target: BuildUnit) -> Self {
         self.target = target;
         self
     }
 
     /// Stage the built executable into an application bundle with this identity.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::*;
-    /// use std::path::PathBuf;
-    ///
-    /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
-    ///     .with_bundle(AppBundle::new("My App", "com.example"));
-    /// ```
     #[must_use]
-    pub fn with_bundle(mut self, bundle: AppBundle) -> Self {
+    pub(crate) fn with_bundle(mut self, bundle: AppBundle) -> Self {
         self.bundle = Some(bundle);
         self
     }
@@ -239,18 +142,8 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
     /// # Arguments
     ///
     /// * `output_dir` - Custom output directory
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::*;
-    /// use std::path::PathBuf;
-    ///
-    /// let builder = BuilderContextBuilder::new(PathBuf::from("."))
-    ///     .with_output_dir(PathBuf::from("custom/output"));
-    /// ```
     #[must_use]
-    pub fn with_output_dir(mut self, output_dir: PathBuf) -> Self {
+    pub(crate) fn with_output_dir(mut self, output_dir: PathBuf) -> Self {
         self.output_dir = Some(output_dir);
         self
     }
@@ -266,24 +159,8 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
     /// # Returns
     ///
     /// A fully configured `BuilderContext`.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use crate::build::*;
-    /// use std::path::PathBuf;
-    ///
-    /// let ctx = BuilderContextBuilder::new(PathBuf::from("."))
-    ///     .with_platform(Platform::Android {
-    ///         targets: vec!["aarch64-linux-android".to_string()],
-    ///     })
-    ///     .with_profile(Profile::Release)
-    ///     .build();
-    ///
-    /// assert_eq!(ctx.profile, Profile::Release);
-    /// ```
     #[must_use]
-    pub fn build(self) -> BuilderContext {
+    pub(crate) fn build(self) -> BuilderContext {
         let output_dir = self.output_dir.unwrap_or_else(|| {
             self.workspace_root
                 .join("target")

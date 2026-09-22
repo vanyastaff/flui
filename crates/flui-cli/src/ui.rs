@@ -23,11 +23,6 @@
 //! The policy is process-global (`OnceLock`) because a CLI has exactly one
 //! terminal; commands are free functions and threading a context through
 //! every helper only for this would be noise.
-//!
-//! The drawing used to be `cliclack`'s. It went because it brought 42 of the
-//! CLI's 116 crates — ICU text segmentation, with its data tables and
-//! proc-macros, to word-wrap prompt text — for a dozen lines of glyphs and a
-//! spinner that fit in this file.
 
 use serde::Serialize;
 use std::fmt::Display;
@@ -41,7 +36,7 @@ use console::{StyledObject, Term, style};
 
 /// Shape of the CLI's output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OutputMode {
+pub(crate) enum OutputMode {
     /// Styled text for a person, on stderr.
     #[default]
     Human,
@@ -51,7 +46,7 @@ pub enum OutputMode {
 
 /// How much human-mode output to produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub enum Verbosity {
+pub(crate) enum Verbosity {
     /// Warnings, errors and command output only.
     Quiet,
     /// The usual progress narration.
@@ -63,7 +58,7 @@ pub enum Verbosity {
 
 /// Whether to emit ANSI colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
-pub enum ColorChoice {
+pub(crate) enum ColorChoice {
     /// Colour when stderr is a terminal and `NO_COLOR` is unset.
     #[default]
     Auto,
@@ -75,13 +70,13 @@ pub enum ColorChoice {
 
 /// The resolved output policy for this process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Policy {
+pub(crate) struct Policy {
     /// Human or JSON.
-    pub mode: OutputMode,
+    pub(crate) mode: OutputMode,
     /// Quiet / normal / verbose.
-    pub verbosity: Verbosity,
+    pub(crate) verbosity: Verbosity,
     /// Whether prompts and hot-keys may be used.
-    pub interactive: bool,
+    pub(crate) interactive: bool,
 }
 
 static POLICY: OnceLock<Policy> = OnceLock::new();
@@ -91,7 +86,12 @@ static POLICY: OnceLock<Policy> = OnceLock::new();
 ///
 /// `non_interactive` is the explicit opt-out; the environment can also
 /// force it (see [`is_interactive`] for the rule).
-pub fn install(mode: OutputMode, verbosity: Verbosity, color: ColorChoice, non_interactive: bool) {
+pub(crate) fn install(
+    mode: OutputMode,
+    verbosity: Verbosity,
+    color: ColorChoice,
+    non_interactive: bool,
+) {
     apply_color(color);
     let interactive = !non_interactive && environment_allows_interaction();
     let _ = POLICY.set(Policy {
@@ -103,7 +103,7 @@ pub fn install(mode: OutputMode, verbosity: Verbosity, color: ColorChoice, non_i
 
 /// The active policy (defaults when [`install`] was never called, e.g. in
 /// unit tests).
-pub fn policy() -> Policy {
+pub(crate) fn policy() -> Policy {
     POLICY.get().copied().unwrap_or(Policy {
         mode: OutputMode::Human,
         verbosity: Verbosity::Normal,
@@ -112,13 +112,13 @@ pub fn policy() -> Policy {
 }
 
 /// `true` when output is NDJSON.
-pub fn is_json() -> bool {
+pub(crate) fn is_json() -> bool {
     policy().mode == OutputMode::Json
 }
 
 /// `true` when progress narration is suppressed (JSON mode counts: no
 /// human text may leak into a machine stream).
-pub fn is_quiet() -> bool {
+pub(crate) fn is_quiet() -> bool {
     is_json() || policy().verbosity == Verbosity::Quiet
 }
 
@@ -127,7 +127,7 @@ pub fn is_quiet() -> bool {
 /// Requires a terminal on stdin and stderr, no `CI` variable (any value,
 /// the convention every CI vendor follows), no `FLUI_NON_INTERACTIVE`, no
 /// `--non-interactive`, and human mode — a JSON consumer is a program.
-pub fn is_interactive() -> bool {
+pub(crate) fn is_interactive() -> bool {
     let policy = policy();
     policy.interactive && policy.mode == OutputMode::Human
 }
@@ -177,7 +177,7 @@ fn apply_color(choice: ColorChoice) {
 /// `payload` is merged in beside it. Write failures (a closed pipe) are
 /// ignored: the consumer went away, and a CLI must not crash because `head`
 /// stopped reading.
-pub fn emit<T: Serialize>(event: &str, payload: &T) {
+pub(crate) fn emit<T: Serialize>(event: &str, payload: &T) {
     if !is_json() {
         return;
     }
@@ -232,7 +232,7 @@ fn block(glyph: StyledObject<&'static str>, message: &str) -> std::io::Result<()
 }
 
 /// Command banner, e.g. `flui doctor`.
-pub fn intro(title: impl Display) -> std::io::Result<()> {
+pub(crate) fn intro(title: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
@@ -242,7 +242,7 @@ pub fn intro(title: impl Display) -> std::io::Result<()> {
 }
 
 /// Closing line after success.
-pub fn outro(message: impl Display) -> std::io::Result<()> {
+pub(crate) fn outro(message: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
@@ -253,7 +253,7 @@ pub fn outro(message: impl Display) -> std::io::Result<()> {
 
 /// Closing line after failure. Shown even when quiet — a failure is never
 /// noise — but never in JSON mode, where the `error` event carries it.
-pub fn outro_cancel(message: impl Display) -> std::io::Result<()> {
+pub(crate) fn outro_cancel(message: impl Display) -> std::io::Result<()> {
     if is_json() {
         return Ok(());
     }
@@ -263,7 +263,7 @@ pub fn outro_cancel(message: impl Display) -> std::io::Result<()> {
 }
 
 /// Informational line.
-pub fn info(message: impl Display) -> std::io::Result<()> {
+pub(crate) fn info(message: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
@@ -271,7 +271,7 @@ pub fn info(message: impl Display) -> std::io::Result<()> {
 }
 
 /// Success line.
-pub fn success(message: impl Display) -> std::io::Result<()> {
+pub(crate) fn success(message: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
@@ -279,7 +279,7 @@ pub fn success(message: impl Display) -> std::io::Result<()> {
 }
 
 /// Progress step line.
-pub fn step(message: impl Display) -> std::io::Result<()> {
+pub(crate) fn step(message: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
@@ -287,7 +287,7 @@ pub fn step(message: impl Display) -> std::io::Result<()> {
 }
 
 /// Low-emphasis remark.
-pub fn remark(message: impl Display) -> std::io::Result<()> {
+pub(crate) fn remark(message: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
@@ -302,7 +302,7 @@ pub fn remark(message: impl Display) -> std::io::Result<()> {
 /// with no framework crate in its graph there is nothing for a `RUST_LOG`
 /// filter to select, and a second voice on stderr beside the narration
 /// above would only compete with it.
-pub fn debug(message: impl Display) {
+pub(crate) fn debug(message: impl Display) {
     if policy().verbosity != Verbosity::Verbose {
         return;
     }
@@ -315,7 +315,7 @@ pub fn debug(message: impl Display) {
 
 /// Warning line. Survives `--quiet`; in JSON mode it goes to stderr as
 /// plain text so the stdout stream stays pure.
-pub fn warning(message: impl Display) -> std::io::Result<()> {
+pub(crate) fn warning(message: impl Display) -> std::io::Result<()> {
     if is_json() {
         return writeln!(std::io::stderr(), "warning: {message}");
     }
@@ -323,7 +323,7 @@ pub fn warning(message: impl Display) -> std::io::Result<()> {
 }
 
 /// Error line. Always shown; plain text in JSON mode.
-pub fn error(message: impl Display) -> std::io::Result<()> {
+pub(crate) fn error(message: impl Display) -> std::io::Result<()> {
     if is_json() {
         return writeln!(std::io::stderr(), "error: {message}");
     }
@@ -331,7 +331,7 @@ pub fn error(message: impl Display) -> std::io::Result<()> {
 }
 
 /// Titled note: the title on the glyph line, the body hanging under the bar.
-pub fn note(title: impl Display, body: impl Display) -> std::io::Result<()> {
+pub(crate) fn note(title: impl Display, body: impl Display) -> std::io::Result<()> {
     if is_quiet() {
         return Ok(());
     }
@@ -350,7 +350,7 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(80);
 
 /// A spinner that is silent when narration is suppressed.
 #[must_use]
-pub fn spinner() -> Spinner {
+pub(crate) fn spinner() -> Spinner {
     if is_quiet() {
         Spinner(None)
     } else {
@@ -367,7 +367,7 @@ pub fn spinner() -> Spinner {
 /// On a terminal it animates in place on stderr; into a pipe it prints the
 /// start message once and the final message once, so a log of the run
 /// reads like the terminal did, minus the animation.
-pub struct Spinner(Option<Active>);
+pub(crate) struct Spinner(Option<Active>);
 
 struct Active {
     message: Arc<Mutex<String>>,
@@ -385,7 +385,7 @@ impl std::fmt::Debug for Spinner {
 
 impl Spinner {
     /// Start spinning with a message.
-    pub fn start(&self, message: impl Display) {
+    pub(crate) fn start(&self, message: impl Display) {
         let Some(active) = &self.0 else { return };
         let message = message.to_string();
         let term = Term::stderr();
@@ -443,12 +443,12 @@ impl Spinner {
     }
 
     /// Stop with a final message.
-    pub fn stop(&self, message: impl Display) {
+    pub(crate) fn stop(&self, message: impl Display) {
         self.finish(style("◇").green(), message);
     }
 
     /// Stop with a failure message.
-    pub fn error(&self, message: impl Display) {
+    pub(crate) fn error(&self, message: impl Display) {
         self.finish(style("■").red(), message);
     }
 }
@@ -481,7 +481,7 @@ impl Drop for Spinner {
 /// Every function returns `Ok(None)` when the user backed out (Esc, `q` or
 /// Ctrl-C) so the caller can map that to its own cancellation error, and
 /// `Err` only for a real terminal failure.
-pub mod prompt {
+pub(crate) mod prompt {
     use console::{Term, style};
     use dialoguer::theme::ColorfulTheme;
     use dialoguer::{Confirm, Input, MultiSelect, Select};
@@ -512,7 +512,7 @@ pub mod prompt {
     }
 
     /// Free-text input with validation; `default` is offered when set.
-    pub fn input(
+    pub(crate) fn input(
         label: &str,
         default: Option<&str>,
         validate: impl Fn(&str) -> Result<(), String>,
@@ -527,7 +527,10 @@ pub mod prompt {
     }
 
     /// Single choice among `(value, name, description)` items.
-    pub fn select<T: Clone>(label: &str, items: &[(T, &str, &str)]) -> std::io::Result<Option<T>> {
+    pub(crate) fn select<T: Clone>(
+        label: &str,
+        items: &[(T, &str, &str)],
+    ) -> std::io::Result<Option<T>> {
         let labels: Vec<String> = items
             .iter()
             .map(|(_, name, description)| item(name, description))
@@ -544,7 +547,7 @@ pub mod prompt {
 
     /// Any number of choices among `(value, name, description)` items; an
     /// empty selection is a valid answer.
-    pub fn multiselect<T: Clone>(
+    pub(crate) fn multiselect<T: Clone>(
         label: &str,
         items: &[(T, &str, &str)],
     ) -> std::io::Result<Option<Vec<T>>> {
@@ -562,7 +565,7 @@ pub mod prompt {
     }
 
     /// Yes/no question, defaulting to no.
-    pub fn confirm(label: &str) -> std::io::Result<Option<bool>> {
+    pub(crate) fn confirm(label: &str) -> std::io::Result<Option<bool>> {
         cancel_aware_opt(
             Confirm::with_theme(&theme())
                 .with_prompt(label)

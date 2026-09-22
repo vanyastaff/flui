@@ -2,23 +2,21 @@ use std::path::Path;
 
 use crate::build::error::{BuildError, BuildResult};
 use crate::build::platform::{
-    BuildArtifacts, BuildUnit, BuilderContext, FinalArtifacts, PlatformBuilder, private,
+    BuildArtifacts, BuildUnit, BuilderContext, FinalArtifacts, PlatformBuilder,
 };
 use crate::build::util::{check_command_exists, process};
 
 /// Builder for iOS platform (.app bundles via Xcode).
 #[derive(Debug, Default)]
-pub struct IosBuilder;
+pub(crate) struct IosBuilder;
 
 impl IosBuilder {
     /// Create a stateless builder; operations use their `BuilderContext`.
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self
     }
 }
-
-impl private::Sealed for IosBuilder {}
 
 impl PlatformBuilder for IosBuilder {
     fn validate_environment(&self) -> BuildResult<()> {

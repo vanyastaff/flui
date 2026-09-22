@@ -7,19 +7,17 @@
 use std::path::Path;
 
 use crate::build::error::{BuildError, BuildResult};
-use crate::build::platform::{
-    BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder, private,
-};
+use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts, PlatformBuilder};
 use crate::build::util::cargo;
 
 /// Builder for desktop platforms (Windows, macOS, Linux)
 #[derive(Debug, Default)]
-pub struct DesktopBuilder;
+pub(crate) struct DesktopBuilder;
 
 impl DesktopBuilder {
     /// Create a stateless desktop builder; each operation uses its `BuilderContext`.
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self
     }
 
@@ -66,8 +64,6 @@ impl DesktopBuilder {
         Ok(fallback.to_string())
     }
 }
-
-impl private::Sealed for DesktopBuilder {}
 
 impl PlatformBuilder for DesktopBuilder {
     fn validate_environment(&self) -> BuildResult<()> {

@@ -220,7 +220,7 @@ flui devices --json | jq -r 'select(.event=="device" and .platform=="ios") | .id
 |-----:|---------|
 | 0 | Success (also: a prompt cancelled on purpose) |
 | 1 | Generic failure |
-| 2 | Usage error (unknown flag, conflicting selectors), an unsupported target, or an unimplemented feature |
+| 2 | Usage error (unknown flag, conflicting selectors) or an unsupported target |
 | 3 | Environment: a required tool is missing or `doctor` found errors |
 | 4 | The project's build, tests, lints or format check failed |
 | 5 | The requested device or emulator does not exist |

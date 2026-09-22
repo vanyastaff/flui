@@ -149,7 +149,7 @@ fn clean_rejects_an_unknown_platform() {
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains("Invalid platform")
+            predicate::str::contains("invalid platform")
                 .and(predicate::str::contains("android"))
                 .and(predicate::str::contains("ios"))
                 .and(predicate::str::contains("web")),
