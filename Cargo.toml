@@ -614,6 +614,11 @@ a11y = ["flui-app/a11y"]
 # are opted into per-crate, not through the facade)
 serde = ["flui-types/serde"]
 
+# ADR-0074 realm-scoped signals (`Signal`/`Computed`/`Effect` on the view layer, the
+# widget harness's `reactive()`, `UiCommand::SignalWrite`). Not in `default` yet: it
+# stays an opt-in until the #1090 field-mask registry lands on the same seam.
+signals = ["flui-view/signals", "flui-widgets/signals", "flui-app/signals", "flui-testing?/signals"]
+
 # The facade declares no other features. Earlier revisions carried commented
 # blocks for parallel / profiling / tracy / devtools / memory-profiler /
 # full — all referencing crates or features that do not exist (`flui_core`,

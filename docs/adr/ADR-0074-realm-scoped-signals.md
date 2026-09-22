@@ -1,7 +1,11 @@
 # ADR-0074: Realm-scoped signals as the canonical application-state layer
 
-Status: **Draft, phase 2 in progress** — prototype behind `flui-view` feature `signals`
-with the go/no-go measurement in §8.
+Status: **Accepted (2026-09-22)** — prototype behind `flui-view` feature `signals`, go/no-go
+measured in §8.1. Two limits are part of the decision: a value read by hundreds of cells is
+an `InheritedView` + field-mask (#1090) concern, not a per-cell signal; structural list
+changes are `Memo<V>`/`can_update`'s job (C1), a separate task measured with the same
+telemetry. One go-condition stays open and is the next epic (A4): the #1090
+`Theme`/`MediaQuery` field test through the same reader registry, with no second code path.
 Supersedes: FOUNDATIONS C1 (signals clause), ADR-0008 §"signals-as-default are rejected"
 — by the beta-roadmap mandate that locked contracts are revisable explicitly (AGENTS.md
 ADR policy). The C1 text in `docs/FOUNDATIONS.md` is rewritten to §7's wording and ADR-0008
@@ -358,7 +362,15 @@ Nothing is removed in this ADR.
 
 - `set_state_scheduled` stays the way to mutate *widget-local* state (an expanded/collapsed
   flag, a pressed visual). Guidance: local, short-lived, read by this element only →
-  `setState`; shared, long-lived, or read by many → signal.
+  `setState`; shared, long-lived, read by a handful of elements → signal.
+- **Choosing by reader count.** A signal write costs about **1.8 µs per reader** on top of
+  what one `setState` on the readers' common parent costs (§8.1, 600 readers: 2.09 ms
+  against 1.01 ms), because every reader is scheduled through the inbox individually.
+  Below ~50 readers that is noise next to the rebuilds it saves; above it the scheduling
+  itself dominates. Rule: **a value with fewer than ~50 readers is a `Signal`; a value read
+  by hundreds of cells (a theme slot, a unit preference, a media-query field) is an
+  `InheritedView` with field masks (#1090)** — one dependency edge per subtree, and the
+  masks keep the granularity signals would have given.
 - `ValueNotifier`/`ChangeNotifier` stay as the `Listenable` contract for controllers
   (`AnimationController`, `ScrollController`, `TextEditingController`,
   `WidgetStatesController`). A `Signal<T>` can wrap a notifier (`Reactive::from_listenable`)

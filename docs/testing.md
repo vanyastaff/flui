@@ -212,6 +212,15 @@ cargo bench -p flui-engine
 
 Benchmark results are written under `target/criterion/` as HTML reports.
 
+`just bench-signals` (`crates/flui-widgets/benches/signals_rebuilds.rs`, needs the
+`signals` feature) runs ADR-0074's go/no-go: `setState` against realm-scoped signals on
+the same widget tree, printing a table of elements rebuilt per `RebuildReason` and
+layout roots per frame before the criterion timings. The counts come from two telemetry
+accessors any test can use: `BuildOwner::last_frame_build_report()` (what the last
+`build_scope` rebuilt, split by cause — read it after a pump, before the next one) and
+`PipelineOwner::layout_roots_total()` (monotonic; a frame's figure is the difference
+across it, because `run_layout` runs several times per frame).
+
 Compiling benches (`bench-compile` in CI) proves they build; it does not
 detect a regression — numbers have to be collected and compared. The
 workflow for that:

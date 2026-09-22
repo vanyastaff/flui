@@ -552,6 +552,8 @@ facade-combos:
                  "--no-default-features --features hot-reload" \
                  "--no-default-features --features serde" \
                  "--no-default-features --features a11y" \
+                 "--no-default-features --features signals" \
+                 "--no-default-features --features material,signals" \
                  "--all-features" \
                  ""; do
         echo "==> cargo clippy -p flui --locked --all-targets ${combo:-(default features)}"
