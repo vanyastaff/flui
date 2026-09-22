@@ -1,7 +1,13 @@
 name: CI
 
-# Job graph (every job is gated on the fast `checks` source gate):
+# Job graph (every compiling job is gated on `checks` AND `paths-filter`):
 #   checks         — fmt + taplo + typos + inventory + runtime-conformance + panic-policy + port-check + actionlint + zizmor (seconds, no compile)
+#   paths-filter   — on a `pull_request` run only: is anything outside docs/config
+#                    changed? Every compiling job below is `if:`-gated on its
+#                    `non_docs` output and skips (not silently green — see the
+#                    `ci` aggregator's ALLOWED_SKIPS) on a docs-only PR. Always
+#                    "yes" on `push`/`merge_group`, so main and the merge queue
+#                    always run the full graph.
 #   clippy         — workspace lint with -D warnings
 #   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps, two passes: libs/bins then tests/benches/examples), xilem-style, as a 4-slice matrix: three balanced package groups + the combination checks
 #                    plus a bounded backend-feature-pair powerset for flui-engine, plus every
@@ -116,17 +122,38 @@ jobs:
           # fetched from its own release below.
           tool: typos-cli@1.48,taplo-cli@0.10,ripgrep@15,zizmor@1
 
+      # actionlint is a Go release binary, not a crates.io package: it has no
+      # taiki-e/install-action recipe (falls back to cargo-binstall, which
+      # cannot resolve it — "actionlint is not found", exit 76) and no
+      # cargo-install source to swap for a prebuilt fetch. What IS avoidable
+      # is re-downloading and re-extracting the same binary on every run —
+      # cached by version, so only the first run (or a version bump) pays for
+      # the curl + tar.
+      - name: Cache actionlint
+        id: actionlint-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.local/bin/actionlint
+          key: actionlint-${{ runner.os }}-1.7.12
+
       - name: Install actionlint
+        if: steps.actionlint-cache.outputs.cache-hit != 'true'
         env:
           ACTIONLINT_VERSION: 1.7.12
         run: |
           set -euo pipefail
+          mkdir -p ~/.local/bin
           curl -fsSL -o actionlint.tar.gz \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           tar -xzf actionlint.tar.gz actionlint
-          install -m 0755 actionlint /usr/local/bin/actionlint
+          install -m 0755 actionlint ~/.local/bin/actionlint
           rm -f actionlint actionlint.tar.gz
-          actionlint --version
+
+      - name: Put actionlint on PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify actionlint
+        run: actionlint --version
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -163,6 +190,53 @@ jobs:
         run: zizmor .
 
   # ─────────────────────────────────────────────────────────────────────────
+  # paths-filter — decides whether this PR touches anything besides docs/
+  # config, so every compiling job below can skip on a docs-only change
+  # instead of paying for a full workspace build. NOT wired via the
+  # workflow-level `on.pull_request.paths-ignore` trigger: that would make
+  # GitHub never create the compiling jobs' check runs at all on a docs-only
+  # PR, which leaves any branch-protection rule that requires them stuck
+  # "Expected — waiting for status" forever. Job-level `if:` keeps every job
+  # in the run (as `skipped`, which the `ci` aggregator below already has a
+  # reviewable mechanism for — `ALLOWED_SKIPS` — instead of silently
+  # counting it green), so required-status-check state always resolves.
+  #
+  # Only gates the `pull_request` fast path: a push to `main` or a
+  # `merge_group` run is what actually becomes (or joins) `main`, so those
+  # always run the full graph regardless of which paths changed.
+  # ─────────────────────────────────────────────────────────────────────────
+  paths-filter:
+    name: paths-filter
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      non_docs: ${{ github.event_name != 'pull_request' || steps.filter.outputs.non_docs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+
+      - id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          # A file matches `non_docs` if it matches `**` (everything) and does
+          # NOT match any of the negated patterns below — dorny/paths-filter
+          # evaluates a filter's pattern list in order, gitignore-style, so a
+          # later `!pattern` re-excludes what an earlier positive pattern
+          # matched. Keep this allowlist in sync with AGENTS.md's worktree
+          # policy if the "docs-only" definition ever changes.
+          filters: |
+            non_docs:
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!.github/ISSUE_TEMPLATE/**'
+              - '!.github/CODEOWNERS'
+              - '!.editorconfig'
+
+  # ─────────────────────────────────────────────────────────────────────────
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
   # in PARALLEL with test/doc/bench-compile instead of gating them: clippy
   # compiles the whole workspace (minutes); the rest of `checks` is seconds.
@@ -170,7 +244,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   clippy:
     name: clippy
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -221,7 +296,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   test:
     name: test (${{ matrix.os }})
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -398,7 +474,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   test-features:
     name: test-features
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -475,7 +552,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   live-smoke:
     name: live-smoke
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -533,7 +611,8 @@ jobs:
 
   gpu-test:
     name: gpu-test
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: windows-latest
     # Generous headroom: ~440 readback tests on a software rasterizer, each
     # creating its own wgpu::Device, plus the cold wgpu-stack build. The first
@@ -626,7 +705,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   bench-compile:
     name: bench-compile (${{ matrix.os }})
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -663,7 +743,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   doc:
     name: doc
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -692,7 +773,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   deny:
     name: deny
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The workflow default is `contents: read` only. The wgpu-bump probe below
@@ -794,7 +876,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   doc-test:
     name: doc-test
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -824,7 +907,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   msrv:
     name: msrv
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -869,7 +953,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   miri:
     name: miri
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true
@@ -944,7 +1029,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   feature-matrix:
     name: feature-matrix (${{ matrix.slice }})
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -1095,7 +1181,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   wasm-check:
     name: wasm-check
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -1310,7 +1397,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   cli-macos:
     name: cli-macos
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -1360,7 +1448,8 @@ jobs:
 
   cross-typecheck:
     name: cross-typecheck
-    needs: checks
+    needs: [checks, paths-filter]
+    if: needs.paths-filter.outputs.non_docs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1452,7 +1541,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
+    needs: [checks, paths-filter, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1472,12 +1561,14 @@ jobs:
       #    list above ran, passed or failed, and gated nothing. Renaming was
       #    already safe (`needs` stops resolving); adding was not.
       #
-      # 2. NO SILENT SKIPS — `skipped` is a failure. No job in this workflow
-      #    is conditional, so a skipped job means someone gave it an `if:`
-      #    (or it was cancelled), and the old rule counted that as green,
-      #    turning the job into a no-op nobody would notice. The day a job
-      #    legitimately needs an `if:`, list it in ALLOWED_SKIPS with the
-      #    reason — that is the reviewable decision, not an accident.
+      # 2. NO SILENT SKIPS — `skipped` is a failure, UNLESS the job is listed
+      #    in ALLOWED_SKIPS with a reason. Every compiling job below is now
+      #    conditional on `paths-filter`'s `non_docs` output (docs-only PRs
+      #    skip them, per the `paths-filter` job's own comment) — that is the
+      #    one reviewable, intentional source of `if:` in this workflow, so
+      #    those exact job names are listed below. A skip from anywhere else
+      #    (a future `if:` someone adds without updating this list, or a
+      #    cancellation) still fails the aggregator.
       # A real YAML parse, not a regex over `key:` lines: a job declared as
       # `"quoted-key":` or `key: # comment` is valid YAML that a line regex
       # misses, and a missed declaration silently re-opens the hole this
@@ -1488,7 +1579,10 @@ jobs:
       - name: Verify every job is gated and every gated job succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}
-          ALLOWED_SKIPS: ""
+          ALLOWED_SKIPS: >-
+            clippy feature-matrix wasm-check cross-typecheck cli-macos test
+            test-features live-smoke gpu-test bench-compile doc deny doc-test
+            msrv miri
         run: |
           python3 - <<'EOF'
           import json, os, sys, yaml

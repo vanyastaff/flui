@@ -288,15 +288,29 @@ jobs:
           FLUI_CLI_LIVE_BUILD: "1"
         run: cargo nextest run -p flui-cli --locked -E 'test(live_desktop_build_produces_an_artifact_on_disk)'
 
-      # The web half: the same scaffold built for wasm32 and served by
-      # `flui run --device browser:…`. wasm-bindgen-cli must match the
-      # locked wasm-bindgen crate exactly (the build refuses otherwise), so
-      # the version comes from Cargo.lock, as `just wasm-test` reads it.
-      - name: Install the wasm32 target and the locked wasm-bindgen-cli
+      - name: Add the wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      # wasm-bindgen-cli must match the locked wasm-bindgen crate exactly
+      # (the runner refuses to start otherwise), so the version comes from
+      # Cargo.lock — same source of truth `just wasm-test` and ci.yml's
+      # `wasm-check` job read. Installed as a prebuilt binary via
+      # taiki-e/install-action (same as `wasm-check`), not `cargo install
+      # --locked`: the latter compiles wasm-bindgen-cli from source on every
+      # run, which is minutes of build time for a leaf tool this job doesn't
+      # otherwise need to build.
+      - name: Resolve the locked wasm-bindgen version
+        id: wasm_bindgen_version
         run: |
-          rustup target add wasm32-unknown-unknown
-          version=$(python3 -c "import tomllib;print(next(p['version'] for p in tomllib.load(open('Cargo.lock','rb'))['package'] if p['name']=='wasm-bindgen'))")
-          cargo install wasm-bindgen-cli --version "$version" --locked
+          set -euo pipefail
+          version="$(python3 -c "import tomllib;print(next(p['version'] for p in tomllib.load(open('Cargo.lock','rb'))['package'] if p['name']=='wasm-bindgen'))")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "locked wasm-bindgen: $version"
+
+      - name: Install wasm-bindgen-cli (matching the lockfile)
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wasm_bindgen_version.outputs.version }}
 
       # Chromium is preinstalled on ubuntu-latest, so `flui devices` lists a
       # browser and the serve half runs; `--no-open` keeps it headless.
@@ -304,3 +318,61 @@ jobs:
         env:
           FLUI_CLI_LIVE_WEB: "1"
         run: cargo nextest run -p flui-cli --locked -E 'test(live_web_build_and_run_serve_the_generated_project)'
+
+  # ───────────────────────────────────────────────────────────────────────
+  # publish-dry-run — `cargo publish --dry-run` for every publishable
+  # workspace crate, leaves-first (scripts/publish-order.sh). Advisory: right
+  # now every crate except `flui-cli` depends on at least one sibling
+  # workspace crate that isn't on crates.io yet, so `cargo publish --dry-run`
+  # fails for all of them on version resolution alone — that specific,
+  # expected failure is reported informational by the script, not as an
+  # "unexpected failure". `continue-on-error: true` at the job level besides:
+  # this is the FIRST run of the mechanism, so a genuine unexpected finding
+  # (a missing `license`/`description`/`readme`, a manifest error) should be
+  # visible and read, not silently red-main a workflow nobody has tuned yet.
+  # Tighten to a hard gate once a few weeks of green (or understood-red)
+  # runs build confidence in the signal.
+  # ───────────────────────────────────────────────────────────────────────
+  publish-dry-run:
+    name: publish dry-run, leaves-first (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: cargo publish --dry-run, leaves-first
+        run: bash scripts/publish-order.sh
+
+  # ───────────────────────────────────────────────────────────────────────
+  # cargo-machete — unused-dependency audit. Advisory: a false positive is
+  # possible (a dependency used only behind a cfg the default feature set
+  # doesn't build, a re-export machete's static scan can't see), so this
+  # reports rather than gates. None of `deny`/`clippy`/`feature-matrix`
+  # catch a genuinely-unused *normal* dependency.
+  # ───────────────────────────────────────────────────────────────────────
+  cargo-machete:
+    name: cargo-machete (unused dependencies, advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install cargo-machete
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-machete@0.7
+
+      - name: cargo machete
+        run: cargo machete
