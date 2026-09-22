@@ -38,6 +38,16 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `signals` on `flui-testing`/`flui-app`); facade feature `signals`; the feature's tests run
   in CI. FOUNDATIONS C1 amended. Derived values and effects are deferred to ADR-0075
   (Proposed).
+- **Field-granular inherited dependencies** (issue #1090, ADR-0008 §2): `FieldMask`,
+  `#[derive(InheritedData)]` (one `FIELD_<NAME>: FieldMask` per field + `field_mask_diff`),
+  `InheritedView::changed_fields`, `BuildContextExt::depend_on_field`. An
+  `InheritedElement` records which fields each dependent read and notifies only the
+  dependents whose fields changed; `depend_on` is the whole-provider mask. `MediaQuery::
+  {size_of, device_pixel_ratio_of, text_scale_factor_of, padding_of, view_insets_of,
+  platform_brightness_of, depend_on_fields}` and `Theme::{color_scheme_of, text_theme_of,
+  depend_on_fields}` are the field accessors; `MediaQueryData`/`ThemeData` derive
+  `InheritedData`. `InheritedElementAccess::record_dependent` takes the mask;
+  `InheritedBehavior::dependents` values are `DependentEntry { depth, mask }`.
 - **Rebuild and relayout telemetry**: `BuildOwner::last_frame_build_report()` (elements
   rebuilt by the last `build_scope`, split by `RebuildReason`) and
   `PipelineOwner::layout_roots_total()` (monotonic count of drained layout roots).

@@ -260,15 +260,28 @@ run from callbacks, `did_update_view`, or realm commands.
 
 The reader set keyed by `SignalSlot` is the same *kind* of edge #1090 needs keyed by
 `(provider TypeId, field bit)`: a dependent recorded with what it read, notified only when
-that changed. The intent is one dependency discipline, not two mechanisms with different
-rules: read-is-depend, re-derived per build, scheduled through the same heap. The field-mask
-half is epic **A4** (branch `a4/inherited-field-masks`), paused until this PR merges; it
-lives on `InheritedBehavior::dependents` (masks per dependent) so `depend_on::<Theme, _>`
-and `depend_on_field::<Theme, _>(Theme::FIELD_COLOR_SCHEME, ..)` share one code path. It
-is not a condition of this ADR (the first draft called it a go-condition; that was
-overreach — an accepted ADR cannot carry an unmet condition). Issue #1254 (ALT-2,
-`#[derive(Observable)]`) asks whether the field-mask registry should become the *only*
-registry with signals as its one-field case; that is decided before the catalog accepts
+that changed. Epic **A4** lands the field-mask half on the inherited path with one
+discipline and one code path:
+
+- `FieldMask(u64)` and the opt-in `#[derive(InheritedData)]` (one `FIELD_<NAME>` constant
+  per field plus `field_mask_diff`) on the provider's data type;
+- `InheritedView::changed_fields(old)` — `ALL`/`NONE` by default from
+  `update_should_notify`, per-field for a provider whose data implements `InheritedData`;
+- `InheritedBehavior::dependents` stores `DependentEntry { depth, mask }`; `on_view_updated`
+  schedules a dependent only if its mask intersects the changed set. `depend_on::<T, _>`
+  is `depend_on_field::<T, _>(FieldMask::ALL, ..)`: whole-provider parity is the
+  degenerate mask, not a second mechanism;
+- `MediaQuery::size_of(cx)` / `text_scale_factor_of` / … and `Theme::color_scheme_of` /
+  `text_theme_of` (plus the general `depend_on_fields(cx, mask, f)`) are the field
+  accessors; `MediaQuery::of` / `Theme::of` keep the whole-provider dependency.
+
+#1090's acceptance tests (`crates/flui-widgets/tests/media_query_fields.rs`,
+`crates/flui-material/tests/theme_fields.rs`) pin: a size-only change rebuilds the size
+readers and the whole-`of` readers, not the text-scale readers; the reverse; an equal
+provider swap rebuilds nobody; a field reader still rebuilds when its own field changes
+after an unrelated one. `rebuild_exactness` (non-dependents never rebuild) stays.
+Issue #1254 (ALT-2, `#[derive(Observable)]`) asks whether this registry should become the
+*only* one with signals as its one-field case; decided before the catalog accepts
 `Signal<T>` inputs.
 
 ### 5.6 What the three screens look like

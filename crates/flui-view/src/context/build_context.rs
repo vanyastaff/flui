@@ -504,28 +504,6 @@ pub trait BuildContextExt: BuildContext {
         self.reactive().signal_owned_by(self.element_id(), value)
     }
 
-    /// Look up data from an ancestor InheritedView (with dependency).
-    ///
-    /// Typed callback wrapper over [`BuildContext::depend_on_inherited`].
-    /// The closure receives `&T` (the InheritedView) and returns any
-    /// derived value `R` — typically a cloned `Data` field. Registers
-    /// a dependency: when the InheritedView's data changes, this
-    /// Element rebuilds.
-    ///
-    /// Callback form chosen over `Option<&T>` to preserve the
-    /// declarative-build invariant (Constitution Principle 5) and avoid
-    /// extending the inherited-data borrow across the rest of
-    /// `build()`.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Clone the entire data — `MyTheme` here is any `InheritedView`
-    /// // ancestor (e.g. `flui_material::Theme`):
-    /// let theme: Option<MyThemeData> = ctx.depend_on::<MyTheme, _>(|t| t.data().clone());
-    /// // Or extract a single field:
-    /// let color: Option<Color> = ctx.depend_on::<MyTheme, _>(|t| t.data().primary_color);
-    /// ```
     /// [`depend_on`](Self::depend_on) at **field** granularity (issue #1090):
     /// read through `f` as usual, but depend only on the fields in `mask` —
     /// the `FIELD_*` constants a `#[derive(InheritedData)]` data type emits.
@@ -551,6 +529,28 @@ pub trait BuildContextExt: BuildContext {
         result
     }
 
+    /// Look up data from an ancestor InheritedView (with dependency).
+    ///
+    /// Typed callback wrapper over [`BuildContext::depend_on_inherited`].
+    /// The closure receives `&T` (the InheritedView) and returns any
+    /// derived value `R` — typically a cloned `Data` field. Registers
+    /// a dependency: when the InheritedView's data changes, this
+    /// Element rebuilds.
+    ///
+    /// Callback form chosen over `Option<&T>` to preserve the
+    /// declarative-build invariant (Constitution Principle 5) and avoid
+    /// extending the inherited-data borrow across the rest of
+    /// `build()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// // Clone the entire data — `MyTheme` here is any `InheritedView`
+    /// // ancestor (e.g. `flui_material::Theme`):
+    /// let theme: Option<MyThemeData> = ctx.depend_on::<MyTheme, _>(|t| t.data().clone());
+    /// // Or extract a single field:
+    /// let color: Option<Color> = ctx.depend_on::<MyTheme, _>(|t| t.data().primary_color);
+    /// ```
     fn depend_on<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         let mut result: Option<R> = None;
         let mut once = Some(f);

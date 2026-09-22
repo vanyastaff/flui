@@ -49,7 +49,10 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
     }
 
     let consts = fields.iter().enumerate().map(|(index, field)| {
-        let name = field.ident.as_ref().expect("named field");
+        let name = field
+            .ident
+            .as_ref()
+            .expect("BUG: Fields::Named yields only named fields");
         let const_ident = format_ident!("FIELD_{}", name.to_string().to_uppercase());
         let index = index as u32;
         let doc = format!("Field mask of `{name}` (bit {index}).");
@@ -59,7 +62,10 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         }
     });
     let diffs = fields.iter().map(|field| {
-        let name = field.ident.as_ref().expect("named field");
+        let name = field
+            .ident
+            .as_ref()
+            .expect("BUG: Fields::Named yields only named fields");
         let const_ident = format_ident!("FIELD_{}", name.to_string().to_uppercase());
         quote! {
             if self.#name != other.#name {
