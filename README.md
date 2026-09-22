@@ -98,14 +98,14 @@ generates, kept in sync deliberately:
 ```rust
 //! examples/counter.rs (excerpt)
 use flui::prelude::*;
-use flui::widgets::column;
+use flui::widgets::{SafeArea, column};
 
 #[derive(Clone, StatelessView)]
-pub struct CounterApp;
+struct CounterApp;
 
 impl StatelessView for CounterApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        Theme::new(ThemeData::light(), CounterView)
+        Theme::new(ThemeData::light(), SafeArea::new().child(CounterView))
     }
 }
 

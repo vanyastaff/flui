@@ -71,9 +71,20 @@ transitions) and asserts a `*_RESULT=PASS`/`FAIL` marker; macOS-only unless note
 
 | Example | Run |
 |---|---|
-| **desktop_scene** — hot-reloadable scene plugin for desktop (Windows/macOS/Linux) | `just example-desktop-scene` (`cargo run -p desktop_scene`) |
+| **desktop_scene** — hot-reloadable scene plugin for desktop (Windows/macOS/Linux) | two terminals, see below |
 | **hot_reload_counter** — the counter template through `flui run --hot` (host/logic/types split) | `cd examples/hot_reload_counter && flui run --hot` |
 | **hot_reload_lifecycle_fixture** | Dev-only `app_plugin!` fixture for `flui-hot-reload`'s own integration test — not meant to be run directly. |
+
+**desktop_scene** is a `cdylib` plugin, not a binary — there is no `cargo run -p flui-desktop-scene`. It's built in one terminal and loaded by a separate host process in another (full workflow: [`docs/hot-reload.md`](../docs/hot-reload.md#desktop-plugin-workflow)):
+
+```bash
+# Terminal 1 — rebuild the plugin on change
+just example-desktop-scene
+
+# Terminal 2 — run the host with in-process reload (Linux/macOS; see
+# docs/hot-reload.md for the Windows .dll path)
+FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run --example scene_render
+```
 
 ## Web / WASM
 

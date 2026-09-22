@@ -695,9 +695,9 @@ example name:
     cargo run --example {{name}}
 
 [group("examples")]
-[doc("Run the desktop_scene hot-reload example")]
+[doc("Build the desktop_scene hot-reload plugin, rebuilding on change (requires cargo-watch; docs/hot-reload.md's Desktop Plugin Workflow, terminal 1). It's a cdylib, not a binary -- there is no `cargo run` for it; run `cargo run --example scene_render` with FLUI_SCENE_PLUGIN set in a second terminal to host it")]
 example-desktop-scene:
-    cargo run -p desktop_scene
+    cargo watch -w examples/desktop_scene -x "build -p flui-desktop-scene"
 
 [group("examples")]
 [doc("List all available examples")]
