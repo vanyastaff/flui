@@ -167,6 +167,14 @@ target = "all"
 path = "crates/flui-widgets"
 why = "Enable the crate testing feature for checkout integration tests and benches."
 
+[[checkout_only_dev]]
+source = "flui-cli"
+package = "flui-hot-reload"
+alias = "flui-hot-reload"
+target = "all"
+path = "crates/flui-hot-reload"
+why = "Pin the FLUI_HOT_RELOAD / FLUI_WORKER_PLUGIN env-var names the CLI sets against the runtime's constants; the CLI publishes alone and must not wait for the framework."
+
 # =============================================================================
 # Layers
 # =============================================================================

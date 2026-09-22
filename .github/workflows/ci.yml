@@ -9,6 +9,7 @@ name: CI
 #   wasm-check     — cargo check for the wasm-capable crates + real cdylib link of the two web
 #                    demos + import-surface check against scripts/wasm-import-allowlist.txt
 #   cross-typecheck — cargo clippy (no link, no tests) of flui-platform's windows + macos + android backends
+#   cli-macos      — nextest of flui-cli on macos-latest (simctl, Xcode probes, .app staging, termios hot-keys)
 #   test           — build + nextest (lib + integration), ubuntu, plus a
 #                    dedicated flui-platform (Linux-runnable subset) step
 #   gpu-test       — full testing readback suite on windows/WARP (merge-blocking)
@@ -1297,6 +1298,43 @@ jobs:
   # `gpu-test` uses) and aarch64 macOS — plus aarch64 Android, with
   # `--all-targets` so per-OS test targets compile too.
   # ─────────────────────────────────────────────────────────────────────────
+  # cli-macos — the CLI's own suite on macOS. `test` runs it on Linux, which
+  # never executes the macOS arms: simulator selection through `simctl`,
+  # Xcode probes in `flui doctor`, browser versions read from `Info.plist`,
+  # the `.app` staging of `flui build macos`, and the termios hot-keys of
+  # `flui run`. The CLI has no FLUI crate in its normal graph, so this is a
+  # small build (~75 crates) and the only per-OS coverage it gets before a
+  # release; the shim test drives `cargo-flui` as well.
+  # ─────────────────────────────────────────────────────────────────────────
+  cli-macos:
+    name: cli-macos
+    needs: checks
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Per tokio: binary caching breaks on macOS.
+          cache-bin: false
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo nextest run -p flui-cli
+        run: cargo nextest run -p flui-cli --locked
+
   cross-typecheck:
     name: cross-typecheck
     needs: checks
@@ -1389,7 +1427,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, clippy, feature-matrix, wasm-check, cross-typecheck, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
+    needs: [checks, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

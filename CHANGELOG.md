@@ -40,6 +40,16 @@ file records the repo-consumer-visible summary.
   was resolved and never used, while the warning promised the APK step
   would be skipped — now it is), and the iOS simulator probes use the
   bounded runner in `proc.rs` instead of a fresh tokio runtime per call.
+- **`flui-cli` release gates** (`flui-cli`, `.github/workflows/ci.yml`,
+  `.github/workflows/weekly.yml`, `docs/workspace-layers.toml`).
+  `cargo publish --dry-run -p flui-cli` passes: the `flui-hot-reload`
+  dev-dependency is path-only (Cargo drops it from the published manifest,
+  and the layers inventory records it as checkout-only), so the CLI no
+  longer waits for the framework to be on crates.io. `cargo deny` is clean.
+  New CI job `cli-macos` runs the CLI suite on macOS, the only execution of
+  its simulator, Xcode, `.app` staging and termios arms; the weekly
+  workflow gains `cli-live-build`, which scaffolds a project against the
+  checkout and builds it for desktop end to end.
 - **`cargo flui` and prebuilt CLI binaries** (`flui-cli`,
   `.github/workflows/release.yml`). `flui-cli` ships a second binary,
   `cargo-flui`, an exec shim over the `flui` installed beside it, so

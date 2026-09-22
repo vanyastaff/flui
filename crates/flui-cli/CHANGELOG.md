@@ -58,6 +58,11 @@ the workspace version and follows [Semantic Versioning](https://semver.org/).
   `flui build android` passes `JAVA_HOME` to the Gradle wrapper. Without
   `JAVA_HOME` the native libraries are still built and the APK step is
   skipped, which is what the warning always said.
+- The crate publishes on its own: the `flui-hot-reload` dev-dependency is
+  path-only, which Cargo drops from the published manifest, so
+  `cargo publish --dry-run` no longer looks for the framework on crates.io
+  (84 files, 183 KiB compressed). `cargo deny` reports no advisory, ban,
+  licence or source issue on the graph.
 - `clap` is pulled with `derive` only: the `cargo` and `env` features
   enabled macros and attributes no code used. `serde` is a local
   dependency with `derive` alone rather than the workspace's `rc` set.

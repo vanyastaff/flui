@@ -104,8 +104,9 @@ predicates = "3.1"
 # `#[tokio::test]` in the build pipeline's artifact tests.
 tokio = { workspace = true, features = ["macros"] }
 # Only for the env-var contract test in `commands/run.rs`; never in the
-# `cargo install` graph.
-flui-hot-reload = { path = "../flui-hot-reload", version = "=0.3.0-beta.1" }
+# `cargo install` graph. No `version`: a path-only dev-dependency is dropped
+# from the published manifest, so the CLI publishes without the framework.
+flui-hot-reload = { path = "../flui-hot-reload" }
 
 # Consolidated integration-test binary (see `autotests = false` above).
 # All five suites drive the built `flui` binary in subprocesses via
