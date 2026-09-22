@@ -1,0 +1,89 @@
+name: Docs
+
+# Builds the mdBook site under `book/` and deploys it to GitHub Pages from
+# `main`. Scoped to `book/**` plus this file itself via `paths:`, so it
+# never runs on a PR that doesn't touch the book — the opposite direction
+# from `ci.yml`'s docs-only skip, which exists to skip *compiling* jobs on
+# a docs-only PR; this workflow is the compiling (well, mdBook-building)
+# side of a docs change and has nothing to gate against non-docs changes.
+#
+# No `mdbook test`-equivalent step: most Rust fences in this book are
+# prose-adjacent snippets copied from a real example or CLI template, not
+# standalone compiling programs, so they are fenced `rust,ignore` rather
+# than plain `rust` (see AGENTS.md's "no invented API" rule for this book
+# and `book/book.toml`'s own comment). What this workflow does check is
+# every internal link, via `lychee` in `--offline` mode over the built
+# HTML — an external-link check is deliberately left out of the required
+# gate (rate limits and third-party downtime would make it flaky), but is
+# free to add later as an advisory job if that becomes useful, the same
+# way `weekly.yml` runs its own advisory checks.
+#
+# Enabling this requires a one-time repo setting only the repo owner can
+# make: Settings → Pages → Source = "GitHub Actions". Until that's set,
+# the `deploy` job below fails with a clear error naming the missing
+# setting; `build` (and its link check) still runs and gates every PR.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'book/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'book/**'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mdbook
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: mdbook
+
+      - name: mdbook build
+        run: mdbook build book
+
+      - name: lychee (internal links only)
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: >-
+            --offline
+            --root-dir book/book
+            --exclude-path book/book/print.html
+            book/book
+          fail: true
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        with:
+          path: book/book
+
+  deploy:
+    name: deploy
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        id: deployment

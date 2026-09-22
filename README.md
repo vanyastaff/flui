@@ -10,6 +10,8 @@ FLUI brings the proven three-tree architecture (View → Element → Render) to 
 
 **Project stage: 0.x, beta candidate.** The `flui` CLI is on crates.io (`cargo install flui-cli --locked`; `flui create` scaffolds a project that pins the framework's `v0.1.0` git tag). The framework crates themselves are not yet published: they build and run from a clone (instructions below) or from that tag, and APIs may still change between minor versions. See [`CHANGELOG.md`](CHANGELOG.md) for notable changes and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what lands next.
 
+**Documentation:** the book at <https://vanyastaff.github.io/flui/> — still a skeleton being filled in (tracked as H2 in the beta roadmap). That URL 404s until GitHub Pages is enabled for this repository (Settings → Pages → Source = GitHub Actions, a one-time setting only the repo owner can make); use [`docs/getting-started.md`](docs/getting-started.md) below in the meantime.
+
 The next milestone is a beta release; its user workflows and required evidence
 are defined in [Beta release criteria](docs/BETA.md).
 

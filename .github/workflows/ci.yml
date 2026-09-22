@@ -283,6 +283,7 @@ jobs:
               - '!.editorconfig'
               - '!crates/*/ARCHITECTURE.md'
               - '!crates/*/CHANGELOG.md'
+              - '!book/**'
 
   # ─────────────────────────────────────────────────────────────────────────
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs

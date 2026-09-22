@@ -1,0 +1,33 @@
+[book]
+title = "FLUI"
+description = "A Flutter-inspired declarative UI framework for Rust — book skeleton (H2, part 1)."
+authors = ["FLUI Contributors"]
+language = "en"
+src = "src"
+
+[build]
+# Rust code fences are marked `rust,ignore` wherever they are not copied
+# verbatim from a compiling source (an example, a CLI template, or a
+# doctest) — see AGENTS.md's "no invented API" rule for this book. This
+# flag is a backstop, not the primary defense: it stops an accidentally
+# un-ignored fence from failing a `mdbook test` run, but `mdbook test`
+# is not part of this book's CI gate (see .github/workflows/docs.yml's
+# comment) precisely because most fences here are prose-adjacent
+# snippets, not standalone compiling programs.
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/vanyastaff/flui"
+edit-url-template = "https://github.com/vanyastaff/flui/edit/main/book/{path}"
+
+[output.html.fold]
+enable = true
+level = 1
+
+# No [output.linkcheck] table: link checking runs as a separate `lychee`
+# pass over the built HTML in .github/workflows/docs.yml, not as an
+# mdbook-linkcheck renderer backend — that keeps a plain `mdbook build`
+# working for anyone who has only `mdbook` installed, with no second
+# binary required for local iteration.
