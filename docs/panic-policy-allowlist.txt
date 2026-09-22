@@ -105,7 +105,7 @@ crates/flui-scheduler/src/budget.rs 3
 crates/flui-scheduler/src/frame.rs 2
 crates/flui-scheduler/src/scheduler.rs 1
 crates/flui-testing/src/bootstrap.rs 2
-crates/flui-testing/src/lib.rs 3
+crates/flui-testing/src/lib.rs 4
 crates/flui-view/src/element/behavior.rs 2
 crates/flui-view/src/tree/element_tree.rs 5
 crates/flui-view/src/tree/id_reconcile.rs 2
