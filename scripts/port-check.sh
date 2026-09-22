@@ -42,6 +42,9 @@
 #   bash scripts/port-check.sh --budget    # alias for -b
 
 set -euo pipefail
+# `mapfile` below needs bash >= 4; macOS /bin/bash is 3.2.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/interpreters.sh"
+flui_require_bash4 "$0"
 
 verbose=0
 budget=0

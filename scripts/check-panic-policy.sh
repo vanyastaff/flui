@@ -89,14 +89,15 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 cd "${repo_root}"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "check-panic-policy: python3 not found on PATH" >&2
-  exit 2
-fi
+# The embedded program annotates with `X | None`, evaluated at definition
+# time (Python >= 3.10); /usr/bin/python3 on macOS is 3.9, so pick an
+# interpreter by version, not by name.
+source "${script_dir}/lib/interpreters.sh"
+flui_require_python311 "check-panic-policy"
 
 mode="${1:-}"
 
-python3 - "${repo_root}" "${mode}" <<'PY'
+"${FLUI_PYTHON}" - "${repo_root}" "${mode}" <<'PY'
 import re
 import sys
 from pathlib import Path

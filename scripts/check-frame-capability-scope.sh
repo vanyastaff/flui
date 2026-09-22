@@ -93,6 +93,9 @@
 #   scripts/check-frame-capability-scope.sh --self-test # verify the scanner itself
 # -----------------------------------------------------------------------------
 set -euo pipefail
+# `mapfile` below needs bash >= 4; macOS /bin/bash is 3.2.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/interpreters.sh"
+flui_require_bash4 "$0"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 

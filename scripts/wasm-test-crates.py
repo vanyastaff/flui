@@ -14,6 +14,14 @@ harness exists to remove.
 """
 
 import sys
+if sys.version_info < (3, 11):  # tomllib; macOS /usr/bin/python3 is 3.9
+    print(
+        f"{sys.argv[0]}: needs Python >= 3.11 (it uses tomllib); running "
+        f"{sys.version.split()[0]}. macOS: brew install python@3.12, then run it "
+        "through just (recipes pick a Python >= 3.11). `just doctor` checks every tool.",
+        file=sys.stderr,
+    )
+    sys.exit(2)  # same code as the shell scripts' interpreter guards
 import tomllib
 from pathlib import Path
 
