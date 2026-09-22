@@ -1316,6 +1316,17 @@ fn is_command_chord(modifiers: Modifiers) -> bool {
         || (modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT))
 }
 
+/// Whether these modifiers request WORD-granularity caret/selection/delete
+/// movement rather than character-granularity — Ctrl (Windows/Linux) or
+/// Alt (macOS's Option), matching both conventions rather than picking
+/// one, since FLUI has no per-platform keymap layer to pick for it. Arrow
+/// and Backspace keys never produce a character, so this has no AltGr
+/// carve-out to make (contrast [`is_command_chord`], which does).
+#[inline]
+fn is_word_jump_modifier(modifiers: Modifiers) -> bool {
+    modifiers.contains(Modifiers::CONTROL) || modifiers.contains(Modifiers::ALT)
+}
+
 /// Build the key-event handler closure for `controller`.
 ///
 /// Only `KeyState::Down` events (which cover key-repeat) are acted upon, and
@@ -1371,12 +1382,31 @@ fn build_key_handler(
                 }
                 KeyEventResult::Handled
             }
+            // Ctrl/Alt+Backspace deletes the WORD behind the caret rather
+            // than one character — see `is_word_jump_modifier`'s doc for
+            // why both modifiers are accepted. This used to be a plain
+            // one-character Backspace regardless of the chord (see this
+            // arm's history for the `a_command_chord_on_backspace_...`
+            // test that documented that gap before word-delete existed).
             Key::Named(NamedKey::Backspace) => {
-                controller.backspace();
+                if is_word_jump_modifier(event.modifiers) {
+                    controller.delete_word_backward();
+                } else {
+                    controller.backspace();
+                }
                 KeyEventResult::Handled
             }
+            // Ctrl/Alt+Delete is the forward mirror, added alongside
+            // Backspace for the same reason
+            // `TextEditingController::delete_word_forward`'s doc gives —
+            // this crate does not leave one half of a symmetric pair
+            // unfinished.
             Key::Named(NamedKey::Delete) => {
-                controller.delete_forward();
+                if is_word_jump_modifier(event.modifiers) {
+                    controller.delete_word_forward();
+                } else {
+                    controller.delete_forward();
+                }
                 KeyEventResult::Handled
             }
             // Shift is the difference between MOVING the caret and EXTENDING
@@ -1385,20 +1415,30 @@ fn build_key_handler(
             // stops there; modified, it steps the extent from wherever it is
             // and leaves the anchor. Flutter draws the same line between
             // `ExtendSelectionByCharacterIntent`'s two `collapseSelection`
-            // values (`widgets/editable_text.dart:685,697`).
+            // values (`widgets/editable_text.dart:685,697`). Ctrl/Alt raises
+            // the granularity from character to WORD without changing that
+            // axis — the two modifiers compose independently, matching
+            // Flutter's separate `ExtendSelectionByCharacterIntent`/
+            // `ExtendSelectionToNextWordBoundaryIntent` pair.
             Key::Named(NamedKey::ArrowLeft) => {
-                if event.modifiers.contains(Modifiers::SHIFT) {
-                    controller.extend_selection_left();
-                } else {
-                    controller.move_caret_left();
+                let extend = event.modifiers.contains(Modifiers::SHIFT);
+                let by_word = is_word_jump_modifier(event.modifiers);
+                match (by_word, extend) {
+                    (true, true) => controller.extend_selection_word_left(),
+                    (true, false) => controller.move_caret_word_left(),
+                    (false, true) => controller.extend_selection_left(),
+                    (false, false) => controller.move_caret_left(),
                 }
                 KeyEventResult::Handled
             }
             Key::Named(NamedKey::ArrowRight) => {
-                if event.modifiers.contains(Modifiers::SHIFT) {
-                    controller.extend_selection_right();
-                } else {
-                    controller.move_caret_right();
+                let extend = event.modifiers.contains(Modifiers::SHIFT);
+                let by_word = is_word_jump_modifier(event.modifiers);
+                match (by_word, extend) {
+                    (true, true) => controller.extend_selection_word_right(),
+                    (true, false) => controller.move_caret_word_right(),
+                    (false, true) => controller.extend_selection_right(),
+                    (false, false) => controller.move_caret_right(),
                 }
                 KeyEventResult::Handled
             }
@@ -1979,23 +2019,18 @@ mod tests {
         assert_eq!(text, "a");
     }
 
-    /// Ctrl+Backspace keeps deleting a character, deliberately.
-    ///
-    /// This is the case that most tempts a blanket guard: Ctrl+Backspace
-    /// *should* delete a word, and consuming it here hides it from whoever
-    /// implements delete-word. But nobody does — there is no
-    /// default-text-shortcuts layer, and `DefaultFocusTraversal` binds only
-    /// Tab/Shift+Tab — so refusing it would delete nothing at all, which is
-    /// strictly worse than deleting one character.
-    ///
-    /// Kept as a test rather than a comment so that whoever adds that layer
-    /// sees this decision fail and revisits it.
+    /// Ctrl+Backspace deletes the WHOLE current word, not one character —
+    /// this arm used to fall back to a plain character Backspace (see git
+    /// history for `a_command_chord_on_backspace_still_deletes_until_a_shortcuts_layer_exists`,
+    /// this test's predecessor, written while there was no word-delete to
+    /// route to). Alt+Backspace (macOS's Option) is the same chord — see
+    /// `is_word_jump_modifier`'s doc.
     #[test]
-    fn a_command_chord_on_backspace_still_deletes_until_a_shortcuts_layer_exists() {
+    fn ctrl_backspace_deletes_the_whole_word_behind_the_caret() {
         use flui_interaction::events::Code;
         use flui_interaction::testing::input::KeyEventBuilder;
 
-        let controller = TextEditingController::with_text("hello");
+        let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("test");
         let handler = build_key_handler(
             Rc::new(RefCell::new(controller.clone())),
@@ -2013,9 +2048,46 @@ mod tests {
         assert_eq!(handler(&event), KeyEventResult::Handled);
         assert_eq!(
             controller.text(),
-            "hell",
-            "with no delete-word handler anywhere above the field, dropping this \
-             chord would delete nothing at all"
+            "hello ",
+            "the whole word \"world\", not just \"d\""
+        );
+    }
+
+    /// Ctrl+Left/Right jump the caret by a WORD, not a character — the
+    /// keyboard-facing half of `TextEditingController`'s `# Word unit`
+    /// contract.
+    #[test]
+    fn ctrl_arrow_jumps_the_caret_by_a_word() {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("test");
+        let handler = build_key_handler(
+            Rc::new(RefCell::new(controller.clone())),
+            Rc::clone(&focus_node),
+            Rc::new(RefCell::new(None)),
+        );
+        controller.move_caret_home();
+
+        let right = KeyEventBuilder::new(Code::ArrowRight)
+            .with_key(Key::Named(NamedKey::ArrowRight))
+            .with_state(KeyState::Down)
+            .with_modifiers(Modifiers::CONTROL)
+            .build();
+        assert_eq!(handler(&right), KeyEventResult::Handled);
+        assert_eq!(controller.caret_byte_offset(), 6, "start of \"world\"");
+
+        let left = KeyEventBuilder::new(Code::ArrowLeft)
+            .with_key(Key::Named(NamedKey::ArrowLeft))
+            .with_state(KeyState::Down)
+            .with_modifiers(Modifiers::ALT)
+            .build();
+        assert_eq!(handler(&left), KeyEventResult::Handled);
+        assert_eq!(
+            controller.caret_byte_offset(),
+            0,
+            "Alt is the same chord as Ctrl (macOS's Option)"
         );
     }
 
