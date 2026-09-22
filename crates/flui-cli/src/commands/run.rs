@@ -289,7 +289,11 @@ fn run_once(release: bool, profile: Option<String>, verbose: bool) -> CliResult<
 // ============================================================================
 
 /// What the loop can be told to do by a key press.
+///
+/// Only [`KeyReader`] constructs these, and it reads keys on Unix alone;
+/// the loop still matches every variant so there is one dev loop, not two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(unix), allow(dead_code))]
 enum HotKey {
     /// `r`: apply the cheapest reload the strategy offers.
     Reload,
@@ -305,6 +309,7 @@ enum HotKey {
 
 impl HotKey {
     /// The key bound to each action; anything else is ignored.
+    #[cfg(unix)]
     fn from_byte(byte: u8) -> Option<Self> {
         match byte {
             b'r' => Some(Self::Reload),
@@ -517,8 +522,12 @@ fn install_interrupt_flag() -> &'static AtomicBool {
         std::thread::Builder::new()
             .name("flui-ctrl-c".into())
             .spawn(|| {
+                // `enable_all`, not `enable_io`: on Unix the signal driver
+                // rides on the I/O driver, but on Windows `ctrl_c` uses the
+                // console handler and tokio's `signal` feature does not even
+                // expose `enable_io` there.
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                    .enable_io()
+                    .enable_all()
                     .build()
                 else {
                     tracing::warn!("could not start the Ctrl-C listener; default handling applies");
@@ -1595,7 +1604,9 @@ pub fn execute_scene(
 
 #[cfg(test)]
 mod tests {
-    use super::{HotKey, fnv1a, has_flui_dependency, is_host_device, stage_worker_artifact};
+    #[cfg(unix)]
+    use super::HotKey;
+    use super::{fnv1a, has_flui_dependency, is_host_device, stage_worker_artifact};
 
     #[test]
     fn host_device_aliases() {
@@ -1611,6 +1622,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn hot_key_bindings() {
         assert_eq!(HotKey::from_byte(b'r'), Some(HotKey::Reload));
         assert_eq!(HotKey::from_byte(b'R'), Some(HotKey::Restart));

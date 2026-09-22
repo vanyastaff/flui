@@ -1372,6 +1372,14 @@ jobs:
           AR_aarch64_linux_android: ar
         run: cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings
 
+      # The CLI ships on Windows but the `test` matrix is Linux-only and no
+      # Windows job exists, so a Windows-only compile break in `flui-cli`
+      # was invisible (found the day this step was added: tokio's `signal`
+      # feature does not expose `enable_io` on Windows). `--all-targets`
+      # so the integration suite's Windows arms type-check too.
+      - name: cargo clippy (cli, windows)
+        run: cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
   # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern). Branch protection
   # requires this ONE check instead of enumerating the graph, so adding or

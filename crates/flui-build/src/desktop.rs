@@ -1,3 +1,6 @@
+// Only the macOS bundle staging below takes a `Path`; on other hosts the
+// import would be unused and trip `-D warnings`.
+#[cfg(target_os = "macos")]
 use std::path::Path;
 
 use crate::error::{BuildError, BuildResult};

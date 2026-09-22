@@ -58,6 +58,14 @@ file records the repo-consumer-visible summary.
 
 ### Fixed
 
+- **`flui-cli` did not compile on Windows** (`flui-cli`, `flui-build`): the
+  Ctrl-C listener's runtime asked for `enable_io`, which tokio's `signal`
+  feature only exposes on Unix; it now uses `enable_all`. Under the
+  workspace's `-D warnings` the Windows build then tripped on code that only
+  macOS or Unix reaches (simctl parsing, iOS targets, hot-key bindings,
+  `flui-build`'s bundle-staging `Path` import); each is now gated to the
+  platform that uses it. The `cross-typecheck` CI job gains a Windows clippy
+  step for the CLI so this class cannot return.
 - **`flui devices` hung forever on macOS** (`flui-cli`): browser detection
   ran `Safari -v`, which launches Safari instead of printing a version.
   Versions are now read from each app's `Info.plist`, and every external

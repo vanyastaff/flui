@@ -153,6 +153,7 @@ fn summary_line(stdout: &str) -> Option<serde_json::Value> {
 // ============================================================================
 
 /// Pull every `doctor.fix` object out of NDJSON stdout.
+#[cfg(unix)]
 fn fix_events(stdout: &str) -> Vec<serde_json::Value> {
     stdout
         .lines()

@@ -34,7 +34,9 @@ pub(crate) enum Kind {
     Physical,
     /// An Android Virtual Device.
     Emulator,
-    /// An iOS Simulator runtime instance.
+    /// An iOS Simulator runtime instance (only discovered on macOS; kept
+    /// in the model so `--json` has one schema on every host).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Simulator,
     /// An installed web browser.
     Browser,
@@ -360,6 +362,7 @@ pub(crate) fn probe_ios() -> Result<Vec<Device>, Problem> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn parse_simctl_json(text: &str) -> Result<Vec<Device>, String> {
     let value: serde_json::Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
     let Some(devices_by_runtime) = value.get("devices").and_then(|d| d.as_object()) else {
@@ -419,6 +422,7 @@ fn parse_simctl_json(text: &str) -> Result<Vec<Device>, String> {
 }
 
 /// `com.apple.CoreSimulator.SimRuntime.iOS-17-2` → `iOS 17.2`.
+#[cfg(target_os = "macos")]
 fn runtime_name(runtime_key: &str) -> String {
     let Some(suffix) = runtime_key.strip_prefix("com.apple.CoreSimulator.SimRuntime.") else {
         return runtime_key.to_string();
@@ -732,6 +736,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn runtime_name_formats_ios_and_other_families() {
         assert_eq!(
             runtime_name("com.apple.CoreSimulator.SimRuntime.iOS-17-2"),
@@ -745,6 +750,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn parse_simctl_json_filters_unavailable_and_reads_state() {
         let json = r#"{
             "devices": {
@@ -767,11 +773,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn parse_simctl_json_rejects_invalid_json() {
         assert!(parse_simctl_json("not json").is_err());
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn parse_simctl_json_tolerates_missing_devices_key() {
         let result = parse_simctl_json(r#"{"runtimes": []}"#).expect("valid json");
         assert!(result.is_empty());

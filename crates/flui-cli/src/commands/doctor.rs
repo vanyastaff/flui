@@ -702,6 +702,7 @@ fn check_java(verbose: bool, promote: bool) -> Check {
 // iOS
 // ============================================================================
 
+#[cfg(target_os = "macos")]
 const IOS_TARGETS: [&str; 3] = [
     "aarch64-apple-ios",
     "aarch64-apple-ios-sim",
