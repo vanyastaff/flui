@@ -107,6 +107,23 @@ reasoning stands verbatim: "the crate's process-global SIGNAL_RUNTIME predates t
 UiRealm model (cross-realm bleed if ever wired). Any future signals story is a new
 realm-scoped design, not a revival."
 
+The full picture from the last revision before removal (`c534ea0f`, 2025-11-18 →
+2026-07-28, 23 source files, 101 `#[test]` fns, plus a `BENCHMARK_RESULTS.md` that is
+actually an unrelated render-object spec): one `SignalRuntime::global()` backed by
+`DashMap`, every value an `Arc<Mutex<T>>` (`runtime.rs`, carrying a `PORT-CHECK-OK-SP6`
+waiver), every callback `Send + Sync`, `Computed<T>` holding its own
+`Mutex<HashSet<SignalId>>` dependency set, an `EffectScheduler` with `Arc<Mutex<Box<dyn
+FnMut>>>` callbacks and priorities, a leptos-style `Owner` tree also built on `Mutex`es,
+`HookContext` with `begin_component`/hook-index bookkeeping, `batch()` on thread-locals,
+and an `async.rs` bridging to tokio channels. It depended on `any_spawner` and
+`send_wrapper` that the workspace never declared, so it did not build at removal time.
+**It was never wired to an Element**: no file in the crate mentions `Element`,
+`BuildContext` or `mark_needs_build`, and no other crate ever imported it after the
+2025-12 view rewrite — the "components re-render" in its docs referred to a hook context
+of its own, not to FLUI's tree. There is nothing to salvage structurally; the reusable
+parts are ideas (`Copy` handles, owner-tree cleanup, batching) that the market survey
+sources better.
+
 What must be different, point by point:
 
 | a57b4140 | This ADR |
