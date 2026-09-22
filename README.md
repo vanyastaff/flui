@@ -8,7 +8,7 @@
 
 FLUI brings the proven three-tree architecture (View → Element → Render) to Rust, adapted to native ownership, type-safe arity, and a strict layered crate DAG. The Core.1 vertical slice is complete: the widget catalog (`flui-widgets`) is live, the full build → layout → paint → composite pipeline is exercised end-to-end, and the gesture/animation integration ships.
 
-**Project stage: pre-release — build from source.** FLUI is not published to crates.io; the workspace builds and runs from a clone (instructions below), and APIs may still change between commits. See [`CHANGELOG.md`](CHANGELOG.md) for notable changes and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what lands next.
+**Project stage: 0.x, beta candidate.** The `flui` CLI is on crates.io (`cargo install flui-cli --locked`; `flui create` scaffolds a project that pins the framework's `v0.1.0` git tag). The framework crates themselves are not yet published: they build and run from a clone (instructions below) or from that tag, and APIs may still change between minor versions. See [`CHANGELOG.md`](CHANGELOG.md) for notable changes and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what lands next.
 
 The next milestone is a beta release; its user workflows and required evidence
 are defined in [Beta release criteria](docs/BETA.md).
@@ -18,7 +18,7 @@ are defined in [Beta release criteria](docs/BETA.md).
 - ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`, `flui-log`, `flui-tree`, `flui-platform`
 - ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-hot-reload`
 - ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-localizations`, `flui-material`, `flui-cupertino`, `flui-testing`, `flui-animation`, `flui-assets`, `flui-app` (migration)
-- ✅ DX/tooling: `flui-devtools` (partial), `flui-cli`, `flui-build`
+- ✅ DX/tooling: `flui-devtools` (partial), `flui-cli` (with the per-target build pipeline in `crates/flui-cli/src/build/`)
 
 See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate status.
 

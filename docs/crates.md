@@ -92,7 +92,7 @@ Neither design system may depend on `flui-localizations` — that direction is a
 | Crate | Status | Purpose |
 |-------|--------|---------|
 | `flui-app` | ✅ ACTIVE (migration) | App runner, root widget, application lifecycle. The **private composition root** for runtime ownership during Runtime.1 — a `flui-runtime` crate is not extracted from it until two entry points prove the boundary ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)). Owns **no design tokens** ([ADR-0042](adr/ADR-0042-theming-ownership.md)); hot reload is behind its optional `hot-reload` feature. |
-| `flui-cli` | ✅ ACTIVE | The `flui` CLI: `create`/`run` (hot reload with hot-keys)/`build`/`doctor`/`devices`/`emulators`, one output policy (`--json`, `--quiet`, `--non-interactive`) and a documented exit-code table. Depends on `flui-build` and `flui-hot-reload`; no edge to `flui-devtools`. |
+| `flui-cli` | ✅ ACTIVE | The `flui` CLI: `create`/`run` (hot reload with hot-keys)/`build`/`doctor`/`devices`/`emulators`, one output policy (`--json`, `--quiet`, `--non-interactive`) and a documented exit-code table. The per-target build pipeline (Android/iOS/desktop/web) lives in its own `src/build/` module; depends on `flui-hot-reload`; no edge to `flui-devtools`. |
 | `flui-devtools` | ✅ ACTIVE (partial) | Profiler, timeline, inspector counters |
 
 ## Layer 10 — Facade

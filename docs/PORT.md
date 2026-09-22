@@ -70,7 +70,7 @@ The *funnel* signatures (`tree.rs::insert_box`, view → render `From` impls) ac
 
 **Why:** the same sync-hot-path clause. Async on these methods would force the scheduler to await within a frame budget critical path.
 
-**Back-references:** the "sync hot path, async at the edges" rule; permitted at IO (`flui-assets`), scheduler (`flui-scheduler`), build pipeline (`flui-build`) only.
+**Back-references:** the "sync hot path, async at the edges" rule; permitted at IO (`flui-assets`), scheduler (`flui-scheduler`), build pipeline (`flui-cli`'s build module) only.
 
 **Regex:** `async\s+fn\s+(build|layout|paint|perform_layout|composite|render|fire_composition_callbacks)\b` constrained to `crates/flui-{rendering,view,painting,layer}/src/**`. Scope and verb set extended in Mythos Step 13 of the `flui-layer` chain to catch layer-level async (`composite`, `render`, `fire_composition_callbacks`). Re-confirmed in Mythos Step 13 of the `flui-painting` chain to recurse into the post-split `crates/flui-painting/src/` subdirectories (rg recurses naturally; verified via `bash scripts/port-check.sh -v`).
 
@@ -603,14 +603,14 @@ Worked examples of the rule, both directions:
 Where a runtime check and a compile-time check express the same constraint, the compile-time form is required. Concretely:
 
 - Arity types (`Leaf` / `Single` / `Optional` / `Variable`) over runtime child-count assertions.
-- Typestate builders (e.g., `BuilderContextBuilder<P, Pr>` in `flui-build`) over runtime config validation.
+- Typestate builders (e.g., `BuilderContextBuilder<P, Pr>` in `flui-cli`'s build module) over runtime config validation.
 - Sealed traits (e.g., `Arity`) over open-world dispatch.
 
 `TypeId` lookup for `InheritedView` ancestry is the single allowed runtime-reflection window per the strategy clause.
 
 ### Sync hot path, async at edges
 
-`async fn` is forbidden in the render hot path: `View::build`, `RenderObject::layout`, `RenderObject::paint`, `RenderObject::perform_layout`, and their helpers. Permitted at IO boundaries in `flui-assets`, the scheduler in `flui-scheduler`, the build pipeline in `flui-build`, and route-notification handlers in `flui-view/src/binding.rs` (which sit on the binding layer, not the render path).
+`async fn` is forbidden in the render hot path: `View::build`, `RenderObject::layout`, `RenderObject::paint`, `RenderObject::perform_layout`, and their helpers. Permitted at IO boundaries in `flui-assets`, the scheduler in `flui-scheduler`, the build pipeline in `flui-cli`'s build module, and route-notification handlers in `flui-view/src/binding.rs` (which sit on the binding layer, not the render path).
 
 ### Multi-source references in `## Mapping decisions`
 
@@ -637,7 +637,7 @@ This table is the canonical lookup when translating a single Dart symbol into Ru
 | `Map<K, V>` (ordered iteration required) | `BTreeMap<K, V>` | Dart `LinkedHashMap` insertion-order is approximated by `indexmap::IndexMap` for non-comparable keys — workspace does not yet depend on `indexmap`; flag with `// TODO(port)` if needed. |
 | `Set<T>` | `ahash::AHashSet<T>` or `HashSet<T, ahash::RandomState>` | Same hasher rationale as `Map`. |
 | `Iterable<T>` (lazy) | `impl Iterator<Item = T>` (or `&dyn Iterator<Item = T>` at FFI boundary — needs `// PORT-CHECK-OK-DYN` marker per Trigger 9) | Strict-eager → `Vec<T>`. |
-| `Future<T>` | `impl Future<Output = T>` (or `Pin<Box<dyn Future<Output = T> + Send>>` at FFI/storage — exempted by FR-029) | **Forbidden** on hot path (Refusal trigger 3). Permitted in `flui-assets`, `flui-scheduler`, `flui-build`. Use `tokio::task::spawn` only at those boundaries. |
+| `Future<T>` | `impl Future<Output = T>` (or `Pin<Box<dyn Future<Output = T> + Send>>` at FFI/storage — exempted by FR-029) | **Forbidden** on hot path (Refusal trigger 3). Permitted in `flui-assets`, `flui-scheduler`, `flui-cli`'s build module. Use `tokio::task::spawn` only at those boundaries. |
 | `Stream<T>` | `impl futures::Stream<Item = T>` or `tokio::sync::broadcast::Receiver<T>` | **Forbidden** on hot path. UI change-notification → `Listenable` trait + manual notify loop, not `Stream`. |
 | `dynamic` | **forbidden** — convert to a typed surface. If literally unavoidable at an FFI boundary: `&dyn Any` with `// PORT-CHECK-OK-DYN: <reason>` and a `downcast_ref::<ConcreteT>` site marked with `// PORT-CHECK-OK-DOWNCAST: <reason>` | Constitution Principle IV forbids open-world `dyn`. The Dart `dynamic` keyword is a port-time conversation, not a 1:1 mapping. |
 | `Object` (untyped base) | concrete type, or `&dyn Any` with markers (same rule as `dynamic`) | Most Flutter uses of `Object` are debugging payloads or untyped equality keys; pick the concrete type from the call graph. |
@@ -930,7 +930,7 @@ pub type RenderResult<T> = Result<T, RenderError>;
 
 2. **Use `#[non_exhaustive]`** on every public error enum. Lets variants be added without breaking downstream `match` exhaustively. Crates internal to a feature boundary may omit it.
 
-3. **`Box<str>` is preferred for message fields on new error types**, not `String`. Errors are written-once / read-rarely; the spare-capacity word of `String` is wasted. **Codebase state:** `flui-rendering` follows this rule (`crates/flui-rendering/src/error.rs` — every `RenderError` variant). Older crates (`flui-assets`, `flui-build`, `flui-cli`, `flui-engine`, `flui-painting`, etc.) still use `String` and are not retrofit targets for this PR — log them in the respective crate's `## Outstanding refactors` if the cost matters. New error types should adopt `Box<str>` from inception.
+3. **`Box<str>` is preferred for message fields on new error types**, not `String`. Errors are written-once / read-rarely; the spare-capacity word of `String` is wasted. **Codebase state:** `flui-rendering` follows this rule (`crates/flui-rendering/src/error.rs` — every `RenderError` variant). Older crates (`flui-assets`, `flui-cli`, `flui-engine`, `flui-painting`, etc.) still use `String` and are not retrofit targets for this PR — log them in the respective crate's `## Outstanding refactors` if the cost matters. New error types should adopt `Box<str>` from inception.
 
 4. **`#[source]` on wrapping variants** (or `#[from]` which implies `#[source]`). Preserves the `Error::source()` chain for `Display`/`tracing` consumers. Use `#[from]` only when the conversion is the **only** way that variant is constructed; otherwise hand-write the constructor and use `#[source]` on the wrapped field.
 
@@ -1187,7 +1187,6 @@ This section indexes **crate-level** `ARCHITECTURE.md` template state. For docum
 | `flui-animation` | `crates/flui-animation/docs/ARCHITECTURE.md` (pre-template) | Active |
 | `flui-devtools` | Not yet templated | Active |
 | `flui-cli` | Not yet templated | Active |
-| `flui-build` | Not yet templated | Active |
 | `flui-assets` | `crates/flui-assets/docs/ARCHITECTURE.md` (pre-template) | Active |
 
 Authoritative workspace state lives in [`AGENTS.md`](../AGENTS.md) and [`docs/crates.md`](crates.md); this index restates "templated yes/no" only.
