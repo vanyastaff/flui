@@ -77,7 +77,6 @@ Exit codes:
 Environment:
   CI, FLUI_NON_INTERACTIVE   never prompt (same as --non-interactive)
   NO_COLOR, CLICOLOR_FORCE   colour policy when --color=auto
-  RUST_LOG                   log filter (overrides -v)
 
 flui sends no telemetry and never touches the network unless a command
 explicitly downloads something (`flui upgrade`, `cargo` fetching crates).")]
@@ -86,7 +85,8 @@ pub struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Show debug logs from FLUI's own crates
+    /// Show diagnostics: the commands flui runs, the probes it makes, the
+    /// decisions it takes (dimmed `debug:` lines on stderr)
     #[arg(short, long, global = true, conflicts_with = "quiet")]
     verbose: bool,
 
@@ -632,72 +632,6 @@ impl BuildTarget {
     }
 }
 
-/// Install the CLI's own subscriber.
-///
-/// The CLI owns its logging policy — it is a composition root, not a library —
-/// but reuses `flui-log`'s backend construction so a `flui run` prints the same
-/// way the application it launches does.
-///
-/// `Auto` rather than `Install`: a wrapper script or an embedding harness that
-/// set up a subscriber before invoking the CLI keeps it, and this never aborts
-/// the command over a logging detail.
-fn install_cli_logging(
-    config: &flui_log::LogConfig,
-) -> Result<flui_log::SubscriberInstallation, flui_log::SetupError> {
-    use tracing_subscriber::Layer as _;
-    use tracing_subscriber::layer::SubscriberExt as _;
-
-    let filter = config.env_filter()?;
-
-    #[cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))]
-    let platform = flui_log::PlatformLayer::desktop_compact_stderr();
-    #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
-    let platform = flui_log::PlatformLayer::platform_default(config);
-
-    let subscriber = tracing_subscriber::Registry::default().with(platform.with_filter(filter));
-    flui_log::install_subscriber(
-        subscriber,
-        flui_log::InstallPolicy::Auto,
-        config.log_bridge_policy(),
-    )
-}
-
-fn init_logging(verbosity: ui::Verbosity) {
-    // `-v` raises FLUI's own crates (and this binary, whose crate name is
-    // `flui`) to debug and leaves the dependency stack alone. `RUST_LOG` still
-    // overrides the whole thing, and nothing narrows it afterwards, so
-    // `RUST_LOG=flui=trace` reaches TRACE.
-    let directives = match verbosity {
-        ui::Verbosity::Verbose => "info,flui=debug",
-        ui::Verbosity::Normal => "info",
-        ui::Verbosity::Quiet => "warn",
-    };
-
-    let config = flui_log::LogConfig::builder()
-        .directives(directives)
-        .build();
-
-    let rejected = match install_cli_logging(&config) {
-        Ok(_) => None,
-        Err(flui_log::SetupError::Filter(
-            error @ (flui_log::FilterError::Environment { .. }
-            | flui_log::FilterError::EnvironmentNotUnicode { .. }),
-        )) => {
-            let fallback = flui_log::LogConfig::builder()
-                .filter(flui_log::FilterConfig::new(directives).without_env_var())
-                .build();
-            install_cli_logging(&fallback)
-                .expect("BUG: the CLI's built-in directive literals must parse");
-            Some(error)
-        }
-        Err(error) => panic!("BUG: CLI diagnostics setup failed: {error}"),
-    };
-
-    if let Some(error) = rejected {
-        tracing::warn!(%error, "the RUST_LOG filter was rejected; using CLI defaults");
-    }
-}
-
 fn main() {
     let cli = Cli::parse();
 
@@ -714,7 +648,6 @@ fn main() {
         ui::OutputMode::Human
     };
     ui::install(mode, verbosity, cli.color, cli.non_interactive);
-    init_logging(verbosity);
     let verbose = cli.verbose;
 
     // Dispatch command

@@ -42,7 +42,7 @@ impl PlatformBuilder for IosBuilder {
             });
         }
 
-        tracing::debug!("iOS environment validation passed");
+        crate::ui::debug("iOS environment validation passed".to_string());
 
         Ok(())
     }
@@ -119,7 +119,7 @@ impl PlatformBuilder for IosBuilder {
             ));
         }
 
-        tracing::info!("Building iOS app with Xcode...");
+        crate::ui::debug("Building iOS app with Xcode...".to_string());
 
         let ios_dir = ctx.workspace_root.join("platforms").join("ios");
 
@@ -183,7 +183,7 @@ impl PlatformBuilder for IosBuilder {
         }
         copy_dir_recursive(&app_path, &output_app)?;
 
-        tracing::info!("iOS app copied to: {:?}", output_app);
+        crate::ui::debug(format!("iOS app copied to: {}", output_app.display()));
 
         Ok(FinalArtifacts {
             app_binary: output_app,

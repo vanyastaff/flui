@@ -60,7 +60,9 @@ impl DesktopBuilder {
             "x86_64-unknown-linux-gnu"
         };
 
-        tracing::warn!("Could not detect host target from rustc, falling back to {fallback}");
+        let _ = crate::ui::warning(format!(
+            "Could not detect host target from rustc, falling back to {fallback}"
+        ));
         Ok(fallback.to_string())
     }
 }
@@ -87,7 +89,10 @@ impl PlatformBuilder for DesktopBuilder {
             }
         };
 
-        tracing::info!("Building desktop target '{target}' ({:?})", ctx.target);
+        crate::ui::debug(format!(
+            "Building desktop target '{target}' ({:?})",
+            ctx.target
+        ));
 
         let mut args = vec!["build".to_string(), "--target".to_string(), target.clone()];
         let selected = cargo::select_target(&ctx.workspace_root, &ctx.target).await?;
@@ -153,7 +158,10 @@ impl PlatformBuilder for DesktopBuilder {
 
         let size_bytes = std::fs::metadata(&output_binary)?.len();
 
-        tracing::info!("Desktop executable copied to: {:?}", output_binary);
+        crate::ui::debug(format!(
+            "Desktop executable copied to: {}",
+            output_binary.display()
+        ));
 
         Ok(FinalArtifacts {
             app_binary: output_binary,
@@ -250,7 +258,7 @@ impl DesktopBuilder {
         std::fs::write(contents.join("Info.plist"), plist)?;
 
         let size_bytes = calculate_dir_size(&app_dir)?;
-        tracing::info!(app = %app_dir.display(), "macOS .app bundle staged");
+        crate::ui::debug(format!("macOS .app bundle staged at {}", app_dir.display()));
 
         Ok(FinalArtifacts {
             app_binary: app_dir,

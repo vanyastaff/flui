@@ -62,7 +62,7 @@ impl PlatformBuilder for WebBuilder {
             });
         };
 
-        tracing::info!("Building WASM for target: {}", target);
+        crate::ui::debug(format!("Building WASM for target: {target}"));
 
         let web_dist_dir = self
             .workspace_root
@@ -120,7 +120,7 @@ impl PlatformBuilder for WebBuilder {
             return Err(BuildError::Other("No WASM files generated".to_string()));
         }
 
-        tracing::info!("Generated {} WASM files", rust_libs.len());
+        crate::ui::debug(format!("Generated {} WASM files", rust_libs.len()));
 
         Ok(BuildArtifacts {
             rust_libs,
@@ -142,14 +142,14 @@ impl PlatformBuilder for WebBuilder {
         let index_html = web_dir.join("index.html");
         if index_html.exists() {
             std::fs::copy(&index_html, dist_dir.join("index.html"))?;
-            tracing::debug!("Copied index.html");
+            crate::ui::debug("Copied index.html".to_string());
         }
 
         // Copy manifest.json if exists
         let manifest = web_dir.join("manifest.json");
         if manifest.exists() {
             std::fs::copy(&manifest, dist_dir.join("manifest.json"))?;
-            tracing::debug!("Copied manifest.json");
+            crate::ui::debug("Copied manifest.json".to_string());
         }
 
         // Copy icons directory if exists
@@ -162,7 +162,7 @@ impl PlatformBuilder for WebBuilder {
                 let dest = dist_icons.join(entry.file_name());
                 std::fs::copy(entry.path(), dest)?;
             }
-            tracing::debug!("Copied icons directory");
+            crate::ui::debug("Copied icons directory".to_string());
         }
 
         // Copy dist to output directory
@@ -180,7 +180,7 @@ impl PlatformBuilder for WebBuilder {
             .map(|m| m.len())
             .sum();
 
-        tracing::info!("Web build copied to: {:?}", output_dir);
+        crate::ui::debug(format!("Web build copied to: {}", output_dir.display()));
 
         Ok(FinalArtifacts {
             app_binary: output_dir.join("index.html"),

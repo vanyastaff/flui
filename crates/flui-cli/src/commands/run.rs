@@ -473,7 +473,9 @@ fn next_event(
             match child.try_wait() {
                 Ok(Some(status)) => return LoopEvent::ChildExited(status),
                 Ok(None) => {}
-                Err(error) => tracing::warn!(%error, "could not poll the application"),
+                Err(error) => {
+                    let _ = ui::warning(format!("could not poll the application: {error}"));
+                }
             }
         }
         match watcher.recv_timeout(Duration::from_millis(100)) {
@@ -489,7 +491,10 @@ fn start_watcher(paths: Vec<(PathBuf, bool)>) -> CliResult<SourceWatcher> {
         SourceWatcher::new().map_err(|e| CliError::context(e, "Failed to create file watcher"))?;
     for (path, recursive) in paths {
         if !path.exists() {
-            tracing::debug!(path = %path.display(), "not watching: does not exist");
+            ui::debug(format!(
+                "not watching {}: it does not exist",
+                path.display()
+            ));
             continue;
         }
         watcher
@@ -538,7 +543,9 @@ fn install_interrupt_flag() -> &'static AtomicBool {
                     .enable_all()
                     .build()
                 else {
-                    tracing::warn!("could not start the Ctrl-C listener; default handling applies");
+                    let _ = crate::ui::warning(
+                        "could not start the Ctrl-C listener; default handling applies".to_string(),
+                    );
                     return;
                 };
                 runtime.block_on(async {
@@ -698,7 +705,7 @@ fn stop_child(child: Option<&mut Child>) -> bool {
         return false;
     }
     if let Err(e) = child.kill() {
-        tracing::debug!("Could not kill child process: {e}");
+        crate::ui::debug(format!("Could not kill child process: {e}"));
     }
     wait_with_timeout(child, Duration::from_secs(5));
     true
@@ -788,17 +795,17 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) {
             Ok(Some(_)) => return,
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    tracing::warn!(
+                    let _ = crate::ui::warning(format!(
                         "Child process (PID {}) did not exit within {:?}",
                         child.id(),
                         timeout
-                    );
+                    ));
                     return;
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                tracing::debug!("Error waiting for child: {e}");
+                crate::ui::debug(format!("Error waiting for child: {e}"));
                 return;
             }
         }
@@ -874,7 +881,7 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool) -> bool {
     match cmd.status() {
         Ok(status) => status.success(),
         Err(e) => {
-            tracing::error!("Failed to run cargo build: {}", e);
+            let _ = crate::ui::error(format!("Failed to run cargo build: {e}"));
             false
         }
     }
@@ -1176,21 +1183,23 @@ fn codesign_ad_hoc(path: &Path) {
         .output();
     match output {
         Ok(output) if output.status.success() => {
-            tracing::debug!(path = %path.display(), "ad-hoc signed staged worker");
+            ui::debug(format!(
+                "ad-hoc signed the staged worker {}",
+                path.display()
+            ));
         }
         Ok(output) => {
-            tracing::warn!(
-                path = %path.display(),
-                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-                "codesign of the staged worker failed; continuing (load may still succeed)"
-            );
+            let _ = ui::warning(format!(
+                "codesign of the staged worker {} failed; continuing (load may still succeed): {}",
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
         }
         Err(error) => {
-            tracing::warn!(
-                path = %path.display(),
-                %error,
-                "could not run codesign; continuing (load may still succeed)"
-            );
+            let _ = ui::warning(format!(
+                "could not run codesign for {}; continuing (load may still succeed): {error}",
+                path.display()
+            ));
         }
     }
 }
@@ -1284,7 +1293,7 @@ fn run_cargo_build_packages(
     match cmd.status() {
         Ok(status) => status.success(),
         Err(e) => {
-            tracing::error!("Failed to run cargo build for {packages:?}: {e}");
+            let _ = crate::ui::error(format!("Failed to run cargo build for {packages:?}: {e}"));
             false
         }
     }

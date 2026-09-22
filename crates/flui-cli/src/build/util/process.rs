@@ -8,7 +8,7 @@ use crate::build::error::{BuildError, BuildResult};
 pub async fn run_command<S: AsRef<str>>(program: &str, args: &[S]) -> BuildResult<()> {
     let args_str: Vec<&str> = args.iter().map(std::convert::AsRef::as_ref).collect();
 
-    tracing::info!("Running: {} {}", program, args_str.join(" "));
+    crate::ui::debug(format!("Running: {} {}", program, args_str.join(" ")));
 
     let status = Command::new(program)
         .args(&args_str)
@@ -42,11 +42,11 @@ pub(crate) async fn run_command_with_output<S: AsRef<str>>(
 ) -> BuildResult<String> {
     let args_str: Vec<&str> = args.iter().map(std::convert::AsRef::as_ref).collect();
 
-    tracing::debug!(
+    crate::ui::debug(format!(
         "Running (capturing output): {} {}",
         program,
         args_str.join(" ")
-    );
+    ));
 
     let output = Command::new(program)
         .args(&args_str)
@@ -82,7 +82,12 @@ pub async fn run_command_in_dir<S: AsRef<str>>(
 ) -> BuildResult<()> {
     let args_str: Vec<&str> = args.iter().map(std::convert::AsRef::as_ref).collect();
 
-    tracing::info!("Running in {:?}: {} {}", dir, program, args_str.join(" "));
+    crate::ui::debug(format!(
+        "Running in {}: {} {}",
+        dir.display(),
+        program,
+        args_str.join(" ")
+    ));
 
     let status = Command::new(program)
         .args(&args_str)

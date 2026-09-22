@@ -4,8 +4,9 @@
 runs them with hot reload, builds for every platform, and checks your
 environment. It starts in about 25 ms, sends no telemetry, never touches the
 network unless you ask it to, and every command has a machine-readable mode.
-It is a standalone binary: `cargo install flui-cli` compiles no framework
-crate, so it installs in a fraction of the time an app build takes.
+It is a standalone binary with no FLUI crate in its dependency graph, so
+`cargo install flui-cli` compiles no framework code and installs in a fraction
+of the time an app build takes.
 
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/vanyastaff/flui/blob/main/LICENSE-MIT)
 
@@ -60,7 +61,7 @@ Every command accepts the global flags:
 |------|--------|
 | `--json` | One JSON object per line on stdout; nothing decorative anywhere. |
 | `-q`, `--quiet` | No progress narration; warnings, errors and tool output stay. |
-| `-v`, `--verbose` | Debug logs from FLUI's own crates (`RUST_LOG` overrides). |
+| `-v`, `--verbose` | Diagnostics on stderr: the commands flui runs, the probes it makes, the paths it skips. |
 | `--color auto|always|never` | `auto` honours `NO_COLOR`, `CLICOLOR_FORCE` and `TERM=dumb`. |
 | `--non-interactive` | Never prompt or read keys; implied by `CI`, `FLUI_NON_INTERACTIVE`, or a non-terminal stdin. |
 

@@ -177,7 +177,10 @@ pub fn emit<T: Serialize>(event: &str, payload: &T) {
             map
         }
         Err(error) => {
-            tracing::error!(%error, event, "BUG: event payload is not serializable");
+            let _ = writeln!(
+                std::io::stderr(),
+                "error: BUG: the `{event}` event payload is not serializable: {error}"
+            );
             return;
         }
     };
@@ -248,6 +251,25 @@ pub fn remark(message: impl Display) -> std::io::Result<()> {
         return Ok(());
     }
     cliclack::log::remark(message)
+}
+
+/// Diagnostic line for `--verbose`: which command ran, which probe failed,
+/// which path was skipped and why. Plain dimmed text on stderr, shown only
+/// under `-v` — in JSON mode too, since stderr is not the machine stream.
+///
+/// This is the CLI's whole logging story. It links no logging framework:
+/// with no framework crate in its graph there is nothing for a `RUST_LOG`
+/// filter to select, and a second voice on stderr beside the narration
+/// above would only compete with it.
+pub fn debug(message: impl Display) {
+    if policy().verbosity != Verbosity::Verbose {
+        return;
+    }
+    let _ = writeln!(
+        std::io::stderr(),
+        "{}",
+        console::style(format!("debug: {message}")).dim()
+    );
 }
 
 /// Warning line. Survives `--quiet`; in JSON mode it goes to stderr as

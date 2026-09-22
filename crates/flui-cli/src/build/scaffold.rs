@@ -238,12 +238,11 @@ pub fn scaffold_platform(
         })?;
     }
 
-    tracing::debug!(
-        platform = %platform_lower,
-        files = files.len(),
-        dest = %dest_dir.display(),
-        "Scaffolded platform directory"
-    );
+    crate::ui::debug(format!(
+        "scaffolded {} file(s) for {platform_lower} into {}",
+        files.len(),
+        dest_dir.display()
+    ));
 
     Ok(())
 }

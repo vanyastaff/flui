@@ -68,16 +68,19 @@ pub fn probe_stdout(command: &mut Command, timeout: Duration) -> Option<String> 
             Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
         }
         Ok(output) => {
-            tracing::debug!(
-                program = ?command.get_program(),
-                status = ?output.status,
-                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
-                "probe exited unsuccessfully"
-            );
+            crate::ui::debug(format!(
+                "probe {} exited with {}: {}",
+                command.get_program().to_string_lossy(),
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
             None
         }
         Err(error) => {
-            tracing::debug!(program = ?command.get_program(), %error, "probe failed");
+            crate::ui::debug(format!(
+                "probe {} failed: {error}",
+                command.get_program().to_string_lossy()
+            ));
             None
         }
     }

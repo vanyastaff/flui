@@ -154,3 +154,41 @@ fn emulators_list_json_is_pure_ndjson_and_succeeds() {
     // Parsing alone is the assertion: any non-JSON line panics.
     let _events = ndjson_events(&assert.get_output().stdout);
 }
+
+/// `-v` is the CLI's whole logging story: probe diagnostics appear as dimmed
+/// `debug:` lines on stderr only under `--verbose`, in JSON mode too (stderr
+/// is not the machine stream), and never otherwise.
+#[test]
+fn verbose_prints_probe_diagnostics_to_stderr_only() {
+    let empty_path = TempDir::new().expect("temp dir");
+
+    let verbose = flui()
+        .args(["devices", "--json", "--verbose", "--color", "never"])
+        .env_clear()
+        .env("PATH", empty_path.path())
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&verbose.get_output().stderr);
+    assert!(
+        stderr.contains("debug: probe"),
+        "with no tools on PATH every probe fails, and -v must say so; stderr was:\n{stderr}"
+    );
+    for line in String::from_utf8_lossy(&verbose.get_output().stdout).lines() {
+        assert!(
+            line.starts_with('{'),
+            "diagnostics must never reach the JSON stream; stdout line: {line}"
+        );
+    }
+
+    let quiet = flui()
+        .args(["devices", "--json"])
+        .env_clear()
+        .env("PATH", empty_path.path())
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&quiet.get_output().stderr);
+    assert!(
+        !stderr.contains("debug:"),
+        "without -v there are no diagnostics; stderr was:\n{stderr}"
+    );
+}

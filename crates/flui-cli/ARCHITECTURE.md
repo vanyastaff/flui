@@ -3,10 +3,21 @@
 `flui-cli` owns command parsing, project template selection, generation of
 consumer dependency declarations, platform scaffolding and build
 orchestration (`src/build/`, once the `flui-build` crate), and the dev-loop
-source watcher (`src/watch.rs`). It links no framework crate except
-`flui-log`: the runtime half of hot reload stays in `flui-hot-reload`, which
-the *app* links, and the only contract between the two is a pair of
-environment-variable names pinned by a dev-dependency test.
+source watcher (`src/watch.rs`). It links no FLUI crate at all: the runtime
+half of hot reload stays in `flui-hot-reload`, which the *app* links, and the
+only contract between the two is a pair of environment-variable names pinned
+by a dev-dependency test.
+
+## No logging framework
+
+The CLI once carried `tracing`, `tracing-subscriber` and `flui-log` to print
+`RUST_LOG`-filtered logs beside its own narration. With no framework crate in
+its graph there was nothing for that filter to select but the CLI's own 57
+call sites, 28 of them `INFO` lines from the former build library that
+duplicated what the commands already report — two voices on stderr. All of it
+now goes through `ui::`: warnings and errors through the same functions as
+every other line, diagnostics through `ui::debug`, shown under `-v` only.
+`flui-log` stays what it is, the application's logging backend.
 
 ## Mapping decisions
 

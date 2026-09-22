@@ -485,7 +485,7 @@ name = "flui-cli"
 release_role = "cli"
 layer = 9
 disposition = "keep"
-note = "The `flui` binary. Owns the build pipeline (once `flui-build`) and the source watcher; links no framework crate but flui-log, so the hot-reload env-var contract is checked by a dev-dependency test instead of a normal edge."
+note = "The `flui` binary. Owns the build pipeline (once `flui-build`) and the source watcher; has no internal dependency at all (not even flui-log: its diagnostics go through its own output policy), so the hot-reload env-var contract is checked by a dev-dependency test instead of a normal edge."
 
 [[member]]
 name = "flui"

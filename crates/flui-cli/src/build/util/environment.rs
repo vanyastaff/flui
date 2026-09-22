@@ -25,7 +25,10 @@ pub fn resolve_android_home() -> BuildResult<PathBuf> {
     if let Ok(android_home) = env::var("ANDROID_HOME") {
         let path = PathBuf::from(android_home);
         if path.exists() {
-            tracing::debug!("Found ANDROID_HOME from environment: {:?}", path);
+            crate::ui::debug(format!(
+                "Found ANDROID_HOME from environment: {}",
+                path.display()
+            ));
             return Ok(path);
         }
     }
@@ -44,7 +47,10 @@ pub fn resolve_android_home() -> BuildResult<PathBuf> {
 
     for path in common_paths {
         if path.exists() {
-            tracing::debug!("Found Android SDK at default location: {:?}", path);
+            crate::ui::debug(format!(
+                "Found Android SDK at default location: {}",
+                path.display()
+            ));
             return Ok(path);
         }
     }
@@ -76,7 +82,10 @@ pub fn resolve_ndk_home(android_home: &Path) -> BuildResult<PathBuf> {
     if let Ok(ndk_home) = env::var("ANDROID_NDK_HOME") {
         let path = PathBuf::from(ndk_home);
         if path.exists() {
-            tracing::debug!("Found NDK from ANDROID_NDK_HOME: {:?}", path);
+            crate::ui::debug(format!(
+                "Found NDK from ANDROID_NDK_HOME: {}",
+                path.display()
+            ));
             return Ok(path);
         }
     }
@@ -92,7 +101,7 @@ pub fn resolve_ndk_home(android_home: &Path) -> BuildResult<PathBuf> {
             .max();
 
         if let Some(path) = latest {
-            tracing::debug!("Found NDK at: {:?}", path);
+            crate::ui::debug(format!("Found NDK at: {}", path.display()));
             return Ok(path);
         }
     }

@@ -15,6 +15,18 @@ file records the repo-consumer-visible summary.
 
 ### Changed
 
+- **`flui-cli` has no internal dependency and no logging framework**
+  (`flui-cli`; breaking for `RUST_LOG` users). The CLI dropped `flui-log`,
+  `tracing` and `tracing-subscriber`. With no framework crate in its graph a
+  `RUST_LOG` filter could only select the CLI's own 57 call sites, 28 of them
+  `INFO` lines inherited from the build library that duplicated what the
+  commands already report, so stderr carried two voices. Warnings and errors
+  now go through the same `ui::` functions as every other line; diagnostics
+  (the commands flui runs, the probes it makes, the paths it skips) are
+  dimmed `debug:` lines on stderr under `-v` only, in JSON mode too, and a
+  test pins that they never reach stdout. `RUST_LOG` is no longer read.
+  `cargo install flui-cli` compiles no FLUI code: the normal dependency graph
+  is down from 135 crates to 116, all external.
 - **`flui-devtools` is only what exists** (`flui-devtools`; breaking). Default
   features now enable the crate's three modules (a crate that exists only to
   provide them shipped with nothing on by default), so `cargo doc` also

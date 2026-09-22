@@ -98,7 +98,7 @@ impl SourceWatcher {
         match self.rx.recv_timeout(timeout) {
             Ok(Ok(events)) => Ok(Self::paths_from_events(&events)),
             Ok(Err(errors)) => {
-                tracing::warn!("source watch errors: {errors:?}");
+                let _ = crate::ui::warning(format!("source watch errors: {errors:?}"));
                 Ok(None)
             }
             Err(e) => Err(e),

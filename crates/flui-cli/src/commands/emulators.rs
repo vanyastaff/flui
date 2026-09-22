@@ -308,7 +308,7 @@ fn launch_ios_simulator(udid: &str) -> CliResult<()> {
                 exit_code: boot.status.code(),
             });
         }
-        tracing::debug!(udid, "simulator already booted");
+        crate::ui::debug(format!("simulator {udid} was already booted"));
     }
 
     // `open -a Simulator` returns as soon as the app is asked to activate;

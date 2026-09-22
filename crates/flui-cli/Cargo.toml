@@ -26,10 +26,12 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-# The CLI links no framework crate: the build pipeline (`src/build/`) and the
-# source watcher (`src/watch.rs`) are modules here, and the hot-reload
+# The CLI has no internal dependency at all: the build pipeline (`src/build/`)
+# and the source watcher (`src/watch.rs`) are modules here, the hot-reload
 # runtime half stays in `flui-hot-reload`, linked by the app, with the env-var
-# contract checked by a dev-dependency test in `commands/run.rs`.
+# contract checked by a dev-dependency test in `commands/run.rs`, and there is
+# no logging framework — `-v` diagnostics go through `ui::debug` like every
+# other line the CLI prints (see `ui.rs`).
 
 # Build pipeline: cargo metadata for artifact selection, staging
 # directories, and `process`/`io-util` for the async builders.
@@ -44,11 +46,6 @@ notify-debouncer-mini = "0.7"
 # `process`/`io-util` drive the builders' child processes.
 tokio = { workspace = true, features = ["rt-multi-thread", "time", "signal", "process", "io-util"] }
 
-# Logging backend. The CLI chooses and installs its own subscriber policy and
-# reuses flui-log's backend construction; it is a composition root, so this
-# normal edge is sanctioned — see docs/workspace-layers.toml.
-flui-log = { workspace = true }
-
 # CLI framework
 clap = { version = "4.5", features = ["derive", "cargo", "env", "color"] }
 clap_complete = "4.5"
@@ -60,8 +57,6 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 toml = "1.1"
 
 # Utilities

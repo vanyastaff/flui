@@ -29,7 +29,7 @@ impl AndroidBuilder {
         let java_home = environment::resolve_java_home().ok();
 
         if java_home.is_none() {
-            tracing::warn!("JAVA_HOME not set - APK build will be skipped");
+            let _ = crate::ui::warning("JAVA_HOME not set - APK build will be skipped".to_string());
         }
 
         Ok(Self {
@@ -61,7 +61,9 @@ impl AndroidBuilder {
         scene_crate: &str,
         release: bool,
     ) -> BuildResult<PathBuf> {
-        tracing::info!("Building scene plugin '{}' for {}", scene_crate, target);
+        crate::ui::debug(format!(
+            "Building scene plugin '{scene_crate}' for {target}"
+        ));
 
         let mut args = vec![
             "ndk".to_string(),
@@ -113,7 +115,7 @@ impl AndroidBuilder {
                 BuildError::path_not_found(target_dir, "scene plugin .so not found in target dir")
             })?;
 
-        tracing::info!("Scene plugin built: {:?}", so_path);
+        crate::ui::debug(format!("Scene plugin built: {}", so_path.display()));
         Ok(so_path)
     }
 
@@ -147,7 +149,7 @@ impl AndroidBuilder {
         let cp_cmd = format!("cp {tmp_path} {app_path}");
         process::run_command("adb", &["shell", "run-as", package, "sh", "-c", &cp_cmd]).await?;
 
-        tracing::info!("Scene plugin pushed to device: {}", app_path);
+        crate::ui::debug(format!("Scene plugin pushed to device: {app_path}"));
         Ok(())
     }
 }
@@ -182,8 +184,12 @@ impl PlatformBuilder for AndroidBuilder {
         );
 
         if !gradle_wrapper.exists() {
-            tracing::warn!("Gradle wrapper not found - will build native libraries only");
-            tracing::warn!("To build APK, ensure Gradle is set up in platforms/android/");
+            let _ = crate::ui::warning(
+                "Gradle wrapper not found - will build native libraries only".to_string(),
+            );
+            let _ = crate::ui::warning(
+                "To build APK, ensure Gradle is set up in platforms/android/".to_string(),
+            );
         }
 
         // Check Android targets are installed
@@ -201,9 +207,9 @@ impl PlatformBuilder for AndroidBuilder {
             });
         }
 
-        tracing::debug!("Android environment validation passed");
-        tracing::debug!("  ANDROID_HOME: {:?}", self.android_home);
-        tracing::debug!("  NDK: {:?}", self.ndk_home);
+        crate::ui::debug("Android environment validation passed".to_string());
+        crate::ui::debug(format!("  ANDROID_HOME: {}", self.android_home.display()));
+        crate::ui::debug(format!("  NDK: {}", self.ndk_home.display()));
 
         Ok(())
     }
@@ -235,7 +241,10 @@ impl PlatformBuilder for AndroidBuilder {
 
         // Clean jniLibs directory
         if jni_libs_dir.exists() {
-            tracing::debug!("Cleaning jniLibs directory: {:?}", jni_libs_dir);
+            crate::ui::debug(format!(
+                "Cleaning jniLibs directory: {}",
+                jni_libs_dir.display()
+            ));
             std::fs::remove_dir_all(&jni_libs_dir)?;
         }
         std::fs::create_dir_all(&jni_libs_dir)?;
@@ -252,7 +261,7 @@ impl PlatformBuilder for AndroidBuilder {
         let mut rust_libs = Vec::new();
 
         for target in targets {
-            tracing::info!("Building for Android target: {}", target);
+            crate::ui::debug(format!("Building for Android target: {target}"));
 
             let mut args = vec![
                 "ndk",
@@ -289,7 +298,7 @@ impl PlatformBuilder for AndroidBuilder {
             return Err(BuildError::Other("No .so files generated".to_string()));
         }
 
-        tracing::info!("Generated {} native libraries", rust_libs.len());
+        crate::ui::debug(format!("Generated {} native libraries", rust_libs.len()));
 
         Ok(BuildArtifacts {
             rust_libs,
@@ -303,7 +312,7 @@ impl PlatformBuilder for AndroidBuilder {
         ctx: &BuilderContext,
         artifacts: &BuildArtifacts,
     ) -> BuildResult<FinalArtifacts> {
-        tracing::info!("Building APK with Gradle...");
+        crate::ui::debug("Building APK with Gradle...".to_string());
 
         let android_dir = self.workspace_root.join("platforms").join("android");
 
@@ -316,9 +325,10 @@ impl PlatformBuilder for AndroidBuilder {
         // Check if gradle wrapper exists
         let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
         if !gradle_wrapper_path.exists() {
-            tracing::warn!("Gradle wrapper not found, skipping APK build");
-            tracing::info!(
+            let _ = crate::ui::warning("Gradle wrapper not found, skipping APK build".to_string());
+            crate::ui::debug(
                 "Native libraries built successfully at: platforms/android/app/src/main/jniLibs/"
+                    .to_string(),
             );
 
             // Return the .so file as the artifact
@@ -378,7 +388,7 @@ impl PlatformBuilder for AndroidBuilder {
             .join(format!("flui-{}.apk", ctx.profile.as_str()));
         std::fs::copy(&apk_path, &output_apk)?;
 
-        tracing::info!("APK copied to: {:?}", output_apk);
+        crate::ui::debug(format!("APK copied to: {}", output_apk.display()));
 
         Ok(FinalArtifacts {
             app_binary: output_apk,

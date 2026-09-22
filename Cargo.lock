@@ -1791,7 +1791,6 @@ dependencies = [
  "cliclack",
  "console",
  "flui-hot-reload",
- "flui-log",
  "notify-debouncer-mini",
  "pollster",
  "predicates",
@@ -1802,8 +1801,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "toml",
- "tracing",
- "tracing-subscriber",
  "which",
 ]
 

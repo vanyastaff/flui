@@ -211,7 +211,10 @@ impl Drop for Work {
             // Cleanup uncertainty must never delete files a surviving child can
             // still access, including when the worker itself unwinds.
             if let Err(payload) = std::panic::catch_unwind(|| {
-                tracing::error!(path = %path.display(), "child termination unconfirmed; retained iOS packaging scratch");
+                let _ = crate::ui::error(format!(
+                    "child termination unconfirmed; retained the iOS packaging scratch at {}",
+                    path.display()
+                ));
             }) {
                 std::mem::forget(payload);
             }
