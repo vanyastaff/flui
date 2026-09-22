@@ -241,17 +241,18 @@ pub use flui_app::{run_app_android, run_app_android_with_config};
 /// customization, reach them at `flui::material`), or `flui-material`
 /// internals like the raw M3 type-scale table (`english_like_2021`).
 ///
-/// **`TextField` is deliberately absent.** `flui-widgets` and
-/// `flui-material` each ship a distinct type of that name — a design-agnostic
-/// text-editing primitive and the M3-styled input — so a curated glob cannot
-/// carry both without one silently shadowing the other. [`prelude`] keeps
-/// [`flui_widgets::TextField`] (already part of [`flui_widgets::prelude`]);
-/// reach the Material one explicitly as `flui::material::TextField`. The
-/// Cupertino catalog has no such collision
-/// (every type is `Cupertino`-prefixed), but its surface is app-shell-shaped
-/// rather than everyday-widget-shaped (`CupertinoPageScaffold`,
-/// `CupertinoTabScaffold`, …), so it stays at `flui::cupertino` rather than
-/// joining this glob.
+/// **`TextField` names the Material type, unambiguously** — `flui-widgets`'
+/// own theme-free stand-in is named [`flui_widgets::RawTextField`], not
+/// `TextField`, specifically so this glob never has to choose between two
+/// same-named types or make `TextField`'s meaning depend on whether the
+/// `material` feature happens to be on. See this module's own
+/// `## Mapping decisions` entry in `ARCHITECTURE.md` for the two earlier
+/// revisions this superseded (first an omission, then an explicit-shadow
+/// that solved the ambiguity but broke feature-additivity). The Cupertino
+/// catalog has no such collision (every type is `Cupertino`-prefixed), but
+/// its surface is app-shell-shaped rather than everyday-widget-shaped
+/// (`CupertinoPageScaffold`, `CupertinoTabScaffold`, …), so it stays at
+/// `flui::cupertino` rather than joining this glob.
 pub mod prelude {
     pub use flui_app::app::AppConfig;
     #[cfg(not(target_os = "ios"))]
@@ -270,7 +271,8 @@ pub mod prelude {
         IconButton, InkWell, ListTile, Material, MaterialApp, NavigationBar, NavigationDestination,
         OutlinedButton, Radio, Scaffold, ScaffoldMessenger, ScaffoldMessengerHandle,
         ScaffoldMessengerScope, SnackBar, Switch, Tab, TabBar, TabBarView, TabController,
-        TextButton, TextTheme, Theme, ThemeData, ThemeMode, VerticalDivider, show_dialog,
+        TextButton, TextField, TextTheme, Theme, ThemeData, ThemeMode, VerticalDivider,
+        show_dialog,
     };
     pub use flui_widgets::prelude::*;
 }

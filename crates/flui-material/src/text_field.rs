@@ -8,8 +8,12 @@
 //! `_TextFieldState.build` composes a raw `widgets.EditableText` and
 //! `InputDecorator` inline (`text_field.dart:1684-1782`), which is exactly
 //! this substrate's own shape: no
-//! [`flui_widgets::TextField`](flui_widgets::text::text_field::TextField) in
-//! the middle.
+//! [`flui_widgets::RawTextField`](flui_widgets::text::text_field::RawTextField)
+//! in the middle — that type is this crate's theme-free sibling for a tree
+//! with no `Theme` ancestor, named `RawTextField` (not `TextField`)
+//! specifically so this Material type gets to be the one thing named
+//! `TextField` throughout the facade; see that type's own module doc for
+//! the naming rationale.
 //!
 //! # Live plumbing — what's wired and how
 //!
@@ -126,7 +130,7 @@ use flui_foundation::notifier::Listenable;
 use flui_interaction::FocusNode;
 use flui_view::RebuildHandle;
 use flui_view::prelude::*;
-use flui_widgets::{EditableText, GestureDetector, TextEditingController};
+use flui_widgets::{EditableText, GestureDetector, SubmitCallback, TextEditingController};
 
 use crate::input_decorator::{InputDecoration, InputDecorator};
 use crate::theme::Theme;
@@ -138,7 +142,7 @@ use crate::theme::Theme;
 /// The Material single-line text field — [`EditableText`] decorated by
 /// [`InputDecorator`], with live focus/enabled/error plumbing. See the
 /// module docs for exactly what's wired and what's deferred.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TextField {
     controller: TextEditingController,
     external_focus_node: Option<Rc<FocusNode>>,
@@ -146,6 +150,25 @@ pub struct TextField {
     enabled: Option<bool>,
     /// Forwarded to [`EditableText::obscure_text`] — a password field.
     obscure_text: bool,
+    /// Forwarded to [`EditableText::on_submitted`] — see
+    /// [`Self::on_submitted`].
+    on_submitted: Option<SubmitCallback>,
+}
+
+// Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
+// no `Debug` impl. Mirrors `flui_widgets::EditableText`'s own manual impl,
+// which exists for the identical reason.
+impl std::fmt::Debug for TextField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TextField")
+            .field("controller", &self.controller)
+            .field("external_focus_node", &self.external_focus_node)
+            .field("decoration", &self.decoration)
+            .field("enabled", &self.enabled)
+            .field("obscure_text", &self.obscure_text)
+            .field("on_submitted", &self.on_submitted.is_some())
+            .finish()
+    }
 }
 
 impl TextField {
@@ -182,6 +205,7 @@ impl TextField {
             decoration: InputDecoration::default(),
             enabled: None,
             obscure_text: false,
+            on_submitted: None,
         }
     }
 
@@ -210,6 +234,16 @@ impl TextField {
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = Some(enabled);
+        self
+    }
+
+    /// Call `callback` with the field's current text when Enter is pressed
+    /// while it has focus. Forwards to [`EditableText::on_submitted`] — see
+    /// that method's doc for exactly when it fires and why it is Enter
+    /// rather than an IME action-button commit.
+    #[must_use]
+    pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
+        self.on_submitted = Some(Rc::new(callback));
         self
     }
 }
@@ -384,6 +418,9 @@ impl ViewState<TextField> for MaterialTextFieldState {
             .obscure_text(view.obscure_text);
         if let Some(text_style) = theme.text_theme.body_large.clone() {
             editable = editable.text_style(text_style);
+        }
+        if let Some(on_submitted) = view.on_submitted.clone() {
+            editable = editable.on_submitted(move |text| on_submitted(text));
         }
 
         let focus_node = Rc::clone(&self.focus_node);

@@ -92,32 +92,46 @@ from the source:
   computes it as `list.last().map_or(0, |it| it.id + 1)` when pushing — simple, and enough for an
   in-memory list that only ever grows a counter, never reuses an id.
 
-## Adding an item: no form widget, because none exists yet
+## Adding an item: no form widget, no separate "hidden" duplicated logic
 
 There is no `Form`/validated-field wrapper in this codebase — [Forms](../cookbook/forms.md)'s
 validated `TextField` example is hand-rolled state, not a `Form` widget. `todo.rs` does the same,
-simpler: a plain `TextField` (the **Material** one — `flui::material::TextField`, not
-`flui-widgets`' theme-free one of the same name, which the facade's prelude would otherwise bring
-in instead) backed by a `TextEditingController`, read at "Add"-press time:
+simpler: a plain `TextField` (the **Material** one — `flui::material::TextField`. `flui::prelude`
+resolves a bare `TextField` to this one whenever the `material` feature is on, explicitly shadowing
+`flui-widgets`' theme-free type of the same name — see `ARCHITECTURE.md`'s
+`## Mapping decisions` for why) backed by a `TextEditingController`. Both ways of submitting a new
+item — pressing Enter and clicking "Add" — end up calling the same `add_item` function:
 
 ```rust,ignore
-TextField::new(new_item_field).decoration(InputDecoration {
-    label_text: Some("New item".to_string()),
-    ..Default::default()
-}),
+fn add_item(items: &StateHandle<Vec<Item>>, field: &TextEditingController, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    items.update(|list| { /* push a new Item, one past the highest existing id */ });
+    field.clear();
+}
+```
+
+```rust,ignore
+TextField::new(new_item_field)
+    .decoration(InputDecoration { label_text: Some("New item".to_string()), ..Default::default() })
+    .on_submitted(move |text| add_item(&submit_items, &submit_field, text)),
 ElevatedButton::new(Text::new("Add")).on_pressed(move || {
-    let text = add_item_field.text();
-    if text.is_empty() { return; }
-    items.update(|list| { /* push a new Item */ });
+    let text = button_field.text();
+    add_item(&button_items, &button_field, &text);
 }),
 ```
 
-`TextField` has no `on_submitted`/enter-to-add callback today — the controller's live text is
-read directly (`.text()`) from the button's `on_pressed`, the same pattern
+`TextField::on_submitted(Fn(&str))` fires on a raw Enter keypress while the field has focus —
+Flutter parity for `EditableText.onSubmitted`, implemented at the `flui-widgets` `EditableText`
+level (this substrate has no platform IME-action-button integration, so Enter is the trigger; see
+that type's own doc). The button's `on_pressed` still reads the controller's live text directly
+(`.text()`), the same pattern
 [`examples/material_demo`](https://github.com/vanyastaff/flui/blob/main/examples/material_demo/tree.rs)
-uses for its own Submit button (see [Forms](../cookbook/forms.md)). The example doesn't clear the
-field after Add — `TextEditingController` has no `.clear()`, and composing one from
-`set_selection`/`insert_str` wasn't worth the extra surface for a tutorial example.
+uses for its own Submit button (see [Forms](../cookbook/forms.md)) — `on_submitted` hands the text
+straight to its callback, but a plain button press has no such event to read it from.
+`TextEditingController::clear()` empties the field after either path adds the item, so it's ready
+for the next one.
 
 ## The whole file
 

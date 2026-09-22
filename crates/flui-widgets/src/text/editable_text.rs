@@ -35,6 +35,11 @@ use crate::AnimatedBuilder;
 use crate::text::controller::TextEditingController;
 
 type ImeFocusTransition = Rc<dyn Fn(bool)>;
+/// Callback for [`EditableText::on_submitted`] — see that method's doc.
+/// Exported (not crate-private) so [`RawTextField`](super::text_field::RawTextField)'s
+/// own `on_submitted` passthrough and `flui_material::TextField`'s can share
+/// one canonical alias instead of each declaring their own.
+pub type SubmitCallback = Rc<dyn Fn(&str)>;
 
 // ============================================================================
 // EditableText
@@ -180,8 +185,8 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 /// A single-line text field that accepts keyboard input when focused.
 ///
 /// Flutter parity: `widgets/editable_text.dart` `EditableText` — the low-level
-/// editable primitive.  [`TextField`](super::text_field::TextField) wraps this
-/// with decoration and tap-to-focus.
+/// editable primitive.  [`RawTextField`](super::text_field::RawTextField) wraps
+/// this with decoration and tap-to-focus.
 ///
 /// # Key routing
 ///
@@ -250,7 +255,7 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 ///   wrapping, multi-line layout, and vertical scrolling are not implemented.
 /// - **Input formatters** — no validation or transformation pipeline.
 /// - **Scroll when text overflows** — the rendered text clips without scrolling.
-#[derive(Clone, Debug, StatefulView)]
+#[derive(Clone, StatefulView)]
 pub struct EditableText {
     /// Controller that owns the text buffer and caret.
     pub(super) controller: TextEditingController,
@@ -269,9 +274,9 @@ pub struct EditableText {
     /// `TextField` and flows down as `_isEnabled` into
     /// `_effectiveFocusNode.canRequestFocus`
     /// (`text_field.dart:1183,1282-1299`, tag `3.44.0`). FLUI's
-    /// [`TextField`](super::text_field::TextField) has no decoration/enabled
-    /// plumbing yet, so this substrate hoists the behavior onto
-    /// `EditableText` itself, one layer lower than the oracle — see
+    /// [`RawTextField`](super::text_field::RawTextField) has no
+    /// decoration/enabled plumbing yet, so this substrate hoists the behavior
+    /// onto `EditableText` itself, one layer lower than the oracle — see
     /// [`enabled`](Self::enabled)'s doc comment for exactly what it
     /// withholds.
     pub(super) enabled: bool,
@@ -295,6 +300,9 @@ pub struct EditableText {
     /// The character painted in place of each source character. Flutter's
     /// default, and Flutter asserts it is exactly one character.
     pub(super) obscuring_character: char,
+    /// Called with the current text when Enter is pressed while this field
+    /// has focus — see [`Self::on_submitted`]'s doc.
+    pub(super) on_submitted: Option<SubmitCallback>,
 }
 
 impl EditableText {
@@ -314,6 +322,7 @@ impl EditableText {
             text_style: None,
             obscure_text: false,
             obscuring_character: DEFAULT_OBSCURING_CHARACTER,
+            on_submitted: None,
         }
     }
 
@@ -398,6 +407,49 @@ impl EditableText {
     pub fn text_style(mut self, style: TextStyle) -> Self {
         self.text_style = Some(style);
         self
+    }
+
+    /// Call `callback` with the field's current text when Enter is pressed
+    /// while it has focus.
+    ///
+    /// Flutter parity: `EditableText.onSubmitted` (`editable_text.dart`) —
+    /// fires on a raw Enter keypress here rather than an IME action-button
+    /// commit, since this substrate has no platform IME-action-button
+    /// integration yet (see the type doc's `# DEFERRED (v1)` list). The key
+    /// is consumed ([`KeyEventResult::Handled`](flui_interaction::routing::KeyEventResult))
+    /// only when a callback is set — with none, Enter is left unconsumed
+    /// (`Ignored`) so an ancestor can still act on it, unchanged from this
+    /// field's behavior before this method existed.
+    ///
+    /// No multiline support exists in this substrate (there is no
+    /// newline-insertion behavior to conflict with), so Enter has exactly
+    /// one meaning here: submit.
+    #[must_use]
+    pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
+        self.on_submitted = Some(Rc::new(callback));
+        self
+    }
+}
+
+// Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
+// no `Debug` impl (a trait object over a closure has no useful
+// representation beyond its presence), so a derive would reject every field
+// once this one exists. Mirrors `EditableTextState`'s own manual impl just
+// below for the same reason.
+impl std::fmt::Debug for EditableText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditableText")
+            .field("controller", &self.controller)
+            .field("focus_node", &self.focus_node)
+            .field("caret_height", &self.caret_height)
+            .field("caret_color", &self.caret_color)
+            .field("selection_color", &self.selection_color)
+            .field("enabled", &self.enabled)
+            .field("text_style", &self.text_style)
+            .field("obscure_text", &self.obscure_text)
+            .field("obscuring_character", &self.obscuring_character)
+            .field("on_submitted", &self.on_submitted.is_some())
+            .finish()
     }
 }
 
@@ -509,6 +561,15 @@ pub struct EditableTextState {
     /// of the slot; a loop closure that already holds its own clone still
     /// sees the flip (shared `Cell`) and dies on its next firing.
     cursor_area_alive: Rc<RefCell<Option<Rc<Cell<bool>>>>>,
+    /// The current [`EditableText::on_submitted`] callback, behind a shared
+    /// cell for the same reason `controller` is: the key handler closure
+    /// installed in `init_state` reads through it at DISPATCH time, so a
+    /// parent rebuilding with a different callback (or none) takes effect
+    /// without re-registering the handler. Unlike `controller`/`focus_node`,
+    /// no identity comparison gates the update in `did_update_view` — a
+    /// closure has no meaningful identity to compare, so it is simply
+    /// overwritten every rebuild, which is cheap and always correct.
+    on_submitted: Rc<RefCell<Option<SubmitCallback>>>,
 }
 
 impl std::fmt::Debug for EditableTextState {
@@ -547,6 +608,7 @@ impl StatefulView for EditableText {
             ime_token: Rc::new(RefCell::new(None)),
             local_post_frame_handle: None,
             cursor_area_alive: Rc::new(RefCell::new(None)),
+            on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
         }
     }
 }
@@ -678,9 +740,12 @@ impl ViewState<EditableText> for EditableTextState {
         //    `can_request_focus` (kept in sync with `enabled` in
         //    `did_update_view`) so a stray dispatch to an already-focused
         //    field that has since been disabled is a no-op.
-        self.key_handler_registration = Some(self.focus_node.register_on_key_event(
-            build_key_handler(Rc::clone(&self.controller), Rc::clone(&self.focus_node)),
-        ));
+        self.key_handler_registration =
+            Some(self.focus_node.register_on_key_event(build_key_handler(
+                Rc::clone(&self.controller),
+                Rc::clone(&self.focus_node),
+                Rc::clone(&self.on_submitted),
+            )));
 
         // 3. Forward controller change events into the rebuild notifier so the
         //    inner AnimatedBuilder rebuilds on every keystroke.
@@ -833,6 +898,14 @@ impl ViewState<EditableText> for EditableTextState {
     }
 
     fn did_update_view(&mut self, _old_view: &EditableText, new_view: &EditableText) {
+        // Cheap and unconditional: a closure has no identity worth comparing,
+        // so every rebuild just installs whatever `on_submitted` the latest
+        // view carries — read through this cell at dispatch time by the key
+        // handler installed once in `init_state`.
+        self.on_submitted
+            .borrow_mut()
+            .clone_from(&new_view.on_submitted);
+
         // A parent rebuilding with a DIFFERENT controller retargets the
         // mounted field onto it, rather than the field silently going on
         // driving the one it was born with. The reference does the same in
@@ -870,9 +943,12 @@ impl ViewState<EditableText> for EditableTextState {
         if !Rc::ptr_eq(&self.focus_node, &new_view.focus_node) {
             let replacement = Rc::clone(&new_view.focus_node);
             replacement.set_can_request_focus(new_view.enabled);
-            let replacement_key_handler_registration = replacement.register_on_key_event(
-                build_key_handler(self.controller.clone(), Rc::clone(&replacement)),
-            );
+            let replacement_key_handler_registration =
+                replacement.register_on_key_event(build_key_handler(
+                    self.controller.clone(),
+                    Rc::clone(&replacement),
+                    Rc::clone(&self.on_submitted),
+                ));
             let replacement_rect_provider_registration = self
                 .rect_provider
                 .as_ref()
@@ -1256,6 +1332,7 @@ fn is_command_chord(modifiers: Modifiers) -> bool {
 fn build_key_handler(
     controller: Rc<RefCell<TextEditingController>>,
     focus_node: Rc<FocusNode>,
+    on_submitted: Rc<RefCell<Option<SubmitCallback>>>,
 ) -> KeyEventHandler {
     Rc::new(move |event| {
         let controller = controller.borrow();
@@ -1338,6 +1415,61 @@ fn build_key_handler(
                     controller.extend_selection_end();
                 } else {
                     controller.move_caret_end();
+                }
+                KeyEventResult::Handled
+            }
+            // Only claimed when something actually consumes it — with no
+            // `on_submitted` set, Enter is left `Ignored` so an ancestor
+            // can still act on it, unchanged from this field's behavior
+            // before `on_submitted` existed. See `on_submitted`'s doc for
+            // why a raw Enter keypress rather than an IME action-button
+            // commit.
+            Key::Named(NamedKey::Enter) => {
+                // IME owns Enter while composing — same suppression
+                // contract the `Key::Character` arm above follows: an
+                // in-progress composition must not also trigger submit.
+                if controller.is_composing() {
+                    return KeyEventResult::Ignored;
+                }
+                // A command chord is not a submit, mirroring the
+                // `Key::Character` arm's own command-chord guard — without
+                // this, Ctrl+Enter/Cmd+Enter would be swallowed here
+                // instead of reaching an ancestor `Shortcuts`.
+                if is_command_chord(event.modifiers) {
+                    return KeyEventResult::Ignored;
+                }
+                // Shift+Enter is reserved for a future multiline newline,
+                // not submit — this substrate has no multiline support yet
+                // (see the type doc's `# DEFERRED (v1)` list), so today
+                // this is simply `Ignored`, but the reservation is
+                // deliberate: a later multiline field must not find
+                // Shift+Enter's meaning already claimed by submit.
+                if event.modifiers.contains(Modifiers::SHIFT) {
+                    return KeyEventResult::Ignored;
+                }
+                // Clone the callback and drop the borrow before calling
+                // it — `on_submitted.borrow()` (this statement's own
+                // temporary) and the outer `controller` `Ref` are both
+                // live at this point, and the callback is arbitrary user
+                // code that may itself call back into this same
+                // `EditableText` (`examples/todo.rs`'s `add_item` calls
+                // `TextEditingController::clear()` from inside its
+                // `on_submitted` callback). Calling it while either guard
+                // is still held is exactly the hazard
+                // `LockDiscipline/StatementDrop` (`docs/PORT.md`) guards
+                // against for a `Mutex`/`RwLock`, applied here to a
+                // `RefCell` the grep doesn't reach.
+                let Some(callback) = on_submitted.borrow().clone() else {
+                    return KeyEventResult::Ignored;
+                };
+                // Auto-repeat (macOS/Win32 report a held Enter as repeated
+                // `Down` events, not one Down followed by held state) must
+                // not resubmit on every tick — the key is still consumed
+                // (`Handled`), just without calling the callback again.
+                if !event.repeat {
+                    let text = controller.text();
+                    drop(controller);
+                    callback(&text);
                 }
                 KeyEventResult::Handled
             }
@@ -1747,6 +1879,7 @@ mod tests {
         let handler = build_key_handler(
             Rc::new(RefCell::new(controller.clone())),
             Rc::clone(&focus_node),
+            Rc::new(RefCell::new(None)),
         );
 
         let event = KeyEventBuilder::new(Code::KeyA)
@@ -1790,6 +1923,7 @@ mod tests {
             let handler = build_key_handler(
                 Rc::new(RefCell::new(controller.clone())),
                 Rc::clone(&focus_node),
+                Rc::new(RefCell::new(None)),
             );
             let event = KeyEventBuilder::new(code)
                 .with_key(Key::Character(key.to_string()))
@@ -1866,6 +2000,7 @@ mod tests {
         let handler = build_key_handler(
             Rc::new(RefCell::new(controller.clone())),
             Rc::clone(&focus_node),
+            Rc::new(RefCell::new(None)),
         );
         controller.move_caret_end();
 
@@ -2032,6 +2167,264 @@ mod tests {
             controller.caret_byte_offset(),
             1,
             "and collapses to the span's end, without stepping past it"
+        );
+    }
+
+    fn enter_key_event() -> flui_interaction::events::KeyEvent {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+        KeyEventBuilder::new(Code::Enter)
+            .with_key(Key::Named(NamedKey::Enter))
+            .with_state(KeyState::Down)
+            .build()
+    }
+
+    /// Enter, dispatched through a mounted field the way production input
+    /// arrives (`FocusManager::dispatch_key_event`, not `build_key_handler`
+    /// called directly), reaches `on_submitted` with the field's current
+    /// text.
+    ///
+    /// Red-check: delete the `Key::Named(NamedKey::Enter)` arm — this test
+    /// then falls through to `Key::Named(_) => Ignored` and the assertion on
+    /// `submitted.borrow()` fails (still `None`).
+    #[test]
+    fn enter_calls_on_submitted_with_the_current_text() {
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("submit field");
+        let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let submitted_for_callback = Rc::clone(&submitted);
+
+        let harness = crate::test_harness::mount(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(
+                move |text| {
+                    submitted_for_callback.replace(Some(text.to_string()));
+                },
+            ),
+        );
+        focus_node.request_focus();
+
+        harness
+            .focus_manager()
+            .dispatch_key_event(&character_key_event('h'));
+        harness
+            .focus_manager()
+            .dispatch_key_event(&character_key_event('i'));
+        assert_eq!(controller.text(), "hi", "typed text reaches the buffer");
+        assert_eq!(*submitted.borrow(), None, "typing alone must not submit");
+
+        let result = harness
+            .focus_manager()
+            .dispatch_key_event(&enter_key_event());
+
+        assert_eq!(
+            *submitted.borrow(),
+            Some("hi".to_string()),
+            "Enter calls on_submitted with the field's current text"
+        );
+        assert!(result, "Enter is consumed once a callback is set");
+    }
+
+    /// The contrast case: with no `on_submitted`, Enter is left unconsumed —
+    /// unchanged from this field's behavior before the callback existed, so
+    /// an ancestor can still act on a bare Enter press.
+    #[test]
+    fn enter_with_no_on_submitted_is_ignored() {
+        let controller = TextEditingController::with_text("hi");
+        let focus_node = FocusNode::with_debug_label("no-submit field");
+        let harness =
+            crate::test_harness::mount(EditableText::new(controller, Rc::clone(&focus_node)));
+        focus_node.request_focus();
+
+        let result = harness
+            .focus_manager()
+            .dispatch_key_event(&enter_key_event());
+
+        assert!(!result, "with no on_submitted, Enter is not consumed");
+    }
+
+    /// IME owns Enter while composing — the same suppression contract the
+    /// `Key::Character` arm already follows. An in-progress composition
+    /// must not also trigger submit.
+    ///
+    /// Red-check: delete the `controller.is_composing()` guard — this test
+    /// then sees `submitted` populated despite the active composition.
+    #[test]
+    fn enter_while_composing_is_ignored_and_does_not_submit() {
+        let controller = TextEditingController::with_text("hi");
+        controller.set_composing_text("に", None);
+        let focus_node = FocusNode::with_debug_label("composing field");
+        let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let submitted_for_callback = Rc::clone(&submitted);
+
+        let harness = crate::test_harness::mount(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(
+                move |text| {
+                    submitted_for_callback.replace(Some(text.to_string()));
+                },
+            ),
+        );
+        focus_node.request_focus();
+        assert!(controller.is_composing(), "sanity: composition is active");
+
+        let result = harness
+            .focus_manager()
+            .dispatch_key_event(&enter_key_event());
+
+        assert!(!result, "Enter must not be consumed while composing");
+        assert_eq!(*submitted.borrow(), None, "the IME owns Enter, not submit");
+    }
+
+    /// A command chord is not a submit — mirroring the `Key::Character`
+    /// arm's own command-chord guard, Ctrl+Enter/Cmd+Enter must bubble to
+    /// an ancestor `Shortcuts` rather than being swallowed here.
+    ///
+    /// Red-check: delete the `is_command_chord(event.modifiers)` guard —
+    /// this test then sees `submitted` populated by a Ctrl+Enter press.
+    #[test]
+    fn ctrl_enter_is_a_command_chord_not_a_submit() {
+        use flui_interaction::events::{Code, Modifiers};
+        use flui_interaction::testing::input::KeyEventBuilder;
+
+        let controller = TextEditingController::with_text("hi");
+        let focus_node = FocusNode::with_debug_label("ctrl-enter field");
+        let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let submitted_for_callback = Rc::clone(&submitted);
+
+        let harness = crate::test_harness::mount(
+            EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |text| {
+                submitted_for_callback.replace(Some(text.to_string()));
+            }),
+        );
+        focus_node.request_focus();
+
+        let event = KeyEventBuilder::new(Code::Enter)
+            .with_key(Key::Named(NamedKey::Enter))
+            .with_state(KeyState::Down)
+            .with_modifiers(Modifiers::CONTROL)
+            .build();
+        let result = harness.focus_manager().dispatch_key_event(&event);
+
+        assert!(!result, "Ctrl+Enter must bubble, not be consumed here");
+        assert_eq!(*submitted.borrow(), None, "a command chord must not submit");
+    }
+
+    /// Shift+Enter is reserved for a future multiline newline, not submit —
+    /// this substrate has no multiline support yet, but the reservation is
+    /// deliberate.
+    ///
+    /// Red-check: delete the Shift guard — this test then sees `submitted`
+    /// populated by a Shift+Enter press.
+    #[test]
+    fn shift_enter_is_reserved_and_does_not_submit() {
+        use flui_interaction::events::{Code, Modifiers};
+        use flui_interaction::testing::input::KeyEventBuilder;
+
+        let controller = TextEditingController::with_text("hi");
+        let focus_node = FocusNode::with_debug_label("shift-enter field");
+        let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let submitted_for_callback = Rc::clone(&submitted);
+
+        let harness = crate::test_harness::mount(
+            EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |text| {
+                submitted_for_callback.replace(Some(text.to_string()));
+            }),
+        );
+        focus_node.request_focus();
+
+        let event = KeyEventBuilder::new(Code::Enter)
+            .with_key(Key::Named(NamedKey::Enter))
+            .with_state(KeyState::Down)
+            .with_modifiers(Modifiers::SHIFT)
+            .build();
+        let result = harness.focus_manager().dispatch_key_event(&event);
+
+        assert!(
+            !result,
+            "Shift+Enter must not be consumed as a submit today"
+        );
+        assert_eq!(
+            *submitted.borrow(),
+            None,
+            "reserved for newline, not submit"
+        );
+    }
+
+    /// Auto-repeat (macOS/Win32 report a held Enter as repeated `Down`
+    /// events) must not resubmit on every tick — the key is still consumed,
+    /// just without calling the callback again.
+    ///
+    /// Red-check: delete the `!event.repeat` guard — the call counter below
+    /// reaches 2, not 1.
+    #[test]
+    fn repeated_enter_consumes_the_key_without_resubmitting() {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let controller = TextEditingController::with_text("hi");
+        let focus_node = FocusNode::with_debug_label("repeat field");
+        let calls = Rc::new(AtomicUsize::new(0));
+        let calls_for_callback = Rc::clone(&calls);
+
+        let harness = crate::test_harness::mount(
+            EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |_text| {
+                calls_for_callback.fetch_add(1, Ordering::Relaxed);
+            }),
+        );
+        focus_node.request_focus();
+
+        let initial_press = KeyEventBuilder::new(Code::Enter)
+            .with_key(Key::Named(NamedKey::Enter))
+            .with_state(KeyState::Down)
+            .build();
+        let repeated_press = KeyEventBuilder::new(Code::Enter)
+            .with_key(Key::Named(NamedKey::Enter))
+            .with_state(KeyState::Down)
+            .with_repeat(true)
+            .build();
+
+        let first = harness.focus_manager().dispatch_key_event(&initial_press);
+        assert!(first, "the initial press submits and is consumed");
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+        let repeated = harness.focus_manager().dispatch_key_event(&repeated_press);
+        assert!(repeated, "a repeat is still consumed");
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "a repeat must not resubmit"
+        );
+    }
+
+    /// The real `examples/todo.rs` path: `on_submitted` calls
+    /// `TextEditingController::clear()` on (a clone of) the same
+    /// controller from inside the callback. Proves the callback runs with
+    /// no outstanding borrow of either `on_submitted` or the outer
+    /// controller cell that this reentrant call could conflict with.
+    #[test]
+    fn on_submitted_may_clear_its_own_controller_without_panicking() {
+        let controller = TextEditingController::with_text("hi");
+        let focus_node = FocusNode::with_debug_label("clear-on-submit field");
+        let controller_for_callback = controller.clone();
+
+        let harness = crate::test_harness::mount(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(
+                move |_text| {
+                    controller_for_callback.clear();
+                },
+            ),
+        );
+        focus_node.request_focus();
+
+        let result = harness
+            .focus_manager()
+            .dispatch_key_event(&enter_key_event());
+
+        assert!(result, "Enter is consumed");
+        assert_eq!(
+            controller.text(),
+            "",
+            "the callback's own clear() must have taken effect, not panicked"
         );
     }
 

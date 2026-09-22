@@ -451,6 +451,54 @@ impl TextEditingController {
         self.notifier.notify_listeners();
     }
 
+    /// Replace the whole buffer with `text`, ignoring the current selection —
+    /// the programmatic counterpart to typing. Clears any active composing
+    /// region, the same non-IME-edit rule [`Self::insert_str`] documents.
+    ///
+    /// **Divergence from Flutter, deliberate:** `TextEditingController.text`'s
+    /// setter (`editable_text.dart`) also replaces the value wholesale, but
+    /// collapses the selection to `TextSelection.collapsed(offset: -1)` — an
+    /// off-the-end sentinel that does not paint a caret at all until
+    /// something else moves it. That is a common source of "my caret
+    /// disappeared after I set `.text`" surprise in Flutter itself. This
+    /// method collapses the caret to `text.len()` instead — the visible,
+    /// unsurprising place to leave it after a programmatic replacement — and
+    /// that choice is the whole point of diverging here, not an oversight.
+    ///
+    /// A no-op (no notification) when `text` already equals the current
+    /// buffer — the same "notify only on a real change" rule most mutators
+    /// here follow ([`Self::insert_str`]/[`Self::commit_text`] are the
+    /// exceptions: they notify unconditionally on every call, since an
+    /// insertion or IME commit is by construction never a no-op) — so a
+    /// caller that calls this unconditionally on every build does not force
+    /// a rebuild loop.
+    pub fn set_text(&self, text: impl Into<String>) {
+        let text = text.into();
+        let changed = {
+            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            if guard.text == text {
+                false
+            } else {
+                guard.selection = Selection::collapsed(text.len());
+                guard.text = text;
+                guard.composing = None;
+                true
+            }
+        };
+        if changed {
+            self.notifier.notify_listeners();
+        }
+    }
+
+    /// Empty the buffer and collapse the caret to `0`.
+    ///
+    /// Flutter parity: `TextEditingController.clear()` (`editable_text.dart`).
+    /// Defined in terms of [`Self::set_text`] so the two cannot drift — same
+    /// no-op-when-already-empty rule, same composing-region reset.
+    pub fn clear(&self) {
+        self.set_text(String::new());
+    }
+
     /// Delete the character immediately to the **left** of the caret (Backspace).
     ///
     /// No-op when the caret is at the beginning of the buffer. Clears any
@@ -1410,6 +1458,94 @@ mod tests {
         controller.insert_str("l");
         assert_eq!(controller.text(), "hello");
         assert_eq!(controller.caret_byte_offset(), 4);
+    }
+
+    #[test]
+    fn set_text_replaces_the_whole_buffer_and_collapses_the_caret_to_the_end() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(0, 5); // a selection must not survive the replace
+
+        controller.set_text("new value");
+
+        assert_eq!(controller.text(), "new value");
+        assert_eq!(controller.caret_byte_offset(), "new value".len());
+        assert!(!controller.has_selection());
+    }
+
+    /// Same no-op-when-unchanged rule every other mutator here follows — a
+    /// caller that calls `set_text` unconditionally on every build (mirroring
+    /// a controlled-input pattern) must not force a rebuild loop.
+    #[test]
+    fn set_text_with_the_same_value_does_not_notify() {
+        let controller = TextEditingController::with_text("hello");
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&seen);
+        let _sub = controller
+            .listenable()
+            .add_listener(std::sync::Arc::new(move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }));
+
+        controller.set_text("hello");
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "no change, no notification"
+        );
+
+        controller.set_text("hello!");
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "control: a real change does notify"
+        );
+    }
+
+    /// `set_text` clears an active IME composing region the same way
+    /// `insert_str` does — a stale composing range pointing at a
+    /// now-replaced buffer is the exact bug class `set_composing_text`'s
+    /// doc warns about.
+    #[test]
+    fn set_text_clears_an_active_composing_region() {
+        let controller = TextEditingController::with_text("hello");
+        controller.set_composing_text("world", None);
+        assert!(controller.is_composing());
+
+        controller.set_text("replaced");
+
+        assert!(!controller.is_composing());
+        assert_eq!(controller.text(), "replaced");
+    }
+
+    #[test]
+    fn clear_empties_the_buffer_and_collapses_the_caret_to_zero() {
+        let controller = TextEditingController::with_text("hello world");
+        controller.set_selection(2, 7);
+
+        controller.clear();
+
+        assert_eq!(controller.text(), "");
+        assert_eq!(controller.caret_byte_offset(), 0);
+        assert!(!controller.has_selection());
+    }
+
+    #[test]
+    fn clear_on_an_already_empty_controller_does_not_notify() {
+        let controller = TextEditingController::new();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&seen);
+        let _sub = controller
+            .listenable()
+            .add_listener(std::sync::Arc::new(move || {
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }));
+
+        controller.clear();
+        assert_eq!(
+            seen.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "already empty, no notification"
+        );
     }
 
     #[test]

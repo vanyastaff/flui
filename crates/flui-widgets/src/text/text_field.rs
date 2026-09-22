@@ -1,4 +1,4 @@
-//! [`TextField`] — an [`EditableText`] with a plain border decoration and
+//! [`RawTextField`] — an [`EditableText`] with a plain border decoration and
 //! tap-to-focus behavior, for callers with no `Theme` ancestor.
 //!
 //! **Not a Flutter-parity port.** Flutter has no widgets-layer text field —
@@ -11,6 +11,22 @@
 //! state-table colors — for a widgets-only tree with no `Theme` above it to
 //! decorate from. Prefer `flui_material::TextField` whenever a `Theme` is
 //! available.
+//!
+//! # Name
+//!
+//! Named `RawTextField`, not `TextField` — `flui::prelude` (the facade)
+//! needs `TextField` to mean exactly one thing, the Material one, whenever
+//! the `material` feature is on, with no shadowing and no feature-dependent
+//! meaning for a name a caller might already be using. Before this rename,
+//! both this type and `flui_material::TextField` were named `TextField`,
+//! and the facade's prelude picked between them by having the Material one
+//! explicitly shadow this one via Rust's explicit-import-over-glob rule —
+//! technically sound, but `TextField`'s meaning then depended on whether the
+//! `material` feature happened to be on, which is a feature-additivity
+//! violation (enabling a Cargo feature is supposed to only ADD symbols, not
+//! change what an existing name resolves to). See `ARCHITECTURE.md`'s
+//! `## Mapping decisions` entry for the record of both the original
+//! shadowing decision and this rename that superseded it.
 
 use std::rc::Rc;
 
@@ -24,10 +40,10 @@ use crate::interaction::GestureDetector;
 use crate::layout::Padding;
 use crate::paint::DecoratedBox;
 use crate::text::controller::TextEditingController;
-use crate::text::editable_text::EditableText;
+use crate::text::editable_text::{EditableText, SubmitCallback};
 
 // ============================================================================
-// TextField
+// RawTextField
 // ============================================================================
 
 /// A plain decorated, tap-to-focus single-line text input field — wraps
@@ -47,8 +63,8 @@ use crate::text::editable_text::EditableText;
 /// - Scroll when text overflows the visible width
 /// - Label / hint text / error text / `InputDecoration` in general
 /// - Focus decoration changes (highlighted border on focus)
-#[derive(Clone, Debug)]
-pub struct TextField {
+#[derive(Clone)]
+pub struct RawTextField {
     // PORT-CHECK-OK-SP3: deliberate theme-free stand-in for a widgets-only tree; the M3 field is flui_material::TextField — see this module's docs
     /// Controller that owns the text buffer and caret position.
     controller: TextEditingController,
@@ -63,10 +79,30 @@ pub struct TextField {
     content_padding: EdgeInsets,
     /// Forwarded to [`EditableText::obscure_text`] — a password field.
     obscure_text: bool,
+    /// Forwarded to [`EditableText::on_submitted`] — see
+    /// [`Self::on_submitted`].
+    on_submitted: Option<SubmitCallback>,
 }
 
-impl TextField {
-    /// Create a `TextField` driven by `controller`.
+// Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
+// no `Debug` impl. Mirrors `EditableText`'s own manual impl, which exists
+// for the identical reason.
+impl std::fmt::Debug for RawTextField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawTextField")
+            .field("controller", &self.controller)
+            .field("external_focus_node", &self.external_focus_node)
+            .field("caret_height", &self.caret_height)
+            .field("caret_color", &self.caret_color)
+            .field("content_padding", &self.content_padding)
+            .field("obscure_text", &self.obscure_text)
+            .field("on_submitted", &self.on_submitted.is_some())
+            .finish()
+    }
+}
+
+impl RawTextField {
+    /// Create a `RawTextField` driven by `controller`.
     #[must_use]
     pub fn new(controller: TextEditingController) -> Self {
         Self {
@@ -76,6 +112,7 @@ impl TextField {
             caret_color: Color::BLACK,
             content_padding: EdgeInsets::symmetric(px(8.0), px(12.0)),
             obscure_text: false,
+            on_submitted: None,
         }
     }
 
@@ -117,49 +154,63 @@ impl TextField {
         self.content_padding = padding;
         self
     }
+
+    /// Call `callback` with the field's current text when Enter is pressed
+    /// while it has focus. Forwards to [`EditableText::on_submitted`] — see
+    /// that method's doc for exactly when it fires. Added for symmetry with
+    /// `flui_material::TextField::on_submitted`, which forwards the same
+    /// way.
+    #[must_use]
+    pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
+        self.on_submitted = Some(Rc::new(callback));
+        self
+    }
 }
 
-impl View for TextField {
+impl View for RawTextField {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateful(self)
     }
 }
 
-impl StatefulView for TextField {
-    type State = TextFieldState;
+impl StatefulView for RawTextField {
+    type State = RawTextFieldState;
 
     fn create_state(&self) -> Self::State {
-        TextFieldState {
+        RawTextFieldState {
             focus_node: self
                 .external_focus_node
                 .as_ref()
-                .map_or_else(|| FocusNode::with_debug_label("TextField"), Rc::clone),
+                .map_or_else(|| FocusNode::with_debug_label("RawTextField"), Rc::clone),
             using_external_node: self.external_focus_node.is_some(),
         }
     }
 }
 
-/// Persistent focus ownership for a plain [`TextField`].
-pub struct TextFieldState {
+/// Persistent focus ownership for a plain [`RawTextField`].
+pub struct RawTextFieldState {
     focus_node: Rc<FocusNode>,
     using_external_node: bool,
 }
 
-impl std::fmt::Debug for TextFieldState {
+impl std::fmt::Debug for RawTextFieldState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TextFieldState")
+        f.debug_struct("RawTextFieldState")
             .field("focus_node", &self.focus_node.id())
             .field("using_external_node", &self.using_external_node)
             .finish()
     }
 }
 
-impl ViewState<TextField> for TextFieldState {
-    fn build(&self, view: &TextField, _ctx: &dyn BuildContext) -> impl IntoView {
-        let editable = EditableText::new(view.controller.clone(), Rc::clone(&self.focus_node))
+impl ViewState<RawTextField> for RawTextFieldState {
+    fn build(&self, view: &RawTextField, _ctx: &dyn BuildContext) -> impl IntoView {
+        let mut editable = EditableText::new(view.controller.clone(), Rc::clone(&self.focus_node))
             .caret_height(view.caret_height)
             .caret_color(view.caret_color)
             .obscure_text(view.obscure_text);
+        if let Some(on_submitted) = view.on_submitted.clone() {
+            editable = editable.on_submitted(move |text| on_submitted(text));
+        }
 
         let padded = Padding::new(view.content_padding).child(editable);
         let decorated = DecoratedBox::new(field_border_decoration()).child(padded);
@@ -172,7 +223,7 @@ impl ViewState<TextField> for TextFieldState {
             .child(decorated)
     }
 
-    fn did_update_view(&mut self, old_view: &TextField, new_view: &TextField) {
+    fn did_update_view(&mut self, old_view: &RawTextField, new_view: &RawTextField) {
         let external_changed = match (
             old_view.external_focus_node.as_ref(),
             new_view.external_focus_node.as_ref(),
@@ -188,7 +239,7 @@ impl ViewState<TextField> for TextFieldState {
         self.focus_node = new_view
             .external_focus_node
             .as_ref()
-            .map_or_else(|| FocusNode::with_debug_label("TextField"), Rc::clone);
+            .map_or_else(|| FocusNode::with_debug_label("RawTextField"), Rc::clone);
         self.using_external_node = new_view.external_focus_node.is_some();
     }
 }
@@ -226,11 +277,11 @@ mod tests {
         let first_node = FocusNode::with_debug_label("first");
         let second_node = FocusNode::with_debug_label("second");
         let mut harness = crate::test_harness::mount(crate::Column::new(vec![
-            TextField::new(first)
+            RawTextField::new(first)
                 .focus_node(Rc::clone(&first_node))
                 .into_view()
                 .boxed(),
-            TextField::new(second)
+            RawTextField::new(second)
                 .focus_node(Rc::clone(&second_node))
                 .into_view()
                 .boxed(),
@@ -264,7 +315,7 @@ mod tests {
     #[test]
     fn builder_methods_override_caret_height_caret_color_and_content_padding() {
         let controller = TextEditingController::new();
-        let field = TextField::new(controller)
+        let field = RawTextField::new(controller)
             .caret_height(24.0)
             .caret_color(Color::rgb(1, 2, 3))
             .content_padding(EdgeInsets::all(px(5.0)));
@@ -276,12 +327,105 @@ mod tests {
 
     #[test]
     fn new_defaults_to_documented_caret_height_color_and_padding() {
-        let field = TextField::new(TextEditingController::new());
+        let field = RawTextField::new(TextEditingController::new());
         assert_eq!(field.caret_height, 18.0);
         assert_eq!(field.caret_color, Color::BLACK);
         assert_eq!(
             field.content_padding,
             EdgeInsets::symmetric(px(8.0), px(12.0))
+        );
+        assert!(field.on_submitted.is_none());
+    }
+
+    /// `RawTextField::on_submitted` reaches the composed `EditableText` —
+    /// mirrors `flui_material::TextField`'s own passthrough test, one layer
+    /// down.
+    #[test]
+    fn on_submitted_reaches_the_composed_editable_text_and_fires_on_enter() {
+        use flui_interaction::events::{Code, Key, KeyState, NamedKey};
+        use flui_interaction::testing::input::KeyEventBuilder;
+        use std::cell::RefCell;
+
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("raw-submit field");
+        let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let submitted_for_callback = Rc::clone(&submitted);
+
+        let harness = crate::test_harness::mount(
+            RawTextField::new(controller)
+                .focus_node(Rc::clone(&focus_node))
+                .on_submitted(move |text| {
+                    submitted_for_callback.replace(Some(text.to_string()));
+                }),
+        );
+        focus_node.request_focus();
+
+        let event = KeyEventBuilder::new(Code::Enter)
+            .with_key(Key::Named(NamedKey::Enter))
+            .with_state(KeyState::Down)
+            .build();
+        harness.focus_manager().dispatch_key_event(&event);
+
+        assert_eq!(
+            *submitted.borrow(),
+            Some(String::new()),
+            "Enter must call on_submitted through RawTextField's own passthrough"
+        );
+    }
+
+    /// A parent rebuilding with a different `on_submitted` closure must
+    /// reach the newly-mounted field — since `RawTextFieldState::build`
+    /// constructs a fresh `EditableText` on every call, the replacement
+    /// callback is simply what the next build passes, and the previous
+    /// one is gone.
+    #[test]
+    fn swapping_the_on_submitted_closure_via_a_rebuild_replaces_it() {
+        use flui_interaction::events::{Code, Key, KeyState, NamedKey};
+        use flui_interaction::testing::input::KeyEventBuilder;
+        use std::cell::RefCell;
+
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("swap-submit field");
+        let first_calls: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+        let second_calls: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+        let first_calls_cb = Rc::clone(&first_calls);
+        let second_calls_cb = Rc::clone(&second_calls);
+
+        let mut harness = crate::test_harness::mount(
+            RawTextField::new(controller.clone())
+                .focus_node(Rc::clone(&focus_node))
+                .on_submitted(move |_| {
+                    *first_calls_cb.borrow_mut() += 1;
+                }),
+        );
+        focus_node.request_focus();
+
+        let event = KeyEventBuilder::new(Code::Enter)
+            .with_key(Key::Named(NamedKey::Enter))
+            .with_state(KeyState::Down)
+            .build();
+        harness.focus_manager().dispatch_key_event(&event);
+        assert_eq!(*first_calls.borrow(), 1);
+        assert_eq!(*second_calls.borrow(), 0);
+
+        harness.swap_root(
+            RawTextField::new(controller)
+                .focus_node(Rc::clone(&focus_node))
+                .on_submitted(move |_| {
+                    *second_calls_cb.borrow_mut() += 1;
+                }),
+        );
+
+        harness.focus_manager().dispatch_key_event(&event);
+        assert_eq!(
+            *first_calls.borrow(),
+            1,
+            "the old closure must not fire again"
+        );
+        assert_eq!(
+            *second_calls.borrow(),
+            1,
+            "the new closure, installed by the rebuild, must fire"
         );
     }
 }

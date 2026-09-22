@@ -1,5 +1,5 @@
 //! Integration tests for [`TextEditingController`], [`EditableText`], and
-//! [`TextField`].
+//! [`RawTextField`].
 //!
 //! Tests are structured in two groups:
 //!
@@ -28,7 +28,7 @@ use flui_interaction::{
     routing::{FocusAttachment, FocusManager, FocusNode, KeyEventHandler, KeyEventResult},
 };
 use flui_types::{Size, geometry::px};
-use flui_widgets::{EditableText, TextEditingController, TextField};
+use flui_widgets::{EditableText, RawTextField, TextEditingController};
 
 // ============================================================================
 // Helpers
@@ -508,18 +508,18 @@ fn requesting_focus_via_the_explicit_node_reveals_the_caret_after_a_tick() {
 }
 
 // ============================================================================
-// TextField — composition (mounts the full GestureDetector/DecoratedBox/
-// Padding/EditableText tree `TextField` builds, never previously exercised:
-// every test above hand-simulates EditableTextState's key handler rather than
-// mounting a real TextField/EditableText widget).
+// RawTextField — composition (mounts the full GestureDetector/DecoratedBox/
+// Padding/EditableText tree `RawTextField` builds, never previously
+// exercised: every test above hand-simulates EditableTextState's key
+// handler rather than mounting a real RawTextField/EditableText widget).
 // ============================================================================
 
 #[test]
-fn text_field_deflates_editable_text_by_its_content_padding() {
+fn raw_text_field_deflates_editable_text_by_its_content_padding() {
     let controller = TextEditingController::with_text("hello");
 
     let laid = crate::common::lay_out(
-        TextField::new(controller).content_padding(EdgeInsets::all(px(10.0))),
+        RawTextField::new(controller).content_padding(EdgeInsets::all(px(10.0))),
         crate::common::tight(200.0, 100.0),
     );
 
@@ -534,14 +534,14 @@ fn text_field_deflates_editable_text_by_its_content_padding() {
 }
 
 #[test]
-fn text_field_default_content_padding_matches_its_documented_default() {
+fn raw_text_field_default_content_padding_matches_its_documented_default() {
     let controller = TextEditingController::new();
 
     // Default content_padding is symmetric(8 vertical, 12 horizontal) per
-    // `TextField::new`'s doc comment -- deflates width by 24 (12+12) and
+    // `RawTextField::new`'s doc comment -- deflates width by 24 (12+12) and
     // height by 16 (8+8).
     let laid = crate::common::lay_out(
-        TextField::new(controller),
+        RawTextField::new(controller),
         crate::common::tight(300.0, 60.0),
     );
 
