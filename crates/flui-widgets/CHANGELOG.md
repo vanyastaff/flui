@@ -8,6 +8,20 @@ Versioning: per `docs/release.md` policy.
 
 ### Added
 
+- **`TextEditingController::clear()`/`set_text()`**. `set_text` replaces
+  the whole buffer, collapses the caret to the end (a deliberate
+  divergence from Flutter's `TextEditingController.text` setter, which
+  collapses to an off-the-end `-1` sentinel that paints no caret at all —
+  see the method's own doc), and clears any active composing region;
+  `clear()` is defined in terms of it. No-op without notifying when the
+  value is unchanged.
+- **`EditableText::on_submitted(Fn(&str))`**, forwarded through
+  `RawTextField::on_submitted`. Fires on Enter while focused — never while
+  composing, never on a command chord, never on Shift+Enter (reserved for
+  a future multiline newline), never twice for one held key.
+- **`SubmitCallback`** (`Rc<dyn Fn(&str)>`) exported at the crate root, the
+  shared alias `EditableText::on_submitted`/`RawTextField::on_submitted`
+  (and `flui_material::TextField::on_submitted`) all use.
 - Initial `flui-widgets` Core.1 vertical-slice catalog.
 - Layout family: `Padding`, `Align`, `Center`, `SizedBox`, `ConstrainedBox`, `LimitedBox`, `Transform`, `AspectRatio`, `Baseline`, `FittedBox`, `FractionallySizedBox`, `FractionalTranslation`.
 - Flex/stack family: `Row`, `Column`, `Flex`, `Expanded`, `Flexible`, `Stack`, `Positioned`.

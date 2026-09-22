@@ -33,6 +33,21 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `platforms/android/gradlew` switches to Gradle. `flui run` installs with
   `adb install -r`, starts the `NativeActivity` and follows `logcat --pid`.
   See `crates/flui-cli/CHANGELOG.md`.
+- **`TextEditingController::clear()`/`set_text()`** (`flui-widgets`).
+  `set_text` replaces the whole buffer, collapses the caret to the end (a
+  deliberate divergence from Flutter's `TextEditingController.text` setter,
+  which collapses to an off-the-end `-1` sentinel that paints no caret at
+  all — see the method's own doc), and clears any active composing region;
+  `clear()` is defined in terms of it. No-ops without notifying when the
+  value is unchanged, the same rule `insert_str`/`commit_text`'s
+  unconditional-notify shape aside.
+- **`TextField::on_submitted(Fn(&str))`** on both `flui_widgets::EditableText`
+  and `flui_material::TextField` (the latter forwarding to the former).
+  Fires on Enter while focused — never while composing (the IME owns
+  Enter), never on a command chord (Ctrl/Cmd+Enter bubbles to an ancestor
+  `Shortcuts` instead), never on Shift+Enter (reserved for a future
+  multiline newline), and never twice for one held key (auto-repeat is
+  consumed but does not resubmit).
 
 ### Changed
 

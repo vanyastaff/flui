@@ -575,8 +575,7 @@ fn on_submitted_reaches_the_composed_editable_text_and_fires_on_enter() {
             TextField::new(controller.clone())
                 .focus_node(Rc::clone(&focus_node))
                 .on_submitted(move |text| {
-                    // PORT-CHECK-OK-LOCK: displaces an Option<String>, a plain heap buffer with no re-entrant drop.
-                    *submitted_for_callback.borrow_mut() = Some(text.to_string());
+                    submitted_for_callback.replace(Some(text.to_string()));
                 }),
         ),
         tight(300.0, 100.0),

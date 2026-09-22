@@ -452,17 +452,26 @@ impl TextEditingController {
     }
 
     /// Replace the whole buffer with `text`, ignoring the current selection —
-    /// the programmatic counterpart to typing: Flutter parity,
-    /// `TextEditingController.text`'s setter (`editable_text.dart`), which
-    /// likewise replaces the value wholesale rather than inserting at the
-    /// caret. Collapses the caret to the end of `text` and clears any active
-    /// composing region, the same non-IME-edit rule [`Self::insert_str`]
-    /// documents.
+    /// the programmatic counterpart to typing. Clears any active composing
+    /// region, the same non-IME-edit rule [`Self::insert_str`] documents.
+    ///
+    /// **Divergence from Flutter, deliberate:** `TextEditingController.text`'s
+    /// setter (`editable_text.dart`) also replaces the value wholesale, but
+    /// collapses the selection to `TextSelection.collapsed(offset: -1)` — an
+    /// off-the-end sentinel that does not paint a caret at all until
+    /// something else moves it. That is a common source of "my caret
+    /// disappeared after I set `.text`" surprise in Flutter itself. This
+    /// method collapses the caret to `text.len()` instead — the visible,
+    /// unsurprising place to leave it after a programmatic replacement — and
+    /// that choice is the whole point of diverging here, not an oversight.
     ///
     /// A no-op (no notification) when `text` already equals the current
-    /// buffer — the same "notify only on a real change" rule every mutator
-    /// here follows, so a caller that calls this unconditionally on every
-    /// build does not force a rebuild loop.
+    /// buffer — the same "notify only on a real change" rule most mutators
+    /// here follow ([`Self::insert_str`]/[`Self::commit_text`] are the
+    /// exceptions: they notify unconditionally on every call, since an
+    /// insertion or IME commit is by construction never a no-op) — so a
+    /// caller that calls this unconditionally on every build does not force
+    /// a rebuild loop.
     pub fn set_text(&self, text: impl Into<String>) {
         let text = text.into();
         let changed = {
