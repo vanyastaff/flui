@@ -27,8 +27,11 @@ Add FLUI Foundation to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-flui-foundation = "0.1"
+flui-foundation = "0.2"
 ```
+
+This crate isn't published to crates.io yet; until the first release, depend
+on it via a git tag or path — see the [flui facade's README](../../README.md).
 
 Basic usage:
 
@@ -322,7 +325,7 @@ All foundation types are designed for multi-threaded use:
 
 ```toml
 [dependencies]
-flui-foundation = { version = "0.1", features = ["serde"] }
+flui-foundation = { version = "0.2", features = ["serde"] }
 ```
 
 ## Development

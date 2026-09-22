@@ -23,6 +23,9 @@ To depend on it directly instead:
 flui-cupertino = "0.2"
 ```
 
+Neither crate is published to crates.io yet; until the first release, depend
+on it via a git tag or path — see the [flui facade's README](../../README.md).
+
 ## Example
 
 ```rust

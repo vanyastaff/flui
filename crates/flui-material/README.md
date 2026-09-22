@@ -18,12 +18,15 @@ shell, and the M3 widget catalog built on them — `Scaffold`/`AppBar`, the butt
 flui = "0.2"
 ```
 
-To depend on it directly instead (or if you've turned off `flui`'s default features):
+With default features off, request it explicitly:
 
 ```toml
 [dependencies]
 flui = { version = "0.2", default-features = false, features = ["material"] }
 ```
+
+This crate isn't published to crates.io yet; until the first release, depend
+on it via a git tag or path — see the [flui facade's README](../../README.md).
 
 ## Example
 
