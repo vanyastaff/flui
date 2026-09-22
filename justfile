@@ -109,7 +109,7 @@ wasm-test:
     # refuses to start. Read it out of Cargo.lock rather than hardcoding it, so
     # a dependabot bump moves the tool with the lock instead of breaking this
     # recipe with a message that reads like a toolchain fault.
-    want=$(python3 -c "import tomllib;print(next(p['version'] for p in tomllib.load(open('Cargo.lock','rb'))['package'] if p['name']=='wasm-bindgen'))")
+    want=$(bash scripts/locked-version.sh wasm-bindgen)
     have=$(wasm-bindgen --version 2>/dev/null | cut -d' ' -f2 || true)
     if [ "$have" != "$want" ]; then
         echo "wasm-bindgen-cli $want required (have: ${have:-none}); installing" >&2
