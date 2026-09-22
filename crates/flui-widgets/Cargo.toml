@@ -184,7 +184,7 @@ workspace = true
 
 # ADR-0074 §8: setState (A) vs signals (B) on the same widget tree — rebuild counts
 # from `BuildOwner::last_frame_build_report`, relayout roots from
-# `PipelineOwner::layout_roots_last_run`, and pump wall time. `just bench-signals`.
+# `PipelineOwner::layout_roots_total`, and pump wall time. `just bench-signals`.
 [[bench]]
 name = "signals_rebuilds"
 harness = false

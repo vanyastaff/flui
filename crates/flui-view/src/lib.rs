@@ -218,7 +218,7 @@ pub use owner::{
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
 #[cfg(feature = "signals")]
-pub use reactive::{Computed, Effect, Reactive, Signal, SignalError, SignalSender, SignalSlot};
+pub use reactive::{Reactive, Signal, SignalError, SignalSender, SignalSlot, SlotInfo};
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{

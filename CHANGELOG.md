@@ -23,15 +23,21 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Added
 
-- **Realm-scoped signals** (`flui-view` feature `signals`, ADR-0074): `Signal<T>`,
-  `Computed<T>`, `Effect` owned by the realm's `Reactive` graph. Reading a signal in
-  `build` registers the element as a reader (the same seam as `depend_on`); writing
-  schedules exactly the readers with `RebuildReason::SignalChange`; equality is opt-in
-  (`set_if_changed`, `Computed<T: PartialEq>`); effects run in a named phase, build →
-  effects → layout → paint. `HeadlessBinding::reactive()` and `UiCommand::SignalWrite`
-  (feature `signals` on `flui-testing`/`flui-app`); facade feature `signals`.
-  Refusal trigger 24 (`scripts/check-signal-write-scope.sh`) refuses signal writes and
-  computed/effect creation inside build/layout/paint bodies. FOUNDATIONS C1 amended.
+- **Realm-scoped signals** (`flui-view` feature `signals`, ADR-0074): `Signal<T>` handles
+  (`Copy`, realm-affine, carrying graph id + slot + generation) owned by the realm's
+  `Reactive` graph. Reading a signal in `build` registers the element as a reader (the
+  same seam as `depend_on`); writing schedules exactly the readers with
+  `RebuildReason::SignalChange`; equality is opt-in (`set_if_changed`). `cx.signal(..)`
+  from `init_state` creates a slot released with the element. Writes and creations inside
+  `build` are refused at run time (`SignalError::{WrittenDuringBuild, CreatedDuringBuild}`,
+  with a `tracing::warn!`) and flagged at review time by refusal trigger 24
+  (`scripts/check-signal-write-scope.sh`, advisory; its accepted fixture is compiled code).
+  Read/write closures never hold the graph borrowed (`SignalError::Reentrant` instead of a
+  `RefCell` panic); stale handles are `SignalError::Released` through `try_get`/`try_with`.
+  `HeadlessBinding::reactive()`, `UiCommand::SignalWrite` + `SignalSender` (feature
+  `signals` on `flui-testing`/`flui-app`); facade feature `signals`; the feature's tests run
+  in CI. FOUNDATIONS C1 amended. Derived values and effects are deferred to ADR-0075
+  (Proposed).
 - **Rebuild and relayout telemetry**: `BuildOwner::last_frame_build_report()` (elements
   rebuilt by the last `build_scope`, split by `RebuildReason`) and
   `PipelineOwner::layout_roots_total()` (monotonic count of drained layout roots).

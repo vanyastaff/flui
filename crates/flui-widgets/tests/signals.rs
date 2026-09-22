@@ -1,6 +1,6 @@
-//! ADR-0074 phase 2: realm-scoped signals driven through the real widget
-//! pipeline (`lay_out` mounts a tree in a `HeadlessBinding`; `tick` pumps one
-//! frame without dirtying anything itself).
+//! ADR-0074: realm-scoped signals driven through the real widget pipeline
+//! (`lay_out` mounts a tree in a `HeadlessBinding`; `tick` pumps one frame
+//! without dirtying anything itself).
 //!
 //! Every test counts `build` calls per element, because the claim under test
 //! is *which elements rebuild*, not what they render.
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::common::{lay_out, loose, size};
-use flui_view::{Computed, Effect, Reactive, Signal, SignalError};
+use flui_view::{Signal, SignalError};
 use flui_widgets::prelude::*;
 use flui_widgets::{Column, SizedBox};
 
@@ -87,71 +87,9 @@ impl ViewState<ConditionalReader> for ConditionalReaderState {
     }
 }
 
-/// Reads a `Computed<usize>`.
-#[derive(Clone, StatefulView)]
-struct MemoReader {
-    memo: Computed<usize>,
-    builds: Builds,
-}
-
-struct MemoReaderState {
-    view: MemoReader,
-}
-
-impl StatefulView for MemoReader {
-    type State = MemoReaderState;
-    fn create_state(&self) -> Self::State {
-        MemoReaderState { view: self.clone() }
-    }
-}
-
-impl ViewState<MemoReader> for MemoReaderState {
-    fn build(&self, _view: &MemoReader, ctx: &dyn BuildContext) -> impl IntoView {
-        self.view.builds.fetch_add(1, Ordering::Relaxed);
-        SizedBox::square(1.0 + self.view.memo.get(ctx) as f32)
-    }
-}
-
-/// Owns an effect: whenever `src` changes, writes `src * 10` into `dst`.
-#[derive(Clone, StatefulView)]
-struct EffectHost {
-    src: Signal<u32>,
-    dst: Signal<u32>,
-}
-
-struct EffectHostState {
-    src: Signal<u32>,
-    dst: Signal<u32>,
-    effect: Option<Effect>,
-}
-
-impl StatefulView for EffectHost {
-    type State = EffectHostState;
-    fn create_state(&self) -> Self::State {
-        EffectHostState {
-            src: self.src,
-            dst: self.dst,
-            effect: None,
-        }
-    }
-}
-
-impl ViewState<EffectHost> for EffectHostState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
-        let (src, dst) = (self.src, self.dst);
-        self.effect = Some(ctx.reactive().effect(move |r: &Reactive| {
-            let v = src.track(r, |v| *v).expect("src is alive");
-            dst.set(r, v * 10).expect("dst is alive");
-        }));
-    }
-
-    fn build(&self, _view: &EffectHost, _ctx: &dyn BuildContext) -> impl IntoView {
-        SizedBox::square(1.0)
-    }
-}
-
-/// Creates a signal owned by its own element in `init_state` and publishes
-/// the handle so the test can probe it after the element unmounts.
+/// Creates a signal owned by its own element in `init_state` (the canonical
+/// `cx.signal(..)` idiom) and publishes the handle so the test can probe it
+/// after the element unmounts.
 #[derive(Clone, StatefulView)]
 struct SignalOwner {
     published: Rc<Cell<Option<Signal<u32>>>>,
@@ -174,7 +112,7 @@ impl StatefulView for SignalOwner {
 
 impl ViewState<SignalOwner> for SignalOwnerState {
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        let own = ctx.reactive().signal_owned_by(ctx.element_id(), 7u32);
+        let own = ctx.signal(7u32);
         self.published.set(Some(own));
         self.own = Some(own);
     }
@@ -202,6 +140,65 @@ impl StatelessView for OwnerSwitch {
         } else {
             SizedBox::square(2.0).boxed()
         }
+    }
+}
+
+/// Reads a handle that may be stale through `try_get`, rendering the outcome
+/// as a size (1 = error, value otherwise).
+#[derive(Clone, StatefulView)]
+struct TolerantReader {
+    sig: Signal<u32>,
+    outcome: Rc<Cell<Option<Result<u32, SignalError>>>>,
+}
+
+struct TolerantReaderState {
+    view: TolerantReader,
+}
+
+impl StatefulView for TolerantReader {
+    type State = TolerantReaderState;
+    fn create_state(&self) -> Self::State {
+        TolerantReaderState { view: self.clone() }
+    }
+}
+
+impl ViewState<TolerantReader> for TolerantReaderState {
+    fn build(&self, _view: &TolerantReader, ctx: &dyn BuildContext) -> impl IntoView {
+        let outcome = self.view.sig.try_get(ctx);
+        let side = outcome.as_ref().map_or(1.0, |v| *v as f32);
+        self.view.outcome.set(Some(outcome));
+        SizedBox::square(side)
+    }
+}
+
+/// Tries to write and to create a signal from inside `build`: the runtime
+/// refuses both.
+#[derive(Clone, StatefulView)]
+struct WriterInBuild {
+    sig: Signal<u32>,
+    outcome: Rc<Cell<Option<Result<(), SignalError>>>>,
+    created: Rc<Cell<Option<Result<(), SignalError>>>>,
+}
+
+struct WriterInBuildState {
+    view: WriterInBuild,
+}
+
+impl StatefulView for WriterInBuild {
+    type State = WriterInBuildState;
+    fn create_state(&self) -> Self::State {
+        WriterInBuildState { view: self.clone() }
+    }
+}
+
+impl ViewState<WriterInBuild> for WriterInBuildState {
+    fn build(&self, _view: &WriterInBuild, ctx: &dyn BuildContext) -> impl IntoView {
+        let r = ctx.reactive();
+        // PORT-CHECK-OK-24: this test proves the run-time refusal of a write in build.
+        self.view.outcome.set(Some(self.view.sig.set(&r, 99)));
+        // PORT-CHECK-OK-24: same for a slot creation in build.
+        self.view.created.set(Some(r.try_signal(0u8).map(|_| ())));
+        SizedBox::square(1.0)
     }
 }
 
@@ -296,108 +293,6 @@ fn a_rebuild_re_derives_the_read_set_so_a_dropped_read_stops_depending() {
 }
 
 #[test]
-fn a_memo_rebuilds_its_readers_only_when_its_output_changes() {
-    let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
-    let r = laid.build_owner_mut().reactive().clone();
-    let fields: [Signal<u32>; 3] = std::array::from_fn(|_| r.signal(0u32));
-    let empty_count = r.computed(move |r: &Reactive| {
-        fields
-            .iter()
-            .filter(|f| f.track(r, |v| *v == 0).expect("field is alive"))
-            .count()
-    });
-    let (b0, b1, b_save) = (builds(), builds(), builds());
-    laid.pump_widget(Column::new((
-        Reader {
-            sig: fields[0],
-            builds: Arc::clone(&b0),
-        },
-        Reader {
-            sig: fields[1],
-            builds: Arc::clone(&b1),
-        },
-        MemoReader {
-            memo: empty_count,
-            builds: Arc::clone(&b_save),
-        },
-    )));
-    let (base0, base1, base_save) = (count(&b0), count(&b1), count(&b_save));
-    let root = laid.current_root();
-    assert_eq!(
-        laid.size(laid.child(root, 2)),
-        size(4.0, 4.0),
-        "3 empty fields → 1 + 3"
-    );
-
-    // Field 0 goes 0 → 5: the memo flips 3 → 2, so field 0's reader AND the
-    // memo's reader rebuild; field 1's reader does not.
-    fields[0].set(&r, 5).unwrap();
-    laid.tick();
-    assert_eq!(count(&b0), base0 + 1);
-    assert_eq!(count(&b1), base1);
-    assert_eq!(count(&b_save), base_save + 1);
-    assert_eq!(laid.size(laid.child(root, 2)), size(3.0, 3.0));
-
-    // Field 0 goes 5 → 6: the memo recomputes to the same 2, so only field 0's
-    // reader rebuilds.
-    fields[0].set(&r, 6).unwrap();
-    laid.tick();
-    assert_eq!(count(&b0), base0 + 2);
-    assert_eq!(count(&b1), base1);
-    assert_eq!(
-        count(&b_save),
-        base_save + 1,
-        "an unchanged memo output marks nobody"
-    );
-}
-
-#[test]
-fn effects_run_after_build_and_their_writes_land_in_the_next_frame() {
-    let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
-    let r = laid.build_owner_mut().reactive().clone();
-    let src = r.signal(1u32);
-    let dst = r.signal(0u32);
-    let dst_builds = builds();
-    laid.pump_widget(Column::new((
-        EffectHost { src, dst },
-        Reader {
-            sig: dst,
-            builds: Arc::clone(&dst_builds),
-        },
-    )));
-    // The effect registered in `init_state` ran in that frame's effects phase
-    // (after the build that read dst = 0) and wrote dst = 10; the reader is
-    // queued for the next frame.
-    assert_eq!(dst.peek(&r, |v| *v).unwrap(), 10);
-    laid.tick();
-    let base = count(&dst_builds);
-    let root = laid.current_root();
-    assert_eq!(laid.size(laid.child(root, 1)), size(10.0, 10.0));
-
-    src.set(&r, 2).unwrap();
-    laid.tick();
-    assert_eq!(
-        dst.peek(&r, |v| *v).unwrap(),
-        20,
-        "the effect ran in this frame"
-    );
-    assert_eq!(
-        count(&dst_builds),
-        base,
-        "the reader of dst was marked by the effect, after this frame's build phase"
-    );
-    assert_eq!(laid.size(laid.child(root, 1)), size(10.0, 10.0));
-
-    laid.tick();
-    assert_eq!(
-        count(&dst_builds),
-        base + 1,
-        "…and rebuilds in the next frame"
-    );
-    assert_eq!(laid.size(laid.child(root, 1)), size(20.0, 20.0));
-}
-
-#[test]
 fn a_signal_created_in_init_state_is_released_when_its_element_unmounts() {
     let published = Rc::new(Cell::new(None));
     let mut laid = lay_out(
@@ -411,6 +306,7 @@ fn a_signal_created_in_init_state_is_released_when_its_element_unmounts() {
     let own = published.get().expect("init_state published the handle");
     assert_eq!(own.peek(&r, |v| *v), Ok(7));
     assert_eq!(laid.size(laid.current_root()), size(7.0, 7.0));
+    assert_eq!(r.live_slot_count(), 1);
 
     laid.pump_widget(OwnerSwitch {
         show: false,
@@ -422,4 +318,72 @@ fn a_signal_created_in_init_state_is_released_when_its_element_unmounts() {
         "the owning element unmounted, so its signal is released"
     );
     assert!(r.readers_of(own.slot()).is_empty());
+    assert_eq!(r.live_slot_count(), 0, "no slot leaked");
+}
+
+#[test]
+fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
+    let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
+    let r = laid.build_owner_mut().reactive().clone();
+    let sig = r.signal(4u32);
+    let outcome = Rc::new(Cell::new(None));
+    laid.pump_widget(TolerantReader {
+        sig,
+        outcome: Rc::clone(&outcome),
+    });
+    assert_eq!(outcome.get(), Some(Ok(4)));
+    assert_eq!(laid.size(laid.current_root()), size(4.0, 4.0));
+
+    // The handle goes stale while the reader stays mounted (eviction of the
+    // owner, a popped route): the next build sees a typed error, not a panic.
+    r.release(sig.slot());
+    laid.pump();
+
+    assert!(matches!(
+        outcome.get(),
+        Some(Err(SignalError::Released { .. }))
+    ));
+    assert_eq!(laid.size(laid.current_root()), size(1.0, 1.0));
+}
+
+#[test]
+fn writes_and_creations_inside_build_are_refused_by_the_runtime() {
+    let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
+    let r = laid.build_owner_mut().reactive().clone();
+    let sig = r.signal(1u32);
+    let outcome = Rc::new(Cell::new(None));
+    let created = Rc::new(Cell::new(None));
+    laid.pump_widget(WriterInBuild {
+        sig,
+        outcome: Rc::clone(&outcome),
+        created: Rc::clone(&created),
+    });
+
+    assert!(
+        matches!(
+            outcome.get(),
+            Some(Err(SignalError::WrittenDuringBuild { .. }))
+        ),
+        "a write from build is refused"
+    );
+    assert!(
+        matches!(
+            created.get(),
+            Some(Err(SignalError::CreatedDuringBuild { .. }))
+        ),
+        "a creation from build is refused"
+    );
+    assert_eq!(
+        sig.peek(&r, |v| *v),
+        Ok(1),
+        "the refused write changed nothing"
+    );
+    assert_eq!(
+        r.live_slot_count(),
+        1,
+        "the refused creation leaked nothing"
+    );
+
+    sig.set(&r, 2).unwrap();
+    assert_eq!(sig.peek(&r, |v| *v), Ok(2));
 }

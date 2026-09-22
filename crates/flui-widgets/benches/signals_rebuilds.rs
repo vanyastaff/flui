@@ -21,7 +21,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use flui_view::{Computed, FrameBuildReport, Reactive, RebuildReason, Signal, StateHandle, View};
+use flui_view::{FrameBuildReport, Reactive, RebuildReason, Signal, StateHandle, View};
 use flui_widgets::prelude::*;
 use flui_widgets::testing::{LaidOut, lay_out, loose};
 use flui_widgets::{Column, SizedBox};
@@ -199,24 +199,25 @@ impl StatelessView for ListB {
     }
 }
 
-/// B: reads the `Computed` invalid count only.
+/// B: the form root reads nothing; each field subscribes individually. The
+/// "Save" cell reads every field (a derived value is ADR-0075's subject), so
+/// it rebuilds on any keystroke in both variants.
+#[derive(Clone, Debug, StatelessView)]
+struct FormB {
+    fields: Rc<Vec<Signal<u32>>>,
+}
+
+/// B: the Save cell reads all fields directly.
 #[derive(Clone, Debug, StatelessView)]
 struct SaveB {
-    invalid: Computed<usize>,
+    fields: Rc<Vec<Signal<u32>>>,
 }
 
 impl StatelessView for SaveB {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        SizedBox::square(1.0 + self.invalid.get(ctx) as f32)
+        let invalid = self.fields.iter().filter(|f| f.get(ctx) == 0).count();
+        SizedBox::square(1.0 + invalid as f32)
     }
-}
-
-/// B: the form root reads nothing; fields and the save cell subscribe
-/// individually.
-#[derive(Clone, Debug, StatelessView)]
-struct FormB {
-    fields: Rc<Vec<Signal<u32>>>,
-    invalid: Computed<usize>,
 }
 
 impl StatelessView for FormB {
@@ -229,7 +230,7 @@ impl StatelessView for FormB {
             .collect();
         children.push(
             SaveB {
-                invalid: self.invalid,
+                fields: Rc::clone(&self.fields),
             }
             .boxed(),
         );
@@ -397,12 +398,10 @@ fn scenarios() -> Vec<Scenario> {
         });
     }
 
-    // 3. Form: type into field 7 (validity unchanged: 5 -> 6 -> 5 ...).
-    // 4. Form: field 7 flips empty <-> non-empty (validity changes).
-    for (name, flips) in [
-        ("form 20: keystroke, validity unchanged", false),
-        ("form 20: field flips validity", true),
-    ] {
+    // 3. Form: type into field 7 (5 -> 6 -> 5 ...). The Save cell reads
+    //    every field in both variants, so it rebuilds on each keystroke; the
+    //    other 19 fields are what the variants differ on.
+    {
         let initial: Vec<u32> = (0..FORM_FIELDS as u32)
             .map(|i| if i % 3 == 0 { 0 } else { 5 })
             .collect();
@@ -414,54 +413,28 @@ fn scenarios() -> Vec<Scenario> {
             loose(4096.0),
         );
         out.push(Scenario {
-            name,
+            name: "form 20: keystroke in one field",
             variant: "A setState",
             laid,
-            change: Box::new(move |_, i| {
-                fields.update(|f| {
-                    f[7] = if flips {
-                        (i % 2) as u32
-                    } else {
-                        5 + (i % 2) as u32
-                    }
-                });
-            }),
+            change: Box::new(move |_, i| fields.update(|f| f[7] = 5 + (i % 2) as u32)),
         });
         let fields_cell: Rc<RefCell<Vec<Signal<u32>>>> = Rc::new(RefCell::new(Vec::new()));
         let fields_for_mount = Rc::clone(&fields_cell);
-        let init = initial.clone();
         let mut laid = mount_b(|r| {
-            let fields: Vec<Signal<u32>> = init.iter().map(|v| r.signal(*v)).collect();
+            let fields: Vec<Signal<u32>> = initial.iter().map(|v| r.signal(*v)).collect();
             fields_for_mount.replace(fields.clone());
-            let sources = fields.clone();
-            let invalid = r.computed(move |r| {
-                sources
-                    .iter()
-                    .filter(|f| f.track(r, |v| *v == 0).expect("field alive"))
-                    .count()
-            });
             FormB {
                 fields: Rc::new(fields),
-                invalid,
             }
         });
         let r = reactive(&mut laid);
         let field7 = fields_cell.borrow()[7];
         out.push(Scenario {
-            name,
+            name: "form 20: keystroke in one field",
             variant: "B signals",
             laid,
             change: Box::new(move |_, i| {
-                field7
-                    .set(
-                        &r,
-                        if flips {
-                            (i % 2) as u32
-                        } else {
-                            5 + (i % 2) as u32
-                        },
-                    )
-                    .expect("field alive");
+                field7.set(&r, 5 + (i % 2) as u32).expect("field alive");
             }),
         });
     }

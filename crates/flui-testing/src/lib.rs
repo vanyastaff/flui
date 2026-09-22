@@ -1077,11 +1077,6 @@ impl HeadlessBinding {
         // Drain the build inbox, filled by the vsync tick and the async-driver
         // poll that ran before this closure.
         tree_binding.build_owner.build_scope(&mut tree_binding.tree);
-        // ADR-0074 §5.4: build -> effects -> layout -> paint. An effect that
-        // writes a signal marks readers into the owner's inbox, which the NEXT
-        // `build_scope` drains — never this frame's.
-        #[cfg(feature = "signals")]
-        tree_binding.build_owner.reactive().run_effects();
 
         // `run_frame_with_layout_builders` is the shared
         // layout<->build fixpoint — it settles every build-during-layout node

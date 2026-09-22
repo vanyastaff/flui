@@ -1,15 +1,18 @@
 # ADR-0074: Realm-scoped signals as the canonical application-state layer
 
-Status: **Accepted (2026-09-22)** — prototype behind `flui-view` feature `signals`, go/no-go
-measured in §8.1. Two limits are part of the decision: a value read by hundreds of cells is
-an `InheritedView` + field-mask (#1090) concern, not a per-cell signal; structural list
-changes are `Memo<V>`/`can_update`'s job (C1), a separate task measured with the same
-telemetry. One go-condition stays open and is the next epic (A4): the #1090
-`Theme`/`MediaQuery` field test through the same reader registry, with no second code path.
+Status: **Accepted (2026-09-22) for `Signal<T>` and the reader registry** — shipped behind
+`flui-view` feature `signals`, go/no-go measured in §8.1. Derived values and effects
+(`Computed<T>`, `Effect`) were part of the first prototype and are **not** part of this
+decision: the adversarial review found them unsound in four ways, and they are designed
+separately in [ADR-0075](ADR-0075-derived-state-and-effects.md) (Proposed).
+Two limits are part of the decision: a value read by hundreds of cells is an
+`InheritedView` + field-mask (#1090) concern, not a per-cell signal (§5.10); structural
+list changes are `Memo<V>`/`can_update`'s job (C1, issue #1251). The #1090 field-mask
+registry (epic A4) is the next step on the same seam, **not a condition of this ADR**.
 Supersedes: FOUNDATIONS C1 (signals clause), ADR-0008 §"signals-as-default are rejected"
 — by the beta-roadmap mandate that locked contracts are revisable explicitly (AGENTS.md
 ADR policy). The C1 text in `docs/FOUNDATIONS.md` is rewritten to §7's wording and ADR-0008
-gains a `Superseded-by: ADR-0074` note in the same PR as the prototype.
+carries a `Superseded-by: ADR-0074` note.
 
 ## 1. Context
 
@@ -70,8 +73,9 @@ readers are tracked per read.
 
 ### 1.3 Why the retained three-tree model changes the design (and why it is not Solid)
 
-Solid, Leptos and Dioxus attach signal readers to closures that own DOM nodes; a write
-re-runs the closure and patches nodes directly. FLUI's unit of rebuild is the **Element**
+Solid attaches readers to DOM expressions and Leptos to reactive nodes, so a write re-runs
+exactly those; Dioxus marks the *component* that read the signal dirty and re-renders it,
+which is the closest analogue to FLUI's Element. FLUI's unit of rebuild is the **Element**
 (FOUNDATIONS C1: "the smallest sound invalidation unit stays the Element"): a rebuild is
 `View::build` for that element followed by keyed reconciliation of its children
 (`BuildOwner::build_scope`, `crates/flui-view/src/owner/build_owner.rs:57`). Signals do not
@@ -141,55 +145,62 @@ What must be different, point by point:
 | effects scheduled by the signal write itself | effects run in a named frame phase owned by the scheduler (§6.3) |
 | independent of the Element tree | the only side effect on the tree is `schedule_build_for(element)` |
 
-## 4. Decision (proposed)
+## 4. Decision
 
-Add a realm-owned reactive graph — `Signal<T>`, `Computed<T>`, `Effect` — to the view layer,
-where **reading a signal inside `build` registers the building element as a reader**,
-and **writing a signal schedules exactly the reader elements** on the existing dirty heap.
-`setState`, `ValueNotifier`, `InheritedView` remain; `InheritedView` field masks (#1090)
-and signals share one reader-registry implementation.
+Add a realm-owned reactive graph — `Signal<T>` values in a generational arena plus a reader
+registry — to the view layer, where **reading a signal inside `build` registers the
+building element as a reader**, and **writing a signal schedules exactly the reader
+elements** on the existing dirty heap. `setState`, `ValueNotifier`, `InheritedView` remain.
+Derived values and effects are ADR-0075's subject.
 
 ## 5. Design
 
 ### 5.1 Types
 
 ```rust
-/// A realm-owned cell. `Copy` handle (slot index + generation), like Dioxus/Leptos;
-/// the value lives in the realm's arena, so the handle is `'static` and cheap to
-/// capture in closures without `Rc` cycles.
-pub struct Signal<T: 'static> { slot: SignalSlot, _t: PhantomData<T> }   // Copy, !Send
-pub struct Computed<T: 'static> { slot: SignalSlot, _t: PhantomData<T> } // Copy, !Send, read-only ("memo"; the name `Memo<V>` is C1's view combinator)
-pub struct Effect             { slot: EffectSlot }                        // RAII: dropping unregisters
+/// A realm-owned cell. `Copy` handle (graph id + slot index + generation), like
+/// Dioxus/Leptos; the value lives in the realm's arena, so the handle is `'static`
+/// and cheap to capture in closures without `Rc` cycles. `!Send` (realm-affine).
+pub struct Signal<T: 'static> { slot: SignalSlot, .. }
 
 impl<T> Signal<T> {
-    pub fn get(self, cx: &dyn BuildContext) -> T where T: Clone;        // read + subscribe
-    pub fn with<R>(self, cx: &dyn BuildContext, f: impl FnOnce(&T) -> R) -> R; // read + subscribe, borrowed
-    pub fn peek<R>(self, realm: &Reactive, f: impl FnOnce(&T) -> R) -> R;     // read, NO subscribe
-    pub fn set(self, realm: &Reactive, value: T);                        // write → mark readers
-    pub fn update(self, realm: &Reactive, f: impl FnOnce(&mut T));       // write → mark readers
+    // build-time reads: the building element becomes a reader
+    pub fn get(self, cx: &dyn BuildContext) -> T where T: Clone;           // panics on a stale handle
+    pub fn with<R>(self, cx: &dyn BuildContext, f: impl FnOnce(&T) -> R) -> R;
+    pub fn try_get(self, cx: &dyn BuildContext) -> Result<T, SignalError>;  // stale = Err(Released)
+    pub fn try_with<R>(self, cx: &dyn BuildContext, f: impl FnOnce(&T) -> R) -> Result<R, SignalError>;
+    // reads/writes outside build: callbacks, tests, realm commands
+    pub fn peek<R>(self, r: &Reactive, f: impl FnOnce(&T) -> R) -> Result<R, SignalError>;
+    pub fn set(self, r: &Reactive, value: T) -> Result<(), SignalError>;   // marks readers, equal or not
+    pub fn update<R>(self, r: &Reactive, f: impl FnOnce(&mut T) -> R) -> Result<R, SignalError>;
+    pub fn set_if_changed(self, r: &Reactive, value: T) -> Result<bool, SignalError> where T: PartialEq;
+    pub fn detach(self) -> SignalSender<T>;                                 // the Send form (§5.8)
 }
 ```
 
-- **Naming.** The cached computation is `Computed<T>`, not `Memo<T>`: `flui_view::Memo<V>`
-  is already C1's view-memoization combinator (a `View` that short-circuits a subtree
-  when its data is unchanged) and lives in the same crate, so a reactive `Memo<T>` would
-  collide at the crate root (it did, in the first compile). The market is split anyway —
-  Leptos, Solid and Dioxus say `Memo`; Vue says `computed`; SwiftUI has computed
-  properties; Compose says `derivedStateOf` — so `Computed` is a recognised name, and it
-  reads as what the node is (a computed value) rather than as what it does (memoise).
-- `Reactive` is the realm's reactive graph, reachable from `BuildContext` (for build-time
-  reads), from lifecycle hooks and callbacks (`cx.reactive()`), and from the headless
-  driver. It is `!Send + !Sync`, lives next to `BuildOwner` in the realm's services
-  (`RealmServices::construct`, `crates/flui-app/src/app/ui_realm.rs`), and is dropped with
-  the realm — every signal of a dead realm is `OwnerGone`, by generation, the same rule as
-  `RealmId` and `GlobalKey`.
-- **No trait bound on `T` beyond `'static`.** `Signal<T>::set` and `update` mark readers
-  **always**, whether or not the value changed — there is no equality check and no
-  `PartialEq` bound. `set_if_changed` (requires `T: PartialEq`) is the opt-in that skips
-  marking on an equal write; `Computed<T>` requires `PartialEq` on its output by construction.
-  This is the rule, not a default (§5.7); it is what keeps C1's Druid warning honoured.
-- `Signal<T>` is `Copy`: closures in `on_tap` capture it by value, no `Rc<RefCell<>>`
-  choreography, no listener registration, no `RebuildHandle` in `init_state`.
+- **Creation is owned.** The canonical idiom is `cx.signal(value)` from
+  `ViewState::init_state` (or `did_change_dependencies`): the slot is owned by that
+  element and released when it unmounts, so a widget cannot leak slots. Application-level
+  state that outlives every screen uses `Reactive::signal(value)`, released with the realm;
+  `Reactive::signal_owned_by(element, value)` is the explicit form of the former. All
+  three have `try_` variants; creating a slot **inside `build`** is refused
+  (`SignalError::CreatedDuringBuild`, one slot per rebuild would be a leak).
+- `Reactive` is the realm's reactive graph, reachable from `BuildContext` (`cx.reactive()`)
+  in every lifecycle hook and callback, and from the headless driver. It is `!Send + !Sync`,
+  lives next to `BuildOwner` in the realm's services, and is dropped with the realm. Every
+  graph has a process-unique id that its slots carry, so a handle used against another
+  realm's graph is `SignalError::ForeignGraph`, never a read of someone else's value.
+- **No trait bound on `T` beyond `'static`.** `set` and `update` mark readers **always**,
+  whether or not the value changed — there is no equality check and no `PartialEq` bound.
+  `set_if_changed` (requires `T: PartialEq`) is the opt-in that skips marking on an equal
+  write. This is the rule, not a default (§5.7); it is what keeps C1's Druid warning
+  honoured.
+- **Handles are `PartialEq`/`Eq` by identity** (issue #1251 covers what a view does with
+  that for `can_update`).
+- **Naming.** The derived value planned in ADR-0075 is `Computed<T>`, not `Memo<T>`:
+  `flui_view::Memo<V>` is already C1's view-memoization combinator in the same crate and
+  the two collided in the first compile. The market is split (Leptos/Solid/Dioxus `Memo`,
+  Vue `computed`, Compose `derivedStateOf`), so `Computed` is a recognised name.
 
 ### 5.2 Read-is-subscribe through the existing `BuildContext`
 
@@ -198,151 +209,151 @@ seam `depend_on` already has:
 
 - `ElementBuildContext` (`crates/flui-view/src/context/element_build_context.rs`) knows
   the building `ElementId`. `Signal::get(cx)` calls `cx.reactive_read(slot)`, which appends
-  `(slot → element_id, depth)` to the reader set and returns the value. This is *exactly*
+  `slot → element_id` to the reader set and returns the value (the depth the dirty heap
+  needs is resolved by the inbox at drain time, as for every external schedule). This is *exactly*
   what `depend_on_inherited` does for a provider (`element_build_context.rs:267`), with a
   signal slot in place of a provider node.
 - Reader sets are **cleared and rebuilt on every build of that element** (Compose's and
   Solid's rule): a build that no longer reads a signal stops depending on it. Storage:
-  per signal a small `Vec<(ElementId, depth)>` (rebuilt readers are re-added in build
-  order; dedup on insert), per element a `SmallVec<SignalSlot>` for the clear step.
+  per signal a `SmallVec<ElementId>` (rebuilt readers are re-added in build order; dedup on
+  insert), per element a `SmallVec` of slot indices for the clear step. Both are linear
+  today; issue #1248 tracks the slab-indexed form.
 - **Trigger #22 is not touched.** `Signal::get` is not a *capability acquisition*; it is a
   read, the same class as `depend_on`. The scanner's token list stays as it is, and the
-  ADR adds one new refusal instead: `Signal::set`/`update`/`Effect::new` inside a guarded
+  ADR adds one new refusal instead: `Signal::set`/`update` or a slot creation inside a guarded
   body (`build`/`perform_layout`/`paint`/…) is a violation, because a write during build
   is the unbounded-loop hazard #22 exists for. `peek` is allowed anywhere.
 - Reads outside build (callbacks, `init_state`, effects) do not subscribe an element —
-  there is none building. They go through `peek`, or through `Effect` (§5.4).
+  there is none building. They go through `peek` (a read that registers nothing).
 
 ### 5.3 Write → dirty exactly the readers
 
 ```text
 signal.set(v)                         // owner thread, outside build
   └─ reactive.mark(slot)
-       ├─ for (elem, depth) in readers[slot]: owner.schedule_build_for(elem, depth, RebuildReason::SignalChange)
-       └─ for memo in dependents[slot]:      memo.stale = true   (lazy: recomputed on next read)
+       └─ for elem in readers[slot]: ExternalBuildScheduler::schedule(elem, RebuildReason::SignalChange)
 ```
 
-- `schedule_build_for` is the existing entry the `ExternalBuildScheduler` inbox and
-  `set_state_scheduled` already use; the depth heap and the `MAX_MID_DRAIN_ABSORBS` budget
-  (issue #1180) apply unchanged. A signal cannot create a rebuild path the framework does
-  not already have.
-- Memos use Leptos's three-state discipline (stale / check / clean): a `Memo` marked stale
-  recomputes on the next read and only marks *its* readers if the new output differs
-  (`PartialEq` required for `Computed<T>`, opt-in by construction). This is what stops
-  "20-field form → `is_dirty` memo → Save button" from rebuilding the button on every
-  keystroke that does not change dirtiness.
-- Writes are coalesced per frame by construction: the heap dedups by element, and a
-  second write before the drain finds the element already scheduled.
-- Writes during a drain (from a `did_update_view`, for example) fall into the mid-drain
+- `schedule` is the existing entry the `RebuildHandle` uses: it lands in the owner's
+  external inbox and requests a frame; the depth heap and the `MAX_MID_DRAIN_ABSORBS`
+  budget (issue #1180) apply unchanged at drain. A signal cannot create a rebuild path
+  the framework does not already have.
+- Writes are coalesced per frame by construction: the inbox dedups by element, and a
+  second write before the drain finds the element already queued. One write with R readers
+  is R inbox inserts today (issue #1249: batch under one lock).
+- **Re-entrancy.** A read or write closure runs with no borrow of the graph held: the
+  value is taken out on loan, the closure runs, the value is put back if the slot is still
+  the same generation. `a.with(cx, |_| b.get(cx))` and `a.update(&r, |v| *v += b.peek(..))`
+  are fine; touching the *same* slot from its own closure is `SignalError::Reentrant`,
+  never a `RefCell` panic.
+- Writes during a drain (from `did_update_view`, for example) fall into the mid-drain
   absorb path; writes from `build` are refused (§5.2).
 
-### 5.4 `Effect`
+### 5.4 Effects
 
-An `Effect` is a closure that reads signals and does something that is not a build:
-persist to disk, push to an `AnimationController`, log. The frame order is fixed:
-**build → effects → layout → paint**. An effect runs once, in the effects phase of the
-frame in which one of its sources changed. An effect that writes a signal or calls
-`RebuildHandle::schedule` marks readers for the **next** frame: the current frame's build
-phase is already closed, so nothing it does re-enters this frame's build. Phase 2 carries a
-test that pins both halves (an effect runs after the build that wrote its source, and a
-rebuild it requests is observed one `pump_frame` later, not in the same one). Effects are owned by the
-`ViewState` that created them (RAII drop on `dispose`) or by the realm (app-level
-effects). This is the `Mounted<'_>`/`EffectScope` slot ADR-0008 §3 reserved.
+Deferred to [ADR-0075](ADR-0075-derived-state-and-effects.md) together with derived values.
+The prototype's effects phase ran only in the headless harness, never in the product frame
+(`draw_frame_impl`), which is the first of ADR-0075's requirements. Until then, side effects
+run from callbacks, `did_update_view`, or realm commands.
 
 ### 5.5 One registry for signals and `InheritedView` field masks (#1090)
 
-The reader set keyed by `SignalSlot` is the same data structure #1090 needs keyed by
-`(provider TypeId, field bit)`. The prototype implements the reader registry once and
-gives `InheritedBehavior::dependents` (`behavior.rs:1300`, today `HashMap<ElementId,
-usize>`) a mask column; `depend_on::<Theme, _>(Theme::primary)` from ADR-0008 §2 then
-records `(provider, mask)` where `Signal::get` records `slot`. `MediaQueryData::size` and a
-`Signal<Size>` become the same kind of dependency edge — which is the point: an
-application author can lift a provider field into a signal or the reverse without a
-rebuild-behaviour cliff.
+The reader set keyed by `SignalSlot` is the same *kind* of edge #1090 needs keyed by
+`(provider TypeId, field bit)`: a dependent recorded with what it read, notified only when
+that changed. The intent is one dependency discipline, not two mechanisms with different
+rules: read-is-depend, re-derived per build, scheduled through the same heap. The field-mask
+half is epic **A4** (branch `a4/inherited-field-masks`), paused until this PR merges; it
+lives on `InheritedBehavior::dependents` (masks per dependent) so `depend_on::<Theme, _>`
+and `depend_on_field::<Theme, _>(Theme::FIELD_COLOR_SCHEME, ..)` share one code path. It
+is not a condition of this ADR (the first draft called it a go-condition; that was
+overreach — an accepted ADR cannot carry an unmet condition). Issue #1254 (ALT-2,
+`#[derive(Observable)]`) asks whether the field-mask registry should become the *only*
+registry with signals as its one-field case; that is decided before the catalog accepts
+`Signal<T>` inputs.
 
 ### 5.6 What the three screens look like
 
-**Counter** (today: `ValueNotifier` + listener + `RebuildHandle`, ~25 lines; with signals):
+**Counter** (today: `StateHandle` + `RebuildHandle`; with signals — the handle is `Copy`,
+the write happens from the tap callback, outside `build`):
 
 ```rust
-#[derive(Stateful)]
+#[derive(Clone, StatefulView)]
 struct Counter;
 
-struct CounterState { count: Signal<u32> }
+struct CounterState { count: Option<Signal<u32>> }
 
 impl ViewState<Counter> for CounterState {
     fn init_state(&mut self, cx: &dyn BuildContext) {
-        self.count = cx.reactive().signal(0);          // owned by this element's realm,
-    }                                                  // released with the element
+        self.count = Some(cx.signal(0u32));            // owned by this element,
+    }                                                  // released with it
     fn build(&self, _v: &Counter, cx: &dyn BuildContext) -> impl IntoView {
-        let count = self.count;                        // Copy
+        let count = self.count.expect("init_state ran");   // Copy
+        let r = cx.reactive();                              // Rc clone; the callback owns one
         Column::new((
             Text::new(format!("{}", count.get(cx))),   // reads → this element is a reader
-            Button::new("+1").on_tap(move |cx| count.update(cx.reactive(), |c| *c += 1)),
+            Button::new("+1").on_tap(move || { let _ = count.update(&r, |c| *c += 1); }),
         ))
     }
 }
 ```
 
-**Todo list, 10 000 rows** — the list itself reads only the *set of ids*; each row reads
-its own item signal:
+**Todo list, 10 000 rows** — the list reads only the *row count*; each row reads its own
+signal, so toggling row 4 217 rebuilds that row (measured: 2 elements, the row and its
+box, §8.1):
 
 ```rust
-struct Todos { ids: Signal<Vec<TodoId>>, items: Signal<SlotMap<TodoId, Signal<Todo>>> }
+struct Todos { count: Signal<usize>, rows: Rc<RefCell<Vec<Signal<Todo>>>> }
 
-fn build_list(cx: &dyn BuildContext, todos: &Todos) -> impl IntoView {
-    let ids = todos.ids.get(cx);                       // list rebuilds only on add/remove/reorder
-    ListView::builder(ids.len(), move |cx, i| {
-        let item = todos.items.with(cx, |m| m[ids[i]]);   // Signal<Todo>, Copy
-        TodoRow { item }                               // its build reads `item.with(cx, ..)`
-    })
-}
-// toggling row 4217: `item.update(r, |t| t.done = !t.done)` → exactly one element (the row) rebuilds.
-```
-
-**Form, 20 fields** — one signal per field, one memo for validity:
-
-```rust
-struct FormModel { fields: [Signal<String>; 20], invalid: Computed<usize> }
-
-impl FormModel {
-    fn new(r: &Reactive) -> Self {
-        let fields = std::array::from_fn(|_| r.signal(String::new()));
-        let invalid = r.computed(move |r| fields.iter().filter(|f| f.track(r, |s| s.is_empty()).unwrap()).count());
-        Self { fields, invalid }
+impl StatelessView for TodoList {
+    fn build(&self, cx: &dyn BuildContext) -> impl IntoView {
+        let count = self.todos.count.get(cx);
+        let rows = self.todos.rows.borrow();
+        Column::new(rows.iter().take(count).map(|row| TodoRow { row: *row }.boxed()).collect())
     }
 }
-// TextField i reads fields[i]; typing rebuilds that TextField only.
-// Save button reads `invalid.get(cx) == 0`; it rebuilds only when the memo's output flips.
+// TodoRow::build reads `self.row.with(cx, |t| t.done)`; a toggle is
+// `row.update(&r, |t| t.done = !t.done)` from the row's tap callback.
 ```
 
-The same `FormModel` is constructed in a headless test with `binding.reactive()` and
-driven by `fields[3].set(r, "x".into())`; the assertion is on the memo, not on a widget.
+**Form, 20 fields** — one signal per field; each `TextField` reads its own. The "Save"
+cell reads all twenty (so it rebuilds on every keystroke, like the `setState` form) until
+ADR-0075's `Computed` lands; the measured shape is in §8.1.
+
+```rust
+struct FormModel { fields: [Signal<String>; 20] }
+// TextField i reads fields[i].with(cx, ..); typing rebuilds that TextField (and Save).
+```
+
+A headless test constructs the same model with `binding.reactive()` and drives it with
+`fields[3].set(&r, "x".into())`; the assertion is on the readers rebuilt
+(`BuildOwner::last_frame_build_report`), not on pixels.
 
 ### 5.7 Rules without hooks
 
-- A signal is created explicitly (`r.signal(v)` in `init_state`, a constructor, or the
+- A signal is created explicitly (`cx.signal(v)` in `init_state`, or `r.signal(v)` at the
   app root) and held in a field. There is no `use_signal()` whose identity is the call
   index; `build` may read signals in any order, conditionally, or in loops.
 - `build` is still a pure function of `(View, State, reads)`; the reads are recorded, not
   ordered.
+- Lifetime is ownership, not call structure: a slot created through `cx.signal` is released
+  when its element unmounts (the registry drops that element's reads at the same time); an
+  app-level slot is released with the realm. A `Copy` handle that outlives its slot is a
+  `SignalError::Released` on the next `try_*`/`peek`, and a panic through the plain
+  `get`/`with` (documented under `# Panics`).
 - Equality is opt-in, never implied: a plain `set` marks readers even for an equal value;
-  only `set_if_changed` and `Computed` compare, and both say so in their bounds.
-- Lifetime is ownership, not call structure: a signal created by a `ViewState` is released
-  when that state is disposed (the `Reactive` arena tracks the creating element and frees
-  its slots on unmount, LIFO); an app-level signal is released with the realm.
+  only `set_if_changed` compares, and says so in its bounds.
 
 ### 5.8 Threads
 
-- `Signal`, `Memo`, `Reactive` are `!Send + !Sync` — realm-affine like the element tree
-  (ADR-0027 §"one realm, one owner"). A `Signal<T>` handle that crossed a thread could not
-  reach its arena anyway; the type system says so up front.
-- Cross-thread writes go through the realm proxy: `UiCommandSender` gains a
-  `UiCommand::SignalWrite(Box<dyn FnOnce(&Reactive) + Send>)` variant (the same shape as
-  `Navigation(NavigatorCommand)`, `ui_realm.rs:231`). It executes on the owner thread at
-  the next Idle drain, marks readers, and wakes a frame — enqueue-and-wake, never touch
-  the tree. A `SignalSender<T>` (`Send + Sync`, holds the sender and the slot) is the
-  convenience wrapper an `AsyncDriver` future or a file watcher captures.
+- `Signal`, `Reactive` are `!Send + !Sync` — realm-affine like the element tree
+  (ADR-0027 §"one realm, one owner"). A handle carries its graph's id, so it cannot be
+  attached to another realm's graph by accident (`SignalError::ForeignGraph`).
+- Cross-thread writes go through the realm proxy: `UiCommand::SignalWrite(Box<dyn
+  FnOnce(&Reactive) + Send>)` (the same shape as `Navigation(NavigatorCommand)`) executes on
+  the owner thread at the next Idle drain, marks readers, and wakes a frame —
+  enqueue-and-wake, never touch the tree. The closure cannot capture a `Signal` (it is
+  `!Send`); it captures `signal.detach()`, a `SignalSender<T>` that is `Send + Sync` and
+  re-attaches with `.attach()` on the owner side. `flui-app` tests the round trip.
 - Writes from a dead realm's sender return `OwnerGone` (channel identity), as every other
   realm-scoped command does.
 
@@ -362,7 +373,8 @@ Nothing is removed in this ADR.
 
 - `set_state_scheduled` stays the way to mutate *widget-local* state (an expanded/collapsed
   flag, a pressed visual). Guidance: local, short-lived, read by this element only →
-  `setState`; shared, long-lived, read by a handful of elements → signal.
+  `setState`; shared, long-lived, read by a handful of elements → signal (created with
+  `cx.signal` by the element that owns its lifetime, or at the app root).
 - **Choosing by reader count.** A signal write costs about **1.8 µs per reader** on top of
   what one `setState` on the readers' common parent costs (§8.1, 600 readers: 2.09 ms
   against 1.01 ms), because every reader is scheduled through the inbox individually.
@@ -396,16 +408,17 @@ covered by the realm command inbox.
 - A signal read in `build` that is *also* written in the same element's `did_update_view`
   is a foot-gun (mid-drain absorb budget, then a loud stop); the refusal in §5.2 covers
   `build` only, the budget covers the rest.
-- `Computed` requires `PartialEq` on its output: a computed value over a non-comparable
-  type must return a comparable projection. Documented, not hidden.
+- Derived values and effects are not here; until ADR-0075 lands, a cell that needs a
+  derived value reads every input and pays that rebuild (§5.6, form).
 
-## 7. Amendment to FOUNDATIONS C1 (required if accepted)
+## 7. Amendment to FOUNDATIONS C1 (applied)
 
 C1 currently reads "signals out … an application-author signal crate that drives
 `Element::mark_needs_build` from outside the catalog is a permitted post-parity opt-in,
 gated by a refusal trigger barring signal subscriptions from `build`/`layout`/`paint`."
 This ADR proposes replacing that clause with: *"A realm-owned reactive graph
-(`Signal`/`Memo`/`Effect`, ADR-0074) is a first-class state layer of the view crate.
+(`Signal` and its reader registry, ADR-0074; derived values and effects in ADR-0075)
+is a first-class state layer of the view crate.
 Reading a signal in `build` is the sanctioned subscription path (the same class as
 `depend_on`); **writing** a signal or creating an effect inside `build`/`layout`/`paint`
 is refused (trigger #24). The catalog crates may accept `Signal<T>` values as widget
@@ -418,7 +431,7 @@ explicit revision.
 
 ## 8. Phase-2 measurement plan and go/no-go
 
-Prototype scope: `Signal`/`Computed`/`Effect`/`Reactive` in `flui-view` behind `feature = "signals"`,
+Prototype scope: `Signal`/`Reactive` in `flui-view` behind `feature = "signals"`,
 reader registry, `RebuildReason::SignalChange`, `HeadlessBinding::reactive()`, one
 `UiCommand::SignalWrite` variant. No catalog changes.
 
@@ -437,8 +450,8 @@ Benchmarks (criterion, headless, `just bench-signals`), each in two variants —
 Go if, for the four "one thing changed" scenarios, **B rebuilds ≤ 3 elements** (the reader
 plus at most its memo-dependent readers) where A rebuilds the owning subtree, **relayout
 count is ≤ A**, `pump_frame` wall time for B is ≤ A, and the idle overhead of B is
-≤ 5 % of A's idle frame. Also go-conditional: the reader registry must implement the #1090
-`Theme`/`MediaQuery` field test from that issue's acceptance list with no second code path.
+≤ 5 % of A's idle frame. The #1090 `Theme`/`MediaQuery` field test through the same discipline is epic A4's
+acceptance, not this ADR's condition (§5.5).
 
 No-go if the idle overhead exceeds 5 %, if any scenario needs a `PartialEq` bound on plain
 `Signal<T>` to meet the rebuild count, or if the write-in-build refusal cannot be
@@ -454,7 +467,11 @@ cold build of the GPU stack inside the build slot), one run, criterion 2 s measu
 Counts come from `BuildOwner::last_frame_build_report` and the frame's difference of
 `PipelineOwner::layout_roots_total`; both variants mount the same tree shape (two elements
 per cell: a stateless cell view over a `SizedBox`). Counts do not depend on the profile;
-timings are dev-profile and only comparable A against B.
+timings are dev-profile and only comparable A against B. **Rows that used the reverted
+`Computed` prototype** ("form 20: field flips validity") are kept as a measurement of
+that design for ADR-0075; the shipped bench derives validity in the Save cell from all 20
+fields, so its B figure for a keystroke is the field reader **plus the Save cell** (4
+elements), to be re-measured in the next build slot.
 
 | scenario | variant | elements built | by reason | layout roots | change + frame |
 |---|---|---:|---|---:|---:|
@@ -463,9 +480,9 @@ timings are dev-profile and only comparable A against B.
 | list 10k: append one row | A setState | 20003 | initial_mount=2 parent_update=20000 state_change=1 | 2 | 34.63 ms |
 | list 10k: append one row | B signals | 20005 | initial_mount=2 parent_update=20002 signal_change=1 | 2 | 36.45 ms |
 | form 20: keystroke, validity unchanged | A setState | 44 | parent_update=43 state_change=1 | 1 | 39.08 µs |
-| form 20: keystroke, validity unchanged | **B signals** | **2** | parent_update=1 signal_change=1 | 1 | **17.19 µs** |
+| form 20: keystroke, validity unchanged (prototype: Save read a `Computed`) | **B signals** | **2** | parent_update=1 signal_change=1 | 1 | **17.19 µs** |
 | form 20: field flips validity | A setState | 44 | parent_update=43 state_change=1 | 1 | 39.24 µs |
-| form 20: field flips validity | **B signals** | **4** | parent_update=2 signal_change=2 | 1 | **17.92 µs** |
+| form 20: field flips validity (prototype `Computed`, reverted → ADR-0075) | **B signals** | **4** | parent_update=2 signal_change=2 | 1 | **17.92 µs** |
 | setting read by 3×200 cells | A setState | 1209 | parent_update=1208 state_change=1 | 1 | 1.01 ms |
 | setting read by 3×200 cells | B signals | 1200 | parent_update=600 signal_change=600 | 1 | 2.09 ms |
 | idle frame (list 10k mounted) | A setState | 0 | – | 0 | 4.06 µs |
@@ -513,3 +530,4 @@ concern, not a per-cell signal read; (2) structural list changes need `Memo<V>`/
   `crates/flui-app/src/app/ui_realm.rs:231,302`.
 - `git show a57b4140` (flui-reactivity), `git show 38620127` (removal).
 - `docs/research/state-model-2026.md` — market survey with sources.
+- ADR-0075 (Proposed) — derived values and effects; follow-ups #1248–#1254.

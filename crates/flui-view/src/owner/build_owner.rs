@@ -960,7 +960,7 @@ impl BuildOwner {
         self.reactive.set_scheduler(self.external_scheduler());
     }
 
-    /// The realm's reactive graph (ADR-0074): signals, memos, effects and the
+    /// The realm's reactive graph (ADR-0074): signals and the
     /// reader registry that schedules exactly the elements that read a
     /// written signal.
     #[cfg(feature = "signals")]
@@ -1784,8 +1784,6 @@ impl BuildOwner {
                 if replacement_location.is_some() {
                     element_owner.arm_lifecycle_panic_handoff();
                 }
-                #[cfg(feature = "signals")]
-                self.reactive.begin_element_build(id);
                 let views = element.element_mut().build_into_views(&mut element_owner);
                 if replacement_location.is_some() {
                     assert!(
@@ -1803,8 +1801,6 @@ impl BuildOwner {
             // (before the next dirty pop) preserves Flutter's
             // record-before-notify ordering (`framework.dart:5086`).
             tree.put_element(id, element);
-            #[cfg(feature = "signals")]
-            self.reactive.end_element_build(id);
 
             let new_views: Vec<Box<dyn View>> = match build_outcome {
                 Ok(views) => {

@@ -497,6 +497,21 @@ pub trait BuildContextExt: BuildContext {
     /// // Or extract a single field:
     /// let color: Option<Color> = ctx.depend_on::<MyTheme, _>(|t| t.data().primary_color);
     /// ```
+    /// Create a signal owned by **this element** (ADR-0074): released when the
+    /// element unmounts. Call it from `ViewState::init_state` (or
+    /// `did_change_dependencies`) and hold the `Copy` handle in the state;
+    /// read it in `build` with `Signal::get`/`with`.
+    ///
+    /// # Panics
+    ///
+    /// If called while this element's `build` is running
+    /// (`SignalError::CreatedDuringBuild`): a slot per rebuild is a leak.
+    #[cfg(feature = "signals")]
+    #[must_use]
+    fn signal<T: 'static>(&self, value: T) -> crate::reactive::Signal<T> {
+        self.reactive().signal_owned_by(self.element_id(), value)
+    }
+
     fn depend_on<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         let mut result: Option<R> = None;
         let mut once = Some(f);

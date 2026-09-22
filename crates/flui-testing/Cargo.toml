@@ -18,8 +18,8 @@ categories = ["gui"]
 autotests = false
 
 [features]
-# ADR-0074 phase-2 prototype: exposes `HeadlessBinding::reactive()` and runs the
-# effects phase (build -> effects -> layout -> paint) inside `pump_frame`.
+# ADR-0074: exposes `HeadlessBinding::reactive()` so a test creates, writes and
+# reads signals against the tree's own graph.
 signals = ["flui-view/signals"]
 
 [lints]

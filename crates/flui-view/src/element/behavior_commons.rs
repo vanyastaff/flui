@@ -182,7 +182,22 @@ where
     // opaque value via `IntoView::into_view()` + `Box::new`, producing an
     // owned `Box<dyn View>` with no escaping borrows. Authors need no
     // `+ use<…>` annotations on their `build()` impls.
-    match std::panic::catch_unwind(AssertUnwindSafe(build)) {
+    // ADR-0074: every element kind builds through this one function, so this
+    // is where "an element is building" is armed for the realm's reactive
+    // graph — reads re-derive the reader set, writes and slot creations are
+    // refused. Disarmed on both exits (the panic path below included).
+    #[cfg(feature = "signals")]
+    let building = core.self_id();
+    #[cfg(feature = "signals")]
+    if let Some(id) = building {
+        owner.reactive.begin_element_build(id);
+    }
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(build));
+    #[cfg(feature = "signals")]
+    if let Some(id) = building {
+        owner.reactive.end_element_build(id);
+    }
+    match outcome {
         Ok(child_view) => child_view,
         Err(payload) => {
             let Some(element) = core.self_id() else {

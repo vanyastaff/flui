@@ -1663,8 +1663,8 @@ else
   fi
 fi
 # -----------------------------------------------------------------------------
-# Trigger 24 (ADR-0074) — a realm-scoped signal is never WRITTEN, and no computed value or
-# effect is CREATED, inside a build / layout / paint body.
+# Trigger 24 (ADR-0074) — a realm-scoped signal is never WRITTEN or CREATED
+# inside a build / layout / paint body.
 #
 # Reading a signal in `build` is the sanctioned subscription path (the same
 # class as `depend_on`), and trigger 22's capability list is untouched. The
@@ -1677,17 +1677,31 @@ fi
 # Delegates to a brace-depth scanner with its own accept/reject fixtures:
 # `scripts/check-signal-write-scope.sh --self-test`.
 # -----------------------------------------------------------------------------
-signal_write_hits=$("${repo_root}/scripts/check-signal-write-scope.sh" crates 2>/dev/null || true)
-if [[ -n "${signal_write_hits}" ]]; then
-  echo "VIOLATION 24: a realm-scoped signal was written, or a computed/effect created,"
-  echo "             inside a build/layout/paint body (ADR-0074 §5.2)"
-  echo "see ${trigger_doc} (trigger 24)"
-  echo "${signal_write_hits}"
+# Fail closed: a scanner that cannot run is a red trigger, not a green one,
+# and its self-test runs first so a broken scanner cannot pass by silence.
+# Exit 0 = clean, 1 = violations, anything else = the scanner itself failed.
+if ! "${repo_root}/scripts/check-signal-write-scope.sh" --self-test >/dev/null 2>&1; then
+  echo "VIOLATION 24: scripts/check-signal-write-scope.sh failed its own self-test"
+  "${repo_root}/scripts/check-signal-write-scope.sh" --self-test 2>&1 | sed 's/^/  /' || true
   echo ""
   violations=$((violations + 1))
 else
-  if [[ "${verbose}" -eq 1 ]]; then
-    echo "ok    24: signals are only written, and memos/effects only created, outside frame phases"
+  signal_write_status=0
+  signal_write_hits=$("${repo_root}/scripts/check-signal-write-scope.sh" crates 2>&1) || signal_write_status=$?
+  if [[ "${signal_write_status}" -eq 1 ]]; then
+    echo "VIOLATION 24: a realm-scoped signal was written or created"
+    echo "             inside a build/layout/paint body (ADR-0074 §5.2)"
+    echo "see ${trigger_doc} (trigger 24)"
+    echo "${signal_write_hits}"
+    echo ""
+    violations=$((violations + 1))
+  elif [[ "${signal_write_status}" -ne 0 ]]; then
+    echo "VIOLATION 24: scripts/check-signal-write-scope.sh exited ${signal_write_status} (scanner failure, not a clean scan)"
+    echo "${signal_write_hits}"
+    echo ""
+    violations=$((violations + 1))
+  elif [[ "${verbose}" -eq 1 ]]; then
+    echo "ok    24: signals are only written and created outside frame phases"
   fi
 fi
 
