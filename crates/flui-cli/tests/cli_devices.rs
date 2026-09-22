@@ -126,20 +126,23 @@ fn devices_with_no_tools_on_path_reports_problems_not_errors() {
 /// devices` used to shell out to Safari's binary to read its version, which
 /// launches the GUI and never returns.
 ///
-/// The bound is relative to a `--version` baseline measured in the same
-/// test, not an absolute wall-clock number — an absolute threshold (the
-/// previous `< 20s`) flaked twice in one day on the shared CI runner (23s,
-/// then 28.9s) with nothing actually wrong: ambient load on a shared
-/// runner slows every process uniformly, `flui devices` included, and a
-/// fixed number can't tell "the runner is busy" from "the regression came
-/// back." `--version` pays the same fork+exec/dynamic-linking/first-touch
-/// page-fault cost as `devices` (launching the same binary) but does none
-/// of `devices`' own work (no `adb`/`xcrun` subprocess probing), so it
-/// absorbs ambient load the same way `devices` does and the *ratio*
-/// between them stays meaningful regardless of how loaded the runner is
-/// right now. The regression this guards against is not a fixed multiple
-/// slower — Safari's GUI launching and never returning hangs for MINUTES,
-/// not some proportion of however slow `--version` happens to run today.
+/// A `--version` baseline is still measured (and still reported in the
+/// panic message) as a diagnostic, but it is not used to scale the bound
+/// down — a first version of this test used `(baseline * 5).max(5s)`, and
+/// it flaked on *both* `ubuntu-latest` and `cli-macos` the same day it
+/// landed: `--version` pays only fork+exec/dynamic-linking cost, near-zero
+/// on a quiet runner (1.5ms / 5.3ms observed), while `devices` does real
+/// subprocess probing (`adb`/`xcrun`) whose cost has nothing to do with
+/// process-spawn overhead — so `baseline * 5` collapsed to a bound tighter
+/// than `devices`' own legitimate work (9.15s / 11.26s observed, both
+/// comfortably normal). The ratio was never meaningful; only the floor
+/// was ever doing anything, so the floor is now the whole bound, set well
+/// above every real number seen for `devices` on this runner class so far
+/// (the original flake's 23s/28.9s under the old flat `< 20s`, and the
+/// 9.15s/11.26s above) — 60s. Safari's GUI launching and never returning
+/// hangs indefinitely, not for tens of seconds, so 60s stays a wide
+/// margin below the regression this guards against while comfortably
+/// clearing realistic shared-runner noise.
 #[test]
 fn devices_finishes_well_under_the_old_gui_launch_hang() {
     let baseline_started = Instant::now();
@@ -150,15 +153,7 @@ fn devices_finishes_well_under_the_old_gui_launch_hang() {
     flui().arg("devices").assert().success();
     let elapsed = started.elapsed();
 
-    // 5x the baseline, with a floor: on a quiet runner `--version` can
-    // measure near-instant, and 5x of a near-zero duration would be an
-    // unrealistically tight bound for `devices`' real probing work. The
-    // floor exists to keep the bound sane when the ratio term is too
-    // small to be meaningful — it is not itself meant to catch a real
-    // hang; the ratio term does that, scaling up automatically under the
-    // exact ambient-load conditions that made the old fixed threshold
-    // flake.
-    let threshold = (baseline * 5).max(Duration::from_secs(5));
+    let threshold = Duration::from_secs(60);
     assert!(
         elapsed < threshold,
         "flui devices took {elapsed:?} (baseline `flui --version`: {baseline:?}, threshold: \
