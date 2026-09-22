@@ -48,6 +48,7 @@ mod config;
 mod error;
 mod proc;
 mod runner;
+mod serve;
 mod templates;
 mod types;
 mod ui;
@@ -164,6 +165,10 @@ enum Commands {
     /// While the app runs, these keys work when stdin is a terminal:
     /// `r` rebuild and reload, `R` full restart, `c` clear the screen,
     /// `h` help, `q` (or Ctrl-C) quit and stop the app.
+    ///
+    /// `--device browser:<name>` (a browser from `flui devices`) builds the
+    /// project for wasm32, serves the result on localhost, opens the
+    /// browser, and reloads the page after every rebuild.
     Run {
         /// Target device: a name or UDID from `flui devices`
         /// (default: this desktop)
@@ -202,6 +207,14 @@ enum Commands {
         /// Build profile (dev, release, bench)
         #[arg(long)]
         profile: Option<String>,
+
+        /// Dev-server port for `--device browser:…` (0 picks a free one)
+        #[arg(long, value_name = "PORT", default_value_t = 0)]
+        web_port: u16,
+
+        /// With `--device browser:…`: print the URL, do not open the browser
+        #[arg(long)]
+        no_open: bool,
     },
 
     /// Build the FLUI application
@@ -671,6 +684,8 @@ fn main() {
             package,
             target,
             profile,
+            web_port,
+            no_open,
         } => {
             if scene {
                 // clap enforces both via `requires`; the unwraps document that.
@@ -680,7 +695,17 @@ fn main() {
                     package.expect("BUG: clap `requires` guarantees --package with --scene");
                 commands::run::execute_scene(&scene_crate, &package, &target, release, verbose)
             } else {
-                commands::run::execute(device, release, !no_hot_reload, profile, verbose)
+                commands::run::execute(
+                    device,
+                    release,
+                    !no_hot_reload,
+                    profile,
+                    verbose,
+                    commands::run::WebOptions {
+                        port: web_port,
+                        open: !no_open,
+                    },
+                )
             }
         }
 

@@ -813,26 +813,29 @@ fn web_checks(_verbose: bool, promote: bool, installed_targets: Option<&[String]
     ]
 }
 
-/// `wasm-pack` or `wasm-bindgen` is convenient but not required — either
-/// one, or neither, only ever warns.
+/// `wasm-bindgen` is what `flui build web` and `flui run --device
+/// browser:…` call after `cargo build --target wasm32-unknown-unknown`. Its
+/// version must match the project's `wasm-bindgen` crate, which only a
+/// project can tell; the build checks that, this only asks whether the tool
+/// is there at all.
 fn check_wasm_tooling() -> Check {
     const ID: &str = "web.tooling";
     const SECTION: &str = "web";
-    const TITLE: &str = "WASM tooling";
+    const TITLE: &str = "wasm-bindgen";
 
-    if which::which("wasm-pack").is_ok() {
-        Check::ok(ID, SECTION, TITLE, "wasm-pack found".to_string())
-    } else if which::which("wasm-bindgen").is_ok() {
-        Check::ok(ID, SECTION, TITLE, "wasm-bindgen found".to_string())
-    } else {
-        Check::failing(
+    match crate::proc::probe_stdout(
+        std::process::Command::new("wasm-bindgen").arg("--version"),
+        crate::proc::PROBE_TIMEOUT,
+    ) {
+        Some(version) => Check::ok(ID, SECTION, TITLE, version),
+        None => Check::failing(
             ID,
             SECTION,
             TITLE,
             Status::Warn,
-            "neither wasm-pack nor wasm-bindgen found (optional)".to_string(),
-            Some(Fix::manual("cargo install wasm-pack")),
-        )
+            "wasm-bindgen not found (needed for web builds)".to_string(),
+            Some(Fix::manual("cargo install wasm-bindgen-cli --locked")),
+        ),
     }
 }
 
