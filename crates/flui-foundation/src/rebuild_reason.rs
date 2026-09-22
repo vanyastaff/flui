@@ -44,7 +44,10 @@ pub enum RebuildReason {
 impl RebuildReason {
     /// Every variant in stable diagnostic order — the backing table for
     /// [`RebuildReasons::iter`].
-    pub(crate) const ALL: [Self; 11] = [
+    /// Number of variants — the size a per-reason table needs.
+    pub const COUNT: usize = 11;
+
+    pub(crate) const ALL: [Self; Self::COUNT] = [
         Self::InitialMount,
         Self::ParentUpdate,
         Self::StateChange,

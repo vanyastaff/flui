@@ -140,9 +140,9 @@ What must be different, point by point:
 | a57b4140 | This ADR |
 |---|---|
 | process/thread-global runtime, tracker and batch state | every node is owned by one `UiRealm`; the tracker is a field of the build owner, not a static |
-| hook order is the identity of a value (`use_state` index) | a signal is a value with a handle; no call-order contract (§6.4) |
+| hook order is the identity of a value (`use_state` index) | a signal is a value with a handle; no call-order contract (§5.7) |
 | callbacks `Send + 'static`, `Mutex` inside | realm-affine `!Send` cells (ADR-0002 / ADR-0027 control plane); cross-thread writes are a `UiCommand` |
-| effects scheduled by the signal write itself | effects run in a named frame phase owned by the scheduler (§6.3) |
+| effects scheduled by the signal write itself | no effects in this ADR; ADR-0075 puts them in a named phase of the binding's frame |
 | independent of the Element tree | the only side effect on the tree is `schedule_build_for(element)` |
 
 ## 4. Decision
@@ -208,7 +208,7 @@ This is the one place the design touches the build seam, and it deliberately reu
 seam `depend_on` already has:
 
 - `ElementBuildContext` (`crates/flui-view/src/context/element_build_context.rs`) knows
-  the building `ElementId`. `Signal::get(cx)` calls `cx.reactive_read(slot)`, which appends
+  the building `ElementId`. `Signal::get(cx)` calls `cx.signal_read(slot)`, which appends
   `slot → element_id` to the reader set and returns the value (the depth the dirty heap
   needs is resolved by the inbox at drain time, as for every external schedule). This is *exactly*
   what `depend_on_inherited` does for a provider (`element_build_context.rs:267`), with a
@@ -356,6 +356,9 @@ A headless test constructs the same model with `binding.reactive()` and drives i
   re-attaches with `.attach()` on the owner side. `flui-app` tests the round trip.
 - Writes from a dead realm's sender return `OwnerGone` (channel identity), as every other
   realm-scoped command does.
+- `UiCommand::SignalWrite` and `UiCommandSender::send_signal_write` are **internal**
+  (`pub(crate)`, exercised by a realm test) until D3 (the async `Task` slice) vends a
+  `SignalSender` through the realm handle; this ADR does not add public realm API.
 
 ### 5.9 Testability
 
@@ -385,9 +388,10 @@ Nothing is removed in this ADR.
   masks keep the granularity signals would have given.
 - `ValueNotifier`/`ChangeNotifier` stay as the `Listenable` contract for controllers
   (`AnimationController`, `ScrollController`, `TextEditingController`,
-  `WidgetStatesController`). A `Signal<T>` can wrap a notifier (`Reactive::from_listenable`)
-  for migration; the reverse is a `ValueListenableBuilder` reading a signal via `peek` in
-  a listener.
+  `WidgetStatesController`). Migrating a notifier-backed value is a listener that writes the signal
+  (`notifier.add_listener(move || { let _ = sig.set(&r, notifier.value()); })`); the
+  reverse is a `ValueListenableBuilder` reading a signal via `peek` in a listener. No
+  adapter type ships.
 - `InheritedView` stays the *scoping* mechanism (nearest-ancestor lookup) and gains field
   masks via the shared registry (§5.5). A provider whose value is a `Signal<T>` is the
   recommended way to put realm state into a subtree.
@@ -420,8 +424,8 @@ This ADR proposes replacing that clause with: *"A realm-owned reactive graph
 (`Signal` and its reader registry, ADR-0074; derived values and effects in ADR-0075)
 is a first-class state layer of the view crate.
 Reading a signal in `build` is the sanctioned subscription path (the same class as
-`depend_on`); **writing** a signal or creating an effect inside `build`/`layout`/`paint`
-is refused (trigger #24). The catalog crates may accept `Signal<T>` values as widget
+`depend_on`); **writing** or **creating** a signal inside `build`/`layout`/`paint`
+is refused (trigger #24, and at run time). The catalog crates may accept `Signal<T>` values as widget
 inputs but never own application state."* The sentence "the smallest sound invalidation
 unit stays the Element" is unchanged and is what §5.3 relies on. ADR-0008's "signals
 route invalidation around the retained tree" objection is answered by §5.3: they do not;

@@ -461,7 +461,7 @@ impl ElementOwner<'_> {
     }
 
     /// The element left the tree: drop its signal reads and release every
-    /// signal/memo/effect created on its behalf (ADR-0074 §5.7).
+    /// signal created on its behalf (ADR-0074 §5.7).
     #[cfg(feature = "signals")]
     pub(crate) fn release_reactive(&self, element: ElementId) {
         self.reactive.release_element(element);

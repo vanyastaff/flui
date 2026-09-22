@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# Refusal trigger 24 (ADR-0074 §5.2): a realm-scoped signal is never WRITTEN,
-# and no memo/effect is CREATED, inside a build / layout / paint body.
+# Refusal trigger 24 (ADR-0074 §5.2): a realm-scoped signal is never WRITTEN
+# or CREATED inside a build / layout / paint body.
 #
 # Reading a signal in `build` is the sanctioned subscription path (the same
-# class as `depend_on`), so `Signal::get(cx)` / `with(cx)` / `peek(..)` are
-# fine anywhere. What this scanner refuses is the write side — `set(&r, ..)`,
-# `update(&r, ..)`, `set_if_changed(&r, ..)` — and graph growth —
-# `effect(..)`, `effect_owned_by(..)`, `computed(..)`, `computed_owned_by(..)` — inside
-# the frame phases: a write from `build` re-marks readers of the frame that is
-# still building (the unbounded-loop hazard trigger 22 exists for), and a memo
-# or effect created per build leaks one slot per rebuild.
+# class as `depend_on`), so `Signal::get(cx)` / `with(cx)` / `try_get` /
+# `try_with` / `peek(..)` are fine anywhere. What this scanner refuses is the
+# write side — `set(&r, ..)`, `update(&r, ..)`, `set_if_changed(&r, ..)` — and
+# slot creation — `signal(..)`, `signal_owned_by(..)`, `try_signal(..)`,
+# `try_signal_owned_by(..)` — inside the frame phases: a write from `build`
+# re-marks readers of the frame that is still building (the unbounded-loop
+# hazard trigger 22 exists for), and a slot created per build leaks one slot
+# per rebuild.
 #
 # This scanner is ADVISORY: a textual scan cannot tell a closure the build
 # defines for later (`on_tap(move |cx| sig.set(..))`, legal) from one it invokes

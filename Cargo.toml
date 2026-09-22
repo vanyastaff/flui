@@ -614,8 +614,8 @@ a11y = ["flui-app/a11y"]
 # are opted into per-crate, not through the facade)
 serde = ["flui-types/serde"]
 
-# ADR-0074 realm-scoped signals (`Signal`/`Computed`/`Effect` on the view layer, the
-# widget harness's `reactive()`, `UiCommand::SignalWrite`). Not in `default` yet: it
+# ADR-0074 realm-scoped signals (`Signal<T>` and its reader registry on the view layer,
+# the widget harness's `reactive()`, `UiCommand::SignalWrite`). Not in `default` yet: it
 # stays an opt-in until the #1090 field-mask registry lands on the same seam.
 signals = ["flui-view/signals", "flui-widgets/signals", "flui-app/signals", "flui-testing?/signals"]
 

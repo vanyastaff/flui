@@ -483,18 +483,43 @@ impl Reactive {
             .filter(|node| node.live)
             .count()
     }
+}
 
-    // -------------------------------------------------------- take / put back
+// -------------------------------------------------------- take / put back
 
+/// A slot's value on loan to a user closure. Dropping the loan puts the
+/// value back (if the slot is still the same generation) — **on unwind
+/// too**, so a panicking closure, which `build_or_recover` contains, does
+/// not leave the slot permanently [`SignalError::Reentrant`].
+struct Loan<'a> {
+    graph: &'a Reactive,
+    slot: SignalSlot,
+    value: Option<Box<dyn Any>>,
+}
+
+impl Drop for Loan<'_> {
+    fn drop(&mut self) {
+        if let Some(value) = self.value.take() {
+            self.graph.put_back(self.slot, value);
+        }
+    }
+}
+
+impl Reactive {
     /// Take `slot`'s value out on loan. The borrow of the graph ends before
     /// the caller's closure runs.
-    fn take(&self, slot: SignalSlot) -> Result<Box<dyn Any>, SignalError> {
+    fn loan(&self, slot: SignalSlot) -> Result<Loan<'_>, SignalError> {
         let mut inner = self.inner.borrow_mut();
         self.check(&inner, slot)?;
-        inner.nodes[slot.index as usize]
+        let value = inner.nodes[slot.index as usize]
             .value
             .take()
-            .ok_or(SignalError::Reentrant { index: slot.index })
+            .ok_or(SignalError::Reentrant { index: slot.index })?;
+        Ok(Loan {
+            graph: self,
+            slot,
+            value: Some(value),
+        })
     }
 
     /// Return a loaned value, unless the slot was released (or reused) while
@@ -506,17 +531,37 @@ impl Reactive {
         }
     }
 
+    /// The write-side refusal shared by every mutating entry point, checked
+    /// before anything else (so an equal `set_if_changed` inside `build` is
+    /// still refused).
+    fn refuse_if_building(&self, slot: SignalSlot) -> Result<(), SignalError> {
+        let inner = self.inner.borrow();
+        self.check(&inner, slot)?;
+        if let Some(element) = inner.building {
+            tracing::warn!(
+                target: "flui::signals",
+                slot = ?slot,
+                ?element,
+                "refused: a signal was written during build (write from a callback, init_state or a realm command)"
+            );
+            return Err(SignalError::WrittenDuringBuild { element });
+        }
+        Ok(())
+    }
+
     fn read<T: 'static, R>(
         &self,
         slot: SignalSlot,
         f: impl FnOnce(&T) -> R,
     ) -> Result<R, SignalError> {
-        let value = self.take(slot)?;
-        let typed = value
-            .downcast_ref::<T>()
+        let loan = self.loan(slot)?;
+        let typed = loan
+            .value
+            .as_deref()
+            .and_then(<dyn Any>::downcast_ref::<T>)
             .expect("BUG: a live slot of this graph holds a value of another type");
         let result = f(typed);
-        self.put_back(slot, value);
+        drop(loan);
         Ok(result)
     }
 
@@ -525,29 +570,21 @@ impl Reactive {
         slot: SignalSlot,
         f: impl FnOnce(&mut T) -> R,
     ) -> Result<R, SignalError> {
-        {
-            let inner = self.inner.borrow();
-            self.check(&inner, slot)?;
-            if let Some(element) = inner.building {
-                tracing::warn!(
-                    target: "flui::signals",
-                    slot = ?slot,
-                    ?element,
-                    "refused: a signal was written during build (write from a callback, init_state or a realm command)"
-                );
-                return Err(SignalError::WrittenDuringBuild { element });
-            }
-        }
-        let mut value = self.take(slot)?;
-        let typed = value
-            .downcast_mut::<T>()
+        self.refuse_if_building(slot)?;
+        let mut loan = self.loan(slot)?;
+        let typed = loan
+            .value
+            .as_deref_mut()
+            .and_then(<dyn Any>::downcast_mut::<T>)
             .expect("BUG: a live slot of this graph holds a value of another type");
         let result = f(typed);
-        self.put_back(slot, value);
+        drop(loan);
         self.mark(slot);
         Ok(result)
     }
+}
 
+impl Reactive {
     /// `slot` changed: schedule its element readers through the owner's inbox
     /// (one frame request for the burst; the inbox dedups by element).
     fn mark(&self, slot: SignalSlot) {
@@ -726,6 +763,7 @@ impl<T: 'static> Signal<T> {
     where
         T: PartialEq,
     {
+        r.refuse_if_building(self.slot)?;
         if r.read(self.slot, |current: &T| *current == value)? {
             return Ok(false);
         }
@@ -1004,6 +1042,61 @@ mod tests {
         assert_eq!(info[0].owner, Some(e1));
         assert_eq!(info[1].readers, vec![e1]);
         assert_eq!(info[1].owner, None);
+    }
+
+    #[test]
+    fn a_panicking_closure_returns_the_loaned_value_and_marks_nobody() {
+        let (r, inbox) = graph_with_inbox();
+        let a = r.signal(3u32);
+        let e1 = ElementId::new(1);
+        r.register_element_reader(a.slot(), e1);
+
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            a.peek(&r, |_| panic!("reader panics"))
+        }));
+        assert!(read.is_err());
+        assert_eq!(
+            a.peek(&r, |v| *v),
+            Ok(3),
+            "the value came back after the read panic"
+        );
+
+        let write = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            a.update(&r, |v| {
+                *v = 99;
+                panic!("writer panics");
+            })
+        }));
+        assert!(write.is_err());
+        assert_eq!(
+            a.peek(&r, |v| *v),
+            Ok(99),
+            "the (partially) written value came back; the slot is usable"
+        );
+        assert!(
+            scheduled(&inbox).is_empty(),
+            "a panicking write marks nobody"
+        );
+        a.set(&r, 5).unwrap();
+        assert_eq!(
+            scheduled(&inbox),
+            vec![e1],
+            "and the slot still schedules afterwards"
+        );
+    }
+
+    #[test]
+    fn an_equal_set_if_changed_inside_build_is_still_refused() {
+        let (r, _) = graph_with_inbox();
+        let a = r.signal(1u32);
+        let e1 = ElementId::new(1);
+        r.begin_element_build(e1);
+        assert_eq!(
+            a.set_if_changed(&r, 1),
+            Err(SignalError::WrittenDuringBuild { element: e1 })
+        );
+        r.end_element_build(e1);
+        assert_eq!(a.set_if_changed(&r, 1), Ok(false));
     }
 
     #[test]

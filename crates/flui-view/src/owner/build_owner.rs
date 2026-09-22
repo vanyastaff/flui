@@ -250,20 +250,20 @@ pub(crate) struct BuildScopeQueues {
 }
 
 /// Per-cause rebuild counters for one `build_scope`, indexed by the
-/// `RebuildReason` discriminant (`#[repr(u8)]`, eleven variants today; sixteen
-/// slots leave room for the `#[non_exhaustive]` enum to grow).
+/// `RebuildReason` discriminant (`#[repr(u8)]`), sized by `RebuildReason::COUNT`
+/// so a new variant grows the table with it.
 #[derive(Debug, Default)]
 struct FrameBuildCounts {
     /// Which causes appeared this frame — the bitset is also the stable
     /// iteration order for the report.
     seen: Option<RebuildReasons>,
-    counts: [usize; 16],
+    counts: [usize; RebuildReason::COUNT],
 }
 
 impl FrameBuildCounts {
     fn clear(&mut self) {
         self.seen = None;
-        self.counts = [0; 16];
+        self.counts = [0; RebuildReason::COUNT];
     }
 
     fn record(&mut self, reason: RebuildReason) {
@@ -285,7 +285,12 @@ impl FrameBuildCounts {
         self.seen
             .into_iter()
             .flat_map(RebuildReasons::iter)
-            .map(|reason| (reason, self.counts[reason as u8 as usize]))
+            .map(|reason| {
+                (
+                    reason,
+                    self.counts.get(reason as u8 as usize).copied().unwrap_or(0),
+                )
+            })
             .collect()
     }
 }

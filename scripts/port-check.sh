@@ -1670,9 +1670,10 @@ fi
 # class as `depend_on`), and trigger 22's capability list is untouched. The
 # write side is the hazard: `Signal::set`/`update`/`set_if_changed` from a
 # frame phase re-marks readers of the frame still running (the unbounded-loop
-# hazard trigger 22 exists for); `Reactive::effect`/`computed` created per build
-# leak one slot per rebuild. `Reactive::write` refuses the same at runtime
-# (`SignalError::WrittenDuringBuild`); this is the static half.
+# hazard trigger 22 exists for); a slot created per build (`signal`,
+# `signal_owned_by` and their `try_` forms) leaks one slot per rebuild. The
+# runtime refuses both (`SignalError::{WrittenDuringBuild, CreatedDuringBuild}`)
+# and is the gate; this scanner is the advisory static half.
 #
 # Delegates to a brace-depth scanner with its own accept/reject fixtures:
 # `scripts/check-signal-write-scope.sh --self-test`.

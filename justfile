@@ -624,7 +624,7 @@ panic-policy-check:
 # =============================================================================
 
 [group("port")]
-[doc("Run refusal-trigger grep regressions (22 triggers + named guards from docs/PORT.md)")]
+[doc("Run refusal-trigger grep regressions (24 triggers + named guards from docs/PORT.md)")]
 port-check:
     bash scripts/port-check.sh
 
