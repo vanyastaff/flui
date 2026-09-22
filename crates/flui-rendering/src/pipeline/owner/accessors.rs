@@ -1354,6 +1354,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.scheduler.nodes_needing_layout()
     }
 
+    /// How many dirty layout entries the most recent `run_layout` drained —
+    /// the relayout-root count of the last frame (ADR-0074 §8 telemetry).
+    /// Entries that turned out already clean or layout-poisoned are counted
+    /// too: they were scheduled, which is what the figure measures.
+    #[inline]
+    pub fn layout_roots_last_run(&self) -> usize {
+        self.scheduler.layout_drained_last_run()
+    }
+
     /// Returns the nodes needing paint.
     ///
     /// These are repaint boundaries that need to be painted in the next

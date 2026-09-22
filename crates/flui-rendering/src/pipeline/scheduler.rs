@@ -97,6 +97,9 @@ pub(super) struct DirtyTracker {
 
     /// True while `run_semantics` is iterating `dirty.needs_semantics`.
     debug_doing_semantics: bool,
+    /// Dirty layout entries drained by the most recent `run_layout` — the
+    /// per-frame relayout figure ADR-0074 §8 measures (reset at each run).
+    layout_drained_last_run: usize,
 
     /// Shared wake sink — the same `Arc` that `PipelineOwner` holds for its
     /// callback setters. Both clones point at the same
@@ -116,6 +119,7 @@ impl DirtyTracker {
             debug_doing_layout: false,
             debug_doing_paint: false,
             debug_doing_semantics: false,
+            layout_drained_last_run: 0,
             notifier,
             #[cfg(test)]
             eviction_passes: 0,
@@ -773,7 +777,19 @@ impl DirtyTracker {
     /// loop picks them up in the next iteration.
     pub(super) fn take_layout_batch_shallow_first(&mut self) -> Vec<DirtyNode> {
         self.dirty.needs_layout.sort_shallow_first();
-        self.dirty.needs_layout.drain().collect()
+        let batch: Vec<DirtyNode> = self.dirty.needs_layout.drain().collect();
+        self.layout_drained_last_run += batch.len();
+        batch
+    }
+
+    /// Start a new `run_layout` accounting window.
+    pub(super) fn reset_layout_drain_count(&mut self) {
+        self.layout_drained_last_run = 0;
+    }
+
+    /// Dirty layout entries drained by the most recent `run_layout`.
+    pub(super) fn layout_drained_last_run(&self) -> usize {
+        self.layout_drained_last_run
     }
 
     // =========================================================================

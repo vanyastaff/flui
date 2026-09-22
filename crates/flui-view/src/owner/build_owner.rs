@@ -249,6 +249,26 @@ pub(crate) struct BuildScopeQueues {
     scratch: Vec<DirtyElement>,
 }
 
+/// Per-frame rebuild telemetry, see [`BuildOwner::last_frame_build_report`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FrameBuildReport {
+    /// Distinct elements rebuilt by the last `build_scope`.
+    pub elements_built: usize,
+    /// Rebuilt-element count per cause, in stable diagnostic-name order.
+    pub by_reason: Vec<(RebuildReason, usize)>,
+}
+
+impl FrameBuildReport {
+    /// How many rebuilt elements carried `reason`.
+    #[must_use]
+    pub fn count(&self, reason: RebuildReason) -> usize {
+        self.by_reason
+            .iter()
+            .find(|(candidate, _)| *candidate == reason)
+            .map_or(0, |(_, count)| *count)
+    }
+}
+
 impl DirtyElement {
     /// Construct a new dirty-elements heap entry.
     pub(crate) fn new(id: ElementId, depth: usize) -> Self {
@@ -464,6 +484,10 @@ pub struct BuildOwner {
     /// or from the other half of an A↔B ping-pong — and spends one unit of
     /// [`Self::mid_drain_absorbs_left`].
     pub(crate) built_this_frame: HashSet<ElementId>,
+    /// How many elements this frame's drain rebuilt for each cause — the
+    /// per-frame telemetry ADR-0074 §8 measures against (`FrameStats` has no
+    /// rebuild figure). Reset with `built_this_frame` at every `build_scope`.
+    frame_builds_by_reason: HashMap<RebuildReason, usize>,
 
     /// Registry of live lazy-sliver [`ChildManager`]s, one per live adaptor
     /// element. Keyed by the sliver's `RenderId`; populated at mount and
@@ -661,6 +685,7 @@ impl BuildOwner {
             mid_drain_absorbs_left: MAX_MID_DRAIN_ABSORBS,
             mid_drain_cap_streak: false,
             built_this_frame: HashSet::new(),
+            frame_builds_by_reason: HashMap::new(),
             child_manager_registry: Arc::new(Mutex::new(HashMap::new())),
             layout_builder_registry: LayoutBuilderRegistry::default(),
             lazy_band_pass_budget: super::layout_builder::MAX_LAZY_BAND_PASSES,
@@ -1246,6 +1271,24 @@ impl BuildOwner {
     /// `schedule(reason)` from a worker thread is visible here before any frame runs.
     /// Returns a count, never a guard — the lock stays private (SP-6).
     #[must_use]
+    /// What the most recent `build_scope` rebuilt: the number of distinct
+    /// elements built this frame and, per [`RebuildReason`], how many of them
+    /// carried that cause (an element scheduled for two reasons counts once in
+    /// `elements_built` and once under each reason). Reset at every
+    /// `build_scope`, so read it after a pump, before the next one.
+    pub fn last_frame_build_report(&self) -> FrameBuildReport {
+        let mut by_reason: Vec<(RebuildReason, usize)> = self
+            .frame_builds_by_reason
+            .iter()
+            .map(|(reason, count)| (*reason, *count))
+            .collect();
+        by_reason.sort_by_key(|(reason, _)| reason.as_str());
+        FrameBuildReport {
+            elements_built: self.built_this_frame.len(),
+            by_reason,
+        }
+    }
+
     pub fn pending_external_builds(&self) -> usize {
         self.external_inbox.lock().len()
     }
@@ -1326,6 +1369,7 @@ impl BuildOwner {
         }
         self.mid_drain_absorbs_left = MAX_MID_DRAIN_ABSORBS;
         self.built_this_frame.clear();
+        self.frame_builds_by_reason.clear();
 
         self.build_scope_impl(tree);
     }
@@ -1778,6 +1822,9 @@ impl BuildOwner {
             // rescheduling itself, a child notifying it back, or one half of
             // an A↔B ping-pong — see `Self::absorb_mid_drain_inbox`.
             self.built_this_frame.insert(id);
+            for reason in reasons.iter() {
+                *self.frame_builds_by_reason.entry(reason).or_insert(0) += 1;
+            }
 
             // ADR-0040: the build ran to completion (the resume_unwind branch
             // can no longer take it) and the slot is restored — safe window

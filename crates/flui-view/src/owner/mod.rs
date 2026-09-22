@@ -22,7 +22,7 @@ mod layout_builder;
 mod rebuild_handle;
 mod recovered_panic;
 
-pub use build_owner::BuildOwner;
+pub use build_owner::{BuildOwner, FrameBuildReport};
 // `OwnerTag`/`claim_and_register`/`release_and_unregister` (ADR-0043) stay
 // crate-internal to `global_key_scope`, reached by `BuildOwner` and
 // `ElementOwner`'s register/unregister paths via the module path directly —

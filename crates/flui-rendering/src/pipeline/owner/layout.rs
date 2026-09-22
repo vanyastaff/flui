@@ -46,6 +46,7 @@ impl PipelineOwner<Layout> {
     /// synchronous child layout through the RenderTree. The child is laid
     /// out immediately and returns its size.
     pub fn run_layout(&mut self) -> crate::error::RenderResult<()> {
+        self.scheduler.reset_layout_drain_count();
         let _span =
             tracing::debug_span!("layout", dirty_nodes = self.scheduler.layout_queue_len(),)
                 .entered();

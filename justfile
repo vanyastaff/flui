@@ -655,6 +655,11 @@ port-markers:
 bench crate:
     cargo bench -p {{crate}}
 
+[group("perf")]
+[doc("ADR-0074 §8 go/no-go: setState vs signals rebuild/relayout counts + pump time on one widget tree")]
+bench-signals:
+    cargo bench -p flui-widgets --features signals --bench signals_rebuilds -- --noplot
+
 [group("bench")]
 [doc("Run benchmarks across the workspace")]
 bench-all:

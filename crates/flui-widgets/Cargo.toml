@@ -91,6 +91,8 @@ flui-testing = { workspace = true, optional = true }
 # link (the unit-test build reaches it via `cfg(test)` instead).
 # Checkout-only test edge; see docs/workspace-layers.toml release policy.
 flui-widgets = { path = ".", features = ["testing"] }
+# ADR-0074 §8 go/no-go benchmarks (`benches/signals_rebuilds.rs`).
+criterion = { workspace = true }
 # Integration tests drive the real layout pipeline through the render harness.
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
@@ -179,3 +181,11 @@ testing = ["dep:flui-testing", "flui-rendering/testing", "flui-interaction/testi
 
 [lints]
 workspace = true
+
+# ADR-0074 §8: setState (A) vs signals (B) on the same widget tree — rebuild counts
+# from `BuildOwner::last_frame_build_report`, relayout roots from
+# `PipelineOwner::layout_roots_last_run`, and pump wall time. `just bench-signals`.
+[[bench]]
+name = "signals_rebuilds"
+harness = false
+required-features = ["signals"]
