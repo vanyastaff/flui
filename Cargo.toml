@@ -637,13 +637,6 @@ name = "screenshot"
 path = "examples/screenshot.rs"
 required-features = ["material", "cupertino"]
 
-# Self-driving representative-workload probe for docs/BETA.md's "Performance
-# and resilience" row — see the example's own module doc.
-[[example]]
-name = "workload_probe"
-path = "examples/workload_probe.rs"
-required-features = ["material"]
-
 [[test]]
 name = "material_demo"
 path = "tests/material_demo.rs"
