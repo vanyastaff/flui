@@ -219,6 +219,7 @@ mod appkit_resize_jitter_probe {
             decorated: true,
             min_size: None,
             max_size: None,
+            ..Default::default()
         }) {
             Ok(pending) => match pending.try_ready() {
                 Ok(window) => window,

@@ -795,13 +795,24 @@ AppKit shows a window the moment it is ordered front, and the first frame
 reaches the compositor only once the GPU stack behind it exists and the first
 present lands — 2.81 s on a measured cold launch — so ordering an opaque window
 at open shows its bare background for that whole gap (the launch blank-window
-observation in `docs/BETA.md`). `WindowOptions::visible` is therefore the
-*intended* state: macOS orders a `visible: true` window front at `alphaValue`
-0 and restores alpha 1 when the embedder reports the first presented frame
-through `PlatformWindow::reveal_after_first_frame`, or when the window is shown
+observation in `docs/BETA.md`). The deferral is the caller's to ask for,
+through `WindowOptions::reveal`: with `WindowReveal::AfterFirstFrame`, macOS
+orders a `visible: true` window front at `alphaValue` 0 and restores alpha 1
+when the embedder reports the first presented frame through
+`PlatformWindow::reveal_after_first_frame`, or when the window is shown
 explicitly (`show`, `set_visible(true)`, `activate`). The flag is settled under
 the window's state lock, never inside an owner route, so exactly one caller
 performs the reveal.
+
+Opt-in rather than the backend's default, because the reveal report is a
+promise only a frame-loop owner can keep. `flui-app`'s runner makes it
+(`From<&AppConfig> for WindowOptions` selects `AfterFirstFrame`); a direct
+consumer of this crate — `examples/hello_world.rs`, `wgpu_window.rs`, the
+platform probes, a bare `open_secondary_window` — has no first frame to
+report, and a window whose reveal waits for a call that never comes is a
+window nobody sees. The default `WindowReveal::AtOpen` therefore leaves alpha
+untouched and those windows appear at open, as they always did. A backend that
+cannot defer treats `AfterFirstFrame` as `AtOpen`.
 
 Transparent rather than hidden, because a hidden alternative was tried and
 measured on 2026-09-21: an un-ordered window gets no Metal drawable — wgpu

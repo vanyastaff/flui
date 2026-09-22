@@ -32,6 +32,7 @@ fn test_window_creation_with_options() {
         decorated: true,
         min_size: Some(Size::new(px(320.0), px(240.0))),
         max_size: Some(Size::new(px(1920.0), px(1080.0))),
+        ..Default::default()
     };
 
     // Attempt to create window

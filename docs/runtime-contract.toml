@@ -174,7 +174,7 @@ declarations = [
     "pub use platforms::WinitPlatform;",
     "pub use shared::{PlatformHandlers, WindowCallbacks};",
     "pub use task::{Task, TaskLabel};",
-    "pub use traits::{ AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowShowError, };",
+    "pub use traits::{ AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError, };",
     "pub use traits::{ OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform, WaitError, WakeRegistrationError, WindowOpen, };",
     "pub fn current_platform() -> Result<Box<dyn Platform>, PlatformError> {",
     "pub fn headless_platform() -> Box<dyn Platform> {",

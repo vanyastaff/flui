@@ -48,6 +48,7 @@ fn test_platform_event_contract() {
         decorated: true,
         min_size: None,
         max_size: None,
+        ..Default::default()
     };
 
     let window = platform
@@ -206,6 +207,7 @@ fn test_cross_platform_event_consistency() {
         decorated: true,
         min_size: Some(Size::new(px(320.0), px(240.0))),
         max_size: Some(Size::new(px(1920.0), px(1080.0))),
+        ..Default::default()
     };
 
     let window = platform
@@ -288,6 +290,7 @@ fn test_event_dispatch_latency_benchmark() {
         decorated: true,
         min_size: None,
         max_size: None,
+        ..Default::default()
     };
 
     // Measure window creation time
@@ -364,6 +367,7 @@ fn test_event_handling_performance_baseline() {
             decorated: true,
             min_size: None,
             max_size: None,
+            ..Default::default()
         };
 
         let window = platform

@@ -21,6 +21,34 @@ use crate::{
     task::Task,
 };
 
+/// When a window opened [`WindowOptions::visible`]` == true` first becomes
+/// visible to the viewer.
+///
+/// The choice is the caller's because the two callers differ in what they
+/// can promise. An embedder that drives the frame loop (`flui-app`) reports
+/// its first presented frame through
+/// [`PlatformWindow::reveal_after_first_frame`], so it may ask for the
+/// reveal to wait for that frame and never show a bare background. A direct
+/// consumer of this crate — an example, a probe, a test — has no such report
+/// to give, and a window whose reveal waits for a call that never comes is a
+/// window nobody sees; for those, the reveal happens at open.
+///
+/// [`PlatformWindow::reveal_after_first_frame`]: crate::traits::PlatformWindow::reveal_after_first_frame
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WindowReveal {
+    /// The window is on screen when `open_window` returns (the default).
+    /// Every backend supports this.
+    #[default]
+    AtOpen,
+    /// The window is ordered on screen but stays invisible to the viewer
+    /// until [`PlatformWindow::reveal_after_first_frame`] is called; the
+    /// caller commits to calling it (or to a bounded fallback that does).
+    /// A backend that cannot defer treats this as [`Self::AtOpen`].
+    ///
+    /// [`PlatformWindow::reveal_after_first_frame`]: crate::traits::PlatformWindow::reveal_after_first_frame
+    AfterFirstFrame,
+}
+
 /// Window creation options
 #[derive(Debug, Clone)]
 pub struct WindowOptions {
@@ -33,16 +61,17 @@ pub struct WindowOptions {
     pub resizable: bool,
     /// Whether the window should be visible initially.
     ///
-    /// `true` is the INTENDED state, not a promise that the window is on
-    /// screen the moment `open_window` returns: a backend may defer the
-    /// physical reveal until the embedder reports its first presented frame
-    /// through [`PlatformWindow::reveal_after_first_frame`], so the window
-    /// never shows a bare background while the GPU stack behind it is
-    /// built. Such a backend answers `is_visible() == true` meanwhile.
-    /// `false` stays hidden until shown explicitly.
-    ///
-    /// [`PlatformWindow::reveal_after_first_frame`]: crate::traits::PlatformWindow::reveal_after_first_frame
+    /// `true` is the INTENDED state: with [`Self::reveal`] at its default
+    /// the window is on screen when `open_window` returns; with
+    /// [`WindowReveal::AfterFirstFrame`] a backend that can defer keeps it
+    /// invisible to the viewer until the embedder reports its first
+    /// presented frame, answering `is_visible() == true` meanwhile. `false`
+    /// stays hidden until shown explicitly, whatever `reveal` says.
     pub visible: bool,
+    /// When a `visible: true` window first becomes visible to the viewer;
+    /// see [`WindowReveal`] for who should pick what. Ignored for
+    /// `visible: false`.
+    pub reveal: WindowReveal,
     /// Whether window is decorated (has title bar)
     pub decorated: bool,
     /// Minimum window size
@@ -60,6 +89,7 @@ impl Default for WindowOptions {
             size: Size::new(px(800.0), px(600.0)),
             resizable: true,
             visible: true,
+            reveal: WindowReveal::AtOpen,
             decorated: true,
             min_size: None,
             max_size: None,

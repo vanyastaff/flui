@@ -42,7 +42,7 @@ use super::{display::refresh_period_for_screen, view};
 use crate::{
     config::WindowConfiguration,
     shared::WindowCallbacks,
-    traits::{CursorError, OpenWindowError, PlatformWindow, WindowId, WindowOptions},
+    traits::{CursorError, OpenWindowError, PlatformWindow, WindowId, WindowOptions, WindowReveal},
 };
 
 /// macOS window wrapper around NSWindow
@@ -199,11 +199,15 @@ struct MacOSWindowState {
     /// says otherwise, matching every other backend's initial state.
     occlusion_visible: bool,
 
-    /// The window was opened `visible: true` and is ordered front, but at
+    /// The window was opened `visible: true` with
+    /// [`WindowReveal::AfterFirstFrame`] and is ordered front, but at
     /// `alphaValue` 0: the first reveal — alpha back to 1 — is deferred
     /// until the embedder reports a presented frame
     /// ([`PlatformWindow::reveal_after_first_frame`]) or asks for the window
-    /// explicitly (`show`/`set_visible(true)`/`activate`).
+    /// explicitly (`show`/`set_visible(true)`/`activate`). Opt-in, because
+    /// only a caller that drives a frame loop can make that report; a
+    /// direct consumer opening a window with the default
+    /// [`WindowReveal::AtOpen`] sees it at once, alpha untouched.
     ///
     /// Ordered-but-transparent rather than hidden, and measured rather than
     /// assumed: a window that is not ordered on screen gets no Metal
@@ -226,6 +230,16 @@ impl std::fmt::Debug for MacOSWindow {
             .field("ns_window", &(self.ns_window as usize))
             .finish_non_exhaustive()
     }
+}
+
+/// Whether a window opened with `options` is ordered front at alpha 0 and
+/// revealed later (see `MacOSWindowState::first_reveal_pending`): only a
+/// `visible: true` window whose caller asked for
+/// [`WindowReveal::AfterFirstFrame`] and so committed to reporting its first
+/// presented frame. Everything else — the default `AtOpen`, or a hidden
+/// window — has alpha left alone.
+fn defers_first_reveal(options: &WindowOptions) -> bool {
+    options.visible && options.reveal == WindowReveal::AfterFirstFrame
 }
 
 impl MacOSWindow {
@@ -402,8 +416,9 @@ impl MacOSWindow {
             // Get backing scale factor
             let scale: f64 = msg_send![ns_window, backingScaleFactor];
 
-            // A window opened `visible: true` is ordered front now but fully
-            // transparent. AppKit shows a window the moment it is ordered,
+            // A window opened `visible: true` is ordered front now. With
+            // `WindowReveal::AfterFirstFrame` it is ordered fully
+            // transparent: AppKit shows a window the moment it is ordered,
             // and the first frame reaches the compositor only after the GPU
             // stack behind it is built and the first present lands —
             // measured at 2.81 s on a cold launch — so an opaque window
@@ -413,9 +428,14 @@ impl MacOSWindow {
             // drawable (see `MacOSWindowState::first_reveal_pending`). Alpha
             // 0 gives the surface a window to present into while the viewer
             // sees nothing; `reveal_after_first_frame` restores alpha 1.
-            // `visible: false` stays hidden until asked, as before.
-            if options.visible {
+            // The default `WindowReveal::AtOpen` leaves alpha alone — the
+            // caller has no first frame to report — and `visible: false`
+            // stays hidden until asked, as before.
+            let first_reveal_pending = defers_first_reveal(&options);
+            if first_reveal_pending {
                 let _: () = msg_send![ns_window, setAlphaValue: 0.0f64];
+            }
+            if options.visible {
                 let _: () = msg_send![ns_window, makeKeyAndOrderFront: NIL];
             }
 
@@ -450,7 +470,7 @@ impl MacOSWindow {
                     refresh_period,
                     cursor: CursorIcon::default(),
                     occlusion_visible: true,
-                    first_reveal_pending: options.visible,
+                    first_reveal_pending,
                 })),
                 windows_map: Arc::clone(&windows_map),
                 callbacks,
@@ -2708,6 +2728,26 @@ impl MacOSWindow {
 
 #[cfg(test)]
 mod tests {
+    /// The deferral is opt-in: the default `WindowOptions` — what every
+    /// direct consumer of this crate opens with — reveals at open, and a
+    /// hidden window never defers even when asked, so `show` later is a
+    /// plain reveal and not a reveal-plus-alpha-restore.
+    #[test]
+    fn first_reveal_is_deferred_only_for_visible_after_first_frame_windows() {
+        use super::{WindowOptions, WindowReveal, defers_first_reveal};
+
+        assert!(!defers_first_reveal(&WindowOptions::default()));
+        assert!(defers_first_reveal(&WindowOptions {
+            reveal: WindowReveal::AfterFirstFrame,
+            ..Default::default()
+        }));
+        assert!(!defers_first_reveal(&WindowOptions {
+            visible: false,
+            reveal: WindowReveal::AfterFirstFrame,
+            ..Default::default()
+        }));
+    }
+
     use super::super::owner_lane::test_owner_queue;
     use super::*;
 

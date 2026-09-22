@@ -402,6 +402,12 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             size: config.size,
             resizable: config.resizable,
             visible: true,
+            // The runner drives the frame loop and reports its first
+            // presented frame (`runner::first_reveal`), so it can promise
+            // the deferred reveal that a direct `flui-platform` consumer
+            // cannot; the backend that can defer never shows a bare
+            // background, the rest reveal at open.
+            reveal: flui_platform::WindowReveal::AfterFirstFrame,
             decorated: config.decorations,
             min_size: config.min_size,
             max_size: config.max_size,

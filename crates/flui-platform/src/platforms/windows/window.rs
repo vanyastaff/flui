@@ -2078,6 +2078,7 @@ mod tests {
             decorated: true,
             min_size: None,
             max_size: None,
+            ..Default::default()
         };
 
         let windows_map = Arc::new(Mutex::new(HashMap::new()));

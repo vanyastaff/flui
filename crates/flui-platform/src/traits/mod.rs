@@ -64,7 +64,7 @@ pub use owner::{
 };
 pub use platform::{
     Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback,
-    WindowEvent, WindowId, WindowMode, WindowOptions,
+    WindowEvent, WindowId, WindowMode, WindowOptions, WindowReveal,
 };
 pub use text_input::PlatformTextInput;
 pub use window::{

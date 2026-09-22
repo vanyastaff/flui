@@ -57,6 +57,7 @@ mod appkit_close_path_probe {
                 decorated: true,
                 min_size: None,
                 max_size: None,
+                ..Default::default()
             })
             .expect("open_window must construct a real NSWindow on the owner/main thread");
 
