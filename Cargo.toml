@@ -602,6 +602,11 @@ gpu-readback-tests = []
 # Without it the normal application graph excludes flui-hot-reload.
 hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-app/hot-reload"]
 
+# Native accessibility: the per-OS AccessKit adapters that hand the semantics
+# tree to VoiceOver / Narrator / Orca. Off by default (the Linux adapter
+# carries a D-Bus stack); `just macos-a11y` is the executable check.
+a11y = ["flui-app/a11y"]
+
 # === Core Features ===
 # Serialization support (flui-types only today; other crates' serde features
 # are opted into per-crate, not through the facade)
@@ -665,6 +670,14 @@ required-features = ["material"]
 name = "workload_probe"
 path = "examples/workload_probe.rs"
 required-features = ["material"]
+
+# The generated counter run for an assistive technology (`just macos-a11y`
+# reads its NSAccessibility tree and presses the button through AXPress);
+# see the example's own doc.
+[[example]]
+name = "a11y_probe"
+path = "examples/a11y_probe.rs"
+required-features = ["material", "a11y"]
 
 # Self-driving window-lifecycle probe for docs/BETA.md's lifecycle rows
 # (`just macos-lifecycle`): minimize/restore, hide/unhide, resize, with the

@@ -63,6 +63,7 @@ flui = { path = "…", default-features = false }
 | `cupertino` | off | `flui::cupertino` |
 | `localizations` | off | `flui::localizations` — global (multi-language) resources |
 | `hot-reload` | off | desktop/Android development reload machinery; absent from an ordinary production graph |
+| `a11y` | off | native accessibility: the AccessKit adapters that hand the semantics tree to VoiceOver / Narrator / Orca (off by default because the Linux adapter carries a D-Bus stack) |
 
 A module whose feature is off is *absent*, not empty. Every supported
 combination is compiled in isolation by CI (`just facade-combos`), so a

@@ -59,6 +59,17 @@ then `flui create` pins this tag as a git dependency.
   `flui-platform` consumer's window visible at open, since only a frame-loop
   owner can report a first frame. Explicit `show`/`set_visible(true)`/
   `activate` reveal immediately. Other backends are unchanged.
+- **Reachable from a screen reader** (`flui`, `flui-app`, `flui-semantics`,
+  `flui-widgets`): the facade gains an `a11y` feature forwarding
+  `flui-platform`'s AccessKit adapters (off by default; the Linux adapter
+  carries a D-Bus stack), which no consumer could enable before. A labelled
+  node with no role flag now resolves to AccessKit's `Label` rather than
+  `GenericContainer` — which AccessKit's consumer filter hides from assistive
+  technology, so every plain `Text` was invisible to VoiceOver — and
+  `GestureDetector` publishes tap and long-press semantics actions, so a
+  screen reader's activate gesture presses a button with no pointer event.
+  `just macos-a11y` drives the generated counter through `AXUIElement`:
+  the texts read as static text, `AXPress` on the button advances the count.
 - **Android touches reach the framework** (`flui-platform`): the Android
   backend filled `PointerState::position` with physical pixels where every
   other backend — and the framework's reader — uses logical pixels, so on a

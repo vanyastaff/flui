@@ -116,7 +116,7 @@ on a real OS, not that beta acceptance is complete.
 
 | Platform | Status | Evidence | Published limitations |
 |---|---|---|---|
-| macOS (AppKit, Metal, ARM64) | **beta candidate** | Live operator-equivalent input through real OS channels — `CGEventPost`/`CGHIDEventTap` clicks and `CGWindowListCopyWindowInfo` capture, no accessibility-tree shim (["Live verification through direct OS interaction — 2026-09-20"](#live-verification-through-direct-os-interaction--2026-09-20)); native close/quit/reopen (["Native macOS last-window exit"](#native-macos-last-window-exit), `exit_policy_probe`, `just macos-close-path`); launch-route rendering across direct exec, `open`, and `open -g` (`just macos-launch-render`, cited in the same live-verification section); the deferred-first-reveal fix for the white-window observation, commit `fd9f2938` ("Reveal a macOS window only once its first frame has been presented", `PlatformWindow::reveal_after_first_frame` / `FirstReveal`); IME routing/protocol coverage via the `just macos-ime` script (`ime_probe`, ADR-0069) | No native accessibility/assistive-technology check on any workflow; no physical Cmd+Q or menu-bar routing, nested modal loops, or foreign-loop embedding (only programmatic quit/terminate paths are proven); `just macos-ime` exercises routing and the `NSTextInputClient` protocol with synthesized key events — no genuine input method runs, so real IME composition is unverified; `open_window`'s `SharedRealm` policy is refused at admission (only `SeparateRealms` has content); a single unattributed first-run flake is recorded in "Live verification" and not reproduced; clipboard and OS suspend/resume are unverified |
+| macOS (AppKit, Metal, ARM64) | **beta candidate** | Live operator-equivalent input through real OS channels — `CGEventPost`/`CGHIDEventTap` clicks and `CGWindowListCopyWindowInfo` capture, no accessibility-tree shim (["Live verification through direct OS interaction — 2026-09-20"](#live-verification-through-direct-os-interaction--2026-09-20)); native close/quit/reopen (["Native macOS last-window exit"](#native-macos-last-window-exit), `exit_policy_probe`, `just macos-close-path`); launch-route rendering across direct exec, `open`, and `open -g` (`just macos-launch-render`, cited in the same live-verification section); the deferred-first-reveal fix for the white-window observation, commit `fd9f2938` ("Reveal a macOS window only once its first frame has been presented", `PlatformWindow::reveal_after_first_frame` / `FirstReveal`); IME routing/protocol coverage via the `just macos-ime` script (`ime_probe`, ADR-0069) | The assistive-technology check covers one control through one `AXUIElement` client, not a VoiceOver session (["Accessibility on macOS"](#accessibility-on-macos-the-counter-through-an-assistive-technology--2026-09-22), `just macos-a11y`); no physical Cmd+Q or menu-bar routing, nested modal loops, or foreign-loop embedding (only programmatic quit/terminate paths are proven); `just macos-ime` exercises routing and the `NSTextInputClient` protocol with synthesized key events — no genuine input method runs, so real IME composition is unverified; `open_window`'s `SharedRealm` policy is refused at admission (only `SeparateRealms` has content); a single unattributed first-run flake is recorded in "Live verification" and not reproduced; clipboard and OS suspend/resume are unverified |
 | iOS Simulator (iPhone 16e, iOS 26.2) | **experimental** | Touch input and Home/return state retention via XCUITest, since the backend publishes no accessibility tree (["iOS execution lifecycle foundation"](#ios-execution-lifecycle-foundation), `just ios-input-check`, `scripts/check-ios-input.py`); safe-area inset layout (["iOS safe-area layout"](#ios-safe-area-layout), `just ios-safe-area-check`); scene disconnect/reconnect protocol probe (["UIKit scene ownership"](#uikit-scene-ownership)) | No physical device tested; the oracle is pixels only (no a11y tree, so nothing is read by identifier); no IME or keyboard check; landscape orientation, keyboard occlusion, and other device classes are untested; background execution grants and full multiwindow/background-launch rendering remain unverified; the measured counter bundle was the CLI's 2026-09-19 build, not a fresh build of the current revision; `just ios-sim` (static Material app renders, animated app's pixels change between two screenshots 2 s apart and the process survives) was re-run on 2026-09-22 at `51c8fe63` on an iPhone 17 Pro simulator and passed both arms — the XCUITest touch check was not re-run |
 | Linux (X11 / Wayland) | **experimental** | CI-executed live smoke only: the `live-smoke` job in `.github/workflows/ci.yml` builds `flui`'s `sliver_demo` example and `flui-live-smoke`, then drives a real window with real X11 input under Xvfb (pixel and exit-code checks, occlusion verified against a real cover window), plus a Wayland variant under headless weston for close-path teardown ordering (`live-smoke` / `live-smoke-wayland` recipes in `justfile`; also described in the README under "Resilience that is tested, not assumed") | No operator-equivalent input verification as used on macOS (only the harness's synthetic/scripted input); no IME check; no resident/background lifecycle coverage; native accessibility bridges are not exercised by this job; X11 and Wayland coverage differ in scope (Wayland covers only close-path teardown ordering) |
 | Windows (Win32) | **unverified** | Cross-compiled Clippy only: `just cross-typecheck` runs `cargo clippy -p flui-platform --target x86_64-pc-windows-msvc --features a11y` | No live window, input, lifecycle, or IME verification has been performed on Windows for this candidate; the "Window-independent owner turns" and "Resident main-window validation" sections explicitly note Windows show/worker paths as cross-compilation evidence only |
@@ -713,6 +713,44 @@ a page styling the canvas `100vw`/`100vh`: the canvas measured 1100×700 for
 an 1100×700 viewport with no inline style, followed a viewport change to
 980×1260 at device pixel ratio 2 (backing store 1960×2520) with the counter
 re-centred, and a click on the re-laid-out button advanced the count.
+
+## Accessibility on macOS: the counter through an assistive technology — 2026-09-22
+
+`examples/a11y_probe.rs` (`just macos-a11y`, release, `--features
+material,a11y`) is the CLI counter template's tree with the facade's new
+`a11y` feature, which forwards `flui-platform`'s AccessKit adapters
+(NSAccessibility / UIA / AT-SPI) — off by default, since the Linux adapter
+carries a D-Bus stack, and until today unreachable from the facade at all.
+`scripts/macos-ax-client.swift` is an `AXUIElement` client, the API every
+macOS screen reader uses: it reads the window's accessibility tree, finds the
+button by label, performs `AXPress`, and reads the count back as static text.
+No pointer or keyboard event is synthesised anywhere.
+
+The first run found two defects, both fixed the same day:
+
+- The window's tree held the button (`AXButton title="Increment"`) but
+  neither `Text` — a labelled node with no role-bearing flag resolved to
+  AccessKit's `GenericContainer`, which AccessKit's consumer filter drops
+  from what an assistive technology sees. A labelled, flagless node is now
+  `Role::Label` (static text, what Flutter's bridges publish for the same
+  node); both texts appear as `AXStaticText` with their values.
+- `AXPress` was accepted (status 0) and nothing happened: `GestureDetector`
+  advertised no semantics action, so the button's node had no tap for the
+  platform to route. The detector now publishes tap and long-press actions
+  (`_GestureSemantics` parity); the `Send + Sync` platform handler records
+  the request and schedules a rebuild, and the `Rc` callback runs through the
+  owner-local post-frame handle after that frame — one frame of latency, no
+  unsafe. A headless round-trip test pins it, and the Material `Checkbox`
+  test learned that a detector adds an annotation node of its own.
+
+Accepted run (M1, macOS 27.0): before the press the tree read
+`AXStaticText "You have pushed the button this many times:"`, `AXStaticText
+"0"`, `AXButton "Increment"`; `AXPress` returned success; the tree then read
+`AXStaticText "1"` — `AX_CLIENT_RESULT=PASS`. Limits: one client, not a
+VoiceOver session (no announcements, no cursor navigation, no rotor); one
+control (button and static text); Windows UIA and Linux AT-SPI adapters
+compile under `--features a11y` (cross-typecheck) and are not exercised; iOS
+publishes no accessibility tree at all (its row says so).
 
 ## Window lifecycle on macOS: minimize, hide, resize — 2026-09-22
 

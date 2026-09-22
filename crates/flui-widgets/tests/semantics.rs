@@ -1276,7 +1276,9 @@ fn exclude_semantics_removes_its_subtree_from_the_a11y_tree() {
 // ===========================================================================
 
 use std::assert_matches;
+use std::cell::Cell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -1363,6 +1365,67 @@ fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() {
         1,
         "the handler must have run exactly once",
     );
+}
+
+/// A `GestureDetector`'s `on_tap` is reachable from assistive technology
+/// without any pointer event: the detector advertises a click on the
+/// nearest node, and a platform click request runs the `Rc` callback after
+/// the frame the request schedules (see `GestureDetector`'s
+/// "Assistive-technology activation").
+///
+/// Red-check: before the detector published the action, `supports_action`
+/// was false on this node and the count stayed 0 — the live `AXPress` half
+/// of `just macos-a11y` showed exactly that on the generated counter.
+#[test]
+fn a_gesture_detector_tap_is_reachable_through_a_platform_click() {
+    let activations = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&activations);
+
+    let (mut laid, tree, node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .button(true)
+            .label(LABEL)
+            .child(
+                flui_widgets::GestureDetector::new()
+                    .on_tap(move || counted.set(counted.get() + 1))
+                    .child(SizedBox::new(40.0, 20.0)),
+            ),
+    );
+
+    assert!(
+        tree.find_by_label(LABEL)
+            .expect("node was located a moment ago")
+            .supports_action(Action::Click),
+        "a GestureDetector with on_tap must advertise a click on its nearest node. \
+         Tree was:\n{}",
+        tree.describe()
+    );
+
+    invoke_semantics_action(
+        &laid.pipeline_owner(),
+        request(Action::Click, node_id, None),
+    )
+    .expect("a click on a node advertising one must resolve");
+    assert_eq!(
+        activations.get(),
+        0,
+        "the request is recorded, not performed inline — the callback runs after \
+         the frame the request schedules"
+    );
+
+    // The scheduled rebuild drains the request; the callback runs after
+    // that frame.
+    laid.pump();
+    assert_eq!(
+        activations.get(),
+        1,
+        "the on_tap callback must have run exactly once"
+    );
+
+    // A control: the request was consumed, not left armed.
+    laid.pump();
+    assert_eq!(activations.get(), 1);
 }
 
 /// Without a handler the platform is told nothing.

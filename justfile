@@ -551,6 +551,7 @@ facade-combos:
                  "--no-default-features --features material,cupertino,localizations" \
                  "--no-default-features --features hot-reload" \
                  "--no-default-features --features serde" \
+                 "--no-default-features --features a11y" \
                  "--all-features" \
                  ""; do
         echo "==> cargo clippy -p flui --locked --all-targets ${combo:-(default features)}"
@@ -737,6 +738,15 @@ if [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'LIFECYCLE_PROBE_RES
 fi"
 } else {
 "echo 'Skipping macos-lifecycle on this host: the probe drives AppKit window transitions on a real visible window, so it needs macOS with an active GUI session; on a Mac run: just macos-lifecycle'"
+} }}
+
+[group("test")]
+[doc("Assistive-technology check on a real Mac (docs/BETA.md's accessibility gap): builds examples/a11y_probe — the generated counter with the facade's `a11y` feature, so the AccessKit adapter is installed — runs it on a real window, and runs scripts/macos-ax-client.swift against the process: an AXUIElement client (what every macOS screen reader uses) that reads the window's accessibility tree, finds the Increment button by label, performs AXPress, and reads the count back as static text. No pointer or keyboard event is synthesised; if the count advances, a VoiceOver user could press the button. Exits 2 (CANNOT VERIFY) when this process is not trusted for accessibility, since a denied query decides nothing. Needs a macOS GUI session; skips with a message on other hosts")]
+macos-a11y:
+    {{ if os() == "macos" {
+"rc=0\npython3 -B scripts/check-macos-a11y.py || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'macos-a11y CANNOT VERIFY: this host could not take the measurement (accessibility trust not granted, or swiftc missing) — details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'macos-a11y FAILED: the button was not in the accessibility tree, AXPress was refused, or the count did not advance (tree dumps above)'\nfi\nexit \"$rc\""
+} else {
+"echo 'Skipping macos-a11y on this host: the check reads a real window through the macOS accessibility API, so it needs macOS with an active GUI session; on a Mac run: just macos-a11y'"
 } }}
 
 [group("quality")]

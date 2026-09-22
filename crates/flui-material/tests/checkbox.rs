@@ -61,10 +61,22 @@ fn mounting_a_checkbox_creates_a_semantics_annotated_tap_target() {
         constraints(),
     );
 
-    let semantics = laid
-        .try_find_by_render_type("RenderSemanticsAnnotations")
-        .expect("Checkbox must mount a Semantics wrapper");
-    assert_eq!(laid.size(semantics), size(TAP_TARGET, TAP_TARGET));
+    // Two annotation nodes are expected: the checkbox's own `Semantics`
+    // wrapper (the outer one, sized to the tap target) and the one its
+    // `GestureDetector` mounts to advertise the tap action to assistive
+    // technology. The outer one is the checkbox's.
+    let semantics = laid.find_all_by_render_type("RenderSemanticsAnnotations");
+    assert_eq!(
+        semantics.len(),
+        2,
+        "the Checkbox Semantics wrapper plus the GestureDetector's action node"
+    );
+    let outer = semantics
+        .iter()
+        .copied()
+        .find(|id| laid.size(*id) == size(TAP_TARGET, TAP_TARGET))
+        .expect("Checkbox must mount a Semantics wrapper sized to its tap target");
+    assert_eq!(laid.size(outer), size(TAP_TARGET, TAP_TARGET));
 }
 
 #[test]
