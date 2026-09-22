@@ -93,7 +93,8 @@ env:
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # checks — fast source gate. fmt + inventory + runtime-conformance +
-  # toolchain-consistency + panic-policy + port-check + typos + Taplo + the
+  # toolchain-consistency + panic-policy + port-check + typos + Taplo +
+  # nextest-partition + the
   # workflow linters (actionlint semantics, zizmor security audit). No
   # compile. Every
   # downstream job (clippy, test, doc, bench-compile) depends on this, so a
@@ -206,6 +207,15 @@ jobs:
       # compiled/tested content.
       - name: scripts/check-paths-filter-allowlist.py (docs-only allowlist vs. real include_str! targets)
         run: python3 -B scripts/check-paths-filter-allowlist.py
+
+      # `just test-ci` runs the suite as two nextest profiles whose default
+      # filters must be exact complements, and the nested-cargo timeout
+      # override must name the same tests; nextest cannot share one filter
+      # string, so .config/nextest.toml spells it three times. This fails when
+      # the copies drift (a drifted test loses its budget or silently drops
+      # out of `just test-ci`). Local mirror: `just text-check`.
+      - name: scripts/check-nextest-partition.py (nested-cargo filter copies agree)
+        run: python3 -B scripts/check-nextest-partition.py
 
       - name: actionlint (workflow semantics)
         run: actionlint

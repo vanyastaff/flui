@@ -100,7 +100,7 @@ check_bin ci taplo "cargo install --locked taplo-cli"
 # --- `just ci-full` -------------------------------------------------------------
 check_cargo_sub full hack "cargo install --locked cargo-hack"
 check_cargo_sub full deny "cargo install --locked cargo-deny"
-check_bin full wasm-tools "cargo install --locked wasm-tools"
+check_bin full wasm-tools "$(brew_or wasm-tools 'cargo install --locked wasm-tools')"
 want_wb="$(bash "$here/locked-version.sh" wasm-bindgen 2>/dev/null || true)"
 have_wb="$(wasm-bindgen --version 2>/dev/null | cut -d' ' -f2 || true)"
 if [ -n "$want_wb" ] && [ "$have_wb" = "$want_wb" ]; then
@@ -112,6 +112,8 @@ else
     row full "wasm-bindgen-cli" MISSING "the locked version is read with Python >= 3.11 (see above)" \
         "fix Python first; then: cargo install --locked wasm-bindgen-cli --version <Cargo.lock's wasm-bindgen>"
 fi
+check_bin full actionlint "$(brew_or actionlint 'go install github.com/rhysd/actionlint/cmd/actionlint@latest')"
+check_bin full zizmor "$(brew_or zizmor 'cargo install --locked zizmor')"
 check_target full wasm32-unknown-unknown
 for t in x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android aarch64-apple-ios; do
     check_target full "$t"
