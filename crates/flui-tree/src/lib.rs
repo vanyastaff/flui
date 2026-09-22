@@ -160,15 +160,20 @@ mod tests {
         // `VERSION` is wired from the package version (`env!("CARGO_PKG_VERSION")`);
         // assert its shape, not a pinned literal — a hardcoded value breaks on
         // every workspace version bump (it broke at the 0.1.0 -> 0.2.0 bump).
+        // The patch component may carry a semver pre-release suffix
+        // (`0.2.0-dev`, per the pre-1.0 MSRV-adjacent versioning policy), so
+        // only the part before a `-` is checked for numeric-ness.
         let parts: Vec<&str> = VERSION.split('.').collect();
         assert_eq!(
             parts.len(),
             3,
-            "VERSION should be semver `major.minor.patch`, got {VERSION:?}",
+            "VERSION should be semver `major.minor.patch[-pre]`, got {VERSION:?}",
         );
         assert!(
-            parts.iter().all(|part| part.parse::<u64>().is_ok()),
-            "VERSION components should be numeric, got {VERSION:?}",
+            parts
+                .iter()
+                .all(|part| part.split('-').next().unwrap_or(part).parse::<u64>().is_ok()),
+            "VERSION components should be numeric (ignoring a pre-release suffix), got {VERSION:?}",
         );
     }
 
