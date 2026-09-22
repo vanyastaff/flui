@@ -115,6 +115,9 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Degenerate case: sigma <= 0 → identity (kernel_radius = 0, only centre tap).
+    // `u` is the pass's uniform buffer, so this branch — and the
+    // `textureSample` it guards — is in uniform control flow for WebGPU's
+    // analysis. wgsl-uniformity: uniform
     if u.sigma <= 0.0 {
         let centre_uv: vec2<f32> = in.uv;
         let inside_centre: bool =
@@ -145,6 +148,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var acc: vec4<f32> = vec4<f32>(0.0);
     var tally: f32 = 0.0;
 
+    // `r` derives from `u.sigma` alone, so every invocation runs the same
+    // trip count and the sampling inside stays uniform. wgsl-uniformity: uniform
     for (var i: i32 = -r; i <= r; i++) {
         let sample_uv: vec2<f32> = in.uv + dir * f32(i) * texel_size;
 

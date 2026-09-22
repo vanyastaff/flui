@@ -143,6 +143,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     //   erode  (op ≈ 1): neutral = vec4(1) — min with 1 is opaque white.
     var acc: vec4<f32> = select(vec4<f32>(0.0), vec4<f32>(1.0), u.op > 0.5);
 
+    // `r` derives from the uniform buffer alone, so every invocation runs
+    // the same trip count and the sampling inside stays uniform.
+    // wgsl-uniformity: uniform
     for (var i: i32 = -r; i <= r; i++) {
         let sample_uv: vec2<f32> = in.uv + dir * f32(i) * texel_size;
 

@@ -719,9 +719,15 @@ macos-hot-reload-loop work="target/hot-reload-loop/work":
     cargo build -p flui-cli --locked
     python3 -B scripts/check-hot-reload-loop.py {{work}}
 
+[group("test")]
+[doc("Representative-workload budget on a real Mac (docs/BETA.md's \"Performance and resilience\" row): builds examples/workload_probe in release and runs it through scripts/check-macos-workload.py, which samples RSS while the probe drives itself — 20 s of scrolling a 2,000-row ListView::builder, 500 characters typed into a Material TextField, 5 s of enforced idleness — with no operator input and no synthetic OS events, then applies the budgets the script declares in its header (scroll/type p99 within 2 display periods, under 1 % of scroll frames over 2 periods, RSS growth under 10 %, at most 5 idle frames). Every run writes target/workload/<timestamp>.json with the raw phase lines, the RSS series and the verdict per budget; a failed budget is a finding to record in BETA.md, not a number to tune. Needs a macOS GUI session; skips with a message on other hosts")]
+macos-workload:
+    python3 -B scripts/check-macos-workload.py
+
 [group("quality")]
 [doc("Refuse a WGSL derivative (dpdx/dpdy/fwidth, or any function that takes one) inside a branch or after a conditional return: browsers' uniformity analysis rejects the module while native naga accepts it, and no host-side oracle catches the class (scripts/check-wgsl-uniformity.py)")]
 wgsl-uniformity-check:
+    python3 -B scripts/check-wgsl-uniformity.py --self-test
     python3 -B scripts/check-wgsl-uniformity.py
 
 [group("web")]
