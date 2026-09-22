@@ -10,6 +10,9 @@ repository.workspace = true
 description = "Command-line interface for FLUI - Project creation, building, and deployment automation"
 keywords = ["cli", "flui", "ui", "cross-platform", "build-tool"]
 categories = ["command-line-utilities", "development-tools", "gui"]
+# ARCHITECTURE.md records design decisions for people working on the crate;
+# the published archive carries the README and CHANGELOG a user reads.
+exclude = ["ARCHITECTURE.md"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 5
 # separate binaries). See the `[[test]] name = "cli_it"` target below.

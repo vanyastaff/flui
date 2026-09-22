@@ -1,14 +1,24 @@
-# FLUI CLI
+# flui
 
-`flui` is the command-line tool for the FLUI framework: it scaffolds projects,
-runs them with hot reload, builds for every platform, and checks your
-environment. It starts in about 25 ms, sends no telemetry, never touches the
-network unless you ask it to, and every command has a machine-readable mode.
-It is a standalone binary with no FLUI crate in its dependency graph, so
-`cargo install flui-cli` compiles no framework code and installs in a fraction
-of the time an app build takes.
+[![crates.io](https://img.shields.io/crates/v/flui-cli.svg)](https://crates.io/crates/flui-cli)
+[![CI](https://github.com/vanyastaff/flui/actions/workflows/ci.yml/badge.svg)](https://github.com/vanyastaff/flui/actions/workflows/ci.yml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.97-blue.svg)](Cargo.toml)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](#license)
 
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/vanyastaff/flui/blob/main/LICENSE-MIT)
+The command-line tool for the [FLUI](https://github.com/vanyastaff/flui)
+framework. It scaffolds projects, runs them with hot reload, builds for every
+platform, and checks your environment.
+
+- **Fast to install and start.** A standalone binary with no FLUI crate in its
+  dependency graph: `cargo install flui-cli` compiles no framework code, and
+  the tool starts in about 25 ms.
+- **Scriptable.** Every command has `--json` (NDJSON on stdout), a documented
+  exit-code contract, and `--non-interactive`; human text never touches
+  stdout.
+- **Honest.** No telemetry, no network access unless a command asks for it,
+  no placeholder features: everything listed here works and is tested.
+- **Familiar.** The commands and hot-keys follow `flutter`; see
+  [Coming from Flutter](#coming-from-flutter).
 
 ## Installation
 
@@ -23,6 +33,13 @@ git clone https://github.com/vanyastaff/flui.git
 cd flui
 cargo install --path crates/flui-cli --locked
 ```
+
+Requires Rust 1.97 or newer with Cargo, rustup and Git. Platform toolchains
+are only needed for the platforms you build: Xcode command line tools for
+macOS and iOS; the Android SDK (`ANDROID_HOME`), NDK, a JDK and `adb` for
+Android; the `wasm32-unknown-unknown` target and `wasm-bindgen` or
+`wasm-pack` for the web. `flui doctor` tells you what is missing and how to
+fix it.
 
 ## Quick start
 
@@ -249,8 +266,9 @@ types_watch = "types/src"
 ```
 
 `[app].name` and `[app].organization` become the macOS bundle name and
-identifier. There is no global configuration file and no telemetry setting,
-because the CLI stores nothing about you and sends nothing anywhere.
+identifier. Unknown keys are ignored. There is no global configuration file
+and no telemetry setting, because the CLI stores nothing about you and sends
+nothing anywhere.
 
 ## Coming from Flutter
 
@@ -279,15 +297,33 @@ The script is the only thing written to stdout; installation notes go to
 stderr and are silenced by `--quiet`. With `--json` the script is delivered
 inside a `completions` event instead.
 
-## Requirements
+## Contributing
 
-- Rust at or above the workspace MSRV (`flui doctor` reports it) with Cargo,
-  rustup and Git.
-- **macOS / iOS**: Xcode command line tools; iOS targets via `rustup`.
-- **Android**: Android SDK (`ANDROID_HOME`), NDK, a JDK, `adb` on `PATH`,
-  Android targets via `rustup`.
-- **Web**: `wasm32-unknown-unknown` target; `wasm-bindgen` or `wasm-pack`.
+Bug reports and pull requests are welcome at
+[github.com/vanyastaff/flui](https://github.com/vanyastaff/flui/issues).
+The CLI lives in `crates/flui-cli`; before opening a pull request, run:
+
+```bash
+cargo fmt -p flui-cli
+cargo clippy -p flui-cli --all-targets -- -D warnings
+cargo nextest run -p flui-cli
+```
+
+The integration tests drive the built `flui` binary, so every command has
+both a human-mode and a `--json` assertion; a change to output or exit codes
+belongs in the tables above and in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-MIT OR Apache-2.0
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE](LICENSE) or <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.
