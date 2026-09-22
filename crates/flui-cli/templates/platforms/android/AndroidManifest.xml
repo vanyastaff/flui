@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- No resources: the platform's default launcher icon applies. Add a
+         `res/` and an `android:icon` when the app has its own. -->
     <application
         android:label="{{app_name}}"
-        android:hasCode="false"
-        android:icon="@mipmap/ic_launcher">
+        android:hasCode="false">
         <activity
             android:name="android.app.NativeActivity"
             android:exported="true"

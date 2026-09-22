@@ -11,8 +11,8 @@ pub(crate) struct AndroidBuilder {
     workspace_root: PathBuf,
     android_home: PathBuf,
     ndk_home: PathBuf,
-    /// `None` when `JAVA_HOME` is unset: the native libraries are still
-    /// built, the Gradle APK step is skipped.
+    /// `JAVA_HOME` when set. Gradle needs it; the build-tools packager only
+    /// needs a `java` for `apksigner`, from here or from `PATH`.
     java_home: Option<PathBuf>,
 }
 
@@ -27,9 +27,6 @@ impl AndroidBuilder {
         let ndk_home = environment::resolve_ndk_home(&android_home)?;
 
         let java_home = environment::resolve_java_home().ok();
-        if java_home.is_none() {
-            let _ = crate::ui::warning("JAVA_HOME not set - APK build will be skipped".to_string());
-        }
 
         Ok(Self {
             workspace_root: workspace_root.to_path_buf(),
@@ -171,22 +168,14 @@ impl AndroidBuilder {
             });
         }
 
-        // Check Gradle (optional - warn if not found)
-        let gradle_wrapper = self.workspace_root.join("platforms").join("android").join(
-            if cfg!(target_os = "windows") {
-                "gradlew.bat"
-            } else {
-                "gradlew"
-            },
-        );
-
-        if !gradle_wrapper.exists() {
-            let _ = crate::ui::warning(
-                "Gradle wrapper not found - will build native libraries only".to_string(),
-            );
-            let _ = crate::ui::warning(
-                "To build APK, ensure Gradle is set up in platforms/android/".to_string(),
-            );
+        // Signing the APK runs `apksigner`, a Java program: a JDK from
+        // `JAVA_HOME` or a `java` on PATH. Gradle projects need the former.
+        let java_on_path = which::which("java").is_ok();
+        if self.java_home.is_none() && !java_on_path {
+            return Err(BuildError::ToolNotFound {
+                tool: "java (a JDK 17+, for apksigner)".to_string(),
+                install_hint: "install a JDK and set JAVA_HOME, or put `java` on PATH".to_string(),
+            });
         }
 
         // Check Android targets are installed
@@ -260,14 +249,15 @@ impl AndroidBuilder {
         for target in targets {
             crate::ui::debug(format!("Building for Android target: {target}"));
 
+            // The project's own package: its `[lib]` is a `cdylib` with
+            // `android_main` (what `flui create` writes), which `cargo ndk`
+            // drops into `jniLibs/<abi>/lib<name>.so`.
             let mut args = vec![
                 "ndk",
                 "-t",
                 target.as_str(),
                 "-o",
                 jni_libs_str,
-                "--manifest-path",
-                "crates/flui_app/Cargo.toml",
                 "build",
                 "--lib",
             ];
@@ -276,7 +266,12 @@ impl AndroidBuilder {
                 args.push(profile_flag);
             }
 
-            process::run(Command::new("cargo").args(&args)).await?;
+            process::run(
+                Command::new("cargo")
+                    .args(&args)
+                    .current_dir(&self.workspace_root),
+            )
+            .await?;
 
             // Find the .so file
             let abi_dir = jni_libs_dir.join(target);
@@ -319,30 +314,17 @@ impl AndroidBuilder {
             "gradlew"
         };
 
+        // A Gradle wrapper in the project means the app has grown a Java or
+        // Kotlin side and Gradle owns the APK; without one, the SDK's own
+        // build-tools package the NativeActivity app directly.
         let gradle_wrapper_path = android_dir.join(gradle_wrapper_name);
-        let gradle = match &self.java_home {
-            None => Err("JAVA_HOME not set"),
-            Some(_) if !gradle_wrapper_path.exists() => Err("Gradle wrapper not found"),
-            Some(java_home) => Ok(java_home),
-        };
-        let java_home = match gradle {
-            Ok(java_home) => java_home,
-            Err(reason) => {
-                let _ = crate::ui::warning(format!("{reason}, skipping APK build"));
-                crate::ui::debug(
-                    "native libraries built at platforms/android/app/src/main/jniLibs/".to_string(),
-                );
-                let so_file = artifacts
-                    .rust_libs
-                    .first()
-                    .ok_or_else(|| BuildError::Other("no native libraries found".to_string()))?;
-                let size_bytes = std::fs::metadata(so_file)?.len();
-                return Ok(FinalArtifacts {
-                    app_binary: so_file.clone(),
-                    size_bytes,
-                });
-            }
-        };
+        if !gradle_wrapper_path.exists() {
+            return self.package_with_build_tools(ctx, artifacts).await;
+        }
+        let java_home = self.java_home.as_ref().ok_or_else(|| BuildError::ToolNotFound {
+            tool: "JAVA_HOME (Gradle needs a JDK)".to_string(),
+            install_hint: "set JAVA_HOME to a JDK 17+, or remove platforms/android/gradlew to package without Gradle".to_string(),
+        })?;
 
         let gradle_task = match ctx.profile {
             crate::build::platform::Profile::Debug => "assembleDebug",
@@ -385,6 +367,73 @@ impl AndroidBuilder {
 
         Ok(FinalArtifacts {
             app_binary: output_apk,
+            size_bytes,
+        })
+    }
+}
+
+/// The Gradle-less delivery: `aapt2` + `zipalign` + `apksigner` from the
+/// SDK's build-tools, see `android_package.rs`.
+impl AndroidBuilder {
+    async fn package_with_build_tools(
+        &self,
+        ctx: &BuilderContext,
+        artifacts: &BuildArtifacts,
+    ) -> BuildResult<FinalArtifacts> {
+        let config = crate::config::FluiConfig::load_from(&self.workspace_root.join("flui.toml"))
+            .map_err(|error| {
+            BuildError::Other(format!("flui.toml names the package: {error}"))
+        })?;
+        let package = config.app.app_id();
+        let manifest = self
+            .workspace_root
+            .join("platforms")
+            .join("android")
+            .join("app")
+            .join("src")
+            .join("main")
+            .join("AndroidManifest.xml");
+        if !manifest.is_file() {
+            return Err(BuildError::path_not_found(
+                manifest,
+                "the Android platform is not scaffolded; run `flui platform add android`",
+            ));
+        }
+        let native_libs: Vec<(String, PathBuf)> = artifacts
+            .rust_libs
+            .iter()
+            .map(|lib| {
+                let abi = lib
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("arm64-v8a")
+                    .to_string();
+                (abi, lib.clone())
+            })
+            .collect();
+        let output =
+            ctx.output_dir
+                .join(format!("{}-{}.apk", config.app.name, ctx.profile.as_str()));
+        let tools =
+            super::android_package::BuildTools::locate(&self.android_home, self.java_home.clone())?;
+        tools
+            .package(&super::android_package::ApkSpec {
+                manifest: &manifest,
+                package: &package,
+                native_libs: &native_libs,
+                work_dir: &ctx.output_dir.join("apk-work"),
+                output: &output,
+            })
+            .await?;
+        let size_bytes = std::fs::metadata(&output)?.len();
+        crate::ui::debug(format!(
+            "APK {} ({} entries)",
+            output.display(),
+            super::android_package::archive_entries(&output)?.len()
+        ));
+        Ok(FinalArtifacts {
+            app_binary: output,
             size_bytes,
         })
     }

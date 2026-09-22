@@ -567,11 +567,14 @@ fn android_checks(
         .map(PathBuf::from);
 
     let mut checks = vec![sdk_check, check_adb(verbose, promote)];
-    // Without an SDK home the NDK row could only say "cannot check" — the
-    // SDK row already carries that failure, so do not repeat it.
+    // Without an SDK home the NDK and build-tools rows could only say
+    // "cannot check" — the SDK row already carries that failure, so do not
+    // repeat it.
     if let Some(sdk_path) = sdk_path.as_deref() {
         checks.push(check_android_ndk(Some(sdk_path), promote));
+        checks.push(check_android_build_tools(sdk_path, promote));
     }
+    checks.push(check_cargo_ndk(promote));
     checks.push(check_java(verbose, promote));
     checks.push(targets_check(
         "android.targets",
@@ -629,6 +632,68 @@ fn check_adb(verbose: bool, promote: bool) -> Check {
             Check::missing(promote),
             "adb not found on PATH".to_string(),
             Some(Fix::manual("install the Android SDK Platform Tools")),
+        ),
+    }
+}
+
+/// `aapt2`, `zipalign` and `apksigner`: what packages an APK when the
+/// project has no Gradle wrapper.
+fn check_android_build_tools(sdk_home: &std::path::Path, promote: bool) -> Check {
+    const ID: &str = "android.build-tools";
+    const SECTION: &str = "android";
+    const TITLE: &str = "Android build-tools";
+
+    let build_tools = sdk_home.join("build-tools");
+    let newest = std::fs::read_dir(&build_tools)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .filter(|entry| {
+            ["aapt2", "zipalign", "apksigner"].iter().all(|tool| {
+                let path = entry.path();
+                path.join(tool).is_file()
+                    || path.join(format!("{tool}.exe")).is_file()
+                    || path.join(format!("{tool}.bat")).is_file()
+            })
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .max();
+    match newest {
+        Some(version) => Check::ok(ID, SECTION, TITLE, version),
+        None => Check::failing(
+            ID,
+            SECTION,
+            TITLE,
+            Check::missing(promote),
+            format!(
+                "no build-tools with aapt2, zipalign and apksigner under {}",
+                build_tools.display()
+            ),
+            Some(Fix::manual("sdkmanager \"build-tools;35.0.0\"")),
+        ),
+    }
+}
+
+/// `cargo ndk` compiles the project's `cdylib` for Android.
+fn check_cargo_ndk(promote: bool) -> Check {
+    const ID: &str = "android.cargo-ndk";
+    const SECTION: &str = "android";
+    const TITLE: &str = "cargo-ndk";
+
+    match proc::probe_stdout(
+        std::process::Command::new("cargo").args(["ndk", "--version"]),
+        PROBE_TIMEOUT,
+    ) {
+        Some(version) => Check::ok(ID, SECTION, TITLE, version),
+        None => Check::failing(
+            ID,
+            SECTION,
+            TITLE,
+            Check::missing(promote),
+            "cargo-ndk not found".to_string(),
+            Some(Fix::manual("cargo install cargo-ndk --locked")),
         ),
     }
 }

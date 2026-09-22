@@ -89,6 +89,7 @@ which = "8.0"
 # (no password editor, no fuzzy matcher).
 console = "0.16"
 dialoguer = { version = "0.12", default-features = false }
+zip = { version = "8.6.0", default-features = false }
 
 
 # Terminal mode for `flui run`'s hot-keys (see commands/run.rs `raw_mode`):

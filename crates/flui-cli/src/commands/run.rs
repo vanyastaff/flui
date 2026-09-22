@@ -88,6 +88,16 @@ fn run_session(
     verbose: bool,
     web: WebOptions,
 ) -> CliResult<()> {
+    if let Target::Android(device) = target {
+        if matches!(project, Project::Worker(_)) {
+            return Err(CliError::Unsupported {
+                what: "running a worker hot-reload project on Android".into(),
+                reason: "the host/worker split targets the desktop; use `flui run --scene` for Android scene reload".into(),
+            });
+        }
+        let mut strategy = AndroidSession::new(device.clone(), release, hot_reload)?;
+        return dev_loop(&mut strategy);
+    }
     if let Target::Browser(browser) = target {
         if matches!(project, Project::Worker(_)) {
             return Err(CliError::Unsupported {
@@ -143,6 +153,15 @@ enum Target {
     IosSimulator(String),
     /// An installed browser, opened on the dev server's URL.
     Browser(Browser),
+    /// An Android device or emulator `adb` sees as online, by serial.
+    Android(AndroidDevice),
+}
+
+/// An online Android device from `flui devices`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AndroidDevice {
+    serial: String,
+    name: String,
 }
 
 /// A browser `flui devices` found, with what launches it: a `.app` bundle
@@ -160,6 +179,7 @@ impl Target {
             Self::Host => host_device_id(),
             Self::IosSimulator(udid) => udid.clone(),
             Self::Browser(browser) => browser.id.clone(),
+            Self::Android(device) => device.serial.clone(),
         }
     }
 
@@ -168,6 +188,7 @@ impl Target {
             Self::Host => format!("{} (this machine)", host_device_id()),
             Self::IosSimulator(udid) => format!("iOS simulator {udid}"),
             Self::Browser(browser) => format!("{} (browser)", browser.name),
+            Self::Android(device) => format!("{} (Android, {})", device.name, device.serial),
         }
     }
 }
@@ -248,15 +269,34 @@ fn match_target(device: &super::devices::Device) -> CliResult<Target> {
     match device.platform {
         DevicePlatform::Desktop => Ok(Target::Host),
         DevicePlatform::Ios => Ok(Target::IosSimulator(device.id.clone())),
-        DevicePlatform::Android => Err(CliError::Unsupported {
-            what: format!("running on Android device {}", device.id),
-            reason: "`flui run` cannot install to Android yet; build with `flui build android` and install the APK with adb, or use `flui run --scene` for scene hot reload".into(),
-        }),
+        DevicePlatform::Android => {
+            use crate::commands::devices::Status;
+            match device.status {
+                Status::Online => Ok(Target::Android(AndroidDevice {
+                    serial: device.id.clone(),
+                    name: device.name.clone(),
+                })),
+                Status::Unauthorized => Err(CliError::DeviceNotFound {
+                    name: device.id.clone(),
+                    hint: "the device has not authorized this computer; accept the USB debugging prompt on it".into(),
+                }),
+                status => Err(CliError::DeviceNotFound {
+                    name: device.id.clone(),
+                    hint: format!(
+                        "adb reports it as {}; reconnect it or boot the emulator",
+                        format!("{status:?}").to_ascii_lowercase()
+                    ),
+                }),
+            }
+        }
         DevicePlatform::Web => {
-            let launch = device.details.get("path").ok_or_else(|| CliError::Unsupported {
-                what: format!("running in {}", device.name),
-                reason: "`flui devices` found no launch path for this browser".into(),
-            })?;
+            let launch = device
+                .details
+                .get("path")
+                .ok_or_else(|| CliError::Unsupported {
+                    what: format!("running in {}", device.name),
+                    reason: "`flui devices` found no launch path for this browser".into(),
+                })?;
             Ok(Target::Browser(Browser {
                 id: device.id.clone(),
                 name: device.name.clone(),
@@ -1027,6 +1067,10 @@ fn environment_error(error: crate::build::error::BuildError) -> CliError {
             tool: format!("Rust target {target}"),
             suggestion: format!("install with: {install_cmd}"),
         },
+        BuildError::EnvVarError { var, reason } => CliError::ToolNotFound {
+            tool: var,
+            suggestion: reason,
+        },
         other => CliError::Build(other),
     }
 }
@@ -1128,6 +1172,226 @@ fn open_browser(browser: &Browser, url: &str) -> CliResult<()> {
         }
     }
     Ok(())
+}
+
+// ============================================================================
+// Android: build the APK, install, start, follow logcat
+// ============================================================================
+
+/// `flui run --device <serial>`: the APK installed with `adb install -r`,
+/// the `NativeActivity` started, and `adb logcat --pid` of the app kept as
+/// the loop's child, so its lines are the app's output and its exit means
+/// the app died. A change rebuilds, reinstalls and restarts.
+struct AndroidSession {
+    root: PathBuf,
+    device: AndroidDevice,
+    release: bool,
+    hot_reload: bool,
+    adb: PathBuf,
+    /// The application id `flui platform add android` wrote into the manifest.
+    package: String,
+    runtime: tokio::runtime::Runtime,
+}
+
+/// What Android launches; the scaffolded manifest declares exactly this.
+const ANDROID_ACTIVITY: &str = "android.app.NativeActivity";
+
+impl AndroidSession {
+    fn new(device: AndroidDevice, release: bool, hot_reload: bool) -> CliResult<Self> {
+        let root = std::env::current_dir()?;
+        let adb = super::devices::find_android_tool("adb", "platform-tools").ok_or_else(|| {
+            CliError::ToolNotFound {
+                tool: "adb".into(),
+                suggestion:
+                    "install Android SDK platform-tools and put `adb` on PATH, or set ANDROID_HOME"
+                        .into(),
+            }
+        })?;
+        let config = FluiConfig::load_from(&root.join("flui.toml"))
+            .context("flui.toml names the Android package (`[app] name` and `organization`)")?;
+        Ok(Self {
+            root,
+            device,
+            release,
+            hot_reload,
+            adb,
+            package: config.app.app_id(),
+            runtime: tokio::runtime::Runtime::new().context("start the build runtime")?,
+        })
+    }
+
+    fn adb(&self) -> Command {
+        let mut command = Command::new(&self.adb);
+        command.arg("-s").arg(&self.device.serial);
+        command
+    }
+
+    /// Run one bounded `adb` command that must succeed.
+    fn adb_ok(&self, args: &[&str], timeout: Duration) -> CliResult<std::process::Output> {
+        let rendered = format!("adb -s {} {}", self.device.serial, args.join(" "));
+        let output = crate::proc::output_with_timeout(self.adb().args(args), timeout)
+            .with_context(|| rendered.clone())?;
+        if output.status.success() {
+            Ok(output)
+        } else {
+            ui::error(format!(
+                "{rendered}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))?;
+            Err(CliError::CommandFailed {
+                context: rendered,
+                exit_code: output.status.code(),
+            })
+        }
+    }
+
+    /// Environment problems end the session; a compile failure returns
+    /// `None` and the loop keeps watching.
+    fn build(&self) -> CliResult<Option<PathBuf>> {
+        use crate::build::AndroidBuilder;
+        let builder = AndroidBuilder::new(&self.root).map_err(environment_error)?;
+        builder.validate_environment().map_err(environment_error)?;
+        let ctx = BuilderContextBuilder::new(self.root.clone())
+            .with_platform(Platform::Android {
+                targets: vec!["arm64-v8a".to_string()],
+            })
+            .with_profile(if self.release {
+                Profile::Release
+            } else {
+                Profile::Debug
+            })
+            .build();
+        std::fs::create_dir_all(&ctx.output_dir)?;
+        let mut apk = None;
+        timed_build(|| {
+            let result = self
+                .runtime
+                .block_on(builder.build_rust(&ctx))
+                .and_then(|artifacts| {
+                    self.runtime
+                        .block_on(builder.build_platform(&ctx, &artifacts))
+                });
+            match result {
+                Ok(delivered) => {
+                    apk = Some(delivered.app_binary);
+                    true
+                }
+                Err(error) => {
+                    let _ = ui::error(format!("android build failed: {error}"));
+                    false
+                }
+            }
+        });
+        Ok(apk)
+    }
+
+    fn install_and_start(&self, apk: &Path) -> CliResult<Child> {
+        ui::step(format!("Installing on {}...", self.device.name))?;
+        self.adb_ok(
+            &["install", "-r", &apk.display().to_string()],
+            Duration::from_secs(300),
+        )?;
+        ui::emit(
+            "run.android.install",
+            &serde_json::json!({ "serial": self.device.serial, "apk": apk }),
+        );
+        // A previous instance would keep the old library mapped.
+        let _ = self
+            .adb()
+            .args(["shell", "am", "force-stop", &self.package])
+            .output();
+        let component = format!("{}/{ANDROID_ACTIVITY}", self.package);
+        self.adb_ok(
+            &["shell", "am", "start", "-W", "-n", &component],
+            Duration::from_secs(60),
+        )?;
+        let pid = self.wait_for_pid()?;
+        ui::emit(
+            "run.android.start",
+            &serde_json::json!({ "package": self.package, "pid": pid }),
+        );
+        let mut logcat = self.adb();
+        logcat.args(["logcat", "--pid", &pid, "-v", "brief"]);
+        let child = spawn_child(logcat, "attach logcat")?;
+        announce_started(&child, &format!("{} started (pid {pid})", self.package));
+        Ok(child)
+    }
+
+    /// `am start -W` returns before the process is always visible to
+    /// `pidof`; a few retries cover it.
+    fn wait_for_pid(&self) -> CliResult<String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(output) = crate::proc::output_with_timeout(
+                self.adb().args(["shell", "pidof", &self.package]),
+                Duration::from_secs(10),
+            ) && output.status.success()
+            {
+                let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !pid.is_empty() {
+                    return Ok(pid);
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(CliError::RunFailed {
+                    details: format!(
+                        "{} did not start on {} (no process after 10 s); `adb logcat` shows why",
+                        self.package, self.device.serial
+                    ),
+                });
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+}
+
+impl Drop for AndroidSession {
+    /// `q` and Ctrl-C stop the app, like the desktop session stops its child.
+    fn drop(&mut self) {
+        let _ = self
+            .adb()
+            .args(["shell", "am", "force-stop", &self.package])
+            .output();
+    }
+}
+
+impl ReloadStrategy for AndroidSession {
+    fn watch_paths(&self) -> Vec<(PathBuf, bool)> {
+        if !self.hot_reload {
+            return Vec::new();
+        }
+        vec![
+            (self.root.join("src"), true),
+            (self.root.join("Cargo.toml"), false),
+            (self.root.join("platforms").join("android"), true),
+        ]
+    }
+
+    fn build_and_spawn(&mut self, child: &mut Option<Child>) -> CliResult<()> {
+        let Some(apk) = self.build()? else {
+            return Ok(());
+        };
+        *child = Some(self.install_and_start(&apk)?);
+        Ok(())
+    }
+
+    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<Child>) -> CliResult<()> {
+        stop_and_report(child);
+        ui::step("Rebuilding...")?;
+        self.build_and_spawn(child)?;
+        ui::emit(
+            "run.reload",
+            &serde_json::json!({ "kind": "restart", "ok": child.is_some() }),
+        );
+        if child.is_none() {
+            ui::warning("Build failed. Watching for changes... (fix errors and save to retry)")?;
+        }
+        Ok(())
+    }
+
+    fn reload_label(&self) -> &'static str {
+        "Rebuild, reinstall and restart"
+    }
 }
 
 /// Run `cargo build` and return whether it succeeded.
@@ -2188,5 +2452,61 @@ mod browser_tests {
             assert_eq!(program, "/Applications/Safari.app");
             assert_eq!(args, ["http://127.0.0.1:8080/"]);
         }
+    }
+}
+
+#[cfg(test)]
+mod android_tests {
+    use super::{ANDROID_ACTIVITY, AndroidDevice, Target, match_target};
+    use crate::DevicePlatform;
+    use crate::commands::devices::{Device, Kind, Status};
+    use std::collections::BTreeMap;
+
+    fn android_device(status: Status) -> Device {
+        Device {
+            id: "emulator-5554".into(),
+            name: "sdk gphone64 arm64".into(),
+            platform: DevicePlatform::Android,
+            kind: Kind::Emulator,
+            status,
+            details: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn an_online_android_device_is_a_target_by_serial() {
+        let target = match_target(&android_device(Status::Online)).expect("target");
+        assert_eq!(
+            target,
+            Target::Android(AndroidDevice {
+                serial: "emulator-5554".into(),
+                name: "sdk gphone64 arm64".into(),
+            })
+        );
+        assert_eq!(target.id(), "emulator-5554");
+        assert_eq!(
+            target.label(),
+            "sdk gphone64 arm64 (Android, emulator-5554)"
+        );
+    }
+
+    #[test]
+    fn offline_and_unauthorized_devices_are_not_found_with_a_reason() {
+        let unauthorized = match_target(&android_device(Status::Unauthorized)).expect_err("no");
+        assert_eq!(unauthorized.exit_code(), 5);
+        assert!(
+            unauthorized.to_string().contains("USB debugging"),
+            "{unauthorized}"
+        );
+        let offline = match_target(&android_device(Status::Offline)).expect_err("no");
+        assert_eq!(offline.exit_code(), 5);
+        assert!(offline.to_string().contains("offline"), "{offline}");
+    }
+
+    #[test]
+    fn the_launched_component_is_the_native_activity_the_manifest_declares() {
+        let manifest = include_str!("../../templates/platforms/android/AndroidManifest.xml");
+        assert!(manifest.contains(&format!("android:name=\"{ANDROID_ACTIVITY}\"")));
+        assert!(!manifest.contains("android:icon="), "no resources, no icon");
     }
 }
