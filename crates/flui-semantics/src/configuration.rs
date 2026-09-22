@@ -223,6 +223,24 @@ impl SemanticsConfiguration {
         self.has_been_annotated
     }
 
+    /// Whether everything this configuration says is an action handler: no
+    /// flags, no role, and no label, value, hint or tooltip.
+    ///
+    /// The shape of the annotation a `GestureDetector` mounts to advertise
+    /// its tap to assistive technology, which merges into the control's own
+    /// node above it. Diagnostics and widget tests use it to tell that
+    /// helper node from the control's wrapper.
+    pub fn is_actions_only(&self) -> bool {
+        self.has_been_annotated
+            && !self.actions.is_empty()
+            && self.flags.is_empty()
+            && self.role == SemanticsRole::None
+            && self.label.is_none()
+            && self.value.is_none()
+            && self.hint.is_none()
+            && self.tooltip.is_none()
+    }
+
     #[inline]
     fn mark_annotated(&mut self) {
         self.has_been_annotated = true;
@@ -2051,5 +2069,35 @@ mod tests {
 
         parent.absorb(&child);
         assert_eq!(parent.role(), SemanticsRole::Dialog);
+    }
+}
+
+#[cfg(test)]
+mod actions_only_tests {
+    use super::*;
+
+    #[test]
+    fn is_actions_only_names_the_gesture_detectors_helper_shape() {
+        let mut actions_only = SemanticsConfiguration::new();
+        actions_only.add_action(SemanticsAction::Tap, std::sync::Arc::new(|_, _| {}));
+        assert!(actions_only.is_actions_only());
+
+        assert!(
+            !SemanticsConfiguration::new().is_actions_only(),
+            "nothing at all"
+        );
+
+        let mut labelled = SemanticsConfiguration::new();
+        labelled.add_action(SemanticsAction::Tap, std::sync::Arc::new(|_, _| {}));
+        labelled.set_label("Increment");
+        assert!(
+            !labelled.is_actions_only(),
+            "a label makes it a control's own"
+        );
+
+        let mut button = SemanticsConfiguration::new();
+        button.add_action(SemanticsAction::Tap, std::sync::Arc::new(|_, _| {}));
+        button.set_button(true);
+        assert!(!button.is_actions_only(), "a flag makes it a control's own");
     }
 }

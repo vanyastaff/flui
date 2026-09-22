@@ -59,8 +59,12 @@ fn mounting_a_radio_creates_a_semantics_annotated_tap_target() {
         constraints(),
     );
 
+    // The wrapper node is the Radio's own; its `GestureDetector` adds
+    // a second, action-only annotation beneath it for assistive technology.
     let semantics = laid
-        .try_find_by_render_type("RenderSemanticsAnnotations")
+        .find_semantics_wrappers()
+        .into_iter()
+        .next()
         .expect("Radio must mount a Semantics wrapper");
     assert_eq!(laid.size(semantics), size(TAP_TARGET, TAP_TARGET));
 }

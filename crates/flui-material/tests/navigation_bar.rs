@@ -298,9 +298,11 @@ fn mounting_creates_a_tab_bar_container_and_one_annotated_node_per_destination()
         bar_constraints(300.0, 800.0),
     );
 
-    let semantics_nodes = laid.find_all_by_render_type("RenderSemanticsAnnotations");
     // One container node for the bar itself (`SemanticsRole::TabBar`) plus
-    // one per destination (`SemanticsRole::Tab`).
+    // one per destination (`SemanticsRole::Tab`); each destination's
+    // `GestureDetector` adds an action-only annotation of its own beneath,
+    // which `find_semantics_wrappers` leaves out.
+    let semantics_nodes = laid.find_semantics_wrappers();
     assert_eq!(
         semantics_nodes.len(),
         1 + three_destinations().len(),

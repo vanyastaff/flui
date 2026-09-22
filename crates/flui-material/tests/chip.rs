@@ -63,8 +63,12 @@ fn color_property(color: Color) -> String {
 /// `Material`/content chain in full (mirrors `tests/checkbox.rs`'s own
 /// semantics-node-as-container-size assertion).
 fn container_size(laid: &common::LaidOut) -> flui_types::Size {
+    // The wrapper node is the chip's own; its `GestureDetector`s add
+    // action-only annotations beneath it for assistive technology.
     let semantics = laid
-        .try_find_by_render_type("RenderSemanticsAnnotations")
+        .find_semantics_wrappers()
+        .into_iter()
+        .next()
         .expect("Chip/FilterChip must mount a Semantics wrapper");
     laid.size(semantics)
 }
