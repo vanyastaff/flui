@@ -1,4 +1,4 @@
-[← Crates Map](crates.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Back to README](../README.md) · [Contributing →](contributing.md)
+[← Crates Map](crates.md) · [Foundations](FOUNDATIONS.md) · [Roadmap](ROADMAP.md) · [Back to README](../README.md) · [Contributing →](../CONTRIBUTING.md)
 
 # Testing
 
@@ -667,5 +667,5 @@ A change cannot be merged if any of these fail. If you encounter a flaky test, f
 ## See Also
 
 - [Getting Started](getting-started.md) — toolchain setup and first build
-- [Contributing](contributing.md) — quality gates, commits, code style
+- [Contributing](../CONTRIBUTING.md) — planning a change, git hygiene, bug reports
 - [`AGENTS.md`](../AGENTS.md) — current performance and testing requirements

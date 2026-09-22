@@ -176,4 +176,4 @@ See [Hot Reload](hot-reload.md) for workflows, `ReloadStrategy`, and integration
 - [`AGENTS.md`](../AGENTS.md) — the current cross-tool rules (`.ai-factory/ARCHITECTURE.md` and `.specify/memory/constitution.md` were the historical originals; neither exists in this checkout)
 - [Roadmap](ROADMAP.md) — construction phases from current to target
 - [Crates Map](crates.md) — per-layer crate inventory
-- [Contributing](contributing.md) — workflow and conventions
+- [Contributing](../CONTRIBUTING.md) — workflow and conventions
