@@ -234,6 +234,15 @@ Run test stages from one checkout at a time, or give each checkout its own
 target directory for tests. Sharing is safe for `check`, `clippy` and builds,
 which Cargo serializes on its lock.
 
+A shared target is a cache, not a guarantee. On 2026-09-22 a `just ci` in one
+worktree failed to compile `flui-view` against a `flui-foundation` that lacked
+a constant its own source defined (`RebuildReason::COUNT`), and the same
+`cargo test -p flui-view --no-run` passed immediately afterwards with nothing
+else building. The stale artifact's origin was not established. So an
+inexplicable compile error under a shared `CARGO_TARGET_DIR` is re-run first,
+and a result that has to be trusted on its own (a merge gate, a measurement)
+comes from a checkout's own target directory.
+
 ## Build
 
 ```bash
