@@ -3,9 +3,9 @@
 //! The derive lives in a `proc-macro = true` crate, which cannot use its own
 //! derives in unit tests (and resolves the runtime path from the consumer's
 //! manifest); this compilation unit exercises the generated code against the
-//! real runtime types. `prelude::*` brings both the derive and the trait.
+//! real runtime types. `prelude::*` brings the derive; the trait is imported by name.
 
-use flui_view::FieldMask;
+use flui_view::{FieldMask, InheritedData as _};
 use flui_view::prelude::*;
 
 #[derive(Clone, PartialEq, InheritedData)]
