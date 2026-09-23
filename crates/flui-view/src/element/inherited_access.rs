@@ -75,12 +75,7 @@ pub trait InheritedElementAccess {
     /// captured without leaving stale entries, and unions `mask` into the
     /// fields it depends on (issue #1090: a dependent that read two fields in
     /// two builds depends on both).
-    fn record_dependent(
-        &mut self,
-        dependent: ElementId,
-        depth: usize,
-        mask: crate::view::FieldMask,
-    );
+    fn record_dependent(&mut self, dependent: ElementId, depth: usize, mask: crate::view::FieldSet);
 
     /// Like [`record_dependent`](Self::record_dependent), for a read made in a
     /// lifecycle hook (`init_state`, `did_change_dependencies`) or outside a
@@ -90,10 +85,10 @@ pub trait InheritedElementAccess {
         &mut self,
         dependent: ElementId,
         depth: usize,
-        mask: crate::view::FieldMask,
+        mask: crate::view::FieldSet,
     );
 
-    /// Reset the fields `dependent` read in `build` to `FieldMask::NONE`
+    /// Reset the fields `dependent` read in `build` to `FieldSet::NONE`
     /// (keeping its depth), right before the build drain re-applies the reads
     /// of its latest build. A no-op when the id is not registered.
     fn reset_dependent_mask(&mut self, dependent: ElementId);

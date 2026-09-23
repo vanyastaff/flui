@@ -1283,10 +1283,10 @@ where
 // ============================================================================
 
 /// One dependent of an `InheritedElement`: its tree depth (for the dirty heap)
-/// and the fields it read (issue #1090; [`FieldMask::ALL`] for a whole-type
+/// and the fields it read (issue #1090; [`FieldSet::ALL`] for a whole-type
 /// dependency).
 ///
-/// [`FieldMask::ALL`]: crate::view::FieldMask::ALL
+/// [`FieldSet::ALL`]: crate::view::FieldSet::ALL
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DependentEntry {
@@ -1294,18 +1294,18 @@ pub struct DependentEntry {
     pub depth: usize,
     /// Fields read in the dependent's latest `build` (re-derived per build,
     /// ADR-0074 §5.5 reset-on-build).
-    pub mask: crate::view::FieldMask,
+    pub mask: crate::view::FieldSet,
     /// Fields read in `init_state` / `did_change_dependencies`: kept until
     /// unmount, never reset by a rebuild (a state that acquires a value in a
     /// lifecycle hook and does not re-read it in `build` stays subscribed).
-    pub lifecycle_mask: crate::view::FieldMask,
+    pub lifecycle_mask: crate::view::FieldSet,
 }
 
 impl DependentEntry {
     /// Every field this dependent is notified for: build reads plus
     /// lifecycle reads.
     #[must_use]
-    pub fn fields(&self) -> crate::view::FieldMask {
+    pub fn fields(&self) -> crate::view::FieldSet {
         self.mask | self.lifecycle_mask
     }
 }
@@ -1319,7 +1319,7 @@ impl DependentEntry {
 ///
 /// Stored as `HashMap<ElementId, DependentEntry>` — dependent id mapped to its
 /// depth in the element tree and the provider fields it read
-/// ([`FieldMask`](crate::view::FieldMask), #1090). The depth is captured at
+/// ([`FieldSet`](crate::view::FieldSet), #1090). The depth is captured at
 /// `depend_on_inherited` time and used during `on_view_updated` to call
 /// `ElementOwner::schedule_build_for` with a typed rebuild reason, without an
 /// extra tree traversal (the tree is not in scope at `on_view_updated`
@@ -1382,12 +1382,12 @@ impl<V: InheritedView> InheritedBehavior<V> {
         &mut self,
         element: ElementId,
         depth: usize,
-        mask: crate::view::FieldMask,
+        mask: crate::view::FieldSet,
     ) {
         let entry = self.dependents.entry(element).or_insert(DependentEntry {
             depth,
-            mask: crate::view::FieldMask::NONE,
-            lifecycle_mask: crate::view::FieldMask::NONE,
+            mask: crate::view::FieldSet::NONE,
+            lifecycle_mask: crate::view::FieldSet::NONE,
         });
         entry.depth = depth;
         entry.mask |= mask;
@@ -1399,12 +1399,12 @@ impl<V: InheritedView> InheritedBehavior<V> {
         &mut self,
         element: ElementId,
         depth: usize,
-        mask: crate::view::FieldMask,
+        mask: crate::view::FieldSet,
     ) {
         let entry = self.dependents.entry(element).or_insert(DependentEntry {
             depth,
-            mask: crate::view::FieldMask::NONE,
-            lifecycle_mask: crate::view::FieldMask::NONE,
+            mask: crate::view::FieldSet::NONE,
+            lifecycle_mask: crate::view::FieldSet::NONE,
         });
         entry.depth = depth;
         entry.lifecycle_mask |= mask;
@@ -1440,7 +1440,7 @@ where
         &mut self,
         dependent: ElementId,
         depth: usize,
-        mask: crate::view::FieldMask,
+        mask: crate::view::FieldSet,
     ) {
         self.add_dependent(dependent, depth, mask);
     }
@@ -1449,14 +1449,14 @@ where
         &mut self,
         dependent: ElementId,
         depth: usize,
-        mask: crate::view::FieldMask,
+        mask: crate::view::FieldSet,
     ) {
         self.add_lifecycle_dependent(dependent, depth, mask);
     }
 
     fn reset_dependent_mask(&mut self, dependent: ElementId) {
         if let Some(entry) = self.dependents.get_mut(&dependent) {
-            entry.mask = crate::view::FieldMask::NONE;
+            entry.mask = crate::view::FieldSet::NONE;
         }
     }
 
@@ -1514,7 +1514,7 @@ where
         self.view_cache = core.view().clone();
 
         // Compare old vs new view: `changed_fields(old)` says WHICH fields
-        // changed (`FieldMask::ALL`/`NONE` from `update_should_notify` for a
+        // changed (`ALL`/`NONE` from `update_should_notify` for a
         // provider that never opted in), and only dependents whose recorded
         // mask intersects are scheduled.
         //
@@ -1524,10 +1524,10 @@ where
         // `_dependents.keys` to enqueue each dependent for build; the mask
         // intersection is the typed form of `InheritedModel`'s aspect check.
         // Field-granular (#1090): the provider reports WHICH fields changed
-        // (`FieldMask::ALL` for a provider that never opted in — the
+        // (`ALL` for a provider that never opted in — the
         // `update_should_notify` default), and only dependents whose recorded
         // mask intersects are scheduled. One path for both granularities.
-        let changed = core.view().changed_fields(old_view);
+        let changed = core.view().changed_fields(old_view).erase();
         if changed.is_empty() {
             tracing::trace!("InheritedBehavior::on_view_updated no notify (no field changed)");
         } else {

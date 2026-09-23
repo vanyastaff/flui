@@ -38,8 +38,10 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `signals` on `flui-testing`/`flui-app`); facade feature `signals`; the feature's tests run
   in CI. FOUNDATIONS C1 amended. Derived values and effects are deferred to ADR-0075
   (Proposed).
-- **Field-granular inherited dependencies** (issue #1090, ADR-0008 §2): `FieldMask`,
-  `#[derive(InheritedData)]` (one `FIELD_<NAME>: FieldMask` per field + `field_mask_diff`),
+- **Field-granular inherited dependencies** (issue #1090, ADR-0008 §2): `FieldMask<D>`
+  (typed by the provider data; a mismatched selector does not compile) and the untyped
+  `FieldSet` it erases to, `#[derive(InheritedData)]` (one `FIELD_<NAME>: FieldMask<Self>` per
+  field + `field_mask_diff`),
   `InheritedView::changed_fields`, `BuildContextExt::depend_on_field`. An
   `InheritedElement` records which fields each dependent read and notifies only the
   dependents whose fields changed; `depend_on` is the whole-provider mask. The field

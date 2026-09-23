@@ -267,14 +267,21 @@ scheduler (`schedule_build_for`, `RebuildReason::DependencyChange`) and the same
 signal arena. Structural unification of the two registries is #1254's question, not this
 section's claim:
 
-- `FieldMask(u64)` and the opt-in `#[derive(InheritedData)]` (one `FIELD_<NAME>` constant
-  per field plus `field_mask_diff`) on the provider's data type;
+- `FieldMask<D>` — a 64-bit field set **typed by the provider's data type** — and the
+  opt-in `#[derive(InheritedData)]` (one `FIELD_<NAME>: FieldMask<Self>` constant per field
+  plus `field_mask_diff`). `depend_on_field::<T, _>` takes `FieldMask<T::Data>`, so a
+  selector of another data type is a compile error rather than a silently wrong
+  subscription (a `compile_fail` doctest pins it); element storage and the object-safe
+  context method carry the untyped `FieldSet` that `FieldMask::erase` lowers to. Market
+  check: Compose's `derivedStateOf`/`snapshotFlow` and SwiftUI's `@Observable` track reads
+  per property with no untyped selector at all; a typed mask is the closest static shape
+  that keeps one provider type per `TypeId` lookup;
 - `InheritedView::changed_fields(old)` — `ALL`/`NONE` by default from
   `update_should_notify`, per-field for a provider whose data implements `InheritedData`;
-- `InheritedBehavior::dependents` stores `DependentEntry { depth, mask }`; `on_view_updated`
-  schedules a dependent only if its mask intersects the changed set. `depend_on::<T, _>`
-  is `depend_on_field::<T, _>(FieldMask::ALL, ..)`: whole-provider parity is the
-  degenerate mask, not a second mechanism;
+- `InheritedBehavior::dependents` stores `DependentEntry { depth, mask, lifecycle_mask }`;
+  `on_view_updated` schedules a dependent only if `mask | lifecycle_mask` intersects the
+  changed set. `depend_on::<T, _>` records `FieldSet::ALL` through the same path as
+  `depend_on_field`: whole-provider parity is the degenerate mask, not a second mechanism;
 - `MediaQuery::size_of(cx)` / `text_scale_factor_of` / … and `Theme::color_scheme_of` /
   `text_theme_of` (plus the general `depend_on_fields(cx, mask, f)`) are the field
   accessors; `MediaQuery::of` / `Theme::of` keep the whole-provider dependency.
@@ -294,8 +301,11 @@ drain goes through the same function, so it does the same for the elements it bu
 second → a later size-only change rebuilds nothing). Cost: one hash lookup per previous
 provider per build; benefit: no stale rebuilds from reads a conditional branch stopped making.
 Reset-on-build covers reads made in **`build` only**. A read in `init_state` or
-`did_change_dependencies` is recorded in a separate `lifecycle_mask` that accumulates until
-unmount, as in Flutter: framework states such as `FocusState` and `DraggableState` acquire an
+`did_change_dependencies` is recorded in a separate `lifecycle_mask` that **accumulates until
+unmount**, as in Flutter. It is deliberately not re-derived per `did_change_dependencies`
+call: that hook does not run on the first build after `init_state` here, so resetting on it
+would drop what `init_state` read; the cost is that a conditional read in a lifecycle hook
+stays subscribed until unmount (Flutter's behavior for every read). Why this matters: framework states such as `FocusState` and `DraggableState` acquire an
 inherited value in a lifecycle hook and do not re-read it in `build`, and a rebuild from any
 other cause must not unsubscribe them
 (`a_dependency_acquired_in_a_lifecycle_hook_survives_a_rebuild_that_does_not_reread_it`).

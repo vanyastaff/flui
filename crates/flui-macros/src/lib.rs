@@ -110,7 +110,7 @@ pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
 }
 
 /// Derive [`InheritedData`] for a provider's data struct: one
-/// `pub const FIELD_<NAME>: FieldMask` per field plus `field_mask_diff`, so an
+/// `pub const FIELD_<NAME>: FieldMask<Self>` per field plus `field_mask_diff`, so an
 /// `InheritedView` can report which fields changed and dependents that used
 /// `depend_on_field` rebuild only for those (issue #1090).
 ///
@@ -122,7 +122,7 @@ pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
 ///
 /// impl InheritedView for MediaQuery {
 ///     type Data = MediaQueryData;
-///     fn changed_fields(&self, old: &Self) -> FieldMask { self.data.field_mask_diff(&old.data) }
+///     fn changed_fields(&self, old: &Self) -> FieldMask<Self::Data> { self.data.field_mask_diff(&old.data) }
 ///     /* … */
 /// }
 /// // A reader that depends on the size only:

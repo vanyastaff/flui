@@ -22,7 +22,7 @@ fn constants_are_declaration_order_bits() {
     assert_eq!(Data::FIELD_SCALE, FieldMask::bit(1));
     assert_eq!(Data::FIELD_TYPE, FieldMask::bit(2));
     assert!(!Data::FIELD_SIZE.intersects(Data::FIELD_SCALE));
-    assert!(FieldMask::ALL.intersects(Data::FIELD_TYPE));
+    assert!(FieldMask::<Data>::ALL.intersects(Data::FIELD_TYPE));
 }
 
 #[test]

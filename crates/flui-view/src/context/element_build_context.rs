@@ -280,13 +280,13 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
-        self.depend_on_inherited_fields(type_id, crate::view::FieldMask::ALL, callback)
+        self.depend_on_inherited_fields(type_id, crate::view::FieldSet::ALL, callback)
     }
 
     fn depend_on_inherited_fields(
         &self,
         type_id: TypeId,
-        mask: crate::view::FieldMask,
+        mask: crate::view::FieldSet,
         callback: &mut dyn FnMut(&dyn Any),
     ) -> bool {
         // Walk ancestors looking for an Element whose view_type_id
@@ -653,7 +653,7 @@ pub(crate) struct DependentRecord {
     /// The dependent's tree depth (for dirty-heap ordering).
     pub(crate) depth: usize,
     /// The provider fields the dependent read (#1090).
-    pub(crate) mask: crate::view::FieldMask,
+    pub(crate) mask: crate::view::FieldSet,
     /// Recorded from `init_state` / `did_change_dependencies` rather than
     /// `build`: such reads are kept until unmount (Flutter's accumulate
     /// semantics), not re-derived per build (ADR-0074 §5.5). Set by the
@@ -855,13 +855,13 @@ impl BuildContext for BuildCtx<'_> {
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
-        self.depend_on_inherited_fields(type_id, crate::view::FieldMask::ALL, callback)
+        self.depend_on_inherited_fields(type_id, crate::view::FieldSet::ALL, callback)
     }
 
     fn depend_on_inherited_fields(
         &self,
         type_id: TypeId,
-        mask: crate::view::FieldMask,
+        mask: crate::view::FieldSet,
         callback: &mut dyn FnMut(&dyn Any),
     ) -> bool {
         let Some(provider_id) = self.find_inherited_provider(type_id) else {

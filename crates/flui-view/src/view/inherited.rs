@@ -8,40 +8,26 @@
 
 use super::view::View;
 
-/// Which fields of a provider's data a dependent read, or a provider update
-/// changed — a 64-bit set, one bit per field (issue #1090, ADR-0008 §2).
+use std::marker::PhantomData;
+
+/// An **untyped** set of provider-data fields — the type-erased form of
+/// [`FieldMask<D>`] that element storage and the object-safe context methods
+/// carry (issue #1090, ADR-0008 §2).
 ///
-/// `ALL` is the whole-type dependency every plain [`BuildContextExt::depend_on`]
-/// registers (vanilla `InheritedWidget` parity); a `#[derive(InheritedData)]`
-/// data type exposes one `FIELD_*` constant per field and computes the changed
-/// set on update. Notification is the intersection: a dependent rebuilds only
-/// when a field it read changed.
+/// Application code does not build these: it passes a typed
+/// [`FieldMask<D>`], which [`FieldMask::erase`] lowers once the data type has
+/// been checked against the provider. `ALL` is the whole-type dependency every
+/// plain [`BuildContextExt::depend_on`] registers.
 ///
 /// [`BuildContextExt::depend_on`]: crate::BuildContextExt::depend_on
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct FieldMask(u64);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub struct FieldSet(u64);
 
-impl FieldMask {
+impl FieldSet {
     /// No field.
     pub const NONE: Self = Self(0);
-    /// Every field, including ones a future derive adds: the whole-type
-    /// dependency.
+    /// Every field, including ones a future derive adds.
     pub const ALL: Self = Self(u64::MAX);
-
-    /// The mask of field number `index` (0-based, in declaration order).
-    ///
-    /// # Panics
-    ///
-    /// At compile time (in a `const`) or at run time if `index >= 64`; the
-    /// derive refuses structs with more fields than the mask carries.
-    #[must_use]
-    pub const fn bit(index: u32) -> Self {
-        assert!(
-            index < 64,
-            "FieldMask carries 64 fields; the derive refuses larger structs"
-        );
-        Self(1u64 << index)
-    }
 
     /// Both sets.
     #[must_use]
@@ -68,14 +54,165 @@ impl FieldMask {
     }
 }
 
-impl std::ops::BitOr for FieldMask {
+impl std::ops::BitOr for FieldSet {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self {
         self.union(rhs)
     }
 }
 
-impl std::ops::BitOrAssign for FieldMask {
+impl std::ops::BitOrAssign for FieldSet {
+    fn bitor_assign(&mut self, rhs: Self) {
+        *self = self.union(rhs);
+    }
+}
+
+/// Which fields of the provider data type `D` a dependent read, or a provider
+/// update changed — one bit per field (issue #1090, ADR-0008 §2).
+///
+/// The data type is part of the mask's type, so a selector cannot be passed to
+/// a provider whose data it does not describe: `#[derive(InheritedData)]` emits
+/// `pub const FIELD_<NAME>: FieldMask<Self>`, and
+/// [`BuildContextExt::depend_on_field`] takes `FieldMask<T::Data>` for provider
+/// `T`. Notification is the intersection: a dependent rebuilds only when a
+/// field it read changed.
+///
+/// A mask of another data type is a compile error (`wants_size(FieldMask::<Size>::bit(0))`
+/// compiles; the `Theme` mask below does not):
+///
+/// ```compile_fail,E0308
+/// use flui_view::FieldMask;
+///
+/// struct Size;
+/// struct Theme;
+///
+/// fn wants_size(_mask: FieldMask<Size>) {}
+/// wants_size(FieldMask::<Theme>::bit(0));
+/// ```
+///
+/// ```
+/// use flui_view::FieldMask;
+///
+/// struct Size;
+///
+/// fn wants_size(_mask: FieldMask<Size>) {}
+/// wants_size(FieldMask::<Size>::bit(0));
+/// ```
+///
+/// [`BuildContextExt::depend_on_field`]: crate::BuildContextExt::depend_on_field
+pub struct FieldMask<D> {
+    set: FieldSet,
+    // `fn() -> D`: covariant, and Send/Sync/Copy regardless of `D`.
+    data: PhantomData<fn() -> D>,
+}
+
+impl<D> FieldMask<D> {
+    /// No field.
+    pub const NONE: Self = Self::from_set(FieldSet::NONE);
+    /// Every field, including ones a future derive adds: the whole-type
+    /// dependency.
+    pub const ALL: Self = Self::from_set(FieldSet::ALL);
+
+    const fn from_set(set: FieldSet) -> Self {
+        Self {
+            set,
+            data: PhantomData,
+        }
+    }
+
+    /// The mask of field number `index` (0-based, in declaration order).
+    ///
+    /// # Panics
+    ///
+    /// At compile time (in a `const`) or at run time if `index >= 64`; the
+    /// derive refuses structs with more fields than the mask carries.
+    #[must_use]
+    pub const fn bit(index: u32) -> Self {
+        assert!(
+            index < 64,
+            "FieldMask carries 64 fields; the derive refuses larger structs"
+        );
+        Self::from_set(FieldSet(1u64 << index))
+    }
+
+    /// Both sets.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self::from_set(self.set.union(other.set))
+    }
+
+    /// Whether the two sets share at least one field.
+    #[must_use]
+    pub const fn intersects(self, other: Self) -> bool {
+        self.set.intersects(other.set)
+    }
+
+    /// Whether no field is set.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.set.is_empty()
+    }
+
+    /// The raw bits (diagnostics).
+    #[must_use]
+    pub const fn bits(self) -> u64 {
+        self.set.bits()
+    }
+
+    /// Lower to the untyped [`FieldSet`] element storage carries, once the
+    /// data type has been checked.
+    #[must_use]
+    pub const fn erase(self) -> FieldSet {
+        self.set
+    }
+}
+
+// Manual impls: a derive would demand `D: Clone`/`D: PartialEq`/…, but the
+// data type is only a marker here.
+impl<D> Clone for FieldMask<D> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<D> Copy for FieldMask<D> {}
+
+impl<D> PartialEq for FieldMask<D> {
+    fn eq(&self, other: &Self) -> bool {
+        self.set == other.set
+    }
+}
+
+impl<D> Eq for FieldMask<D> {}
+
+impl<D> std::hash::Hash for FieldMask<D> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.set.hash(state);
+    }
+}
+
+impl<D> std::fmt::Debug for FieldMask<D> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("FieldMask")
+            .field(&format_args!("{:#x}", self.set.bits()))
+            .finish()
+    }
+}
+
+impl<D> Default for FieldMask<D> {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+impl<D> std::ops::BitOr for FieldMask<D> {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        self.union(rhs)
+    }
+}
+
+impl<D> std::ops::BitOrAssign for FieldMask<D> {
     fn bitor_assign(&mut self, rhs: Self) {
         *self = self.union(rhs);
     }
@@ -84,7 +221,7 @@ impl std::ops::BitOrAssign for FieldMask {
 /// Provider data that can say **which fields** changed between two values.
 ///
 /// Opt in with `#[derive(InheritedData)]` (every field must be `PartialEq`),
-/// which also emits one `pub const FIELD_<NAME>: FieldMask` per field on the
+/// which also emits one `pub const FIELD_<NAME>: FieldMask<Self>` per field on the
 /// type. An `InheritedView` whose `Data` implements this overrides
 /// [`InheritedView::changed_fields`] with `self.data().field_mask_diff(old.data())`
 /// so dependents that used [`BuildContextExt::depend_on_field`] are notified
@@ -93,7 +230,7 @@ impl std::ops::BitOrAssign for FieldMask {
 /// [`BuildContextExt::depend_on_field`]: crate::BuildContextExt::depend_on_field
 pub trait InheritedData: Clone + 'static {
     /// The fields whose values differ between `self` and `other`.
-    fn field_mask_diff(&self, other: &Self) -> FieldMask;
+    fn field_mask_diff(&self, other: &Self) -> FieldMask<Self>;
 }
 
 /// A View that provides data to its descendants.
@@ -195,7 +332,7 @@ pub trait InheritedView: Clone + 'static + Sized {
     /// InheritedData` override this with `self.data().field_mask_diff(old.data())`.
     /// The notify path uses only this method; `update_should_notify` is its
     /// whole-type default, never a second gate.
-    fn changed_fields(&self, old: &Self) -> FieldMask {
+    fn changed_fields(&self, old: &Self) -> FieldMask<Self::Data> {
         if self.update_should_notify(old) {
             FieldMask::ALL
         } else {
@@ -239,6 +376,9 @@ mod tests {
     use flui_foundation::ElementId;
 
     use super::*;
+
+    /// A typed mask over the test data.
+    type M = FieldMask<TestTheme>;
     use crate::{
         InheritedElement,
         element::{InheritedBehavior, Lifecycle},
@@ -333,12 +473,8 @@ mod tests {
         let dep1 = ElementId::new(1);
         let dep2 = ElementId::new(2);
 
-        element
-            .behavior_mut()
-            .add_dependent(dep1, 3, FieldMask::ALL);
-        element
-            .behavior_mut()
-            .add_dependent(dep2, 4, FieldMask::ALL);
+        element.behavior_mut().add_dependent(dep1, 3, FieldSet::ALL);
+        element.behavior_mut().add_dependent(dep2, 4, FieldSet::ALL);
         assert_eq!(element.behavior().dependents().len(), 2);
         assert_eq!(
             element.behavior().dependents().get(&dep1).map(|e| e.depth),
@@ -351,9 +487,7 @@ mod tests {
 
         // Adding same dependent again should overwrite depth (idempotent
         // dedup via HashMap key) — not duplicate.
-        element
-            .behavior_mut()
-            .add_dependent(dep1, 5, FieldMask::ALL);
+        element.behavior_mut().add_dependent(dep1, 5, FieldSet::ALL);
         assert_eq!(element.behavior().dependents().len(), 2);
         assert_eq!(
             element.behavior().dependents().get(&dep1).map(|e| e.depth),
@@ -364,13 +498,13 @@ mod tests {
         let dep3 = ElementId::new(3);
         element
             .behavior_mut()
-            .add_dependent(dep3, 6, FieldMask::bit(1));
+            .add_dependent(dep3, 6, M::bit(1).erase());
         element
             .behavior_mut()
-            .add_dependent(dep3, 7, FieldMask::bit(2));
+            .add_dependent(dep3, 7, M::bit(2).erase());
         let entry = element.behavior().dependents()[&dep3];
         assert_eq!(entry.depth, 7);
-        assert_eq!(entry.mask, FieldMask::bit(1) | FieldMask::bit(2));
+        assert_eq!(entry.mask, (M::bit(1) | M::bit(2)).erase());
         element.behavior_mut().remove_dependent(dep3);
 
         element.behavior_mut().remove_dependent(dep1);
@@ -404,26 +538,26 @@ mod tests {
 
     #[test]
     fn field_mask_bit_union_intersects_is_empty() {
-        let a = FieldMask::bit(0);
-        let b = FieldMask::bit(63);
-        assert!(FieldMask::NONE.is_empty());
+        let a = M::bit(0);
+        let b = M::bit(63);
+        assert!(M::NONE.is_empty());
         assert!(!a.is_empty());
         assert!(!a.intersects(b));
         let both = a.union(b);
         assert!(both.intersects(a) && both.intersects(b));
         assert_eq!(a | b, both);
-        let mut acc = FieldMask::NONE;
+        let mut acc = M::NONE;
         acc |= b;
         assert_eq!(acc, b);
-        assert!(FieldMask::ALL.intersects(a) && FieldMask::ALL.intersects(b));
-        assert!(!FieldMask::NONE.intersects(FieldMask::ALL));
-        assert_eq!(FieldMask::bit(3).bits(), 0b1000);
+        assert!(M::ALL.intersects(a) && M::ALL.intersects(b));
+        assert!(!M::NONE.intersects(M::ALL));
+        assert_eq!(M::bit(3).bits(), 0b1000);
     }
 
     #[test]
     #[should_panic(expected = "FieldMask carries 64 fields")]
     fn field_mask_bit_out_of_range_panics() {
-        let _ = FieldMask::bit(64);
+        let _ = M::bit(64);
     }
 
     #[test]

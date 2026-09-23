@@ -82,7 +82,7 @@ With only the facade dependency, the generated implementation calls:
 ### `#[derive(InheritedData)]`
 
 Field-granular inherited dependencies (issue #1090). For a non-generic struct with
-named fields, generates one `pub const FIELD_<NAME>: FieldMask` per field (declaration
+named fields, generates one `pub const FIELD_<NAME>: FieldMask<Self>` per field (declaration
 order, bit 0 first; `r#type` becomes `FIELD_TYPE`) and `impl InheritedData for T` whose
 `field_mask_diff` unions the mask of every field that differs (`!=`, so each field must be
 `PartialEq`). An `InheritedView` whose `Data` derives it overrides `changed_fields` with

@@ -3,7 +3,7 @@
 //!
 //! For a non-generic struct with named fields, emits:
 //!
-//! - one `pub const FIELD_<NAME>: FieldMask` per field (declaration order,
+//! - one `pub const FIELD_<NAME>: FieldMask<Self>` per field (declaration order,
 //!   bit 0 first; a raw identifier such as `r#type` becomes `FIELD_TYPE`),
 //!   the handle a reader passes to `BuildContextExt::depend_on_field`;
 //! - `impl InheritedData for T` whose `field_mask_diff` compares every field
@@ -84,7 +84,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
         let doc = format!("Field mask of `{}` (bit {index}).", name.unraw());
         quote! {
             #[doc = #doc]
-            pub const #const_ident: #runtime::FieldMask = #runtime::FieldMask::bit(#index);
+            pub const #const_ident: #runtime::FieldMask<Self> = #runtime::FieldMask::bit(#index);
         }
     });
     let diffs = entries.iter().map(|(name, const_ident, _)| {
@@ -103,7 +103,7 @@ pub(crate) fn expand(input: &DeriveInput) -> syn::Result<TokenStream> {
 
         #[automatically_derived]
         impl #runtime::InheritedData for #ident {
-            fn field_mask_diff(&self, other: &Self) -> #runtime::FieldMask {
+            fn field_mask_diff(&self, other: &Self) -> #runtime::FieldMask<Self> {
                 let mut changed = #runtime::FieldMask::NONE;
                 #(#diffs)*
                 changed

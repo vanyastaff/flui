@@ -167,7 +167,7 @@ impl MediaQuery {
     /// single-field forms.
     pub fn depend_on_fields<R>(
         ctx: &dyn BuildContext,
-        mask: FieldMask,
+        mask: FieldMask<MediaQueryData>,
         f: impl FnOnce(&MediaQueryData) -> R,
     ) -> Option<R> {
         ctx.depend_on_field::<Self, _>(mask, |mq| f(&mq.data))
@@ -241,7 +241,7 @@ impl InheritedView for MediaQuery {
         self.data != old.data
     }
 
-    fn changed_fields(&self, old: &Self) -> FieldMask {
+    fn changed_fields(&self, old: &Self) -> FieldMask<MediaQueryData> {
         self.data.field_mask_diff(&old.data)
     }
 }

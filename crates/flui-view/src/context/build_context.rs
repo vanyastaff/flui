@@ -278,14 +278,16 @@ pub trait BuildContext {
     /// [`depend_on_inherited`](Self::depend_on_inherited) at **field**
     /// granularity (issue #1090): the dependency is recorded with `mask`, and
     /// a later provider update schedules this element only if a field in the
-    /// mask changed ([`InheritedView::changed_fields`]). `FieldMask::ALL`
-    /// is exactly `depend_on_inherited`.
+    /// mask changed ([`InheritedView::changed_fields`]). `FieldSet::ALL`
+    /// is exactly `depend_on_inherited`. The mask is untyped here (this
+    /// method is object-safe); application code reaches it through the typed
+    /// [`BuildContextExt::depend_on_field`].
     ///
     /// [`InheritedView::changed_fields`]: crate::InheritedView::changed_fields
     fn depend_on_inherited_fields(
         &self,
         type_id: TypeId,
-        mask: crate::view::FieldMask,
+        mask: crate::view::FieldSet,
         callback: &mut dyn FnMut(&dyn std::any::Any),
     ) -> bool;
 
@@ -514,14 +516,80 @@ pub trait BuildContextExt: BuildContext {
     /// ```rust,ignore
     /// let size = ctx.depend_on_field::<MediaQuery, _>(MediaQueryData::FIELD_SIZE, |mq| mq.data().size);
     /// ```
-    fn depend_on_field<T: 'static, R>(
+    ///
+    /// The mask is typed by the provider's data (`FieldMask<T::Data>`). This
+    /// compiles:
+    ///
+    /// ```no_run
+    /// use flui_view::{BoxedView, BuildContext, BuildContextExt, FieldMask, InheritedView, View};
+    ///
+    /// #[derive(Clone, PartialEq)]
+    /// struct SizeData { size: u32 }
+    /// impl SizeData { const FIELD_SIZE: FieldMask<SizeData> = FieldMask::bit(0); }
+    /// #[derive(Clone, PartialEq)]
+    /// struct ThemeData { color: u32 }
+    /// impl ThemeData { const FIELD_COLOR: FieldMask<ThemeData> = FieldMask::bit(0); }
+    ///
+    /// #[derive(Clone)]
+    /// struct SizeProvider { data: SizeData, child: BoxedView }
+    /// impl InheritedView for SizeProvider {
+    ///     type Data = SizeData;
+    ///     fn data(&self) -> &SizeData { &self.data }
+    ///     fn child(&self) -> &dyn View { &self.child }
+    ///     fn update_should_notify(&self, old: &Self) -> bool { self.data != old.data }
+    /// }
+    ///
+    /// fn read(ctx: &dyn BuildContext) -> Option<u32> {
+    ///     ctx.depend_on_field::<SizeProvider, _>(SizeData::FIELD_SIZE, |p| p.data.size)
+    /// }
+    /// ```
+    ///
+    /// and the same code with a selector of another data type does not:
+    ///
+    /// ```compile_fail,E0308
+    /// use flui_view::{BoxedView, BuildContext, BuildContextExt, FieldMask, InheritedView, View};
+    ///
+    /// #[derive(Clone, PartialEq)]
+    /// struct SizeData { size: u32 }
+    /// impl SizeData { const FIELD_SIZE: FieldMask<SizeData> = FieldMask::bit(0); }
+    /// #[derive(Clone, PartialEq)]
+    /// struct ThemeData { color: u32 }
+    /// impl ThemeData { const FIELD_COLOR: FieldMask<ThemeData> = FieldMask::bit(0); }
+    ///
+    /// #[derive(Clone)]
+    /// struct SizeProvider { data: SizeData, child: BoxedView }
+    /// impl InheritedView for SizeProvider {
+    ///     type Data = SizeData;
+    ///     fn data(&self) -> &SizeData { &self.data }
+    ///     fn child(&self) -> &dyn View { &self.child }
+    ///     fn update_should_notify(&self, old: &Self) -> bool { self.data != old.data }
+    /// }
+    ///
+    /// fn read(ctx: &dyn BuildContext) -> Option<u32> {
+    ///     ctx.depend_on_field::<SizeProvider, _>(ThemeData::FIELD_COLOR, |p| p.data.size)
+    /// }
+    /// ```
+    fn depend_on_field<T: crate::InheritedView, R>(
         &self,
-        mask: crate::view::FieldMask,
+        mask: crate::view::FieldMask<T::Data>,
+        f: impl FnOnce(&T) -> R,
+    ) -> Option<R> {
+        self.depend_on_erased::<T, R>(mask.erase(), f)
+    }
+
+    /// The one recording path behind [`depend_on`](Self::depend_on) and
+    /// [`depend_on_field`](Self::depend_on_field): look up `T`, record the
+    /// dependency with `set`, and call `f`. `depend_on` accepts any `'static`
+    /// provider type, so it cannot go through the typed selector.
+    #[doc(hidden)]
+    fn depend_on_erased<T: 'static, R>(
+        &self,
+        set: crate::view::FieldSet,
         f: impl FnOnce(&T) -> R,
     ) -> Option<R> {
         let mut result: Option<R> = None;
         let mut once = Some(f);
-        self.depend_on_inherited_fields(TypeId::of::<T>(), mask, &mut |any| {
+        self.depend_on_inherited_fields(TypeId::of::<T>(), set, &mut |any| {
             if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
                 result = Some(call(typed));
             }
@@ -552,8 +620,8 @@ pub trait BuildContextExt: BuildContext {
     /// let color: Option<Color> = ctx.depend_on::<MyTheme, _>(|t| t.data().primary_color);
     /// ```
     fn depend_on<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
-        // One path: the whole-provider dependency is the ALL mask.
-        self.depend_on_field::<T, R>(crate::view::FieldMask::ALL, f)
+        // One path: the whole-provider dependency is the ALL set.
+        self.depend_on_erased::<T, R>(crate::view::FieldSet::ALL, f)
     }
 
     /// Look up data from an ancestor InheritedView (without dependency).

@@ -5701,7 +5701,7 @@ mod tests {
             .element_mut()
             .as_inherited_mut()
             .expect("root is inherited")
-            .record_dependent(dependent, 1, crate::view::FieldMask::ALL);
+            .record_dependent(dependent, 1, crate::view::FieldSet::ALL);
         owner
             .write()
             .register_inherited_dependency(dependent, provider);

@@ -92,7 +92,7 @@ impl Theme {
     /// whole-theme dependency. `None` without a `Theme` ancestor.
     pub fn depend_on_fields<R>(
         ctx: &dyn BuildContext,
-        mask: FieldMask,
+        mask: FieldMask<ThemeData>,
         f: impl FnOnce(&ThemeData) -> R,
     ) -> Option<R> {
         ctx.depend_on_field::<Self, _>(mask, |t| f(&t.data))
@@ -136,7 +136,7 @@ impl InheritedView for Theme {
         self.data != old.data
     }
 
-    fn changed_fields(&self, old: &Self) -> FieldMask {
+    fn changed_fields(&self, old: &Self) -> FieldMask<ThemeData> {
         self.data.field_mask_diff(&old.data)
     }
 }
