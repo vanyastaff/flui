@@ -18,7 +18,7 @@ mod web;
 use std::path::Path;
 use std::process::ExitCode;
 
-use exec::{Cmd, Host, NO_ARGS, Runner, Step, host_binary, parsed, target_dir};
+use exec::{Cmd, Host, NO_ARGS, Runner, Step, host_binary, installed, parsed, target_dir};
 
 use crate::doc_strict;
 
@@ -476,6 +476,26 @@ fn bench_compile_plan() -> Vec<Step> {
     vec![Cmd::cargo(["bench", "-p", "flui-rendering", "--no-run", "--locked"]).into()]
 }
 
+/// The workflow linters CI's `checks` job runs: actionlint (workflow
+/// semantics) and zizmor (the workflows' security audit). A linter that is
+/// not `installed` is skipped with a message, not failed: neither is a cargo
+/// tool, and `cargo xtask doctor full` says how to get each.
+fn workflow_lint_plan(installed: impl Fn(&str) -> bool) -> Vec<Step> {
+    [("actionlint", &[][..]), ("zizmor", &["."][..])]
+        .into_iter()
+        .map(|(program, args)| {
+            if installed(program) {
+                Cmd::new(program).args(args.iter().copied()).into()
+            } else {
+                Step::Note(format!(
+                    "{program}: not installed, skipped (`cargo xtask doctor full` says how to \
+                     install it); CI's `checks` job runs it"
+                ))
+            }
+        })
+        .collect()
+}
+
 /// The live smoke: a real windowed demo (built with `--locked`, as CI builds
 /// it) driven by the `flui-live-smoke` harness. X11: real XTEST input under
 /// Xvfb (launch, mid-drag tracking, scroll, a clean WM_DELETE close, then a
@@ -670,8 +690,9 @@ pub(crate) struct CiFullArgs {
 ///
 /// Then: the all-targets build (the only step that links the examples),
 /// test-features, feature-matrix, wasm-check, wasm-link, wasm-test,
-/// cross-typecheck, bench-compile, `deps` (each tool when installed), miri,
-/// gpu-test, and on Linux live-smoke under X11 and Wayland. Slow on purpose:
+/// cross-typecheck, bench-compile, `deps` (each tool when installed), the
+/// workflow linters (each when installed), miri, gpu-test, and on Linux
+/// live-smoke under X11 and Wayland. Slow on purpose:
 /// cargo-hack's per-feature matrix dominates; `cargo xtask doctor full` names
 /// any tool it needs first. What stays CI-only is the table in docs/testing.md.
 pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
@@ -691,6 +712,9 @@ pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
     runner.steps(&cross_typecheck_plan(Host::current()))?;
     runner.steps(&bench_compile_plan())?;
     deps::run(runner, None, false)?;
+    runner.steps(&workflow_lint_plan(|program| {
+        runner.dry_run || installed(program, &["--version"])
+    }))?;
     runner.steps(&miri_plan())?;
     runner.steps(&gpu_test_plan())?;
     if Host::current() == Host::Linux {
@@ -981,6 +1005,20 @@ mod tests {
     }
 
     const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations";
+
+    #[test]
+    fn workflow_lint_runs_each_installed_linter_and_skips_the_rest() {
+        assert_eq!(
+            lines(&workflow_lint_plan(|_| true)),
+            ["$ actionlint", "$ zizmor ."]
+        );
+        let only_zizmor = lines(&workflow_lint_plan(|program| program == "zizmor"));
+        assert!(
+            only_zizmor[0].starts_with("actionlint: not installed, skipped"),
+            "{only_zizmor:?}"
+        );
+        assert_eq!(only_zizmor[1], "$ zizmor .");
+    }
 
     #[test]
     fn test_runs_both_group_stages_and_the_platform_suite_per_host() {

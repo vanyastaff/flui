@@ -904,7 +904,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 
 | CI job | Local command | Difference, or why CI-only |
 |---|---|---|
-| `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
+| `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected` (`check-changed` runs the same classification) | decides the lane and the affected packages; CI passes the PR's base SHA, `check-changed` diffs against `origin/main` (or `--base`) and adds uncommitted files |
 | `fast-lane` | `cargo xtask check-changed` | same packages and arguments; the cross-target and wasm32 clippy and the per-feature pass for changed manifests run only when their rustup target or cargo-hack is installed (`cargo xtask doctor full`); the flui-platform leg needs `xvfb-run` (Linux) |
 | `fast-lane-ios` | `cargo xtask check-changed` (on a Mac with the iOS target) | the same iOS runner clippy as `cli-macos`, run on a PR when `flui-app` is in scope |
@@ -919,7 +919,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny or cargo-shear fails instead of being skipped); the advisories step blocks only in the heavy lane, because a new RustSec entry can fail a commit that passed the day before |
 | `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
 | `miri` | `cargo xtask miri` | nightly + miri; advisory in CI too (`continue-on-error`) |
-| `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI splits the packages into parallel slices; locally it is one run over the workspace |
+| `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI runs `--slice 1/3`, `2/3`, `3/3` and `combinations` in parallel; locally it is one run over the workspace |
 | `wasm-check` | `cargo xtask wasm-check`, `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
 | `cli-macos` | `cargo xtask test` (flui-cli's tests) + `cargo xtask cross-typecheck` (its iOS clippy line) | the same commands; they only mean "macOS" on a Mac |
 | `cross-typecheck` | `cargo xtask cross-typecheck` | needs the four targets (`cargo xtask doctor full`) |
