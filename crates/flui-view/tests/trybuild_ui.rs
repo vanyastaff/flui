@@ -37,4 +37,5 @@ fn ui_tests() {
     t.compile_fail("tests/ui/field_mask_erase_is_private.rs");
     t.compile_fail("tests/ui/build_context_is_sealed.rs");
     t.compile_fail("tests/ui/depend_on_inherited_fields_needs_token.rs");
+    t.compile_fail("tests/ui/inherited_access_mutation_needs_token.rs");
 }

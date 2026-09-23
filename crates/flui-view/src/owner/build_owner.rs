@@ -1908,7 +1908,7 @@ impl BuildOwner {
                     .get_mut(*provider)
                     .and_then(|node| node.element_mut().as_inherited_mut())
                 {
-                    accessor.reset_dependent_mask(id);
+                    accessor.reset_dependent_mask(crate::context::CrateToken::new(), id);
                 }
             }
             for record in dep_sink.into_inner() {
@@ -1920,12 +1920,18 @@ impl BuildOwner {
                 };
                 if record.lifecycle {
                     accessor.record_lifecycle_dependent(
+                        crate::context::CrateToken::new(),
                         record.dependent,
                         record.depth,
                         record.mask,
                     );
                 } else {
-                    accessor.record_dependent(record.dependent, record.depth, record.mask);
+                    accessor.record_dependent(
+                        crate::context::CrateToken::new(),
+                        record.dependent,
+                        record.depth,
+                        record.mask,
+                    );
                 }
                 self.inherited_dependencies
                     .register(record.dependent, record.provider);
@@ -1934,7 +1940,9 @@ impl BuildOwner {
                 let pruned = tree
                     .get_mut(provider)
                     .and_then(|node| node.element_mut().as_inherited_mut())
-                    .is_some_and(|accessor| accessor.prune_unread_dependent(id));
+                    .is_some_and(|accessor| {
+                        accessor.prune_unread_dependent(crate::context::CrateToken::new(), id)
+                    });
                 if pruned {
                     self.inherited_dependencies.unregister(id, provider);
                 }

@@ -1716,7 +1716,7 @@ impl ElementTree {
             if let Some(node) = self.get_mut(provider)
                 && let Some(accessor) = node.element_mut().as_inherited_mut()
             {
-                accessor.remove_dependent(dependent);
+                accessor.remove_dependent(crate::context::CrateToken::new(), dependent);
             }
         }
     }
@@ -5701,7 +5701,12 @@ mod tests {
             .element_mut()
             .as_inherited_mut()
             .expect("root is inherited")
-            .record_dependent(dependent, 1, crate::view::FieldSet::ALL);
+            .record_dependent(
+                crate::context::CrateToken::new(),
+                dependent,
+                1,
+                crate::view::FieldSet::ALL,
+            );
         owner
             .write()
             .register_inherited_dependency(dependent, provider);

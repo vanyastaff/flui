@@ -629,7 +629,20 @@ pub trait BuildContextExt: BuildContext {
         mask: crate::view::FieldMask<T::Data>,
         f: impl FnOnce(&T) -> R,
     ) -> Option<R> {
-        depend_on_set::<T, R, _>(self, mask.erase(), f)
+        // An empty mask would read the provider and never rebuild: the read
+        // is promoted to the whole-provider dependency instead of silently
+        // opting out (read-is-depend holds for every public read path).
+        let set = if mask.is_empty() {
+            tracing::debug!(
+                target: "flui::signals",
+                provider = std::any::type_name::<T>(),
+                "depend_on_field with an empty mask; recorded as a whole-provider dependency"
+            );
+            crate::view::FieldSet::ALL
+        } else {
+            mask.erase()
+        };
+        depend_on_set::<T, R, _>(self, set, f)
     }
 
     /// Look up data from an ancestor InheritedView (with dependency).

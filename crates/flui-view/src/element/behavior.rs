@@ -1441,6 +1441,7 @@ where
 
     fn record_dependent(
         &mut self,
+        _token: crate::context::CrateToken,
         dependent: ElementId,
         depth: usize,
         mask: crate::view::FieldSet,
@@ -1450,6 +1451,7 @@ where
 
     fn record_lifecycle_dependent(
         &mut self,
+        _token: crate::context::CrateToken,
         dependent: ElementId,
         depth: usize,
         mask: crate::view::FieldSet,
@@ -1457,13 +1459,17 @@ where
         self.add_lifecycle_dependent(dependent, depth, mask);
     }
 
-    fn reset_dependent_mask(&mut self, dependent: ElementId) {
+    fn reset_dependent_mask(&mut self, _token: crate::context::CrateToken, dependent: ElementId) {
         if let Some(entry) = self.dependents.get_mut(&dependent) {
             entry.mask = crate::view::FieldSet::NONE;
         }
     }
 
-    fn prune_unread_dependent(&mut self, dependent: ElementId) -> bool {
+    fn prune_unread_dependent(
+        &mut self,
+        _token: crate::context::CrateToken,
+        dependent: ElementId,
+    ) -> bool {
         match self.dependents.get(&dependent) {
             Some(entry) if entry.fields().is_empty() => {
                 self.dependents.remove(&dependent);
@@ -1473,7 +1479,7 @@ where
         }
     }
 
-    fn remove_dependent(&mut self, dependent: ElementId) {
+    fn remove_dependent(&mut self, _token: crate::context::CrateToken, dependent: ElementId) {
         self.remove_dependent(dependent);
     }
 }

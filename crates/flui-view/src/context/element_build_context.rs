@@ -349,7 +349,12 @@ impl BuildContext for ElementBuildContext {
         // Register dependency (id + depth).
         // Outside a build drain there is no build whose reads could
         // re-derive this one, so it is kept like a lifecycle read.
-        accessor.record_lifecycle_dependent(self_id, self_depth, mask);
+        accessor.record_lifecycle_dependent(
+            crate::context::CrateToken::new(),
+            self_id,
+            self_depth,
+            mask,
+        );
         owner.register_inherited_dependency(self_id, ancestor_id);
         drop(owner);
 
