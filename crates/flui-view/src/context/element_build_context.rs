@@ -197,6 +197,8 @@ impl ElementBuildContext {
     }
 }
 
+impl super::build_context::sealed::Sealed for ElementBuildContext {}
+
 impl BuildContext for ElementBuildContext {
     fn element_id(&self) -> ElementId {
         self.element_id
@@ -777,6 +779,8 @@ impl<'b> BuildCtx<'b> {
         self.tree.get(self.element_id)?.inherited_provider(type_id)
     }
 }
+
+impl super::build_context::sealed::Sealed for BuildCtx<'_> {}
 
 impl BuildContext for BuildCtx<'_> {
     fn element_id(&self) -> ElementId {

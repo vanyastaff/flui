@@ -274,7 +274,10 @@ section's claim:
   subscription (a `compile_fail` doctest pins it); element storage and the object-safe
   context method carry the untyped `FieldSet`; the lowering (`FieldMask::erase`) and the
   recording helper are crate-private, so outside `flui-view` a `FieldSet` is only `NONE`/`ALL`
-  and the typed selector cannot be bypassed (a second `compile_fail` doctest pins it). Market
+  and the typed selector cannot be bypassed (a second `compile_fail` doctest pins it). The
+  marker is invariant in `D` (`PhantomData<fn(D) -> D>`), so subtyping cannot coerce one data
+  type's mask into another's, and `BuildContext` is sealed so a downstream context cannot
+  forward an erased set to a different provider `TypeId`. Market
   check: Compose's `derivedStateOf`/`snapshotFlow` and SwiftUI's `@Observable` track reads
   per property with no untyped selector at all; a typed mask is the closest static shape
   that keeps one provider type per `TypeId` lookup;

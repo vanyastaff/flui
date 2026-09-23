@@ -12,6 +12,13 @@ use std::any::TypeId;
 
 use flui_foundation::ElementId;
 
+/// The seal behind [`BuildContext`]: public-in-private, so no crate outside
+/// `flui-view` can name it or implement it.
+pub(crate) mod sealed {
+    /// Implemented only by `flui-view`'s build contexts.
+    pub trait Sealed {}
+}
+
 /// Context provided to Views during the build phase.
 ///
 /// `BuildContext` provides Views with:
@@ -48,7 +55,23 @@ use flui_foundation::ElementId;
 ///     }
 /// }
 /// ```
-pub trait BuildContext {
+///
+/// # Sealed
+///
+/// Only `flui-view` implements this trait (the live drain context and
+/// `ElementBuildContext`). A downstream implementation could forward the
+/// untyped [`FieldSet`](crate::view::FieldSet) that
+/// [`BuildContextExt::depend_on_field`] passes to
+/// [`depend_on_inherited_fields`](Self::depend_on_inherited_fields) to a
+/// different provider `TypeId`, registering one data type's field bits against
+/// another provider; sealing keeps the typed selector the only way a field
+/// dependency is recorded (ADR-0074 §5.5).
+///
+/// ```compile_fail,E0277
+/// struct Mine;
+/// impl flui_view::BuildContext for Mine {}
+/// ```
+pub trait BuildContext: sealed::Sealed {
     // ========================================================================
     // Identity & State
     // ========================================================================

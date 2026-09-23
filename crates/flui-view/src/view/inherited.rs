@@ -113,8 +113,11 @@ impl std::ops::BitOrAssign for FieldSet {
 /// [`BuildContextExt::depend_on_field`]: crate::BuildContextExt::depend_on_field
 pub struct FieldMask<D> {
     set: FieldSet,
-    // `fn() -> D`: covariant, and Send/Sync/Copy regardless of `D`.
-    data: PhantomData<fn() -> D>,
+    // `fn(D) -> D`: INVARIANT in `D` (a covariant marker would let subtyping
+    // coerce e.g. `FieldMask<for<'a> fn(&'a str)>` into
+    // `FieldMask<fn(&'static str)>` — two distinct provider data types), and
+    // Send/Sync/Copy regardless of `D`.
+    data: PhantomData<fn(D) -> D>,
 }
 
 impl<D> FieldMask<D> {
