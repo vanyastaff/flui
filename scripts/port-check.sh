@@ -172,6 +172,23 @@ check() {
   shift 3
   # Remaining args are rg path/glob arguments.
 
+  # A path that no longer exists must fail loudly: rg's "No such file" is
+  # discarded below, so a renamed or split file used to turn its guard into
+  # a silent pass (ui_realm.rs -> ui_realm/ did exactly that to
+  # ADR-0037/closed-ui-commands).
+  local arg skip_next=0
+  for arg in "$@"; do
+    if [[ "${skip_next}" -eq 1 ]]; then skip_next=0; continue; fi
+    case "${arg}" in
+      --type|-t|--type-not|-T|--glob|-g|--iglob) skip_next=1; continue ;;
+      -*) continue ;;
+    esac
+    if [[ ! -e "${arg}" ]]; then
+      echo "VIOLATION ${trigger_id}: guarded path ${arg} does not exist (renamed or split? update this trigger)"
+      violations=$((violations + 1))
+    fi
+  done
+
   local hits
   if hits=$(rg --line-number --column "${pattern}" "$@" 2>/dev/null \
     | grep -Ev ':\s*(//!|///|//)' \
@@ -867,7 +884,7 @@ check "ADR-0037/closed-ui-commands" \
   "generic executable payload in UiRealm command protocol" \
   '\b(ResultStamp|submit_result)\b|UiCommand::Invoke|Box<\s*dyn\s+FnOnce\(\)\s*\+\s*Send' \
   --type rust \
-  crates/flui-app/src/app/ui_realm.rs
+  crates/flui-app/src/app/ui_realm
 
 # ADR-0037 focus-owner guard — focus belongs to one presentation.
 #
@@ -1497,7 +1514,6 @@ check "N-geom.U16" \
   crates/flui-engine/src/command_renderer.rs \
   crates/flui-engine/src/dispatch.rs \
   crates/flui-engine/src/error.rs \
-  crates/flui-engine/src/fonts.rs \
   crates/flui-engine/src/frame_timing.rs \
   crates/flui-engine/src/layer_state_stack.rs \
   crates/flui-engine/src/raster.rs \

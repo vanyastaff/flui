@@ -13,7 +13,7 @@ cap because the platform's occlusion gate does not bound it.*
 - **Deciders:** @vanyastaff
 - **Scope:** `flui-engine`'s `RasterBackend` trait (`raster.rs`,
   `wgpu/renderer.rs`, `raster_owner.rs`), `flui-app`'s raster lane
-  (`raster_lane.rs`) and frame tail (`ui_realm.rs`,
+  (`raster_lane.rs`) and frame tail (`ui_realm/`,
   `presentation.rs`). Relates to [ADR-0044](ADR-0044-native-frame-pacing.md)
   §7 and ADR-0058's fallback gate.
 

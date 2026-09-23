@@ -472,7 +472,7 @@ for crate in RUNTIME_CRATES + [
 # are stripped first, and top-level `#[cfg(test)]`/`#[cfg(all(test, ...))]`-
 # gated `mod { ... }` blocks are blanked out by brace depth -- a test that
 # calls `Foo::instance()` to prove NON-interference (this repo's divergence-
-# check idiom, e.g. `ui_realm.rs`'s hot-reload test asserting
+# check idiom, e.g. `ui_realm/`'s hot-reload test asserting
 # `AppBinding::instance()` was untouched) is not a production ambient reach.
 # ---------------------------------------------------------------------------
 # Empty: the macro-defining file this used to exempt is deleted under #553

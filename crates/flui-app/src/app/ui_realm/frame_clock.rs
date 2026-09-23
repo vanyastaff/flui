@@ -232,7 +232,7 @@ impl UiRealm {
     /// the whole tree for a purely renderer-side rejection would be
     /// strictly heavier than either fix needs. Verified, not assumed:
     /// swapping this one call site is what the SurfaceLost retry test's
-    /// by-hand stand-in (`ui_realm.rs`'s
+    /// by-hand stand-in (`ui_realm/`'s
     /// `surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame`)
     /// also uses `mark_needs_layout` for, but that stand-in predates this
     /// method and was never revisited against the lighter mark — the

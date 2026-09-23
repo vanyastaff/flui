@@ -457,7 +457,7 @@ returns `true` (phase gate passed AND frames enabled) does it poke
 `window.request_redraw()`.
 
 The realm's `wake` was already registered as the scheduler's
-`on_frame_scheduled` hook (`ui_realm.rs`), so the `frame_scheduled`
+`on_frame_scheduled` hook (`ui_realm/`), so the `frame_scheduled`
 false→true edge fires the platform wake exactly as before — routing the
 pipeline carrier through `ensure_visual_update` makes the scheduler's
 `frame_scheduled` flag the single carrier, and the presentation closure

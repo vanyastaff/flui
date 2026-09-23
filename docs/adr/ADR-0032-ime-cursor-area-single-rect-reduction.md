@@ -7,7 +7,7 @@
 - **Status:** Accepted (amended by [ADR-0033](ADR-0033-composing-region-rendering.md) — upgrades the caret-only fallback to prefer the composing region's rect)
 - **Date:** 2026-07-17
 - **Deciders:** @vanyastaff
-- **Scope:** `crates/flui-objects/src/text/editable.rs` (`RenderEditable::caret_local_rect`); `crates/flui-widgets/src/text/editable_text.rs` (`CursorAreaLoop`, the inner `SubtreeAnchor`); `crates/flui-interaction/src/text_input.rs` (`TextInputHandle::set_cursor_area`); `crates/flui-app/src/app/{binding.rs,ui_realm.rs}` (`AppBinding::set_ime_cursor_area`, `TextInputPlatformBridge::set_cursor_area`); `crates/flui-platform/src/traits/text_input.rs` (doc only — the trait method already existed)
+- **Scope:** `crates/flui-objects/src/text/editable.rs` (`RenderEditable::caret_local_rect`); `crates/flui-widgets/src/text/editable_text.rs` (`CursorAreaLoop`, the inner `SubtreeAnchor`); `crates/flui-interaction/src/text_input.rs` (`TextInputHandle::set_cursor_area`); `crates/flui-app/src/app/{binding.rs,ui_realm/}` (`AppBinding::set_ime_cursor_area`, `TextInputPlatformBridge::set_cursor_area`); `crates/flui-platform/src/traits/text_input.rs` (doc only — the trait method already existed)
 - **Related:** ADR-0030 (`PlatformTextInput` — the capability this loop finally drives); ADR-0021 (`post_frame_handle` — the frame-capability rule this loop's acquisition follows); ADR-0027 (`UiRealm`/realm-scoped ownership — per-window routing deferral below)
 
 ---

@@ -37,7 +37,7 @@ use flui_foundation::{PresentationId, RealmId};
 use flui_scheduler::{AsyncDriver, LocalPostFrameLane, UpdateScheduler};
 
 // `RealmServices` and `next_identity` below are used unconditionally by
-// `ui_realm.rs` (every `UiRealm` constructor resolves its own
+// `ui_realm/` (every `UiRealm` constructor resolves its own
 // `RealmServices` now, on every platform `UiRealm` itself compiles for,
 // including iOS's stub). `AppRuntime` and `SharedEngineServices` further
 // down are the loop-scoped composition root that only the non-iOS runners
@@ -159,7 +159,7 @@ impl SharedEngineServices {
 /// fresh, realm-owned [`UpdateScheduler`] — the strong root — plus the
 /// `local_post_frame_lane()` and `async_driver()` handles derived from that
 /// SAME scheduler (formerly `UpdateScheduler::instance()` calls inside
-/// `ui_realm.rs` itself). Resolved once, here — never inside `ui_realm.rs`
+/// `ui_realm/` itself). Resolved once, here — never inside `ui_realm/`
 /// itself, so `UiRealm`'s own source performs zero `::instance()` calls.
 pub(crate) struct RealmServices {
     pub(crate) local_post_frame: LocalPostFrameLane,
@@ -186,7 +186,7 @@ impl RealmServices {
 
 /// Monotonic incarnation counter: every successfully constructed realm gets
 /// a fresh `RealmId` generation, so a recreated realm never compares equal
-/// to its predecessor. Moved here from `ui_realm.rs`: identity minting is an
+/// to its predecessor. Moved here from `ui_realm/`: identity minting is an
 /// `AppRuntime` concern now, not a `UiRealm` one — a real multi-window
 /// `AppRuntime` registry mints slots from here once it exists.
 static NEXT_INCARNATION: AtomicU32 = AtomicU32::new(1);

@@ -529,7 +529,7 @@ concern, not a per-cell signal read; (2) structural list changes need `Memo<V>`/
 - `crates/flui-view/src/context/build_context.rs:490` (`depend_on`),
   `element_build_context.rs:267` (`depend_on_inherited`), `element/behavior.rs:1300`
   (`dependents`), `owner/rebuild_handle.rs:89,133`, `element/unified.rs:426-460`,
-  `crates/flui-app/src/app/ui_realm.rs:231,302`.
+  `crates/flui-app/src/app/ui_realm/commands.rs:72,143`.
 - `git show a57b4140` (flui-reactivity), `git show 38620127` (removal).
 - `docs/research/state-model-2026.md` — market survey with sources.
 - ADR-0075 (Proposed) — derived values and effects; follow-ups #1248–#1254.

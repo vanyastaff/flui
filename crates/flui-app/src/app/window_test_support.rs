@@ -1,7 +1,7 @@
 //! Shared [`PlatformWindow`] test double for flui-app's test modules.
 //!
 //! Before this module, six hand-rolled stubs implemented the same trait
-//! surface across `presentation.rs`, `runtime.rs`, `ui_realm.rs`, and
+//! surface across `presentation.rs`, `runtime.rs`, `ui_realm/`, and
 //! `window_registry.rs`, differing only in a knob or two (window id, scale
 //! factor, sizes, a redraw counter, an injected text-input or accessibility
 //! capability). [`TestWindow`] carries every knob those stubs varied, with

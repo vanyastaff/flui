@@ -24,7 +24,7 @@
 //! `WidgetsBinding` continues to own its `BuildOwner` and `ElementTree`
 //! inline behind a single `RwLock<WidgetsBindingInner>` — and the
 //! registry captures one binding's owner state. The active handle is selected
-//! by the [`UiRealm`](../../../flui-app/src/app/ui_realm.rs) entry scope.
+//! by the [`UiRealm`](../../../flui-app/src/app/ui_realm/mod.rs) entry scope.
 //!
 //! Activation is thread-local and stack-shaped. Nested realm entry restores
 //! the previous handle, including during panic unwinding. A lookup clones the

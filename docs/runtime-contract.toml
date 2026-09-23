@@ -331,8 +331,8 @@ domain = "realm"
 mechanical = true
 mechanism = "compile-time assert_not_impl_any + symbol/test existence checks here"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "_owner_affine: PhantomData<*const ()>" },
-    { kind = "compile-time", file = "crates/flui-app/src/app/ui_realm.rs", contains = "assert_not_impl_any!(UiRealm: Send, Sync)" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/mod.rs", contains = "_owner_affine: PhantomData<*const ()>" },
+    { kind = "compile-time", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "assert_not_impl_any!(UiRealm: Send, Sync)" },
 ]
 
 [[contract]]
@@ -600,10 +600,10 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn hot_restart_while_callback_mutates_realm_map_defers_mutation" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn owner_platform_accessor_fences_correctly_with_a_second_idle_realm_present" },
     { kind = "test", file = "crates/flui-app/src/app/runner/mod.rs", contains = "fn owner_platform_accessor_fences_the_installed_realms_frame_transaction_through_dispatch" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn two_realms_coexist_same_thread" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn two_realms_two_threads_no_shared_state" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropping_realm_a_cannot_wake_realm_b" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_realm_duplicate_global_key_mounts_succeed_in_both" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn two_realms_coexist_same_thread" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn two_realms_two_threads_no_shared_state" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn dropping_realm_a_cannot_wake_realm_b" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn cross_realm_duplicate_global_key_mounts_succeed_in_both" },
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub enum WindowPolicy" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/secondary_window.rs", contains = "pub fn open_secondary_window" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/host.rs", contains = "fn install_exit_policy_hook" },
@@ -778,7 +778,7 @@ idle `UiRealm` that calls `record_compositor_tick` then \
 `draw_frame_entered` produced every pump under the mutant, zero pumps \
 after the fix), pinned by \
 `an_idle_presentation_stays_idle_through_the_production_call_sequence_with_compositor_ticks` \
-(`crates/flui-app/src/app/ui_realm.rs`) -- deliberately a DIFFERENT test \
+(`crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs`) -- deliberately a DIFFERENT test \
 from the pre-existing `an_idle_presentation_produces_and_flushes_exactly_zero_over_many_pumps`, \
 which never calls `record_compositor_tick` and could not have caught \
 this. Neither the `Animation` mark nor `record_compositor_tick` is a \
@@ -799,23 +799,23 @@ evidence = [
     { kind = "symbol", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "pub fn poll(&self, now: Instant) -> PollDecision" },
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "clock: FrameClock," },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn manual_and_platform_sources_agree_on_every_matrix_cell" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn closing_a_presentation_mid_animation_stops_its_ticks_without_panicking_or_touching_the_sibling" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn an_idle_presentation_produces_and_flushes_exactly_zero_over_many_pumps" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn segment_still_runs_by_the_same_predicate_while_deferred" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn an_idle_pump_while_deferred_does_not_latch_first_frame_sent" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn a_wake_bit_marked_before_deferral_is_consumed_by_exactly_one_flush" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn closing_a_presentation_mid_animation_stops_its_ticks_without_panicking_or_touching_the_sibling" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn an_idle_presentation_produces_and_flushes_exactly_zero_over_many_pumps" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn segment_still_runs_by_the_same_predicate_while_deferred" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_pipeline_and_vsync.rs", contains = "fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn an_idle_pump_while_deferred_does_not_latch_first_frame_sent" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn a_wake_bit_marked_before_deferral_is_consumed_by_exactly_one_flush" },
     { kind = "test", file = "crates/flui-testing/tests/multi_presentation_clock.rs", contains = "fn two_presentations_at_independent_scripted_cadences_tick_and_advance_independently" },
     { kind = "symbol", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "pub fn try_arm_redraw_request(&self) -> bool" },
     { kind = "symbol", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "pub fn record_compositor_tick(&self, now: Instant)" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn n_demands_before_a_produce_collapse_into_exactly_one_armed_request_then_rearm" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn scripted_60hz_and_144hz_feeds_produce_independently_proportional_counts" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn a_paused_compositor_feed_pauses_production_and_resuming_resumes_it" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn a_running_controller_with_no_other_dirty_state_still_flushes_every_tick" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn a_running_controller_with_no_other_dirty_state_still_flushes_every_tick" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn record_compositor_tick_alone_marks_no_demand_and_never_produces" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn an_idle_presentation_stays_idle_through_the_production_call_sequence_with_compositor_ticks" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn an_idle_presentation_stays_idle_through_the_production_call_sequence_with_compositor_ticks" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn clear_demand_emptying_the_mask_disarms_the_latch" },
     { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate" },
 ]
@@ -866,14 +866,14 @@ domain = "realm"
 owner_issue = 556
 mechanical = false
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn set_presentation_hidden(&self, presentation_id: PresentationId, hidden: bool)" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/presentations.rs", contains = "pub(crate) fn set_presentation_hidden(&self, presentation_id: PresentationId, hidden: bool)" },
     { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/presentation_lifecycle.rs", contains = "self.set_presentation_hidden(id, !visible);" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn window_visibility_gates_exactly_the_addressed_presentations_clock" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_and_animating_presentation_does_not_spin" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn unoccluding_an_undirtied_presentation_does_not_wake" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn unhide_wakes_on_retained_demand_even_when_the_latch_was_armed_before_the_hide" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn gated_and_animating_presentation_does_not_spin" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn unoccluding_an_undirtied_presentation_does_not_wake" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn unhide_wakes_on_retained_demand_even_when_the_latch_was_armed_before_the_hide" },
     { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly" },
 ]
 
@@ -958,7 +958,7 @@ evidence = [
     { kind = "test", file = "crates/flui-app/src/app/raster_lane.rs", contains = "fn a_withheld_frame_is_not_collapsed_into_no_present" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm/frame_commit_state_tests.rs", contains = "fn a_frame_the_surface_never_showed_is_retained_and_repainted" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm/frame_commit_state_tests.rs", contains = "fn a_frame_with_nothing_owed_is_not_retained" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "const MAX_NOT_SHOWN_RETRIES: u32 = 128;" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/mod.rs", contains = "const MAX_NOT_SHOWN_RETRIES: u32 = 128;" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm/frame_commit_state_tests.rs", contains = "fn the_withheld_retry_is_bounded_and_then_parks" },
     { kind = "test", file = "crates/flui-app/src/app/ui_realm/frame_commit_state_tests.rs", contains = "fn a_presented_frame_clears_the_withheld_streak" },
 ]
@@ -982,10 +982,10 @@ owner_issue = 553
 mechanical = true
 mechanism = "drain_commands asserts/gates on SchedulerPhase::Idle; owner-thread commit pinned by test"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "SchedulerPhase::Idle" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_thread_navigation_command_drains_on_owner_thread" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn semantics_action_addressed_to_a_live_non_primary_presentation_is_invoked" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn semantics_action_with_stale_presentation_generation_drops_traced" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/commands.rs", contains = "SchedulerPhase::Idle" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn cross_thread_navigation_command_drains_on_owner_thread" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn semantics_action_addressed_to_a_live_non_primary_presentation_is_invoked" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn semantics_action_with_stale_presentation_generation_drops_traced" },
 ]
 
 [[contract]]
@@ -1018,9 +1018,9 @@ domain = "realm"
 mechanical = true
 mechanism = "test existence pinned here"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn command_sender" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn every_send_wakes_the_owner" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn redraw_requests_coalesce_to_one_flag_and_one_wake" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/commands.rs", contains = "fn command_sender" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn every_send_wakes_the_owner" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn redraw_requests_coalesce_to_one_flag_and_one_wake" },
 ]
 
 [[contract]]
@@ -1034,9 +1034,9 @@ domain = "realm"
 mechanical = true
 mechanism = "test existence pinned here"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "ChannelFull {" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn inbox_reports_backpressure_at_capacity" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn channel_full_retry_preserves_the_rejected_payload" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/commands.rs", contains = "ChannelFull {" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn inbox_reports_backpressure_at_capacity" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn channel_full_retry_preserves_the_rejected_payload" },
 ]
 
 [[contract]]
@@ -1051,8 +1051,8 @@ domain = "realm"
 mechanical = true
 mechanism = "source gate pins the pre-read length and bounded loop"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "let pending = self.rx.len();" },
-    { kind = "source-gate", file = "crates/flui-app/src/app/ui_realm.rs", contains = "for _ in 0..pending" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/commands.rs", contains = "let pending = self.rx.len();" },
+    { kind = "source-gate", file = "crates/flui-app/src/app/ui_realm/commands.rs", contains = "for _ in 0..pending" },
 ]
 
 [[contract]]
@@ -1401,8 +1401,8 @@ mechanical = true
 mechanism = "test existence pinned here"
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "static NEXT_INCARNATION" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn recreated_runtime_gets_fresh_realm_id" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropped_runtime_yields_owner_gone" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn recreated_runtime_gets_fresh_realm_id" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn dropped_runtime_yields_owner_gone" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn late_event_never_crosses_realm_incarnations" },
 ]
 
@@ -1466,10 +1466,10 @@ evidence = [
     { kind = "test", file = "crates/flui-view/tests/global_key_duplication.rs", contains = "fn the_parent_a_graft_robs_is_reported_when_it_never_rebuilds" },
     { kind = "symbol", file = "crates/flui-view/src/binding.rs", contains = "pub struct GlobalKeyRegistryComposite" },
     { kind = "symbol", file = "crates/flui-view/src/key/registry.rs", contains = "pub(crate) fn build_composite" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn realm_id" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn realm_entry_activates_its_global_key_registry" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/construct.rs", contains = "fn realm_id" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn realm_entry_activates_its_global_key_registry" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn whole_frame_event_keeps_realm_global_key_scope_active" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn composite_registry_resolves_keys_registered_in_either_presentation" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/presentation_forest_isolation.rs", contains = "fn composite_registry_resolves_keys_registered_in_either_presentation" },
     { kind = "test", file = "crates/flui-view/src/key/registry.rs", contains = "fn composite_routes_with_element_to_the_member_that_resolved_the_lookup" },
 ]
 
@@ -1479,7 +1479,7 @@ statement = """
 One `FocusTree` per presentation with realm-level active-presentation \
 arbitration. The per-presentation `FocusManager` is real (owned by \
 `PresentationState`, unchanged since the forest slice); `FocusCoordinator` \
-(`ui_realm.rs`, private) is the multi-presentation arbitration this contract \
+(`ui_realm/input.rs`, private) is the multi-presentation arbitration this contract \
 was waiting on the element forest for -- it tracks exactly which \
 presentation currently owns OS keyboard focus (`Cell<PresentationId>`, \
 defaulting to the realm's initial presentation) and is the sole thing \
@@ -1513,14 +1513,14 @@ owner_issue = 555
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "fn focus_manager" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "struct FocusCoordinator" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn note_focus_gained" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn notify_presentation_focus_gained" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn presentation_and_widget_tree_share_the_exact_focus_owner" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn keyboard_routes_to_active_presentation_only" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/input.rs", contains = "struct FocusCoordinator" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/input.rs", contains = "fn note_focus_gained" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/input.rs", contains = "fn notify_presentation_focus_gained" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn presentation_and_widget_tree_share_the_exact_focus_owner" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/addressed_input_routing.rs", contains = "fn keyboard_routes_to_active_presentation_only" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn window_focus_true_moves_active_presentation_end_to_end_and_false_does_not" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn focus_gained_for_an_unknown_presentation_is_a_traced_no_op" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn keyboard_after_closing_the_active_presentation_routes_to_the_survivor" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/addressed_input_routing.rs", contains = "fn focus_gained_for_an_unknown_presentation_is_a_traced_no_op" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/addressed_input_routing.rs", contains = "fn keyboard_after_closing_the_active_presentation_routes_to_the_survivor" },
 ]
 
 [[contract]]
@@ -1551,7 +1551,7 @@ domain = "platform"
 mechanical = true
 mechanism = "forbidden_pattern scan below keeps ForegroundExecutor out of crates/**/*.rs"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "enum UiCommand" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/commands.rs", contains = "enum UiCommand" },
     { kind = "source-gate", file = "crates/flui-platform/src/lib.rs", contains = "pub use executor::BackgroundExecutor" },
 ]
 
@@ -1635,8 +1635,8 @@ evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(crate) struct AppRuntime" },
     { kind = "symbol", file = "crates/flui-app/src/app/window_registry.rs", contains = "fn contains_address" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn install_presentation_alongside" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn install_presentation" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn assemble_presentation" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/presentations.rs", contains = "fn install_presentation" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/presentations.rs", contains = "fn assemble_presentation" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn install_presentation_alongside_leaves_the_forest_unchanged_on_registration_failure" },
 ]
 
@@ -1691,7 +1691,7 @@ domain = "platform"
 owner_issue = 552
 mechanical = false
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "enum UiCommand" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/commands.rs", contains = "enum UiCommand" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "enum PlatformToUi" },
     { kind = "compile-time", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "assert_impl_all!(PlatformToUi: Send)" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn stale_realm_dispatch_is_dropped" },
@@ -1770,12 +1770,12 @@ owner_issue = 555
 mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "gestures: GestureBinding" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn handle_input_addressed" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/input.rs", contains = "fn handle_input_addressed" },
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn mouse_tracker_applies_cursor_to_the_exact_owned_window" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn input_stamped_for_b_never_reaches_as_arena" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn ime_event_addressed_to_b_does_not_reach_as_session" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn input_addressed_to_a_closed_or_unknown_presentation_drops_traced_never_falls_through" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn redraw_request_from_a_does_not_wake_bs_window" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/addressed_input_routing.rs", contains = "fn input_stamped_for_b_never_reaches_as_arena" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/addressed_input_routing.rs", contains = "fn ime_event_addressed_to_b_does_not_reach_as_session" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/addressed_input_routing.rs", contains = "fn input_addressed_to_a_closed_or_unknown_presentation_drops_traced_never_falls_through" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/redraw_wake_routing.rs", contains = "fn redraw_request_from_a_does_not_wake_bs_window" },
 ]
 
 [[contract]]
@@ -1799,8 +1799,8 @@ mechanism = "test existence pinned here"
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "fn dispatch_semantics_action" },
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "BUG: the pipeline must be free before invoking a semantics-action handler" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn semantics_action_commits_on_the_owner_after_releasing_the_pipeline_lock" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn stale_semantics_action_is_gracefully_dropped" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn semantics_action_commits_on_the_owner_after_releasing_the_pipeline_lock" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/mod.rs", contains = "fn stale_semantics_action_is_gracefully_dropped" },
 ]
 
 [[contract]]
@@ -1952,8 +1952,8 @@ mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "enum PresentationLifecycle" },
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn lifecycle_transitions_are_typed_and_close_is_idempotent" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn pointer_input_is_dropped_while_suspended_but_keyboard_flows" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn all_input_dropped_after_close" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_pipeline_and_vsync.rs", contains = "fn pointer_input_is_dropped_while_suspended_but_keyboard_flows" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_pipeline_and_vsync.rs", contains = "fn all_input_dropped_after_close" },
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn semantics_action_after_close_is_refused" },
 ]
 
@@ -2113,21 +2113,21 @@ owner_issue = 555
 mechanical = true
 mechanism = "PresentationForest::install and its production callers pinned; the six-step teardown contract's symbols pinned"
 evidence = [
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "presentations: PresentationForest" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/mod.rs", contains = "presentations: PresentationForest" },
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "widgets: WidgetsBinding" },
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "renderer: RenderingFlutterBinding" },
     { kind = "symbol", file = "crates/flui-app/src/app/presentation.rs", contains = "redraw_pending: Cell<bool>" },
     { kind = "symbol", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "pub(crate) fn install" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn install_presentation" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/presentations.rs", contains = "fn install_presentation" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn install_presentation_alongside" },
     { kind = "test", file = "crates/flui-app/src/app/presentation_forest.rs", contains = "fn install_accepts_any_number_of_presentations" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn install_presentation_grows_the_forest_past_one" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn reassemble_fans_out_to_all_presentations_in_mount_order" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropping_the_realm_closes_every_presentation" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn sibling_presentations_flush_independently" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn cross_presentation_dirty_during_a_segment_sets_wake_bit_and_lands_next_pump" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn close_presentation_entered" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn enter_for_close" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/presentation_forest_isolation.rs", contains = "fn install_presentation_grows_the_forest_past_one" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/presentation_forest_isolation.rs", contains = "fn reassemble_fans_out_to_all_presentations_in_mount_order" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/presentation_forest_isolation.rs", contains = "fn dropping_the_realm_closes_every_presentation" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/presentation_forest_isolation.rs", contains = "fn sibling_presentations_flush_independently" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/presentation_forest_isolation.rs", contains = "fn cross_presentation_dirty_during_a_segment_sets_wake_bit_and_lands_next_pump" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/presentations.rs", contains = "pub(crate) fn close_presentation_entered" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/presentations.rs", contains = "fn enter_for_close" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "ClosePresentation(flui_foundation::PresentationId)" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn close_presentation(" },
     # `SubtreeRemoval::Finalize` is the load-bearing half here (issue #838):
@@ -2136,10 +2136,10 @@ evidence = [
     # never happen.
     { kind = "symbol", file = "crates/flui-view/src/binding.rs", contains = "crate::tree::SubtreeRemoval::Finalize," },
     { kind = "test", file = "crates/flui-view/src/binding.rs", contains = "fn detach_root_widget_disposes_every_descendant_not_just_the_root" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dispose_during_teardown_cannot_reach_sibling_or_dead_services" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn closing_presentation_a_leaves_sibling_layer_tree_identical" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dropped_presentations_surviving_pipeline_handles_fail_closed" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/async_completion_isolation.rs", contains = "fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/dispose_teardown_isolation.rs", contains = "fn dispose_during_teardown_cannot_reach_sibling_or_dead_services" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/closing_one_presentation_is_invisible_to_siblings.rs", contains = "fn closing_presentation_a_leaves_sibling_layer_tree_identical" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/closing_one_presentation_is_invisible_to_siblings.rs", contains = "fn dropped_presentations_surviving_pipeline_handles_fail_closed" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn closing_a_presentation_unregisters_its_window_mapping" },
 ]
@@ -2304,7 +2304,7 @@ mechanism = "gate tests pinned here"
 evidence = [
     { kind = "symbol", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn keeps_frame_gate_open" },
     { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_pipeline_and_vsync.rs", contains = "fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle" },
 ]
 
 [[contract]]
@@ -2363,7 +2363,7 @@ evidence = [
     { kind = "symbol", file = "crates/flui-scheduler/src/frame_telemetry.rs", contains = "pub struct FrameSnapshot" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn two_inputs_before_one_produce_both_survive_with_distinct_latencies_older_larger" },
     { kind = "test", file = "crates/flui-scheduler/tests/frame_telemetry_allocation.rs", contains = "fn frame_path_allocates_nothing_while_frames_since_pull_side_does" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn dispatched_input_is_attributed_end_to_end_in_the_exported_frame_record" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn dispatched_input_is_attributed_end_to_end_in_the_exported_frame_record" },
     { kind = "test", file = "crates/flui-devtools/src/timeline.rs", contains = "fn frame_snapshot_export_carries_real_input_attribution_through_the_existing_serializer" },
 ]
 
@@ -2395,7 +2395,7 @@ mechanism = "pinned known-distribution percentile tests (exact bucket values ass
 evidence = [
     { kind = "symbol", file = "crates/flui-scheduler/src/frame_histogram.rs", contains = "pub struct LatencyHistogram" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_histogram.rs", contains = "fn percentiles_land_on_the_expected_bucket_boundaries_for_a_known_distribution" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn successful_submit_emits_structured_frame_telemetry_with_tail_quality" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn successful_submit_emits_structured_frame_telemetry_with_tail_quality" },
     { kind = "test", file = "crates/flui-app/src/app/presentation.rs", contains = "fn overlay_line_surfaces_tail_quality_and_keeps_deferrals_distinct_from_drops" },
 ]
 
@@ -2415,7 +2415,7 @@ mechanism = "pinned tests at the FrameClock unit level and the UiRealm productio
 evidence = [
     { kind = "symbol", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "pub fn produces_deferred(&self) -> u64" },
     { kind = "test", file = "crates/flui-scheduler/src/frame_clock.rs", contains = "fn backpressure_deferral_is_counted_separately_and_never_looks_like_a_dropped_frame" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn backpressure_episode_is_not_counted_as_a_dropped_frame_but_a_real_submit_error_is" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn backpressure_episode_is_not_counted_as_a_dropped_frame_but_a_real_submit_error_is" },
 ]
 
 [[contract]]
@@ -2499,13 +2499,13 @@ mechanical = false
 evidence = [
     { kind = "symbol", file = "crates/flui-interaction/src/arena/mod.rs", contains = "fn next_deadline(&self) -> Option<Instant>" },
     { kind = "symbol", file = "crates/flui-interaction/src/binding.rs", contains = "pub fn next_deadline(&self) -> Option<web_time::Instant>" },
-    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm.rs", contains = "pub(crate) fn next_wake(&self) -> Option<web_time::Instant>" },
+    { kind = "symbol", file = "crates/flui-app/src/app/ui_realm/frame_clock.rs", contains = "pub(crate) fn next_wake(&self) -> Option<web_time::Instant>" },
     { kind = "symbol", file = "crates/flui-app/src/app/runtime.rs", contains = "pub(super) fn next_wake(&self) -> Option<web_time::Instant>" },
     { kind = "symbol", file = "crates/flui-app/src/app/runner/host.rs", contains = "fn install_wake_deadline_hook" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gated_long_press_resolves_through_the_arenas_own_callback_with_zero_submits" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn gated_long_press_resolves_through_the_arenas_own_callback_with_zero_submits" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn next_wake_is_the_min_deadline_across_every_installed_realm" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn next_wake_is_the_min_deadline_across_two_presentations_of_one_realm" },
-    { kind = "test", file = "crates/flui-app/src/app/ui_realm.rs", contains = "fn gesture_arena_next_deadline_is_the_min_across_two_recognizers_on_one_arena" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn next_wake_is_the_min_deadline_across_two_presentations_of_one_realm" },
+    { kind = "test", file = "crates/flui-app/src/app/ui_realm/tests/frame_clock_segment_gate.rs", contains = "fn gesture_arena_next_deadline_is_the_min_across_two_recognizers_on_one_arena" },
     { kind = "symbol", file = "crates/flui-platform/src/platforms/winit/platform.rs", contains = "fn new_events" },
     { kind = "test", file = "crates/flui-app/src/app/runner/frame_pacing.rs", contains = "fn idle_presentation_over_a_real_wall_clock_window_produces_zero_then_responds_instantly" },
     { kind = "test", file = "crates/flui-app/src/app/runner/realm_dispatch.rs", contains = "fn next_wake_is_none_when_no_realm_owned_deadline_is_armed" },
@@ -3790,7 +3790,7 @@ module (`#[cfg(test)]`, never compiled into production) and is allow-listed \
 because implementing the trait requires restating its `fn id(&self) -> \
 WindowId` signature; that is a structural trait-conformance fact, not a \
 routing-logic exception. The per-test-module mocks that used to earn \
-presentation.rs and ui_realm.rs allow-list entries are consolidated into \
+presentation.rs and ui_realm allow-list entries are consolidated into \
 that module, so those files no longer name the type at all. runtime.rs \
 remains allow-listed for one internal helper predating this entry \
 (`release_redraw_window_for`, which releases the TLS-held redraw window by \

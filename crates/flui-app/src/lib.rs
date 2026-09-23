@@ -11,7 +11,7 @@
 //! flui_app
 //!   ├── app/
 //!   │   ├── runtime.rs      - AppRuntime: the loop-scoped composition root
-//!   │   ├── ui_realm.rs     - owner-affine widget, render, and gesture runtime
+//!   │   ├── ui_realm/     - owner-affine widget, render, and gesture runtime
 //!   │   ├── presentation.rs - per-presentation window/haptics/frame-accounting state
 //!   │   ├── config.rs       - AppConfig
 //!   │   ├── direct.rs       - direct rendering mode (bypasses the widget tree)

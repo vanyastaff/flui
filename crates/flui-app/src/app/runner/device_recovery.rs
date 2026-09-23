@@ -190,7 +190,7 @@ pub(super) struct FrameRecoveryOutcome {
 /// wake_frame`], and never bare [`crate::app::ui_realm::UiRealm::request_redraw`]
 /// either. Neither of those alone is enough: `wake_frame` does not open
 /// `render_frame_entered`'s OWN per-presentation dirty gate
-/// (`presentation.take_redraw_pending()`, `ui_realm.rs`'s
+/// (`presentation.take_redraw_pending()`, `ui_realm/`'s
 /// `draw_frame_entered`) at all, and `request_redraw` alone opens that gate
 /// but still leaves `PipelineOwner`'s OWN independent dirty tracking
 /// untouched — confirmed by a probe, not assumed: with `request_redraw`
@@ -974,7 +974,7 @@ mod device_recovery_tests {
     /// does not catch this: the FIRST frame still has the mount's own
     /// pending paint, reaches `render_scene`, and `ui_realm`'s OWN
     /// `DeviceLost` arm independently arms `needs_redraw` too (`retry_needed
-    /// = true` there, from this same issue's `ui_realm.rs` fix) — the bug
+    /// = true` there, from this same issue's `ui_realm/` fix) — the bug
     /// only shows up once that leftover demand is exhausted, on the frame
     /// AFTER, which is exactly why this drives (and checks) three.
     #[test]
