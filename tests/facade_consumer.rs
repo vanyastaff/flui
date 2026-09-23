@@ -390,8 +390,8 @@ fn external_consumer_names_presentation_lifecycle_capability() {
     let output = compile_consumer(
         dependencies,
         r"
-use flui::view::{BuildContext, LifecycleHandle, LifecycleSubscription, LifecycleClosed};
-pub fn acquire(ctx: &dyn BuildContext) -> Option<LifecycleHandle> { ctx.lifecycle_handle() }
+use flui::view::{LifecycleContext, LifecycleHandle, LifecycleSubscription, LifecycleClosed};
+pub fn acquire(ctx: &dyn LifecycleContext) -> Option<LifecycleHandle> { ctx.lifecycle_handle() }
 pub fn observe(handle: &LifecycleHandle) -> Result<(Option<flui::view::AppLifecycleState>, LifecycleSubscription), LifecycleClosed> {
     handle.subscribe(|_| {})
 }
