@@ -169,6 +169,29 @@ impl StatelessView for Host {
     }
 }
 
+/// Two overlays sharing one handle, the second optional.
+#[derive(Clone)]
+struct TwoOverlays {
+    handle: OverlayHandle,
+    second: bool,
+}
+
+impl View for TwoOverlays {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for TwoOverlays {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let mut children = vec![Overlay::new(self.handle.clone()).into_view().boxed()];
+        if self.second {
+            children.push(Overlay::new(self.handle.clone()).into_view().boxed());
+        }
+        crate::Column::new(children)
+    }
+}
+
 // ============================================================================
 // TESTS
 // ============================================================================
@@ -533,16 +556,21 @@ fn insert_on_an_unmounted_overlay_waits_for_the_next_mount() {
     );
 }
 
-/// `OverlayEntry::remove` on an **unmounted** overlay detaches the entry but leaves
-/// the overlay's entry list untouched — Flutter's `if (!overlay.mounted) return;`
-/// (`overlay.dart:231-233`), which sits *before* `overlay._entries.remove(this)`.
+/// `OverlayEntry::remove` on an **unmounted** overlay takes the entry out of
+/// the list, so the next mount does not build it.
 ///
-/// Found by a parity re-check against Flutter: FLUI mutated the list regardless.
+/// A deliberate divergence from Flutter's `if (!overlay.mounted) return;`
+/// (`overlay.dart:231-233`), which sits *before* `overlay._entries.remove(this)`:
+/// there the list dies with the unmounted state, here the handle keeps it and
+/// the next mount builds it (ADR-0076 §2). Porting the early return left a
+/// detached entry in the list that the next mount built and nothing could
+/// remove anymore (the back-reference was already spent).
 ///
-/// Red-check: delete the `if !shared.is_mounted() { return; }` guard in
-/// `OverlayEntry::remove`; the list drops to 0.
+/// Red-check: restore `if !shared.is_mounted() { return; }` before
+/// `retain_entries` in `OverlayEntry::remove`; `len` stays 1 and the remounted
+/// overlay builds the removed entry.
 #[test]
-fn overlay_entry_remove_leaves_an_unmounted_overlays_list_alone() {
+fn overlay_entry_remove_on_an_unmounted_overlay_takes_it_out_of_the_list() {
     let calls = Calls::default();
     let entry = counting_entry(&calls);
     let handle = OverlayHandle::new();
@@ -552,7 +580,7 @@ fn overlay_entry_remove_leaves_an_unmounted_overlays_list_alone() {
         show_overlay: true,
         handle: handle.clone(),
     });
-    assert_eq!(handle.len(), 1);
+    assert_eq!((handle.len(), calls.get()), (1, 1));
 
     harness.swap_root(Host {
         show_overlay: false,
@@ -561,12 +589,132 @@ fn overlay_entry_remove_leaves_an_unmounted_overlays_list_alone() {
     assert!(!handle.is_mounted());
 
     entry.remove();
-
     assert!(!entry.is_attached(), "the entry detached from the overlay");
+    assert_eq!(handle.len(), 0, "and left the list the handle keeps");
+
+    harness.swap_root(Host {
+        show_overlay: true,
+        handle: handle.clone(),
+    });
+    assert!(handle.is_mounted());
+    assert_eq!(calls.get(), 1, "the remounted overlay does not build it");
+}
+
+/// The same, before the first mount: insert, remove, then mount builds nothing.
+#[test]
+fn remove_before_the_first_mount_keeps_the_entry_out_of_the_first_build() {
+    let calls = Calls::default();
+    let entry = counting_entry(&calls);
+    let (handle, overlay) = overlay_with(std::slice::from_ref(&entry));
+    entry.remove();
+    assert_eq!(handle.len(), 0);
+
+    let mut harness = mount(overlay);
+    assert_eq!(calls.get(), 0, "the removed entry is never built");
+    assert_eq!(layer_count(&mut harness), 0);
+}
+
+/// An entry is in one overlay, once. Inserting it into a second overlay, or
+/// twice into one, is refused and logged, never a ghost copy: the entry stays
+/// where it was, and `remove` still takes it out of there.
+///
+/// Red-check: make `admissible` return `candidates.to_vec()`; `b` gains the
+/// entry, `a` keeps a copy `remove` can no longer reach, and `a` holds it twice.
+#[test]
+fn an_entry_already_in_an_overlay_is_refused_elsewhere_and_twice() {
+    let calls = Calls::default();
+    let entry = counting_entry(&calls);
+    let (a, b) = (OverlayHandle::new(), OverlayHandle::new());
+
+    a.insert(&entry, &InsertPosition::Top);
+    b.insert(&entry, &InsertPosition::Top);
+    b.rearrange(std::slice::from_ref(&entry));
+    a.insert(&entry, &InsertPosition::Top);
+    a.insert_all(&[entry.clone(), entry.clone()], &InsertPosition::Top);
+
+    assert_eq!(a.entry_ids(), vec![entry.id()], "a holds it exactly once");
+    assert!(b.entry_ids().is_empty(), "b refused it");
+
+    entry.remove();
+    assert!(
+        a.entry_ids().is_empty(),
+        "remove reaches the one real owner"
+    );
+    b.insert(&entry, &InsertPosition::Top);
     assert_eq!(
-        handle.len(),
+        b.entry_ids(),
+        vec![entry.id()],
+        "once removed, it may go elsewhere"
+    );
+}
+
+/// Two `Overlay`s mounted with one handle: the first serves it, the second
+/// builds nothing, and disposing the second leaves the first mounted.
+///
+/// Red-check: make `claim_rebuild` always take the slot; the test fails (the
+/// second overlay also serves the handle).
+#[test]
+fn one_handle_serves_one_mounted_overlay() {
+    let calls = Calls::default();
+    let entry = counting_entry(&calls);
+    let (handle, _) = overlay_with(std::slice::from_ref(&entry));
+
+    let mut harness = mount(TwoOverlays {
+        handle: handle.clone(),
+        second: true,
+    });
+    assert!(handle.is_mounted());
+    assert_eq!(calls.get(), 1, "only the first overlay builds the entry");
+
+    harness.swap_root(TwoOverlays {
+        handle: handle.clone(),
+        second: false,
+    });
+    assert!(
+        handle.is_mounted(),
+        "disposing the refused second keeps the first"
+    );
+
+    entry.mark_needs_build();
+    harness.tick();
+    assert_eq!(calls.get(), 2, "the first overlay still rebuilds the entry");
+}
+
+/// Rebuilding an `Overlay` with a different handle moves the mounted overlay
+/// onto that handle: its list is built, the old handle reports unmounted, and
+/// the old handle's mutations no longer reach the screen.
+///
+/// Red-check: delete `OverlayState::did_update_view`; `b.is_mounted()` stays
+/// false and the new list is never built.
+#[test]
+fn a_replacement_handle_takes_over_the_mounted_overlay() {
+    let (calls_a, calls_b) = (Calls::default(), Calls::default());
+    let (entry_a, entry_b) = (counting_entry(&calls_a), counting_entry(&calls_b));
+    let (a, _) = overlay_with(std::slice::from_ref(&entry_a));
+    let (b, _) = overlay_with(std::slice::from_ref(&entry_b));
+
+    let mut harness = mount(Host {
+        show_overlay: true,
+        handle: a.clone(),
+    });
+    assert!(a.is_mounted());
+    assert_eq!((calls_a.get(), calls_b.get()), (1, 0));
+
+    harness.swap_root(Host {
+        show_overlay: true,
+        handle: b.clone(),
+    });
+    assert!(b.is_mounted(), "the new handle serves the mounted overlay");
+    assert!(!a.is_mounted(), "the old one no longer does");
+    assert_eq!(calls_b.get(), 1, "the new list is built");
+
+    let late = counting_entry(&calls_a);
+    a.insert(&late, &InsertPosition::Top);
+    harness.tick();
+    assert_eq!(
+        calls_a.get(),
         1,
-        "but an unmounted overlay's entry list is left alone"
+        "the old handle's insert rebuilds nothing on screen"
     );
 }
 

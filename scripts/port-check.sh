@@ -908,15 +908,29 @@ check "ADR-0037/focus-owner" \
 # generic multi-child impl macro. It carries no semver guarantee, so only
 # `crates/flui-*` may import it: the facade, examples, generated app templates
 # and any other crate must not. The exported macro's name counts too.
+#
+# Matched as the bare `__private` token, not the `flui_widgets::` path, so an
+# alias (`use flui_widgets as w; use w::__private::*;`) or a glob is caught
+# too. The second check closes the laundering route: no `flui-*` crate but
+# flui-widgets may `pub use` anything from the seam, under any name. Limit:
+# a text scan cannot see macro expansion, so a `$crate::`-path produced by
+# some other crate's macro is out of reach; no such macro exists.
 check "SEAM/widgets-private" \
-  "flui_widgets::__private used outside crates/flui-*" \
-  'flui_widgets::__private|__generic_render_view_element' \
+  "flui_widgets::__private (or its macro) used outside crates/flui-*" \
+  '\b__private\b|__generic_render_view_element' \
   --type rust \
   --glob '!crates/flui-*/src/**' \
   --glob '!crates/flui-*/tests/**' \
   --glob '!crates/flui-*/benches/**' \
   --glob '!target/**' \
   .
+check "SEAM/widgets-private" \
+  "a flui-* crate re-exports the flui_widgets::__private seam" \
+  'pub\s+use\s+[^;]*(\b__private\b|__generic_render_view_element)' \
+  --multiline \
+  --type rust \
+  --glob '!crates/flui-widgets/**' \
+  crates
 
 # ADR-0045 decision 1's `Renderer: Send` re-widening guard lives in
 # `docs/runtime-contract.toml` as a `forbidden_pattern` entry, right next

@@ -8,7 +8,7 @@
 - **Date:** 2026-09-23
 - **Deciders:** @vanyastaff
 - **Supersedes:** ADR-0036 §1, the sentence keeping the existing mutation methods `pub(crate)`, and ADR-0036's Deferred item "a public `Overlay::new`/`initialEntries` constructor", as far as `Overlay::new` goes. The four published types and all of §2–§4 stand.
-- **Scope:** `crates/flui-widgets/src/overlay/{mod.rs,entry.rs,tests.rs}` (visibility, rustdoc, one behaviour test); `crates/flui-widgets/src/lib.rs` (`pub mod overlay`, `InsertPosition` re-export); `crates/flui-widgets/src/testing/overlay_probe.rs` (test-only inspection); `crates/flui-widgets/src/navigator/navigator_tests.rs` (the export guard, rewritten for this contract)
+- **Scope:** `crates/flui-widgets/src/overlay/{mod.rs,entry.rs,tests.rs}` (visibility, rustdoc, one behaviour test); `crates/flui-widgets/src/lib.rs` (`InsertPosition` re-export; the module stays private); `crates/flui-widgets/src/testing/overlay_probe.rs` (test-only inspection); `crates/flui-widgets/src/navigator/navigator_tests.rs` (the export guard, rewritten for this contract)
 - **Related:** ADR-0036 (overlay publication); ADR-0019 (Navigator routing seam); issue #1272 (the flui-widgets crate split that forces the question)
 
 ---
@@ -28,7 +28,7 @@ Flutter itself publishes this surface (`OverlayState.insert/rearrange/mounted`, 
 
 ### 1. Publish exactly what the compiler says navigation uses
 
-`mod overlay` becomes `pub mod overlay`, and `InsertPosition` joins the crate-root re-exports. The set was not chosen by reading the code:
+The items are re-exported from the crate root, with `InsertPosition` joining the four types ADR-0036 published. The `overlay` module itself stays private: a public module would also make `OverlayState` nameable, which is `pub` only because `StatefulView::State` must be. The set was not chosen by reading the code:
 
 1. Every `pub(crate)` in `overlay/{mod,entry,theater}.rs` was narrowed to `pub(in crate::overlay)`.
 2. `cargo check -p flui-widgets` then reported one privacy error (E0603/E0624) for each use outside the module.
@@ -37,13 +37,13 @@ Flutter itself publishes this surface (`OverlayState.insert/rearrange/mounted`, 
 | Item | Flutter counterpart | Before mount / after unmount or removal |
 |---|---|---|
 | `OverlayHandle::new` | `GlobalKey<OverlayState>` + `Overlay(initialEntries:)` | An empty list no overlay has mounted |
-| `Overlay::new(handle)` | `Overlay` widget | Mounting publishes the rebuild capability into the handle; dispose revokes it |
+| `Overlay::new(handle)` | `Overlay` widget | Mounting publishes the rebuild capability into the handle; dispose revokes it. One handle, one mounted `Overlay` (see §2a); rebuilding with a different handle moves onto it |
 | `OverlayHandle::is_mounted` | `OverlayState.mounted` | `false` before the first mount and after dispose |
-| `OverlayHandle::insert` | `OverlayState.insert` | Unmounted: the entry joins the list, nothing rebuilds (see §2) |
-| `OverlayHandle::rearrange` | `OverlayState.rearrange` | Unmounted: the list is reordered, nothing rebuilds (see §2) |
+| `OverlayHandle::insert` | `OverlayState.insert` | Unmounted: the entry joins the list, nothing rebuilds (see §2). An entry another overlay holds, or this one already holds, is refused and logged (see §2a) |
+| `OverlayHandle::rearrange` | `OverlayState.rearrange` | Unmounted: the list is reordered, nothing rebuilds (see §2). Foreign entries are refused, repeats count once |
 | `InsertPosition` | `above:`/`below:` arguments | A reference the overlay does not hold falls back to `Top` |
 | `OverlayEntry::new` | `OverlayEntry(builder:)` | Unattached; the builder runs on the layer's builds only |
-| `OverlayEntry::remove` | `OverlayEntry.remove` | Unmounted overlay: detaches, leaves the list alone (Flutter's `if (!overlay.mounted) return`). A second call logs `tracing::error!` and returns, per PANIC-POLICY (Flutter asserts) |
+| `OverlayEntry::remove` | `OverlayEntry.remove` | Always leaves the list; the rebuild runs only if mounted. This diverges from Flutter's `if (!overlay.mounted) return`, see §2. A second call logs `tracing::error!` and returns, per PANIC-POLICY (Flutter asserts) |
 | `OverlayEntry::mark_needs_build` | `OverlayEntry.markNeedsBuild` | Inert before mount and after unmount |
 | `OverlayEntry::set_opaque` | `OverlayEntry.opaque =` | Unattached or unmounted: stored and read by the next build; an unchanged value does nothing |
 | `OverlayEntry::set_maintain_state` | `OverlayEntry.maintainState =` | Same as `set_opaque` |
@@ -62,6 +62,16 @@ This is the contract rather than a silent no-op or an error because the handle d
 - **Before first mount:** mutating before the first mount was already the documented contract of `OverlayHandle` ("the first build reads whatever the list holds"). The overlay tests build their overlays that way (`overlay_with` inserts, then mounts), so after unmount the same rule simply continues.
 
 Flutter's equivalent is a `GlobalKey<OverlayState>` whose state has gone: there, the caller has nothing to insert into. The FLUI handle keeps the list, and the rebuild simply waits.
+
+The same reason makes `remove` diverge from Flutter. Flutter's `OverlayEntry.remove` returns before touching the list when the overlay is unmounted, which is harmless there because that list dies with the state. Here the next mount would build a detached entry that nothing can remove anymore. So `remove` always takes the entry out of the list, and only the rebuild waits for a mount.
+
+### 2a. The public API refuses the misuses a single in-crate caller never made
+
+Before this ADR the navigator was the only caller, and it never misused the surface. Published, the surface has to hold for any caller. Each refusal below is logged with `tracing::error!` and never panics (PANIC-POLICY: caller error; Flutter `assert`s the same preconditions):
+
+- **An entry lives in one overlay, once.** `insert` refuses an entry another live overlay holds, or one this overlay already holds. `rearrange` refuses foreign entries, and a repeat within one call counts once. Without this, a second insert re-pointed the entry's back-reference and left a ghost copy that `remove` could not reach.
+- **One handle serves one mounted `Overlay`.** A second concurrent mount with the same handle builds nothing, and disposing it leaves the first one mounted. The rebuild slot is released only by the element that holds it.
+- **A replacement handle takes over.** An `Overlay` rebuilt with a different handle releases the old handle's slot and claims the new one (`did_update_view`), so the new list is built and the old handle reports unmounted.
 
 ### 3. A public constructor: closing ADR-0036's deferral as a benefit
 
@@ -85,4 +95,5 @@ Tests that read the stacking order back (`entry_ids`, in the overlay's own tests
 
 - The overlay is now semver surface. Changing `InsertPosition` or the entry lifecycle is a breaking change.
 - `rearrange`'s `above:`/`below:` placement of the unmentioned group stays deferred (the note on `rearrange`), because nothing needs it.
-- `navigator_tests::overlay_publishes_the_lookup_and_mutation_contract` replaces ADR-0036's guard. It pins the published names, keeps the machinery out of the crate root's `pub use` lines, and asserts the module is public.
+- `navigator_tests::overlay_publishes_the_lookup_and_mutation_contract` replaces ADR-0036's guard. It pins the published names, keeps the machinery out of the crate root's `pub use` lines, and asserts the module stays private.
+- Behaviour tests pin §2 and §2a: `insert_on_an_unmounted_overlay_waits_for_the_next_mount`, `overlay_entry_remove_on_an_unmounted_overlay_takes_it_out_of_the_list`, `remove_before_the_first_mount_keeps_the_entry_out_of_the_first_build`, `an_entry_already_in_an_overlay_is_refused_elsewhere_and_twice`, `one_handle_serves_one_mounted_overlay` and `a_replacement_handle_takes_over_the_mounted_overlay`.

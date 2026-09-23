@@ -451,7 +451,7 @@ fn navigator_of_self_check_finds_current_navigator() {
 /// `expect` below fires.
 #[test]
 fn overlay_of_from_route_content_resolves_the_navigators_own_overlay() {
-    use crate::overlay::{Overlay, OverlayHandle};
+    use crate::{Overlay, OverlayHandle};
 
     /// A stateless leaf that runs `on_build` on its own nested `BuildContext`.
     #[derive(Clone)]
@@ -1210,16 +1210,16 @@ fn public_no_internal_route_stack_exports() {
 
 /// The overlay's published contract: the lookup types (ADR-0036) plus the
 /// mutation surface `flui-navigation` drives from outside this crate
-/// (ADR-0076): `InsertPosition` at the crate root, and the `overlay` module
-/// itself public so `flui_widgets::overlay::*` resolves. The view/state
+/// (ADR-0076), all re-exported from the crate root while the `overlay` module
+/// itself stays private, so nothing else in it is nameable. The view/state
 /// machinery (`OverlayScope`, `OverlayShared`, `OnstagePlan`, `OverlayState`,
 /// `OverlayEntryView`, `OverlayEntryViewState`, `Theater`) stays private;
 /// Rust visibility enforces that inside the module, and this guard keeps it
 /// out of the crate root's `pub use` lines.
 ///
 /// Red-check: drop `InsertPosition` from the `pub use overlay::{...}` line in
-/// `lib.rs`, and the first loop fails. Make `mod overlay;` private again, and
-/// the module assertion fails. Add any machinery name to a `pub use` line,
+/// `lib.rs`, and the first loop fails. Make it `pub mod overlay;`, and the
+/// module assertion fails. Add any machinery name to a `pub use` line,
 /// and `assert_not_exported` fails.
 #[test]
 fn overlay_publishes_the_lookup_and_mutation_contract() {
@@ -1263,11 +1263,16 @@ fn overlay_publishes_the_lookup_and_mutation_contract() {
         ],
     );
 
-    assert!(
-        LIB.lines()
-            .any(|line| line.trim_start().starts_with("pub mod overlay;")),
-        "ADR-0076: the overlay module is public, so sibling crates can name its API"
-    );
+    // The module itself stays private: a public `mod overlay` would make the
+    // `pub` `OverlayState` (visible only because `StatefulView::State` must be)
+    // nameable as `flui_widgets::overlay::OverlayState`.
+    for line in LIB.lines() {
+        let code = line.trim_start();
+        assert!(
+            !code.starts_with("pub mod overlay"),
+            "ADR-0076: the overlay module stays private, the API is re-exported: {line}"
+        );
+    }
 }
 
 /// `NavigatorHandle::push_replacement` — Flutter's `pushReplacement`

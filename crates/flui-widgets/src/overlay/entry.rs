@@ -290,9 +290,14 @@ impl OverlayEntry {
     /// - *"An OverlayEntry should be removed only once"* — Flutter `assert`s.
     ///   Removing twice is caller error, not a framework invariant, so
     ///   [`PANIC-POLICY`] forbids a panic here: the second call logs and returns.
-    /// - `if (!overlay.mounted) return;` — a dropped overlay makes this a no-op.
-    ///   Here the `Weak` upgrade fails and we return, so a stale entry handle can
-    ///   never resurrect a dead overlay.
+    /// - `if (!overlay.mounted) return;` is **not** ported, deliberately. In
+    ///   Flutter the entry list dies with the unmounted `OverlayState`; here the
+    ///   [`OverlayHandle`](super::OverlayHandle) owns the list and a later mount
+    ///   builds it (ADR-0076 §2), so returning early would leave a detached
+    ///   entry in the list for that mount to build, with no way left to remove
+    ///   it. The entry always leaves the list; the rebuild is scheduled only if
+    ///   the overlay is mounted. A dropped overlay (every handle gone) still
+    ///   makes this a no-op: the `Weak` upgrade fails and nothing is resurrected.
     /// - the `persistentCallbacks` post-frame deferral is unnecessary (see module
     ///   docs).
     ///
@@ -310,13 +315,9 @@ impl OverlayEntry {
             return;
         };
 
-        // `if (!overlay.mounted) return;` (`overlay.dart:231-233`) — Flutter detaches
-        // the entry but leaves the unmounted overlay's list alone. Found by a
-        // parity re-check: FLUI used to mutate it regardless.
-        if !shared.is_mounted() {
-            return;
-        }
-
+        // Always out of the list, mounted or not: the handle's list outlives the
+        // mounted overlay (see the doc above for why Flutter's unmounted early
+        // return does not apply). `schedule_rebuild` is inert when unmounted.
         shared.retain_entries(|entry| entry.id() != self.inner.id);
         shared.schedule_rebuild();
     }
@@ -325,7 +326,7 @@ impl OverlayEntry {
 
     /// Take the overlay back-reference, upgrading it. `None` when this entry is
     /// attached to nothing, or when its overlay's shared state has been dropped.
-    fn attached_overlay(&self) -> Option<Arc<OverlayShared>> {
+    pub(super) fn attached_overlay(&self) -> Option<Arc<OverlayShared>> {
         self.inner.overlay.lock().as_ref().and_then(Weak::upgrade)
     }
 

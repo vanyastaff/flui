@@ -289,7 +289,12 @@ outside `crates/flui-*` may import it: not the `flui` facade, not examples,
 not generated app templates. The exported macro's name
 (`__generic_render_view_element`) counts as an import.
 
-**Scope:** every Rust file outside `crates/flui-*/{src,tests,benches}`.
+**Scope:** every Rust file outside `crates/flui-*/{src,tests,benches}` for
+the bare `__private` token, which also catches aliased and glob imports. A
+second check covers `crates/` minus flui-widgets and forbids any `pub use` of
+the seam, so no allowed crate can re-export it under another name. A text
+scan cannot see macro expansion; no macro outside flui-widgets expands to the
+seam.
 
 **Enforcement:** `scripts/port-check.sh`, reported as `SEAM/widgets-private`.
 An extra architecture guard, not a Flutter-port trigger.

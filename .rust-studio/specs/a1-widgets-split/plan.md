@@ -65,6 +65,21 @@ dependency, `unicode-segmentation`, moves with text-editing.
 - `testing::harness` needs `flui_platform::traits::PlatformTextInput`: the
   `testing` feature now enables an optional `flui-platform` dependency (L2,
   downward; flui-interaction already depends on it normally).
+- First Codex round on #1273 (7 findings). Publishing the overlay exposed
+  misuse the navigator never made, so the API is hardened in PR 0:
+  - an entry lives in one overlay, once;
+  - one handle serves one mounted `Overlay`;
+  - a replacement handle takes over the mounted overlay;
+  - `remove` on an unmounted overlay leaves the list. This is a deliberate
+    Flutter divergence, ADR-0076 §2.
+  Other changes from that round:
+  - `mod overlay` is back to private, with every item re-exported at the
+    root. The navigator now imports from the crate root, which is also the
+    form it will use as `flui_widgets::…`.
+  - The seam guard matches the bare `__private` token, and forbids
+    re-exporting the seam from any other flui-* crate.
+  - `AnchoredBox` rebinding is #1275.
+  Per Master's convergence rule, after the second round only P1s are fixed.
 - `scripts/check-panic-policy.sh` excluded only `NAME/` for a gated `mod
   NAME;` when both `NAME.rs` and `NAME/` exist (Rust 2018 layout). It now
   excludes both, with a self-test. That self-test is not on the merge path

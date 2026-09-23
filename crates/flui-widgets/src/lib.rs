@@ -100,13 +100,14 @@ pub mod testing;
 /// route stack, its lifecycle, the flush algorithm and the result channel are
 /// private; the signed-off surface is re-exported from the crate root below.
 pub mod navigator;
-// `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. The types
-// (ADR-0036) and the mutation surface (`insert`/`rearrange`/`InsertPosition`/
-// the entry lifecycle, ADR-0076) are public; `OverlayScope` and the
-// `Theater`/`OverlayState` machinery stay private. (A `///` doc here would be
-// concatenated with the module's own `//!` docs and resolve its intra-doc
-// links in the crate root.)
-pub mod overlay;
+// `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. The module
+// stays private: the types (ADR-0036) and the mutation surface
+// (`insert`/`rearrange`/`InsertPosition`/the entry lifecycle, ADR-0076) are
+// re-exported from the crate root, and nothing else is nameable, so
+// `OverlayScope` and the `Theater`/`OverlayState` machinery stay private. (A
+// `///` doc here would be concatenated with the module's own `//!` docs and
+// resolve its intra-doc links in the crate root.)
+mod overlay;
 pub mod paint;
 pub mod physical_model;
 pub mod scroll;
