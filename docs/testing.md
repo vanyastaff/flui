@@ -880,3 +880,4 @@ A change cannot be merged if any of these fail. If you encounter a flaky test, f
 - [Getting Started](getting-started.md) — toolchain setup and first build
 - [Contributing](../CONTRIBUTING.md) — planning a change, git hygiene, bug reports
 - [`AGENTS.md`](../AGENTS.md) — current performance and testing requirements
+<!-- fast-lane measurement: docs-only change; this PR is closed unmerged -->
