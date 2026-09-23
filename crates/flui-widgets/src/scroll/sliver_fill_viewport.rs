@@ -8,7 +8,7 @@ use flui_rendering::protocol::SliverProtocol;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
-use crate::support::generic_render_view_element;
+use crate::__private::generic_render_view_element;
 
 /// A sliver that sizes each of its eagerly-attached box children to
 /// `viewport_fraction × viewport_main_axis_extent`.

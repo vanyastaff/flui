@@ -31,7 +31,7 @@ use super::observer::NavigatorObserver;
 use super::overlay_route::SimpleRoute;
 use super::page_route::PageRoute;
 use super::route::RouteId;
-use crate::test_harness::{Harness, mount};
+use crate::testing::harness::{Harness, mount};
 use crate::{Center, SizedBox};
 
 const TRANSITION: Duration = Duration::from_millis(300);

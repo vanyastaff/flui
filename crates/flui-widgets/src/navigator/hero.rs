@@ -90,7 +90,7 @@ use flui_view::{RebuildHandle, impl_inherited_view};
 use parking_lot::Mutex;
 
 use super::hero_controller::FlightDirection;
-use super::subtree::AnchoredBox;
+use crate::__private::AnchoredBox;
 use crate::{Offstage, SizedBox, Stack, TickerMode};
 
 /// Builds the [`RectTween`](flui_animation::RectTween)-like path a hero's shuttle

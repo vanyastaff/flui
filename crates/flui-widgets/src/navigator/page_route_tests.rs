@@ -29,7 +29,7 @@ use super::page_route::{PageRoute, PopupRoute};
 use super::route::RouteId;
 use super::transition_route::TransitionHandle;
 use crate::SizedBox;
-use crate::test_harness::{Harness, mount};
+use crate::testing::harness::{Harness, mount};
 
 /// A leaf whose `create_state` is counted, so "was this subtree destroyed?" is
 /// observable.
@@ -592,7 +592,7 @@ fn back_gesture_enabled_route_mounts_and_becomes_pop_gesture_eligible() {
 
 /// A real, hit-tested horizontal drag through the mounted tree must move the
 /// controller's value by `delta / route_width` — the harness's fixed 800px
-/// screen (`test_harness.rs`), which the route's page fills
+/// screen (`testing/harness.rs`), which the route's page fills
 /// (`Stack(fit: expand)`) — never by `delta / BACK_GESTURE_WIDTH` (20px).
 /// This is exactly the path that would have caught
 /// `BackGestureRuntime::normalized_width` never reading the route's real

@@ -11,7 +11,7 @@ use flui_types::painting::Clip;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
-use crate::support::generic_render_view_element;
+use crate::__private::generic_render_view_element;
 
 /// Where a [`Viewport`] or [`ShrinkWrappingViewport`]'s render object gets
 /// its scroll offset from. Shared by both widgets — they're two `RenderBox`

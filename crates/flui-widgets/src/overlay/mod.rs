@@ -2,11 +2,13 @@
 //!
 //! The first prerequisite for `Navigator`. [`Overlay`], [`OverlayEntry`],
 //! [`OverlayEntryId`] and [`OverlayHandle`] are published from the crate root
-//! (`docs/adr/ADR-0036-overlay-publication-and-per-entry-scope-marker.md`);
-//! everything else here — the mutation surface, [`OverlayScope`], the
-//! `Theater`/`OverlayState`/`OverlayEntryView` machinery — stays
-//! `pub(crate)`. `Navigator` and `Draggable`'s feedback layer are the only
-//! in-crate consumers of the mutation surface for now.
+//! (`docs/adr/ADR-0036-overlay-publication-and-per-entry-scope-marker.md`), and
+//! so is the mutation surface: [`OverlayHandle::insert`]/[`rearrange`],
+//! [`InsertPosition`], and the entry lifecycle (`docs/adr/ADR-0076-public-overlay-mutation-api.md`).
+//! `OverlayScope` and the `Theater`/`OverlayState`/`OverlayEntryView`
+//! machinery stay `pub(crate)`.
+//!
+//! [`rearrange`]: OverlayHandle::rearrange
 //!
 //! # Flutter parity
 //!
@@ -37,11 +39,11 @@
 //! view tree entirely: its state is disposed, and rebuilt fresh when it is
 //! uncovered. That is Flutter's contract, and routes depend on it.
 //!
-//! Two divergences, both recorded in [`entry`]: no `tickerEnabled: false` for the
+//! Two divergences, both recorded in the `entry` module: no `tickerEnabled: false` for the
 //! covered entries, and no `canSizeOverlay`.
 //!
-//! [`opaque`]: OverlayEntry::opaque
-//! [`maintain_state`]: OverlayEntry::maintain_state
+//! [`opaque`]: OverlayEntry::set_opaque
+//! [`maintain_state`]: OverlayEntry::set_maintain_state
 //! [`RenderTheater`]: flui_objects::RenderTheater
 //!
 //! # Threading and locks
@@ -56,14 +58,11 @@
 //!
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
-// `Overlay`/`OverlayEntry`/`OverlayEntryId`/`OverlayHandle` are published
-// (ADR-0036: the `Overlay::of`/`maybe_of` lookup contract). The mutation
-// surface — `insert`/`insert_all`/`rearrange`/`InsertPosition`/`entry_ids`,
-// the builder-form constructors, `mark_needs_build` — stays `pub(crate)`:
-// `Navigator` and `Draggable`'s feedback layer are its only callers today,
-// and widening it (a public `Overlay::wrap`/`initialEntries` constructor, a
-// public `OverlayHandle::insert`) is a separate, not-yet-taken gate — see
-// ADR-0036's deferrals.
+// The types (ADR-0036) and the mutation surface the navigator needs
+// (ADR-0076) are public. The rest -- `insert_all`, `entry_ids`, the
+// builder-form constructors, `OverlayScope`, the `Theater` machinery -- stays
+// `pub(crate)`: `Navigator` and `Draggable`'s feedback layer are its only
+// callers.
 //
 // The `navigator` module needs no such allow: every item there has a production
 // caller or a `#[cfg(test)]`.
@@ -87,13 +86,17 @@ use parking_lot::Mutex;
 
 use self::theater::Theater;
 
-/// Where [`OverlayHandle::insert`] places a new entry.
+/// Where [`OverlayHandle::insert`] places a new entry in the bottom → top list.
 ///
 /// Flutter passes `above:`/`below:` named arguments and asserts they are not both
 /// given (`overlay.dart:661`); an enum makes that unrepresentable instead.
 /// Resolves to Flutter's `_insertionIndex` (`overlay.dart:660-669`).
+///
+/// A reference entry the overlay does not hold (never inserted, or removed
+/// since) falls back to [`Top`](Self::Top), as Flutter's `indexOf` of `-1`
+/// does after its assert.
 #[derive(Debug, Clone)]
-pub(crate) enum InsertPosition {
+pub enum InsertPosition {
     /// Append — the new entry paints above every existing one. Flutter's default.
     Top,
     /// Directly above `.0`, i.e. at `index_of(entry) + 1`.
@@ -146,14 +149,95 @@ impl OverlayShared {
         entries.retain(keep);
         let _prev = std::mem::replace(&mut *self.entries.lock(), entries);
     }
+
+    /// Take the rebuild slot for the mounted `Overlay` element `handle` names.
+    ///
+    /// One handle serves one mounted `Overlay`: if another live element already
+    /// holds the slot, the claim is refused (logged, never a panic, per
+    /// PANIC-POLICY) and the caller builds nothing. Re-claiming by the element
+    /// that holds it is a no-op success.
+    fn claim_rebuild(&self, handle: &RebuildHandle) -> bool {
+        let mut slot = self.rebuild.lock();
+        if let Some(held) = slot.as_ref().filter(|held| held.is_active())
+            && held.element_id() != handle.element_id()
+        {
+            tracing::error!(
+                holder = ?held.element_id(),
+                refused = ?handle.element_id(),
+                "an OverlayHandle is already mounted by another Overlay; one handle \
+                 serves one mounted Overlay, so this one builds nothing"
+            );
+            return false;
+        }
+        let _prev = slot.replace(handle.clone());
+        true
+    }
+
+    /// Give the rebuild slot back, but only if `element` holds it: a refused
+    /// second mount disposing must not unmount the first.
+    fn release_rebuild(&self, element: Option<flui_foundation::ElementId>) {
+        let mut slot = self.rebuild.lock();
+        if slot
+            .as_ref()
+            .is_some_and(|held| held.element_id() == element)
+        {
+            let _prev = slot.take();
+        }
+    }
+
+    /// The entries of `candidates` this overlay may take: not owned by another
+    /// live overlay, not already in this list, and not repeated within
+    /// `candidates` (the first occurrence wins). Each refusal is logged; none
+    /// panics (PANIC-POLICY: this is caller error, which Flutter `assert`s).
+    fn admissible(
+        self: &Arc<Self>,
+        candidates: &[OverlayEntry],
+        held_ok: bool,
+    ) -> Vec<OverlayEntry> {
+        let list = self.entries.lock();
+        let mut accepted: Vec<OverlayEntry> = Vec::with_capacity(candidates.len());
+        for entry in candidates {
+            if let Some(owner) = entry.attached_overlay()
+                && !Arc::ptr_eq(&owner, self)
+            {
+                tracing::error!(
+                    entry = entry.id().get(),
+                    "OverlayEntry belongs to another overlay; remove it there first"
+                );
+                continue;
+            }
+            if accepted.iter().any(|seen| seen.is_same(entry)) {
+                tracing::error!(
+                    entry = entry.id().get(),
+                    "OverlayEntry passed twice in one call"
+                );
+                continue;
+            }
+            if !held_ok && list.iter().any(|held| held.is_same(entry)) {
+                tracing::error!(
+                    entry = entry.id().get(),
+                    "OverlayEntry is already in this overlay"
+                );
+                continue;
+            }
+            accepted.push(entry.clone());
+        }
+        accepted
+    }
 }
 
 /// An owned, `'static` capability to mutate an [`Overlay`]'s entry list.
 ///
-/// Create one, hand it to `Overlay::new` (crate-internal — `Navigator` is the
-/// only caller today), and keep a clone: every clone names the same overlay.
-/// Mutating before mount is legal — the first build reads
-/// whatever the list holds — and mutating after unmount is a silent no-op.
+/// Create one with [`OverlayHandle::new`], hand a clone to [`Overlay::new`],
+/// and keep one: every clone names the same overlay (ADR-0076).
+///
+/// The entry list lives here, not in the mounted view, so mutation is legal at
+/// any time:
+///
+/// - **before mount**, the first build reads whatever the list holds;
+/// - **while mounted**, each mutation schedules the overlay to rebuild;
+/// - **after unmount**, the list still changes but nothing rebuilds. The
+///   change takes effect if an [`Overlay`] mounts with this handle again.
 ///
 /// This replaces Flutter's `GlobalKey<OverlayState>` (`navigator.dart:3746`),
 /// which `Navigator` uses purely to call `rearrange`. The `GlobalKey` route is
@@ -166,8 +250,11 @@ pub struct OverlayHandle {
 }
 
 impl OverlayHandle {
-    /// A handle to an overlay with no entries, not yet mounted.
-    pub(crate) fn new() -> Self {
+    /// A handle to an empty entry list that no [`Overlay`] has mounted yet.
+    ///
+    /// Insert entries now or later, then build `Overlay::new(handle.clone())`.
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             shared: Arc::new(OverlayShared {
                 entries: Mutex::new(Vec::new()),
@@ -176,8 +263,15 @@ impl OverlayHandle {
         }
     }
 
-    /// Whether the overlay this handle names is currently mounted.
-    pub(crate) fn is_mounted(&self) -> bool {
+    /// Whether the [`Overlay`] this handle names is mounted right now, i.e. its
+    /// state is alive. Not the same as [`OverlayEntry::is_attached`], which
+    /// asks whether one *entry* is in this handle's list.
+    ///
+    /// Flutter's `OverlayState.mounted`. `false` before the first mount and
+    /// after the overlay is disposed; while it is `false`, mutations change the
+    /// list without rebuilding anything.
+    #[must_use]
+    pub fn is_mounted(&self) -> bool {
         self.shared
             .rebuild
             .lock()
@@ -185,8 +279,9 @@ impl OverlayHandle {
             .is_some_and(RebuildHandle::is_active)
     }
 
-    /// The entries, bottom → top.
-    pub(crate) fn entry_ids(&self) -> Vec<OverlayEntryId> {
+    /// The entries, bottom → top. Read by `testing::overlay_probe`, which is
+    /// how tests (in this crate and its siblings) inspect the list.
+    pub(crate) fn ids_bottom_to_top(&self) -> Vec<OverlayEntryId> {
         self.shared
             .entries
             .lock()
@@ -207,10 +302,23 @@ impl OverlayHandle {
         Arc::ptr_eq(&self.shared, &other.shared)
     }
 
-    /// Insert `entry` at `position` and schedule a rebuild.
+    /// Insert `entry` at `position` and, if the overlay is mounted, schedule it
+    /// to rebuild with the new layer.
     ///
-    /// Flutter's `OverlayState.insert` (`overlay.dart:742-749`).
-    pub(crate) fn insert(&self, entry: &OverlayEntry, position: &InsertPosition) {
+    /// Flutter's `OverlayState.insert` (`overlay.dart:742-749`). Call it from
+    /// outside a build (an event handler, a post-frame callback, a `Navigator`
+    /// flush): the entry is built on the overlay's next frame.
+    ///
+    /// On an unmounted overlay (before the first mount, or after dispose) the
+    /// entry still joins the list and [`is_attached`](OverlayEntry::is_attached)
+    /// turns `true`, but nothing rebuilds until an [`Overlay`] mounts with this
+    /// handle.
+    ///
+    /// An entry can be in one overlay, once. Inserting an entry another
+    /// overlay holds, or one this overlay already holds, is refused: logged
+    /// with `tracing::error!`, the list unchanged ([`remove`](OverlayEntry::remove)
+    /// it from its overlay first). Flutter asserts the same precondition.
+    pub fn insert(&self, entry: &OverlayEntry, position: &InsertPosition) {
         self.insert_all(std::slice::from_ref(entry), position);
     }
 
@@ -220,16 +328,17 @@ impl OverlayHandle {
     /// Flutter's `OverlayState.insertAll` (`overlay.dart:758-771`), which
     /// early-returns on an empty iterable.
     pub(crate) fn insert_all(&self, entries: &[OverlayEntry], position: &InsertPosition) {
+        let entries = self.shared.admissible(entries, false);
         if entries.is_empty() {
             return;
         }
-        for entry in entries {
+        for entry in &entries {
             entry.attach(&self.shared);
         }
         {
             let mut list = self.shared.entries.lock();
             let index = insertion_index(&list, position);
-            list.splice(index..index, entries.iter().cloned());
+            list.splice(index..index, entries);
         }
         self.shared.schedule_rebuild();
     }
@@ -249,7 +358,15 @@ impl OverlayHandle {
     ///
     /// **Deferred:** the `above:` / `below:` placement of the unmentioned group.
     /// Nothing needs it yet; `Navigator` never passes either.
-    pub(crate) fn rearrange(&self, new_entries: &[OverlayEntry]) {
+    ///
+    /// On an unmounted overlay the list is reordered but nothing rebuilds, as
+    /// with [`insert`](Self::insert). Entries another overlay holds are
+    /// refused, and an entry named twice counts once, as for `insert`.
+    pub fn rearrange(&self, new_entries: &[OverlayEntry]) {
+        // Entries another overlay holds are refused and repeats collapse to
+        // their first occurrence, as for `insert`; this overlay's own are the
+        // point of the call.
+        let new_entries = &self.shared.admissible(new_entries, true)[..];
         if new_entries.is_empty() {
             return;
         }
@@ -285,6 +402,12 @@ impl OverlayHandle {
         }
 
         self.shared.schedule_rebuild();
+    }
+}
+
+impl Default for OverlayHandle {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -370,8 +493,20 @@ pub struct Overlay {
 }
 
 impl Overlay {
-    /// An overlay backed by `handle`.
-    pub(crate) fn new(handle: OverlayHandle) -> Self {
+    /// An overlay that builds the entries in `handle`'s list, bottom → top.
+    ///
+    /// Keep a clone of `handle` to mutate the overlay later. Mounting publishes
+    /// the rebuild capability into the handle, and disposing revokes it, so
+    /// [`OverlayHandle::is_mounted`] follows this view's lifetime. The same
+    /// handle may be mounted again later; the new state reads the list as it
+    /// is then.
+    ///
+    /// **One handle, one mounted `Overlay`.** A second `Overlay` mounted with a
+    /// handle another live `Overlay` already serves builds nothing and logs an
+    /// error; the first keeps the handle. Rebuilding this view with a
+    /// *different* handle moves the mounted overlay onto that handle's list.
+    #[must_use]
+    pub fn new(handle: OverlayHandle) -> Self {
         Self { handle }
     }
 
@@ -464,6 +599,8 @@ impl StatefulView for Overlay {
     fn create_state(&self) -> Self::State {
         OverlayState {
             shared: Arc::clone(&self.handle.shared),
+            rebuild: None,
+            serving: false,
         }
     }
 }
@@ -479,6 +616,13 @@ impl StatefulView for Overlay {
 /// module constructs or names it.
 pub struct OverlayState {
     shared: Arc<OverlayShared>,
+    /// This element's own rebuild capability, kept so the slot can move to a
+    /// replacement handle (`did_update_view`) and be released only by its
+    /// holder (`dispose`).
+    rebuild: Option<RebuildHandle>,
+    /// Whether this state holds `shared`'s rebuild slot. `false` for a second
+    /// concurrent mount of one handle, which builds nothing.
+    serving: bool,
 }
 
 impl fmt::Debug for OverlayState {
@@ -496,17 +640,42 @@ impl ViewState<Overlay> for OverlayState {
     /// `init_state` is the correct hook and the only permitted one: port-check
     /// trigger #22 rejects acquiring a `RebuildHandle` from `build`/layout/paint.
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        let _prev = self.shared.rebuild.lock().replace(ctx.rebuild_handle());
+        let rebuild = ctx.rebuild_handle();
+        self.serving = self.shared.claim_rebuild(&rebuild);
+        self.rebuild = Some(rebuild);
+    }
+
+    /// A rebuild that hands this element a *different* handle moves the
+    /// mounted overlay onto it: the old handle's slot is released (it reports
+    /// unmounted from now on) and the new one is claimed, so `build` reads the
+    /// new list and the new handle's mutations reach this element.
+    fn did_update_view(&mut self, _old: &Overlay, new: &Overlay) {
+        if Arc::ptr_eq(&self.shared, &new.handle.shared) {
+            return;
+        }
+        let element = self.rebuild.as_ref().and_then(RebuildHandle::element_id);
+        if self.serving {
+            self.shared.release_rebuild(element);
+        }
+        self.shared = Arc::clone(&new.handle.shared);
+        self.serving = self
+            .rebuild
+            .as_ref()
+            .is_some_and(|rebuild| self.shared.claim_rebuild(rebuild));
     }
 
     /// Bottom → top: `entries[i]` paints below `entries[i + 1]`, because
-    /// [`Theater`] paints its children in order.
+    /// `Theater` paints its children in order.
     ///
     /// A line-for-line port of `OverlayState.build` (`overlay.dart:886-918`).
     /// The loop runs **top-first** over `_entries.reversed`, so `children` comes
     /// out top→bottom and is reversed once at the end; `skip_count` therefore
     /// counts the covered `maintain_state` entries, which are the leading ones.
     fn build(&self, _view: &Overlay, _ctx: &dyn BuildContext) -> impl IntoView {
+        if !self.serving {
+            // A second concurrent mount of one handle: see `claim_rebuild`.
+            return Theater::new(Vec::new(), 0);
+        }
         let entries = self.shared.entries.lock();
         let plan = onstage_plan(&entries);
         // The handle every entry's `OverlayScope` marker provides to
@@ -527,7 +696,10 @@ impl ViewState<Overlay> for OverlayState {
     /// inert. Flutter gets this from `_markDirty`'s `if (mounted)` guard
     /// (`overlay.dart:849`).
     fn dispose(&mut self) {
-        let _prev = self.shared.rebuild.lock().take();
+        if self.serving {
+            self.shared
+                .release_rebuild(self.rebuild.as_ref().and_then(RebuildHandle::element_id));
+        }
     }
 }
 
@@ -589,6 +761,7 @@ impl StatefulView for OverlayEntryView {
     fn create_state(&self) -> Self::State {
         OverlayEntryViewState {
             entry: self.entry.clone(),
+            element: None,
         }
     }
 }
@@ -596,13 +769,17 @@ impl StatefulView for OverlayEntryView {
 /// Persistent state for one overlay layer.
 pub(crate) struct OverlayEntryViewState {
     entry: OverlayEntry,
+    /// This layer's element, so `dispose` revokes only its own publication.
+    element: Option<flui_foundation::ElementId>,
 }
 
 impl ViewState<OverlayEntryView> for OverlayEntryViewState {
     /// Hand this element's rebuild capability to the entry, so
     /// [`OverlayEntry::mark_needs_build`] rebuilds this layer alone.
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        self.entry.publish_rebuild(ctx.rebuild_handle());
+        let rebuild = ctx.rebuild_handle();
+        self.element = rebuild.element_id();
+        self.entry.publish_rebuild(rebuild);
     }
 
     /// Build from `view`, not `self`: the element may have been reconciled onto a
@@ -629,9 +806,11 @@ impl ViewState<OverlayEntryView> for OverlayEntryViewState {
         );
     }
 
-    /// Revoke the capability, so a `mark_needs_build` after unmount is inert.
+    /// Revoke the capability, so a `mark_needs_build` after unmount is inert,
+    /// unless a newer view of the same entry (in another overlay) has already
+    /// published its own.
     fn dispose(&mut self) {
-        self.entry.clear_rebuild();
+        self.entry.clear_rebuild(self.element);
     }
 }
 

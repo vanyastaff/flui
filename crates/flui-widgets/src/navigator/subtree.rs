@@ -56,17 +56,19 @@
 //! pins that.
 //!
 //! [`PipelineOwner::box_size`]: flui_rendering::pipeline::PipelineOwner::box_size
+//! [`RenderSubtreeAnchor`]: flui_objects::RenderSubtreeAnchor
 
 use std::fmt;
 use std::sync::Arc;
 
 use flui_foundation::{ElementId, RenderId};
-use flui_objects::{RenderSubtreeAnchor, SubtreeAnchor};
-use flui_rendering::protocol::BoxProtocol;
+use flui_objects::SubtreeAnchor;
+use flui_view::Child;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{Child, RenderView, impl_render_view};
 use parking_lot::Mutex;
+
+use crate::__private::AnchoredBox;
 
 /// Where a route's page subtree lives, once it is both mounted and attached.
 ///
@@ -199,61 +201,6 @@ impl ViewState<RouteSubtreeAnchor> for RouteSubtreeAnchorState {
     }
 
     fn build(&self, view: &RouteSubtreeAnchor, _ctx: &dyn BuildContext) -> impl IntoView {
-        AnchoredBox {
-            anchor: view.cell.anchor.clone(),
-            child: view.child.clone(),
-        }
+        AnchoredBox::from_child(view.cell.anchor.clone(), view.child.clone())
     }
 }
-
-/// The render half: a transparent proxy whose only job is to have a `RenderId`.
-///
-/// `pub(crate)`: a `Hero` needs exactly this — a render node it can
-/// name — and duplicating it would mean a second `RenderSubtreeAnchor` wrapper with
-/// the same body and a different name.
-#[derive(Debug, Clone)]
-pub(crate) struct AnchoredBox {
-    anchor: SubtreeAnchor,
-    child: Child,
-}
-
-impl AnchoredBox {
-    /// Anchor `child` into `anchor`, publishing the render node's id while mounted.
-    pub(crate) fn new(anchor: SubtreeAnchor, child: impl IntoView) -> Self {
-        Self {
-            anchor,
-            child: Child::some(child.into_view()),
-        }
-    }
-}
-
-impl RenderView for AnchoredBox {
-    type Protocol = BoxProtocol;
-    type RenderObject = RenderSubtreeAnchor;
-
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        RenderSubtreeAnchor::new(self.anchor.clone())
-    }
-
-    /// Always reports `RenderUpdateImpact::NONE`.
-    ///
-    /// The anchor's identity is fixed for the life of the node, and the anchor
-    /// carries identity only — no geometry, paint, or semantics state that a
-    /// rebuild could invalidate. When reconciliation swaps the child, it is
-    /// adopting that child that schedules the layout the replacement needs;
-    /// this update has nothing of its own to invalidate.
-    fn update_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
-    }
-
-    flui_view::single_child_view_children!();
-}
-
-impl_render_view!(AnchoredBox);

@@ -87,6 +87,11 @@ lru = { workspace = true, optional = true }
 # production graph ever links the test driver (see the sanctioned
 # same-layer edge in docs/workspace-layers.toml).
 flui-testing = { workspace = true, optional = true }
+# The element-level harness (`testing::harness`) records the IME calls a
+# mounted `EditableText` makes through a `PlatformTextInput` it supplies.
+# Activated only by the `testing` feature, like `flui-testing` above; the
+# production graph never links it (flui-interaction already depends on it).
+flui-platform = { path = "../flui-platform", version = "=0.2.0-dev", optional = true }
 
 [dev-dependencies]
 # Enable this crate's own `testing` feature for its integration tests:
@@ -181,7 +186,12 @@ serde = ["flui-types/serde"]
 # Named `testing` to match the flui-rendering/flui-layer convention for
 # feature-gated `src/testing` modules (the shape port-check trigger 11
 # sanctions).
-testing = ["dep:flui-testing", "flui-rendering/testing", "flui-interaction/testing"]
+testing = [
+    "dep:flui-testing",
+    "dep:flui-platform",
+    "flui-rendering/testing",
+    "flui-interaction/testing",
+]
 
 [lints]
 workspace = true

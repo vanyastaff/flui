@@ -276,7 +276,7 @@ mod tests {
         let second = TextEditingController::new();
         let first_node = FocusNode::with_debug_label("first");
         let second_node = FocusNode::with_debug_label("second");
-        let mut harness = crate::test_harness::mount(crate::Column::new(vec![
+        let mut harness = crate::testing::harness::mount(crate::Column::new(vec![
             RawTextField::new(first)
                 .focus_node(Rc::clone(&first_node))
                 .into_view()
@@ -351,7 +351,7 @@ mod tests {
         let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let submitted_for_callback = Rc::clone(&submitted);
 
-        let harness = crate::test_harness::mount(
+        let harness = crate::testing::harness::mount(
             RawTextField::new(controller)
                 .focus_node(Rc::clone(&focus_node))
                 .on_submitted(move |text| {
@@ -391,7 +391,7 @@ mod tests {
         let first_calls_cb = Rc::clone(&first_calls);
         let second_calls_cb = Rc::clone(&second_calls);
 
-        let mut harness = crate::test_harness::mount(
+        let mut harness = crate::testing::harness::mount(
             RawTextField::new(controller.clone())
                 .focus_node(Rc::clone(&focus_node))
                 .on_submitted(move |_| {

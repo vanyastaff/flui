@@ -414,7 +414,7 @@ mod tests {
 
     use super::*;
     use crate::SizedBox;
-    use crate::test_harness::mount;
+    use crate::testing::harness::mount;
 
     fn scope(locale: Locale) -> LocalizationsScope {
         LocalizationsScope {

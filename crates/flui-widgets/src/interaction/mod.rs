@@ -7,7 +7,7 @@ mod actions;
 mod dismissible;
 mod drag_target;
 mod draggable;
-mod focus;
+pub(crate) mod focus;
 mod gesture_arena_scope;
 mod gesture_detector;
 mod ignore_pointer;
@@ -40,7 +40,6 @@ pub use focus::{
     ExcludeFocus, Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope,
     FocusScopeState, FocusState,
 };
-pub(crate) use focus::{enclosing_focus_parent, install_rect_provider};
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};
 pub use ignore_pointer::IgnorePointer;

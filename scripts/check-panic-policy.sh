@@ -475,11 +475,14 @@ def test_support_paths_for_crate(crate_src: Path) -> set[Path]:
                 if cand_file.is_file():
                     excluded.add(cand_file.relative_to(root))
                 continue
+            # Both, when both exist: Rust 2018's non-`mod.rs` layout puts the
+            # module body in `NAME.rs` and its submodules in `NAME/` (e.g.
+            # `testing.rs` + `testing/harness.rs`), and the gate covers all of it.
             cand_file = decl_dir / f"{name}.rs"
             cand_dir = decl_dir / name
             if cand_dir.is_dir():
                 excluded.add(cand_dir.relative_to(root))
-            elif cand_file.is_file():
+            if cand_file.is_file():
                 excluded.add(cand_file.relative_to(root))
     return excluded
 
@@ -927,6 +930,23 @@ def self_test() -> int:
                 )
             else:
                 print(f"  FAIL: expected only lib.rs's violation flagged, got errors={po_errors} counts={po_counts}")
+                status = 1
+
+            print("self-test: a gated `mod NAME;` with both NAME.rs and NAME/ excludes both")
+            nm_crate_src = tmp_root / "crates" / "non_mod_rs_crate" / "src"
+            (nm_crate_src / "testing").mkdir(parents=True)
+            bare = 'pub fn f(x: Option<u32>) -> u32 {\n    x.expect("no prefix")\n}\n'
+            (nm_crate_src / "lib.rs").write_text('#[cfg(any(test, feature = "testing"))]\npub mod testing;\n')
+            (nm_crate_src / "testing.rs").write_text("pub mod harness;\n" + bare)
+            (nm_crate_src / "testing" / "harness.rs").write_text(bare)
+            nm_rel_prefix = "crates/non_mod_rs_crate/src"
+            nm_excluded = test_support_paths_for_crate(nm_crate_src)
+            expected_nm_excluded = {Path(f"{nm_rel_prefix}/testing.rs"), Path(f"{nm_rel_prefix}/testing")}
+            nm_errors, _ = run_check(nm_crate_src.parent.parent, {})
+            if nm_excluded == expected_nm_excluded and not any("non_mod_rs_crate" in e for e in nm_errors):
+                print("  ok: testing.rs and testing/ are both excluded; neither is scanned")
+            else:
+                print(f"  FAIL: expected excluded == {expected_nm_excluded}, got {nm_excluded}; errors={nm_errors}")
                 status = 1
         finally:
             root = real_root

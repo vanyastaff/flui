@@ -28,7 +28,7 @@ use super::navigator::{Navigator, NavigatorHandle};
 use super::transition_route::{TransitionHandle, TransitionRoute};
 use crate::SizedBox;
 use crate::animated::VsyncScope;
-use crate::test_harness::{Harness, mount};
+use crate::testing::harness::{Harness, mount};
 
 // ============================================================================
 // HELPERS

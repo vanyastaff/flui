@@ -22,7 +22,7 @@ use super::navigator::{Navigator, NavigatorHandle};
 use super::observer::NavigatorObserver;
 use super::overlay_route::SimpleRoute;
 use super::page_route::{PageRoute, PopupRoute};
-use crate::test_harness::{Harness, PostFrameCapability, mount, mount_with_capabilities};
+use crate::testing::harness::{Harness, PostFrameCapability, mount, mount_with_capabilities};
 use crate::{Center, SizedBox};
 
 /// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page fills
@@ -510,7 +510,7 @@ fn without_a_post_frame_capability_the_destination_is_left_onstage() {
             show: true,
         },
         PostFrameCapability::Absent,
-        crate::test_harness::TextInputCapability::Absent,
+        crate::testing::harness::TextInputCapability::Absent,
     );
 
     // The controller attached, so it is not the `navigator == None` path being tested.
