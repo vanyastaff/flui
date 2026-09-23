@@ -60,6 +60,23 @@ impl ArboardClipboard {
     }
 }
 
+/// Runs one `arboard` call as a clipboard session. On Windows `arboard`
+/// opens the Win32 clipboard with a `NULL` owner, which does not exclude
+/// other threads of this process, so it must share the process-wide session
+/// lock with the Win32 backend (`shared::clipboard_lock`); a per-instance
+/// `Mutex` cannot, since several instances of either backend may coexist.
+/// Elsewhere a pass-through.
+fn clipboard_session<R>(call: impl FnOnce() -> R) -> R {
+    #[cfg(windows)]
+    {
+        crate::shared::clipboard_lock::with_clipboard_session(call)
+    }
+    #[cfg(not(windows))]
+    {
+        call()
+    }
+}
+
 impl Default for ArboardClipboard {
     /// The system clipboard when a backend is reachable, the inert fallback
     /// otherwise — never a panic. `default()` on a healthy desktop session
@@ -86,7 +103,7 @@ impl Clipboard for ArboardClipboard {
             return None;
         };
 
-        match clipboard.get_text() {
+        match clipboard_session(|| clipboard.get_text()) {
             Ok(text) => {
                 tracing::debug!(len = text.len(), "Read text from clipboard");
                 Some(text)
@@ -108,7 +125,7 @@ impl Clipboard for ArboardClipboard {
             return;
         };
 
-        match clipboard.set_text(&text) {
+        match clipboard_session(|| clipboard.set_text(&text)) {
             Ok(()) => {
                 tracing::debug!(len = text.len(), "Wrote text to clipboard");
             }
@@ -125,6 +142,8 @@ mod tests {
 
     #[test]
     fn test_clipboard_roundtrip() {
+        #[cfg(windows)]
+        let _serial = crate::shared::clipboard_lock::round_trip_serial();
         // Note: This test requires clipboard access and may fail in CI
         if let Ok(clipboard) = ArboardClipboard::new() {
             let test_text = "Hello from FLUI!";

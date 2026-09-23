@@ -182,7 +182,7 @@ When adding platform support or features:
 - **Web**: Production ready
 - **macOS**: Native AppKit backend complete; lint-only in CI plus local bundled probes
 - **iOS**: Native UIKit backend, simulator-verified (`just ios-sim`); real-device run needs signing
-- **Windows**: Win32 backend present; needs a Windows session to close H9
+- **Windows**: Win32 backend present; flui-platform's suite runs on windows-latest in CI (`platform-windows`); live input/IME verification still open
 - **Linux**: winit fallback in production use; native Wayland/X11 still open
 
 ## Resources

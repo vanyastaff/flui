@@ -11,6 +11,9 @@
     any(target_os = "linux", target_os = "windows", target_os = "macos")
 ))]
 pub(crate) mod accessibility_bridge;
+// The Win32 clipboard lock shared by the Win32 and winit (`arboard`) backends.
+#[cfg(windows)]
+pub(crate) mod clipboard_lock;
 // `pub` for the same off-target-consumed reason as `hwnd_affinity` below
 // (consumers: the winit, Win32, and AppKit event-conversion backends).
 pub mod events;

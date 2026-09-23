@@ -129,7 +129,7 @@ bash scripts/check-toolchain-consistency.sh                # toolchain-consisten
 bash scripts/port-check.sh                                 # port-check: architecture refusal triggers
 cargo clippy --workspace --all-targets -- -D warnings      # clippy: lint gate — zero warnings
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations --profile no-nested-cargo  # test-ci, stage 1 (scope: see "What `just test-ci` runs")
-FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test-ci: flui-platform, headless (Linux only — apt install xvfb; skipped with a message on other hosts, see justfile)
+FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test-ci: flui-platform, headless (Linux — apt install xvfb; Windows runs it without FLUI_HEADLESS/xvfb-run; skipped with a message on macOS, see justfile)
 cargo nextest run <same scope> --profile nested-cargo       # test-ci, last stage: the nested-cargo tests (see below)
 cargo test --workspace --locked --doc                      # test-doc: doc-tests (flui-platform included — its doctests need neither device above)
 bash scripts/doc-strict.sh                                # doc-strict: cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
@@ -797,6 +797,7 @@ cargo bench -p flui-rendering --no-run                        # bench-compile jo
 bash scripts/doc-strict.sh                                    # doc job: the same script as `just doc-strict`
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
 FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test job's dedicated flui-platform step
+cargo nextest run -p flui-platform --locked [--all-features] --no-fail-fast                           # platform-windows job (windows-latest), both feature sets
 cargo test --workspace --locked --doc
 cargo check --workspace --all-targets --locked                # repeated on Rust 1.98 (MSRV job)
 cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (continue-on-error); NARROW — every
@@ -896,6 +897,7 @@ in `.github/workflows/ci.yml`:
 | `test-features` | `just test-features` | — |
 | `live-smoke` | `just live-smoke`, `just live-smoke-wayland` | Linux only (Xvfb, weston); `ci-full` runs them on Linux and says it skipped them elsewhere |
 | `gpu-test` | `just gpu-test` | CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a local-only mismatch is a host difference to look at, not a CI verdict |
+| `platform-windows` | `just test-ci` (on Windows) | `test-ci` runs the all-features pass only; CI adds a default-features pass |
 | `bench-compile` | `just bench-compile` | — |
 | `doc` | `just doc-strict` (in `just gate`) | — |
 | `deny` | `just deny` | its second step, re-reading ADR-0045's reopen condition when a PR touches `Cargo.lock`, reads the PR through the GitHub API: CI only (and advisory) |

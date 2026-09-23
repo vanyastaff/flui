@@ -24,6 +24,7 @@ name: CI
 #   test           — build + nextest (lib + integration), ubuntu, plus a
 #                    dedicated flui-platform (Linux-runnable subset) step
 #   gpu-test       — full testing readback suite on windows/WARP (merge-blocking)
+#   platform-windows — flui-platform's suite (Win32 + winit backends) on windows-latest
 #   bench-compile  — criterion benches compile + link
 #   doc            — rustdoc with RUSTDOCFLAGS=-D warnings
 #   deny           — advisories/bans/licenses/sources
@@ -686,11 +687,8 @@ jobs:
       # PR cannot reintroduce the pattern by reintroducing the name. Any
       # genuinely process-global resource that remains (see AGENTS.md's
       # Testing Quirks) needs its own explicit test-local lock instead.
-      # flui-platform is still excluded from this workspace-wide invocation,
-      # but NOT because of the Windows STATUS_HEAP_CORRUPTION crash tracked
-      # at ROADMAP-TRACKER item H9 — that crash is Windows-only and this
-      # runner is ubuntu-latest, so it can't reproduce here regardless. Two
-      # things this default-feature workspace run cannot give flui-platform:
+      # flui-platform is excluded from this workspace-wide invocation because
+      # of two things this default-feature workspace run cannot give it:
       # `--all-features` (the winit backend, its actual Linux-runnable
       # implementation, only compiles under `winit-backend` — invisible to
       # `default = ["desktop"]`) and a
@@ -722,8 +720,8 @@ jobs:
       # all 171 pass, 8 more are legitimately `#[ignore]`d (manual-run
       # perf benchmarks and unimplemented placeholders) — 5x-verified
       # stable, no filter needed. The Linux guard keeps these steps off any
-      # Windows/macOS runner that later rejoins the matrix (H9 stays
-      # honored: the Windows crash means no platform tests there).
+      # Windows/macOS runner that later rejoins the matrix; Windows runs this
+      # crate in the `platform-windows` job instead.
       - name: Ensure Xvfb + xkbcommon are available (flui-platform winit-backend X11 tests)
         if: runner.os == 'Linux'
         # Unconditional install: a preinstalled xvfb-run must not short-circuit
@@ -1033,6 +1031,51 @@ jobs:
           path: readback-dumps/**/*.png
           if-no-files-found: ignore
           retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # platform-windows — flui-platform's own suite on a real Windows host:
+  # the Win32 backend's unit tests (clipboard, events, window extensions,
+  # DPI/wide-string helpers) and the winit backend, including the tests that
+  # drive a real winit event loop (`with_any_thread` makes that legal off
+  # the main thread on Windows). Until the clipboard session lock this suite
+  # could not run here at all: a clipboard reader and writer on two test
+  # threads aborted the in-process test binary with STATUS_HEAP_CORRUPTION
+  # (see flui-platform's `shared/clipboard_lock.rs`). nextest runs each test
+  # in its own process, which is also what the real-event-loop tests need
+  # (winit allows one EventLoop per process).
+  # ─────────────────────────────────────────────────────────────────────────
+  platform-windows:
+    name: platform-windows
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-nextest@0.9
+
+      # Default features: the Win32 backend alone, as a Windows app ships it.
+      - name: cargo nextest run (flui-platform, default features)
+        run: cargo nextest run -p flui-platform --locked --no-fail-fast
+
+      # All features: adds the winit backend and its `arboard` clipboard,
+      # which shares the Win32 clipboard with the backend above.
+      - name: cargo nextest run (flui-platform, all features)
+        run: cargo nextest run -p flui-platform --all-features --locked --no-fail-fast
 
   # ─────────────────────────────────────────────────────────────────────────
   # bench-compile — ensures benchmarks compile and link on both platforms.
@@ -1882,7 +1925,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, fast-lane, fast-lane-ios, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
+    needs: [checks, plan, fast-lane, fast-lane-ios, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, platform-windows, bench-compile, doc, deny, doc-test, msrv, miri]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1925,8 +1968,8 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
             clippy feature-matrix wasm-check cross-typecheck cli-macos test
-            test-features live-smoke gpu-test bench-compile doc doc-test msrv
-            miri
+            test-features live-smoke gpu-test platform-windows bench-compile doc
+            doc-test msrv miri
           HEAVY: ${{ needs.plan.outputs.heavy }}
           MODE: ${{ needs.plan.outputs.mode }}
           CROSS_IOS: ${{ needs.plan.outputs.cross_ios }}

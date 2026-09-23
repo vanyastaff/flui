@@ -65,7 +65,19 @@ default-filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-renderin
 # form of the same rule: these run one at a time, everything else is untouched.
 [test-groups]
 gpu-readback = { max-threads = 1 }
+system-clipboard = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(=renderer::tests::sdr_surface_selection_painter_readback_preserves_swatches_and_blending)))'
 test-group = 'gpu-readback'
+
+# flui-platform's clipboard tests write the one system clipboard and read it
+# back (on Windows and macOS, and under Xvfb on Linux; the headless mocks match
+# the filter too and are cheap to serialize). nextest runs each test in its own
+# process, so the in-process lock those tests take (`round_trip_serial` in
+# `shared/clipboard_lock.rs`, which covers plain `cargo test`) cannot keep two
+# of them apart here: one test's write would land between another's write and
+# read. The group runs them one at a time; everything else stays parallel.
+[[profile.default.overrides]]
+filter = 'package(flui-platform) & test(/clipboard/)'
+test-group = 'system-clipboard'

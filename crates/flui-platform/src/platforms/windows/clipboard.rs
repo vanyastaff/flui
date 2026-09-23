@@ -3,7 +3,6 @@
 //! Provides clipboard access using the Windows Clipboard API.
 //! Thread-safe wrapper with proper clipboard lifecycle management.
 
-use parking_lot::Mutex;
 use windows::Win32::{
     Foundation::{GlobalFree, HANDLE, HGLOBAL},
     System::{
@@ -16,27 +15,26 @@ use windows::Win32::{
     },
 };
 
-use crate::traits::Clipboard;
+use crate::{shared::clipboard_lock, traits::Clipboard};
 
 /// Windows clipboard implementation
 ///
 /// Thread-safe wrapper around Windows Clipboard API.
 /// Opens and closes the clipboard for each operation to avoid blocking other
 /// applications.
+///
+/// Stateless: the clipboard is a process-wide resource, so every instance
+/// opens it under one process-wide lock, shared with the winit backend's
+/// clipboard; instances on different threads never overlap their sessions.
 #[derive(Debug)]
-pub struct WindowsClipboard {
-    /// Serializes clipboard operations on this instance — the Win32
-    /// clipboard is a global resource opened per operation.
-    lock: Mutex<()>,
-}
+#[non_exhaustive]
+pub struct WindowsClipboard;
 
 impl WindowsClipboard {
     /// Create a new clipboard instance
     pub fn new() -> Self {
         tracing::debug!("Created Windows clipboard");
-        Self {
-            lock: Mutex::new(()),
-        }
+        Self
     }
 }
 
@@ -48,11 +46,17 @@ impl Default for WindowsClipboard {
 
 impl Clipboard for WindowsClipboard {
     fn read_text(&self) -> Option<String> {
-        let _guard = self.lock.lock();
+        let Some(_session) = ClipboardSession::open() else {
+            tracing::warn!("Failed to open clipboard for reading");
+            return None;
+        };
 
-        // SAFETY: `OpenClipboard`/`IsClipboardFormatAvailable`/
-        // `GetClipboardData` are plain FFI calls with no pointer arguments
-        // of ours; every one of their results is checked before the next
+        // SAFETY: `_session` holds the clipboard open, exclusively among
+        // FLUI's clipboard users in this process, until this function
+        // returns, so no `EmptyClipboard` can free the `CF_UNICODETEXT`
+        // handle while it is locked and scanned below.
+        // `IsClipboardFormatAvailable`/`GetClipboardData` are plain FFI calls
+        // with no pointer arguments of ours; every one of their results is checked before the next
         // step runs (`is_err()`/`is_invalid()`), so `handle` is only
         // converted to `HGLOBAL` once known valid. `GlobalLock` returning
         // non-null is checked before `ptr` is dereferenced at all. The
@@ -70,15 +74,6 @@ impl Clipboard for WindowsClipboard {
         // regardless — the string (or the decision to abandon it) is
         // already finalized before this call.
         unsafe {
-            // Open clipboard (None = current thread's window)
-            if OpenClipboard(None).is_err() {
-                tracing::warn!("Failed to open clipboard for reading");
-                return None;
-            }
-
-            // Ensure clipboard is closed when we're done
-            let _close_guard = CloseClipboardGuard;
-
             // Check if Unicode text is available
             if IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_err() {
                 tracing::debug!("Clipboard does not contain Unicode text");
@@ -143,10 +138,14 @@ impl Clipboard for WindowsClipboard {
     }
 
     fn write_text(&self, text: String) {
-        let _guard = self.lock.lock();
+        let Some(_session) = ClipboardSession::open() else {
+            tracing::error!("Failed to open clipboard for writing");
+            return;
+        };
 
-        // SAFETY: `OpenClipboard`/`EmptyClipboard`/`GlobalAlloc` results are
-        // all checked before the next step runs. `size` is computed as
+        // SAFETY: `_session` holds the clipboard open for the whole block.
+        // `EmptyClipboard`/`GlobalAlloc` results are all checked before the
+        // next step runs. `size` is computed as
         // `wide.len() * size_of::<u16>()`, the exact byte length of `wide`
         // (a `Vec<u16>`, so `wide.as_ptr()` is valid for reads of `size`
         // bytes) — the same `size` is passed to `GlobalAlloc`, so `ptr` from
@@ -167,15 +166,6 @@ impl Clipboard for WindowsClipboard {
         // succeeds, `global` is no longer freed by this function at all —
         // the clipboard owns it from that point on.
         unsafe {
-            // Open clipboard
-            if OpenClipboard(None).is_err() {
-                tracing::error!("Failed to open clipboard for writing");
-                return;
-            }
-
-            // Ensure clipboard is closed when we're done
-            let _close_guard = CloseClipboardGuard;
-
             // Empty clipboard
             if EmptyClipboard().is_err() {
                 tracing::error!("Failed to empty clipboard");
@@ -250,14 +240,35 @@ impl Clipboard for WindowsClipboard {
     }
 }
 
-/// RAII guard to ensure clipboard is closed
-struct CloseClipboardGuard;
+/// The Win32 clipboard, open on this thread under the process-wide
+/// clipboard lock. The only way this module opens the clipboard.
+///
+/// `OpenClipboard(NULL)` does not exclude other threads of the same process
+/// (see [`clipboard_lock`]), so opening without the lock would let another
+/// thread's `EmptyClipboard` free a handle this one is reading. Dropping
+/// the session closes the clipboard first and releases the lock after, so
+/// the next session never observes a clipboard that is still open.
+struct ClipboardSession {
+    _lock: clipboard_lock::SessionLock,
+}
 
-impl Drop for CloseClipboardGuard {
+impl ClipboardSession {
+    /// Takes the process-wide lock, then opens the clipboard; `None` if
+    /// another process holds it open.
+    fn open() -> Option<Self> {
+        let lock = clipboard_lock::acquire();
+        // SAFETY: plain FFI call with no pointer arguments; the result is
+        // checked, and the session is only constructed on success.
+        unsafe { OpenClipboard(None) }.ok()?;
+        Some(Self { _lock: lock })
+    }
+}
+
+impl Drop for ClipboardSession {
     fn drop(&mut self) {
-        // SAFETY: `CloseClipboard` takes no arguments; every caller of this
-        // guard only constructs it after a successful `OpenClipboard`, so
-        // this always closes a clipboard this thread actually holds open.
+        // SAFETY: `CloseClipboard` takes no arguments; a session exists only
+        // after a successful `OpenClipboard` on this thread, so this always
+        // closes a clipboard this thread actually holds open.
         // The result is discarded because `Drop::drop` cannot return a
         // `Result` and there is no recovery action available regardless —
         // an unbalanced close would surface as the *next* `OpenClipboard`
@@ -281,6 +292,7 @@ mod tests {
     #[test]
     #[ignore = "flaky: the clipboard can be modified by other processes"]
     fn test_clipboard_roundtrip() {
+        let _serial = crate::shared::clipboard_lock::round_trip_serial();
         // Note: This test requires clipboard access and may fail in CI
         let clipboard = WindowsClipboard::new();
 
@@ -299,6 +311,7 @@ mod tests {
 
     #[test]
     fn test_has_text() {
+        let _serial = crate::shared::clipboard_lock::round_trip_serial();
         let clipboard = WindowsClipboard::new();
 
         // Write text
@@ -315,6 +328,7 @@ mod tests {
 
     #[test]
     fn test_unicode_support() {
+        let _serial = crate::shared::clipboard_lock::round_trip_serial();
         let clipboard = WindowsClipboard::new();
 
         // Test with Unicode characters

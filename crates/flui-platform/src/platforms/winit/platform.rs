@@ -1545,6 +1545,18 @@ impl ApplicationHandler for WinitApp {
         // loop back here).
         self.fire_self_close_if_due(event_loop);
 
+        // An exit requested anywhere in this callback (the self-close above
+        // is one) must not be followed by a blocking wait: winit's Windows
+        // runner blocks on the control flow set here right after
+        // `about_to_wait` returns and checks the exit flag only once the
+        // wait ends. With the owner lane already shut down nothing wakes it,
+        // so the loop stayed parked until an unrelated message arrived (six
+        // minutes in the test harness). `Poll` makes that wait return
+        // immediately, and the runner exits on the check that follows.
+        if event_loop.exiting() {
+            event_loop.set_control_flow(ControlFlow::Poll);
+            return;
+        }
         let control_flow = match earliest_deadline(wake_deadline, self.self_close_deadline) {
             Some(deadline) => ControlFlow::WaitUntil(deadline),
             None => ControlFlow::Wait,
