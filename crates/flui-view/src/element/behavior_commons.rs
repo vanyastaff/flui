@@ -195,7 +195,7 @@ where
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(build));
     #[cfg(feature = "signals")]
     if let Some(id) = building {
-        owner.reactive.end_element_build(id);
+        owner.reactive.end_element_build(id, outcome.is_ok());
     }
     match outcome {
         Ok(child_view) => child_view,

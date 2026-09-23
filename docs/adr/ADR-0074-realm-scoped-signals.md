@@ -293,6 +293,12 @@ drain goes through the same function, so it does the same for the elements it bu
 `media_query_fields.rs` pins it (read `size` in the first build, `text_scale_factor` in the
 second → a later size-only change rebuilds nothing). Cost: one hash lookup per previous
 provider per build; benefit: no stale rebuilds from reads a conditional branch stopped making.
+A build that panics is not evidence of what the element reads: when this element's build (or
+its dependency hook) is recovered with an `ErrorView`, its previous masks are kept and the
+sink's records are only added, and the signal registry likewise restores the previous read set
+when the build unwinds — so the element stays subscribed and rebuilds once the failing
+condition clears (`a_build_that_panics_before_reading_keeps_its_dependency`,
+`a_build_that_unwinds_keeps_its_previous_read_set`).
 
 #1090's acceptance tests (`crates/flui-widgets/tests/media_query_fields.rs`,
 `crates/flui-material/tests/theme_fields.rs`) pin: a size-only change rebuilds the size

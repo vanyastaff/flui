@@ -1735,6 +1735,9 @@ impl BuildOwner {
             // `AssertUnwindSafe` is sound because the sole cross-unwind
             // invariant — the slot is whole again — is re-established by the
             // unconditional `put_element` below.
+            // Recovered panics recorded from here on belong to this element's
+            // build window (reset-on-build keeps its masks when one is its own).
+            let recovered_before = self.recovered_panics.len();
             let partitioned_dirty_count = self.partitioned_dirty_count();
             let build_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut element_owner = super::ElementOwner {
@@ -1886,7 +1889,21 @@ impl BuildOwner {
             // to NONE, the build's own reads are re-applied from the sink, and a
             // provider it no longer read drops the entry. A field read only in
             // an earlier build therefore stops rebuilding this element.
-            let previous_providers = self.inherited_dependencies.providers_of(id);
+            //
+            // A build that panicked and was recovered (ErrorView substituted,
+            // `build_or_recover`) or whose dependency hook panicked may have
+            // stopped before reading its providers: the empty sink says nothing
+            // about what the element depends on, so its previous masks are kept
+            // (the sink's records are still added) and it keeps receiving the
+            // notifications that let a fixed condition rebuild it.
+            let build_recovered = self.recovered_panics[recovered_before..].iter().any(|panic| {
+                matches!(panic.at, super::RecoveredAt::Element { element, .. } if element == id)
+            });
+            let previous_providers = if build_recovered {
+                super::inherited_dependencies::ProviderIds::default()
+            } else {
+                self.inherited_dependencies.providers_of(id)
+            };
             for provider in &previous_providers {
                 if let Some(accessor) = tree
                     .get_mut(*provider)

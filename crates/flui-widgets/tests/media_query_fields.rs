@@ -97,6 +97,22 @@ impl StatelessView for SwitchingReader {
     }
 }
 
+/// Reads `size`, but panics before reading it while `fail` is set.
+#[derive(Clone, StatelessView)]
+struct FailingSizeReader {
+    fail: Rc<Cell<bool>>,
+    builds: Count,
+}
+
+impl StatelessView for FailingSizeReader {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.builds.set(self.builds.get() + 1);
+        assert!(!self.fail.get(), "test-induced build failure");
+        let size = MediaQuery::size_of(ctx).expect("MediaQuery ancestor");
+        SizedBox::new(size.width.0 / 100.0, 1.0)
+    }
+}
+
 /// Stops parent-driven rebuilds so only dependency notifications reach the
 /// leaves.
 #[derive(Clone)]
@@ -328,5 +344,49 @@ fn a_rebuild_re_derives_the_field_set_so_a_dropped_read_stops_depending() {
         laid.size(laid.current_root()).width,
         px(1.5),
         "the reader rendered the new scale"
+    );
+}
+
+#[test]
+fn a_build_that_panics_before_reading_keeps_its_dependency() {
+    // Reset-on-build must not treat a recovered panic as "read nothing": the
+    // element would lose its dependency and never rebuild after the failing
+    // condition clears. The recovered build keeps its previous masks.
+    let fail = Rc::new(Cell::new(false));
+    let builds = count();
+    let reader = FailingSizeReader {
+        fail: Rc::clone(&fail),
+        builds: Rc::clone(&builds),
+    };
+    let wrap = |reader: &FailingSizeReader| {
+        use flui_view::ViewExt;
+        StaticChild {
+            inner: reader.clone().boxed(),
+        }
+    };
+    let mut laid = lay_out(
+        MediaQuery::new(data(800.0, 1.0), wrap(&reader)),
+        loose(4000.0),
+    );
+    assert_eq!(builds.get(), 1);
+
+    // The size change rebuilds it; this build panics before reading size.
+    fail.set(true);
+    laid.pump_widget(MediaQuery::new(data(900.0, 1.0), wrap(&reader)));
+    assert_eq!(builds.get(), 2, "the size change reached the reader");
+    let _ = laid.build_owner_mut().take_recovered_panics();
+
+    // Condition fixed: the next size change must still rebuild it.
+    fail.set(false);
+    laid.pump_widget(MediaQuery::new(data(1000.0, 1.0), wrap(&reader)));
+    assert_eq!(
+        builds.get(),
+        3,
+        "a recovered build keeps the dependency it had before the panic"
+    );
+    assert_eq!(
+        laid.size(laid.current_root()).width,
+        px(10.0),
+        "the reader rendered the new width after recovering"
     );
 }

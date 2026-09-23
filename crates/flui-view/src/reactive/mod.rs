@@ -150,6 +150,10 @@ struct Inner {
     owned_by_element: HashMap<ElementId, SmallVec<[SignalSlot; 2]>>,
     /// The element whose `build` is running, if any.
     building: Option<ElementId>,
+    /// The read set of the element now building, taken out by
+    /// `begin_element_build`: dropped when the build completes, restored when
+    /// it unwinds (a panicking build says nothing about what it reads).
+    previous_reads: SmallVec<[u32; 4]>,
     scheduler: Option<ExternalBuildScheduler>,
 }
 
@@ -370,16 +374,45 @@ impl Reactive {
     /// scratch, and arm the build-time refusals.
     pub(crate) fn begin_element_build(&self, element: ElementId) {
         let mut inner = self.inner.borrow_mut();
+        inner.previous_reads = inner
+            .element_reads
+            .get(&element)
+            .cloned()
+            .unwrap_or_default();
         Self::forget_element_reads(&mut inner, element);
         inner.building = Some(element);
     }
 
     /// Called by `build_or_recover` right after `element`'s `build` returned
     /// (or unwound).
-    pub(crate) fn end_element_build(&self, element: ElementId) {
+    ///
+    /// `completed` is false when the build unwound: the reads it made before
+    /// the panic are kept and the previous read set is restored on top, so a
+    /// build that panics before reading a signal stays subscribed and a later
+    /// write can rebuild it once the failing condition is fixed.
+    pub(crate) fn end_element_build(&self, element: ElementId, completed: bool) {
         let mut inner = self.inner.borrow_mut();
+        let previous = std::mem::take(&mut inner.previous_reads);
         if inner.building == Some(element) {
             inner.building = None;
+        }
+        if completed {
+            return;
+        }
+        for index in previous {
+            let Some(node) = inner.nodes.get_mut(index as usize) else {
+                continue;
+            };
+            if !node.live {
+                continue;
+            }
+            if !node.element_readers.contains(&element) {
+                node.element_readers.push(element);
+            }
+            let reads = inner.element_reads.entry(element).or_default();
+            if !reads.contains(&index) {
+                reads.push(index);
+            }
         }
     }
 
@@ -867,14 +900,32 @@ mod tests {
         let e1 = ElementId::new(1);
         r.begin_element_build(e1);
         r.register_element_reader(a.slot(), e1);
-        r.end_element_build(e1);
+        r.end_element_build(e1, true);
 
         r.begin_element_build(e1);
-        r.end_element_build(e1);
+        r.end_element_build(e1, true);
 
         a.set(&r, 1).unwrap();
         assert!(scheduled(&inbox).is_empty());
         assert!(r.readers_of(a.slot()).is_empty());
+    }
+
+    #[test]
+    fn a_build_that_unwinds_keeps_its_previous_read_set() {
+        let (r, inbox) = graph_with_inbox();
+        let a = r.signal(0u8);
+        let e1 = ElementId::new(1);
+        r.begin_element_build(e1);
+        r.register_element_reader(a.slot(), e1);
+        r.end_element_build(e1, true);
+
+        // The next build panics before reading `a`.
+        r.begin_element_build(e1);
+        r.end_element_build(e1, false);
+
+        assert_eq!(r.readers_of(a.slot()), vec![e1], "still subscribed");
+        a.set(&r, 1).unwrap();
+        assert_eq!(scheduled(&inbox).len(), 1, "the write still rebuilds it");
     }
 
     #[test]
@@ -892,7 +943,7 @@ mod tests {
             Err(SignalError::CreatedDuringBuild { element: e1 })
         );
         assert_eq!(a.peek(&r, |v| *v), Ok(0), "reads stay legal during build");
-        r.end_element_build(e1);
+        r.end_element_build(e1, true);
         assert_eq!(a.set(&r, 1), Ok(()));
         assert!(r.try_signal(7u8).is_ok());
     }
@@ -1095,7 +1146,7 @@ mod tests {
             a.set_if_changed(&r, 1),
             Err(SignalError::WrittenDuringBuild { element: e1 })
         );
-        r.end_element_build(e1);
+        r.end_element_build(e1, true);
         assert_eq!(a.set_if_changed(&r, 1), Ok(false));
     }
 
