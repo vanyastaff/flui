@@ -1,0 +1,38 @@
+[package]
+name = "text-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "B7 research spike: parley vs cosmic-text, standalone (not a flui workspace member)"
+
+# Detaches this crate from any ancestor Cargo workspace -- it lives under
+# tools/ inside the flui repo checkout for convenience, but is deliberately
+# NOT a member of flui's own workspace (own Cargo.lock, own target/, no
+# flui-* dependency, no influence on flui's own dependency resolution).
+[workspace]
+
+[[bin]]
+name = "text-spike"
+path = "src/main.rs"
+
+[dependencies]
+# Latest published version at the time this spike was run (checked via
+# `cargo info parley`, 2026-09-22: latest is 0.11.1, our initial "0.7" guess
+# was stale by 4 minor releases). Exact-pinned like cosmic-text below, for a
+# reproducible comparison (Cargo.lock is checked in).
+parley = "=0.11.1"
+# Pinned to the EXACT version flui-painting currently resolves
+# (crates/flui-painting/Cargo.toml: cosmic-text = "0.19"; Cargo.lock:
+# 0.19.0) -- a fair comparison needs the same cosmic-text flui actually
+# ships, not whatever is newest today.
+cosmic-text = "=0.19.0"
+clap = { version = "4", features = ["derive"] }
+# getrusage(RUSAGE_SELF).ru_maxrss for peak-RSS memory measurement --
+# works on both macOS and Linux (the two hosts this spike is run on), with
+# a units difference (bytes vs KB) the measurement code accounts for.
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+debug = true
