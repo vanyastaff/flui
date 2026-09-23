@@ -77,6 +77,8 @@ pub struct DoubleTapGestureRecognizer {
     first_entry: Arc<Mutex<Option<GestureArenaEntry>>>,
 }
 
+// Field names keep Flutter's `onDoubleTap`-style callback names (parity).
+#[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct DoubleTapCallbacks {
     on_double_tap: Option<DoubleTapCallback>,
