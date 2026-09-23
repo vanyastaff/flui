@@ -952,6 +952,9 @@ text-check:
     fi
     # No tool to skip for: this one needs only a Python >= 3.11.
     {{ flui_python }} -B scripts/check-nextest-partition.py
+    # CI's lane machinery (aggregator skip rule, change scope). The aggregator
+    # test needs PyYAML and skips with a message without it; CI installs it.
+    {{ flui_python }} -B -m unittest discover -s scripts/tests -p 'test_c[hi]*.py'
 
 # --- CI jobs without a recipe of their own until now (see the job -> recipe
 # table in docs/testing.md). Each mirrors its ci.yml job's commands.

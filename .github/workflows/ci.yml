@@ -229,6 +229,15 @@ jobs:
       - name: scripts/check-nextest-partition.py (nested-cargo filter copies agree)
         run: python3 -B scripts/check-nextest-partition.py
 
+      # The fast/heavy lane machinery: the `ci` aggregator's skip rule
+      # (extracted from this file and run against every lane and mode) and
+      # scripts/lib/change_scope.py's classification. Local mirror:
+      # `just text-check`.
+      - name: scripts/tests (ci aggregator skip rule, change scope)
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check "pyyaml>=6,<7"
+          python3 -B -m unittest discover -s scripts/tests -p 'test_c[hi]*.py' -v
+
       - name: actionlint (workflow semantics)
         run: actionlint
 
