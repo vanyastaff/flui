@@ -177,7 +177,7 @@ pub fn resolve_alignment(
 /// rather than depending on this function, since it resolves through a
 /// private render-object widget this module has no reason to know about.
 #[must_use]
-pub(crate) fn axis_direction_from_axis_reverse_and_directionality(
+pub fn axis_direction_from_axis_reverse_and_directionality(
     ctx: &dyn BuildContext,
     axis: Axis,
     reverse: bool,
@@ -243,7 +243,7 @@ mod tests {
 
         for (direction, expected_x) in [(TextDirection::Ltr, -1.0), (TextDirection::Rtl, 1.0)] {
             let seen = Rc::new(Cell::new(None));
-            let _harness = crate::test_harness::mount(Directionality::new(
+            let _harness = crate::testing::harness::mount(Directionality::new(
                 direction,
                 Probe {
                     seen: Rc::clone(&seen),

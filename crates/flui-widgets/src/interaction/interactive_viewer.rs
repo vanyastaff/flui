@@ -88,7 +88,7 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{Child, IntoView, View, ViewState};
 
-use crate::navigator::AnchoredBox;
+use crate::anchored_box::AnchoredBox;
 use crate::{AnimatedBuilder, ClipRect, GestureDetector, Listener, Transform};
 
 use super::transformation_controller::TransformationController;

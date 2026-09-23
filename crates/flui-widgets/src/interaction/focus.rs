@@ -39,7 +39,7 @@ use std::{
     rc::Rc,
 };
 
-use crate::navigator::AnchoredBox;
+use crate::anchored_box::AnchoredBox;
 use flui_foundation::ListenerId;
 use flui_geometry::Rect;
 use flui_interaction::routing::{
@@ -110,7 +110,7 @@ impl_inherited_view!(FocusParentProvider);
 /// broken embedder invariant rather than a reason to reach for the
 /// lifecycle-only `BuildContext::focus_manager` capability from arbitrary
 /// build paths.
-pub(crate) fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Rc<FocusNode> {
+pub fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Rc<FocusNode> {
     ctx.depend_on::<FocusParentProvider, _>(|provider| Rc::clone(&provider.parent))
         .expect(
             "BUG: focus widget mounted outside FocusRoot; every presentation root must install \
@@ -829,7 +829,7 @@ impl ViewState<Focus> for FocusState {
 /// time against committed layout — `box_size` + `transform_to` the render
 /// root, the `HeroHandle::bounding_box_in` shape. `None` (fall back to the
 /// stored rect) while unmounted or before first layout.
-pub(crate) fn install_rect_provider(
+pub fn install_rect_provider(
     node: &Rc<FocusNode>,
     anchor: &SubtreeAnchor,
     ctx: &dyn BuildContext,
@@ -1136,7 +1136,7 @@ mod tests {
 
     use super::*;
     use crate::SizedBox;
-    use crate::test_harness::mount;
+    use crate::testing::harness::mount;
 
     /// A root that can drop the focus subtree without changing its own type —
     /// `swap_root` dispatches by `TypeId`.
@@ -2183,7 +2183,7 @@ mod traversal_tests {
     use flui_view::ViewExt;
 
     use super::*;
-    use crate::test_harness::mount;
+    use crate::testing::harness::mount;
     use crate::{Positioned, SizedBox, Stack};
 
     /// Widget-mounted nodes traverse in **reading order**, not attach order —

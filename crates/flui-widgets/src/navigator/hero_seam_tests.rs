@@ -29,7 +29,8 @@ use super::page_route::{PageRoute, PopupRoute};
 use super::route::RouteId;
 use super::subtree::RouteSubtree;
 use crate::overlay::{InsertPosition, OverlayEntry};
-use crate::test_harness::{Harness, mount};
+use crate::testing::harness::{Harness, mount};
+use crate::testing::overlay_probe::OverlayProbe as _;
 use crate::{Opacity, SizedBox, Text};
 
 /// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page sits

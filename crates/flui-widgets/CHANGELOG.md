@@ -8,6 +8,24 @@ Versioning: per `docs/release.md` policy.
 
 ### Added
 
+- **Public overlay mutation API** (ADR-0076): `pub mod overlay`, and
+  `InsertPosition` at the crate root, plus `OverlayHandle::{new, insert,
+  rearrange, is_mounted}`, `Overlay::new`, and `OverlayEntry::{new, remove,
+  mark_needs_build, set_opaque, set_maintain_state, is_attached}`. That is
+  exactly what the navigator drives, which is Flutter's public
+  `OverlayState`/`OverlayEntry` surface. Inserting into an unmounted overlay
+  changes the list and takes effect when an `Overlay` mounts with the same
+  handle again.
+- **`testing::harness`** (the element-level harness, formerly the
+  crate-private `test_harness`) and **`testing::overlay_probe`**, behind the
+  `testing` feature, which now also enables an optional `flui-platform`
+  dependency for the harness's recording `PlatformTextInput`.
+- **`localization::axis_direction_from_axis_reverse_and_directionality`** is
+  public (Flutter's `getAxisDirectionFromAxisReverseAndDirectionality`).
+- **`__private`** (doc-hidden): workspace-only seams for the sibling widget
+  crates split out of this one (#1272). No semver guarantee; port-check
+  `SEAM/widgets-private` refuses importers outside `crates/flui-*`.
+
 - **`TextEditingController::clear()`/`set_text()`**. `set_text` replaces
   the whole buffer, collapses the caret to the end (a deliberate
   divergence from Flutter's `TextEditingController.text` setter, which

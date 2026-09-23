@@ -216,7 +216,7 @@ mod tests {
 
     use super::*;
     use crate::SizedBox;
-    use crate::test_harness::mount;
+    use crate::testing::harness::mount;
 
     /// Registers `controller` with whatever ambient registry it finds, and
     /// records **whether it found one** — the two facts a `TickerMode` decides.

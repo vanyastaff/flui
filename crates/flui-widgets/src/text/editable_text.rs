@@ -890,10 +890,10 @@ impl ViewState<EditableText> for EditableTextState {
         // focus/IME listener is installed below. An external node may carry a
         // focus request queued before mount; `attach_node` fulfills it
         // synchronously, and no listener may miss that edge.
-        let parent = crate::interaction::enclosing_focus_parent(ctx);
+        let parent = crate::__private::enclosing_focus_parent(ctx);
         self.parent = Some(Rc::clone(&parent));
         let (rect_provider, rect_provider_registration) =
-            crate::interaction::install_rect_provider(&self.focus_node, &self.anchor, ctx);
+            crate::__private::install_rect_provider(&self.focus_node, &self.anchor, ctx);
         self.rect_provider = Some(rect_provider);
         self.rect_provider_registration = Some(rect_provider_registration);
 
@@ -1159,7 +1159,7 @@ impl ViewState<EditableText> for EditableTextState {
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
-        let parent = crate::interaction::enclosing_focus_parent(ctx);
+        let parent = crate::__private::enclosing_focus_parent(ctx);
         if self
             .parent
             .as_ref()
@@ -1193,7 +1193,7 @@ impl ViewState<EditableText> for EditableTextState {
         // so anything inserted between the two would break that walk.
         let field = crate::interaction::Listener::new()
             .behavior(HitTestBehavior::Opaque)
-            .child(crate::navigator::AnchoredBox::new(
+            .child(crate::__private::AnchoredBox::new(
                 self.anchor.clone(),
                 AnimatedBuilder::new(Arc::new(self.rebuild_notifier.clone()), move || {
                     build_field_view(
@@ -1886,7 +1886,7 @@ fn build_field_view(
     // A collapsed selection is the caret's business, and the render object
     // skips it anyway — `None` says so at the seam rather than relying on it.
     let selection = (!selection.is_empty()).then_some(selection);
-    crate::navigator::AnchoredBox::new(
+    crate::__private::AnchoredBox::new(
         inner_anchor,
         EditableTextRenderView {
             text,
@@ -2044,7 +2044,7 @@ mod tests {
     fn disabled_field_refuses_focus_on_its_explicit_node() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("disabled EditableText");
-        let harness = crate::test_harness::mount(
+        let harness = crate::testing::harness::mount(
             EditableText::new(controller, Rc::clone(&focus_node)).enabled(false),
         );
 
@@ -2066,7 +2066,7 @@ mod tests {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("enabled EditableText");
         let _harness =
-            crate::test_harness::mount(EditableText::new(controller, Rc::clone(&focus_node)));
+            crate::testing::harness::mount(EditableText::new(controller, Rc::clone(&focus_node)));
 
         focus_node.request_focus();
         assert!(focus_node.has_primary_focus());
@@ -2090,7 +2090,7 @@ mod tests {
     fn disabling_a_focused_field_unfocuses_its_explicit_node() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("disable while focused");
-        let mut harness = crate::test_harness::mount(EditableText::new(
+        let mut harness = crate::testing::harness::mount(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -2115,7 +2115,7 @@ mod tests {
     fn re_enabling_a_disabled_field_restores_explicit_node_focusability() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("re-enabled EditableText");
-        let mut harness = crate::test_harness::mount(
+        let mut harness = crate::testing::harness::mount(
             EditableText::new(controller.clone(), Rc::clone(&focus_node)).enabled(false),
         );
         assert!(!focus_node.can_request_focus());
@@ -2572,16 +2572,16 @@ mod tests {
     // the platform event has been demultiplexed to its presentation.
     // ------------------------------------------------------------------
 
-    fn dispatch_ime(harness: &crate::test_harness::Harness, event: &flui_types::ImeEvent) {
+    fn dispatch_ime(harness: &crate::testing::harness::Harness, event: &flui_types::ImeEvent) {
         harness.dispatch_ime(event);
     }
 
     fn mount_ime_field(
         controller: TextEditingController,
         label: &'static str,
-    ) -> (crate::test_harness::Harness, Rc<FocusNode>) {
+    ) -> (crate::testing::harness::Harness, Rc<FocusNode>) {
         let focus_node = FocusNode::with_debug_label(label);
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller,
             Rc::clone(&focus_node),
         ));
@@ -2627,7 +2627,7 @@ mod tests {
         let controller = TextEditingController::with_text("hello world");
         controller.set_caret_byte_offset(0);
         let focus_node = FocusNode::with_debug_label("shift-arrow field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -2683,7 +2683,7 @@ mod tests {
         let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let submitted_for_callback = Rc::clone(&submitted);
 
-        let harness = crate::test_harness::mount(
+        let harness = crate::testing::harness::mount(
             EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(
                 move |text| {
                     submitted_for_callback.replace(Some(text.to_string()));
@@ -2721,7 +2721,7 @@ mod tests {
         let controller = TextEditingController::with_text("hi");
         let focus_node = FocusNode::with_debug_label("no-submit field");
         let harness =
-            crate::test_harness::mount(EditableText::new(controller, Rc::clone(&focus_node)));
+            crate::testing::harness::mount(EditableText::new(controller, Rc::clone(&focus_node)));
         focus_node.request_focus();
 
         let result = harness
@@ -2745,7 +2745,7 @@ mod tests {
         let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let submitted_for_callback = Rc::clone(&submitted);
 
-        let harness = crate::test_harness::mount(
+        let harness = crate::testing::harness::mount(
             EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(
                 move |text| {
                     submitted_for_callback.replace(Some(text.to_string()));
@@ -2779,7 +2779,7 @@ mod tests {
         let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let submitted_for_callback = Rc::clone(&submitted);
 
-        let harness = crate::test_harness::mount(
+        let harness = crate::testing::harness::mount(
             EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |text| {
                 submitted_for_callback.replace(Some(text.to_string()));
             }),
@@ -2813,7 +2813,7 @@ mod tests {
         let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let submitted_for_callback = Rc::clone(&submitted);
 
-        let harness = crate::test_harness::mount(
+        let harness = crate::testing::harness::mount(
             EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |text| {
                 submitted_for_callback.replace(Some(text.to_string()));
             }),
@@ -2855,7 +2855,7 @@ mod tests {
         let calls = Rc::new(AtomicUsize::new(0));
         let calls_for_callback = Rc::clone(&calls);
 
-        let harness = crate::test_harness::mount(
+        let harness = crate::testing::harness::mount(
             EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |_text| {
                 calls_for_callback.fetch_add(1, Ordering::Relaxed);
             }),
@@ -2896,7 +2896,7 @@ mod tests {
         let focus_node = FocusNode::with_debug_label("clear-on-submit field");
         let controller_for_callback = controller.clone();
 
-        let harness = crate::test_harness::mount(
+        let harness = crate::testing::harness::mount(
             EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(
                 move |_text| {
                     controller_for_callback.clear();
@@ -2958,7 +2958,7 @@ mod tests {
             "an unattached node retains the request until its widget mounts"
         );
 
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -2980,7 +2980,7 @@ mod tests {
         let controller = TextEditingController::new();
         let first = FocusNode::with_debug_label("first live field node");
         let replacement = FocusNode::with_debug_label("replacement live field node");
-        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let mut harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&first),
         ));
@@ -3021,7 +3021,7 @@ mod tests {
         let original = TextEditingController::with_text("original");
         let replacement = TextEditingController::with_text("replacement");
         let focus_node = FocusNode::with_debug_label("controller swap");
-        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let mut harness = crate::testing::harness::mount_with_ime(EditableText::new(
             original.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3096,7 +3096,7 @@ mod tests {
     fn rebuilding_with_the_same_controller_registers_no_second_listener() {
         let controller = TextEditingController::with_text("stable");
         let focus_node = FocusNode::with_debug_label("same controller rebuild");
-        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let mut harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3138,7 +3138,7 @@ mod tests {
         let original = TextEditingController::with_text("original");
         let replacement = TextEditingController::with_text("replacement");
         let focus_node = FocusNode::with_debug_label("listener move");
-        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let mut harness = crate::testing::harness::mount_with_ime(EditableText::new(
             original.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3177,7 +3177,7 @@ mod tests {
     fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("IME focus gain");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3205,7 +3205,7 @@ mod tests {
     fn commit_replaces_the_composing_region_through_the_attached_client() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("IME commit");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3235,7 +3235,7 @@ mod tests {
     fn character_key_during_active_composition_does_not_double_insert() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("IME composition key");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3270,7 +3270,7 @@ mod tests {
     fn character_key_with_ime_attached_but_no_active_preedit_inserts_normally() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("plain key with IME");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3291,7 +3291,7 @@ mod tests {
     fn blur_detaches_the_ime_client() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("IME blur");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller,
             Rc::clone(&focus_node),
         ));
@@ -3318,7 +3318,7 @@ mod tests {
     fn unmount_while_focused_detaches_the_ime_client() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("IME unmount");
-        let mut harness = crate::test_harness::mount_with_ime(ImeUnmountRoot {
+        let mut harness = crate::testing::harness::mount_with_ime(ImeUnmountRoot {
             controller: controller.clone(),
             focus_node: Rc::clone(&focus_node),
             show: true,
@@ -3354,7 +3354,7 @@ mod tests {
     fn disabled_mid_preedit_strips_the_composing_slice_through_the_attached_client() {
         let controller = TextEditingController::with_text("Hello ");
         let focus_node = FocusNode::with_debug_label("IME disabled");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3427,7 +3427,7 @@ mod tests {
     fn focusing_sends_the_exact_caret_rect_including_ancestor_padding() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("cursor area padding");
-        let mut harness = crate::test_harness::mount_with_ime(
+        let mut harness = crate::testing::harness::mount_with_ime(
             crate::Padding::only(20.0, 10.0, 0.0, 0.0)
                 .child(EditableText::new(controller, Rc::clone(&focus_node))),
         );
@@ -3475,7 +3475,7 @@ mod tests {
     fn caret_advance_sends_a_new_rect_with_x_advanced_after_a_commit() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("cursor advance");
-        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let mut harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3523,7 +3523,7 @@ mod tests {
     fn dedupes_unchanged_frames_and_resends_after_a_refocus_at_the_same_position() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("cursor dedupe");
-        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let mut harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller,
             Rc::clone(&focus_node),
         ));
@@ -3573,7 +3573,7 @@ mod tests {
     fn ime_enabled_event_clears_the_dedupe_cache_and_forces_a_resend() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("IME enabled");
-        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let mut harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller,
             Rc::clone(&focus_node),
         ));
@@ -3615,7 +3615,7 @@ mod tests {
     fn loop_stops_sending_after_blur() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("cursor loop blur");
-        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let mut harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3665,7 +3665,7 @@ mod tests {
     fn loop_stops_rescheduling_after_dispose_while_still_focused() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("cursor loop dispose");
-        let mut harness = crate::test_harness::mount_with_ime(ImeUnmountRoot {
+        let mut harness = crate::testing::harness::mount_with_ime(ImeUnmountRoot {
             controller: controller.clone(),
             focus_node: Rc::clone(&focus_node),
             show: true,
@@ -3724,7 +3724,7 @@ mod tests {
     fn blur_then_refocus_within_the_same_scope_leaves_exactly_one_live_loop() {
         let controller = TextEditingController::new();
         let focus_node = FocusNode::with_debug_label("cursor loop refocus");
-        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let mut harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller,
             Rc::clone(&focus_node),
         ));
@@ -3760,7 +3760,7 @@ mod tests {
     /// Runs `f` against the mounted field's single `RenderEditable`, found
     /// by downcasting the one render object this widget mounts.
     fn with_render_editable<T>(
-        harness: &crate::test_harness::Harness,
+        harness: &crate::testing::harness::Harness,
         f: impl FnOnce(&RenderEditable) -> T,
     ) -> Option<T> {
         let owner = harness.pipeline_owner();
@@ -3780,20 +3780,20 @@ mod tests {
     }
 
     /// Whether the mounted field's caret is currently painted.
-    fn show_caret_flag(harness: &crate::test_harness::Harness) -> bool {
+    fn show_caret_flag(harness: &crate::testing::harness::Harness) -> bool {
         with_render_editable(harness, RenderEditable::show_caret).unwrap_or(false)
     }
 
     /// The mounted field's composing-region rect, if any — `None` covers
     /// both "no `RenderEditable` found" and "no composing range active".
-    fn composing_rect(harness: &crate::test_harness::Harness) -> Option<Rect> {
+    fn composing_rect(harness: &crate::testing::harness::Harness) -> Option<Rect> {
         with_render_editable(harness, RenderEditable::rect_for_composing_range).flatten()
     }
 
     /// The mounted field's collapsed caret rect — always geometry, per
     /// [`RenderEditable::caret_local_rect`]'s visibility-independence
     /// contract.
-    fn caret_rect(harness: &crate::test_harness::Harness) -> Rect {
+    fn caret_rect(harness: &crate::testing::harness::Harness) -> Rect {
         with_render_editable(harness, RenderEditable::caret_local_rect)
             .expect("a mounted EditableText always has a RenderEditable")
     }
@@ -3815,7 +3815,7 @@ mod tests {
     fn an_obscured_field_never_hands_its_real_text_to_the_render_object() {
         let controller = TextEditingController::with_text("hunter2");
         let focus_node = FocusNode::with_debug_label("obscured field");
-        let harness = crate::test_harness::mount_with_ime(
+        let harness = crate::testing::harness::mount_with_ime(
             EditableText::new(controller, Rc::clone(&focus_node)).obscure_text(true),
         );
 
@@ -3835,7 +3835,7 @@ mod tests {
     }
 
     /// The mounted field's selection, as the render object received it.
-    fn render_selection(harness: &crate::test_harness::Harness) -> Option<Range<usize>> {
+    fn render_selection(harness: &crate::testing::harness::Harness) -> Option<Range<usize>> {
         with_render_editable(harness, |editable| editable.selection().cloned()).flatten()
     }
 
@@ -3853,7 +3853,7 @@ mod tests {
     fn a_tap_places_the_caret_where_it_landed() {
         let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("tapped field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3880,7 +3880,7 @@ mod tests {
     fn a_tap_focuses_the_field() {
         let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("unfocused field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller,
             Rc::clone(&focus_node),
         ));
@@ -3903,7 +3903,7 @@ mod tests {
     fn a_drag_selects_from_its_start_to_the_pointer() {
         let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("dragged field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3942,7 +3942,7 @@ mod tests {
     fn a_double_tap_selects_the_word_under_it() {
         let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("double-tapped field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -3986,7 +3986,7 @@ mod tests {
     fn a_double_tap_selects_the_word_even_if_the_second_contact_moves_before_lifting() {
         let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("wobbly double-tapped field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -4030,7 +4030,7 @@ mod tests {
     /// the shared arena across the double-tap window for every tap on a
     /// disabled field, delaying an ancestor's own tap. Proving THAT
     /// requires a clock-driven harness this test module does not have
-    /// (`crate::test_harness::Harness` has no `pump_for`); the mechanism
+    /// (`crate::testing::harness::Harness` has no `pump_for`); the mechanism
     /// itself — that attaching the slot at all is what makes a detector
     /// join the arena — is covered directly at the `GestureDetector`
     /// level by `gesture_detector_advanced.rs`'s own participation-gating
@@ -4039,7 +4039,7 @@ mod tests {
     fn a_disabled_field_does_not_select_on_double_tap() {
         let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("disabled field");
-        let harness = crate::test_harness::mount_with_ime(
+        let harness = crate::testing::harness::mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node)).enabled(false),
         );
 
@@ -4083,7 +4083,7 @@ mod tests {
     fn toggling_disabled_between_the_first_taps_down_and_up_does_not_strand_the_recognizer() {
         let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("toggled field");
-        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let mut harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -4123,7 +4123,7 @@ mod tests {
     fn a_move_after_the_pointer_is_up_selects_nothing() {
         let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("released field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -4170,7 +4170,7 @@ mod tests {
     fn a_cancelled_gesture_abandons_its_drag() {
         let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("cancelled field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller.clone(),
             Rc::clone(&focus_node),
         ));
@@ -4198,7 +4198,7 @@ mod tests {
     fn a_disabled_field_ignores_a_tap() {
         let controller = TextEditingController::with_text("hello world");
         let focus_node = FocusNode::with_debug_label("disabled field");
-        let harness = crate::test_harness::mount_with_ime(
+        let harness = crate::testing::harness::mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node)).enabled(false),
         );
 
@@ -4222,7 +4222,7 @@ mod tests {
         let controller = TextEditingController::with_text("hello world");
         controller.set_selection(6, 11);
         let focus_node = FocusNode::with_debug_label("selecting field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller,
             Rc::clone(&focus_node),
         ));
@@ -4238,7 +4238,7 @@ mod tests {
         let controller = TextEditingController::with_text("hello world");
         controller.set_caret_byte_offset(4);
         let focus_node = FocusNode::with_debug_label("caret-only field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller,
             Rc::clone(&focus_node),
         ));
@@ -4269,7 +4269,7 @@ mod tests {
         let controller = TextEditingController::with_text("aa€bb");
         controller.set_selection(5, 7);
         let focus_node = FocusNode::with_debug_label("obscured selecting field");
-        let harness = crate::test_harness::mount_with_ime(
+        let harness = crate::testing::harness::mount_with_ime(
             EditableText::new(controller, Rc::clone(&focus_node)).obscure_text(true),
         );
 
@@ -4303,7 +4303,7 @@ mod tests {
     fn a_double_tap_on_an_obscured_field_selects_against_the_source_text() {
         let controller = TextEditingController::with_text("hello");
         let focus_node = FocusNode::with_debug_label("obscured double-tapped field");
-        let harness = crate::test_harness::mount_with_ime(
+        let harness = crate::testing::harness::mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node)).obscure_text(true),
         );
 
@@ -4329,7 +4329,7 @@ mod tests {
     fn a_plain_field_still_hands_its_real_text_to_the_render_object() {
         let controller = TextEditingController::with_text("hunter2");
         let focus_node = FocusNode::with_debug_label("plain field");
-        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+        let harness = crate::testing::harness::mount_with_ime(EditableText::new(
             controller,
             Rc::clone(&focus_node),
         ));

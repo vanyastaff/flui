@@ -32,7 +32,7 @@ use super::modal_route::{ModalHandle, ModalRoute};
 use super::navigator::{Navigator, NavigatorHandle};
 use super::overlay_route::SimpleRoute;
 use super::route::RouteId;
-use crate::test_harness::{Harness, mount};
+use crate::testing::harness::{Harness, mount};
 use crate::{Column, Focus, SizedBox};
 
 const FRAME: Duration = Duration::from_millis(300);

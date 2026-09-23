@@ -277,6 +277,25 @@ Flutter-port trigger.
 
 **Back-reference:** [ADR-0037](adr/ADR-0037-presentation-ownership-domains.md).
 
+### Widgets `__private` seam guard. Workspace-only plumbing stays in the workspace
+
+`flui_widgets::__private` (doc-hidden) is where flui-widgets hands its sibling
+widget crates (scrolling, navigation, text editing) the plumbing they need
+from it that is not author API. That covers focus-tree wiring
+(`enclosing_focus_parent`, `install_rect_provider`), the render-id anchor
+(`AnchoredBox`), a repaint-boundary keying option (`SaltingChildKey`) and the
+generic multi-child impl macro. It carries no semver guarantee, so nothing
+outside `crates/flui-*` may import it: not the `flui` facade, not examples,
+not generated app templates. The exported macro's name
+(`__generic_render_view_element`) counts as an import.
+
+**Scope:** every Rust file outside `crates/flui-*/{src,tests,benches}`.
+
+**Enforcement:** `scripts/port-check.sh`, reported as `SEAM/widgets-private`.
+An extra architecture guard, not a Flutter-port trigger.
+
+**Back-reference:** issue #1272 (the flui-widgets crate split).
+
 Note: ADR-0045 decision 1's `Renderer: Send` re-widening guard is **not**
 here — it lives in `docs/runtime-contract.toml` as a `forbidden_pattern`
 entry next to the pre-existing sibling `unsafe impl Sync for Renderer`
@@ -1245,7 +1264,7 @@ just port-check-verbose       # prints "ok" lines for each passing trigger + mar
 just port-markers             # per-file marker breakdown (TODO(port) / PERF(port) / PORT NOTE)
 ```
 
-The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs 24 refusal triggers — one `rg` (ripgrep) pass each, except triggers 22 and 24, which delegate to brace-depth scanners, and trigger 23, which scans filenames rather than file contents — plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure), and extra named architecture guards including `ADR-0027/platform-control`, `ADR-0037/closed-ui-commands`, `ADR-0037/focus-owner`, and `LockDiscipline/StatementDrop` — and filters out doc-comment matches except where a guard deliberately treats public docs as part of its surface. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
+The underlying script lives at [`scripts/port-check.sh`](../scripts/port-check.sh). It runs 24 refusal triggers — one `rg` (ripgrep) pass each, except triggers 22 and 24, which delegate to brace-depth scanners, and trigger 23, which scans filenames rather than file contents — plus the FR-033 downcast grep, the FR-033/widgets downcast grep (ADR-0019 U4), the FR-036 sanctioned-`dyn`-boundary registry (main pattern + type-alias closure), and extra named architecture guards including `ADR-0027/platform-control`, `ADR-0037/closed-ui-commands`, `ADR-0037/focus-owner`, `SEAM/widgets-private`, and `LockDiscipline/StatementDrop` — and filters out doc-comment matches except where a guard deliberately treats public docs as part of its surface. The marker-budget scan is an additional non-blocking pass in `-v` and `-b` modes. The regexes are derived directly from the trigger entries in this document; when a trigger changes here, the script changes too.
 
 The marker-budget report is a **non-blocking** addition: it counts `TODO(port)`, `PERF(port)`, and `PORT NOTE` occurrences across `crates/` and prints a per-crate summary. Markers are deliberate deferrals (Phase B work-queue), not violations — the script never fails on marker count.
 

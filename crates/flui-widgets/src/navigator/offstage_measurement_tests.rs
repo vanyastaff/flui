@@ -47,7 +47,7 @@ use super::navigator::{Navigator, NavigatorHandle};
 use super::overlay_route::{RouteAnimation, SimpleRoute};
 use super::page_route::PageRoute;
 use crate::SizedBox;
-use crate::test_harness::mount;
+use crate::testing::harness::mount;
 
 fn leaf(_ctx: &dyn BuildContext, _a: &RouteAnimation, _s: &RouteAnimation) -> BoxedView {
     SizedBox::new(30.0, 18.0).into_view().boxed()

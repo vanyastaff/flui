@@ -47,7 +47,8 @@ use super::{
     InsertPosition, OnstagePlan, Overlay, OverlayEntry, OverlayHandle, OverlayScope, onstage_plan,
 };
 use crate::SizedBox;
-use crate::test_harness::{Harness, mount};
+use crate::testing::harness::{Harness, mount};
+use crate::testing::overlay_probe::OverlayProbe as _;
 
 // ============================================================================
 // PROBES
@@ -463,7 +464,7 @@ fn stale_overlay_handle_is_harmless() {
     );
     assert!(!entry.is_mounted());
 
-    // Every mutation on the stale handle is a silent no-op, not a panic.
+    // Every mutation on the stale handle rebuilds nothing, and none panics.
     let late = counting_entry(&calls);
     handle.insert(&late, &InsertPosition::Top);
     handle.rearrange(std::slice::from_ref(&late));
@@ -472,6 +473,64 @@ fn stale_overlay_handle_is_harmless() {
     harness.tick();
 
     assert_eq!(calls.get(), 1, "nothing was rebuilt after unmount");
+}
+
+/// `insert` on an **unmounted** overlay changes the list and rebuilds nothing;
+/// the entry is built when an `Overlay` mounts with the same handle again.
+///
+/// This is the public contract ADR-0076 records: the handle, not the mounted
+/// view, owns the list, so a subtree that unmounts and remounts its overlay
+/// (a route shown again, a conditional branch toggled back) keeps what was
+/// inserted meanwhile. A no-op would silently drop it.
+///
+/// Red-check: make `insert_all` return early when `!self.is_mounted()`. The
+/// test fails at its first assertion, with `(0, 0)`: the no-op reading drops
+/// the entry inserted before the first mount too, which is the same contract
+/// seen from the other side.
+#[test]
+fn insert_on_an_unmounted_overlay_waits_for_the_next_mount() {
+    let (calls_a, calls_b) = (Calls::default(), Calls::default());
+    let (entry_a, entry_b) = (counting_entry(&calls_a), counting_entry(&calls_b));
+    let handle = OverlayHandle::new();
+    handle.insert(&entry_a, &InsertPosition::Top);
+
+    let mut harness = mount(Host {
+        show_overlay: true,
+        handle: handle.clone(),
+    });
+    assert_eq!((calls_a.get(), calls_b.get()), (1, 0));
+
+    harness.swap_root(Host {
+        show_overlay: false,
+        handle: handle.clone(),
+    });
+    assert!(!handle.is_mounted());
+
+    handle.insert(&entry_b, &InsertPosition::Top);
+    harness.tick();
+    assert!(entry_b.is_attached(), "the late entry joined the list");
+    assert_eq!(handle.entry_ids(), vec![entry_a.id(), entry_b.id()]);
+    assert_eq!(calls_b.get(), 0, "nothing is built while unmounted");
+
+    harness.swap_root(Host {
+        show_overlay: true,
+        handle: handle.clone(),
+    });
+    assert!(handle.is_mounted());
+    assert_eq!(
+        calls_b.get(),
+        1,
+        "the remounted overlay builds the late entry"
+    );
+    assert_eq!(
+        calls_a.get(),
+        2,
+        "and rebuilds the earlier one in a fresh state"
+    );
+    assert!(
+        entry_a.is_mounted() && entry_b.is_mounted(),
+        "both layers are mounted"
+    );
 }
 
 /// `OverlayEntry::remove` on an **unmounted** overlay detaches the entry but leaves

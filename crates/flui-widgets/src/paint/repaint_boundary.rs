@@ -49,16 +49,6 @@ impl RepaintBoundary {
         self
     }
 
-    /// Carry the child's key, salted, as this boundary's own — see
-    /// [`Self::salted_child_key`]. Order-independent with [`Self::child`]:
-    /// whichever is set last re-derives the salt.
-    #[must_use]
-    pub(crate) fn salting_child_key(mut self) -> Self {
-        self.salts_child_key = true;
-        self.refresh_salted_key();
-        self
-    }
-
     fn refresh_salted_key(&mut self) {
         self.salted_child_key = if self.salts_child_key {
             self.child
@@ -105,5 +95,25 @@ impl View for RepaintBoundary {
         self.salted_child_key
             .as_ref()
             .map(|key| key as &dyn flui_foundation::ViewKey)
+    }
+}
+
+/// Keys a [`RepaintBoundary`] by its child's key, salted.
+///
+/// Framework seam for the sliver list builders, exported through
+/// [`crate::__private`]; no semver guarantee.
+pub trait SaltingChildKey {
+    /// Carry the child's key, salted, as this boundary's own — see
+    /// `RepaintBoundary::salted_child_key`. Order-independent with
+    /// [`RepaintBoundary::child`]: whichever is set last re-derives the salt.
+    #[must_use]
+    fn salting_child_key(self) -> Self;
+}
+
+impl SaltingChildKey for RepaintBoundary {
+    fn salting_child_key(mut self) -> Self {
+        self.salts_child_key = true;
+        self.refresh_salted_key();
+        self
     }
 }

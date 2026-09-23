@@ -16,7 +16,7 @@ use flui_view::prelude::*;
 use parking_lot::Mutex;
 
 use super::hero::{Hero, HeroHandle, HeroRegistry, HeroScope, HeroTag};
-use crate::test_harness::{Harness, mount};
+use crate::testing::harness::{Harness, mount};
 use crate::{Center, Column, MainAxisSize, SizedBox, Text};
 
 fn tag(name: &'static str) -> HeroTag {

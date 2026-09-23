@@ -902,6 +902,22 @@ check "ADR-0037/focus-owner" \
   crates/flui-material \
   crates/flui-app
 
+# `flui_widgets::__private` is the workspace-only seam the sibling widget crates
+# (scrolling, navigation, text editing) share with flui-widgets: focus-tree
+# wiring, the render-id anchor, a repaint-boundary keying option and the
+# generic multi-child impl macro. It carries no semver guarantee, so only
+# `crates/flui-*` may import it: the facade, examples, generated app templates
+# and any other crate must not. The exported macro's name counts too.
+check "SEAM/widgets-private" \
+  "flui_widgets::__private used outside crates/flui-*" \
+  'flui_widgets::__private|__generic_render_view_element' \
+  --type rust \
+  --glob '!crates/flui-*/src/**' \
+  --glob '!crates/flui-*/tests/**' \
+  --glob '!crates/flui-*/benches/**' \
+  --glob '!target/**' \
+  .
+
 # ADR-0045 decision 1's `Renderer: Send` re-widening guard lives in
 # `docs/runtime-contract.toml` as a `forbidden_pattern` entry, right next
 # to the pre-existing sibling `unsafe impl Sync for Renderer` entry —
@@ -1886,7 +1902,7 @@ if [[ "${violations}" -gt 0 ]]; then
   exit 1
 fi
 
-echo "port-check: all 24 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner + LockDiscipline/StatementDrop grep clean"
+echo "port-check: all 24 refusal triggers + FR-033 + FR-033/widgets + N-geom.U16 + Cross.H2 + Cross.H3 + Cross.H7 + ADR-0027/platform-control + ADR-0037/closed-ui-commands + ADR-0037/focus-owner + SEAM/widgets-private + LockDiscipline/StatementDrop grep clean"
 
 # -----------------------------------------------------------------------------
 # Marker summary (verbose mode only). Non-blocking — markers are Phase B

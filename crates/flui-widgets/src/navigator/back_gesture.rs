@@ -609,12 +609,12 @@ mod tests {
     /// route with no relationship to the controller the test observes.
     fn mounted_with_transition_route() -> (
         NavigatorHandle,
-        crate::test_harness::Harness,
+        crate::testing::harness::Harness,
         RouteId,
         AnimationController,
     ) {
         use super::super::page_route::PageRoute;
-        use crate::test_harness::mount;
+        use crate::testing::harness::mount;
 
         let navigator = NavigatorHandle::new();
         navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
