@@ -228,7 +228,7 @@ pub(crate) struct UiRealm {
     redraw_pending: Arc<AtomicBool>,
     /// This realm's OWN scheduler — the strong root every `WeakUpdateScheduler`
     /// this realm vends (tickers, `PostFrameHandle`s) upgrades against.
-    /// Built fresh per realm by [`RealmServices::construct`], never a
+    /// Built fresh per realm by [`RealmServices::construct`](crate::app::runtime::RealmServices::construct), never a
     /// process-global singleton: when this realm drops, this field drops
     /// with it, and every retained weak handle starts failing closed.
     /// Read directly for the idle-only commit-gate phase probe in

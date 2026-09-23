@@ -47,7 +47,7 @@ impl UiRealm {
     /// in the same drain loop against whatever survives the close, silently
     /// misaddressed rather than refused outright.
     ///
-    /// Mirrors exactly what [`PresentationForest::remove`]'s `Vec::remove`
+    /// Mirrors exactly what [`PresentationForest::remove`](crate::app::presentation_forest::PresentationForest::remove)'s `Vec::remove`
     /// shift produces: if `id` is the CURRENT primary, the new primary is
     /// whichever presentation is next in mount order; otherwise removing
     /// `id` cannot move index 0 at all, so the primary is unchanged.

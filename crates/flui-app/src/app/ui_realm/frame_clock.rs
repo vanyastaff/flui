@@ -200,8 +200,8 @@ impl UiRealm {
     ///   (that method's own doc, at the `producer` binding, explains why
     ///   the two can differ).
     /// - The per-presentation unwind boundary, when a panic escapes after a
-    ///   successful pipeline in [`SegmentPhase::Tail`] or
-    ///   [`SegmentPhase::Scene`]. That catch still holds the exact failed
+    ///   successful pipeline in [`SegmentPhase::Tail`](crate::app::frame_failure::SegmentPhase::Tail) or
+    ///   [`SegmentPhase::Scene`](crate::app::frame_failure::SegmentPhase::Scene). That catch still holds the exact failed
     ///   presentation, so it re-dirties it immediately instead of asking
     ///   pump-wide producer selection to infer attribution later.
     ///
@@ -218,7 +218,7 @@ impl UiRealm {
     /// `Idle`). Marking the root render object dirty is what gives the
     /// pipeline actual work to redo.
     ///
-    /// [`PipelineOwner::mark_needs_paint`], deliberately NOT `mark_needs_
+    /// [`PipelineOwner::mark_needs_paint`](flui_rendering::pipeline::PipelineOwner::mark_needs_paint), deliberately NOT `mark_needs_
     /// layout`: layout has not changed across either caller's failure —
     /// a device loss invalidates only the renderer's backing store, and a
     /// submit failure (`SurfaceLost`/`DeviceLost`/`SurfaceValidation`) is

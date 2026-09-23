@@ -13,7 +13,7 @@ use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 /// Realm-level arbitration of which presentation currently owns OS keyboard
-/// focus (issue #555's addressed-routing slice). One [`FocusManager`] exists per presentation
+/// focus (issue #555's addressed-routing slice). One [`FocusManager`](flui_interaction::FocusManager) exists per presentation
 /// (`PresentationState::focus_manager`), but only ONE presentation's tree
 /// should ever receive a keyboard event at a time — the one whose native
 /// window the platform most recently reported as focused.
