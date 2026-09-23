@@ -306,8 +306,19 @@ impl DoubleTapGestureRecognizer {
             DoubleTapPhase::FirstDown | DoubleTapPhase::SecondDown
         ) && self.check_slop(position)
         {
-            // Moved too far, cancel
-            state.phase = DoubleTapPhase::Cancelled;
+            // Moved too far, cancel. Release the lock and let
+            // `handle_cancel` itself drive the phase transition -- it
+            // already resets to `DoubleTapPhase::Ready` via
+            // `DoubleTapState::default()` once its own guard
+            // (`phase != Ready && phase != Cancelled`) passes. Setting
+            // `Cancelled` here FIRST used to make that guard fail
+            // immediately (phase already reads `Cancelled` by the time
+            // `handle_cancel` checks it), skipping the reset entirely and
+            // stranding the recognizer in `Cancelled` forever: every
+            // later `handle_down` falls through the `Ready`/
+            // `WaitingForSecond` match arms into `_ => {}`, so a contact
+            // that drags past slop then lifts permanently disables
+            // double-tap on that field until it remounts.
             drop(state);
 
             self.handle_cancel(position, global_position, kind);
@@ -870,6 +881,61 @@ mod tests {
 
         // Should NOT have called double tap callback
         assert!(!*tapped.lock());
+    }
+
+    /// A contact that drags past touch slop before lifting must cancel
+    /// AND RESET — not strand the recognizer permanently. Regression for
+    /// `handle_move` pre-setting `phase = Cancelled` before calling
+    /// `handle_cancel`, whose own guard (`phase != Ready && phase !=
+    /// Cancelled`) then read `Cancelled` already and skipped its entire
+    /// reset, leaving every later `handle_down` fall through into the
+    /// match's `_ => {}` arm forever. The concrete sequence this pins:
+    /// down, move past slop, up, then a completely fresh double-tap —
+    /// which must still work.
+    #[test]
+    fn an_over_slop_move_cancels_back_to_ready_not_stuck_in_cancelled() {
+        let arena = GestureArena::new();
+        let recognizer = DoubleTapGestureRecognizer::new(arena);
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let start = Offset::new(px(100.0), px(100.0));
+        let dragged_to = Offset::new(px(500.0), px(500.0));
+
+        recognizer.add_pointer(pointer, start, start);
+        recognizer.handle_move(dragged_to, dragged_to, PointerType::Touch);
+        assert_eq!(
+            recognizer.gesture_state.lock().phase,
+            DoubleTapPhase::Ready,
+            "an over-slop move must cancel all the way back to Ready, not \
+             strand the recognizer in Cancelled"
+        );
+        let up_event = make_up_event(dragged_to, PointerType::Touch);
+        recognizer.handle_event(PointerDispatch::at_root(&up_event));
+
+        // A completely fresh double-tap, entirely after the cancelled
+        // drag, must still be recognized.
+        let tapped = Arc::new(Mutex::new(false));
+        let tapped_clone = Arc::clone(&tapped);
+        let recognizer = recognizer.with_on_double_tap(move |_details| {
+            *tapped_clone.lock() = true;
+        });
+
+        let pos = Offset::new(px(10.0), px(10.0));
+        recognizer.add_pointer(pointer, pos, pos);
+        recognizer.handle_event(PointerDispatch::at_root(&make_up_event(
+            pos,
+            PointerType::Touch,
+        )));
+        recognizer.handle_down(pos, pos, PointerType::Touch);
+        recognizer.handle_event(PointerDispatch::at_root(&make_up_event(
+            pos,
+            PointerType::Touch,
+        )));
+
+        assert!(
+            *tapped.lock(),
+            "double-tap must still work after an earlier over-slop cancel"
+        );
     }
 
     #[test]

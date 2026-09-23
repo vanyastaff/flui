@@ -80,3 +80,22 @@ Versioning: per `docs/release.md` policy.
   `RouteLifecycle::Pushing -> Idle` is driven by a `RouteCommand` a
   continuation queues post-flush, so it still needs one pump regardless of
   how quickly the controller itself resolved.
+
+### Fixed
+
+- **A tap on an obscured `EditableText` placed the caret at the wrong
+  source offset whenever a source character's byte width differed from
+  the obscuring character's** (the default bullet is 3 UTF-8 bytes;
+  almost any real password has 1-byte ASCII characters, so this was not
+  a corner case). `source_offset_at_global`'s masked→source conversion
+  passed `RenderEditable::plain_text()` — the MASKED string on an
+  obscured field — as the `source` argument to
+  `source_offset_for_masked_offset`, which needs the actual source
+  string to walk its (differently-sized) grapheme clusters; walking the
+  masked string's own uniform-width clusters instead just echoed the
+  masked offset back, unconverted. No caret-placement test on an
+  obscured field previously existed to catch it. Found while auditing
+  the analogous double-tap-word-selection code added earlier in this
+  release for the same bug (caught there before merge); fixed in both
+  places, both now take the controller's source text as an explicit
+  parameter instead of reading it off the render object.

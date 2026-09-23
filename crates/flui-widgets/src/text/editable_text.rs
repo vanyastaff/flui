@@ -123,11 +123,19 @@ fn obscure(text: &str, offsets: &mut [usize], mask: char) -> String {
 /// returns is a masked one while [`TextEditingController`] holds source bytes.
 /// The conversion happens here, at the same seam
 /// [`build_field_view`] masks at, so the two directions cannot drift apart.
+/// `source_text` must be the CONTROLLER's own source string (the caller's
+/// job to supply — `RenderEditable::plain_text()` is the MASKED string on
+/// an obscured field, the wrong input for
+/// [`source_offset_for_masked_offset`], whose own doc spells out why: it
+/// walks `source`'s grapheme clusters to answer a SOURCE byte offset, and
+/// walking the masked string instead just answers back the masked offset
+/// it was given, silently corrupting every obscured-field tap).
 fn source_offset_at_global(
     owner: &PipelineCell,
     inner_anchor: &flui_objects::SubtreeAnchor,
     global: Offset<Pixels>,
     obscuring: Option<char>,
+    source_text: &str,
 ) -> Option<usize> {
     let anchor_id = inner_anchor.get()?;
     // `try_with`, not `with`: a pointer event can land in a callback a frame
@@ -148,7 +156,7 @@ fn source_offset_at_global(
             let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
             let masked = editable.byte_offset_for_local_offset(Offset::new(x, y))?;
             Some(match obscuring {
-                Some(mask) => source_offset_for_masked_offset(editable.plain_text(), masked, mask),
+                Some(mask) => source_offset_for_masked_offset(source_text, masked, mask),
                 None => masked,
             })
         })
@@ -179,11 +187,16 @@ fn source_offset_at_global(
 /// only `flui-painting` can see (`TextLayout`) and only
 /// `flui-widgets::controller` can see (the raw buffer, no shaping), not
 /// an oversight.
+///
+/// `source_text` must be the CONTROLLER's own source string — see
+/// [`source_offset_at_global`]'s doc for why `RenderEditable::plain_text()`
+/// (the masked string on an obscured field) is the wrong input here too.
 fn source_word_range_at_global(
     owner: &PipelineCell,
     inner_anchor: &flui_objects::SubtreeAnchor,
     global: Offset<Pixels>,
     obscuring: Option<char>,
+    source_text: &str,
 ) -> Option<Range<usize>> {
     let anchor_id = inner_anchor.get()?;
     owner
@@ -201,9 +214,8 @@ fn source_word_range_at_global(
             let masked = editable.word_range_at_local_offset(Offset::new(x, y))?;
             Some(match obscuring {
                 Some(mask) => {
-                    let text = editable.plain_text();
-                    source_offset_for_masked_offset(text, masked.start, mask)
-                        ..source_offset_for_masked_offset(text, masked.end, mask)
+                    source_offset_for_masked_offset(source_text, masked.start, mask)
+                        ..source_offset_for_masked_offset(source_text, masked.end, mask)
                 }
                 None => masked,
             })
@@ -711,8 +723,15 @@ impl EditableTextState {
         let resolve = {
             let owner = owner.clone();
             let anchor = anchor.clone();
+            let controller = Rc::clone(&controller);
             move |global: Offset<Pixels>| -> Option<usize> {
-                source_offset_at_global(owner.as_ref()?, &anchor, global, obscuring)
+                // Owned, not borrowed across the call: `source_text` must be
+                // the CONTROLLER's source string, not `RenderEditable::
+                // plain_text()` (masked on an obscured field) — see
+                // `source_offset_at_global`'s doc for why passing the wrong
+                // one silently corrupts every obscured-field tap.
+                let source_text = controller.borrow().text();
+                source_offset_at_global(owner.as_ref()?, &anchor, global, obscuring, &source_text)
             }
         };
 
@@ -818,30 +837,42 @@ impl EditableTextState {
         view: &EditableText,
         drag_anchor: Rc<Cell<Option<usize>>>,
     ) -> impl IntoView {
-        let enabled = view.enabled;
         let obscuring = view.obscure_text.then_some(view.obscuring_character);
         let owner = self.pipeline_owner.clone();
         let anchor = self.inner_anchor.clone();
         let controller = Rc::clone(&self.controller);
 
-        crate::interaction::GestureDetector::new()
-            .behavior(HitTestBehavior::Opaque)
-            .on_double_tap_down(move |details| {
-                if !enabled {
-                    return;
-                }
+        let mut detector =
+            crate::interaction::GestureDetector::new().behavior(HitTestBehavior::Opaque);
+        // Attach the callback ONLY while enabled, rather than always
+        // attaching it and returning early inside — `on_double_tap_down`
+        // being set at all is what makes `RecognizerGroup::double_tap_active`
+        // join the arena for a contact (see its own doc). A disabled field
+        // is documented to ignore pointer input entirely; leaving the
+        // callback attached would still hold the shared arena across the
+        // double-tap window for every tap on a disabled field, delaying an
+        // ancestor's own tap and letting this no-op recognizer compete to
+        // win a contact it does nothing with.
+        if view.enabled {
+            detector = detector.on_double_tap_down(move |details| {
                 let Some(owner) = owner.as_ref() else {
                     return;
                 };
-                let Some(range) =
-                    source_word_range_at_global(owner, &anchor, details.global_position, obscuring)
-                else {
+                let source_text = controller.borrow().text();
+                let Some(range) = source_word_range_at_global(
+                    owner,
+                    &anchor,
+                    details.global_position,
+                    obscuring,
+                    &source_text,
+                ) else {
                     return;
                 };
                 controller.borrow().set_selection(range.start, range.end);
                 drag_anchor.set(None);
-            })
-            .child(child)
+            });
+        }
+        detector.child(child)
     }
 
     fn manager(&self) -> &Rc<FocusManager> {
@@ -3987,6 +4018,41 @@ mod tests {
         );
     }
 
+    /// A disabled field must not attach `on_double_tap_down` at all —
+    /// `wrap_double_tap_word_select` skips the builder call entirely
+    /// rather than attaching it and returning early inside, which is what
+    /// this test's OBSERVABLE assertion (no selection change) shares with
+    /// the old, insufficient fix. The reason the distinction matters is
+    /// structural, not behavioral here: `GestureDetector`'s
+    /// `RecognizerGroup::double_tap_active` joins the arena whenever the
+    /// callback SLOT is set, regardless of what the callback does once
+    /// called — an attached-but-early-returning callback would still hold
+    /// the shared arena across the double-tap window for every tap on a
+    /// disabled field, delaying an ancestor's own tap. Proving THAT
+    /// requires a clock-driven harness this test module does not have
+    /// (`crate::test_harness::Harness` has no `pump_for`); the mechanism
+    /// itself — that attaching the slot at all is what makes a detector
+    /// join the arena — is covered directly at the `GestureDetector`
+    /// level by `gesture_detector_advanced.rs`'s own participation-gating
+    /// tests.
+    #[test]
+    fn a_disabled_field_does_not_select_on_double_tap() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("disabled field");
+        let harness = crate::test_harness::mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).enabled(false),
+        );
+
+        harness.dispatch_pointer_down(1.0, 5.0);
+        harness.dispatch_pointer_up(1.0, 5.0);
+        harness.dispatch_pointer_down(1.0, 5.0);
+
+        assert!(
+            !controller.has_selection(),
+            "a disabled field must not select a word on double-tap"
+        );
+    }
+
     /// A move with no drag in flight must not anchor a selection at whatever
     /// offset was last there. The pointer-up clears the anchor, so a move
     /// after it is somebody else's.
@@ -4152,6 +4218,45 @@ mod tests {
             Some(9..15),
             "the last two bullets; forwarding the source range unmapped would \
              clamp to 6..9, the third"
+        );
+    }
+
+    /// A double-tap on an obscured field must select against the SOURCE
+    /// text's own cluster widths, not the masked string's uniform ones.
+    ///
+    /// `source_offset_for_masked_offset`'s own doc spells out the
+    /// contract: it walks `source`'s grapheme clusters to answer a SOURCE
+    /// byte offset from a masked cluster INDEX. Passing the masked string
+    /// itself as `source` (as `source_word_range_at_global` briefly did)
+    /// makes it walk the masked string's own uniform-width clusters
+    /// instead — for source `"hello"` (5 one-byte ASCII characters) with
+    /// the 3-byte default bullet, double-tapping the FIRST bullet then
+    /// resolved a masked word range of `0..3` (one bullet) and mapped
+    /// each endpoint independently against the MASKED string, landing on
+    /// SOURCE `0..3` (the buffer's first three bytes) instead of the one
+    /// character `0..1` ("h") the tap actually landed on.
+    ///
+    /// Red-check: swap `source_word_range_at_global`'s `source_text`
+    /// argument back to `editable.plain_text()` — the selection becomes
+    /// `0..3` instead of `0..1`.
+    #[test]
+    fn a_double_tap_on_an_obscured_field_selects_against_the_source_text() {
+        let controller = TextEditingController::with_text("hello");
+        let focus_node = FocusNode::with_debug_label("obscured double-tapped field");
+        let harness = crate::test_harness::mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).obscure_text(true),
+        );
+
+        // First tap lands on the first (bullet-masked) character.
+        harness.dispatch_pointer_down(1.0, 5.0);
+        harness.dispatch_pointer_up(1.0, 5.0);
+        harness.dispatch_pointer_down(1.0, 5.0);
+
+        assert_eq!(
+            controller.selection(),
+            0..1,
+            "one source character (\"h\"), not the buffer's first three \
+             bytes worth of masked-cluster width"
         );
     }
 
