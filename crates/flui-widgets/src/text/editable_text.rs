@@ -1505,9 +1505,27 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 ///
 /// Arrow and Backspace/Delete keys never produce a character, so this has
 /// no AltGr carve-out to make (contrast [`is_command_chord`], which does).
+///
+/// # Exact chord, not just "the modifier is held"
+///
+/// Requires EXACTLY the platform's word-jump modifier among
+/// {Ctrl, Alt, Meta} — Shift composes independently (it selects
+/// move-vs-extend, handled by the caller) and is not part of this check,
+/// but any OTHER command modifier held at the same time disqualifies the
+/// chord. Flutter's `SingleActivator` matches the complete modifier
+/// state the same way (apart from Shift), and without this a chord that
+/// is not meant to be word-jump at all — Ctrl+Alt+Right on Linux,
+/// Option+Command+Right on macOS — would wrongly take the word-jump path
+/// just because it happens to also hold the required key. Lock-state
+/// flags (`CAPS_LOCK`/`NUM_LOCK`/`SCROLL_LOCK`/`FN_LOCK`) and
+/// `ALT_GRAPH`/`FN`/`SYMBOL` are deliberately excluded from the mask —
+/// they are not "another command modifier" in the sense this guards
+/// against, and treating an incidental Caps Lock as disqualifying would
+/// be its own new bug.
 #[inline]
 fn is_word_jump_modifier(modifiers: Modifiers, platform: TargetPlatform) -> bool {
-    modifiers.contains(word_jump_modifier(platform))
+    let command_mask = Modifiers::CONTROL | Modifiers::ALT | Modifiers::META;
+    (modifiers & command_mask) == word_jump_modifier(platform)
 }
 
 /// Build the key-event handler closure for `controller`.
@@ -2247,6 +2265,42 @@ mod tests {
                 "{platform:?}"
             );
         }
+    }
+
+    /// `is_word_jump_modifier` requires the EXACT chord, not just "the
+    /// required modifier happens to be among the ones held" — a chord
+    /// that ALSO holds another command modifier is not word-jump on
+    /// either the Linux/Windows/... default (Ctrl+Alt+Right, which could
+    /// otherwise be mistaken for the plain Ctrl chord) or the macOS/iOS
+    /// arm (Option+Command+Right, which could otherwise be mistaken for
+    /// the plain Option chord).
+    #[test]
+    fn is_word_jump_modifier_rejects_a_chord_with_an_extra_command_modifier() {
+        assert!(
+            !super::is_word_jump_modifier(
+                Modifiers::CONTROL | Modifiers::ALT,
+                TargetPlatform::Linux
+            ),
+            "Ctrl+Alt is not the plain Ctrl chord"
+        );
+        assert!(
+            !super::is_word_jump_modifier(Modifiers::META | Modifiers::ALT, TargetPlatform::MacOS),
+            "Cmd+Alt is not the plain Alt (Option) chord"
+        );
+        // The plain chords themselves, and Shift alongside them, still work —
+        // Shift is not part of the command-modifier mask this check guards.
+        assert!(super::is_word_jump_modifier(
+            Modifiers::CONTROL,
+            TargetPlatform::Linux
+        ));
+        assert!(super::is_word_jump_modifier(
+            Modifiers::CONTROL | Modifiers::SHIFT,
+            TargetPlatform::Linux
+        ));
+        assert!(super::is_word_jump_modifier(
+            Modifiers::ALT,
+            TargetPlatform::MacOS
+        ));
     }
 
     /// The platform's word-jump modifier + Backspace deletes the WHOLE

@@ -626,6 +626,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
             entry.release();
         }
         self.callbacks.borrow_mut().on_double_tap = None;
+        self.callbacks.borrow_mut().on_double_tap_down = None;
         self.callbacks.borrow_mut().on_double_tap_cancel = None;
     }
 
@@ -920,6 +921,40 @@ mod tests {
         assert!(
             *up_seen.lock(),
             "on_double_tap fires once the second contact lifts cleanly"
+        );
+    }
+
+    /// `dispose` must release EVERY callback's captured state, not just
+    /// `on_double_tap`/`on_double_tap_cancel` — `on_double_tap_down` was
+    /// added after `dispose` was first written and was missed there,
+    /// leaking whatever a caller's closure captured for as long as the
+    /// caller kept its own clone of the (disposed, otherwise inert)
+    /// recognizer alive.
+    #[test]
+    fn dispose_releases_the_on_double_tap_down_callbacks_captured_state() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let arena = GestureArena::new();
+        let captured = Arc::new(AtomicUsize::new(0));
+        let captured_clone = Arc::clone(&captured);
+
+        let recognizer =
+            DoubleTapGestureRecognizer::new(arena).with_on_double_tap_down(move |_details| {
+                captured_clone.fetch_add(1, Ordering::SeqCst);
+            });
+
+        assert_eq!(
+            Arc::strong_count(&captured),
+            2,
+            "precondition: the closure holds one clone"
+        );
+
+        recognizer.dispose();
+
+        assert_eq!(
+            Arc::strong_count(&captured),
+            1,
+            "dispose must release on_double_tap_down's captured state too"
         );
     }
 
