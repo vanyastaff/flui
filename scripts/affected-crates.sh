@@ -19,4 +19,4 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/interpreters.sh
 source "$here/lib/interpreters.sh"
 python="$(flui_find_python311 || command -v python3 || echo python3)"
-exec "$python" -B "$here/lib/change_scope.py" "$@"
+exec "$python" -B "$here/lib/cargo_args.py" "$@"

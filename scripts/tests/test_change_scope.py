@@ -1,14 +1,23 @@
-"""scripts/lib/change_scope.py: how a changed path is classified.
+"""scripts/lib/change_scope.py and cargo_args.py: how a change is scoped.
 
-Pure path classification (no git, no cargo) plus one real `cargo metadata`
-closure check. Runs on a stock python3 >= 3.9.
+Path classification needs no git or cargo; the dependency-graph cases run a
+real `cargo metadata --no-deps --offline`; the rename case builds a throwaway
+git repository. Runs on a stock python3 >= 3.9.
 """
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import cargo_args as ca  # noqa: E402
 import change_scope as cs  # noqa: E402
+
+
+def scope(*files):
+    return cs.classify(list(files))
 
 
 class DocsOnly(unittest.TestCase):
@@ -27,31 +36,107 @@ class DocsOnly(unittest.TestCase):
 
 class Modes(unittest.TestCase):
     def test_docs_and_empty(self):
-        self.assertEqual(cs.classify(["docs/a.md", "README.md"])[0], "docs")
-        self.assertEqual(cs.classify([])[0], "docs")
+        self.assertEqual(scope("docs/a.md", "README.md")["mode"], "docs")
+        self.assertEqual(scope()["mode"], "docs")
 
-    def test_workspace_wide_inputs_are_full(self):
+    def test_heavy_inputs_require_the_heavy_lane(self):
         for path in ("Cargo.lock", "Cargo.toml", ".cargo/config.toml", "rust-toolchain.toml",
-                     ".github/workflows/ci.yml", ".config/nextest.toml"):
-            self.assertEqual(cs.classify([path])[0], "full", path)
+                     ".github/workflows/ci.yml"):
+            r = scope(path)
+            self.assertEqual((r["mode"], r["heavy_required"]), ("full", True), path)
 
-    def test_tooling_compiles_nothing(self):
-        self.assertEqual(cs.classify(["justfile", "scripts/port-check.sh", "typos.toml"])[0], "none")
+    def test_scripts_only_a_heavy_job_runs_require_the_heavy_lane(self):
+        # read out of ci.yml, not restated: doc-strict (doc job), the wasm-check helpers
+        inputs = cs.heavy_job_inputs()
+        for path in ("scripts/doc-strict.sh", "scripts/check-wasm-imports.sh", "scripts/wasm-test-crates.py"):
+            self.assertIn(path, inputs)
+            self.assertTrue(scope(path)["heavy_required"], path)
+
+    def test_lane_machinery_gets_the_whole_workspace(self):
+        for path in ("scripts/lib/change_scope.py", "scripts/lib/cargo_args.py", "scripts/affected-crates.sh",
+                     "scripts/lib/interpreters.sh", "clippy.toml", ".config/nextest.toml"):
+            r = scope(path)
+            self.assertEqual((r["mode"], r["heavy_required"]), ("full", False), path)
+
+    def test_checks_only_tooling_compiles_nothing(self):
+        self.assertEqual(scope("scripts/port-check.sh", "typos.toml")["mode"], "none")
 
     def test_unattributable_file_is_full(self):
-        self.assertEqual(cs.classify(["some-new-dir/thing.txt"])[0], "full")
+        self.assertEqual(scope("some-new-dir/thing.txt")["mode"], "full")
 
+
+class Graph(unittest.TestCase):
     def test_crate_change_pulls_in_its_dependents(self):
-        mode, packages, _ = cs.classify(["crates/flui-material/src/lib.rs"])
-        self.assertEqual(mode, "packages")
-        self.assertIn("flui-material", packages)
-        self.assertIn("flui", packages)  # the facade depends on it
-        self.assertNotIn("flui-types", packages)  # a dependency, not a dependent
+        r = scope("crates/flui-material/src/lib.rs")
+        self.assertEqual(r["mode"], "packages")
+        self.assertIn("flui", r["packages"])  # the facade depends on it
+        self.assertNotIn("flui-types", r["packages"])  # a dependency, not a dependent
 
-    def test_root_package_owns_only_its_own_sources(self):
-        self.assertEqual(cs.classify(["examples/counter.rs"])[1][:1], ["flui"])
-        mode, packages, _ = cs.classify(["examples/web_counter/src/lib.rs"])
-        self.assertEqual((mode, packages), ("packages", ["flui-web-counter"]))
+    def test_optional_dependency_edges_count(self):
+        # declared but feature-gated: the resolved graph would miss these
+        self.assertIn("flui", scope("crates/flui-cupertino/src/lib.rs")["packages"])
+        self.assertIn("flui", scope("crates/flui-localizations/src/lib.rs")["packages"])
+        self.assertIn("flui-widgets", scope("crates/flui-assets/src/lib.rs")["packages"])
+
+    def test_root_package_owns_its_targets_directories(self):
+        r = scope("examples/material_demo/tree.rs")  # an [[example]] whose main.rs is in a subdirectory
+        self.assertEqual(r["mode"], "packages")
+        self.assertIn("flui", r["packages"])
+        r = scope("examples/web_counter/src/lib.rs")  # a separate package under examples/
+        self.assertEqual((r["mode"], r["packages"]), ("packages", ["flui-web-counter"]))
+
+    def test_a_changed_manifest_is_reported(self):
+        r = scope("crates/flui-material/Cargo.toml")
+        self.assertEqual(r["manifests"], ["flui-material"])
+        self.assertEqual(ca.args_for(r)["hack_args"], "-p flui-material")
+
+
+class Renames(unittest.TestCase):
+    def test_a_move_puts_both_crates_in_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)  # noqa: E731
+            git("init", "-q", "-b", "main")
+            git("config", "user.email", "t@example.invalid")
+            git("config", "user.name", "t")
+            (root / "a").mkdir()
+            (root / "a" / "x.rs").write_text("fn x() {}\n" * 20)
+            git("add", ".")
+            git("commit", "-qm", "base")
+            git("checkout", "-qb", "change")
+            (root / "b").mkdir()
+            git("mv", "a/x.rs", "b/x.rs")
+            git("commit", "-qm", "move")
+            self.assertEqual(cs.changed_files("main", False, root=root), ["a/x.rs", "b/x.rs"])
+
+
+class CargoArgs(unittest.TestCase):
+    def test_cfg_gated_backends_get_their_targets(self):
+        a = ca.args_for(scope("crates/flui-platform/src/lib.rs"))
+        self.assertEqual((a["cross_platform"], a["cross_app"], a["platform"]), ("true", "true", "true"))
+        self.assertNotIn("flui-platform", a["test_args"])  # its suite runs in the headless leg
+        a = ca.args_for(scope("crates/flui-material/src/lib.rs"))
+        self.assertEqual((a["cross_platform"], a["cross_cli"]), ("false", "false"))
+        self.assertEqual(a["cross_app"], "true")  # `flui` is in scope: its mobile runner is
+
+    def test_wasm_scope_skips_packages_that_cannot_target_wasm(self):
+        no_wasm = ca.no_wasm_packages()
+        self.assertIn("flui-cli", no_wasm)  # read from ci.yml, not restated
+        a = ca.args_for(scope("crates/flui-platform/src/lib.rs"))
+        self.assertNotIn("-p flui-cli", a["wasm_args"])
+        self.assertIn("-p flui-platform", a["wasm_args"])
+
+    def test_shell_format_is_safe_to_eval(self):
+        # `just check-changed` evals the CLI's --format shell output; an unowned
+        # file's name lands in `reason`, so a hostile file name must stay data.
+        payload = "x';touch${IFS}PWNED;#"
+        cli = Path(ca.__file__)
+        out = subprocess.run([sys.executable, str(cli), "--files", payload, "--format", "shell"],
+                             check=True, capture_output=True, text=True).stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["bash", "-c", 'eval "$1"; printf %s "$REASON"', "_", out],
+                           cwd=tmp, check=True, capture_output=True)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "PWNED")))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,32 @@
+name: full-ci label
+
+# Adding the `full-ci` label to a pull request runs CI's heavy lane on the
+# PR's branch, now, by dispatching ci.yml there (`plan` sees a
+# workflow_dispatch event and picks the heavy lane). ci.yml does not listen to
+# `labeled` itself: a run for an unrelated label would post another `ci`
+# check on the same commit, and a skipped or no-op one would mask a red one.
+# The heavy lane is a superset of the fast one, so its `ci` check can only
+# confirm or tighten the PR's result. Later pushes to a labelled PR take the
+# heavy lane in ci.yml directly.
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  dispatch-heavy-ci:
+    name: dispatch heavy CI
+    if: github.event.label.name == 'full-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch ci.yml on the PR branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: gh workflow run ci.yml --ref "$HEAD_REF"

@@ -43,8 +43,12 @@ name: CI
 
 on:
   pull_request:
-    # `labeled`: adding the `full-ci` label re-runs the PR with the heavy jobs.
-    types: [opened, synchronize, reopened, labeled]
+    # No `labeled` here: a run for an unrelated label would post its own `ci`
+    # check on the same commit, and the latest one is what a required check
+    # reads -- a skipped or no-op `ci` would mask a red one. Adding the
+    # `full-ci` label instead dispatches this workflow on the PR's branch
+    # (.github/workflows/full-ci.yml); later pushes to a labelled PR pick the
+    # heavy lane up here through `plan`.
   push:
     branches: [main]
   merge_group:
@@ -278,6 +282,12 @@ jobs:
     outputs:
       heavy: ${{ steps.scope.outputs.heavy }}
       mode: ${{ steps.scope.outputs.mode }}
+      cross_platform: ${{ steps.scope.outputs.cross_platform }}
+      cross_app: ${{ steps.scope.outputs.cross_app }}
+      cross_cli: ${{ steps.scope.outputs.cross_cli }}
+      wasm_args: ${{ steps.scope.outputs.wasm_args }}
+      wasm_facade: ${{ steps.scope.outputs.wasm_facade }}
+      hack_args: ${{ steps.scope.outputs.hack_args }}
       reason: ${{ steps.scope.outputs.reason }}
       packages: ${{ steps.scope.outputs.packages }}
       pkg_args: ${{ steps.scope.outputs.pkg_args }}
@@ -302,14 +312,23 @@ jobs:
           FULL_CI_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" != pull_request ] || [ "$FULL_CI_LABEL" = true ]; then
-            echo "heavy=true" >> "$GITHUB_OUTPUT"
-            bash scripts/affected-crates.sh --full --format github >> "$GITHUB_OUTPUT"
-            echo "heavy lane: event=$EVENT full-ci-label=$FULL_CI_LABEL"
+          if [ "$EVENT" != pull_request ]; then
+            bash scripts/affected-crates.sh --full --format github > scope.txt
+            heavy=true
           else
-            echo "heavy=false" >> "$GITHUB_OUTPUT"
-            bash scripts/affected-crates.sh --base "$BASE_SHA" --format github | tee -a "$GITHUB_OUTPUT"
+            bash scripts/affected-crates.sh --base "$BASE_SHA" --format github > scope.txt
+            # heavy when the change feeds a heavy job (Cargo.lock, toolchain,
+            # workflows, a heavy job's script) or the PR carries `full-ci`
+            heavy=false
+            if grep -qx 'heavy_required=true' scope.txt || [ "$FULL_CI_LABEL" = true ]; then
+              heavy=true
+              bash scripts/affected-crates.sh --full --format github > scope.txt
+            fi
           fi
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
+          cat scope.txt >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT full-ci-label=$FULL_CI_LABEL heavy=$heavy"
+          cat scope.txt
 
   # ─────────────────────────────────────────────────────────────────────────
   # fast-lane — an ordinary pull_request's whole compile gate: clippy and
@@ -333,6 +352,8 @@ jobs:
       TEST_ARGS: ${{ needs.plan.outputs.test_args }}
       FEATURES: ${{ needs.plan.outputs.features }}
       PLATFORM: ${{ needs.plan.outputs.platform }}
+      WASM_ARGS: ${{ needs.plan.outputs.wasm_args }}
+      HACK_ARGS: ${{ needs.plan.outputs.hack_args }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -378,6 +399,61 @@ jobs:
         run: |
           # shellcheck disable=SC2086
           cargo nextest run $TEST_ARGS --locked --no-fail-fast --lib --bins --tests $FEATURES
+
+      # cfg-gated code the Linux build never compiles: clippy (no link, no
+      # tests) on its own target, for the affected packages only -- the same
+      # commands as the heavy `cross-typecheck` job.
+      - name: Add cross targets
+        if: needs.plan.outputs.cross_platform == 'true' || needs.plan.outputs.cross_app == 'true' || needs.plan.outputs.cross_cli == 'true'
+        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android aarch64-apple-ios
+
+      - name: cargo clippy flui-platform backends (windows, macos, android, ios)
+        if: needs.plan.outputs.cross_platform == 'true'
+        run: |
+          for target in x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android aarch64-apple-ios; do
+            cargo clippy -p flui-platform --locked --all-targets --features a11y --target "$target" -- -D warnings
+          done
+
+      - name: cargo clippy flui-app / flui android runner
+        if: needs.plan.outputs.cross_app == 'true'
+        env:
+          CC_aarch64_linux_android: clang
+          CFLAGS_aarch64_linux_android: --target=aarch64-linux-android21
+          AR_aarch64_linux_android: ar
+        run: cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings
+
+      - name: cargo clippy flui-cli (windows)
+        if: needs.plan.outputs.cross_cli == 'true'
+        run: cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
+      # wasm32-only code in the affected wasm-capable packages -- the
+      # heavy `wasm-check` job's clippy pass, narrowed to them.
+      - name: cargo clippy (wasm32, affected packages)
+        if: needs.plan.outputs.wasm_args != ''
+        run: |
+          rustup target add wasm32-unknown-unknown
+          # shellcheck disable=SC2086
+          cargo clippy $WASM_ARGS --lib --bins --locked --target wasm32-unknown-unknown -- -D warnings
+
+      - name: cargo check facade hot-reload feature (wasm32)
+        if: needs.plan.outputs.wasm_facade == 'true'
+        run: cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload
+
+      # A crate whose Cargo.toml changed (typically its [features]): the
+      # feature-matrix job's per-feature clippy, for that crate only.
+      - name: Install cargo-hack
+        if: needs.plan.outputs.hack_args != ''
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-hack
+
+      - name: cargo hack clippy --each-feature (changed manifests)
+        if: needs.plan.outputs.hack_args != ''
+        run: |
+          # shellcheck disable=SC2086
+          cargo hack clippy $HACK_ARGS --locked --each-feature --optional-deps --keep-going -- -D warnings
+          # shellcheck disable=SC2086
+          cargo hack clippy $HACK_ARGS --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
 
       - name: Ensure Xvfb + xkbcommon are available (flui-platform)
         if: needs.plan.outputs.platform == 'true'
@@ -593,6 +669,13 @@ jobs:
       # close exits 0 within a timeout (catches teardown hangs and
       # post-quit crashes); wheel ticks scroll. X11 input/pixels only — the
       # Wayland-specific teardown ordering is the next step's job.
+      # fast-lane restores this job's cache (shared-key workspace-tests) and
+      # runs clippy before anything else; without check-mode artifacts in the
+      # cache that clippy starts cold. Main only: it is what saves the cache.
+      - name: Warm clippy artifacts for fast-lane's cache (main only)
+        if: github.ref == 'refs/heads/main'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Upload insta snapshot candidates on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1820,7 +1903,7 @@ jobs:
   notify-main-red:
     name: notify-main-red
     needs: [ci]
-    if: always() && needs.ci.result == 'failure' && (github.event_name == 'push' || github.event_name == 'schedule')
+    if: ${{ !cancelled() && needs.ci.result == 'failure' && (github.event_name == 'push' || github.event_name == 'schedule') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
