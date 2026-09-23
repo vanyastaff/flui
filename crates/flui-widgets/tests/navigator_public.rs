@@ -2149,7 +2149,7 @@ fn a_factory_that_pops_during_resolution_leaves_the_removal_a_no_op() {
 
 /// The observer ordering for a re-entrant factory, pinned rather than assumed.
 ///
-/// This is the half of CodeRabbit's finding that survives the fix: because the
+/// This is the half of a review finding that survives the fix: because the
 /// factory runs before the departing route is dealt with, the nested `didPush`
 /// is observed **before** the outer `didPop`. Flutter's `popAndPushNamed` pops
 /// first and cannot produce that order, so `ARCHITECTURE.md` §5's "identical

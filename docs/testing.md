@@ -909,9 +909,8 @@ in `.github/workflows/ci.yml`:
 | `ci` | — | CI only: the single required check. It verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the plan skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red heavy run on main or nightly |
 
-The other workflows (`weekly.yml`, `release.yml`, `docs.yml`,
-`coderabbit-trigger.yml`) are scheduled or event-driven, not per-PR gates, and
-have no local mirror. `full-ci.yml` only turns the `full-ci` label into a
+The other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
+event-driven, not per-PR gates, and have no local mirror. `full-ci.yml` only turns the `full-ci` label into a
 re-run of the PR's own `ci.yml` run.
 
 The `gpu-test` job additionally runs the full `testing` readback

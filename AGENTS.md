@@ -178,3 +178,55 @@ A green gate proves the gates pass, not that the behavior exists. So a change is
 | Contracts, pipeline, panics | `docs/FOUNDATIONS.md`, `docs/architecture.md`, `docs/PANIC-POLICY.md` |
 | Public runtime-contract surface | `docs/runtime-contract.toml` (`runtime-conformance-check`) |
 | Planning a large change, git hygiene | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+
+## Review guidelines
+
+Pull requests are reviewed by Codex, which reads this section; a human reviewer can use it the
+same way. fmt, clippy (pedantic, `unwrap_used`, the lints in the table above), rustdoc and the
+script gates already run in CI, so style and anything they catch is not worth a comment.
+
+- **What to report:** defects that would make a maintainer block the merge. Each finding names
+  the defect and a concrete failure scenario — the input or sequence that produces the wrong
+  result. If you can't construct one, label it a hypothesis. No praise, no restating the diff.
+- **Tests:** for each behavior change, find the test that covers it and ask whether it would fail
+  with the production hunk reverted. Tests here have passed both ways by reimplementing the
+  predicate they pin, asserting that a widget exists rather than that it was laid out or
+  painted, pinning a `Send` bound with a type that already satisfies it, counting rebuilds
+  through a harness helper that dirties the root itself, or narrowing an assertion to what a
+  partial implementation handles. A regenerated `*.snap` is a claim the new output is correct —
+  the PR must say what changed and why. A test that mutates genuinely process-global state
+  (`Registry::global`, `FONT_SYSTEM`) needs a module-scoped lock, because nextest runs one
+  process per test in parallel.
+- **Unwired surface:** a new `pub` item that no production path reaches (test, example and
+  bench callers don't count) is this repository's most common defect. Flag it unless the PR
+  names the follow-up that wires it.
+- **Flutter behavior:** a change to render, layout, paint, hit-test, semantics, scheduling or
+  reconciliation either keeps Flutter's observable contract (output, edge cases, ordering) or
+  records the divergence (ADR or `## Mapping decisions`) with a test for the new behavior. A
+  Dart-shaped design is not an improvement by itself.
+- **Rendering specifics:** `SliverGeometry { ..SliverGeometry::ZERO }` drops the constructor's
+  derived defaults (`layout_extent`, `visible`) and has caused real header bugs; a layout that
+  publishes geometry from a stand-in value (ADR-0054); intrinsics, baselines or hit-testing left
+  returning defaults while the PR calls the object done; a concrete render object missing from
+  `RENDER_OBJECT_TYPES` or its `harness_*` test.
+- **Engine:** a `wgpu::Instance` and the surface it must be compatible with are created
+  together. A pixel claim needs a readback whose sample points distinguish the fixed code from
+  the broken code — rotation about the centre, SSAA area gates and framebuffer rebases have each
+  produced tests that passed both ways.
+- **Runtime and platform:** state belongs to a realm (scheduler, focus, GlobalKeys), never to the
+  process. Only the Linux/headless platform path executes in CI; Win32, AppKit, Android and iOS
+  are clippy-only, so a change there is unverified unless the PR shows a run. Event-translation
+  changes need the live smoke path, not a synthetic gesture test.
+- **`unsafe`:** each block's `SAFETY:` comment names an invariant this code establishes, not a
+  restatement of the operation; say so if a safe API would do.
+- **Manifests and workflows:** shared dependencies go through `[workspace.dependencies]`;
+  features stay additive; a new crate is registered in `docs/workspace-layers.toml` and one
+  `FM_GROUP_*` in `ci.yml`. In workflows: actions pinned to a full SHA, `--locked` on every cargo
+  call, caches saved only on `main`, a job's name equals its key, and a new job is listed in the
+  `ci` aggregator's `needs` (a heavy one also in `HEAVY_JOBS`).
+- **Registries** (`docs/runtime-contract.toml`, `docs/workspace-layers.toml`,
+  `docs/panic-policy-allowlist.txt`, `docs/ROADMAP.md`): check only that each entry matches the
+  code in the same PR and that a new exemption states its reason.
+- **Docs:** no process markers (see "Working here"); no hand-maintained completeness claims ("all
+  call sites now use X") without the command that showed it; no Flutter-parity claim without the
+  reference it was checked against.
