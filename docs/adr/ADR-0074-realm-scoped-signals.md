@@ -272,7 +272,9 @@ section's claim:
   plus `field_mask_diff`). `depend_on_field::<T, _>` takes `FieldMask<T::Data>`, so a
   selector of another data type is a compile error rather than a silently wrong
   subscription (a `compile_fail` doctest pins it); element storage and the object-safe
-  context method carry the untyped `FieldSet` that `FieldMask::erase` lowers to. Market
+  context method carry the untyped `FieldSet`; the lowering (`FieldMask::erase`) and the
+  recording helper are crate-private, so outside `flui-view` a `FieldSet` is only `NONE`/`ALL`
+  and the typed selector cannot be bypassed (a second `compile_fail` doctest pins it). Market
   check: Compose's `derivedStateOf`/`snapshotFlow` and SwiftUI's `@Observable` track reads
   per property with no untyped selector at all; a typed mask is the closest static shape
   that keeps one provider type per `TypeId` lookup;

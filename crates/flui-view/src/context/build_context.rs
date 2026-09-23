@@ -279,8 +279,10 @@ pub trait BuildContext {
     /// granularity (issue #1090): the dependency is recorded with `mask`, and
     /// a later provider update schedules this element only if a field in the
     /// mask changed ([`InheritedView::changed_fields`]). `FieldSet::ALL`
-    /// is exactly `depend_on_inherited`. The mask is untyped here (this
-    /// method is object-safe); application code reaches it through the typed
+    /// is exactly `depend_on_inherited`. The set is untyped here (this
+    /// method is object-safe); outside `flui-view` a `FieldSet` can only be
+    /// `NONE`/`ALL` (`FieldMask::erase` is crate-private), so a per-field
+    /// dependency is reachable only through the typed
     /// [`BuildContextExt::depend_on_field`].
     ///
     /// [`InheritedView::changed_fields`]: crate::InheritedView::changed_fields
@@ -574,27 +576,7 @@ pub trait BuildContextExt: BuildContext {
         mask: crate::view::FieldMask<T::Data>,
         f: impl FnOnce(&T) -> R,
     ) -> Option<R> {
-        self.depend_on_erased::<T, R>(mask.erase(), f)
-    }
-
-    /// The one recording path behind [`depend_on`](Self::depend_on) and
-    /// [`depend_on_field`](Self::depend_on_field): look up `T`, record the
-    /// dependency with `set`, and call `f`. `depend_on` accepts any `'static`
-    /// provider type, so it cannot go through the typed selector.
-    #[doc(hidden)]
-    fn depend_on_erased<T: 'static, R>(
-        &self,
-        set: crate::view::FieldSet,
-        f: impl FnOnce(&T) -> R,
-    ) -> Option<R> {
-        let mut result: Option<R> = None;
-        let mut once = Some(f);
-        self.depend_on_inherited_fields(TypeId::of::<T>(), set, &mut |any| {
-            if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
-                result = Some(call(typed));
-            }
-        });
-        result
+        depend_on_set::<T, R, _>(self, mask.erase(), f)
     }
 
     /// Look up data from an ancestor InheritedView (with dependency).
@@ -621,7 +603,7 @@ pub trait BuildContextExt: BuildContext {
     /// ```
     fn depend_on<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         // One path: the whole-provider dependency is the ALL set.
-        self.depend_on_erased::<T, R>(crate::view::FieldSet::ALL, f)
+        depend_on_set::<T, R, _>(self, crate::view::FieldSet::ALL, f)
     }
 
     /// Look up data from an ancestor InheritedView (without dependency).
@@ -740,6 +722,27 @@ pub trait BuildContextExt: BuildContext {
         });
         result
     }
+}
+
+/// The one recording path behind [`BuildContextExt::depend_on`] and
+/// [`BuildContextExt::depend_on_field`]: look up `T`, record the dependency
+/// with `set`, and call `f`. Crate-private on purpose — an untyped set must
+/// not reach a provider from application code, or a selector of another data
+/// type could be registered (the typed `depend_on_field` is the only public
+/// field-granular entry).
+fn depend_on_set<T: 'static, R, C: BuildContext + ?Sized>(
+    ctx: &C,
+    set: crate::view::FieldSet,
+    f: impl FnOnce(&T) -> R,
+) -> Option<R> {
+    let mut result: Option<R> = None;
+    let mut once = Some(f);
+    ctx.depend_on_inherited_fields(TypeId::of::<T>(), set, &mut |any| {
+        if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
+            result = Some(call(typed));
+        }
+    });
+    result
 }
 
 impl<C: BuildContext + ?Sized> BuildContextExt for C {}

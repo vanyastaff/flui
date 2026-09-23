@@ -14,9 +14,9 @@ use std::marker::PhantomData;
 /// [`FieldMask<D>`] that element storage and the object-safe context methods
 /// carry (issue #1090, ADR-0008 §2).
 ///
-/// Application code does not build these: it passes a typed
-/// [`FieldMask<D>`], which [`FieldMask::erase`] lowers once the data type has
-/// been checked against the provider. `ALL` is the whole-type dependency every
+/// Application code cannot build one with specific fields (only `NONE` and
+/// `ALL`): it passes a typed [`FieldMask<D>`], which the crate lowers once the
+/// data type has been checked against the provider. `ALL` is the whole-type dependency every
 /// plain [`BuildContextExt::depend_on`] registers.
 ///
 /// [`BuildContextExt::depend_on`]: crate::BuildContextExt::depend_on
@@ -99,6 +99,17 @@ impl std::ops::BitOrAssign for FieldSet {
 /// wants_size(FieldMask::<Size>::bit(0));
 /// ```
 ///
+/// Nor can a mask be lowered to the untyped [`FieldSet`] outside this crate
+/// and passed to another provider through the object-safe context method:
+///
+/// ```compile_fail,E0624
+/// use flui_view::FieldMask;
+///
+/// struct Theme;
+///
+/// let _untyped = FieldMask::<Theme>::bit(0).erase();
+/// ```
+///
 /// [`BuildContextExt::depend_on_field`]: crate::BuildContextExt::depend_on_field
 pub struct FieldMask<D> {
     set: FieldSet,
@@ -160,9 +171,11 @@ impl<D> FieldMask<D> {
     }
 
     /// Lower to the untyped [`FieldSet`] element storage carries, once the
-    /// data type has been checked.
+    /// data type has been checked. Crate-private: a public lowering would let
+    /// application code hand a selector of one data type to another provider
+    /// through the object-safe context method.
     #[must_use]
-    pub const fn erase(self) -> FieldSet {
+    pub(crate) const fn erase(self) -> FieldSet {
         self.set
     }
 }
