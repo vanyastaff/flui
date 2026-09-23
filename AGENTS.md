@@ -41,8 +41,12 @@
 - **A report is:** actual command output behind each claim, plus what you could *not* verify and
   why. "Should work" isn't a report.
 - **Commits:** `area: what changed`, one logical change per commit. **PRs:** one task, one PR,
-  `just ci` green first. `Refs #N` by default; `Closes #N`/`Fixes #N` only when the merge should
-  close it (GitHub's linker ignores surrounding negation).
+  `just check-changed` green first (the changed crates + their dependents: CI's fast lane);
+  the full `just ci` is optional — CI is the proof. A risky PR gets the `full-ci` label.
+  `Refs #N` by default; `Closes #N`/`Fixes #N` only when the merge should close it (GitHub's
+  linker ignores surrounding negation).
+- **Red main:** fix forward within the hour, or revert. A red heavy run on main or nightly opens
+  the "CI is red on main" issue; close it when main is green again.
 - **Don't touch without an explicit task saying so:** `.github/workflows/`,
   `docs/runtime-contract.toml`, `docs/workspace-layers.toml`, `Cargo.lock` by hand, `docs/archive/`.
 - **No internal process-ID markers** (`Cycle N`, `PR #NNN review`, `Phase B`) in code or docs.
@@ -50,14 +54,15 @@
   Archival roots excluded (`docs/{audits,brainstorms,ideation,plans,research,superpowers}`,
   `.rust-studio/specs`, `specs`, `openspec`); residue tracked in issue #644.
 - **A new gate is a justfile recipe + a `checks`-job step** — a recipe alone isn't on the merge
-  path. A doc pulled in via `include_str!` is source, not docs: list it in `ci.yml`'s paths-filter.
+  path. A doc pulled in via `include_str!` is source, not docs: keep it out of `DOCS_ONLY` in `scripts/lib/change_scope.py` (`check-paths-filter-allowlist.py` enforces it).
 
 ## Commands
 
 | Need | Run |
 |------|-----|
-| Local gate | `just ci` (fmt, text-check, inventory/runtime-conformance/panic-policy/port checks, clippy, doc-strict, tests, doctests) |
-| CI parity | `just ci` is the fast local gate; `just ci-full` also runs every other CI job this host can (feature-matrix, wasm, cross-typecheck, msrv, miri, deny, gpu-test, ...). `just doctor full` names any tool it needs; what stays CI-only, and why: `docs/testing.md` |
+| Pre-PR check | `just check-changed` — fmt + clippy + nextest over the changed crates and their dependents (same scope script as CI's fast lane) |
+| Full local gate | `just ci` (fmt, text-check, inventory/runtime-conformance/panic-policy/port checks, clippy, doc-strict, tests, doctests) — optional before a PR |
+| CI parity | A PR runs CI's fast lane (checks, deny, clippy + nextest over affected crates); main, nightly and `full-ci` PRs run everything. `just ci-full` mirrors the heavy jobs this host can run; `just doctor full` names any tool it needs; the job table: `docs/testing.md` |
 | One crate | `cargo nextest run -p <crate>`, or `just test-crate <crate>` / `test-name <crate> <test>` |
 | One target (no link/exec) | `just cross-typecheck` — clippies Win32/AppKit/Android/iOS |
 | Run an example | `just example-hello` / `example <name>` / `example-list` |

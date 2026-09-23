@@ -1,0 +1,60 @@
+name: full-ci label
+
+# Adding the `full-ci` label to a pull request re-runs that PR's own CI run
+# (ci.yml, `pull_request` event), now. The re-run is another attempt of the
+# same run, so its heavy result replaces the fast-lane one in the very `ci`
+# check branch protection reads -- a separately dispatched run would attach
+# to the branch head instead and leave the fast `ci` result standing. `plan`
+# reads the label from the API, not from the replayed event payload, and so
+# picks the heavy lane. ci.yml does not listen to `labeled` itself: a run for
+# an unrelated label would post another `ci` check on the same commit. Later
+# pushes to a labelled PR take the heavy lane in ci.yml directly.
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  rerun-ci:
+    name: re-run CI on the heavy lane
+    if: github.event.label.name == 'full-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      # A fork PR's token is read-only here, so it cannot re-run anything.
+      # Say so instead of silently leaving the PR on its fast-lane result.
+      - name: Refuse a fork pull request
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::error::full-ci cannot re-run CI for a fork PR with this token: re-run the PR's CI workflow from its Checks tab (plan reads the label live and takes the heavy lane)"
+          exit 1
+
+      - name: Re-run this PR's CI run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          run=$(gh run list --workflow ci.yml --event pull_request --commit "$HEAD_SHA" --limit 1 \
+            --json databaseId,status --jq '.[0] | select(.) | "\(.databaseId) \(.status)"')
+          if [ -z "$run" ]; then
+            echo "no CI run for $HEAD_SHA yet: when it starts, plan reads the label and takes the heavy lane"
+            exit 0
+          fi
+          id=${run%% *}
+          status=${run#* }
+          # A run still in progress cannot be re-run: stop it first.
+          if [ "$status" != completed ]; then
+            gh run cancel "$id" || true
+            for _ in $(seq 60); do
+              [ "$(gh run view "$id" --json status --jq .status)" = completed ] && break
+              sleep 5
+            done
+          fi
+          gh run rerun "$id"
+          echo "re-running CI run $id for $HEAD_SHA on the heavy lane"

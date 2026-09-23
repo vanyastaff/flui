@@ -379,6 +379,94 @@ flui_python + " -B scripts/check-ios-safe-area.py " + quote(udid) + " target/ios
 "echo 'Skipping ios-safe-area-check on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-safe-area-check <udid>'"
 } }}
 
+# The pre-PR check (AGENTS.md): what CI's fast lane runs, locally. The scope
+# comes from scripts/affected-crates.sh -- the script CI's `plan` job runs --
+# over this branch's diff against origin/main PLUS uncommitted and untracked
+# files, so CI and local pick the same packages from the same arguments.
+[group("test")]
+[doc("Pre-PR check: fmt, then clippy + nextest over the crates this branch changes (vs origin/main, uncommitted work included) and every workspace crate depending on them -- CI's fast lane, same scope script. Refuses a CARGO_TARGET_DIR outside the checkout (docs/testing.md: one target per checkout)")]
+check-changed base="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+        # Resolve without requiring the directory to exist yet.
+        target_abs=$({{ flui_python }} -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$CARGO_TARGET_DIR")
+        here=$({{ flui_python }} -c 'import os; print(os.path.realpath("."))')
+        case "$target_abs/" in
+            "$here"/*) ;;
+            *) echo "check-changed: CARGO_TARGET_DIR=$CARGO_TARGET_DIR is outside this checkout; a target shared between worktrees links stale code (docs/testing.md). Unset it." >&2; exit 2 ;;
+        esac
+    fi
+    # Values are shell-quoted by the script (file names are untrusted input).
+    eval "$({{ flui_bash }} scripts/affected-crates.sh --base {{ base }} --worktree --format shell)"
+    echo "check-changed: $REASON"
+    if [ "$HEAVY_REQUIRED" = true ]; then
+        echo "check-changed: only CI's heavy jobs check part of this change (see the reason above): the PR will run the heavy lane; locally, consider just ci-full"
+    fi
+    cargo fmt --all -- --check
+    case "$MODE" in
+        docs|none) echo "check-changed: nothing to compile ($MODE)"; exit 0 ;;
+    esac
+    echo "check-changed: packages: ${PACKAGES:-<whole workspace>}"
+    have_target() { rustup target list --installed 2>/dev/null | grep -qx "$1"; }
+    # shellcheck disable=SC2086 # the *_ARGS are argument lists by design
+    cargo clippy $PKG_ARGS --all-targets --locked -- -D warnings
+    case " $PACKAGES " in
+        *" flui-engine "*|"  ") cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings ;;
+    esac
+    if [ -n "$TEST_ARGS" ]; then
+        # shellcheck disable=SC2086
+        cargo nextest run $TEST_ARGS --locked --no-fail-fast --lib --bins --tests $FEATURES
+    fi
+    if [ -n "$DOC_ARGS" ]; then
+        # shellcheck disable=SC2086
+        RUSTDOCFLAGS="-D warnings" cargo doc $DOC_ARGS --no-deps --locked --document-private-items
+    fi
+    if [ -n "$DOCTEST_ARGS" ]; then
+        # shellcheck disable=SC2086
+        cargo test $DOCTEST_ARGS --locked --doc
+    fi
+    # cfg-gated code this host's build never compiles (same commands as CI's fast lane)
+    if [ "$CROSS_PLATFORM" = true ]; then
+        for t in x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android aarch64-apple-ios; do
+            if have_target "$t"; then cargo clippy -p flui-platform --locked --all-targets --features a11y --target "$t" -- -D warnings
+            else echo "check-changed: skipped flui-platform on $t (rustup target add $t; CI runs it)"; fi
+        done
+    fi
+    if [ "$CROSS_APP" = true ]; then
+        if have_target aarch64-linux-android; then
+            CC_aarch64_linux_android=clang CFLAGS_aarch64_linux_android=--target=aarch64-linux-android21 AR_aarch64_linux_android=ar \
+                cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings
+        else echo "check-changed: skipped the android runner (rustup target add aarch64-linux-android; CI runs it)"; fi
+    fi
+    if [ "$CROSS_CLI" = true ]; then
+        if have_target x86_64-pc-windows-msvc; then cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+        else echo "check-changed: skipped flui-cli on windows (rustup target add x86_64-pc-windows-msvc; CI runs it)"; fi
+    fi
+    if [ "$CROSS_IOS" = true ]; then
+        if [ "$(uname -s)" = Darwin ] && have_target aarch64-apple-ios; then
+            cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
+        else echo "check-changed: skipped the iOS runner (needs macOS + rustup target add aarch64-apple-ios; CI's fast-lane-ios runs it)"; fi
+    fi
+    if [ -n "$WASM_ARGS" ]; then
+        if have_target wasm32-unknown-unknown; then
+            # shellcheck disable=SC2086
+            cargo clippy $WASM_ARGS --lib --bins --locked --target wasm32-unknown-unknown -- -D warnings
+            [ "$WASM_FACADE" = true ] && cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload
+        else echo "check-changed: skipped wasm32 (rustup target add wasm32-unknown-unknown; CI runs it)"; fi
+    fi
+    if [ -n "$HACK_ARGS" ]; then
+        if cargo hack --version >/dev/null 2>&1; then
+            # shellcheck disable=SC2086
+            cargo hack clippy $HACK_ARGS --locked --each-feature --optional-deps --keep-going -- -D warnings
+            # shellcheck disable=SC2086
+            cargo hack clippy $HACK_ARGS --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
+        else echo "check-changed: skipped per-feature clippy of changed manifests (cargo install --locked cargo-hack; CI runs it)"; fi
+    fi
+    if [ "$PLATFORM" = true ]; then
+        {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else { "echo 'check-changed: flui-platform is in scope, but its suite needs xvfb-run (Linux); CI runs it'" } }}
+    fi
+
 [group("test")]
 [doc("Run the workspace test scope used by CI: every test outside the nested-cargo group, then that group as the last stage (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci: _tests-outside-nested-cargo test-nested-cargo
@@ -917,6 +1005,9 @@ text-check:
     fi
     # No tool to skip for: this one needs only a Python >= 3.11.
     {{ flui_python }} -B scripts/check-nextest-partition.py
+    # CI's lane machinery (aggregator skip rule, change scope). The aggregator
+    # test needs PyYAML and skips with a message without it; CI installs it.
+    {{ flui_python }} -B -m unittest discover -s scripts/tests -p 'test_c[hi]*.py'
 
 # --- CI jobs without a recipe of their own until now (see the job -> recipe
 # table in docs/testing.md). Each mirrors its ci.yml job's commands.
@@ -957,7 +1048,7 @@ gpu-test:
     cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1
 
 [group("ci")]
-[doc("Mirror of the workflow half of CI's checks job: the paths-filter allowlist check, actionlint and zizmor (the last two skip with a message when not installed -- CI has them)")]
+[doc("Mirror of the workflow half of CI's checks job: the docs-only allowlist check, actionlint and zizmor (the last two skip with a message when not installed -- CI has them)")]
 workflow-lint:
     #!/usr/bin/env bash
     set -euo pipefail

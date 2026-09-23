@@ -810,14 +810,84 @@ cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (co
 
 ### CI jobs and their local recipes
 
-`just ci` is the fast gate; `just ci-full` runs `just ci` plus every other
-job below that the host can run (`just doctor full` names what it needs).
-One row per job in `.github/workflows/ci.yml`:
+CI runs in two lanes, chosen by the `plan` job:
+
+- **Fast lane**: an ordinary pull request. It runs `checks`, `deny`, and
+  `fast-lane`. `fast-lane` runs clippy and nextest over the changed crates and
+  every workspace crate that declares a dependency on them, including optional,
+  dev and target-specific dependencies. It also checks the code a Linux build
+  never compiles:
+  - clippy on the other targets for `flui-platform`'s backends, the
+    `flui-app`/`flui` Android runner and `flui-cli` on Windows, when they are
+    in scope;
+  - wasm32 clippy for the wasm-capable crates in scope;
+  - a per-feature `cargo hack clippy` for the changed crates that have
+    features, for any crate whose `Cargo.toml` changed, and for each
+    dependent whose edge to a crate in scope only a non-default feature
+    compiles (an optional dependency, or one a non-default feature names).
+    Other dependents keep the default build. More than three such dependents
+    send the PR to the heavy lane, whose `feature-matrix` covers them;
+  - the `flui-app`/`flui` iOS runner's clippy, when either is in scope, in a
+    separate macOS job (`fast-lane-ios`), because it needs xcrun;
+  - rustdoc with `-D warnings` over the crates in scope, with their `testing`
+    features (the `doc` job's flags). A moved item's broken intra-doc link is
+    the typical casualty of a refactor;
+  - the doctests of the library crates in scope (`cargo test --doc`, the
+    `doc-test` job narrowed): nextest runs none.
+
+  A workspace-wide input (clippy/nextest config, the lane's own scripts) or a
+  file no crate owns widens the lane to the whole workspace. Nothing compiles
+  for a documentation-only or tooling-only change. The scope comes from
+  `scripts/affected-crates.sh`; `just check-changed` runs it with the same
+  arguments before a PR, and also counts uncommitted work.
+- **Heavy lane**: a push to main, the merge queue, the nightly schedule,
+  `workflow_dispatch`, a pull request that changes an input of the heavy jobs,
+  or a pull request labelled `full-ci`. The heavy-job inputs are `Cargo.lock`,
+  the root `Cargo.toml`, `.cargo/`, the toolchain file (either spelling), a
+  workflow, a WGSL shader (only a GPU job compiles one), and any script a
+  heavy job runs (read from `ci.yml`, the justfile included). Adding the label
+  re-runs the PR's own CI run through `full-ci.yml`, so the heavy result
+  replaces the fast one in the same `ci` check; `plan` reads the label from
+  the API. On a fork PR it fails, saying so (its token cannot re-run
+  anything): re-run CI from the PR's Checks tab instead. Later pushes to a
+  labelled PR take the heavy lane directly. Every job below runs.
+
+  A red heavy run on main or nightly opens (or comments on) the "CI is red on
+  main" issue. The rule is fix forward within the hour, or revert.
+
+**Only the heavy lane checks these**, so a pull request can merge green and
+still turn main red:
+
+- doc-tests and rustdoc of crates outside the change's scope (`doc-test`,
+  `doc`);
+- linking of examples and benches (`test`'s `build --all-targets`,
+  `bench-compile`);
+- the feature-gated suites (`test-features`);
+- the per-feature matrix of dependents that reach the change under a
+  default feature or not at all (`feature-matrix`);
+- the facade in its default feature set;
+- GPU readback (`gpu-test`), miri, msrv, `live-smoke`;
+- macOS's `flui-cli` suite (`cli-macos`; its iOS runner clippy also runs in
+  `fast-lane-ios` when `flui-app` or `flui` is in scope);
+- linking and running the wasm32 tests (`wasm-check`).
+
+Label a change that is likely to break one of these `full-ci`.
+
+The `ci` aggregator recomputes which jobs this lane and change should skip
+from `plan`'s outputs. It fails on any other skip, and on a job that ran where
+it should have skipped.
+
+Locally, `just check-changed` is the pre-PR check. `just ci` is the full local
+gate and is optional: CI is the proof. `just ci-full` mirrors the heavy jobs
+this host can run, and `just doctor full` names what it needs. One row per job
+in `.github/workflows/ci.yml`:
 
 | CI job | Local recipe | Difference, or why CI-only |
 |---|---|---|
 | `checks` | `just gate` (fmt, text-check, inventory, runtime-conformance, toolchain-consistency, panic-policy, port-check, wgsl-uniformity) + `just workflow-lint` | `workflow-lint` skips actionlint/zizmor with a message when they are not installed; CI always has them |
-| `paths-filter` | — | CI only: decides which jobs a docs-only change may skip; there is nothing to skip locally |
+| `plan` | `scripts/affected-crates.sh` (`just check-changed` runs it) | decides the lane and the affected packages; CI passes the PR's base SHA, `check-changed` diffs against `origin/main` and adds uncommitted files |
+| `fast-lane` | `just check-changed` | same packages and arguments; the cross-target and wasm32 clippy and the per-feature pass for changed manifests run only when their rustup target or cargo-hack is installed (`just doctor full`); the flui-platform leg needs `xvfb-run` (Linux) |
+| `fast-lane-ios` | `just check-changed` (on a Mac with the iOS target) | the same iOS runner clippy as `cli-macos`, run on a PR when `flui-app` is in scope |
 | `clippy` | `just clippy` (in `just gate`) | — |
 | `test` (ubuntu, macos, windows) | `just test-ci` + `just build-all-targets` | one host OS, not three; `test-ci` does not link examples (`build-all-targets` does); the flui-platform leg needs `xvfb-run` (Linux) |
 | `test-features` | `just test-features` | — |
@@ -833,11 +903,13 @@ One row per job in `.github/workflows/ci.yml`:
 | `wasm-check` | `just wasm-check`, `just wasm-link-check`, `just wasm-test` | `wasm-link-check` needs `wasm-tools`; `wasm-test` installs the locked `wasm-bindgen-cli` itself |
 | `cli-macos` | `just test-ci` (flui-cli's tests) + `just cross-typecheck` (its iOS clippy line) | the same commands; they only mean "macOS" on a Mac |
 | `cross-typecheck` | `just cross-typecheck` | needs the four targets (`just doctor full`) |
-| `ci` | — | CI only: the single required check, which verifies that every gated job ran and passed |
+| `ci` | — | CI only: the single required check. It verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the plan skips |
+| `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red heavy run on main or nightly |
 
 The other workflows (`weekly.yml`, `release.yml`, `docs.yml`,
 `coderabbit-trigger.yml`) are scheduled or event-driven, not per-PR gates, and
-have no local mirror.
+have no local mirror. `full-ci.yml` only turns the `full-ci` label into a
+re-run of the PR's own `ci.yml` run.
 
 The `gpu-test` job additionally runs the full `testing` readback
 suite on a windows-latest runner (WARP software rasterizer) and is

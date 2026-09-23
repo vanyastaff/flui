@@ -1,13 +1,18 @@
 name: CI
 
-# Job graph (every compiling job is gated on `checks` AND `paths-filter`):
+# Two lanes, chosen by `plan` (see its comment):
+#   fast lane  an ordinary pull_request: `checks`, `deny`, and `fast-lane`
+#              (clippy + nextest over the changed crates and their workspace
+#              dependents). Target: a typical PR in under 7 minutes.
+#   heavy lane push to main, merge_group, the nightly schedule,
+#              workflow_dispatch, or a PR labelled `full-ci`: every job below.
+#              A red heavy run on main or nightly opens a tracking issue
+#              (`notify-main-red`).
+#
+# Job graph:
 #   checks         — fmt + taplo + typos + inventory + runtime-conformance + toolchain-consistency + panic-policy + port-check + actionlint + zizmor (seconds, no compile)
-#   paths-filter   — on a `pull_request` run only: is anything outside docs/config
-#                    changed? Every compiling job below is `if:`-gated on its
-#                    `non_docs` output and skips (not silently green — see the
-#                    `ci` aggregator's ALLOWED_SKIPS) on a docs-only PR. Always
-#                    "yes" on `push`/`merge_group`, so main and the merge queue
-#                    always run the full graph.
+#   plan           — heavy or fast lane; on a PR, which packages changed (scripts/affected-crates.sh)
+#   fast-lane      — fast lane only: clippy + nextest over the affected packages
 #   clippy         — workspace lint with -D warnings
 #   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps, two passes: libs/bins then tests/benches/examples), xilem-style, as a 4-slice matrix: three balanced package groups + the combination checks
 #                    plus a bounded backend-feature-pair powerset for flui-engine, plus every
@@ -38,9 +43,22 @@ name: CI
 
 on:
   pull_request:
+    # No `labeled` here: a run for an unrelated label would post its own `ci`
+    # check on the same commit, and the latest one is what a required check
+    # reads -- a skipped or no-op `ci` would mask a red one. Adding the
+    # `full-ci` label instead RE-RUNS this PR's own run
+    # (.github/workflows/full-ci.yml), so the heavy result replaces the fast
+    # one in the same `ci` check; `plan` reads the label live, since a re-run
+    # keeps the original event payload. Later pushes to a labelled PR pick
+    # the heavy lane up here the same way.
   push:
     branches: [main]
   merge_group:
+  # Nightly: the heavy jobs against main even on a quiet day (new toolchain,
+  # new advisories, a flaky test that only shows up sometimes).
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 # Least-privilege GITHUB_TOKEN: no job in this workflow writes to the repo,
 # issues, or PRs. Artifact upload uses the separate Actions runtime token and
@@ -202,9 +220,9 @@ jobs:
           python3 -B scripts/check-wgsl-uniformity.py --self-test
           python3 -B scripts/check-wgsl-uniformity.py
 
-      # Keeps the `paths-filter` job's docs-only allowlist honest: fails if
-      # any file it treats as skippable is actually include_str!()'d into
-      # compiled/tested content.
+      # Keeps the docs-only allowlist (scripts/lib/change_scope.py, which
+      # `plan` uses) honest: fails if any file it treats as skippable is
+      # actually include_str!()'d into compiled/tested content.
       - name: scripts/check-paths-filter-allowlist.py (docs-only allowlist vs. real include_str! targets)
         run: python3 -B scripts/check-paths-filter-allowlist.py
 
@@ -217,6 +235,15 @@ jobs:
       - name: scripts/check-nextest-partition.py (nested-cargo filter copies agree)
         run: python3 -B scripts/check-nextest-partition.py
 
+      # The fast/heavy lane machinery: the `ci` aggregator's skip rule
+      # (extracted from this file and run against every lane and mode) and
+      # scripts/lib/change_scope.py's classification. Local mirror:
+      # `just text-check`.
+      - name: scripts/tests (ci aggregator skip rule, change scope)
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check "pyyaml>=6,<7"
+          python3 -B -m unittest discover -s scripts/tests -p 'test_c[hi]*.py' -v
+
       - name: actionlint (workflow semantics)
         run: actionlint
 
@@ -224,80 +251,307 @@ jobs:
         run: zizmor .
 
   # ─────────────────────────────────────────────────────────────────────────
-  # paths-filter — decides whether this PR touches anything besides docs/
-  # config, so every compiling job below can skip on a docs-only change
-  # instead of paying for a full workspace build. NOT wired via the
-  # workflow-level `on.pull_request.paths-ignore` trigger: that would make
-  # GitHub never create the compiling jobs' check runs at all on a docs-only
-  # PR, which leaves any branch-protection rule that requires them stuck
-  # "Expected — waiting for status" forever. Job-level `if:` keeps every job
-  # in the run (as `skipped`, which the `ci` aggregator below already has a
-  # reviewable mechanism for — `ALLOWED_SKIPS` — instead of silently
-  # counting it green), so required-status-check state always resolves.
+  # plan — what this run has to build. Two independent answers:
   #
-  # Only gates the `pull_request` fast path: a push to `main` or a
-  # `merge_group` run is what actually becomes (or joins) `main`, so those
-  # always run the full graph regardless of which paths changed.
+  #   heavy  "true" on push to main, merge_group, schedule, workflow_dispatch,
+  #          and on a pull_request carrying the `full-ci` label (read live
+  #          from the API) or changing a heavy-job input: every job
+  #          below runs. Otherwise (an ordinary pull_request) only the fast
+  #          lane does, and the heavy jobs skip -- expected, see `ci`.
+  #   mode   on a pull_request, from scripts/affected-crates.sh (the same
+  #          script `just check-changed` runs, so CI and local agree):
+  #            docs      only documentation changed: nothing compiles
+  #            none      only repo tooling changed: `checks` covers it
+  #            packages  the changed crates + every workspace crate that
+  #                      depends on them (normal/dev/build, transitively)
+  #            full      a workspace-wide input (Cargo.lock, root
+  #                      Cargo.toml, .cargo/, the toolchain, a workflow) or
+  #                      an unattributable file changed: the whole workspace
+  #          Always "full" when `heavy` is.
+  # The docs-only allowlist and the full triggers live in
+  # scripts/lib/change_scope.py, once; check-paths-filter-allowlist.py (in
+  # `checks`) proves no compiled include_str!() target falls inside it.
+  #
+  # Skipping is done with job-level `if:` on `plan`'s outputs, NOT with
+  # `on.pull_request.paths-ignore`: that would make GitHub never create the
+  # skipped jobs' check runs, leaving any required-status-check rule waiting
+  # forever. Job-level `if:` keeps every job in the run as `skipped`, and the
+  # `ci` aggregator checks that exactly the planned jobs skipped.
   # ─────────────────────────────────────────────────────────────────────────
-  paths-filter:
-    name: paths-filter
+  plan:
+    name: plan
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # `pull-requests: read`: the `full-ci` label is read from the API, not
+    # from the event payload (a re-run replays the payload it started with).
     permissions:
-      # dorny/paths-filter's default (no explicit `base`) reads the PR's
-      # changed-file list from the GitHub API (`listFiles`), not from a local
-      # git diff — no checkout step exists here for that reason. That API
-      # call only works today because this repo is public; a private repo
-      # needs this scope explicitly.
+      contents: read
       pull-requests: read
     outputs:
-      non_docs: ${{ github.event_name != 'pull_request' || steps.filter.outputs.non_docs }}
+      heavy: ${{ steps.scope.outputs.heavy }}
+      mode: ${{ steps.scope.outputs.mode }}
+      cross_platform: ${{ steps.scope.outputs.cross_platform }}
+      cross_app: ${{ steps.scope.outputs.cross_app }}
+      cross_cli: ${{ steps.scope.outputs.cross_cli }}
+      cross_ios: ${{ steps.scope.outputs.cross_ios }}
+      wasm_args: ${{ steps.scope.outputs.wasm_args }}
+      wasm_facade: ${{ steps.scope.outputs.wasm_facade }}
+      hack_args: ${{ steps.scope.outputs.hack_args }}
+      doc_args: ${{ steps.scope.outputs.doc_args }}
+      doctest_args: ${{ steps.scope.outputs.doctest_args }}
+      reason: ${{ steps.scope.outputs.reason }}
+      packages: ${{ steps.scope.outputs.packages }}
+      pkg_args: ${{ steps.scope.outputs.pkg_args }}
+      test_args: ${{ steps.scope.outputs.test_args }}
+      features: ${{ steps.scope.outputs.features }}
+      platform: ${{ steps.scope.outputs.platform }}
     steps:
-      - id: filter
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # `predicate-quantifier: some-with-excludes` is required for the
-          # `!pattern` entries below to actually exclude anything — the
-          # action's DEFAULT quantifier ('some') treats every entry as an
-          # independent OR-match, so a negated pattern never overrides the
-          # catch-all `**` and the filter matches everything regardless
-          # (verified against a real docs-only PR: without this line,
-          # `non_docs` still came back `true` for a CHANGELOG.md-only diff).
-          # With it: a file matches `non_docs` only if it matches `**` AND
-          # none of the negated patterns — i.e. everything except this
-          # docs-only allowlist.
-          #
-          # NOT `!**/*.md` (every .md file, any depth): several crate-level
-          # markdown files are compiled/tested content, not documentation —
-          # `crates/flui-animation/{README.md,docs/GUIDE.md,docs/PERFORMANCE.md}`
-          # and `crates/flui-scheduler/README.md` are pulled into a doctest via
-          # `#[doc = include_str!(...)]`, and
-          # `crates/flui-cli/templates/platforms/ios/README.md` is
-          # `include_str!()`'d by `scaffold.rs` and asserted on by a test. A
-          # PR touching only one of those must NOT skip clippy/cross-typecheck/
-          # wasm-check. `!*.md` below matches only ROOT-level .md files
-          # (picomatch: a pattern with no `/` matches the whole path, and `*`
-          # does not cross `/`, so a nested path can never satisfy it) —
-          # per-crate README.md is deliberately NOT in this allowlist.
-          # `scripts/check-paths-filter-allowlist.py` (part of `checks`)
-          # re-derives every `include_str!()` target in the workspace and
-          # fails if any of them lands inside this allowlist, so the two
-          # can't silently drift apart again.
-          predicate-quantifier: some-with-excludes
-          filters: |
-            non_docs:
-              - '**'
-              - '!*.md'
-              - '!docs/**'
-              - '!.rust-studio/**'
-              - '!.github/**/*.md'
-              - '!.github/ISSUE_TEMPLATE/**'
-              - '!.github/CODEOWNERS'
-              - '!.editorconfig'
-              - '!crates/*/ARCHITECTURE.md'
-              - '!crates/*/CHANGELOG.md'
-              - '!book/**'
+          persist-credentials: false
+          # The merge base with the PR's base branch has to be in the clone.
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - id: scope
+        name: Decide heavy vs fast lane, and the affected packages
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          FULL_CI_LABEL=false
+          if [ "$EVENT" != pull_request ]; then
+            bash scripts/affected-crates.sh --full --format github > scope.txt
+            heavy=true
+          else
+            # live, not from the payload: `full-ci` re-runs this very run. No
+            # pipe into `grep -q` (its early exit would fail the pipeline).
+            labels=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.labels[].name')
+            if grep -qx full-ci <<<"$labels"; then
+              FULL_CI_LABEL=true
+            fi
+            bash scripts/affected-crates.sh --base "$BASE_SHA" --format github > scope.txt
+            # heavy when the change feeds only a heavy job (Cargo.lock,
+            # toolchain, workflows, a heavy job's script, a shader, feature-
+            # gated edges into many dependents) or the PR carries `full-ci`
+            heavy=false
+            if grep -qx 'heavy_required=true' scope.txt || [ "$FULL_CI_LABEL" = true ]; then
+              heavy=true
+              bash scripts/affected-crates.sh --full --format github > scope.txt
+            fi
+          fi
+          echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
+          cat scope.txt >> "$GITHUB_OUTPUT"
+          echo "event=$EVENT full-ci-label=$FULL_CI_LABEL heavy=$heavy"
+          cat scope.txt
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # fast-lane — an ordinary pull_request's whole compile gate: clippy and
+  # nextest over the affected packages (`plan`'s `packages` mode: the changed
+  # crates plus their workspace dependents; `full` mode: the workspace), and
+  # flui-platform's headless suite when it is in scope. Target: a typical PR
+  # under 7 minutes. The heavy jobs below cover the rest on main, nightly,
+  # on demand and under the `full-ci` label. Local mirror: `just check-changed`
+  # (same script, same arguments).
+  # ─────────────────────────────────────────────────────────────────────────
+  fast-lane:
+    name: fast-lane
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy != 'true' && (needs.plan.outputs.mode == 'packages' || needs.plan.outputs.mode == 'full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      SCOPE_REASON: ${{ needs.plan.outputs.reason }}
+      PACKAGES: ${{ needs.plan.outputs.packages }}
+      PKG_ARGS: ${{ needs.plan.outputs.pkg_args }}
+      TEST_ARGS: ${{ needs.plan.outputs.test_args }}
+      FEATURES: ${{ needs.plan.outputs.features }}
+      PLATFORM: ${{ needs.plan.outputs.platform }}
+      WASM_ARGS: ${{ needs.plan.outputs.wasm_args }}
+      HACK_ARGS: ${{ needs.plan.outputs.hack_args }}
+      DOC_ARGS: ${{ needs.plan.outputs.doc_args }}
+      DOCTEST_ARGS: ${{ needs.plan.outputs.doctest_args }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable + clippy
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          # Restores the cache the heavy `test` job saves on main (same
+          # shared-key): this job never runs on main, so a job-keyed cache
+          # would always be cold.
+          shared-key: workspace-tests
+          save-if: false
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: Scope
+        run: |
+          echo "scope: $SCOPE_REASON"
+          echo "packages: ${PACKAGES:-<whole workspace>}"
+
+      # Word splitting of the *_ARGS variables is intended: they are cargo
+      # argument lists computed by scripts/affected-crates.sh.
+      - name: cargo clippy (affected packages)
+        run: |
+          # shellcheck disable=SC2086
+          cargo clippy $PKG_ARGS --all-targets --locked -- -D warnings
+          case " $PACKAGES " in
+            *" flui-engine "*|"  ") cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings ;;
+          esac
+
+      - name: cargo nextest run (affected packages)
+        if: needs.plan.outputs.test_args != ''
+        run: |
+          # shellcheck disable=SC2086
+          cargo nextest run $TEST_ARGS --locked --no-fail-fast --lib --bins --tests $FEATURES
+
+      # The heavy `doc` job's rustdoc (doc-strict.sh's flags) over the scope:
+      # a broken intra-doc link is the typical casualty of moving code.
+      - name: cargo doc -D warnings (affected packages)
+        if: needs.plan.outputs.doc_args != ''
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          # shellcheck disable=SC2086
+          cargo doc $DOC_ARGS --no-deps --locked --document-private-items
+
+      # The heavy `doc-test` job over the scope's library packages: nextest
+      # executes no doctests, and a README pulled in with `include_str!` is
+      # one.
+      - name: cargo test --doc (affected packages)
+        if: needs.plan.outputs.doctest_args != ''
+        run: |
+          # shellcheck disable=SC2086
+          cargo test $DOCTEST_ARGS --locked --doc
+
+      # cfg-gated code the Linux build never compiles: clippy (no link, no
+      # tests) on its own target, for the affected packages only -- the same
+      # commands as the heavy `cross-typecheck` job.
+      - name: Add cross targets
+        if: needs.plan.outputs.cross_platform == 'true' || needs.plan.outputs.cross_app == 'true' || needs.plan.outputs.cross_cli == 'true'
+        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android aarch64-apple-ios
+
+      - name: cargo clippy flui-platform backends (windows, macos, android, ios)
+        if: needs.plan.outputs.cross_platform == 'true'
+        run: |
+          for target in x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android aarch64-apple-ios; do
+            cargo clippy -p flui-platform --locked --all-targets --features a11y --target "$target" -- -D warnings
+          done
+
+      - name: cargo clippy flui-app / flui android runner
+        if: needs.plan.outputs.cross_app == 'true'
+        env:
+          CC_aarch64_linux_android: clang
+          CFLAGS_aarch64_linux_android: --target=aarch64-linux-android21
+          AR_aarch64_linux_android: ar
+        run: cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings
+
+      - name: cargo clippy flui-cli (windows)
+        if: needs.plan.outputs.cross_cli == 'true'
+        run: cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
+      # wasm32-only code in the affected wasm-capable packages -- the
+      # heavy `wasm-check` job's clippy pass, narrowed to them.
+      - name: cargo clippy (wasm32, affected packages)
+        if: needs.plan.outputs.wasm_args != ''
+        run: |
+          rustup target add wasm32-unknown-unknown
+          # shellcheck disable=SC2086
+          cargo clippy $WASM_ARGS --lib --bins --locked --target wasm32-unknown-unknown -- -D warnings
+
+      - name: cargo check facade hot-reload feature (wasm32)
+        if: needs.plan.outputs.wasm_facade == 'true'
+        run: cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload
+
+      # A crate whose Cargo.toml changed (typically its [features]): the
+      # feature-matrix job's per-feature clippy, for that crate only.
+      - name: Install cargo-hack
+        if: needs.plan.outputs.hack_args != ''
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
+        with:
+          tool: cargo-hack
+
+      - name: cargo hack clippy --each-feature (changed manifests)
+        if: needs.plan.outputs.hack_args != ''
+        run: |
+          # shellcheck disable=SC2086
+          cargo hack clippy $HACK_ARGS --locked --each-feature --optional-deps --keep-going -- -D warnings
+          # shellcheck disable=SC2086
+          cargo hack clippy $HACK_ARGS --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
+
+      - name: Ensure Xvfb + xkbcommon are available (flui-platform)
+        if: needs.plan.outputs.platform == 'true'
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0 libxkbcommon0
+
+      - name: cargo nextest run (flui-platform, headless)
+        if: needs.plan.outputs.platform == 'true'
+        env:
+          FLUI_HEADLESS: "1"
+        run: xvfb-run -a cargo nextest run -p flui-platform --all-features --locked --no-fail-fast
+
+      - name: Upload insta snapshot candidates on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: insta-snap-new-fast-lane
+          path: "**/*.snap.new"
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # fast-lane-ios — the flui-app / flui iOS runner's clippy, which needs
+  # macOS (xcrun) and so cannot join `fast-lane` on Linux. Runs on an
+  # ordinary PR when flui-app is in scope; the heavy `cli-macos` job runs the
+  # same command otherwise.
+  # ─────────────────────────────────────────────────────────────────────────
+  fast-lane-ios:
+    name: fast-lane-ios
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy != 'true' && needs.plan.outputs.cross_ios == 'true' && (needs.plan.outputs.mode == 'packages' || needs.plan.outputs.mode == 'full')
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable + clippy (+ iOS target)
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy
+          targets: aarch64-apple-ios
+
+      - name: Add the iOS target to the pinned toolchain
+        run: rustup target add aarch64-apple-ios
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          shared-key: macos-ios
+          save-if: false
+          cache-bin: false
+
+      - name: cargo clippy (ios runner)
+        run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
@@ -307,8 +561,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   clippy:
     name: clippy
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -359,8 +613,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   test:
     name: test (${{ matrix.os }})
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -391,6 +645,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
+          # Shared with `fast-lane`, which restores what this job saves on main.
+          shared-key: workspace-tests
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # Per tokio: binary caching breaks on macOS — guard for when macOS
           # joins the matrix.
@@ -492,6 +748,13 @@ jobs:
       # close exits 0 within a timeout (catches teardown hangs and
       # post-quit crashes); wheel ticks scroll. X11 input/pixels only — the
       # Wayland-specific teardown ordering is the next step's job.
+      # fast-lane restores this job's cache (shared-key workspace-tests) and
+      # runs clippy before anything else; without check-mode artifacts in the
+      # cache that clippy starts cold. Main only: it is what saves the cache.
+      - name: Warm clippy artifacts for fast-lane's cache (main only)
+        if: github.ref == 'refs/heads/main'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Upload insta snapshot candidates on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -537,8 +800,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   test-features:
     name: test-features
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -626,8 +889,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   live-smoke:
     name: live-smoke
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -685,8 +948,8 @@ jobs:
 
   gpu-test:
     name: gpu-test
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: windows-latest
     # Generous headroom: ~440 readback tests on a software rasterizer, each
     # creating its own wgpu::Device, plus the cold wgpu-stack build. The first
@@ -779,8 +1042,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   bench-compile:
     name: bench-compile (${{ matrix.os }})
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -817,8 +1080,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   doc:
     name: doc
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -847,8 +1110,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   deny:
     name: deny
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true' || needs.plan.outputs.mode != 'docs'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The workflow default is `contents: read` only. The wgpu-bump probe below
@@ -950,8 +1213,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   doc-test:
     name: doc-test
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -981,8 +1244,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   msrv:
     name: msrv
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -1027,8 +1290,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   miri:
     name: miri
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true
@@ -1103,8 +1366,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   feature-matrix:
     name: feature-matrix (${{ matrix.slice }})
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -1255,8 +1518,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   wasm-check:
     name: wasm-check
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -1471,8 +1734,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   cli-macos:
     name: cli-macos
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -1496,6 +1759,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
+          # Shared with `fast-lane-ios`, which restores what this job saves on main.
+          shared-key: macos-ios
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # Per tokio: binary caching breaks on macOS.
           cache-bin: false
@@ -1522,8 +1787,8 @@ jobs:
 
   cross-typecheck:
     name: cross-typecheck
-    needs: [checks, paths-filter]
-    if: needs.paths-filter.outputs.non_docs == 'true'
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -1617,7 +1882,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, paths-filter, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
+    needs: [checks, plan, fast-lane, fast-lane-ios, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1630,90 +1895,120 @@ jobs:
           sparse-checkout: .github/workflows/ci.yml
           sparse-checkout-cone-mode: false
 
-      # Two rules, each closing a hole that used to be documented as open:
+      # Two rules:
       #
-      # 1. COMPLETENESS — every job in this workflow except `ci` itself must
-      #    appear in `needs`. Without this, a job ADDED without editing the
-      #    list above ran, passed or failed, and gated nothing. Renaming was
-      #    already safe (`needs` stops resolving); adding was not.
+      # 1. COMPLETENESS -- every job in this workflow except `ci` itself (and
+      #    `notify-main-red`, which runs after it) must appear in `needs`.
+      #    Without this, a job ADDED without editing the list above ran,
+      #    passed or failed, and gated nothing.
       #
-      # 2. NO SILENT SKIPS — `skipped` is a failure, UNLESS the job is listed
-      #    in ALLOWED_SKIPS with a reason. Every compiling job below is now
-      #    conditional on `paths-filter`'s `non_docs` output (docs-only PRs
-      #    skip them, per the `paths-filter` job's own comment) — that is the
-      #    one reviewable, intentional source of `if:` in this workflow, so
-      #    those exact job names are listed below. A skip from anywhere else
-      #    (a future `if:` someone adds without updating this list, or a
-      #    cancellation) still fails the aggregator.
+      # 2. EXACTLY THE EXPECTED SKIPS -- which jobs may skip is decided by
+      #    `plan` alone, and the aggregator recomputes it from `plan`'s
+      #    outputs instead of trusting each job's `if:`:
+      #      heavy lane (main, merge queue, nightly, dispatch, `full-ci`):
+      #        only fast-lane and fast-lane-ios skip; every heavy job must succeed
+      #      ordinary PR, mode packages/full: every heavy job skips,
+      #        fast-lane and deny must succeed, fast-lane-ios too when plan
+      #        puts the iOS runner in scope (cross_ios)
+      #      ordinary PR, mode none (repo tooling only): heavy + fast-lane skip
+      #      ordinary PR, mode docs: heavy + fast-lane + deny skip
+      #    Any other skip (a drifted `if:`, a cancellation) or a job that ran
+      #    where it should have skipped fails the aggregator.
       # A real YAML parse, not a regex over `key:` lines: a job declared as
       # `"quoted-key":` or `key: # comment` is valid YAML that a line regex
-      # misses, and a missed declaration silently re-opens the hole this
-      # step closes. The runner image ships Python but not PyYAML.
+      # misses. The runner image ships Python but not PyYAML.
       - name: Install PyYAML
         run: python3 -m pip install --quiet --disable-pip-version-check "pyyaml>=6,<7"
 
-      - name: Verify every job is gated and every gated job succeeded
+      - name: Verify every job is gated and exactly the expected jobs skipped
         env:
           NEEDS: ${{ toJSON(needs) }}
-          ALLOWED_SKIPS: >-
+          HEAVY_JOBS: >-
             clippy feature-matrix wasm-check cross-typecheck cli-macos test
-            test-features live-smoke gpu-test bench-compile doc deny doc-test
-            msrv miri
-          # Whether a `skipped` result is EVER excusable depends on both of
-          # these, not on the job's name alone: a job in ALLOWED_SKIPS that
-          # was skipped for some OTHER reason (a bug in its `if:`, a
-          # cancellation) is still a real problem, not "the docs-only path
-          # working as designed".
-          NON_DOCS: ${{ needs.paths-filter.outputs.non_docs }}
+            test-features live-smoke gpu-test bench-compile doc doc-test msrv
+            miri
+          HEAVY: ${{ needs.plan.outputs.heavy }}
+          MODE: ${{ needs.plan.outputs.mode }}
+          CROSS_IOS: ${{ needs.plan.outputs.cross_ios }}
           EVENT: ${{ github.event_name }}
         run: |
           python3 - <<'EOF'
           import json, os, sys, yaml
           needs = json.loads(os.environ["NEEDS"])
-          allowed_skips = set(os.environ["ALLOWED_SKIPS"].split())
+          heavy_jobs = set(os.environ["HEAVY_JOBS"].split())
+          heavy = os.environ["HEAVY"] == "true"
+          mode = os.environ["MODE"]
           event = os.environ["EVENT"]
-          non_docs = os.environ["NON_DOCS"]
-          # A skip is only the *designed* docs-only fast path on a
-          # `pull_request` run whose `paths-filter` output says the diff is
-          # docs-only (`non_docs == 'false'`). On `push`/`merge_group`, or on
-          # a `pull_request` that touched real code, every listed job must
-          # have actually run — a skip there is a bug to fail on, not a skip
-          # to excuse.
-          skips_excusable = event == "pull_request" and non_docs == "false"
           with open(".github/workflows/ci.yml", encoding="utf-8") as f:
               workflow = yaml.safe_load(f)
-          declared = set(workflow["jobs"]) - {"ci"}
+          declared = set(workflow["jobs"]) - {"ci", "notify-main-red"}
           for job, data in sorted(needs.items()):
               print(f"{job}: {data['result']}")
           missing = sorted(declared - set(needs))
           if missing:
               print(f"::error::jobs declared in ci.yml but absent from the ci aggregator's needs: {missing}")
-          bad = {}
-          skipped_allowed = set()
-          for job, data in needs.items():
-              r = data["result"]
-              if r == "success":
-                  continue
-              if r == "skipped" and skips_excusable and job in allowed_skips:
-                  skipped_allowed.add(job)
-                  continue
-              bad[job] = r
-          # On the docs-only fast path, a PARTIAL skip (some ALLOWED_SKIPS
-          # jobs ran, others didn't) means the `if:` conditions on those jobs
-          # disagree with each other or with `paths-filter` — that is exactly
-          # the drift this aggregator exists to catch, not something to wave
-          # through because each individual job's own result looked fine.
-          if skips_excusable and skipped_allowed != allowed_skips:
-              missing_skips = sorted(allowed_skips - skipped_allowed)
-              print(
-                  f"::error::docs-only PR (non_docs=false) but not every ALLOWED_SKIPS job "
-                  f"was skipped — {missing_skips} ran instead; their `if:` disagrees with "
-                  f"paths-filter's non_docs output"
-              )
-              bad["_partial_docs_only_skip"] = sorted(missing_skips)
+          if needs.get("plan", {}).get("result") != "success":
+              expected = None  # without a plan there is no expectation to check against
+          elif heavy:
+              expected = {"fast-lane", "fast-lane-ios"}
+          elif mode in ("packages", "full"):
+              expected = set(heavy_jobs) | ({"fast-lane-ios"} if os.environ.get("CROSS_IOS") != "true" else set())
+          elif mode == "none":
+              expected = heavy_jobs | {"fast-lane", "fast-lane-ios"}
+          elif mode == "docs":
+              expected = heavy_jobs | {"fast-lane", "fast-lane-ios", "deny"}
+          else:
+              expected = None
+          skipped = {j for j, d in needs.items() if d["result"] == "skipped"}
+          bad = {j: d["result"] for j, d in needs.items() if d["result"] not in ("success", "skipped")}
+          if expected is None:
+              bad["_plan"] = f"no usable plan (result={needs.get('plan', {}).get('result')}, mode={mode!r})"
+          else:
+              for j in sorted(skipped - expected):
+                  bad[j] = "skipped, but this plan (heavy=%s mode=%s) requires it to run" % (heavy, mode)
+              for j in sorted(expected - skipped):
+                  if j in needs:
+                      bad[j] = "ran (%s), but this plan skips it: its if: disagrees with plan" % needs[j]["result"]
           if bad:
-              print(f"::error::required jobs not green (skipped counts as red unless the docs-only fast path excuses it): {bad}")
+              print(f"::error::jobs not as planned: {bad}")
           if missing or bad:
               sys.exit(1)
-          print(f"ok: {len(declared)} jobs, all gated, all green (event={event}, non_docs={non_docs})")
+          print(f"ok: {len(declared)} jobs, all gated, {len(skipped)} skipped as planned (event={event} heavy={heavy} mode={mode})")
           EOF
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # notify-main-red -- a red `ci` on main or on the nightly run opens (or
+  # comments on) one tracking issue, so a broken main is never silent. It
+  # runs only there: on a PR the red check on the PR is the notification.
+  # The team rule for a red main (AGENTS.md): fix forward within the hour or
+  # revert.
+  # ─────────────────────────────────────────────────────────────────────────
+  notify-main-red:
+    name: notify-main-red
+    needs: [ci]
+    if: ${{ !cancelled() && needs.ci.result == 'failure' && (github.event_name == 'push' || github.event_name == 'schedule') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the "main is red" issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="CI is red on main"
+          body="\`ci\` failed on \`${SHA:0:10}\` ($EVENT): $RUN_URL
+          Rule (AGENTS.md): fix forward within the hour or revert. Close this issue once main is green again."
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+            echo "commented on #$number"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
