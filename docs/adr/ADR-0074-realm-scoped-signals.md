@@ -334,7 +334,7 @@ answered by §5.3: they feed the same heap.
 Prototype scope: `Signal`/`Reactive` in `flui-view` behind `signals`, the reader registry,
 `RebuildReason::SignalChange`, `HeadlessBinding::reactive()`, one `UiCommand::SignalWrite`. No
 catalog changes. The benchmark (`crates/flui-widgets/benches/signals_rebuilds.rs`,
-`just bench-signals`) runs each scenario as **A** `setState` on the owning state vs **B**
+`cargo bench -p flui-widgets --features signals --bench signals_rebuilds`) runs each scenario as **A** `setState` on the owning state vs **B**
 signals, on the same tree.
 
 Acceptance criteria: for "one thing changed" scenarios B rebuilds only the readers (A rebuilds

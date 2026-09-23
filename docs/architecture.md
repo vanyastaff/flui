@@ -38,7 +38,7 @@ Layer 0  ── flui-geometry, flui-types
                  platform value types; base units)
 ```
 
-**This is not enforced by convention.** [`workspace-layers.toml`](workspace-layers.toml) is the authoritative policy, and `scripts/check-workspace-inventory.sh` (`just inventory-check`, part of `just ci` and the CI `checks` job) validates every **normal** Cargo edge against it: strictly downward unless the ordered pair is an explicit same-layer exemption, no forbidden pairs, acyclic including projected future edges, and every member classified. See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md). Dev-dependencies are out of scope and cross layers freely — a test fixture is not an architectural claim.
+**This is not enforced by convention.** Each crate declares its layer in its manifest (`[package.metadata.flui] layer`, named in the root `[workspace.metadata.flui] layers`), and `cargo xtask workspace` (part of `cargo xtask checks` and the CI `checks` job) validates every **normal** and build Cargo edge against it: same layer or lower, never an example or tool, and every crate layered. Cargo rejects cycles itself. See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md). Dev-dependencies may cross layers — a test fixture is not an architectural claim — except where a crate restricts them with `allowed-dev-dependents`: nothing but `flui-localizations`, `flui-app` and the facade depends on Material or Cupertino in any form ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)).
 
 Note on `flui-foundation` placement: in the current workspace its Cargo deps are leaf (no internal-crate runtime deps), but its *responsibility* is framework primitives that operate on top of `flui-types`' value types — so it is placed above `flui-types` in the layered table. The target crate graph in [`FOUNDATIONS.md`](FOUNDATIONS.md) Part IV draws that placement as a dashed (not-yet-real) edge.
 
@@ -46,7 +46,7 @@ See [`crates.md`](crates.md) for the full inventory and current status of each c
 
 ### Why this structure?
 
-- **Tooling enforces the layout, not review.** Cargo rejects a dependency *cycle* at build time, but an upward edge that does not close a cycle (`flui-rendering → flui-devtools`, say) builds fine — which is how three placements in this diagram drifted from the code unnoticed. `just inventory-check` closes that gap by comparing the declared layer policy against Cargo's normal edges.
+- **Tooling enforces the layout, not review.** Cargo rejects a dependency *cycle* at build time, but an upward edge that does not close a cycle (`flui-rendering → flui-devtools`, say) builds fine — which is how three placements in this diagram drifted from the code unnoticed. `cargo xtask workspace` closes that gap by comparing each manifest's declared layer against Cargo's normal and build edges.
 - **Public API discipline scales.** A consumer cannot reach into another crate's internals because they are `pub(crate)`. Reviewers reject changes that expose internals "just to make it compile" — that is the signal an abstraction is wrong.
 - **Backends slot in via traits.** `Platform`, `PaintBackend`, `RenderBox<A>`, and similar are extension points. Implementations live in dedicated crates, not in widget code.
 

@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-18
-- **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime/scheduling topology is a sanctioned leapfrog zone — Flutter is not the reference here); [Runtime Architecture Execution Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) ("Unify worker, I/O, and service execution with host injection"); [Runtime Dependency Adoption Guide](../research/2026-08-01-runtime-dependency-adoption-guide.md) (`tokio-util` adoption, "another async runtime: do not add"); `docs/runtime-contract.toml` (`execution-services-owned-by-app-runtime`)
+- **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime/scheduling topology is a sanctioned leapfrog zone — Flutter is not the reference here); [Runtime Architecture Execution Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) ("Unify worker, I/O, and service execution with host injection"); [Runtime Dependency Adoption Guide](../research/2026-08-01-runtime-dependency-adoption-guide.md) (`tokio-util` adoption, "another async runtime: do not add")
 - **Issue:** [#557](https://github.com/vanyastaff/flui/issues/557) — between singleton retirement (#553) and the task/worker/service lifecycles (#558) / threaded raster lane (#559)
 
 *Background execution is one loop-scoped service owned by `AppRuntime`, not a per-platform possession: work is classified by deadline and behavior (frame-required compute, asynchronous compute, IO), admission is bounded, shutdown cancels-then-joins under a deadline, and an embedded host can inject its own pools — in which case FLUI never constructs its default ones. The per-platform full-core `BackgroundExecutor` is defanged (lazy, small) ahead of its removal.*
@@ -49,7 +49,7 @@ Both lanes count in-flight work against a cap; a full lane refuses with `SpawnEr
 
 ### The platform executor is defanged ahead of removal
 
-`BackgroundExecutor` (already classified removal-target under #557 in `docs/runtime-contract.toml`) no longer claims a full-core pool per platform instance: construction starts zero threads (lazy `OnceLock`), and the pool that starts on first *use* is a small fixed size (2 workers). FLUI-managed runs never use it, so they never start it. Its deletion — together with `flui_platform::Task`/`Priority` — is the follow-up slice, not this one: those surfaces are only lint-gated on Windows/macOS and their internal consumers (prompt marshaling) deserve their own change.
+`BackgroundExecutor` (already slated for removal under #557) no longer claims a full-core pool per platform instance: construction starts zero threads (lazy `OnceLock`), and the pool that starts on first *use* is a small fixed size (2 workers). FLUI-managed runs never use it, so they never start it. Its deletion — together with `flui_platform::Task`/`Priority` — is the follow-up slice, not this one: those surfaces are only lint-gated on Windows/macOS and their internal consumers (prompt marshaling) deserve their own change.
 
 ## Alternatives considered
 

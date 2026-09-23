@@ -381,11 +381,11 @@ impl DataTransferSource for WinitDataTransfer {
     }
 }
 
-// These are the winit arm-conversion tests referenced by ADR-0038. They are
-// valuable locally (`just test`), but they are explicitly NOT the CI gate
-// evidence for the transport: flui-platform's tests are excluded from the CI
-// test job, so the gate-visible transport tests live in
-// `crates/flui-app/tests/data_transfer_transport.rs`.
+// These are the winit arm-conversion tests referenced by ADR-0038. They run
+// with flui-platform's own suite (`cargo nextest run -p flui-platform
+// --all-features`, a dedicated CI step outside the workspace-wide test run),
+// but they are explicitly NOT the gate evidence for the transport: that lives
+// in `crates/flui-app/tests/data_transfer_transport.rs`.
 #[cfg(test)]
 mod tests {
     use std::future::Future;

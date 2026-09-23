@@ -23,6 +23,6 @@ Crate-local guides for the render pipeline, protocols, and test harness.
 ## Related harness docs
 
 - [flui-layer/README.md](../../flui-layer/README.md) — layer-tree construction and the `testing::inspect` walkers
-- [flui-painting/docs/TESTING.md](../../flui-painting/docs/TESTING.md) — display-list recording
+- [flui-painting/src/testing/mod.rs](../../flui-painting/src/testing/mod.rs) — display-list recording
 - [flui-foundation/docs/TESTING.md](../../flui-foundation/docs/TESTING.md) — diagnostics for assertions
 - [Workspace testing guide](../../../docs/testing.md) — CI commands and conventions

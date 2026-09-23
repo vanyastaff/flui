@@ -27,7 +27,6 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 
 thiserror = { workspace = true }
 tracing = { workspace = true }
-serde = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 
 # Text shaping and layout
@@ -46,16 +45,17 @@ unicode-script = { version = "=0.5.8" }
 unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
-serde_json.workspace = true
 criterion = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
-# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-painting = { path = ".", features = ["testing"] }
 
 [features]
 default = ["bundled-fonts"]
-serde = ["dep:serde", "flui-types/serde"]
+# Forwards only: the serializable style values live in flui-types, and no
+# flui-painting type derives serde (the display list carries none, ADR-0066).
+serde = ["flui-types/serde"]
 
 # bundled-fonts: embed Roboto Regular, Material Icons, and Cupertino Icons and
 # install whichever the host lacks into the process-wide font system at
@@ -87,3 +87,6 @@ workspace = true
 [[bench]]
 name = "display_list_record"
 harness = false
+
+[package.metadata.flui]
+layer = 2

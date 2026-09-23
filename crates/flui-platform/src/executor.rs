@@ -16,10 +16,9 @@ use crate::{task::Task, traits::PlatformExecutor};
 /// Worker threads in the lazily-started runtime. Deliberately small: since
 /// the unified execution services (issue #557) the loop-scoped `AppRuntime`
 /// owns the process's real worker pools, and this executor remains only as
-/// the `Platform::background_executor` compatibility surface (a
-/// removal-target — see `docs/runtime-contract.toml`) for platform-internal
-/// marshaling and tests. It must never again claim a full-core pool per
-/// platform instance.
+/// the `Platform::background_executor` compatibility surface (slated for
+/// removal) for platform-internal marshaling and tests. It must never again
+/// claim a full-core pool per platform instance.
 const WORKER_THREADS: usize = 2;
 
 /// Background executor for multi-threaded async tasks

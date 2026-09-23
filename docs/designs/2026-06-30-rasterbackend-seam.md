@@ -22,7 +22,7 @@ guards:
 ## The mistake this design avoids
 
 The naïve reading of "RasterBackend seam" is: wrap the lyon `Tessellator`
-([`wgpu/tessellator.rs`](../../crates/flui-engine/src/wgpu/tessellator.rs)) in a
+([`tessellator.rs`](../../crates/flui-engine/src/tessellator.rs)) in a
 trait like `trait RasterBackend { fn tessellate_fill(..) -> (Vec<Vertex>, Vec<u32>); }`.
 
 **That is a fake seam.** Its input/output (FLUI path/shape → triangle-mesh
@@ -59,7 +59,8 @@ Backend internals (lyon, wgpu pipelines)   ← implementation detail, contained
 
 ### Layer 1 — `CommandRenderer` / `LayerStateStack` (per-command visitor)
 
-Defined in [`traits.rs`](../../crates/flui-engine/src/traits.rs). One `render_*`
+Defined in [`command_renderer.rs`](../../crates/flui-engine/src/command_renderer.rs) and
+[`layer_state_stack.rs`](../../crates/flui-engine/src/layer_state_stack.rs). One `render_*`
 method per `DrawCommand` variant + the clip/transform/effect stack. This is the
 *existing* backend-agnostic seam — its own docs already name "wgpu, skia, vello,
 software" as intended implementors. A new backend implements these traits and

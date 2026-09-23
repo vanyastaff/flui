@@ -20,7 +20,7 @@ A `WarmUpCanvas` trait carrier whose only purpose is to be a parameter type for 
 
 `Canvas` owns its inner `DisplayList` during recording. `Canvas::finish(self) -> DisplayList` consumes the canvas and surrenders the immutable `DisplayList`. The `DisplayList` is then consumed exactly once: either moved into `Layer::Picture(PictureLayer)` / `Layer::Canvas(CanvasLayer)` by `flui-layer`, or iterated by `flui-engine`'s wgpu backend during GPU lowering. There is no `Arc<RwLock<Canvas>>` anywhere. The `Arc<DisplayList>` blanket impl in the sealed-trait pair (`DisplayListCore for Arc<DisplayList>`) is for retained-layer caching, not concurrent mutation -- the value is frozen by the time the `Arc` is constructed.
 
-Two infrastructure lock sites stay (image cache + system fonts notifier; off the per-command hot path; documented in [`docs/PORT.md`](../PORT.md) lock-decision table). One feature-gated `OnceLock<Mutex<FontSystem>>` for cosmic-text font shaping stays (setup-phase + text-shape phase, not per-command). No new locks introduced.
+Two infrastructure lock sites stay (image cache + system fonts notifier; off the per-command hot path; documented in [`docs/PORT.md`](../adr/ADR-0078-rules-live-in-types-and-lints.md) lock-decision table). One feature-gated `OnceLock<Mutex<FontSystem>>` for cosmic-text font shaping stays (setup-phase + text-shape phase, not per-command). No new locks introduced.
 
 ## Main trust boundary
 
@@ -174,7 +174,7 @@ No `Arc<RwLock<Canvas>>` on the diagram. No `Box<dyn Drawable>` plugin trait. No
 - `DisplayList` struct + 29-variant `DrawCommand` enum + `DisplayListStats` + `HitRegion` + `PointerEvent`. Stays; split.
 - `DisplayListCore` / `DisplayListExt` sealed-trait pair + 4 blanket impls (`DisplayList`, `Arc<DisplayList>`, `Box<DisplayList>`, `&DisplayList`). Stays. Documented as the sealed-extension-trait pattern (precedent: `flui-rendering`'s extension-trait split at commit `d0e53c63`).
 - `ClipContext` trait + 3 default `clip_*_and_paint` methods. Stays. Single prod impl `CanvasContext` in `flui-rendering` is the legitimate cross-crate seam; sealing it would force `flui-rendering` into an awkward concrete-type position.
-- `PaintingBinding` + `ImageCache` + `SystemFontsNotifier`. Stays (trimmed). The two `RwLock` sites are off-hot-path per [`docs/PORT.md`](../PORT.md) lock-decision table.
+- `PaintingBinding` + `ImageCache` + `SystemFontsNotifier`. Stays (trimmed). The two `RwLock` sites are off-hot-path per [`docs/PORT.md`](../adr/ADR-0078-rules-live-in-types-and-lints.md) lock-decision table.
 - `tessellation` module (feature-gated, `lyon`-backed). Stays as-is; clean.
 - `text_layout` + `text_painter` (feature-gated, `cosmic-text`-backed). Split into submodules; flatten the `mod inner` cfg layer.
 - `error.rs` with `PaintingError` + 5 variants. Stays; one variant may be added in U10 if a real surface emerges.
@@ -795,7 +795,7 @@ Estimated final re-export count: ~40 names (down from 47 today).
 - `Box<DisplayList>` inside `DrawCommand::ShaderMask` / `BackdropFilter`: child sub-list captured via closure; allocated once per `draw_shader_mask` / `draw_backdrop_filter` call.
 
 **Forbidden allocations.**
-- No `Arc::clone` inside the per-frame paint loop on a per-render-object basis (Trigger 5 of [`docs/PORT.md`](../PORT.md), forward-looking; flui-painting is not in Trigger 5's current scope but we hold the rule).
+- No `Arc::clone` inside the per-frame paint loop on a per-render-object basis (Trigger 5 of [`docs/PORT.md`](../adr/ADR-0078-rules-live-in-types-and-lints.md), forward-looking; flui-painting is not in Trigger 5's current scope but we hold the rule).
 - No `HashMap<RenderId, _>` in the per-command path. (None exists today.)
 - No `String::new` on the per-command path. Some commands (`DrawText`) clone `String`; this is necessary for the text payload but should be considered for `Cow<'static, str>` interning of repeated strings if a benchmark surfaces.
 - No `Box<dyn Trait>` allocation per draw command on the per-frame path. (None exists today after U1/U2 deletes the `Box<dyn ShaderWarmUp>` from `PaintingBinding`.)
@@ -808,7 +808,7 @@ Estimated final re-export count: ~40 names (down from 47 today).
 - `Arc<DisplayList>` -- for retained-layer caching (`Layer::Picture(PictureLayer { display_list: Arc<DisplayList> })`). One allocation per retained layer, long-lived. Read-only via `DisplayListCore`.
 - `Arc<dyn Fn(&PointerEvent) + Send + Sync>` (HitRegionHandler) -- per hit region registered. Recording-time only.
 - `HashMap<String, CachedImage>` in `ImageCache` -- setup-phase + occasional cache lookups. Off per-command path.
-- `RwLock<HashMap<String, CachedImage>>` in `ImageCache` -- documented in [`docs/PORT.md`](../PORT.md) lock-decision table. Off hot path.
+- `RwLock<HashMap<String, CachedImage>>` in `ImageCache` -- documented in [`docs/PORT.md`](../adr/ADR-0078-rules-live-in-types-and-lints.md) lock-decision table. Off hot path.
 - `RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>` in `SystemFontsNotifier` -- system font change notifications, rare.
 - `OnceLock<Mutex<FontSystem>>` in `text_layout` -- cosmic-text init + per-shape lock. Off per-command path; per-text-layout-creation.
 - `Box<DisplayList>` inside `DrawCommand::ShaderMask` / `BackdropFilter` -- child sub-display-list captured by closure. Cannot be inlined (variant size would balloon). Acceptable.
@@ -1038,7 +1038,7 @@ Filed in **Outstanding refactors** as "Flat-bytecode DisplayList representation"
 
 **Why tempting:** Enables incremental paint with chunked GPU upload.
 
-**Why wrong:** [`docs/PORT.md`](../PORT.md) Refusal trigger 3 forbids `async fn` on the render hot path. The paint phase is synchronous by design; mid-frame yields would require coordinating with `flui-scheduler`'s frame budget. Out of scope for this crate. Asset loading (where async legitimately lives) hands off via `flui-assets` and decoded images arrive as `Image` payloads through the synchronous `Canvas::draw_image` API.
+**Why wrong:** [`docs/PORT.md`](../adr/ADR-0078-rules-live-in-types-and-lints.md) Refusal trigger 3 forbids `async fn` on the render hot path. The paint phase is synchronous by design; mid-frame yields would require coordinating with `flui-scheduler`'s frame budget. Out of scope for this crate. Asset loading (where async legitimately lives) hands off via `flui-assets` and decoded images arrive as `Image` payloads through the synchronous `Canvas::draw_image` API.
 
 ### Convert `WarmUpCanvas` to a closed enum vocabulary
 
@@ -1231,7 +1231,7 @@ Ordered. Each step lands as a reviewable commit. Each step compiles and passes t
   - `crates/flui-painting/docs/MIGRATION.md` (obsolete migration notes; stubbed or deleted)
   - `crates/flui-painting/docs/README.md` (Q&A; kept as companion)
 - Update `docs/PORT.md` `## Index` table:
-  - Flip `flui-painting` row from "`crates/flui-painting/docs/ARCHITECTURE.md` (pre-template)" to "[`flui-painting`](../crates/flui-painting/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active".
+  - Flip `flui-painting` row from "`crates/flui-painting/docs/ARCHITECTURE.md` (pre-template)" to "[`flui-painting`](../../crates/flui-painting/ARCHITECTURE.md) | Templated 2026-05-20 (Mythos chain) | Active".
 
 **Verifies:** `crates/flui-painting/ARCHITECTURE.md` exists at crate root; companion docs intact; `docs/PORT.md` index reflects the flip.
 

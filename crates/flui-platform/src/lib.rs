@@ -297,7 +297,7 @@ pub use traits::{
 /// | macOS | ✅ Native AppKit | 9/10 | Windowing, input, clipboard, IME, displays, vsync-paced frame loop; lint-only + bundled probes locally, no CI test job |
 /// | Linux | 🪟 winit fallback (`winit-backend`) | 5/10 | Windowing + input; native Wayland/X11 still a stub |
 /// | Android | 📋 Stub | 2/10 | Roadmap complete |
-/// | iOS | ✅ Native UIKit | 7/10 | Windowing, touch, clipboard, displays, `CADisplayLink` frame source; lint-only in CI plus `just ios-sim` locally (simulator verified) |
+/// | iOS | ✅ Native UIKit | 7/10 | Windowing, touch, clipboard, displays, `CADisplayLink` frame source; lint-only in CI plus `cargo xtask device ios-sim` locally (simulator verified) |
 /// | Web | 📋 Stub | 2/10 | Roadmap complete |
 ///
 /// # Errors

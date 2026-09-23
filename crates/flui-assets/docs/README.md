@@ -279,23 +279,21 @@ let weak_handles: Vec<WeakAssetHandle<_, _>> =
 
 ## Contributing
 
-See [../../CONTRIBUTING.md](../../CONTRIBUTING.md) for contribution guidelines.
+See [../../../CONTRIBUTING.md](../../../CONTRIBUTING.md) for contribution guidelines.
 
 ## License
 
 Licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](../../LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](../../../LICENSE-APACHE))
+- MIT License ([LICENSE](../../../LICENSE))
 
 at your option.
 
 ## See Also
 
 - [Main README](../README.md) - Project overview
-- [API Guidelines Audit](../API_GUIDELINES_AUDIT.md) - Compliance report (96%)
-- [Documentation Improvements](../DOCUMENTATION_IMPROVEMENTS.md) - Recent updates
-- [FLUI Framework](../../README.md) - Parent project
+- [FLUI Framework](../../../README.md) - Parent project
 
 ## Documentation Quality
 

@@ -1444,7 +1444,7 @@ mod tests {
 ///
 /// Both assertions below are FALSE on native, which is the point: a wasm test
 /// that would pass identically on a native target buys a wasm build and no
-/// coverage. Run with `just wasm-test`.
+/// coverage. Run with `cargo xtask wasm-test`.
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_sequential_backend_tests {
     use std::sync::Arc;

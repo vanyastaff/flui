@@ -29,3 +29,6 @@ path = "src/lib.rs"
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+layer = 8

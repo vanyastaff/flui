@@ -44,3 +44,6 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+layer = 1

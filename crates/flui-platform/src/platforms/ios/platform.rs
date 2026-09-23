@@ -270,8 +270,7 @@ impl IOSPlatform {
 // owns the main thread for the process's life, and both the delegate and
 // these values are reachable only from there. This is the same owner-affine
 // scope the winit backend uses for its `ActiveEventLoop` publication, and it
-// keeps the ambient-reach ratchet (`docs/runtime-contract.toml`) honest —
-// there is no new process-global.
+// adds no process-global.
 thread_local! {
     static DELEGATE_STATE: RefCell<DelegateState> = const { RefCell::new(DelegateState {
         on_ready: None,

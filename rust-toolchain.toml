@@ -1,14 +1,14 @@
 # Pinned Rust toolchain for the FLUI workspace — the DEVELOPMENT toolchain, and
-# the single source of truth `scripts/check-toolchain-consistency.sh` reads.
+# the single source of truth `cargo xtask toolchain` reads.
 #
 # This channel is not automatically the MSRV — the MSRV is
-# `[workspace.package].rust-version` in `Cargo.toml`, exercised by the `msrv`
-# CI job. But under the pre-1.0 policy below they move together: the channel
+# `[workspace.package].rust-version` in `Cargo.toml` (clippy reads it from
+# there). But under the pre-1.0 policy below they move together: the channel
 # is bumped to each new stable, and the MSRV is bumped to match within a
-# week, so in practice `channel`'s minor equals the declared MSRV.
-# `scripts/check-toolchain-consistency.sh` (part of `just gate`) enforces
-# that `Cargo.toml`, `clippy.toml`, the `msrv` CI job, all five `flui-cli`
-# templates, the README badge, and `llms.txt` agree with `channel` here.
+# week, so in practice `channel`'s minor equals the declared MSRV, and every
+# CI job builds on it. `cargo xtask toolchain` (part of `cargo xtask checks`)
+# enforces that `Cargo.toml`, all five `flui-cli` templates, the README badge,
+# and `llms.txt` agree with `channel` here.
 #
 # `rustup` will install this exact toolchain automatically on first `cargo`
 # invocation if it is not already available locally.
@@ -22,21 +22,19 @@
 #
 # Bump procedure:
 #   1. Bump `channel` here to the new stable patch release.
-#   2. Bump `[workspace.package].rust-version` in `Cargo.toml`, `msrv` in
-#      `clippy.toml`, the `msrv` job's toolchain in
-#      `.github/workflows/ci.yml`, and the `rust-version` line in all five
+#   2. Bump `[workspace.package].rust-version` in `Cargo.toml` and the
+#      `rust-version` line in all five
 #      `crates/flui-cli/src/templates/{basic,counter,empty,hot_reload,widget}.rs`
-#      — `scripts/check-toolchain-consistency.sh` verifies these plus the
-#      README badge and `llms.txt` against `channel` here directly; nothing
-#      else in this list is machine-checked.
+#      — `cargo xtask toolchain` verifies these plus the README badge and
+#      `llms.txt` against `channel` here directly; nothing else in this list
+#      is machine-checked.
 #   3. Update doc prose (AGENTS.md, README.md, crates/flui-cli/README.md,
 #      docs/getting-started.md, docs/testing.md). NOT
 #      docs/FOUNDATIONS.md: its one MSRV mention is a frozen historical
 #      snapshot ("pre-PR-C-2... Rust 1.96"), correctly describing what the
 #      MSRV *was* at that point in the repo's history, not current policy —
 #      bumping it would make it wrong, not current.
-#   4. Run `bash scripts/check-toolchain-consistency.sh` (or `just gate`) and
-#      `just ci`; update the CI matrix if needed.
+#   4. Run `cargo xtask toolchain` and `cargo xtask ci`.
 
 [toolchain]
 channel = "1.98.1"

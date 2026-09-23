@@ -33,8 +33,7 @@ pub enum DamageRegion {
 /// `stamp` carries the full identity/versioning group — which presentation,
 /// which epoch, against which surface and GPU-resource generation. See
 /// [`FrameStamp`]'s own doc for why those are one value rather than fields
-/// here, and `docs/runtime-contract.toml`'s entry for this type for the
-/// construction-is-not-additive record.
+/// here.
 ///
 /// Fields are `pub` for direct read/match access; `#[non_exhaustive]` makes
 /// matching additive when a field is added, never construction.

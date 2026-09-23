@@ -38,7 +38,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Log capture | The `tracing` events a frame emitted | `flui_testing::log_capture::capture` | dev-dependency |
 | GPU readback | Real pixels off a real device (WARP in CI) | `flui-engine`'s readback suite | `flui-engine/testing` |
 | Demo composition | A whole demo tree's committed `LayerTree`, as structured text | `tests/demo_layer_snapshots.rs` | `flui/material` + `flui/cupertino` |
-| Live E2E | A real window, real X11/Wayland input, real exit code | `tools/live-smoke` | `just live-smoke` |
+| Live E2E | A real window, real X11/Wayland input, real exit code | `tools/live-smoke` | `cargo xtask live-smoke` |
 
 Two structural rules hold across the stack:
 
@@ -60,9 +60,9 @@ Two structural rules hold across the stack:
 
 Three of the commands above target wasm32 and only the last one runs anything. That distinction is
 the whole content of the tier: `cargo check` and `cargo clippy` prove the code type-checks, and
-`wasm-link-check` proves rust-lld resolves the cdylibs (with a committed import allowlist, because
-on wasm32 an undefined symbol becomes an *import* rather than a link error). None of them execute a
-single instruction.
+`cargo xtask wasm-link` proves rust-lld resolves the cdylibs (with a committed import allowlist,
+because on wasm32 an undefined symbol becomes an *import* rather than a link error). None of them
+execute a single instruction.
 
 It is not an academic gap. Swap `web_time::Instant` for `std::time::Instant` in
 `crates/flui-foundation/src/clock.rs` — the substitution that module's own comment justifies as
@@ -70,24 +70,25 @@ It is not an academic gap. Swap `web_time::Instant` for `std::time::Instant` in
 `time not implemented on this platform` the moment it runs. That was the state of the workspace
 until issue #985.
 
-`just wasm-test` (CI: the last steps of the `wasm-check` job) discovers the participating crates —
-those declaring a wasm32 `wasm-bindgen-test` dev-dependency, resolved by
-`scripts/wasm-test-crates.py` parsing the manifests rather than grepping them — and hosts their tests on node through
-`wasm-bindgen-test-runner`. It runs **both** target kinds, because which one is possible depends on
-visibility: an integration test (`tests/wasm32.rs`) sees only the public API, while a `pub(crate)`
-seam is reachable *only* from a lib test. Two things about it are deliberate:
+`cargo xtask wasm-test` (CI: the last steps of the `wasm-check` job) discovers the participating
+crates — those declaring a wasm32 `wasm-bindgen-test` dev-dependency, resolved by
+`cargo xtask wasm-test-crates` parsing the manifests rather than grepping them — and hosts their
+tests on node through `wasm-bindgen-test-runner`. It runs **both** target kinds, because which one
+is possible depends on visibility: an integration test (`tests/wasm32.rs`) sees only the public
+API, while a `pub(crate)` seam is reachable *only* from a lib test. Two things about it are deliberate:
 
 - **What belongs in that file** is behaviour that *differs* on wasm32, or a native-target
   substitution whose whole purpose is keeping wasm32 working. A test that would pass identically on
   native costs a wasm build and proves nothing extra.
 - **The assertion count is checked, not trusted.** A runner that finds no tests exits 0 and prints
-  `0 passed`, which is indistinguishable from a passing suite, so both the recipe and the CI step
-  fail when the count is zero.
+  `0 passed`, which is indistinguishable from a passing suite, so both the xtask command and the CI
+  step fail when the count is zero.
 
 Three versions must agree or the runner refuses to start: the locked `wasm-bindgen`,
 `wasm-bindgen-test` (pinned `=0.3.77` in flui-foundation — the unpinned `"0.3"` resolves to 0.3.78
 and would bump the workspace lock as a side effect of adding a dev-dependency), and
-`wasm-bindgen-cli`, whose version the recipe and the CI step both read out of `Cargo.lock`.
+`wasm-bindgen-cli`, whose version xtask and the CI step both read out of `Cargo.lock`
+(`cargo xtask locked-version wasm-bindgen`).
 
 Discovery rather than a crate list is deliberate: a list is how the next crate to add wasm tests
 gets silently never run — the same defect one level up. Its guards exist for that reason and each
@@ -116,33 +117,35 @@ coverage at all. See #985.
 The local pre-review gate is:
 
 ```bash
-just ci
+cargo xtask ci
 ```
 
-Expanded (see `ci:` in the `justfile` for the authoritative recipe list), that currently runs:
+It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 
 ```bash
-cargo fmt --all -- --check                                # fmt-check: formatter gate (rustfmt.toml is authoritative)
-bash scripts/check-workspace-inventory.sh                  # inventory-check: crate inventory + layer-policy drift guard
-bash scripts/check-runtime-conformance.sh                  # runtime-conformance-check: docs/runtime-contract.toml vs. source tree
-bash scripts/check-toolchain-consistency.sh                # toolchain-consistency-check: MSRV agrees with rust-toolchain.toml everywhere it's declared
-cargo clippy --workspace --all-targets -- -D warnings      # clippy: lint gate — zero warnings
-cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations --profile no-nested-cargo  # test-ci, stage 1 (scope: see "What `just test-ci` runs")
-FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test-ci: flui-platform, headless (Linux — apt install xvfb; Windows runs it without FLUI_HEADLESS/xvfb-run; skipped with a message on macOS, see justfile)
-cargo nextest run <same scope> --profile nested-cargo       # test-ci, last stage: the nested-cargo tests (see below)
-cargo test --workspace --locked --doc                      # test-doc: doc-tests (flui-platform included — its doctests need neither device above)
-bash scripts/doc-strict.sh                                # doc-strict: cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
+cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), workspace (layers, manifests, test reachability, ADR numbers), toolchain, wgsl, the docs-only allowlist, font assets; builds only xtask
+cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
+cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
+cargo xtask test                          # nextest over the local scope, flui-platform headless, then the nested-cargo group (see "What `cargo xtask test` runs")
+cargo test --workspace --locked --doc     # doc-tests (flui-platform included — its doctests need no display server)
 ```
 
-**Adding a new gate** means two changes together, not one: a `just` recipe (so a
-contributor can run it standalone) *and* a step in `.github/workflows/ci.yml`'s
-`checks` job (so CI actually runs it — `just gate`/`just ci` are not
-themselves invoked from CI; each script is its own explicit step there). A
-recipe with no CI step only runs when someone remembers to run it by hand.
+The first three are `cargo xtask gate`, the non-test half. Locally, `checks`
+skips typos, taplo or lychee with a message when they are not installed; CI
+passes `--strict`, which makes a missing one a failure. The flui-platform step
+of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
+Windows, and is skipped with a message on macOS.
 
-### What `just test-ci` runs
+**Adding a new gate** means two changes together, not one: a `cargo xtask`
+command (so a contributor can run it standalone) *and* a step in
+`.github/workflows/ci.yml`'s `checks` job (so CI actually runs it — `gate` and
+`ci` are not themselves invoked from CI). A check folded into `cargo xtask
+checks` gets both at once, since that job runs it. A command with no CI step
+only runs when someone remembers to run it by hand.
 
-One scope for the whole local suite (`test_ci_scope` in the justfile):
+### What `cargo xtask test` runs
+
+One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
 --features flui/cupertino,flui/localizations`, run as the two stages below.
 Two choices in it differ from CI on purpose:
@@ -156,15 +159,15 @@ Two choices in it differ from CI on purpose:
   no `cfg(not(feature = ...))` code, so the default-feature facade's tests are
   a subset of these. **Not covered locally:** the facade in its default
   configuration (Material only, no Cupertino or localizations). CI's `test`
-  job and `feature-matrix` build and test it; `just feature-matrix` does too.
+  job and `feature-matrix` build and test it; `cargo xtask feature-matrix` does too.
 - **Examples are not linked.** `cargo nextest run` with no target flags builds
   every example of every package it tests: about 60 binaries, each linking the
   whole render stack, on every run. `--lib --bins --tests` selects exactly the
-  targets that have tests. Examples still **compile** in `just clippy`
-  (`--all-targets`, part of `just gate`), so a type error in one still fails
-  the local gate. What goes unchecked locally is only a *link* failure specific
-  to an example; CI's `test` job (`cargo build --workspace --all-targets`) and
-  `just build-all-targets` catch it.
+  targets that have tests. Examples still **compile** in `cargo xtask lint`
+  (`--all-targets`, part of `cargo xtask gate`), so a type error in one still
+  fails the local gate. What goes unchecked locally is only a *link* failure
+  specific to an example; CI's `test` job and a local
+  `cargo build --workspace --all-targets --locked` catch it.
 
 Measured against the previous two-slice scope (2026-09-22, M1/8 GB,
 `CARGO_BUILD_JOBS=6`, shared target, after an edit to `flui-types` so every
@@ -188,20 +191,32 @@ one to five minutes; the other ~9,700 tests are quick. Tests that spawn a
 `cargo` only for a trivial crate (`flui-cli`'s `cli_maintenance`, which runs
 `cargo new` and tests an empty project in seconds) are deliberately left out
 of the group. `.config/nextest.toml`
-names them with one filter and two profiles that partition the suite
-exactly: `no-nested-cargo` and `nested-cargo`.
+names them with one filter, in the override that puts them in the nextest
+test group `nested-cargo`; `cargo nextest show-config test-groups` lists the
+group's members. Selecting by group needs nextest 0.9.133 or newer (the
+config's `nextest-version` enforces it).
 
-- `just test-ci` (and so `just ci`) runs everything else first, then this
-  group as its last stage. Nothing is dropped: the two stages together are
-  the whole suite, and CI runs it as one invocation.
-- `just test-ci-fast` is the quick local loop: the same scope without the
-  group, ending with a line that names what it skipped.
-- `just test-nested-cargo` runs only the group.
+- `cargo xtask test` (and so `cargo xtask ci`) runs
+  `-E 'not group(nested-cargo)'` first, then `-E 'group(nested-cargo)'` as
+  its last stage. Nothing is dropped: the two filtersets are complements, so
+  together they are the whole suite, and CI runs it as one invocation.
+- `cargo xtask test --fast` is the quick local loop: the same scope without
+  the group, ending with a line that names what it skipped.
+- `cargo nextest run -E 'group(nested-cargo)'` with the same scope runs only
+  the group.
+
+To narrow either stage, combine with `&` inside the single `-E`:
+`-E 'not group(nested-cargo) & package(flui-view)'`. A second `-E` is ORed
+with the first, not intersected: `-E 'not group(nested-cargo)' -E
+'package(flui-view)'` runs everything outside the group *and* flui-view's
+`trybuild_ui` test inside it. `group()` works only on the command line (a
+profile's `default-filter` rejects it), which is why the stages are filtersets
+rather than profiles.
 
 Measured on the workspace invocation (2026-09-22, M1/8 GB, `CARGO_BUILD_JOBS=6`,
 wall-clock including the build):
 
-| Nested-build caches | One invocation (before) | Two stages (`just test-ci`) |
+| Nested-build caches | One invocation (before) | Two stages (`cargo xtask test`) |
 |---|---|---|
 | warm, nothing changed | 191.2 s | 101.6 + 13.7 = 115.3 s |
 | after an edit to `flui-types` (registry deps warm) | 576.9 s | 406.5 + 87.2 = 493.7 s |
@@ -221,9 +236,10 @@ directory as Cargo resolves it (`cargo metadata`'s `target_directory`), so a
 whatever `CARGO_TARGET_DIR` said. trybuild keeps its own `tests/trybuild/` there, since
 it builds with a different `--cfg` and would thrash a shared cache. Nothing
 prunes these three directories: they grow with every FLUI version and feature
-set built through them (1.5-3 GB each is normal). `just clean-nested` deletes
-them, safe whenever no test run is using them; `just clean-stale` bounds the
-main target directory the same way (oldest artifacts first, via cargo-sweep).
+set built through them (1.5-3 GB each is normal). `cargo xtask clean-nested`
+deletes them, safe whenever no test run is using them; `cargo sweep --installed .`
+then `cargo sweep --maxsize 12GB .` bounds the main target directory (oldest
+artifacts first).
 
 **One target directory per checkout; never share one between worktrees.**
 Pointing several worktrees at one `CARGO_TARGET_DIR` looks like a cache and is
@@ -256,16 +272,16 @@ cargo check -p <crate>               # incremental type check for a single crate
 cargo clean                          # wipe target/ before a fresh build
 ```
 
-The `[default-members]` section of `Cargo.toml` excludes Android-only crates because `ndk-sys` does not compile on the host. Use `cargo ndk` for Android targets (see [Getting Started](getting-started.md)).
+A bare `cargo build` at the root builds only the `flui` facade; pass `--workspace` for everything. Use `cargo ndk` for Android targets (see [Getting Started](getting-started.md)).
 
 ### Local machine mode (shared, memory-limited)
 
 On a shared, memory-constrained dev machine — several agent worktrees against the same checkout,
 one compiling worker at a time (see AGENTS.md's Commands table) — every worktree points at the
 same `CARGO_TARGET_DIR`, and `CARGO_BUILD_JOBS` is sized to available RAM rather than core count.
-A docs-only change never needs a `cargo` invocation at all: `just fmt-check text-check
-inventory-check` is the full local gate for it, which is what lets a docs worktree stay
-green without contending for the shared build. One concrete consequence of the shared
+A docs-only change never needs a workspace build: `cargo xtask checks`, which builds only
+xtask, is the full local gate for it, which is what lets a docs worktree stay green without
+contending for the shared build. One concrete consequence of the shared
 `CARGO_TARGET_DIR`: the trybuild suites (`flui-engine::compile_fail`, `flui-rendering::compile_fail`,
 `unit_mixing_compile_fail::ui`, `trybuild_ui::ui_tests` — see `.config/nextest.toml`) each drive a
 real `rustc` invocation per fixture into scratch output under `target/`, so two of them compiling
@@ -320,12 +336,12 @@ The constitution sets minimum coverage thresholds per crate category:
 | Platform | 70 % | `flui-platform` |
 | Widget | 85 % | (future widget crates) |
 
-Generate a coverage report with [`cargo-llvm-cov`](https://crates.io/crates/cargo-llvm-cov)
-— `just coverage` wraps it, and it is the only coverage tool this workspace uses:
+Generate a coverage report with [`cargo-llvm-cov`](https://crates.io/crates/cargo-llvm-cov),
+the only coverage tool this workspace uses:
 
 ```bash
 cargo install cargo-llvm-cov
-just coverage                        # or: cargo llvm-cov --workspace --html
+cargo llvm-cov --workspace --html    # report: target/llvm-cov/html/index.html
 ```
 
 These thresholds are a target, not a gate: no CI job enforces them today.
@@ -342,8 +358,8 @@ cargo bench -p flui-engine
 
 Benchmark results are written under `target/criterion/` as HTML reports.
 
-`just bench-signals` (`crates/flui-widgets/benches/signals_rebuilds.rs`, needs the
-`signals` feature) runs ADR-0074's go/no-go: `setState` against realm-scoped signals on
+`cargo bench -p flui-widgets --features signals --bench signals_rebuilds -- --noplot`
+(`crates/flui-widgets/benches/signals_rebuilds.rs`) runs ADR-0074's go/no-go: `setState` against realm-scoped signals on
 the same widget tree, printing a table of elements rebuilt per `RebuildReason` and
 layout roots per frame before the criterion timings. The counts come from two telemetry
 accessors any test can use: `BuildOwner::last_frame_build_report()` (what the last
@@ -356,8 +372,8 @@ detect a regression — numbers have to be collected and compared. The
 workflow for that:
 
 - **Local A/B (the authoritative comparison).** Run on a quiet machine:
-  `just bench-save before` on the baseline commit, apply the change, then
-  `just bench-save after` and `just bench-compare before after` (needs
+  `cargo xtask bench-collect before` on the baseline commit, apply the change,
+  then `cargo xtask bench-collect after` and `critcmp before after` (needs
   `critcmp`, e.g. `cargo binstall critcmp`). Criterion also prints its own
   change estimate against the last run of the same bench.
 - **Weekly trend (advisory).** The `bench` job in `weekly.yml` executes the
@@ -379,7 +395,7 @@ Performance targets defined by the constitution:
 
 ```bash
 cargo clippy --workspace --all-targets -- -D warnings
-cargo deny check
+cargo xtask deps                                   # cargo-deny + cargo-shear over every member
 cargo clippy -p flui-engine --all-targets -- -D warnings
 cargo clippy --workspace --fix --allow-dirty       # auto-fix where Clippy can
 ```
@@ -442,7 +458,7 @@ tests/benches/examples via a self dev-dependency; downstream crates opt in with
 |-------|-----|-------------|
 | `flui-rendering` | [crates/flui-rendering/docs/TESTING.md](../crates/flui-rendering/docs/TESTING.md) | `RenderTester`, `Probe`, `box_node` / `sliver_node`, multi-frame `FrameRun` |
 | `flui-layer` | [crates/flui-layer/README.md](../crates/flui-layer/README.md) | `SceneBuilder`, `inspect::structure` / `clip_rects` / `first_picture_bounds` |
-| `flui-painting` | [crates/flui-painting/docs/TESTING.md](../crates/flui-painting/docs/TESTING.md) | `record`, `command_count`, `bounds`, `diagnostics` |
+| `flui-painting` | [crates/flui-painting/src/testing/mod.rs](../crates/flui-painting/src/testing/mod.rs) | `record`, `command_count`, `bounds`, `diagnostics` |
 | `flui-foundation` | [crates/flui-foundation/docs/TESTING.md](../crates/flui-foundation/docs/TESTING.md) | `DiagnosticsNode` / `DiagnosticsBuilder` for structured assertions (no `testing` module) |
 | `flui-testing` | [crates/flui-testing/README.md](../crates/flui-testing/README.md) | `HeadlessBinding` (`pump_frame`, `mount_root`, `replay`), `a11y::A11yQuery` — a **dev-dependency**, not a `testing` feature |
 | `flui-widgets` | [crates/flui-widgets/README.md](../crates/flui-widgets/README.md) | `testing::{lay_out, LaidOut, settle_lazy}` — the canonical widget harness, shared verbatim by `flui-material` / `flui-cupertino` |
@@ -495,14 +511,14 @@ diagnostics stay pinned without visual inspection.
 
 Parent metadata that widgets normally write before layout (stack
 positioning, flex factors, future animation parent slots) can be expressed
-in harness trees via [`ParentDataSeed`](../../crates/flui-rendering/src/testing/parent_data.rs)
-on [`TreeNode::with_parent_data_seed`](../../crates/flui-rendering/src/testing/tree.rs).
+in harness trees via [`ParentDataSeed`](../crates/flui-rendering/src/testing/parent_data.rs)
+on [`TreeNode::with_parent_data_seed`](../crates/flui-rendering/src/testing/tree.rs).
 The pipeline clones each seed into the per-walk child slots before
 `perform_layout` runs.
 
 ### Multi-frame and animation testing
 
-After `.run_frame()`, [`FrameRun`](../../crates/flui-rendering/src/testing/harness.rs)
+After `.run_frame()`, [`FrameRun`](../crates/flui-rendering/src/testing/harness.rs)
 supports deterministic multi-frame scenarios (no wall clock):
 
 | Method | Use when |
@@ -687,8 +703,8 @@ dump); it does now, and step 2 uses it.
 ## Demo composition snapshots
 
 ```bash
-just demo-snapshots          # run
-just demo-snapshots-review   # review and accept intended changes (cargo-insta)
+cargo xtask demo-snapshots   # run
+cargo insta review           # review and accept intended changes (cargo-insta)
 ```
 
 Each demo tree mounts headless at 900x760 through `flui-testing`'s canonical
@@ -758,8 +774,8 @@ cargo run -p flui --example screenshot --features "material cupertino" -- materi
 ## Live E2E smoke
 
 ```bash
-just live-smoke           # X11 under Xvfb: real window, real XTEST input, real pixels
-just live-smoke-wayland   # headless weston: the close-path teardown ordering
+cargo xtask live-smoke             # X11 under Xvfb: real window, real XTEST input, real pixels
+cargo xtask live-smoke --wayland   # headless weston: the close-path teardown ordering
 ```
 
 `tools/live-smoke` is the only executing coverage of the band **above**
@@ -776,28 +792,26 @@ check; all cargo commands run `--locked`; actions are SHA-pinned and the
 workflow files themselves are linted:
 
 ```bash
-cargo fmt --all -- --check
-taplo fmt --check
-typos
+cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace layers, toolchain, wgsl, ...; a missing tool fails
+cargo test -p xtask --locked                                  # xtask's own tests, lane classification included
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit
-bash scripts/check-workspace-inventory.sh
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings  # feature-matrix job, then a --tests --benches --examples pass
-just facade-combos                                            # isolated per-combination facade builds (same job)
-cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — just wasm-check
-cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # the only lint pass over the wasm32-only web backend — just wasm-check
-cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32              # the only step that EXECUTES wasm — just wasm-test
-cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — just cross-typecheck
+cargo xtask feature-matrix --slice 1/3                        # feature-matrix job: cargo-hack per-feature clippy, shards 1/3..3/3 (--partition)
+cargo xtask feature-matrix --slice combinations               # same job: each facade feature combination built in isolation
+cargo check --workspace --locked --target wasm32-unknown-unknown --exclude ...                   # wasm-capable set — cargo xtask wasm-check
+cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown --exclude ... -- -D warnings  # the only lint pass over the wasm32-only web backend — cargo xtask wasm-check
+cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32              # the only step that EXECUTES wasm — cargo xtask wasm-test
+cargo check -p flui-platform --locked --all-targets --target x86_64-pc-windows-msvc            # cross-typecheck job — cargo xtask cross-typecheck
 cargo check -p flui-platform --locked --all-targets --target aarch64-apple-darwin              # (type-check only: no link, no tests)
-cargo deny check                                              # advisories / bans / licenses / sources
+cargo xtask deps --strict --only policy                       # deps job: cargo-deny bans / licenses / sources + cargo-shear
+cargo xtask deps --strict --only advisories                   # same job: RustSec advisories, blocking in the heavy lane only
 cargo bench -p flui-rendering --no-run                        # bench-compile job
-bash scripts/doc-strict.sh                                    # doc job: the same script as `just doc-strict`
+cargo xtask doc-strict                                        # doc job
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
 FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test job's dedicated flui-platform step
 cargo nextest run -p flui-platform --locked [--all-features] --no-fail-fast                           # platform-windows job (windows-latest), both feature sets
 cargo test --workspace --locked --doc
-cargo check --workspace --all-targets --locked                # repeated on Rust 1.98 (MSRV job)
 cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (continue-on-error); NARROW — every
                                                               # unit test under that module, including PipelineCell
                                                               # checkout, an owner-local run_frame traversal, a
@@ -807,11 +821,11 @@ cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (co
                                                               # and intrinsics queries are not interpreted.
 ```
 
-### CI jobs and their local recipes
+### CI jobs and their local commands
 
 CI runs in two lanes, chosen by the `plan` job:
 
-- **Fast lane**: an ordinary pull request. It runs `checks`, `deny`, and
+- **Fast lane**: an ordinary pull request. It runs `checks`, `deps`, and
   `fast-lane`. `fast-lane` runs clippy and nextest over the changed crates and
   every workspace crate that declares a dependency on them, including optional,
   dev and target-specific dependencies. It also checks the code a Linux build
@@ -834,17 +848,19 @@ CI runs in two lanes, chosen by the `plan` job:
   - the doctests of the library crates in scope (`cargo test --doc`, the
     `doc-test` job narrowed): nextest runs none.
 
-  A workspace-wide input (clippy/nextest config, the lane's own scripts) or a
-  file no crate owns widens the lane to the whole workspace. Nothing compiles
-  for a documentation-only or tooling-only change. The scope comes from
-  `scripts/affected-crates.sh`; `just check-changed` runs it with the same
-  arguments before a PR, and also counts uncommitted work.
+  A workspace-wide input (clippy/nextest config, the lane's own code in
+  `tools/xtask/src/change_scope/`) or a file no crate owns widens the lane to
+  the whole workspace. Nothing compiles for a documentation-only or
+  tooling-only change. The scope comes from `cargo xtask affected`;
+  `cargo xtask check-changed` uses the same classification and arguments
+  before a PR, and also counts uncommitted work.
 - **Heavy lane**: a push to main, the merge queue, the nightly schedule,
   `workflow_dispatch`, a pull request that changes an input of the heavy jobs,
   or a pull request labelled `full-ci`. The heavy-job inputs are `Cargo.lock`,
   the root `Cargo.toml`, `.cargo/`, the toolchain file (either spelling), a
-  workflow, a WGSL shader (only a GPU job compiles one), and any script a
-  heavy job runs (read from `ci.yml`, the justfile included). Adding the label
+  workflow, a WGSL shader (only a GPU job compiles one), `deny.toml` (only
+  the heavy lane blocks on `deps`' advisories), and any script or xtask
+  command only a heavy job runs (read from `ci.yml`). Adding the label
   re-runs the PR's own CI run through `full-ci.yml`, so the heavy result
   replaces the fast one in the same `ci` check; `plan` reads the label from
   the API. On a fork PR it fails, saying so (its token cannot re-run
@@ -868,10 +884,12 @@ still turn main red:
 - the per-feature matrix of dependents that reach the change under a
   default feature or not at all (`feature-matrix`);
 - the facade in its default feature set;
-- GPU readback (`gpu-test`), miri, msrv, `live-smoke`;
+- GPU readback (`gpu-test`), miri, `live-smoke`;
 - macOS's `flui-cli` suite (`cli-macos`; its iOS runner clippy also runs in
   `fast-lane-ios` when `flui-app` or `flui` is in scope);
-- linking and running the wasm32 tests (`wasm-check`).
+- linking and running the wasm32 tests (`wasm-check`);
+- a RustSec advisory published against an unchanged lockfile (`deps` reports
+  it on a pull request, but only the heavy lane fails on it).
 
 Label a change that is likely to break one of these `full-ci`.
 
@@ -879,34 +897,33 @@ The `ci` aggregator recomputes which jobs this lane and change should skip
 from `plan`'s outputs. It fails on any other skip, and on a job that ran where
 it should have skipped.
 
-Locally, `just check-changed` is the pre-PR check. `just ci` is the full local
-gate and is optional: CI is the proof. `just ci-full` mirrors the heavy jobs
-this host can run, and `just doctor full` names what it needs. One row per job
-in `.github/workflows/ci.yml`:
+Locally, `cargo xtask check-changed` is the pre-PR check. `cargo xtask ci` is
+the full local gate and is optional: CI is the proof. `cargo xtask ci-full`
+mirrors the heavy jobs this host can run, and `cargo xtask doctor full` names
+what it needs. One row per job in `.github/workflows/ci.yml`:
 
-| CI job | Local recipe | Difference, or why CI-only |
+| CI job | Local command | Difference, or why CI-only |
 |---|---|---|
-| `checks` | `just gate` (fmt, text-check, inventory, runtime-conformance, toolchain-consistency, panic-policy, wgsl-uniformity) + `just workflow-lint` | `workflow-lint` skips actionlint/zizmor with a message when they are not installed; CI always has them |
-| `plan` | `scripts/affected-crates.sh` (`just check-changed` runs it) | decides the lane and the affected packages; CI passes the PR's base SHA, `check-changed` diffs against `origin/main` and adds uncommitted files |
-| `fast-lane` | `just check-changed` | same packages and arguments; the cross-target and wasm32 clippy and the per-feature pass for changed manifests run only when their rustup target or cargo-hack is installed (`just doctor full`); the flui-platform leg needs `xvfb-run` (Linux) |
-| `fast-lane-ios` | `just check-changed` (on a Mac with the iOS target) | the same iOS runner clippy as `cli-macos`, run on a PR when `flui-app` is in scope |
-| `clippy` | `just clippy` (in `just gate`) | — |
-| `test` (ubuntu, macos, windows) | `just test-ci` + `just build-all-targets` | one host OS, not three; `test-ci` does not link examples (`build-all-targets` does); the flui-platform leg needs `xvfb-run` (Linux) |
-| `test-features` | `just test-features` | — |
-| `live-smoke` | `just live-smoke`, `just live-smoke-wayland` | Linux only (Xvfb, weston); `ci-full` runs them on Linux and says it skipped them elsewhere |
-| `gpu-test` | `just gpu-test` | CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a local-only mismatch is a host difference to look at, not a CI verdict |
-| `platform-windows` | `just test-ci` (on Windows) | `test-ci` runs the all-features pass only; CI adds a default-features pass |
-| `bench-compile` | `just bench-compile` | — |
-| `doc` | `just doc-strict` (in `just gate`) | — |
-| `deny` | `just deny` | its second step, re-reading ADR-0045's reopen condition when a PR touches `Cargo.lock`, reads the PR through the GitHub API: CI only (and advisory) |
-| `doc-test` | `just test-doc` (in `just ci`) | — |
-| `msrv` | `just msrv` | needs the `rust-version` toolchain (`just doctor full`) |
-| `miri` | `just miri` | nightly + miri; advisory in CI too (`continue-on-error`) |
-| `feature-matrix` | `just feature-matrix` | CI splits the packages into three parallel slices and first asserts the slices cover the workspace exactly once; locally it is one run over the workspace, which needs no such check |
-| `wasm-check` | `just wasm-check`, `just wasm-link-check`, `just wasm-test` | `wasm-link-check` needs `wasm-tools`; `wasm-test` installs the locked `wasm-bindgen-cli` itself |
-| `cli-macos` | `just test-ci` (flui-cli's tests) + `just cross-typecheck` (its iOS clippy line) | the same commands; they only mean "macOS" on a Mac |
-| `cross-typecheck` | `just cross-typecheck` | needs the four targets (`just doctor full`) |
-| `ci` | — | CI only: the single required check. It verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the plan skips |
+| `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
+| `plan` | `cargo xtask affected` (`check-changed` runs the same classification) | decides the lane and the affected packages; CI passes the PR's base SHA, `check-changed` diffs against `origin/main` (or `--base`) and adds uncommitted files |
+| `fast-lane` | `cargo xtask check-changed` | same packages and arguments; the cross-target and wasm32 clippy and the per-feature pass for changed manifests run only when their rustup target or cargo-hack is installed (`cargo xtask doctor full`); the flui-platform leg needs `xvfb-run` (Linux) |
+| `fast-lane-ios` | `cargo xtask check-changed` (on a Mac with the iOS target) | the same iOS runner clippy as `cli-macos`, run on a PR when `flui-app` is in scope |
+| `clippy` | `cargo xtask lint` (in `gate`) | — |
+| `test` | `cargo xtask test` + `cargo build --workspace --all-targets --locked` | `cargo xtask test` does not link examples (the build does); the flui-platform leg needs `xvfb-run` (Linux) |
+| `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
+| `live-smoke` | `cargo xtask live-smoke`, `cargo xtask live-smoke --wayland` | Linux only (Xvfb, weston); `ci-full` runs them on Linux and says it skipped them elsewhere |
+| `gpu-test` | `cargo xtask gpu-test` | CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a local-only mismatch is a host difference to look at, not a CI verdict |
+| `platform-windows` | `cargo xtask test` (on Windows) | `test` runs the all-features pass only; CI adds a default-features pass |
+| `bench-compile` | `cargo xtask bench-compile` | — |
+| `doc` | `cargo xtask doc-strict` (in `gate`) | — |
+| `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny or cargo-shear fails instead of being skipped); the advisories step blocks only in the heavy lane, because a new RustSec entry can fail a commit that passed the day before |
+| `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
+| `miri` | `cargo xtask miri` | nightly + miri; advisory in CI too (`continue-on-error`) |
+| `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI splits the packages into parallel slices; locally it is one run over the workspace |
+| `wasm-check` | `cargo xtask wasm-check`, `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
+| `cli-macos` | `cargo xtask test` (flui-cli's tests) + `cargo xtask cross-typecheck` (its iOS clippy line) | the same commands; they only mean "macOS" on a Mac |
+| `cross-typecheck` | `cargo xtask cross-typecheck` | needs the four targets (`cargo xtask doctor full`) |
+| `ci` | — | CI only: the single required check. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the plan skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red heavy run on main or nightly |
 
 The other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
@@ -916,13 +933,15 @@ re-run of the PR's own `ci.yml` run.
 The `gpu-test` job additionally runs the full `testing` readback
 suite on a windows-latest runner (WARP software rasterizer) and is
 merge-blocking. Failing snapshot/readback tests upload debuggable artifacts:
-insta `.snap.new` candidates (`test` job) and readback PNG dumps
+insta `.snap.new` candidates (`test` job; `.config/insta.yaml` makes insta
+write them under CI too) and readback PNG dumps
 (`gpu-test` job, written when `FLUI_READBACK_DUMP_DIR` is set).
 
 A scheduled `weekly.yml` workflow (Mondays, or manually via
-`workflow_dispatch`) re-checks RustSec advisories against the committed
-lockfile and builds/tests against a fresh `cargo update` — early warning for
-upstream semver breakage. It is not a merge gate.
+`workflow_dispatch`) builds and tests against a fresh `cargo update` — early
+warning for upstream semver breakage. It is not a merge gate. New RustSec
+advisories need no weekly run: the nightly heavy run's `deps` job checks them
+every day and blocks on them.
 
 A change cannot be merged if any of these fail. If you encounter a flaky test, file a fix issue rather than retrying CI.
 

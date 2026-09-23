@@ -297,8 +297,7 @@ or blanket fallback.
 No new crate dependency or dependency direction is introduced. The method is
 an additive operation on the existing rendering owner, and the re-export
 follows the existing `flui-view` → `flui-rendering` dependency. This decision
-does not change `docs/runtime-contract.toml` or
-`docs/workspace-layers.toml`.
+does not change the public runtime contract or any crate layer.
 
 ## Consequences
 

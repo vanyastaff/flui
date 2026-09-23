@@ -185,8 +185,8 @@ pub(crate) fn probe_target(target: &Arc<dyn WindowTarget>) -> EngineResult<()> {
 
 impl<S> Drop for SurfaceLease<S> {
     fn drop(&mut self) {
-        // Both live-smoke harnesses assert this line: `just live-smoke`
-        // (X11) and `just live-smoke-wayland` (Wayland) both check
+        // Both live-smoke harnesses assert this line: `cargo xtask
+        // live-smoke` (X11) and `cargo xtask live-smoke --wayland` both check
         // `tools/live-smoke/src/self_close.rs`'s
         // `assert_surface_released_before_window_close`, which requires
         // this line to precede the winit backend's "Quitting event loop"

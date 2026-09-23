@@ -11,8 +11,9 @@ Framework libraries (`flui-view`, `flui-rendering`, `flui-widgets`,
 `flui-engine`, …) depend on `tracing` and nothing else. They emit structured
 events and have no opinion about where those events go, so the default backend
 can be replaced or removed without touching a single instrumentation call site.
-`docs/workspace-layers.toml` enforces the rule mechanically — a framework crate
-that adds a normal dependency on `flui-log` fails `just inventory-check`.
+The `allowed-dependents` list in this crate's manifest enforces the rule
+mechanically — a framework crate that adds a normal dependency on `flui-log`
+fails `cargo xtask workspace`.
 
 ## Ownership, not configuration
 

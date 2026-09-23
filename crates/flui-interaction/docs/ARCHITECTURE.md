@@ -108,7 +108,7 @@ a design rule, or a precedent plan).
 
 ## Observability
 
-The observability substrate lives at [`crate::observability`](src/observability.rs) (re-exported at
+The observability substrate lives at [`crate::observability`](../src/observability.rs) (re-exported at
 the crate root as `flui_interaction::observability::*` and the three
 `GestureEvent` / `SPAN_RECOGNIZER` / `SPAN_ARENA` / `pointer_event_kind`
 items). The hot paths (`RecognizerBase::start_tracking`,
@@ -138,9 +138,9 @@ These live alongside this templated `ARCHITECTURE.md` and are
 referenced from it. They predate the template and remain as
 subsystem-level deep-dives:
 
-- [`docs/GESTURES.md`](docs/GESTURES.md) — gesture catalogue.
-- [`docs/HIT_TESTING.md`](docs/HIT_TESTING.md) — hit-test walk.
-- [`docs/INTEGRATION.md`](docs/INTEGRATION.md) — `GestureBinding`
+- [`docs/GESTURES.md`](GESTURES.md) — gesture catalogue.
+- [`docs/HIT_TESTING.md`](HIT_TESTING.md) — hit-test walk.
+- [`docs/INTEGRATION.md`](INTEGRATION.md) — `GestureBinding`
   integration guide for downstream crates.
-- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) — performance notes
+- [`docs/PERFORMANCE.md`](PERFORMANCE.md) — performance notes
   (60 fps / 16 ms / 0 alloc on hot path).

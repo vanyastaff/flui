@@ -14,8 +14,7 @@
 //!   * a rounded-rect ring (`draw_drrect`).
 //!
 //! White-on-dark so the boundary band is easy to inspect (zoom in on the 45° rect
-//! and the star tips). Run with: `cargo run --example aa_showcase`
-//! (or `just example aa_showcase`).
+//! and the star tips). Run with: `cargo run --example aa_showcase`.
 
 use flui_app::{AppConfig, run_direct};
 

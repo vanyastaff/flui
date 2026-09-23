@@ -56,3 +56,6 @@ harness = false
 [[bench]]
 name = "vsync_registry"
 harness = false
+
+[package.metadata.flui]
+layer = 3

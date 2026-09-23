@@ -34,12 +34,16 @@ cargo install flui-cli --locked
 Prebuilt binaries for Linux (x86_64, aarch64), macOS (Intel, Apple
 silicon) and Windows (x86_64) are attached to every
 [GitHub release](https://github.com/vanyastaff/flui/releases), with a
-`SHA256SUMS` file. [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall)
-picks the right one:
+`SHA256SUMS` file. From 0.2.0, [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall)
+installs the right one:
 
 ```bash
 cargo binstall flui-cli
 ```
+
+0.1.0's binstall metadata does not match its Linux and macOS archives, so on
+those systems binstall falls back to building 0.1.0 from source; unpack the
+archive by hand to use the prebuilt binary.
 
 Both routes install two binaries: `flui`, and `cargo-flui` so that
 `cargo flui <command>` is the same CLI with the same exit codes.

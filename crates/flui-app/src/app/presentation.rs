@@ -1261,8 +1261,9 @@ impl PresentationState {
     /// dispatch site depends on an explicit, production-checked invariant:
     /// `UiRealm::drain_commands` (the sole caller) only runs at a frame
     /// boundary, so nothing should still hold the pipeline checked out by
-    /// the time a semantics-action handler runs. Registry:
-    /// `runtime-contract.toml`'s `semantics-two-phase-borrow` contract.
+    /// the time a semantics-action handler runs. The `ui_realm` test
+    /// `semantics_action_commits_on_the_owner_after_releasing_the_pipeline_lock`
+    /// runs through this assert.
     pub(crate) fn dispatch_semantics_action(
         &self,
         request: SemanticsActionRequest,

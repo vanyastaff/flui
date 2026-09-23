@@ -52,7 +52,7 @@
 //! hash-map iteration.
 //!
 //! ```text
-//! just demo-snapshots                     # run
+//! cargo xtask demo-snapshots              # run
 //! cargo insta review                      # review + accept intended changes
 //! ```
 

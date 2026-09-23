@@ -1,7 +1,7 @@
 [workspace]
 # Resolver 3 (stable since 1.84) is the MSRV-aware resolver: `cargo update` /
 # `cargo add` prefer dependency versions whose own `rust-version` fits the
-# declared MSRV instead of leaving the `msrv` CI job as the only guard. Edition
+# declared MSRV instead of leaving a failed build as the only guard. Edition
 # 2024 makes it the default for packages, but a virtual workspace must say so.
 resolver = "3"
 members = [
@@ -60,6 +60,7 @@ members = [
     # === Tools ===
     "tools/web-server", # Built-in web dev server (wasm-pack + HTTP serve)
     "tools/live-smoke", # Live E2E harness: real window, real X11 input, real teardown
+    "tools/xtask",      # `cargo xtask`: CI gates, change scoping, release and weekly tooling
 
     # === Animation Layer ===
     "crates/flui-animation", # Animation system (ACTIVE)
@@ -75,43 +76,29 @@ members = [
     # signals story is a new realm-scoped design, not a revival. History: git.
 ]
 
-# Default members exclude platform-specific examples/tools. `cargo build
-# --workspace` still builds every workspace member listed above.
-#
-# The root `flui` facade IS listed: it is neither an example nor a tool, and
-# leaving it out made `cargo hack --each-feature` unable to select it —
-# cargo-hack drives the root package via `--manifest-path`, which resolves to
-# default-members, so a facade-only feature failed with "none of the selected
-# packages contains this feature".
-default-members = [
-    ".",
-    "crates/flui-geometry",
-    "crates/flui-types",
-    "crates/flui-foundation",
-    "crates/flui-macros",
-    "crates/flui-log",
-    "crates/flui-tree",
-    "crates/flui-platform",
-    "crates/flui-painting",
-    "crates/flui-semantics",
-    "crates/flui-scheduler",
-    "crates/flui-layer",
-    "crates/flui-interaction",
-    "crates/flui-engine",
-    "crates/flui-hot-reload",
-    "crates/flui-rendering",
-    "crates/flui-objects",
-    "crates/flui-view",
-    "crates/flui-widgets",
-    "crates/flui-localizations",
-    "crates/flui-testing",
-    "crates/flui-material",
-    "crates/flui-cupertino",
-    "crates/flui-app",
-    "crates/flui-assets",
-    "crates/flui-animation",
-    "crates/flui-devtools",
-    "crates/flui-cli",
+# No `default-members`: a bare `cargo build` at the root builds the `flui`
+# facade alone; `--workspace` builds everything. cargo-hack drives each package
+# through `--manifest-path`, and for the root manifest that selects the default
+# members, so a list here would lint every listed crate under each facade
+# feature.
+
+[workspace.metadata.flui]
+# Crate layers, bottom (0) to top. Each crate under crates/ and the facade set
+# `[package.metadata.flui] layer`; a normal or build dependency may point to the
+# same layer or lower, never higher, and never at an example or tool. Cargo
+# itself rejects cycles. Checked by `cargo xtask workspace` (ADR-0041).
+layers = [
+    "Foundation (value types)",        # 0
+    "Framework primitives",            # 1
+    "Substrate",                       # 2
+    "Compositing / a11y / animation",  # 3
+    "Render machine + render catalog", # 4
+    "Framework spine",                 # 5
+    "Widget catalog + DX tooling",     # 6
+    "Design systems",                  # 7
+    "Global localizations",            # 8
+    "Application / tooling",           # 9
+    "Facade",                          # 10
 ]
 
 [workspace.package]
@@ -137,8 +124,8 @@ tokio-util = { version = "0.7", default-features = false }
 
 # SYNCHRONIZATION - Used by multiple crates
 parking_lot = "0.12"
-# `once_cell` is deliberately absent: `std::sync::{OnceLock, LazyLock}` cover
-# every use this workspace had, and are what the crates already reach for.
+# No `once_cell`: std's `OnceLock`/`LazyLock` replace it, and deny.toml's
+# `[bans.std-replacements]` rejects a manifest that declares it.
 dashmap = "6.1"
 # Bounded typed mailboxes (private render-invalidation channel, UiRealm
 # owner inbox — bounded queues with typed backpressure only)
@@ -174,7 +161,6 @@ bon = "3.8"
 objc2 = { version = "0.6.4", features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false }
 objc2-app-kit = { version = "0.3.2", default-features = false }
-objc2-core-foundation = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
 
 # DX TOOLING - flui-cli / flui-devtools
@@ -215,8 +201,8 @@ tracing-oslog = "0.3"
 tracing-wasm = "0.2"
 
 # COMPOSITION-ONLY LOGGING BACKEND — sits at the substrate layer with no
-# in-workspace dependencies. See docs/workspace-layers.toml for the rule that
-# keeps framework crates off it.
+# in-workspace dependencies. Its manifest's `allowed-dependents` (checked by
+# `cargo xtask workspace`) keeps framework crates off it.
 flui-log = { path = "crates/flui-log", version = "=0.2.0-dev" }
 
 # === Shared GPU/Window dependencies ===
@@ -278,6 +264,8 @@ wgsl_bindgen = { version = "0.23", default-features = false }
 # regex: required by wgsl_bindgen's OverrideTextureFilterability / OverrideSamplerType
 # constructors in build.rs; not compiled into the crate binary.
 regex = "1"
+walkdir = "2.5"
+clap = { version = "4.5", features = ["derive"] }
 
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
@@ -457,7 +445,7 @@ unused_async_trait_impl = "allow"
 publish = ["crates-io"]
 name = "flui"
 # What the published archive carries. Without this list `cargo package`
-# archived the whole checkout root — docs/, scripts/, CI, editor and
+# archived the whole checkout root — docs/, tooling, CI, editor and
 # research directories, 666 files — none of which a consumer compiles.
 # Nested packages under examples/ are excluded by Cargo on their own.
 # Patterns are gitignore-style, so each is anchored with a leading `/`: an
@@ -485,6 +473,14 @@ description = "Flutter-inspired declarative UI framework with wgpu rendering"
 keywords = ["gui", "ui", "wgpu", "flutter", "reactive"]
 categories = ["gui", "rendering::engine"]
 
+[package.metadata.flui]
+layer = 10
+
+# cargo-shear reports these as unlinked; tools/device-checks' iOS safe-area and
+# resident-reopen checks copy them into a scratch project as its `src/main.rs`.
+[package.metadata.cargo-shear]
+ignored-paths = ["tests/fixtures/ios_safe_area.rs", "tests/fixtures/resident_app.rs"]
+
 [lints]
 workspace = true
 
@@ -497,9 +493,9 @@ workspace = true
 # dev-deps: `src/lib.rs` re-exports them as `flui::material` /
 # `flui::cupertino` / `flui::localizations`, and a `[dev-dependencies]` crate
 # is unavailable to the lib target itself. Optional means an author who wants
-# neither catalog pays for neither — see `[features]` below. `flui` is on
-# ADR-0028's design-system-dependent allowlist alongside `flui-app` — see
-# `scripts/check-workspace-inventory.sh`.
+# neither catalog pays for neither — see `[features]` below. The facade's
+# layer (10) is above the design systems (7), so these edges point down
+# (ADR-0028, `cargo xtask workspace`).
 [dependencies]
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
 flui-types = { path = "crates/flui-types", version = "=0.2.0-dev" }
@@ -540,9 +536,6 @@ flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev", f
     "testing",
 ] }
 
-# === Reactive Layer (animated_box_app example) ===
-flui-scheduler = { path = "crates/flui-scheduler", version = "=0.2.0-dev" }
-
 # === Platform Layer (for examples) ===
 flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
 
@@ -562,7 +555,6 @@ parking_lot.workspace = true
 flui-engine = { path = "crates/flui-engine", version = "=0.2.0-dev", features = ["dx12"] }
 pollster = { workspace = true }
 wgpu = { workspace = true }
-raw-window-handle.workspace = true
 
 # === Error Handling (for examples) ===
 anyhow.workspace = true
@@ -603,7 +595,8 @@ material = ["dep:flui-material"]
 cupertino = ["dep:flui-cupertino"]
 # `flui::localizations` — the global (multi-language) implementations of the
 # catalogs' localization contracts. The catalogs own the contracts and never
-# depend back on this package (docs/workspace-layers.toml `forbidden_edge`);
+# depend back on this package (it sits a layer above them, and
+# `cargo xtask workspace` rejects an upward edge);
 # the facade re-exporting it does not change that direction. Future Material
 # and Cupertino implementations inside flui-localizations must use independent
 # optional features, so enabling one catalog's translations never compiles the
@@ -627,7 +620,7 @@ hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-app/hot
 
 # Native accessibility: the per-OS AccessKit adapters that hand the semantics
 # tree to VoiceOver / Narrator / Orca. Off by default (the Linux adapter
-# carries a D-Bus stack); `just macos-a11y` is the executable check.
+# carries a D-Bus stack); `cargo xtask device macos-a11y` is the executable check.
 a11y = ["flui-app/a11y"]
 
 # === Core Features ===
@@ -660,7 +653,7 @@ name = "material_demo"
 path = "examples/material_demo/main.rs"
 required-features = ["material"]
 
-# `default = ["material"]` does not make this redundant: `just facade-combos`
+# `default = ["material"]` does not make this redundant: `cargo xtask facade-combos`
 # builds every isolated feature combination with `--no-default-features`, and
 # `counter.rs` uses `Theme`/`ThemeData`/`ElevatedButton` from the Material
 # catalog, so an isolated non-material build fails with E0433 without this.
@@ -671,7 +664,7 @@ required-features = ["material"]
 
 # Same reason as `counter.rs` above: `todo.rs` uses `Checkbox`/`ElevatedButton`/
 # `IconButton`/`TextField`/`Theme`/`ThemeData` from the Material catalog, so
-# an isolated non-material `just facade-combos` build fails without this.
+# an isolated non-material `cargo xtask facade-combos` build fails without this.
 [[example]]
 name = "todo"
 path = "examples/todo.rs"
@@ -685,7 +678,7 @@ required-features = ["cupertino"]
 # The iOS simulator demo: the same Material tree as `material_demo`, run on the
 # native UIKit backend. Only meaningful on the `aarch64-apple-ios-sim` target —
 # every other target compiles a no-op `main` — but it is declared unconditionally
-# so `just ios-sim` can build it by name.
+# so `cargo xtask device ios-sim` can build it by name.
 [[example]]
 name = "ios_demo"
 path = "examples/ios_demo.rs"
@@ -710,13 +703,13 @@ path = "examples/multi_window_demo.rs"
 required-features = ["material"]
 
 # Self-driving representative-workload probe for docs/BETA.md's "Performance
-# and resilience" row (`just macos-workload`); see the example's own doc.
+# and resilience" row (`cargo xtask device macos-workload`); see the example's own doc.
 [[example]]
 name = "workload_probe"
 path = "examples/workload_probe.rs"
 required-features = ["material"]
 
-# The generated counter run for an assistive technology (`just macos-a11y`
+# The generated counter run for an assistive technology (`cargo xtask device macos-a11y`
 # reads its NSAccessibility tree and presses the button through AXPress);
 # see the example's own doc.
 [[example]]
@@ -725,7 +718,7 @@ path = "examples/a11y_probe.rs"
 required-features = ["material", "a11y"]
 
 # Self-driving window-lifecycle probe for docs/BETA.md's lifecycle rows
-# (`just macos-lifecycle`): minimize/restore, hide/unhide, resize, with the
+# (`cargo xtask device macos-lifecycle`): minimize/restore, hide/unhide, resize, with the
 # frame production observed through each transition. macOS only; see the
 # example's own doc.
 [[example]]
@@ -779,7 +772,7 @@ opt-level = 1 # Some optimization for faster runtime
 # --workspace` 4.3 s -> 1.5 s, `cargo nextest run -p flui-widgets --no-run`
 # 48 s -> 10 s, `cargo nextest run --workspace --no-run` 158 s -> 45 s. The
 # price is disk: `target/debug/incremental` reached 8.1 GB after one workspace
-# test build — `just clean-incremental` drops it without touching anything else.
+# test build — deleting that directory drops it without touching anything else.
 #
 # CI builds with it OFF: every workflow sets `CARGO_INCREMENTAL=0` in its
 # environment, and that variable overrides this key (it reaches Cargo's own

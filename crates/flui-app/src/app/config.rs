@@ -43,9 +43,8 @@ impl Default for DiagnosticsProfile {
 /// never wired to the real present path — issue #556 removed the unwired
 /// `vsync`/`target_fps` fields rather than leave a persistently misleading
 /// shape a caller could reasonably expect to govern pacing. Both are
-/// removed, not deprecated, and the checker mechanically enforces that
-/// absence (`docs/runtime-contract.toml`'s `frame-config-effective-or-removed`
-/// contract, `forbidden_pattern` entries below). A frame-pacing surface
+/// removed, not deprecated: a frame-configuration field is wired end to end
+/// or it does not exist. A frame-pacing surface
 /// returns with the threaded raster lane that can act on one: the unwired
 /// `flui_engine::RasterOptions` DTO was deleted rather than kept as a shape
 /// nothing read, because its every consumer was its own test (and

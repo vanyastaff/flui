@@ -170,8 +170,8 @@ impl DesktopBuilder {
     ///
     /// The bundle is what makes the app a real application: `Info.plist` names
     /// it and declares `NSPrincipalClass`, and the executable lives at
-    /// `Contents/MacOS/<name>`. The `just macos-*` probes build the same shape
-    /// by hand; this is the reusable equivalent, so `flui build macos` yields a
+    /// `Contents/MacOS/<name>`. The `cargo xtask device macos-*` probes build the
+    /// same shape by hand; this is the reusable equivalent, so `flui build macos` yields a
     /// launchable app rather than a loose binary.
     ///
     /// `CFBundleExecutable` must equal the file placed in `Contents/MacOS`, so

@@ -74,7 +74,7 @@ method on `LifecycleContext`, never on `BuildContext`.
 | Printing from the foundation crates | clippy `print_stdout`/`print_stderr` in `flui-foundation`, `flui-tree`, `flui-macros` |
 | `From<f32>` on a unit wrapper | `compile_fail` doctests in `flui-geometry` (already present) |
 | `async fn` on the frame path | the trait signatures are synchronous; an `async` impl does not match them |
-| Two ADRs sharing a number | `check-workspace-inventory.sh` |
+| Two ADRs sharing a number | `cargo xtask workspace` |
 
 ### 3. The rest becomes design guidance, not a gate
 
@@ -95,8 +95,8 @@ worse than none.
   significant `Drop`) is no longer checked mechanically; clippy covers the scrutinee shapes,
   which is where the recorded deadlocks came from. `significant_drop_tightening` was measured
   (130 hits, mostly false positives) and not adopted.
-- `docs/runtime-contract.toml` drops its `lock_exemption` registry, which existed only to
-  mirror the `PORT-CHECK-OK-SP6` markers.
+- The runtime contract registry dropped its `lock_exemption` table, which existed only to
+  mirror the `PORT-CHECK-OK-SP6` markers; the registry itself has since been removed.
 - CI's `checks` job loses the port-check step and its `ripgrep` install.
 
 ## Alternatives rejected

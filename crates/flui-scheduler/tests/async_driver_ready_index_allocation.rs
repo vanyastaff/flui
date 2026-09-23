@@ -1,6 +1,6 @@
 //! The actual complexity proof for issue #1056's ready-index rewrite:
 //! [`AsyncDriver::poll_ready`] must cost allocations proportional to *ready*
-//! work, not resident tasks. `just ci` has no bench step, so this test — not
+//! work, not resident tasks. `cargo xtask ci` has no bench step, so this test — not
 //! `benches/async_driver_pump.rs` — is the merge-blocking gate.
 //!
 //! A dedicated integration-test binary (never the crate's `--lib` unit

@@ -346,14 +346,14 @@ cargo doc -p flui-foundation --open
 Licensed under either of:
 
 - Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](../../LICENSE-MIT))
+- MIT License ([LICENSE](../../LICENSE))
 
 at your option.
 
 ## Related Crates
 
-- [`flui-types`](../flui_types): Basic geometry and mathematical types
+- [`flui-types`](../flui-types): Basic geometry and mathematical types
 - [`flui-tree`](../flui-tree): Tree abstractions and visitor patterns
 - [`flui-view`](../flui-view): View/Element trees, GlobalKey, ObjectKey
-- [`flui_rendering`](../flui_rendering): Render tree and layout
-- [`flui_app`](../flui_app): Application framework
+- [`flui_rendering`](../flui-rendering): Render tree and layout
+- [`flui_app`](../flui-app): Application framework

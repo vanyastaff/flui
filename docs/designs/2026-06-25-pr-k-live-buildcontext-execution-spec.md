@@ -115,4 +115,4 @@ O(1) persistent inherited map (PR-2), `ElementBase` shrink (PR-3, fork F2),
 field-precise `depend_on` + derives + `Mounted`/`EffectScope` (PR-4). PR-K only
 makes the context REAL via the existing `ElementBuildContext` surface.
 
-[ADR-0008]: ../adr/ADR-0008-flui-view-leapfrog-buildcontext-inherited-element.md
+[ADR-0008]: ../../crates/flui-view/ARCHITECTURE.md#mapping-decisions

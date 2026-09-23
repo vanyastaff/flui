@@ -42,9 +42,9 @@ now and expensive once consumers exist, so fix a bad shape instead of working ar
 
 ## Codebase map
 
-27 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. The checked
-authority is `docs/workspace-layers.toml` (enforced by `inventory-check`); `docs/crates.md` is
-the readable version. Bottom to top:
+27 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
+declares its layer in `[package.metadata.flui]` (checked by `cargo xtask workspace`);
+`docs/crates.md` is the readable version. Bottom to top:
 
 - **Values & primitives** — `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`
   (View derives).
@@ -70,25 +70,26 @@ crate you're changing before changing it.
   `git worktree add -b <area>/<slug> ../flui-wt-<slug> origin/main`. Review someone else's PR
   from your own directory (`gh pr diff`/`checkout`), not inside their worktree.
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
-  `just check-changed` green first; CI is the proof. Before asking for review, review the branch
-  against `main` yourself and list only what would block the merge: file and line, why it is
-  wrong, how to show it fails. Risky PRs get the `full-ci` label. Use
+  `cargo xtask check-changed` green first; CI is the proof. Before asking for review, review the
+  branch against `main` yourself and list only what would block the merge: file and line, why it
+  is wrong, how to show it fails. Risky PRs get the `full-ci` label. Use
   `Refs #N`; `Closes`/`Fixes #N` only when merging should close it (GitHub's linker ignores
   negation around it).
 - **Red main:** fix forward within the hour, or revert. A red heavy run on main or nightly opens a
   "CI is red on main" issue; close it once main is green.
 - **Leave these alone unless the task is about them:** `.github/workflows/` (it is the merge
-  path, and a change there decides what every other PR must pass); `docs/runtime-contract.toml`
-  and `docs/workspace-layers.toml` (checked registries — editing them changes what the gates
-  accept, so an edit is a contract change, not a fix); `docs/archive/` (a historical record);
-  `Cargo.lock` by hand (cargo regenerates it, a hand edit drifts from the manifests).
+  path, and a change there decides what every other PR must pass); `docs/archive/` (a
+  historical record); `Cargo.lock` by hand (cargo regenerates it, a hand edit drifts from the
+  manifests).
 - **No internal process-ID markers** (`Cycle N`, `PR #NNN review`, `Phase B`, slice/wave labels)
   in code or docs — state the invariant, not the history that produced it. `ADR-NNNN` citations
   are fine. Archival roots are exempt (`docs/{audits,brainstorms,ideation,plans,research,superpowers}`,
   `.rust-studio/specs`, `specs`, `openspec`).
-- **A new gate** is a justfile recipe *and* a step in CI's `checks` job — a recipe alone never
-  reaches the merge path. Prefer a lint or a type over a new script. A doc pulled in with
-  `include_str!` is source: keep it out of `DOCS_ONLY` in `scripts/lib/change_scope.py`.
+- **A new gate** is a `cargo xtask` command *and* a step in a CI job the `ci` aggregator gates,
+  usually `checks` (a check folded into `cargo xtask checks` gets both) — a command alone never
+  reaches the merge path. Prefer a lint or a type over a new check. A doc pulled in with
+  `include_str!` is source: keep it out of `DOCS_ONLY` in
+  `tools/xtask/src/change_scope/classify.rs`.
 
 ## Long runs
 
@@ -111,20 +112,22 @@ The maintainer usually hands over a whole task and comes back later.
 
 | Need | Run |
 |------|-----|
-| Before a PR | `just check-changed` — fmt + clippy + nextest over changed crates and their dependents (the same scope script as CI's fast lane) |
-| Full local gate | `just ci` = `just gate` (fmt, text, inventory, runtime-conformance, panic-policy, toolchain, wgsl, clippy, doc-strict) + tests + doctests; the pre-push hook runs `just gate` |
-| CI heavy jobs locally | `just ci-full`; `just doctor full` names any missing tool; job table in `docs/testing.md` |
-| One crate / one test | `cargo nextest run -p <crate>`, `just test-crate <crate>`, `just test-name <crate> <test>` |
-| Other targets (no link) | `just cross-typecheck` — clippy for Win32 / AppKit / Android / iOS |
-| Examples | `just example-hello`, `just example <name>`, `just example-list` |
+| Every task | `cargo xtask --help` (crate `tools/xtask`; the alias is in `.cargo/config.toml`). Anything else is a plain `cargo` command |
+| Before a PR | `cargo xtask check-changed` — fmt + clippy + nextest over changed crates and their dependents (the same classification as CI's fast lane) |
+| Full local gate | `cargo xtask ci` = `cargo xtask gate` (`checks`: fmt, typos, taplo, docs-links, workspace, toolchain, wgsl, …; `lint`; `doc-strict`) + `cargo xtask test` + doctests |
+| CI heavy jobs locally | `cargo xtask ci-full`; `cargo xtask doctor full` names any missing tool; job table in `docs/testing.md` |
+| One crate / one test | `cargo nextest run -p <crate>`, `cargo nextest run -p <crate> <test> --no-capture` |
+| Other targets (no link) | `cargo xtask cross-typecheck` — clippy for Win32 / AppKit / Android / iOS |
+| Dependencies | `cargo xtask deps` — cargo-deny (bans, licenses, sources, advisories) over every member, and cargo-shear (`cargo shear --fix` applies its fixes) |
+| Examples | `cargo run --example counter`, `cargo run --example <name>` (without a name, cargo lists them) |
 | Render-object catalog | `cargo test -p flui-objects --test render_object_harness` |
-| Toolchain | `rust-toolchain.toml` is the source of truth; pre-1.0 the MSRV tracks latest stable. `scripts/check-toolchain-consistency.sh` keeps every copy in sync |
+| Toolchain | `rust-toolchain.toml` is the source of truth; pre-1.0 the MSRV tracks latest stable. `cargo xtask toolchain` keeps every copy in sync |
 
 Gotchas: nextest doesn't run doctests (`cargo test --doc`). A flaky test that isn't yours usually
 mutates a genuinely process-global resource (`Registry::global`, `FONT_SYSTEM`) — scope a lock
 to that test module rather than serializing the suite. The dev host is shared and
 memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only change needs only
-the script gates.
+`cargo xtask checks`, which builds xtask and not the workspace.
 
 ## What the compiler and gates enforce
 
@@ -137,9 +140,10 @@ the script gates.
 | No `todo!`/`unimplemented!`/`dbg!` in production (linux/ios/android init stubs carry an `#[expect]`) | clippy `todo`/`unimplemented`/`dbg_macro` |
 | No `println!`/`eprintln!` in `flui-foundation`/`flui-tree`/`flui-macros` | clippy `print_stdout`/`print_stderr` |
 | No `From<f32>` for `flui-geometry` unit wrappers | `compile_fail` doctests in `flui-geometry` |
-| `thiserror` in libraries, `anyhow` in apps; `expect("BUG: <invariant>")` for internal invariants, no bare `unwrap()` in production | `clippy::unwrap_used`, `check-panic-policy.sh` ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) |
-| Crate layering; `flui-log` only in `flui-app`, `flui-cli` and the facade; unique ADR numbers | `inventory-check` (`docs/workspace-layers.toml`) |
-| No new process-global singletons in the runtime crates | `runtime-conformance-check` (`docs/runtime-contract.toml`) |
+| No bare `unwrap()` in production; by convention `expect("BUG: <invariant>")` for internal invariants, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | `clippy::unwrap_used`; the conventions are review |
+| Crate layering (a dependency points to the same layer or lower); no framework crate but `flui-app`, `flui-cli` and the facade links `flui-log`; none but `flui-localizations`, `flui-app` and the facade depends on Material or Cupertino, in any form (ADR-0028); manifests inherit the workspace keys and lints; no unreachable test file; unique ADR numbers | `cargo xtask workspace` (`[package.metadata.flui]` in each manifest) |
+| No dependency that no code uses, no test-only dependency in `[dependencies]`, no `[workspace.dependencies]` entry nothing inherits (an optional dependency, or one a feature names, is only warned about); licenses, sources and banned crates per `deny.toml`, including crates std now replaces (`once_cell`, `cfg-if`, …); RustSec advisories | `cargo xtask deps` (cargo-shear, cargo-deny; CI's `deps` job) |
+| Links from the non-archival markdown into the checkout resolve without climbing out of it: files, `#heading` anchors, and this repository's own `main` URLs | `cargo xtask docs-links` (lychee, offline), part of `cargo xtask checks` |
 
 ## ADR Policy
 
@@ -156,8 +160,8 @@ the history.
 | **Render object** (`RenderBox`/`RenderSliver`) | Implement in `flui-objects` (protocol in `flui-rendering`) → register in `RENDER_OBJECT_TYPES` → `harness_*` tests in `render_object_harness` → note a Flutter divergence in `## Mapping decisions` |
 | **Widget** | `View`/`ViewState` in `flui-widgets` or the facade, backed by a render object → `SemanticsConfiguration` for assistive tech → a test that fails without it |
 | **Platform capability** (a new handle) | Backend in `flui-platform` with no platform types leaking out → a method on `LifecycleContext`, not `BuildContext`, so `build` cannot reach it → a test that fails without it → ADR if it changes a cross-crate contract |
-| **Crate** | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
-| **Example using `material`/`cupertino`** | `[[example]] required-features = [...]` (`just facade-combos` relies on it) |
+| **Crate** | A workspace `members` entry and `[package.metadata.flui] layer = N` (layer names: root `[workspace.metadata.flui] layers`); `cargo xtask workspace` checks the rest. Why a crate must be a layer: `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
+| **Example using `material`/`cupertino`** | `[[example]] required-features = [...]` (`cargo xtask facade-combos` relies on it) |
 
 ## Definition of Done
 
@@ -173,10 +177,9 @@ A green gate proves the gates pass, not that the behavior exists. So a change is
 | Question | Read |
 |----------|------|
 | Is it planned? What changed recently? | `docs/ROADMAP.md`, `CHANGELOG.md` |
-| Dependencies, layering, a new crate | `docs/workspace-layers.toml`, root `Cargo.toml` `[workspace.dependencies]`, `docs/crates.md` |
+| Dependencies, layering, a new crate | root `Cargo.toml` (`[workspace.metadata.flui] layers`, `[workspace.dependencies]`), `docs/crates.md` |
 | Writing a frame-driving test | `docs/testing.md` (use the shallowest tier that can fail), `crates/flui-rendering/docs/TESTING.md` |
 | Contracts, pipeline, panics | `docs/FOUNDATIONS.md`, `docs/architecture.md`, `docs/PANIC-POLICY.md` |
-| Public runtime-contract surface | `docs/runtime-contract.toml` (`runtime-conformance-check`) |
 | Planning a large change, git hygiene | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
 ## Review guidelines
@@ -220,13 +223,14 @@ script gates already run in CI, so style and anything they catch is not worth a 
 - **`unsafe`:** each block's `SAFETY:` comment names an invariant this code establishes, not a
   restatement of the operation; say so if a safe API would do.
 - **Manifests and workflows:** shared dependencies go through `[workspace.dependencies]`;
-  features stay additive; a new crate is registered in `docs/workspace-layers.toml` and one
-  `FM_GROUP_*` in `ci.yml`. In workflows: actions pinned to a full SHA, `--locked` on every cargo
-  call, caches saved only on `main`, a job's name equals its key, and a new job is listed in the
-  `ci` aggregator's `needs` (a heavy one also in `HEAVY_JOBS`).
-- **Registries** (`docs/runtime-contract.toml`, `docs/workspace-layers.toml`,
-  `docs/panic-policy-allowlist.txt`, `docs/ROADMAP.md`): check only that each entry matches the
-  code in the same PR and that a new exemption states its reason.
+  features stay additive and every optional dependency sits behind a `dep:` feature; a new crate
+  declares its `[package.metadata.flui] layer`, and `wasm = false` if it cannot build for wasm32.
+  In workflows: actions pinned to a full SHA, `--locked` on every cargo call, caches saved only on
+  `main`, a job's name equals its key, and a new job is listed in the `ci` aggregator's `needs`
+  (a heavy one also in `HEAVY_JOBS`).
+- **Registries and exemptions** (`RENDER_OBJECT_TYPES`, `docs/ROADMAP.md`, a `deny.toml` skip, a
+  `typos.toml` word, an `#[expect]`): check that each entry matches the code in the same PR and
+  that a new exemption states its reason.
 - **Docs:** no process markers (see "Working here"); no hand-maintained completeness claims ("all
   call sites now use X") without the command that showed it; no Flutter-parity claim without the
   reference it was checked against.

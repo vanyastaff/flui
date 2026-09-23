@@ -123,6 +123,22 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `flui-cli` project templates, the README badge, and `llms.txt` agree with
   `rust-toolchain.toml`'s channel, so the declaration can no longer drift
   silently across those files.
+- **Dependency gate: `cargo xtask deps`** (the CI job `deps`, formerly `deny`). cargo-deny now
+  graphs every workspace member: the root manifest is the `flui` package, so the old run
+  started at the facade and never checked `flui-cli`, `flui-assets`' `network` feature, the
+  examples or the tools. The one finding that exposed, `webpki-root-certs`' CDLA-Permissive-2.0
+  (Mozilla's root certificates as data), is a crate-scoped license exception.
+  `[bans.std-replacements]` rejects a direct dependency std now replaces (`once_cell`, …).
+  cargo-shear joins the gate, and the unused and misplaced dependencies it reported are gone.
+  Advisories block on main, nightly and any pull request that changes `Cargo.lock` or
+  `deny.toml`, and are reported without failing other pull requests. The weekly `advisories`
+  job (the nightly run covers it daily) and `cargo-machete` job (cargo-shear replaces it) are
+  removed.
+
+### Removed
+
+- `flui_rendering::slivers`, a public module with no items: the sliver windowing math lives in
+  `flui_rendering::virtualization`.
 
 ### Fixed
 

@@ -50,6 +50,14 @@ the workspace version and follows [Semantic Versioning](https://semver.org/).
   `cargo install` otherwise. `flui doctor` reports `wasm-bindgen`, not
   `wasm-pack`.
 
+### Fixed
+
+- `cargo binstall flui-cli` installs the prebuilt Linux and macOS binaries.
+  The `[package.metadata.binstall]` of 0.1.0 put both binaries at the root of
+  every archive, but the Linux and macOS archives hold them in a
+  `flui-<target>/` folder, so binstall found no binary there and fell back to
+  building from source. Windows was unaffected.
+
 ## [0.1.0] - 2026-09-21
 
 First published release. `Changed`, `Fixed` and `Removed` describe what

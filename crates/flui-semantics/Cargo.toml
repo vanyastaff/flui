@@ -69,3 +69,6 @@ criterion = { workspace = true }
 [[bench]]
 name = "publish_cost"
 harness = false
+
+[package.metadata.flui]
+layer = 3

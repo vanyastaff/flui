@@ -6,7 +6,7 @@
 //! `AndroidPlatform::run` cannot execute on any host this suite runs on: it
 //! needs a live `AndroidApp`, constructible only by the real Android
 //! runtime, and the Android target is type-checked (the NDK-free `flui-app`
-//! check, and `just cross-typecheck`) rather than run. So the site is pinned
+//! check, and `cargo xtask cross-typecheck`) rather than run. So the site is pinned
 //! textually, and this scan proves exactly one thing: **the release and the
 //! clear are present in the exit region of `run`, in that order, in the
 //! unfused shape.** Present in the region, never "reached" — nothing here

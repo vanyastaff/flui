@@ -92,3 +92,8 @@ workspace = true
 [[test]]
 name = "assets_it"
 path = "tests/main.rs"
+
+[package.metadata.flui]
+layer = 2
+# tokio's networking stack (mio) has no wasm32-unknown-unknown support.
+wasm = false

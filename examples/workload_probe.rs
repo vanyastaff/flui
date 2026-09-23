@@ -5,7 +5,7 @@
 //! [`ScrollController`]) and a Material [`TextField`] (driven by a
 //! [`TextEditingController`]), then drives BOTH itself through three phases —
 //! `scroll`, `type`, `idle` — with no operator input and no synthetic OS
-//! pointer/keyboard events. `scripts/check-macos-workload.py` builds this in
+//! pointer/keyboard events. `tools/device-checks/check-macos-workload.py` builds this in
 //! release, runs it, and applies budgets declared in that script's header.
 //!
 //! # Why no synthetic OS events
@@ -68,14 +68,14 @@
 //!   `BuildContext` surface exposes it to application code. This example
 //!   takes `FLUI_WORKLOAD_PERIOD_MS` (default `16.67`) and reports which
 //!   source it used in every summary line's `period_source` field
-//!   (`"default"` or `"env"`); `scripts/check-macos-workload.py` measures
+//!   (`"default"` or `"env"`); `tools/device-checks/check-macos-workload.py` measures
 //!   the main display through CoreGraphics and sets the variable, so under
 //!   the script the budgets are stated against the real panel.
 //! - **The idle frame count is a measurement, not an assumption.** A backend
 //!   that kept redrawing with nothing dirty would show close to
 //!   `idle_seconds × refresh_rate` here; the accepted macOS run
 //!   (`docs/BETA.md`) shows 1 — the frame the controller's `stop()` lands
-//!   on — and `scripts/check-macos-workload.py` budgets it at 5, reporting
+//!   on — and `tools/device-checks/check-macos-workload.py` budgets it at 5, reporting
 //!   anything above as a finding rather than budgeting around it.
 
 use std::env;
@@ -517,7 +517,7 @@ impl ViewState<WorkloadDriver> for WorkloadDriverState {
 }
 
 fn main() {
-    // Logging to stderr, not stdout: `scripts/check-macos-workload.py`
+    // Logging to stderr, not stdout: `tools/device-checks/check-macos-workload.py`
     // parses stdout as a stream of JSON summary lines, and interleaved
     // `tracing` output would not be valid JSON.
     tracing_subscriber::fmt()

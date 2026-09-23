@@ -56,3 +56,6 @@ workspace = true
 [[test]]
 name = "hot_reload_it"
 path = "tests/main.rs"
+
+[package.metadata.flui]
+layer = 6

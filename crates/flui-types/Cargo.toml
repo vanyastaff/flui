@@ -32,9 +32,6 @@ flui-geometry = { path = "../flui-geometry", version = "=0.2.0-dev" }
 # snapshots carry no cross-span aliasing to preserve.
 serde = { workspace = true, optional = true, features = ["rc"] }
 
-# Stack-allocated Vec for small collections (animation curves, color stops)
-smallvec = { workspace = true }
-
 # Note: mint and glam optional deps were dropped from flui-types;
 # the mint/glam interop now lives in flui-geometry. flui-types still exposes
 # `mint` and `glam` feature flags but they FORWARD to flui-geometry/{mint,glam}
@@ -104,5 +101,11 @@ harness = false
 [lints]
 workspace = true
 
+# cargo-shear reports the trybuild compile-fail inputs as unlinked: the
+# `unit_mixing_compile_fail` test hands them to rustc by glob, no module
+# declares them.
 [package.metadata.cargo-shear]
 ignored-paths = ["tests/compile_fail/*.rs"]
+
+[package.metadata.flui]
+layer = 0

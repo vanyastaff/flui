@@ -82,7 +82,7 @@
 //! `#[test]` bodies on a worker thread, and AppKit requires main-thread window
 //! construction), unbundled NSWindow construction throws
 //! `_CFBundleGetValueForInfoKey`, a foreign NSException Rust cannot catch. Run
-//! it on a real Mac via `just macos-ime`, which stages this example into a
+//! it on a real Mac via `cargo xtask device macos-ime`, which stages this example into a
 //! minimal `.app` (the committed `Info.plist.ime_probe` clears the bundle
 //! floor), launches it with `RUST_LOG=info`, and asserts exit 0 plus the PASS
 //! marker. On every other target the binary is a compile-time no-op main.
@@ -1261,7 +1261,7 @@ fn main() {
 
 /// Non-macOS build placeholder: this probe needs the AppKit main thread, a
 /// bundle, and a live window to route input through; on other targets it
-/// exists only so the workspace compiles. Run it with `just macos-ime` on a
+/// exists only so the workspace compiles. Run it with `cargo xtask device macos-ime` on a
 /// real Mac.
 #[cfg(not(target_os = "macos"))]
 fn main() {}

@@ -35,8 +35,8 @@ tracing-subscriber = { workspace = true, optional = true }
 # `timeline` only. FrameSnapshot/InputEpoch: the frame-telemetry types
 # `Timeline::record_frame_snapshots` turns into Chrome-trace events, reusing
 # this module's existing exporter rather than inventing a second trace
-# format. A normal downward edge (flui-devtools sits above flui-scheduler in
-# the workspace DAG) — see docs/workspace-layers.toml.
+# format. A normal downward edge: flui-devtools is layer 9, flui-scheduler
+# layer 2 (`[package.metadata.flui]`).
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev", optional = true }
 
 [features]
@@ -75,7 +75,7 @@ full = ["profiling", "timeline", "inspector"]
 # frame through. A dev-only edge, and a dev-only CYCLE: flui-testing depends
 # on this crate through its own dev graph. Cargo permits these checkout dev
 # cycles so a lower crate can use the test support built on it.
-# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 # The end-to-end test's one-leaf tree: a `RenderView` over `RenderSizedBox`.
 flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
@@ -91,3 +91,6 @@ required-features = ["profiling"]
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+layer = 9

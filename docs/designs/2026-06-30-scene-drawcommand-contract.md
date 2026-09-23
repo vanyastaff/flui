@@ -62,8 +62,8 @@ through `Renderer::render_scene` / the `RasterBackend` seam (see the companion
 
 ### 4. Consumer side — `CommandRenderer`
 
-[`flui-engine/src/traits.rs`](../../crates/flui-engine/src/traits.rs): one
-`render_*` method per `DrawCommand` variant; [`commands.rs`](../../crates/flui-engine/src/commands.rs)
+[`flui-engine/src/command_renderer.rs`](../../crates/flui-engine/src/command_renderer.rs): one
+`render_*` method per `DrawCommand` variant; [`dispatch.rs`](../../crates/flui-engine/src/dispatch.rs)
 `dispatch_command` routes each variant to its method. A backend that omits a
 variant is caught by the `_ => warn!` arm at runtime — the freeze guard below
 catches it at **build** time on the producer side.

@@ -20,3 +20,7 @@ hot-reload-counter-types = { path = "../types" }
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+# Hot reload loads the logic crate with dlopen, which the web does not have.
+wasm = false

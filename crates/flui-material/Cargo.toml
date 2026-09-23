@@ -79,3 +79,10 @@ workspace = true
 [[test]]
 name = "material_it"
 path = "tests/main.rs"
+
+[package.metadata.flui]
+layer = 7
+# ADR-0028: no other crate depends on a design system in any form, and the
+# two design systems do not depend on each other.
+allowed-dependents = ["flui-localizations", "flui-app", "flui"]
+allowed-dev-dependents = ["flui-localizations", "flui-app", "flui"]

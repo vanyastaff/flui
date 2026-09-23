@@ -90,8 +90,7 @@ package-lock.json
 # has no npm surface of its own.
 /package.json
 
-# Python bytecode from running scripts/*.py directly (they are run with -B in
-# the recipes, but not always by hand).
+# Python bytecode (tools/device-checks, tools/text-spike).
 __pycache__/
 yarn.lock
 
@@ -233,7 +232,7 @@ flamegraph.svg
 # machine state rather than something to grant every contributor by default.
 .qwen/
 
-# wasm-bindgen output of the web examples (built by `just web-counter-build` and friends)
+# wasm-bindgen output of the web examples (wasm-pack or wasm-bindgen; see examples/README.md)
 examples/*/pkg/
 
 # mdBook build output (built by `mdbook build book/`, deployed by .github/workflows/docs.yml)

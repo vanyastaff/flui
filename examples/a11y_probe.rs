@@ -7,8 +7,8 @@
 //! AccessKit adapter. The process does nothing else: it opens the window and
 //! waits for [`RUN_FOR`], then quits, so an external accessibility client
 //! can be the one that interacts. On macOS that client is
-//! `scripts/check-macos-a11y.py` (`just macos-a11y`), which reads the
-//! window's `NSAccessibility` tree through `AXUIElement`, finds the button
+//! `tools/device-checks/check-macos-a11y.py` (`cargo xtask device macos-a11y`),
+//! which reads the window's `NSAccessibility` tree through `AXUIElement`, finds the button
 //! by its label, performs `AXPress`, and reads the count back — the
 //! screen-reader path end to end, with no pointer event anywhere.
 //!

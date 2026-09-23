@@ -1,0 +1,11 @@
+# insta's workspace configuration, read by every snapshot assertion in the
+# workspace; an INSTA_UPDATE in the environment still takes precedence.
+#
+# `update: new`: on a mismatch, write the candidate next to the snapshot as
+# `<name>.snap.new` and fail the test. Off CI that is what insta's default
+# (`auto`) already does; under CI (`CI` set) `auto` writes nothing, which
+# left the "Upload insta snapshot candidates on failure" steps in
+# .github/workflows/ci.yml with nothing to upload. Accept or reject the
+# candidates with `cargo insta review`.
+behavior:
+  update: new

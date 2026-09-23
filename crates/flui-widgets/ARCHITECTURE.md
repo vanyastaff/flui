@@ -4,7 +4,7 @@ The user-facing widget catalog: configuration objects over the `flui-objects`
 render catalog, plus the stateful widgets that own gesture, focus, routing and
 overlay behavior. Layer rules, dependency direction, and the crate's place in
 the workspace DAG live in [`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md)
-and [`docs/workspace-layers.toml`](../../docs/workspace-layers.toml); this file
+and this crate's `[package.metadata.flui] layer`; this file
 records the per-widget decisions that diverge from the Flutter reference and
 would otherwise read as drift.
 

@@ -11,15 +11,15 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 | Rust | 1.98 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned separately in `rust-toolchain.toml`. `rustup` installs/selects it automatically on first `cargo` invocation. |
 | Cargo | bundled with Rust | Workspace uses `resolver = "3"` (MSRV-aware) and edition 2024. |
 | Git | any recent | Required to clone the repo. |
-| Python | 3.11+ | Required for repository verification scripts (`just ci`), which import `tomllib`. The justfile picks a Python >= 3.11 by version (`python3.12` counts), so `python3` may stay the system one; not required to run an application. |
-| Bash | 4+ | Required by a few gate scripts (`mapfile`). macOS ships 3.2 as `/bin/bash`: `brew install bash`; the justfile finds the newer one. |
+| Python | 3.10+ | Only for the font-fixture generator (`tools/decoy-face/generate.py`, which `cargo xtask checks` re-runs to verify the committed bytes) and the macOS/iOS drivers in `tools/device-checks/`. Not required to build or run an application. |
 | `cargo-ndk` | 3.x | Required only for Android targets. |
 | `wasm-pack` | 0.13+ | Required only for `examples/web_demo` and `examples/painting_demo`. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android. |
 
-`just doctor` checks every tool `just ci` needs and prints the install command
-for each missing one (`just doctor full` adds what `just ci-full` needs); without
-`just` yet, run `bash scripts/doctor.sh`.
+Repository tasks run as `cargo xtask <command>` (`cargo xtask --help` lists
+them); there is no other task runner to install. `cargo xtask doctor` checks
+every tool `cargo xtask ci` needs and prints the install command for each
+missing one (`cargo xtask doctor full` adds what `cargo xtask ci-full` needs).
 
 The GPU dependency version is defined by `wgpu` in `[workspace.dependencies]`
 in `Cargo.toml`; consult that manifest when checking driver or backend requirements.
@@ -29,10 +29,11 @@ in `Cargo.toml`; consult that manifest when checking driver or backend requireme
 Pre-1.0, the MSRV tracks the latest stable release and is bumped within a
 week of each new stable (Rust ships every 6 weeks); post-1.0 it follows N-2
 (tolerates the two most recent stable releases behind current). A bump
-touches `Cargo.toml`, `clippy.toml`, the `msrv` CI job, and the `flui-cli`
-project templates together — `scripts/check-toolchain-consistency.sh` (part
-of `just gate`) fails if any of them drift from `rust-toolchain.toml`'s
-channel. Full procedure: `rust-toolchain.toml`'s header comment.
+touches `rust-toolchain.toml`, `Cargo.toml` (clippy reads the MSRV from it),
+the `flui-cli` project templates, the README badge and `llms.txt` together —
+`cargo xtask toolchain` (part of `cargo xtask checks`) fails if any of them
+drift from `rust-toolchain.toml`'s channel. Full procedure:
+`rust-toolchain.toml`'s header comment.
 
 ## Clone and Build
 

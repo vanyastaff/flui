@@ -142,7 +142,6 @@ objc2-app-kit = { workspace = true, features = [
     "NSVisualEffectView",
     "NSWindowScripting",
 ] }
-objc2-core-foundation.workspace = true
 dispatch2.workspace = true
 # CoreGraphics, for the one display property Cocoa does not expose: the
 # refresh rate of the display's *current* mode (`CGDisplayModeGetRefreshRate`),
@@ -279,7 +278,6 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "CALayer",
     "CAMetalLayer",
 ] }
-objc2-metal = { version = "0.3.2", default-features = false }
 block2 = "0.6.2"
 dispatch2 = "0.3.1"
 
@@ -361,3 +359,6 @@ all-features = true
 # Exercise the exact asynchronous UIKit error block on an Apple host.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 block2 = "0.6.2"
+
+[package.metadata.flui]
+layer = 2

@@ -56,7 +56,7 @@ criterion = { workspace = true }
 # edge, and a dev-only CYCLE: flui-testing depends on this crate normally,
 # which cargo permits for dev-dependencies precisely so a lower crate can use
 # the test support built on it.
-# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 
 [lib]
@@ -98,3 +98,6 @@ harness = false
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+layer = 2

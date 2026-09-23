@@ -740,11 +740,10 @@ pub struct Renderer {
     /// is absent while released (`release_surface`), which is the one state
     /// a renderer has besides "windowed". See [`SurfaceLease`].
     lease: SurfaceLease<wgpu::Surface<'static>>,
-    /// States the "single mutator, never shared" contract
-    /// (`docs/runtime-contract.toml`) as a field instead of a side effect of
-    /// some other field's type. `Cell<()>` is `!Sync`; `PhantomData` of it
-    /// carries that without occupying space or affecting `Send` (`Cell<()>`
-    /// is `Send`) or drop-check (nothing to drop).
+    /// States the "single mutator, never shared" rule as a field instead of
+    /// a side effect of some other field's type. `Cell<()>` is `!Sync`;
+    /// `PhantomData` of it carries that without occupying space or affecting
+    /// `Send` (`Cell<()>` is `Send`) or drop-check (nothing to drop).
     _single_mutator: PhantomData<Cell<()>>,
     /// GPU timestamp profiler. `None` when the `gpu-profiler` feature is off
     /// or the adapter does not expose `wgpu::Features::TIMESTAMP_QUERY`.
@@ -787,10 +786,8 @@ pub struct Renderer {
 // into one — the renderer no longer keeps raw handles at all). `Renderer:
 // !Sync` is likewise no longer an accident of some other field's type:
 // `_single_mutator: PhantomData<Cell<()>>` states it directly.
-// Pinned below; `docs/runtime-contract.toml` carries the matching
-// forbidden-pattern guards (both this bound's re-widening and its `!Sync`
-// sibling) so a hand-reintroduced blanket impl fails `just
-// runtime-conformance-check` too, workspace-wide.
+// Pinned below; the crate's `deny(unsafe_code)` also refuses a
+// hand-reintroduced blanket `unsafe impl Send`/`Sync` for it.
 static_assertions::assert_impl_all!(Renderer: Send);
 static_assertions::assert_not_impl_any!(Renderer: Sync);
 
@@ -883,7 +880,7 @@ impl Renderer {
         // `Arc<Arc<dyn PlatformWindow>>` here — forced: `Arc<dyn
         // PlatformWindow>` cannot upcast to `Arc<dyn WindowTarget>` without
         // `PlatformWindow: WindowTarget`, which would invert the
-        // flui-platform → flui-engine layer edge (docs/workspace-layers.toml).
+        // flui-platform → flui-engine layer edge (`cargo xtask workspace`).
         // One extra pointer chase per surface creation; documented, not
         // fixed — see issue #1043.
         let (w, h) = (800u32, 600u32); // Will be updated on first resize
@@ -1006,7 +1003,7 @@ impl Renderer {
             // The literal sat at 1 for a live-resize argument: the tightest
             // pool means the displayed frame tracks the window edge as closely
             // as possible during a drag. The in-process half of that argument
-            // was refuted first (`just macos-resize-jitter`: the acquired
+            // was refuted first (`cargo xtask device macos-resize-jitter`: the acquired
             // texture never diverges from the configured size at either
             // setting, four runs — `render_scene` acquires and presents
             // inside one call and `resize` reconfigures before it, so no
@@ -1032,7 +1029,7 @@ impl Renderer {
             // rate of every non-trivial app is a measured cost; a possible
             // one-period edge lag during a live drag is a conjecture nothing
             // in-process can observe. The pool is widened on that basis, and
-            // `just macos-workload` is the regression gate: its scroll and
+            // `cargo xtask device macos-workload` is the regression gate: its scroll and
             // type p99 budgets are stated in display periods. The
             // measurement is AppKit/Metal on one 100 Hz panel; the literal
             // is global to every wgpu backend, where 2 is wgpu's own default
@@ -1162,9 +1159,7 @@ impl Renderer {
         //
         // No `unsafe` block: the old unsafe raw-handle surface-creation call
         // and the newtype that narrowed its two handle fields are both gone
-        // from this crate — see `docs/runtime-contract.toml`'s matching
-        // `forbidden_pattern` entry, which ratchets that deletion
-        // workspace-wide.
+        // from this crate, and its `deny(unsafe_code)` keeps them out.
         let surface: wgpu::Surface<'static> = instance
             .create_surface(Arc::clone(target))
             .map_err(EngineError::surface_creation)?;

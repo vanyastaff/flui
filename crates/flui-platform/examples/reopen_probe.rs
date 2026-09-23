@@ -1,4 +1,4 @@
-//! Native reopen transport probe, bounded by scripts/check-macos-reopen.py.
+//! Native reopen transport probe, bounded by tools/device-checks/check-macos-reopen.py.
 #[cfg(target_os = "macos")]
 mod native {
     use flui_platform::{OwnerPlatform, SharedPlatform, WindowOptions};

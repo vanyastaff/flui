@@ -36,9 +36,8 @@ impl PresentationForest {
 
     /// Install another presentation into this forest.
     ///
-    /// Production entry point (this slice lifted the former `len()<=1`
-    /// ratchet, registry-pinned as `multi-presentation-forest-gate` in
-    /// `docs/runtime-contract.toml`): `UiRealm::install_presentation` is the
+    /// Production entry point (issue #555 lifted the former `len()<=1`
+    /// ratchet): `UiRealm::install_presentation` is the
     /// realm-level caller, and `runner.rs::install_presentation_alongside`
     /// is the caller that also mints this presentation's real
     /// `WindowRegistry` mapping — the two steps a hosted presentation needs
