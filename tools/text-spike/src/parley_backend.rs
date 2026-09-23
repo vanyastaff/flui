@@ -53,7 +53,7 @@
 //! mirroring cosmic-text's retention.
 
 use parley::layout::{Alignment, AlignmentOptions, PositionedLayoutItem};
-use parley::style::{FontFamily, StyleProperty};
+use parley::style::{GenericFamily, StyleProperty};
 use parley::{FontContext, Layout, LayoutContext};
 
 use crate::ShapeResult;
@@ -76,6 +76,18 @@ impl ParleyBackend {
     /// you hand parley the entire document at once" data point.
     pub fn shape(&mut self, text: &str, max_width: Option<f32>) -> ShapeResult {
         self.shape_one(text, max_width).0
+    }
+
+    /// Same as `shape`, but returns the built `Layout` instead of dropping
+    /// it -- for a timing comparison against cosmic-text's `shape_retained`
+    /// to be fair, destruction has to happen on the same side of the timer
+    /// on both backends (see `cosmic_backend`'s module docs).
+    pub fn shape_retained(
+        &mut self,
+        text: &str,
+        max_width: Option<f32>,
+    ) -> (ShapeResult, Layout<()>) {
+        self.shape_one(text, max_width)
     }
 
     /// Splits `text` on `\n` and shapes each non-empty paragraph as its
@@ -140,7 +152,13 @@ impl ParleyBackend {
             self.layout_cx
                 .ranged_builder(&mut self.font_cx, text, display_scale, quantize);
         builder.push_default(StyleProperty::FontSize(16.0));
-        builder.push_default(StyleProperty::FontFamily(FontFamily::from("system-ui")));
+        // `GenericFamily::SansSerif`, not `"system-ui"` -- matches
+        // `CosmicBackend::shape`'s `Family::SansSerif` request exactly (a
+        // Codex review caught the original mismatch: `"system-ui"` and
+        // `SansSerif` are different CSS generics and can select different
+        // fonts/fallback chains, confounding font selection with the
+        // backend comparison).
+        builder.push_default(StyleProperty::from(GenericFamily::SansSerif));
         let mut layout: Layout<()> = builder.build(text);
         layout.break_all_lines(max_width);
         layout.align(Alignment::Start, AlignmentOptions::default());

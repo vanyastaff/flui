@@ -5,6 +5,10 @@ Status: **Proposed** (2026-09-22). Backed by the B7 research spike:
 (standalone crate, not a flui workspace member). Nothing in `crates/flui-*` has changed as part of
 this spike or this ADR -- migration is a separate follow-up.
 
+**Challenges** [ADR-0059](ADR-0059-flui-stays-on-cosmic-text.md) (Accepted, "Stay on cosmic-text").
+Does not yet supersede it -- see "Reconciling with ADR-0059" below; the gap that keeps this ADR from
+simply superseding ADR-0059 is itself the biggest open precondition in the Decision section.
+
 ## Context
 
 `flui-painting` depends on cosmic-text 0.19.0 for all text shaping and layout today
@@ -19,22 +23,63 @@ real latest published version — confirmed via `cargo info parley`, not assumed
 paragraph and a 10,000-line document, 5 reps each, in `--release` mode on an otherwise idle
 machine, with parley shaping one `Layout` per paragraph (matching cosmic-text's own internal
 per-paragraph shaping and matching how real parley consumers -- Xilem/Masonry, Blitz -- use it).
+**The spike measured shaping and layout only.** It did not touch glyph rasterization or the engine
+atlas -- see "Reconciling with ADR-0059" below for why that specifically matters here.
 
-## What the spike found
+## Reconciling with ADR-0059
 
-**parley wins on all six corpora at document scale**: 2.4x-8.2x faster than cosmic-text on timing,
-and 1.3x-4.9x less peak memory once measured with a retention policy that matches cosmic-text's
-own (see "Evidentiary basis" below for why that qualifier matters), with line counts matching
-exactly on all six corpora and glyph counts matching on five of six (an implicit correctness
-check; `emoji_zwj` differs by 1.59%, a real ZWJ-clustering difference worth a closer look before
-shipping). Migration cost is low: cosmic-text usage outside `flui-painting/src/text_layout/`
-(5 files) is 5 test files and one 5-occurrence test file in `flui-engine`; `flui-widgets` never
-touches cosmic-text directly; only one cosmic-text type (`Family`) crosses `flui-painting`'s own
-public API today.
+[ADR-0059](ADR-0059-flui-stays-on-cosmic-text.md) (Accepted, 2026-09-06) already asked "migrate to
+parley now?" and rejected it, on cost, for one dominant reason: no wgpu-side equivalent of glyphon
+existed for parley, so a migration was "a text swap plus a hand-rolled renderer." Its own explicit
+re-open trigger: *"A parley-compatible wgpu glyph atlas reaches maturity."*
+
+**Half of that objection is already gone**, independent of anything this spike measured:
+[ADR-0067](ADR-0067-engine-owned-glyph-atlas.md) (Accepted, landed 2026-09-18 -- twelve days after
+ADR-0059, before this spike started) removed glyphon entirely. The engine now owns its own glyph
+atlas and consumes shaper-agnostic `GlyphImage` bitmaps through one door,
+`SharedFontSystem::rasterize(GlyphKey) -> Option<GlyphImage>` -- it no longer takes a
+cosmic-text-specific buffer at all. A parley-shaped run reaching the engine as glyph instances is
+no longer blocked on "does parley have its own glyphon."
+
+**The other half is still open, and this spike did not close it.** `rasterize()`'s current
+implementation (`crates/flui-painting/src/text_layout/layout.rs:346-366`) is itself deeply
+cosmic-text-specific: `GlyphKey` is `pub(super) cosmic_text::CacheKey` (`glyphs.rs:23`), and
+rasterization goes through a `cosmic_text::SwashCache`'s `get_image_uncached`. Checking
+`tools/text-spike/`'s own dependency tree against this: **parley 0.11.1 does not rasterize glyphs
+at all** -- `cargo tree -p parley` has `skrifa` (font parsing/outline extraction) but no `swash` or
+`zeno` (the crates that actually scan-convert outlines to bitmaps); cosmic-text pulls both. Parley
+deliberately leaves rasterization to the consumer (this is normal for shaping-only crates -- Xilem/
+Masonry pair parley with a separate renderer). So a migration needs a rasterizer brought in
+alongside parley -- plausibly `swash` directly, unbundled from cosmic-text, since flui-painting
+already knows how to drive it -- plus a new `GlyphKey` that doesn't assume a
+`cosmic_text::CacheKey`, and confirmation that whatever glyph/cluster identity parley exposes can
+build a stable one. **None of this was prototyped or measured by this spike.** It is the reason
+this ADR challenges ADR-0059 rather than declaring it superseded, and it is the first, required
+precondition below.
+
+## What the spike found (shaping and layout only)
+
+**parley wins on all six corpora at document scale**: 2.4x-9.0x faster than cosmic-text on timing,
+and 1.2x-4.2x less peak memory once measured with a retention policy and font-generic request that
+match cosmic-text's own (see "Evidentiary basis" below for why those qualifiers matter), with line
+counts matching exactly on all six corpora and glyph counts matching on four of six (an implicit
+correctness check; `arabic_mixed` differs by 0.25% and `emoji_zwj` by 3.19%, both real
+clustering/selection differences worth a closer look before shipping). This addresses ADR-0059's
+cost argument on the shaping side specifically -- it says nothing about the rasterization gap
+above.
+
+Migration surface for the shaping/layout side is low: cosmic-text usage is confined to three files
+under `crates/flui-painting/src/text_layout/` (`layout.rs`, `font_resolve.rs`, `glyphs.rs` --
+`mod.rs` itself doesn't mention it) plus two files at the crate root (`fonts.rs`, which directly
+accepts and mutates a `cosmic_text::fontdb::Database` to register loaded fonts, and `lib.rs`,
+which re-exports `cosmic_text::fontdb::Family`) -- five files total, matching the spike report's
+own occurrence count. Five more files are test-only (`crates/flui-painting/tests/`), plus one
+test-only file in `flui-engine` (`paragraph_readback_tests.rs`). `flui-widgets` never touches
+cosmic-text directly.
 
 ## Evidentiary basis (what to check before trusting this ADR's numbers)
 
-This spike went through two rounds of methodology correction before its numbers stabilized --
+This spike went through rounds of methodology correction before its numbers stabilized --
 recorded here because an ADR's "what the spike found" section is a claim later work builds on, and
 a reader should be able to check the basis rather than take the headline number on faith:
 
@@ -50,7 +95,7 @@ a reader should be able to check the basis rather than take the headline number 
    of Devanagari shaping. Fixed by shaping one `Layout` per paragraph for both backends' comparison
    (splitting on `\n`, confirmed linear via a 1,250/2,500/5,000/10,000-line scaling study);
    Devanagari flipped from ~90s (quadratic) to ~1.1s (linear), and the backend-vs-backend result
-   flipped from "27x slower than cosmic-text" to "3.0x faster."
+   flipped from "27x slower than cosmic-text" to "faster."
 2. **Memory, round 2**: the *corrected* per-paragraph timing pass's memory numbers were unfair in
    the opposite direction -- parley's per-paragraph loop dropped each `Layout` immediately after
    reading its counts, while cosmic-text's single `Buffer` call retains every paragraph's shaped
@@ -58,9 +103,22 @@ a reader should be able to check the basis rather than take the headline number 
    (~22 MB vs 620-770 MB). Fixed by retaining every built `Layout` in a `Vec` held alive until peak
    RSS is sampled (`ParleyBackend::shape_per_paragraph_retained`), the same retention cosmic-text
    has by default. The real memory advantage, once both backends retain the same amount of state,
-   is 1.3x-4.9x, not 30-38x -- smallest on the two most-complex-shaping corpora (Arabic,
-   Devanagari), largest on Latin and emoji.
-3. Both rounds are kept in full in the spike's own report (not just this ADR's summary), including
+   narrowed substantially from 30-38x -- see round 3 below for the figure that stood after both
+   memory-fairness rounds landed together.
+3. **Font-selection and timing-boundary parity, round 3**: a Codex review caught two more
+   asymmetries. Parley was requesting the CSS generic `"system-ui"` while cosmic-text requested
+   `Family::SansSerif` -- different generics that can select different fonts, confounding font
+   choice with the backend comparison. And cosmic-text's `shape()` dropped its `Buffer` (destroying
+   hundreds of MB) *inside* the timed window, while parley's retained `Layout`s were dropped after
+   both the timing and RSS samples -- an inconsistent destruction boundary. Both fixed: parley now
+   requests `GenericFamily::SansSerif` to match, and both backends expose a `shape_retained`
+   variant that returns their shaped state so the caller controls exactly when it's dropped,
+   relative to both samples, on both sides. This round also changed which corpora's glyph counts
+   agree between backends (`arabic_mixed` newly disagrees by 0.25%; `emoji_zwj`'s gap changed from
+   1.59% to 3.19%) -- font selection turned out to affect work-parity, not just timing/memory. The
+   timing (2.4x-9.0x) and memory (1.2x-4.2x) ranges in "What the spike found" above are from this
+   third, fully-corrected pass.
+4. Every round is kept in full in the spike's own report (not just this ADR's summary), including
    the numbers that got walked back, since a large finding that later gets corrected is exactly the
    kind of thing a reader re-deriving this decision needs to see, not just the final conclusion.
 
@@ -71,45 +129,74 @@ paragraph-bound its input could still hit it -- but FLUI's own architecture (one
 
 Full measurement tables, both scaling studies, the profiling/symbolication method, the
 init-vs-shaping memory breakdown, the work-parity table, and the upstream issue draft are in
-`docs/research/text-stack-2026.md`; the migration-cost numbers above are real `grep` counts against
-`crates/flui-{engine,painting,widgets}` cited there, not re-derived here.
+`docs/research/text-stack-2026.md`, along with the checked-in runner script and raw per-rep dataset
+behind every table (not just the aggregated numbers) so the medians and ratios can be independently
+recomputed.
 
 ## Decision
 
-**Migrate `flui-painting` from cosmic-text to parley**, shaping one `Layout` per paragraph /
-`RenderParagraph` (never a whole multi-paragraph document as a single `Layout` -- see Context).
+**Direction: migrate `flui-painting` from cosmic-text to parley** for shaping and layout, shaping
+one `Layout` per paragraph / `RenderParagraph` (never a whole multi-paragraph document as a single
+`Layout` -- see Context). **This is not yet an authorization to start the migration.** The
+following preconditions are gates, not activities -- each names what must be true, and how that
+gets checked, before the corresponding piece of work is considered satisfied:
 
-Before the migration itself starts (this ADR authorizes the direction; the migration is separate,
-scoped follow-up work, not part of this spike):
-
-1. Look closer at the `emoji_zwj` glyph-count difference (251 vs 247) to understand whether it's a
-   clustering choice FLUI needs to account for.
-2. Re-derive `flui-painting`'s selection-rect and offset↔cursor conversion logic against parley's
-   `Line`/`GlyphRun` API -- neither backend exposes editor selection semantics natively, so this
-   isn't a drop-in swap regardless of which stack was chosen.
-3. Independently verify BiDi visual-order correctness, UAX #14 line breaking, variable-font
-   support, and wasm32 buildability -- none were measured in the spike.
-4. File the upstream `Item`-boundary issue (draft in the spike's report) so it's tracked
+1. **Rasterization prototype (blocking; see "Reconciling with ADR-0059").** Build a minimal
+   parley-shaped-glyph → bitmap path (parley shaping + a chosen rasterizer, plausibly `swash`
+   directly) and a `GlyphKey` that doesn't assume `cosmic_text::CacheKey`. Pass condition: the
+   prototype produces `GlyphImage`s the existing `flui-engine` atlas (`ADR-0067`) accepts
+   unmodified, for at least one Latin and one complex-script (Devanagari or Arabic) test case, with
+   a stable `GlyphKey` across repeated rasterization of the same glyph (a correctness property the
+   engine's atlas cache depends on). Until this exists, this ADR does not supersede ADR-0059.
+2. **`arabic_mixed` (0.25%) and `emoji_zwj` (3.19%) glyph-count differences.** Pass condition:
+   either (a) a test asserting parley's cluster/selection boundaries match FLUI's expected
+   grapheme-cluster boundaries for fixed ZWJ and bidi-mixed corpora (family, couple+heart,
+   profession, flag, skin-tone for emoji; an Arabic+Latin mixed string for the bidi case), or (b) a
+   written, reviewed decision that each difference is immaterial, with the specific clusters that
+   differ enumerated.
+3. **Selection-rect and offset↔cursor conversion.** `flui-painting` builds this itself on top of
+   cosmic-text today (`measure.rs`); neither backend exposes editor selection semantics natively,
+   so this is a rewrite regardless of stack. Pass condition: the existing `flui-painting` test
+   suite's selection/cursor tests (the ones exercising `measure.rs`'s current logic) pass unchanged
+   in behavior against the parley-backed reimplementation, for at least LTR, RTL, and mixed-BiDi
+   cases.
+4. **BiDi visual-order, UAX #14 line breaking, variable-font support, wasm32 buildability.** None
+   were measured in the spike. Pass condition: a conformance case per area -- a fixed bidi_mixed
+   test string with an expected visual glyph order, a fixed line-breaking test string with expected
+   break points compared against cosmic-text's current output, one variable font exercising at
+   least the weight axis, and `cargo build --target wasm32-unknown-unknown` succeeding for
+   whichever crate ends up depending on parley.
+5. **flui's actual (filtered) cosmic-text initialization vs the spike's plain `FontSystem::new()`.**
+   `font_resolve.rs`'s custom `Database` + `EmojiForbiddenFallback` were not reproduced in the
+   spike, which used cosmic-text's default, unfiltered fallback for a stack-vs-stack comparison.
+   Pass condition: re-run the spike's init-RSS measurement (or an equivalent) against flui's actual
+   initialization path; the spike's data suggests init cost is small for either strategy, but that
+   is a prediction to verify, not a result already in hand.
+6. **File the upstream `Item`-boundary issue** (draft in the spike's report) so it's tracked
    independently of FLUI's own migration timeline.
-5. Verify whether flui-painting's actual, filtered cosmic-text initialization (`font_resolve.rs`'s
-   custom `Database` + `EmojiForbiddenFallback`, vs the spike's plain, unfiltered
-   `FontSystem::new()`) changes the memory comparison's init-cost side -- the spike's data suggests
-   init cost is small for either strategy, but that wasn't independently confirmed against flui's
-   actual initialization path.
+
+Preconditions 2-6 can proceed in parallel with each other. Precondition 1 is the one this ADR
+treats as blocking: without it, "migrate" is not a fully-costed decision, since ADR-0059's
+dominant cost concern was never really about shaping speed.
 
 ## Consequences
 
-- `crates/flui-painting/src/text_layout/` (5 files) and its 5 test files get rewritten against
-  parley's `Layout<B>`/`Line`/`GlyphRun` API in place of cosmic-text's `Buffer`/`LayoutRun`.
-  flui-painting currently builds selection-rect and offset↔cursor conversion itself on top of
-  cosmic-text (`measure.rs`); that logic needs re-deriving against parley's API, not a drop-in
-  swap, since neither backend exposes editor selection/cursor semantics natively.
-- The one public re-export, `pub use cosmic_text::fontdb::Family` in `flui-painting/src/lib.rs`,
-  is replaced by parley's equivalent font-family selection type — the only cosmic-text-shaped
-  break in `flui-painting`'s own public surface.
+- `crates/flui-painting/src/text_layout/layout.rs`, `font_resolve.rs`, and `glyphs.rs` get
+  rewritten against parley's `Layout<B>`/`Line`/`GlyphRun` API in place of cosmic-text's
+  `Buffer`/`LayoutRun`; `crates/flui-painting/src/fonts.rs` (font registration, currently mutates a
+  `cosmic_text::fontdb::Database` directly) needs an equivalent registration path against whatever
+  parley/fontique or a standalone rasterizer needs; `crates/flui-painting/src/lib.rs`'s
+  `pub use cosmic_text::fontdb::Family` — the only cosmic-text type on `flui-painting`'s own public
+  surface — is replaced by an equivalent font-family selection type. `measure.rs`'s selection-rect
+  and offset↔cursor conversion logic needs re-deriving against parley's API (precondition 3 above),
+  not a drop-in swap.
+- `crates/flui-painting/src/text_layout/glyphs.rs`'s `GlyphKey` and
+  `crates/flui-painting/src/text_layout/layout.rs`'s `rasterize()` need a parley-compatible
+  rasterization path (precondition 1) -- this is new work, not a rename of existing cosmic-text
+  calls, since parley does not rasterize glyphs itself.
 - `crates/flui-painting/Cargo.toml`'s single `cosmic-text = { version = "0.19" }` line is replaced
-  by a `parley` dependency; `crates/flui-engine`'s 5 test-only occurrences
-  (`paragraph_readback_tests.rs`) get updated to match.
+  by `parley` plus whichever rasterizer precondition 1 settles on; `crates/flui-engine`'s 5
+  test-only occurrences (`paragraph_readback_tests.rs`) get updated to match.
 - B1 (FontSystem-per-realm) is unaffected either way: both backends require only `&mut` access to
   their own font context, with no internal locking, so per-realm ownership is equally viable under
   either stack -- this decision doesn't gate B1.
@@ -120,8 +207,15 @@ scoped follow-up work, not part of this spike):
   constraint fought against it, but is worth stating as an explicit implementation rule so a future
   contributor doesn't accidentally reintroduce the single-`Layout` pattern for, say, a
   virtualized-list-of-paragraphs optimization.
+- Once precondition 1 is satisfied, this ADR should either be updated to explicitly
+  `Supersedes: ADR-0059` (with ADR-0059 updated to `Superseded-by: ADR-0077`) if accepted, or moved
+  to Rejected with the rasterization findings recorded, if the prototype shows the atlas/cache-key
+  bridge is not viable at acceptable cost.
 
 ## If later Rejected
 
-cosmic-text 0.19.0 stays FLUI's text stack, and the performance/memory gap this spike found across
-all six corpora stands as a known, unclaimed opportunity for whoever revisits this ADR.
+cosmic-text 0.19.0 stays FLUI's text stack, and the shaping/layout performance and memory gap this
+spike found across all six corpora stands as a known, unclaimed opportunity for whoever revisits
+this ADR -- most likely worth reopening if the rasterization prototype (precondition 1) turns out
+cheaper than expected, or if cosmic-text's shaping performance becomes a measured bottleneck in a
+real FLUI app.

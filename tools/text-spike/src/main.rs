@@ -6,19 +6,34 @@
 //! records the exact commands run to produce its measurement table.
 //!
 //! `init_rss_bytes` and `peak_rss_bytes` are sampled separately (right
-//! after backend construction, and again after shaping) because
-//! `getrusage`'s `ru_maxrss` is a process-lifetime high-water mark: for
-//! cosmic-text, `FontSystem::new()` eagerly loads and parses the whole
-//! macOS system font database, while parley's `fontique` resolves fonts
-//! lazily -- so a large chunk of a naive single peak-RSS number is font
-//! database strategy, not shaping cost. Reporting both lets the two be
-//! told apart. For `--backend parley --parley-mode per-paragraph`, every
-//! built `Layout` is kept alive (`ParleyBackend::shape_per_paragraph_retained`)
-//! until after `peak_rss_bytes()` is sampled, so the number reflects "N
-//! paragraphs' worth of shaped state held at once" the same way
-//! cosmic-text's single `Buffer` does by construction -- otherwise a
-//! build-and-drop-per-paragraph loop would only ever show ~1 paragraph's
-//! footprint, understating what a UI actually retains.
+//! after backend construction, and again after shaping) so construction
+//! cost and shaping-attributable growth can at least be told apart --
+//! `getrusage`'s `ru_maxrss` is a process-lifetime high-water mark, so
+//! `peak_rss_bytes - init_rss_bytes` is the growth in that mark between
+//! the two samples, not a precise "bytes retained by shaping" figure: if
+//! construction itself has an internal transient spike above its own
+//! settled footprint, `init_rss_bytes` already reflects that spike (the
+//! mark can't fall back down), which can understate the later delta by
+//! an unknown amount. Treat the delta as an upper-bound-shaped proxy, not
+//! an exact attribution (see `docs/research/text-stack-2026.md`'s
+//! "Memory" section for the caveat this motivates).
+//!
+//! Both backends retain their shaped state until after both samples are
+//! taken, on both axes this file measures:
+//! - **Memory**: `--backend parley --parley-mode per-paragraph` keeps
+//!   every built `Layout` alive (`ParleyBackend::shape_per_paragraph_retained`)
+//!   until after `peak_rss_bytes()` is sampled, matching cosmic-text's
+//!   single `Buffer`, which already holds every paragraph's shaped state
+//!   at once by construction -- otherwise a build-and-drop-per-paragraph
+//!   loop would only ever show ~1 paragraph's footprint.
+//! - **Timing**: both backends' `shape_retained` variants return their
+//!   shaped state (a `Buffer` or `Layout`/`Vec<Layout>`) instead of
+//!   dropping it internally, so destruction happens AFTER `elapsed_ms` is
+//!   sampled on both sides. Without this, `CosmicBackend::shape`'s local
+//!   `Buffer` drops before returning -- inside the timed window -- while
+//!   parley's returned, still-alive state doesn't, so cosmic-text's
+//!   `elapsed_ms` would silently include deallocating hundreds of MB that
+//!   parley's measurement excluded (a Codex review finding).
 
 mod corpora;
 mod cosmic_backend;
@@ -99,12 +114,12 @@ struct Report {
     cache: String,
     parley_mode: Option<String>,
     elapsed_ms: f64,
-    /// RSS immediately after constructing the backend (font database
-    /// load/registration cost), before any shaping.
+    /// RSS immediately after constructing the backend, before any
+    /// shaping -- see module docs for why this isn't a precise
+    /// "construction cost" figure on its own.
     init_rss_bytes: u64,
-    /// RSS after shaping (and, for parley per-paragraph, after retaining
-    /// every built `Layout`) -- the process-lifetime high-water mark, so
-    /// this is >= `init_rss_bytes`.
+    /// RSS after shaping, with all shaped state still retained -- the
+    /// process-lifetime high-water mark, so this is >= `init_rss_bytes`.
     peak_rss_bytes: u64,
     line_count: usize,
     glyph_count: usize,
@@ -130,6 +145,13 @@ fn main() -> std::io::Result<()> {
         Size::Large => corpora::expand_to_lines(&raw, args.large_lines),
     };
 
+    // Both arms below follow the same shape: construct, sample init RSS,
+    // optionally warm up (discarding that call's shaped state -- it's not
+    // being measured), then the timed call returns its shaped state
+    // instead of dropping it internally, so `elapsed_ms` and
+    // `peak_rss_bytes` are both sampled BEFORE that state is dropped, on
+    // both backends -- see this file's module docs for why that symmetry
+    // matters on both axes.
     let (elapsed_ms, result, parley_mode, init_rss_bytes, peak_rss_bytes) = match args.backend {
         Backend::Parley => {
             let mut backend = parley_backend::ParleyBackend::new();
@@ -144,23 +166,25 @@ fn main() -> std::io::Result<()> {
                     }
                 }
             }
-            let start = std::time::Instant::now();
-            let (result, elapsed_ms, retained) = match args.parley_mode {
+            let (elapsed_ms, result, peak_rss_bytes) = match args.parley_mode {
                 ParleyMode::PerParagraph => {
+                    let start = std::time::Instant::now();
                     let (result, layouts) =
                         backend.shape_per_paragraph_retained(&text, args.max_width);
-                    (result, start.elapsed().as_secs_f64() * 1000.0, layouts)
+                    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    let peak_rss_bytes = metrics::peak_rss_bytes();
+                    drop(layouts);
+                    (elapsed_ms, result, peak_rss_bytes)
                 }
                 ParleyMode::Single => {
-                    let result = backend.shape(&text, args.max_width);
-                    (result, start.elapsed().as_secs_f64() * 1000.0, Vec::new())
+                    let start = std::time::Instant::now();
+                    let (result, layout) = backend.shape_retained(&text, args.max_width);
+                    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    let peak_rss_bytes = metrics::peak_rss_bytes();
+                    drop(layout);
+                    (elapsed_ms, result, peak_rss_bytes)
                 }
             };
-            // `retained` (every built Layout, for PerParagraph) must stay
-            // alive across this peak_rss_bytes() sample -- that's the
-            // whole point of shape_per_paragraph_retained, see module docs.
-            let peak_rss_bytes = metrics::peak_rss_bytes();
-            drop(retained);
             (
                 elapsed_ms,
                 result,
@@ -176,9 +200,10 @@ fn main() -> std::io::Result<()> {
                 let _ = backend.shape(&text, args.max_width);
             }
             let start = std::time::Instant::now();
-            let result = backend.shape(&text, args.max_width);
+            let (result, buffer) = backend.shape_retained(&text, args.max_width);
             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
             let peak_rss_bytes = metrics::peak_rss_bytes();
+            drop(buffer);
             (elapsed_ms, result, None, init_rss_bytes, peak_rss_bytes)
         }
     };
