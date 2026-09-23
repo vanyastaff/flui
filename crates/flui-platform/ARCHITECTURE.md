@@ -9,6 +9,44 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### The Win32 clipboard opens with a message-only owner window on a dedicated pump thread
+
+Flutter matches the window, not the thread. Its Windows embedder
+(`engine/src/flutter/shell/platform/windows/platform_handler.cc`, read at
+flutter/flutter `07510ad9a9`) creates an `HWND_MESSAGE` window in
+`PlatformHandler`'s constructor and opens the clipboard with it, on the
+platform thread, whose engine loop pumps it. FLUI's `WindowsClipboard` has no
+such single thread: any thread may read or write, and the winit backend has no
+FLUI-pumped loop. Opening with a `NULL` owner, as `arboard` and FLUI used to,
+does not exclude other threads of the process, since all `NULL` openers count
+as one owner (see "Win32 clipboard: cross-thread sessions" in
+`docs/safety-review.md`).
+
+`ClipboardSession` therefore opens with one message-only window
+(`HWND_MESSAGE` parent), created lazily on the first session and never
+destroyed. The window lives on a dedicated `flui-clipboard-owner` thread whose
+only job is `GetMessageW`/`DispatchMessageW`; every message goes to
+`DefWindowProcW`. The owner must be pumped because `EmptyClipboard` in any
+process *sends* `WM_DESTROYCLIPBOARD` to the current owner and waits for it.
+
+Rejected: reusing the owner thread's loop. It exists only on the Win32
+backend, not while a winit loop or a headless test drives the process, and
+not before `run`. A session on a worker thread would also block on a
+`SendMessage` to the UI thread, which deadlocks whenever the UI thread waits
+on that worker. A thread per process costs one idle stack and removes all of
+this.
+
+The process-wide `clipboard_lock` stays: `arboard` sessions still open with a
+`NULL` owner, and a `WindowsClipboard` session would be let in beside one.
+`OpenClipboard(NULL)` also leaves `SetClipboardData` without an owner to
+record, which Win32 documents as liable to fail; with an owner it is on the
+documented path. If the window cannot be created, sessions fall back to a
+`NULL` owner and log an error.
+
+Tests: `a_null_owner_open_on_another_thread_fails_while_a_session_is_open`
+(fails with a `NULL` owner) and `another_opener_can_empty_a_clipboard_flui_owns`
+(fails when the owner thread does not pump).
+
 ### AppKit reopen signals use a loop-owned serialized callback pump
 
 The owned application delegate implements

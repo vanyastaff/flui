@@ -155,10 +155,20 @@ it passed 3 of 3; the full in-process lib suite (`--skip real_loop_tests`)
 passed 20 of 20, and `cargo nextest run -p flui-platform` passed with default
 and all features.
 
-**Residual.** Third-party code in the same process that opens the clipboard
-with a `NULL` owner on another thread is outside this lock. Opening with an
-owner window (a message-only `HWND`) would make Win32 itself refuse a
-concurrent `NULL`-owner opener; not done here.
+**Residual.** `ClipboardSession` opens the clipboard with a message-only owner
+window (`HWND_MESSAGE` parent, created once per process on a dedicated thread
+that pumps its messages), so Win32 itself refuses a concurrent `OpenClipboard`
+from any other owner in the process, third-party `NULL`-owner openers included.
+`a_null_owner_open_on_another_thread_fails_while_a_session_is_open` in
+`platforms/windows/clipboard.rs` pins this; with the `NULL` owner restored it
+fails. `another_opener_can_empty_a_clipboard_flui_owns` pins that the owner
+thread pumps: without the pump, another opener's `EmptyClipboard` stalls for
+about five seconds on the unanswered `WM_DESTROYCLIPBOARD` and the test fails.
+If the owner window cannot be created, sessions fall back to a `NULL` owner and
+log an error. What remains open: `arboard` (the winit backend's clipboard)
+still opens with a `NULL` owner and exposes no way to pass one, so third-party
+`NULL`-owner code on another thread can still race an `ArboardClipboard`
+session.
 
 ## Independent reviewer sign-off
 
