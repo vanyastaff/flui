@@ -1,16 +1,9 @@
 # ADR-0053: One element-owned lazy child lifecycle for every multi-box sliver
 
-- **Status:** Accepted (2026-09-03)
+- **Status:** Accepted
 - **Date:** 2026-09-03
-- **Deciders:** @vanyastaff
-- **Scope:** `crates/flui-view/src/element/sliver_adaptor.rs` (`LazyMultiBoxRender`,
-  `SliverMultiBoxAdaptor<R>`, one `ChildManager`, one behavior, one element),
-  `crates/flui-objects/src/sliver/` (`RenderSliverList`, `RenderSliverFixedExtentList`,
-  the lazy grid, the shared band walk), `crates/flui-widgets/src/scroll/`.
-- **Related:** [ADR-0003](ADR-0003-virtualization-core-and-reentrant-build.md) (+ amendment),
-  [ADR-0017](ADR-0017-build-during-layout-callback-seam.md) (+ amendment),
-  [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
-  [ADR-0052](ADR-0052-lazy-sliver-child-identity-and-recovery.md); issue #530.
+- **Amended by:** [ADR-0056](ADR-0056-keep-alive-is-an-element-side-lease.md) (a keep-alive-held child is exempt from band eviction and parks in place)
+- **Related:** [ADR-0003](ADR-0003-virtualization-core-and-reentrant-build.md) (+ amendment), [ADR-0017](ADR-0017-build-during-layout-callback-seam.md) (+ amendment), [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md), [ADR-0052](ADR-0052-lazy-sliver-child-identity-and-recovery.md); issue #530
 
 ## Context
 
@@ -68,8 +61,9 @@ objects, so their materialised child count was unbounded, and the parity pin for
    `None` where Flutter teleports. ADR-0051 keeps the measured list's anchor-stationary correction.
 4. **The frame owns the committed band.** Paint, hit-test and semantics never see a resident
    outside the last committed band: the fixpoint evicts before it paints when the budget trips,
-   and the walk lays out everything it positions (ADR-0017 amendment). The pipeline
-   "positioned this pass" stamp is the recorded follow-up.
+   and the walk lays out everything it positions (ADR-0017 amendment). ADR-0056 amends this:
+   a child held by a keep-alive lease is not evicted but stays attached and unlaid, and the
+   placed-generation stamp is what keeps it out of paint, hit-test and semantics.
 5. **Static children are a delegate, and delegates compare by identity.** `ListView::new` /
    `GridView::count|extent` hand their children to `StaticChildren` (Flutter's
    `SliverChildListDelegate`): built by index, keys preserved and salted through the per-item
@@ -114,23 +108,18 @@ objects, so their materialised child count was unbounded, and the parity pin for
   Every probe runs through `build_item_or_error`, the same boundary the adaptor's own builder
   calls use, so a panicking builder does not unwind out of the mount; a panicking index counts as
   PRESENT, because truncating a list when one row throws is the worse failure and the error view
-  is displayable there.
-  Pinned by `an_unknown_item_count_is_probed_once_per_mount_not_per_rebuild`, whose oracle is
-  differential — an `Unknown` list may cost at most ONE builder call per rebuild more than an
-  `Exact` one, that call being the growth check — because an absolute call-count bound encodes
-  whatever the reconcile currently does, and because asserting the extent proves nothing: a
-  per-rebuild probe produces the right extent every time. An already-unbounded source
+  is displayable there. An `Unknown` list costs at most one builder call per rebuild more than
+  an `Exact` one — the growth check. An already-unbounded source
   (`usize::MAX`) skips even the growth check; the sentinel cannot grow, and its builder would
   answer `Some` at that index and send every rebuild through a full search.
-- `semanticBounds` fallback, `addAutomaticKeepAlives`, `addSemanticIndexes`: not ported;
-  follow-ups.
+- `semanticBounds` fallback and `addSemanticIndexes`: not ported; follow-ups.
+  `addAutomaticKeepAlives` is replaced by the keep-alive lease (ADR-0056).
 - The eager grid's stale-tile harness pins are replaced by the frame-level deferral tests: the
   gate moved from the object to the frame.
 
 ## Consequences
 
-- One adaptor implementation instead of two (`sliver_adaptor.rs` −758 / +460 lines at the
-  unification), and one door for a third layout.
+- One adaptor implementation instead of two, and one door for a third layout.
 - `ListView::new` / `GridView::count|extent` become bounded in materialised children; the
   `SliverFixedExtentList` parity pin is un-ignored.
 - A downstream implementor of `LazyMultiBoxRender` owes the harness catalog entry and tests every
@@ -138,11 +127,7 @@ objects, so their materialised child count was unbounded, and the parity pin for
 
 ## Status of the decisions
 
-Decision 1 landed with the unification and decision 4 with ADR-0017's amendment. Decisions 2, 3
-and 5 landed with the fixed-extent port (`RenderSliverFixedExtentList` on the request strategy,
-`StaticChildren`, `ListView::new` over it, the un-ignored residency pin and the clamp-contract
-ports of the two auto-correct cases). The grid is done too: the eager `RenderSliverGrid` and
-`SliverGridParentData` are deleted, the request-strategy grid took the `RenderSliverGrid` /
-`SliverGrid` names (the transitional `RenderSliverGridLazy` / `SliverGridLazy` names are gone),
-and `GridView::count`/`GridView::extent` route over `StaticChildren` exactly as `ListView::new`
-does. All five decisions have landed.
+All five decisions are implemented. The eager `RenderSliverGrid` and `SliverGridParentData` are
+deleted; the request-strategy grid took the `RenderSliverGrid` / `SliverGrid` names, and
+`GridView::count`/`GridView::extent` route over `StaticChildren` exactly as `ListView::new`
+does.

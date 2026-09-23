@@ -949,7 +949,7 @@ impl RenderBox for RenderFlex {
     /// Dry-baseline equivalent of `compute_distance_to_actual_baseline`.
     ///
     /// Uses `ctx.child_dry_layout` + `ctx.child_dry_baseline` through the shared
-    /// `compute_child_offsets` helper (ADR-0012 D-B3), so the offset/positioning
+    /// `compute_child_offsets` helper (flui-rendering ARCHITECTURE.md, reported baselines), so the offset/positioning
     /// math is not duplicated.  Applies the same horizontal/highest vs
     /// vertical/first formulas as the live path (oracle: `flex.dart:936-1025` /
     /// `box.dart:3318-3348`).

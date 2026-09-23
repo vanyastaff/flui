@@ -259,7 +259,7 @@ impl<T> ClaimSlot<T> {
 }
 
 impl<T> Drop for ClaimSlot<T> {
-    /// Owner-disconnect transition (ADR-0039 §3/slice-2 amendment):
+    /// Owner-disconnect transition (ADR-0039 §3):
     /// `Pending -> OwnerGone` if the owner drops this handle without ever
     /// calling [`deliver`](Self::deliver) — the owner died mid-request, or
     /// unwound before reaching its `deliver` guard. Wakes both consumer-side
@@ -732,7 +732,7 @@ mod tests {
     /// Real second thread, bounded via `recv_timeout`: a `wait()` blocked on
     /// a request the owner never delivers must not hang forever once the
     /// owner side (`ClaimSlot`) is dropped — it must unblock with
-    /// `ClaimOutcome::OwnerGone` (ADR-0039 §3/slice-2 amendment). A test
+    /// `ClaimOutcome::OwnerGone` (ADR-0039 §3). A test
     /// that used a bare `.join()` would itself hang the test suite if this
     /// regressed; `recv_timeout` turns that failure mode into a normal
     /// assertion failure instead.
@@ -996,7 +996,7 @@ mod tests {
         // calling `deliver` — the hazard this test rules out is a wedged
         // `Mutex` from a poisoned lock (`parking_lot::Mutex` does not
         // poison) AND, since `ClaimSlot`'s own `Drop` now covers owner
-        // disconnection (ADR-0039 §3 slice-2 amendment), a handle left
+        // disconnection (ADR-0039 §3), a handle left
         // waiting forever for a `deliver` call that will now never come.
         //
         // The panicking thread's `slot` unwinds through `ClaimSlot::drop`

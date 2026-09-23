@@ -24,7 +24,7 @@
 //! `Arc`/`Send + Sync`. `GlobalKey::with_current_state` resolves against the
 //! owner-thread element-tree registry, and this workspace already carries a
 //! documented tension between `Send + Sync` data-plane primitives (gesture
-//! recognizers, render objects — ADR-0002) and owner-affine widget-layer
+//! recognizers, render objects — ADR-0027) and owner-affine widget-layer
 //! capability handles (an in-flight `Send`-bound-drop migration found this
 //! exact knot at `flui_widgets::NavigatorHandle`, which is `Cloneable, Send +
 //! Sync` in name only — see that type's own module doc). `DrawerHandle`

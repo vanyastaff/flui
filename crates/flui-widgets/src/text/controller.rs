@@ -183,7 +183,7 @@ struct ComposingState {
 /// "the IME wants no caret drawn") is tracked internally and exposed through
 /// [`Self::caret_hidden_by_ime`] — the owning `EditableTextState` consults it
 /// to suppress the painted caret while composition still paints its own
-/// underline (see ADR-0033). Composition end — a commit, `Disabled`, a
+/// underline (see ADR-0030). Composition end — a commit, `Disabled`, a
 /// non-IME edit, or `Preedit` cancellation (see below) — always drops the
 /// whole internal composing state, so the hidden-caret flag can never
 /// outlive the composition it describes.
@@ -981,7 +981,7 @@ impl TextEditingController {
     /// IME no longer owns its position even though composing text is still
     /// present. [`EditableTextState`](super::EditableTextState) consults this
     /// to suppress the painted caret while the composing-region underline
-    /// keeps painting (ADR-0033).
+    /// keeps painting (ADR-0030).
     #[must_use]
     pub fn caret_hidden_by_ime(&self) -> bool {
         self.inner

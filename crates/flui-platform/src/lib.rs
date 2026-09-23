@@ -230,7 +230,7 @@ pub use traits::{
     WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
     WindowShowError,
 };
-// The owner-thread capability (ADR-0039 slice 2): minted only by a backend,
+// The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use traits::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,

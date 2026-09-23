@@ -959,6 +959,84 @@ Strategy clause "Behavior as floor, everything else designed for Rust" treats Fl
 
 ---
 
+### Secondary child queries read parent data through an erased per-child accessor
+
+**Rule.** The three query contexts — `BoxDryLayoutCtx`, `BoxIntrinsicsCtx`,
+`BoxDryBaselineCtx` — expose `child_parent_data(i) -> Option<&dyn ParentData>` and
+`child_parent_data_as::<T>(i)`, backed by a per-node slice the query driver fills from each
+child's own parent data (with harness seeds overlaid in test builds). `perform_layout` keeps
+its typed `BoxLayoutContext<Arity, PD>::child_parent_data`. Multi-child containers keep sizing
+math in one ctx-free routine that takes a measuring closure (`RenderFlex::compute_sizes`), called
+by both `perform_layout` (with `layout_child`) and `compute_dry_layout` (with
+`child_dry_layout`), so dry and committed sizes cannot drift apart.
+
+**Alternatives.** Making the query contexts generic over `PD` would change ~120 `compute_*`
+override signatures and still downcast inside the driver, which holds `dyn` nodes.
+
+**Trade-off.** Typed parent data on the hot path, erased in the query contexts (touched only by
+multi-child containers); the container downcasts to the type it declared itself.
+
+### Dry contexts query child intrinsics through the safe take-out walk
+
+**Rule.** `BoxDryLayoutCtx` and `BoxDryBaselineCtx` expose the same `child_intrinsic` /
+`child_{min,max}_intrinsic_{width,height}` accessors as the layout context. Each context
+dispatches one `#[non_exhaustive]` request enum per context (`DryLayoutChildRequest`:
+`DryLayout`, `Intrinsic`, `Baseline`; `DryBaselineChildRequest`), because a context on the
+borrowed slot map can hold only one `&mut`-capturing child callback. The dry driver answers
+`Intrinsic` with the same take-out `intrinsic_query` it already uses (the queried child is a
+different node from the one taken out), sharing the per-node intrinsic cache with the layout
+path. `RenderIntrinsicWidth`/`RenderIntrinsicHeight` build child constraints in one helper
+parameterized by an intrinsic closure and call it from all three passes, matching
+`proxy_box.dart`'s `_childConstraints`: IntrinsicWidth forces width to the intrinsic whenever
+width is not tight, queries with the raw cross-axis maximum, and steps before clamping.
+
+**Why.** Approximating the intrinsic with a loose dry layout gives the wrong answer for exactly
+the width-filling children these proxies exist for, breaking dry == committed.
+
+**Alternatives.** One shared request enum for all contexts (dead arms per context); reaching
+into the borrowed-arena intrinsic path from the dry driver (imports its aliasing obligations
+for nothing).
+
+### Containers record their reported baseline during layout
+
+**Rule.** `compute_distance_to_actual_baseline(&self, baseline)` takes no child channel. A
+container computes its own baseline while positioning children in `perform_layout` — using the
+layout context's `child_distance_to_actual_baseline` and the offsets it just assigned — and
+serves it from a field. `RenderFlex` records both baseline kinds (`reported_baselines`):
+horizontal reports the highest child baseline plus its cross offset, vertical the first child
+with a baseline plus its main offset (Flutter's `defaultComputeDistanceToHighestActualBaseline`
+/ `…FirstActualBaseline`). Nesting composes because an inner container's recorded value is what
+the outer one reads. Dry baseline shares the positioning math through `compute_child_offsets`
+rather than duplicating it as Flutter does.
+
+**Divergence.** Flutter computes the baseline lazily on first query and memoizes it; FLUI pays
+an eager read of each child's baseline per layout. The observable value is identical.
+
+**Alternatives.** A child-query channel on `actual_baseline_raw` would change a widely
+implemented signature and need the driver to reconstruct child offsets that containers keep in
+their own fields; a lazy memoized port would import `&mut` aliasing into a read that is `&self`
+today.
+
+### A follower hit-tests at its last composited position
+
+**Rule.** `PipelineOwner` keeps `last_follower_offsets: FxHashMap<RenderId, Offset>` and
+`last_hidden_follower_ids`, per-frame byproducts like the retained layer tree and link registry.
+During paint the fragment composer records the `RenderId → LayerId` pair of each
+`Layer::Follower` it pushes. After paint, each follower's offset is resolved with the same
+`flui_layer::resolve_follower_offset` the GPU path uses; a follower that resolves to `None`
+(unlinked, `show_when_unlinked == false`) is recorded as hidden. The hit-test walk, gated on the
+tables being non-empty, pushes `Matrix4::translation(r)` on the result's transform stack and
+shifts the position by `-r` for a follower's subtree, and skips a hidden follower's subtree.
+`RenderFollowerLayer::hit_test` stays a plain structural forward; `hit_test_transform`'s
+signature is unchanged.
+
+**Divergence.** None in behavior: this is Flutter's `FollowerLayer.getLastTransform()` —
+hit-testing uses the last completed composite, with the same one-frame staleness. The offset is
+computed twice (engine for pixels, rendering for hit-test) because a single computation would
+need the downstream engine to write into the upstream owner; the logic lives once in
+`resolve_follower_offset`. Translation only, like the render path.
+
+
 ## Thread safety
 
 `flui-rendering` runs in the render pipeline; per strategy clause "sync hot path", the hot frame loop is single-threaded. Sync primitives in this crate are limited to shared-infrastructure objects and lock-free atomics on per-node state. No primitive sits inside `perform_layout` / `paint` on a per-node basis.

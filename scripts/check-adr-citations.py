@@ -43,8 +43,8 @@ SYMBOL_CITE = re.compile(r"`([A-Za-z_][A-Za-z_/0-9.-]*\.rs)`'s `([A-Za-z_][A-Za-
 # conversion that deletes their anchor orphans them invisibly.
 RELATIVE = re.compile(r"`:[0-9][0-9,+/ -]*`")
 # Citations also appear UNBACKTICKED, typically in a `//` comment inside a fenced
-# block -- `// crates/flui-foundation/src/binding.rs:106` in ADR-0002, and more in
-# ADR-0012 and ADR-0038. Skipping them understates the corpus, which is the same
+# block -- `// crates/flui-foundation/src/binding.rs:106` in some ADRs, and more in
+# others. Skipping them understates the corpus, which is the same
 # denominator dishonesty this tool exists to expose. The lookbehind keeps it from
 # re-matching the inside of a backticked path.
 BARE_CITE = re.compile(r"(?<![`/\w.-])([a-z_][A-Za-z_/0-9.-]*\.rs):([0-9][0-9,-]*)(?![`\w])")

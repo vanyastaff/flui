@@ -69,7 +69,7 @@ The pipeline is **on-demand**. The platform event loop uses `ControlFlow::Wait`.
 
 ### Threading & ownership model
 
-The canonical threading/ownership record is [ADR-0027](adr/ADR-0027-owner-affine-ui-realms.md): a multi-threaded runtime of single-writer ownership domains — per-session `UiRealm` (`!Send + !Sync` owner), bounded typed mailboxes committed at Idle, and an owned `SceneSnapshot` handoff to a single-owner raster seam. It supersedes [ADR-0002](adr/ADR-0002-engine-wide-threading-architecture.md).
+The canonical threading/ownership record is [ADR-0027](adr/ADR-0027-owner-affine-ui-realms.md): a multi-threaded runtime of single-writer ownership domains — per-session `UiRealm` (`!Send + !Sync` owner), bounded typed mailboxes committed at Idle, and an owned `SceneSnapshot` handoff to a single-owner raster seam. 
 
 ## Type-Safe Children: the Arity System
 

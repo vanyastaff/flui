@@ -33,7 +33,7 @@
 /// surrounding committed document. `cursor == None` means the platform wants
 /// the composition caret hidden (winit's own semantics for this case);
 /// `flui_widgets::TextEditingController::caret_hidden_by_ime` tracks this and
-/// the owning widget suppresses its painted caret accordingly (ADR-0033).
+/// the owning widget suppresses its painted caret accordingly (ADR-0030).
 ///
 /// # `Preedit` with an empty `text` is composition cancellation (when composing)
 ///

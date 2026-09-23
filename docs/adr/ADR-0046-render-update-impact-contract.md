@@ -1,23 +1,11 @@
 # ADR-0046: Return explicit impact from render-view updates
 
-*Render-view updates report the exact rendering phases invalidated by changed
-configuration, and the rendering owner applies that report once.*
-
----
-
 - **Status:** Accepted
 - **Date:** 2026-08-10
-- **Deciders:** @vanyastaff
-- **Scope:** `RenderUpdateImpact`, canonical compositing/semantics mark methods,
-  and `PipelineOwner::apply_render_update_impact` in `flui-rendering`; the
-  `RenderView::update_render_object` contract and `RenderBehavior` update path
-  in `flui-view`; every in-workspace `RenderView` implementation and affected
-  render-object setter; the parent-data, render-child membership, and
-  headless committed-output seams exposed by removing blanket invalidation
-- **Issue:** [#534 — Make render-view updates return explicit invalidation
-  impact](https://github.com/vanyastaff/flui/issues/534)
+- **Issue:** [#534 — Make render-view updates return explicit invalidation impact](https://github.com/vanyastaff/flui/issues/534)
 
----
+*Render-view updates report the exact rendering phases invalidated by changed
+configuration, and the rendering owner applies that report once.*
 
 ## Context
 
@@ -58,9 +46,9 @@ through `flui-view`. The Rust-native equivalent is a small value returned from
 the mutation, followed by one owner-side application after the mutable render
 object borrow ends.
 
-### Maintainer-grade pre-code verdict
+### Ownership
 
-**ACCEPTABLE.** `flui-rendering` owns rendering phases, dirty queues, and the
+`flui-rendering` owns rendering phases, dirty queues, and the
 meaning of a render update, so it owns both `RenderUpdateImpact` and its
 application on `PipelineOwner`, including the ancestor walks and queue policy
 for each phase. `flui-view` owns typed update dispatch and therefore owns the
@@ -70,10 +58,8 @@ transport request for exactly one dirty phase and cannot represent a composed
 update; painter `Invalidation` and flow `DelegateChange` are narrower local
 classifications, not a cross-crate owner contract. The update path is routine
 and allocation-free but frame-sensitive, so an opaque copied byte with const
-queries is the appropriate performance posture. A strict maintainer would
-reject keeping the blanket mark, locating the type in `flui-view`, exposing raw
-bits, or preserving the old trait with a shim. The workspace is in active
-development, so the trait and all implementations will migrate atomically.
+queries is the appropriate performance posture. The workspace is in active
+development, so the trait and all implementations migrate atomically.
 
 ## Decision
 
@@ -145,9 +131,8 @@ new closure" — the case Rust cannot answer structurally because closures do
 not compare. **Installing the callback is independent of the impact the token
 reports**: a reused identity suppresses the invalidation and still replaces
 the registered closure, since a rebuilt closure may capture different state.
-Gating the install on the impact left the render object calling the previous
-widget's closure, which is what `reusing_a_clip_identity_still_installs_the_new_clipper`
-now pins. Equality is implemented only
+Gating the install on the impact would leave the render object calling the
+previous widget's closure. Equality is implemented only
 through private `Arc::ptr_eq`; there is no raw constructor, pointer/integer
 accessor, `Copy`, `Hash`, `Default`, process-global counter, or exhaustion
 path. `RenderClipPath` and `RenderPhysicalShape` borrow the token in their
@@ -356,17 +341,6 @@ does not change `docs/runtime-contract.toml` or
 - Creating a callback-backed path widget performs one `Arc` allocation. Updates
   borrow the token and clone its `Arc` only when the source really changes.
 
-**Verification requirements**
-
-- Keep the custom single- and multi-child layout parity pins enabled and green.
-- Prove end to end that `LAYOUT` creates no immediate paint queue entry and a
-  successful `run_layout` subsequently queues paint.
-- Pin the compositing walk for established, newly introduced, and lost target
-  boundaries; a child below a repaint boundary; an already-dirty parent;
-  parentless and stale targets; and `DirtyKind::Compositing` replay.
-- Run targeted mutation testing to prove that restoring blanket invalidation
-  or discarding delegate decisions is detected.
-
 ## Alternatives considered
 
 | Option | Why rejected |
@@ -393,4 +367,3 @@ does not change `docs/runtime-contract.toml` or
 - Flutter `packages/flutter/lib/src/rendering/flow.dart`
 - Flutter `packages/flutter/lib/src/rendering/sliver_grid.dart`
 - Flutter `packages/flutter/lib/src/rendering/proxy_box.dart`
-- [Root port and Definition of Done contract](../../AGENTS.md)

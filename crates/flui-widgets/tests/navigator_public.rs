@@ -587,7 +587,7 @@ fn leaf(_ctx: &dyn BuildContext) -> BoxedView {
 /// A named route's pop result is its **own** type, delivered by the ordinary
 /// `pop_with` path.
 ///
-/// This is the case that kills the erase-the-`Output` design ADR-0024 §3.2
+/// This is the case that kills the erase-the-`Output` design ADR-0024
 /// proposed: with `Output = Box<dyn Any + Send>`, `RouteRecord::did_complete`
 /// would downcast the pop payload to the erasure type and every named route
 /// would resolve with `None`. Registration stays typed precisely so this works
@@ -822,7 +822,7 @@ fn pop_and_push_named_with_delivers_its_result_to_the_popped_route() {
 ///
 /// The v2 design could register none of them: `Route::current_result` returns
 /// by value, so every shipped route is bounded `T: Send + Clone + 'static`, and
-/// `Box<dyn Any + Send>` is not `Clone` (ADR-0024 §7.2). That was a compile
+/// `Box<dyn Any + Send>` is not `Clone` (ADR-0024). That was a compile
 /// error, which is why this test's *existence* is half its value — the other
 /// half is that each route actually pushes and delivers its own typed result.
 ///
@@ -849,7 +849,7 @@ fn a_page_route_a_popup_route_and_a_simple_route_are_all_registerable() {
         let attempts = Arc::clone(&attempts);
         move |request: &RouteRequest<'_>| match request.name()? {
             // A user-implemented `NavigatorRoute`, erased by exactly the same
-            // machinery as the three shipped classes above (ADR-0024 §7.4).
+            // machinery as the three shipped classes above (ADR-0024).
             "/custom" => Some(GeneratedRoute::new(RefusingRoute::new(&attempts))),
             _ => None,
         }
@@ -903,7 +903,7 @@ fn a_page_route_a_popup_route_and_a_simple_route_are_all_registerable() {
 }
 
 /// Asking `push_named_typed` for the wrong result type is refused at **push**
-/// time, with the stack untouched — ADR-0024 §7.3's "with nothing pushed" — and
+/// time, with the stack untouched — ADR-0024's "with nothing pushed" — and
 /// the route that was generated for the attempt is **disposed**.
 ///
 /// The disposal half is not incidental. `Route::dispose` is an explicit method,
@@ -990,7 +990,7 @@ fn push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_cha
     );
 
     // The same refusal against a **shipped** route class. `PageRoute` is what
-    // ADR-0024 §7.2 names as the class a route table exists to serve, and its
+    // ADR-0024 names as the class a route table exists to serve, and its
     // disposal runs `PageRoute -> ModalRoute::dispose -> TransitionRoute::dispose`
     // on a route that was never installed — no binding filled, no overlay entry,
     // no animation controller. Every access down that chain is `Option`-guarded

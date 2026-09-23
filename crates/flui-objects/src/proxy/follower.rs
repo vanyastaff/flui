@@ -10,7 +10,7 @@
 //! `CompositedTransformFollower`.
 //!
 //! # Scope — Tier 1 (structural) + Tier 2 (render-time position) + resolved
-//! hit-testing (ADR-0015)
+//! hit-testing (flui-rendering ARCHITECTURE.md, follower hit-testing)
 //!
 //! This type makes the `LayerTree` node structurally correct and
 //! harness-verifiable — a real `Layer::Follower` with the right `link`/
@@ -24,7 +24,7 @@
 //! already-fully-built `LayerTree`, which indexes that frame's leaders — see
 //! `flui_layer::resolve_follower_offset`.
 //!
-//! **Hit-testing now consults that same resolved position** (ADR-0015):
+//! **Hit-testing now consults that same resolved position** (flui-rendering ARCHITECTURE.md, follower hit-testing):
 //! `PipelineOwner` retains a `RenderId`-keyed side table of
 //! composite-resolved follower offsets, populated post-paint by resolving
 //! each paint-phase-correlated follower with the identical
@@ -39,7 +39,7 @@
 //! object — and an unlinked follower with `show_when_unlinked == false`
 //! has its subtree skipped entirely by that same walk, mirroring
 //! `resolve_follower_offset -> None -> don't descend` on the render path.
-//! See ADR-0015 for the full design.
+//! See the follower hit-testing mapping decision in flui-rendering's ARCHITECTURE.md.
 //!
 //! # Rust-native shape
 //!
@@ -283,7 +283,7 @@ impl RenderBox for RenderFollowerLayer {
         // child, miss — because BOTH the resolved-transform shift and the
         // unlinked-hidden skip are applied by the hit-test WALK
         // (`PipelineOwner::hit_test_subtree_impl`), not by this object
-        // (ADR-0015). A self-cached `Cell<Offset>` here would be silently
+        // (flui-rendering ARCHITECTURE.md, follower hit-testing). A self-cached `Cell<Offset>` here would be silently
         // wrong whenever this node's own paint ran before its leader's in
         // the same pass; the walk instead reads a side table resolved
         // once, post-paint, against the fully-built `LayerTree`.

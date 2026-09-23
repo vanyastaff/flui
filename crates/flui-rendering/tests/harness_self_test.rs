@@ -7,7 +7,7 @@
 //! `tests/layout_offset_commit.rs`, and `tests/sliver_fixed_extent_list.rs`.
 //!
 //! Previously lived at `src/testing/tests.rs` (a `#[cfg(test)]` internal
-//! module). Moved here after the `flui-objects` extraction (ADR-0008):
+//! module). Moved here after the `flui-objects` extraction:
 //! internal lib tests cannot import from `flui_objects` without triggering
 //! a duplicate-crate-version error (flui-objects has a production dep on
 //! flui-rendering, so the lib-under-test and flui-objects' copy of

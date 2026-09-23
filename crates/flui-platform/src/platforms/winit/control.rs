@@ -315,7 +315,7 @@ impl ControlCommand {
                 // that function returned `Err`, transitioning the slot
                 // `Pending -> Abandoned(None)` and firing the abandonment
                 // wake, before this `reply: ClaimSlot` is ever dropped here.
-                // `ClaimSlot`'s own `Drop` (ADR-0039 §3 slice-2 amendment:
+                // `ClaimSlot`'s own `Drop` (ADR-0039 §3:
                 // owner-disconnect -> `OwnerGone`) only fires on a slot
                 // still `Pending`, so dropping `reply` here is a no-op --
                 // the request is already resolved.

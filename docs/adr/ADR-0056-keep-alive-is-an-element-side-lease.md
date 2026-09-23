@@ -1,14 +1,10 @@
-# ADR-0056 — Keep-alive is an element-side lease, and a parked child stays in place
+# ADR-0056: Keep-alive is an element-side lease, and a parked child stays in place
 
 - **Status:** Accepted
 - **Date:** 2026-09-05
+- **Amends:** [ADR-0053](ADR-0053-one-lazy-child-lifecycle-for-multi-box-slivers.md) (its eviction contract: a held child is exempt from band eviction), and the evict-before-paint sentence in `crates/flui-rendering/ARCHITECTURE.md`
+- **Depends on:** the placed-generation stamp being consulted by all four observation walks (#834 for paint and hit-test, #881 for semantics) — see [Why the stamp is a prerequisite](#why-the-stamp-is-a-prerequisite)
 - **Issue:** #835
-- **Supersedes:** nothing. Amends the eviction contract in ADR-0053 and the
-  evict-before-paint sentence in `crates/flui-rendering/ARCHITECTURE.md`.
-- **Depends on:** the placed-generation stamp being consulted by all four
-  observation walks (#834 for paint and hit-test, #881 for semantics). Without
-  the semantics half this design would ship an accessibility defect it creates —
-  see [Why the stamp is a prerequisite](#why-the-stamp-is-a-prerequisite).
 
 ## Context
 
@@ -95,7 +91,7 @@ that starts playing. Without it the common false→true transition is
 unreachable: `init_state` is the only guaranteed hook that receives a context,
 `did_update_view` and `activate` receive none, `did_change_dependencies` is not
 guaranteed to run, and acquiring from `build` is forbidden. Same shape, and the
-same reason, as `RebuildHandle`. Both are trigger #22 tokens.
+same reason, as `RebuildHandle`.
 
 It follows that a lease is issued **unconditionally**, including to an element not
 currently inside a lazy sliver: it simply holds nothing there, and begins holding
@@ -111,12 +107,11 @@ an inherited scope would additionally need a per-item `StatefulView` wrapper and
 a config field on all three sliver widgets, because the *host* also needs to read
 the table and is a render behavior that cannot read inherited data ambiently.
 
-`keep_alive_lease` is the eighth token in `scripts/check-frame-capability-scope.sh`.
-Acquired from `build` it would be re-taken on every rebuild, and the previous
-lease's `Drop` would release the old hold, making a child's survival depend on
-rebuild ordering. Note that `init_state` runs with the same `BuildCtx` type
-`build` gets, so the rule is necessarily **static**, enforced by the script —
-exactly as it already is for `text_input_handle` and `focus_manager`.
+`keep_alive_lease` must not be acquired from `build`: there it would be re-taken
+on every rebuild, and the previous lease's `Drop` would release the old hold,
+making a child's survival depend on rebuild ordering. Like `text_input_handle`
+and `focus_manager`, both methods live on `LifecycleContext`, so acquiring either
+from `build` is a compile error (ADR-0078).
 
 ### A parked child is not moved
 
@@ -149,8 +144,8 @@ because they are about to be dropped by the band eviction that follows. A held
 child is the exact opposite: it persists indefinitely. Carrying it over would
 leave it rendering whatever its data said when it left the band, and would deny
 it the update that might release the hold. Held children therefore reconcile
-like in-band residents. This was found by a test, not by reading: a released
-item was never evicted because `did_update_view` had never run on it.
+like in-band residents; otherwise a released item would never be evicted,
+because `did_update_view` had never run on it.
 
 ## Why the stamp is a prerequisite
 
@@ -194,9 +189,8 @@ code on net.
   the child attached until some *other* layout happens — the next scroll, in
   practice, but indefinitely if the user never interacts again. Closing it means
   waking the host on the last release; `ExternalBuildScheduler` is the existing
-  hook, and the reason it is not wired here is that "schedule the holder's
-  rebuild" does not obviously reach the sliver's layout, and I did not want to
-  claim a chain I had not tested.
+  hook; it is not wired here because "schedule the holder's rebuild" does not
+  obviously reach the sliver's layout, and that chain is untested.
 - **`ItemCount::Unknown` can strand a hold.** A count clamp that shrinks below a
   held index leaves a child the band walk never lays out and `retain_band` never
   evicts.
@@ -220,9 +214,7 @@ eviction-timing contract) and folding them in would make one change four.
 
 ## Oracle and replacement tests
 
-`.flutter/packages/flutter/test/widgets/automatic_keep_alive_test.dart` (9 test
-names, 12 executions — its body runs twice via `void tests({required bool
-impliedMode})`).
+Reference: Flutter's `test/widgets/automatic_keep_alive_test.dart`.
 
 | Flutter test | Disposition |
 |---|---|

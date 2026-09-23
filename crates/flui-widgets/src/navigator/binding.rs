@@ -248,12 +248,12 @@ pub(crate) type RouteModals = Arc<Mutex<HashMap<RouteId, ModalHandle>>>;
 /// A gesture-supplied easing curve is a value-only, `Send + Sync` transform
 /// (no tree/element access) carried from `back_gesture.rs`'s controller
 /// through the pop command to `AnimationController::animate_back_curved` —
-/// the same erased-`Animatable`-transform shape ADR-0021 §7n already
+/// the same erased-`Animatable`-transform shape ADR-0021 §8 already
 /// sanctions for `Hero::create_rect_tween`.
 #[derive(Clone)]
 pub(crate) struct PopPacing {
     pub(crate) duration: Duration,
-    pub(crate) curve: Arc<dyn Curve + Send + Sync>, // see the struct doc — erased easing-curve transform, ADR-0021 §7n shape
+    pub(crate) curve: Arc<dyn Curve + Send + Sync>, // see the struct doc — erased easing-curve transform, ADR-0021 §8 shape
 }
 
 /// `RouteId -> PopPacing`, a one-shot override the navigator sets immediately

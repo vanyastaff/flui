@@ -399,8 +399,8 @@ enum RealmMapMutation {
 
 /// Governs when the platform loop should exit once every hosted realm's
 /// window has closed — the embedder-facing policy knob for the "new
-/// independent desktop window ⇒ new realm" production policy (ADR-0027 step
-/// 5's multi-window follow-up, issue #555).
+/// independent desktop window ⇒ new realm" production policy (ADR-0027,
+/// issue #555).
 ///
 /// Consulted through `AppRuntime::should_exit`, which drains any deferred
 /// realm-map mutation FIRST (the drain-before-decide rule): a

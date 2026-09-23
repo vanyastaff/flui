@@ -262,3 +262,36 @@ change the answer silently and the divergence reads as chosen rather than
 overlooked. Its fixture sets the losing flag explicitly and shows each flag
 winning on its own, so the pin cannot read as the `IsButton`-only case.
 
+### 3. Semantics assembly is mark-scoped with a whole-tree fallback, and the tree reaches the OS through AccessKit
+
+**Rule.** The `SemanticsOwner` lives on `PipelineOwner` as `Option<SemanticsOwner>`, created
+when semantics is enabled and disposed when it is disabled (firing the owner-created/disposed
+notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_semantics`,
+`crates/flui-rendering/src/pipeline/owner/semantics.rs`):
+
+- Each render object describes itself through `describe_semantics_configuration`; non-boundary
+  configuration merges up into the nearest node-forming ancestor with
+  `SemanticsConfiguration::absorb`; `is_merging_semantics_of_descendants` collapses a subtree
+  into one node; `excludes_semantics_subtree` and a per-child `visits_child_for_semantics`
+  drop children from the walk.
+- Geometry reuses the paint walk's inputs — the committed `RenderNode::offset()` and
+  `paint_transform()` — plus the parent's semantics clip (`describe_semantics_clip`), so there
+  is no second source of node geometry.
+- A pass re-assembles only the subtrees that can observe the frame's semantics marks, grafting
+  each into the persistent semantics arena under its **anchor** — the nearest unmarked ancestor
+  that formed a node last pass. A formed node absorbs every pending fragment below it and its
+  own forming decision does not depend on its descendants, so re-assembling the anchor's subtree
+  reproduces everything a mark could influence. Anything the graft preconditions cannot prove
+  falls back to the whole-tree rebuild, which is the correctness baseline.
+- `accesskit_translation.rs` maps the owner's tree to AccessKit updates with stable
+  `AccessibilityNodeId`s; `flui-platform` hosts the AccessKit adapters per backend.
+
+**Divergence.** Flutter's current `_RenderObjectSemantics` compiler is a nullable-per-node
+state machine (`_SemanticsFragment`, `mergeUp`, sibling merge groups, geometry-dirty tracking).
+FLUI keeps the observable `SemanticsNode` tree as the contract and implements incrementality as
+anchor-scoped re-assembly over the classic merge model instead. Freshness is mark-driven, as in
+Flutter's `flushSemantics`: geometry outside re-assembled subtrees keeps its last published
+value.
+
+**Not implemented.** `RenderBlockSemantics` / blocking of previously painted siblings; sibling
+merge groups beyond configuration-conflict marking.

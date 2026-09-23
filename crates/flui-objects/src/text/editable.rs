@@ -23,13 +23,13 @@
 //! this object and is not here either; this object is told a range, it does
 //! not decide one.
 //!
-//! **Composing-region underline** (ADR-0033): [`RenderEditable::composing_range`]
+//! **Composing-region underline** (ADR-0030): [`RenderEditable::composing_range`]
 //! paints one thin rect per selection box under the composing text — a
 //! declared **1px-at-baseline+1 approximation**, not real font underline
 //! metrics (`TextStyle` has no `decoration` field to merge, unlike Flutter's
 //! `TextStyle(decoration: TextDecoration.underline)`) — do not call this
 //! parity. [`RenderEditable::rect_for_composing_range`] exposes the same
-//! geometry as a bounding rect for the IME cursor-area loop (ADR-0032), with
+//! geometry as a bounding rect for the IME cursor-area loop (ADR-0030), with
 //! Flutter's own caret-rect fallback order (`_updateComposingRectIfNeeded`,
 //! `editable_text.dart`, tag `3.44.0`). Single-line only: box-to-byte-range
 //! mapping (`get_boxes_for_range`) compares a global byte range against
@@ -63,7 +63,7 @@ const CARET_GAP: f32 = 1.0;
 
 /// Thickness of the composing-region underline, in logical pixels.
 ///
-/// Declared divergence (ADR-0033): a flat 1px bar, not a font's actual
+/// Declared divergence (ADR-0030): a flat 1px bar, not a font's actual
 /// underline metrics — `TextStyle` has no `decoration` field to source real
 /// metrics from.
 const COMPOSING_UNDERLINE_THICKNESS: f32 = 1.0;
@@ -87,7 +87,7 @@ pub struct RenderEditable {
     force_line: bool,
     caret_offset: Offset,
     /// The in-progress IME composition's byte range into [`Self::plain_text`],
-    /// if any — paints an underline (ADR-0033), never a selection highlight.
+    /// if any — paints an underline (ADR-0030), never a selection highlight.
     /// Always char-boundary-clamped against the current text, mirroring
     /// [`Self::caret_byte_offset`]'s own clamping — see
     /// [`Self::clamp_text_range`].
@@ -348,7 +348,7 @@ impl RenderEditable {
     /// zero boxes — **never [`Rect::ZERO`]**, which would read to a caller
     /// as "the composing region is at the origin" instead of "there is no
     /// composing region." `flui_widgets::EditableText`'s IME cursor-area
-    /// loop (ADR-0032) prefers this over [`Self::caret_local_rect`] and
+    /// loop (ADR-0030) prefers this over [`Self::caret_local_rect`] and
     /// falls back to it on `None` — Flutter's own
     /// `_updateComposingRectIfNeeded` order.
     #[must_use]
@@ -402,7 +402,7 @@ impl RenderEditable {
     /// state of its own for "hidden because composing"; the owning widget
     /// achieves it by passing `show_caret = false` through the ordinary
     /// flag, driven by `TextEditingController::caret_hidden_by_ime`
-    /// (ADR-0033). A caller that also wants the *painted* caret must check
+    /// (ADR-0030). A caller that also wants the *painted* caret must check
     /// `show_caret` itself; `paint` does exactly that around its own use of
     /// this same rect.
     ///
@@ -545,7 +545,7 @@ impl RenderEditable {
     }
 
     /// The color the composing-region underline must paint — identical to
-    /// the color the glyphs themselves resolve to, by construction (ADR-0033's
+    /// the color the glyphs themselves resolve to, by construction (ADR-0030's
     /// color-resolution contract): `foreground` takes precedence over
     /// `color`, falling back to black, exactly matching
     /// `flui-engine`'s `render_text_span` resolution for the root span
@@ -564,7 +564,7 @@ impl RenderEditable {
     /// ([`COMPOSING_UNDERLINE_THICKNESS`]), positioned
     /// [`COMPOSING_UNDERLINE_GAP`] below the alphabetic baseline, clamped to
     /// stay inside `box_rect`'s vertical span. Declared divergence from real
-    /// font underline metrics — see the module doc's ADR-0033 note.
+    /// font underline metrics — see the module doc's ADR-0030 note.
     fn underline_rect_for_box(&self, box_rect: Rect) -> Rect {
         let baseline = self
             .compute_distance_to_actual_baseline(TextBaseline::Alphabetic)

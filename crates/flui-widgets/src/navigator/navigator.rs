@@ -699,7 +699,7 @@ impl fmt::Debug for NavigatorCommandTarget {
 /// what first makes this vocabulary growable — a `PushNamed { target, name }`
 /// arm is now expressible where a `Push { route }` arm never was. Adding the
 /// attribute is a breaking change that is free today and is not free later
-/// (ADR-0024 §7.5).
+/// (ADR-0024).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NavigatorCommand {
@@ -791,7 +791,7 @@ pub enum NavigatorCommandOutcome {
 
 /// Why a typed navigation command could not reach its owner-local navigator.
 ///
-/// `#[non_exhaustive]`, for ADR-0024 §7.5's argument — which cuts harder here than
+/// `#[non_exhaustive]`, for ADR-0024's argument — which cuts harder here than
 /// for the two enums that got the attribute first. [`NavigatorCommand`]'s own doc
 /// names `PushNamed { target, name }` as the arm this slice makes expressible, and
 /// a *named* command fails in ways neither variant below can express: the name may
@@ -2190,7 +2190,7 @@ impl NavigatorHandle {
     /// Resolving first means a factory runs before the departing route is dealt
     /// with, and a factory that captured a handle can navigate — survivable
     /// rather than supported, since `RouteRequest::navigator()` was withdrawn
-    /// (ADR-0024 §7.10) but a capture still reaches one. So when a factory
+    /// (ADR-0024) but a capture still reaches one. So when a factory
     /// navigates, its `didPush` is observed
     /// **before** this operation's own dismissal — an ordering Flutter cannot
     /// produce here, because it has already popped. The departing route is then

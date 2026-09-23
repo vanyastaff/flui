@@ -101,7 +101,7 @@ pub use tree::{
 };
 
 // Harness self-tests were moved to `tests/harness_self_test.rs` (integration
-// test) after the flui-objects extraction (ADR-0008). Internal lib unit tests
+// test) after the flui-objects extraction. Internal lib unit tests
 // cannot import from `flui_objects` without creating a duplicate-crate-version
 // error (flui-objects has a production dep on flui-rendering; the lib-under-test
 // and flui-objects' copy of flui-rendering are distinct compiled artifacts).

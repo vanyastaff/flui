@@ -8,7 +8,7 @@
 //! # Deliberate divergences from the oracle (framework-surface gaps)
 //!
 //! 1. **Feedback paints, but at a displacement, not a global position.**
-//!    `Overlay::maybe_of` (ADR-0036) closed the lookup gap this divergence
+//!    `Overlay::maybe_of` (ADR-0076) closed the lookup gap this divergence
 //!    used to name in full: `DraggableState` now resolves the ancestor
 //!    `Overlay` in `did_change_dependencies` and, on drag start, inserts
 //!    `feedback` as a real `OverlayEntry` — matching the oracle's
@@ -23,7 +23,7 @@
 //!    correct only for a `Draggable` sitting at the screen origin, honestly
 //!    wrong (by exactly that origin) everywhere else, same shape of divergence
 //!    as #4. `rootOverlay`, `ignoringFeedback*`, and scaled/rotated-ancestor
-//!    correctness are separate, still-open gaps (ADR-0036's deferrals).
+//!    correctness are separate, still-open gaps (ADR-0076's deferrals).
 //! 2. **Live drag-target discovery, reached through a private origin probe.**
 //!    The oracle's `_DragAvatar.updateDrag` hit-tests at the pointer's
 //!    *current* global position on every move, independent of wherever the
@@ -265,7 +265,7 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
 
     /// The widget shown under the pointer during a drag, painted in an
     /// `OverlayEntry` if an ancestor `Overlay` is found (`Overlay::maybe_of`,
-    /// ADR-0036) — positioned at a **displacement**, not the oracle's true
+    /// ADR-0076) — positioned at a **displacement**, not the oracle's true
     /// global anchor; see the module divergence notes.
     #[must_use]
     pub fn feedback(mut self, builder: impl Fn() -> BoxedView + 'static) -> Self {
@@ -1318,7 +1318,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     /// A lifecycle hook, not `build` and not the
     /// `on_start` gesture callback above, neither of which holds a
     /// `BuildContext`. Re-resolved on every dependency change, not just once:
-    /// `Overlay::maybe_of` depends (ADR-0036), so a *different* enclosing
+    /// `Overlay::maybe_of` depends (ADR-0076), so a *different* enclosing
     /// overlay later replacing this one is exactly what re-fires this hook.
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = std::mem::replace(&mut *self.overlay.lock(), Overlay::maybe_of(ctx));

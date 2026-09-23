@@ -1,310 +1,340 @@
-# ADR-0045: The raster lane — threaded raster ownership, shared GPU services, and the pacing model that replaces the blocking present
+# ADR-0045: The raster lane — threaded raster ownership, shared GPU services, and what paces production once present stops blocking the produce loop
 
-*The raster owner gets a real thread. This record settles the split rule that decides which side of the boundary a fact lives on — the line runs through the surface's **lifecycle**, so creating or recreating a `wgpu::Surface` is owner-affine while using one is raster-affine — the scope of the GPU services that thread shares (one device per **owner thread**, not per process), the single `SurfaceGeneration` counter that makes stale-frame rejection sound once two threads can reconfigure a surface, the cross-thread wake contract, and the produce-side pacing that has to replace ADR-0029's blocking `Fifo` present once the produce loop no longer blocks on it. The lifecycle line, the wake contract and the teardown protocol are three consequences of **one** platform rule — AppKit UI objects may be messaged only from the main thread — stated once and applied uniformly. It also records, as decisions rather than omissions, what it deliberately does not settle: there is no stall watchdog; macOS runs the inline lane until an upstream `wgpu-hal` path stops reaching an `NSView` off-thread; and three of the shipping backends have no executable coverage anywhere in CI.*
-
----
-
-- **Status:** Proposed — Accepted when the change that moves surface acquisition and present onto the raster thread lands together with the pacing re-measurement its own decision below makes an exit criterion.
+- **Status:** Proposed — accepted when surface acquisition and present run on the raster thread and
+  a CI frame-pacing budget stays within budget.
 - **Date:** 2026-08-07
-- **Deciders:** @vanyastaff
-- **Scope:** `crates/flui-engine/src/raster_owner.rs` (`RasterOwner`, `RasterHandle`, the mailbox state, `SurfaceState`, `RasterAck`, `PumpOutcome`), `crates/flui-engine/src/raster_options.rs` (`RasterOptions`), `crates/flui-engine/src/raster.rs` (`RasterBackend`), `crates/flui-engine/src/renderer.rs` (`Renderer`, `build_windowed_gpu_stack`, `acquire_surface_texture`, `recover`, the `unsafe impl Send`); `crates/flui-app/src/app/runner.rs` (the desktop, Android and web lock-wrapped backend sites, `install_surface_applier`, `no_present_fallback_pace`), `crates/flui-app/src/app/runtime.rs` (`AppRuntime`, `SharedEngineServices`), `crates/flui-app/src/app/ui_realm/` (`render_frame_entered`), `crates/flui-app/src/app/presentation.rs` (`PresentationState`), `crates/flui-app/src/app/direct.rs`, `crates/flui-app/src/app/hot_reload.rs`; `crates/flui-scheduler/src/frame_clock.rs` (`FrameClock`'s in-flight and produce-interval gates); `crates/flui-platform/src/traits/owner.rs` (`ProxyTransport`, `ProxySendError`, `ClosedTransport`) and the winit/Win32/AppKit backends; `docs/runtime-contract.toml`'s `surface-generation-single-authority`
-- **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §5 (which explicitly defers "which thread the raster owner loops on" to its own ADR — this is that record; its Consequences → Follow-ups item 1 names it) and §6 (freshness by work class: a raster frame is checked against `FrameEpoch` + `SurfaceGeneration`), plus that record's Governance note naming concurrency architecture and presentation architecture as sanctioned leapfrog zones; [ADR-0029](ADR-0029-frame-pacing-swapchain-block-with-fallback-throttle.md) — **amended by decision 3 below**; [ADR-0044](ADR-0044-driver-loop-hybrid.md) §7 (the wake-deadline hook and `ControlFlow::WaitUntil`, reused by decision 5) and §9 (the in-flight counter and retire→wake edge, whose stated honest boundary — "no production `FrameClock` reads a live raster owner yet" — is what this record closes); [ADR-0037](ADR-0037-presentation-ownership-domains.md) (the presentation is the addressing unit a lane is bound to); [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §3 (`PlatformProxy` — the existing cross-thread-to-owner lane, its per-backend wake primitives, and its "a verb joins when a consumer exists" discipline, all of which decision 5 builds on rather than duplicates); [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md) — **amends decision 1's `Send` deletion and §7's quarantine rationale** (2026-09-14)
-- **Issue:** #559 — move the raster owner into the shipping path, share GPU services, implement the latency policy
-
----
+- **Amended by:** ADR-0058 (decision 3), ADR-0063 (decision 1, §7)
+- **Related:** ADR-0027 §5–§6, ADR-0037, ADR-0039 §3, ADR-0044 §7 and §9; issue #559
 
 ## Context
 
-ADR-0027 §5 designed the raster boundary — an owned `SceneSnapshot` moving down, typed acks moving up, a coalescing mailbox with latest-frame-wins, a one-shot shutdown channel — and then deferred exactly one question: **which thread the owner loops on.** The shipping baseline it chose was a synchronous in-process owner behind the same seam, with a threaded harness as the non-negotiable companion so the protocol was not vacuously green. ADR-0044 §9 added the third owner's accounting (an RAII in-flight ticket, a retire→wake edge) and stated its own boundary just as plainly: no production `FrameClock` reads a live raster owner, so `poll` never actually returns `Skip(Backpressure)` in production.
+ADR-0027 §5 designed the raster boundary — an owned `SceneSnapshot` moving down, typed acks moving
+up, a coalescing latest-frame-wins mailbox, a one-shot shutdown — and deferred one question: which
+thread the raster owner loops on. The shipping baseline is a synchronous in-process owner behind
+that seam, with a threaded harness keeping the protocol honest. ADR-0044 §9 added the in-flight
+ticket and the retire→wake edge, and stated its own boundary: no production `FrameClock` reads a
+live raster owner, so `poll` never returns `Skip(Backpressure)` in production.
 
-That deferral is what this record answers, and the starting position is worth stating exactly, because it changes what kind of change this is:
+Every production runner holds the backend behind a lock (`Arc<Mutex<Renderer>>` on desktop, Android
+and `run_direct`; `Arc<Mutex<Option<Renderer>>>` on web, where the `Option` means "adapter not
+ready"), and a second mutator — the resize applier — reaches through the same lock at an arbitrary
+point relative to paint. So this record introduces a generation scheme into the shipping path
+rather than repairing one; the generation decision (4) lands before anything else touches
+generations.
 
-- `SceneSnapshot` (in `flui-layer`) and the raster seam types `RasterOwner`/`RasterHandle`/`RasterOptions`/`RasterAck`/`PumpOutcome` (in `flui-engine`) have **no code consumers in `flui-app` or `flui-platform`** — the three references there are doc comments saying so. `FrameEpoch` and `SurfaceGeneration` do not appear in either crate at all.
-- All four production runners hold the backend behind a lock — `Arc<Mutex<Renderer>>` on desktop, Android and in `run_direct`, `Arc<Mutex<Option<Renderer>>>` on web, where the `Option` carries real "the WebGPU adapter is not ready yet" state — and the frame path reaches through it. A second mutator, the resize applier, reaches through the same lock at an arbitrary point relative to paint.
-
-So this is not a repair of a generation scheme that is running in production and getting something wrong. **It introduces one into the shipping path**, and every property below has to be established rather than preserved. That is also why the ordering matters: the generation decision (4) has to land before anything else touches generations, because retrofitting it onto a design that already has two counters means fixing a soundness bug rather than never writing one.
-
-Governance: ADR-0027's Governance note names concurrency architecture and presentation architecture as sanctioned leapfrog zones. Flutter's raster thread is a reference for *shape*, not a behavioral contract this record transcribes — no Flutter source is cited below as an oracle for any decision.
+Concurrency and presentation architecture are leapfrog zones (ADR-0027). Flutter's raster thread
+is a reference for shape, not a behavioral oracle for any decision below.
 
 ## Decision
 
-### 1. The split rule, and what actually crosses
-
-> **Owner-affine** = reads or mutates the element/render tree, demand, scheduling state, or input state. **Raster-affine** = touches a `wgpu::Surface`, its `SurfaceConfiguration`, a swapchain texture, or GPU submission. Exactly one value crosses downward — an owned `SceneSnapshot`. Only `Copy` outcome facts cross upward. **The owner thread never blocks on the raster thread.**
-
-Tie-breakers, applied in order: if leaving a fact on the UI thread would force a GPU block, it is raster-affine; if moving it would force the raster thread to read the tree, it is owner-affine; otherwise owner-affine. The last clause is a default-deny with **no carve-out** — decision 4 exists precisely so that resize, the one case that looks like it needs one, does not get one.
-
-**The line runs through the surface's lifecycle, not through the surface:**
-
-> **Creating or recreating a `wgpu::Surface` is owner-affine. Using one — acquire, present, configure/resize, present-mode selection — is raster-affine.**
-
-**Raster-affine (moves onto the lane):** the `Renderer`'s rendering half; damage marking (`mark_full_repaint`/`mark_dirty`/`has_damage`); surface *use* — acquire, present, resize apply, `reconfigure_surface`, present-mode selection; present timestamping.
-
-**Owner-affine (stays):** `PresentationState`, `FrameClock` (`Cell`-backed and `!Sync`), `UpdateScheduler`, `PipelineCell`, gestures/focus/IME, the demand mask, the actuator latch, `wake_frame`, `SceneSnapshot` construction, the latency history — **and surface creation and recreation, including the device-loss rebuild `recover()` performs today.**
-
-**This resolves a contradiction in an earlier draft of this record, rather than rewording it.** That draft listed `recover()` as raster-affine here while decision 2 stated that "recreation is an owner-thread operation" and gave it a worked mechanism. Both could not be true. **Decision 2 is the half that survives** — it is the one with a mechanism behind it, and the platform fact below shows it was right for a reason neither half had stated.
-
-#### Why the line is there: AppKit main-thread affinity, stated once
-
-Three separate decisions in this record are consequences of **one** platform rule, and were previously derived three times as if unrelated:
-
-> **AppKit UI objects — `NSView`, `NSWindow` — may be messaged only from the main thread, which on macOS is the owner thread. Nothing on the raster thread may reach one, directly or through a library.**
-
-For surface creation this is not a convention to be careful about — **it is a hard panic**, verified against the crates this workspace's lockfile actually resolves rather than against current upstream:
-
-> Citations below name a **file and a symbol or quoted string**, never a line number. Every line number in the original 29.0.3 evidence had moved by 30.0.1 — `from_ns_view`, `acquire_texture`, `configure`, `dimensions` all shifted — while nothing about the decision changed. A line number rots on every patch release and is silent when it does; `scripts/check-runtime-conformance.sh` settled on the same predicate for the same reason, and states it: a `contains` match proves the cited thing still exists, which is what a citation is for.
-
-- `wgpu-hal` **30.0.1** (what `Cargo.lock` pins) `src/metal/mod.rs` implements `Instance::create_surface` for AppKit by calling `raw_window_metal::Layer::from_ns_view(handle.ns_view)`.
-- `raw-window-metal` 1.1.0 `src/lib.rs` opens that function with `let _mtm = MainThreadMarker::new().expect("can only access NSView on the main thread");` — an unconditional panic off the main thread, not a soft constraint or a debug assertion.
-- `raw-window-handle` 0.6.2 states the same rule structurally, not merely in prose: `src/appkit.rs` documents `AppKitWindowHandle` as main-thread-only, and `src/lib.rs` pins it with `assert_not_impl_any!(RawWindowHandle: Send, Sync)` — the handle enum is **proven `!Send` at compile time on every platform**. Only the window half is the hazard: `src/lib.rs` asserts `AppKitDisplayHandle: Send + Sync`, and that type is an empty marker struct (`src/appkit.rs`).
-
-**And `configure` genuinely stays on the raster side — checked, not assumed.** The line only works if configuring an already-created surface does not re-enter the creation path. In the locked `wgpu-hal` 30.0.1, `<metal::Surface as crate::Surface>::configure` (`src/metal/surface.rs`) operates entirely on the retained `CAMetalLayer` held behind a `parking_lot::Mutex` — `setDevice`, `setPixelFormat`, `setDrawableSize`, `setMaximumDrawableCount`, and so on. A `CAMetalLayer` is a `CALayer`, not an `NSView`; there is no `MainThreadMarker`, no `from_ns_view`, and no view or window access anywhere in it. The same file documents `Surface::dimensions` as explicitly *"safe to call off of the main thread"*, so off-main use of the layer is a property upstream states rather than one this record infers.
-
-**The same rule decides three things**, and each is stated once and cross-referenced rather than re-argued:
-
-1. **Surface creation and recreation are owner-affine** (this decision) — otherwise `from_ns_view` panics.
-2. **`request_redraw` is never called from the raster thread** (decision 5) — otherwise it messages the content view off-thread and falsifies the stated precondition of `MacOSWindow`'s own `unsafe impl Send`.
-3. **Window destruction is never performed by the raster thread** (decision 7) — `DestroyWindow` is thread-affine on Win32 and AppKit requires the main thread.
-
-**This is not a macOS-only carve-out in the split rule, which keeps decision 1's "no carve-out" property intact.** The lifecycle line is one rule applied uniformly on every platform; macOS is only the platform that *enforces* it at runtime. The other two backends were checked so this record does not read as if the constraint were universal:
-
-- **Win32** — `Win32WindowHandle` is `{ hwnd: NonZeroIsize, hinstance: Option<NonZeroIsize> }` (`raw-window-handle` 0.6.2 `src/windows.rs`), plain integers with no thread affinity of their own, so swapchain creation off-thread is fine. (Correcting a claim made in review: `windows.rs` contains no explicit `Send`/`Sync` assertion for that struct — the property is ordinary auto-trait derivation, and the enum wrapping it is asserted `!Send` regardless.)
-- **X11** — winit 0.30.13 calls `XInitThreads()` unconditionally in `XConnection::new`, *before* `XOpenDisplay` (`src/platform_impl/linux/x11/xdisplay.rs`), and marks `XConnection` `Send + Sync` in the same file.
-
-#### The rule also reaches surface *acquisition* on macOS — and that costs this record its headline benefit there
-
-Checking whether `configure` stays off-main-safe (it does — see below) surfaced a case the lifecycle line does **not** cover. In the locked `wgpu-hal` 30.0.1, `<metal::Surface as crate::Surface>::acquire_texture` (`src/metal/surface.rs`) carries a `#[cfg(target_os = "macos")]` workaround for an occlusion hang: through the same file's `hosting_window` helper it walks up the `CALayer` tree to the layer whose delegate is the `NSView`, sends that delegate `-window`, and sends the resulting `NSWindow` `-occlusionState`, returning `SurfaceError::Occluded` when the visible bit is clear. **Those are AppKit UI-object messages, sent from whatever thread calls `get_current_texture()`** — which under a threaded lane is the raster thread.
-
-Two properties make this different from surface creation, and both matter:
-
-- **It does not panic.** There is no `MainThreadMarker` on this path, so nothing fails loudly; it is unsound by AppKit's threading convention rather than immediately fatal. That is worse for detection, not better.
-- **Upstream asserts the opposite, in the same file.** When this record was first written the argument here had to rest on an absence: `Surface::dimensions` is documented *"safe to call off of the main thread"* (`src/metal/surface.rs`) and no comparable statement accompanied the occlusion block, which is informative in a file whose author was evidently thinking about exactly this question. As of `wgpu-hal` 30.0.x it no longer rests on an absence. That release added `Surface::display_hdr_info`, which resolves the hosting `NSWindow` through the *same* `hosting_window` helper and then messages its `NSScreen` — and it opens with an `objc2::MainThreadMarker::new().is_none()` bail whose doc gives the reason outright: *"`NSScreen` and `NSWindow` are main-thread-only, and off-thread access is undefined behavior."* Neither that function nor any `MainThreadMarker` exists anywhere in 29.0.3's `surface.rs`. So one release later, in the same file, upstream gated the same class of access on the main thread and named off-thread use undefined behavior, while leaving `acquire_texture`'s `-window`/`-occlusionState` sends ungated. This record now cites a statement rather than infers from a silence.
-
-There is no version of the lifecycle line that fixes this: acquisition is where the vsync block lands, and moving it back to the owner thread would delete the entire point of the record.
-
-> **Decision: macOS runs `RasterMode::Inline` until this is resolved upstream.** This is not a new mechanism — the inline lane is already a first-class mode that wasm forces unconditionally and the hot-reload plugin path forces situationally (decision 6 and the consequences below). macOS joins that list, with a stated reopen condition: a `wgpu-hal` release whose Metal `acquire_texture` no longer messages `NSView`/`NSWindow` off the calling thread, or an upstream statement that it is safe to do so, verified in the locked version rather than assumed from a changelog.
-
-**Re-check log.** "Verified in the locked version" is only true of the version that was actually read, so each answer is recorded here with the version it came from rather than overwriting the last one.
-
-| Locked `wgpu-hal` | Checked | Condition met? | Finding |
-|---|---|---|---|
-| 29.0.3 | 2026-08-07 (this record) | no | `acquire_texture`'s occlusion block sends `-window`/`-occlusionState` from the calling thread. |
-| 30.0.1 | 2026-09-07 | no | The block is unchanged in substance, now reaching the window through a `hosting_window` helper. `configure` and `dimensions` are still off-main-safe, and `from_ns_view` still panics off-main. Upstream's new `display_hdr_info` gate makes the constraint explicit rather than inferred. |
-
-**What is mechanised, and the half that cannot be.** `scripts/probe-metal-acquire-main-thread.sh` answers the first disjunct; `weekly.yml`'s `latest-deps` job runs it after its `cargo update --workspace`, so the question is asked against a *fresher* `wgpu-hal` than the merged one — a lockfile comparison could only ever report "the lock moved", never "upstream fixed it". The probe is advisory and reports to the job summary; it blocks nothing.
-
-**How far that reaches, stated rather than overclaimed.** `cargo update` does not cross a semver major and the workspace pins `wgpu = "30.0"`, so the resolution it probes is the newest *compatible* release, not the newest published one. A fix landing in wgpu 31 would be invisible to it — and given upstream would likely take the occlusion workaround out in a release that can break, that is a plausible shape for the reopen condition to arrive in. The probe therefore also asks crates.io for the newest published `wgpu-hal` and says loudly when that is outside what it inspected, so a quiet run is never mistaken for "nothing changed upstream".
-
-It can only see the **first** of the two disjuncts above. The second — *an upstream statement that messaging those objects off-thread is safe* — is prose, and no source predicate detects prose. It is also arguably the likelier one to arrive first: upstream has just shown, in `display_hdr_info`, that it documents this exact question when it thinks about it. So a quiet probe means "the code still does it", never "the condition is still unmet". The second disjunct is answered by reading, on the schedule a human chooses.
-
-The 30.0.1 row is late: the lock moved on 2026-08-22 (#797) and the citations above were stale for sixteen days, because the trigger issue #653 names ("a dependabot PR touching `wgpu`/`wgpu-hal`") had nothing attached to it. It does now — see the note on that issue.
-
-Being consistent here is the whole reason the rule is stated once. Decision 5 refuses `request_redraw` on the raster thread on the strength of exactly this convention; exempting the acquire path because the violation is inside a dependency rather than in this workspace's own code would mean the rule was never the rule.
-
-**Honest note on where this leaves `Occluded`.** Decision 3's occluded-window analysis leans on `CurrentSurfaceTexture::Occluded` returning without blocking. On macOS that signal is *produced by* the block above — so on macOS the analysis describes the inline lane, which is what macOS will be running. On the platforms that do run threaded, `Occluded` comes from the backend's own surface state, not from an `NSWindow` query.
-
-**A consequence worth taking: the `unsafe impl Send` can be deleted, not merely narrowed.** `Renderer`'s `raw_window_handle`/`raw_display_handle` fields are documented as "stored … for recovery" (`renderer.rs`) and their only read is `recover()` (`renderer.rs`). They are also the *entire* reason the blanket `unsafe impl Send for Renderer` exists. Move recreation to the owner thread and the lane no longer needs the handles at all — so rather than narrowing the impl to a private `SendRawHandles` newtype as an earlier draft proposed, the fields and the `unsafe impl` both go, and `Renderer: Send` becomes ordinary auto-derivation over `wgpu` types that are already `Send + Sync`. Deleting an `unsafe impl` that asserts `Send` over a type upstream deliberately proved `!Send` is strictly better than writing a more careful SAFETY comment for it.
-
-**One consequence the rule forces that the issue does not name.** Layout currently reads the surface size back *out of the backend* (`renderer.size()`, in `render_frame_entered`) to build the root `BoxConstraints`. The authority for that number is the platform, which already writes it into the backend through the resize applier. Under the rule, layout may not reach across the boundary to read it. `PresentationState` therefore gains an owner-affine surface-size cell, written by the platform resize path and read by layout, and the backend's `size()` stops being a layout input. This is a "one fact, one place" repair that the boundary makes mandatory rather than optional: today the platform knows the size, writes it into the renderer, and layout reads it back out of the renderer.
-
-**How the value crosses, and the `Send` posture.** The `Renderer` moves into the thread once, at lane construction, and never again — no `Arc`, no `Mutex`, no lock in the public API (the workspace's own no-locks-in-public-API rule). `RasterBackend` gains a `Send` supertrait; the spawn entry point requires `B: Send + 'static`; `dyn RasterBackend + Send` stays object-safe. The existing `unsafe impl Send for Renderer` is *blanket* — it asserts `Send` for every present and future field while its 17-line SAFETY comment reasons about exactly two (`raw_window_handle`, `raw_display_handle`). Per the lifecycle line above it is **deleted along with those two fields**, so `Renderer: Send` becomes ordinary auto-derivation and a future `!Send` field becomes a compile error rather than a silently-widened assertion — a stronger outcome than the narrowing an earlier draft proposed. The `!Sync` posture is unchanged.
-
-### 2. Shared GPU services are per **owner thread**, not per process
-
-Every `Renderer` today builds its own `Instance → Adapter → Device → Queue`, three times over (windowed construction, offscreen construction, and `recover`). Sharing them is the point of the "shared GPU services" half of this issue. Three hazards block a naive `Arc`-share and shape the decision: `set_device_lost_callback` is last-writer-wins, so a second install silently clobbers the first; `recover()` replaces `self.device` wholesale, so a sibling still holding the old `Arc<Device>` renders into a dead device forever; and the caches (`TextureCache`, `TexturePool`, `WgpuPainter`, `OffscreenRenderer`) embed an `Arc<Device>` each.
-
-**Decision:** a `flui_engine::GpuServices` value holding instance/adapter/device/queue/capabilities, the shared `ShaderCache`, one `device_lost: Arc<AtomicBool>` behind exactly one callback install, and an immutable `GpuResourceGeneration`. (This record originally called that field `ResourceGeneration`; `flui_foundation::epoch` already declares a `ResourceGeneration` for a different domain — worker-cache freshness — and port-check trigger 10 forbids the collision mechanically, so the GPU-side type carries the prefix.) It lives in `flui-engine`, not `flui-app`: the workspace layer policy gives `flui-engine` all wgpu state, and leaking `wgpu::Device` upward into the app layer inverts that contract.
-
-**Implementation status, and why the type is not carried in the meantime (2026-09-17).** The first slice of this decision shipped the offscreen-only value type and its sharing seam, and both are now **deleted, not unwired**. A windowed resolver was cut at the time for the reason below; the surviving offscreen half had no production consumer at all — its every reader was its own test, and `flui-app`'s runners kept building a private stack per renderer through `Renderer::new`. Carrying a public `GpuServices` in that state made docs.rs advertise a constructor no windowed caller could reach while the only working entry point sat `#[doc(hidden)]`, which is the misleading-API shape this workspace removed elsewhere (`RasterOptions`, `EngineError::NoAdapter`). What the decision still needs before the value type returns is the other half of its own recovery design: `ReplaceServices`, the owner-thread re-pointing step below. Recovery on a shared device cannot be a per-renderer `recover()` — that would rebuild a private stack and install a second `set_device_lost_callback` (this decision's first named hazard) — so the type and its `ReplaceServices` carrier land together, with `flui-app`'s `DeviceRecovery` seam re-pointed at the owner thread in the same change. `Renderer::new` is therefore no longer `#[doc(hidden)]` and is again the advertised entry point; the windowed shared-stack constructor arrives with `ReplaceServices`, per this decision's original wording.
-
-**Why a windowed resolver could not simply be added to the deleted type.** `Instance::new` builds a fresh wgpu-core `Global` with its own surface registry, and `Adapter::request_adapter` resolves a `compatible_surface` by raw id against the **receiving** instance's registry — a surface created from any other instance does not exist in this one's registry and `request_adapter` panics. The instance and the surface have to be created together, which is exactly the shape `Renderer::build_windowed_gpu_stack` already uses; a value type holding an `Instance` separately from the surface it resolved against is the shape wgpu refuses. The windowed half is therefore a **factory returning the stack and its surface together**, not an accessor-bearing holder — which is a further reason to build it in the `ReplaceServices` slice, where the returned surface has a defined consumer.
-
-**The honest scope correction, stated so that "shared under `AppRuntime`" cannot be read as process-wide.** `AppRuntime` is a `thread_local!` (`APP_RUNTIME`, in the runner), and its `SharedEngineServices` slot is documented in its own source as "resolved **once** per owner thread". So the sharing scope of anything hung off `AppRuntime` is **one owner thread**, not one process. Two realms on two owner threads get two `AppRuntime`s and therefore **two devices** — the exact duplication this decision exists to remove, reappearing across a boundary the earlier framing of this work never named.
-
-This record does not paper over that. The scope **is** per owner thread, and it is *checked* rather than merely documented: `GpuServices` carries a `#[cfg(debug_assertions)] created_on: ThreadId` and asserts on access. Process-level sharing is deferred with a named condition — a second owner thread carrying a real GPU workload — because it would mean a genuinely process-global GPU resource, i.e. a new entry in the ambient-reach ratchet immediately after #553 finished deleting the singleton family. Adding one back needs a reason better than symmetry.
-
-**The container is re-settable, and that is not an implementation detail.** `AppRuntime::services` is a `std::cell::OnceCell`, which cannot be re-set — and re-setting the GPU services is precisely what device-loss recovery *is*. The `GpuServices` slot is therefore an interior-mutable `Option`, not a `OnceCell`. "Resolved lazily by the first surface" is a **policy expressed in the resolution function**, never a type-level guarantee; claiming it as a type guarantee is what would make recovery impossible. (The slot itself does not exist yet — see the implementation-status paragraph above; it is the `ReplaceServices` slice that needs it.)
-
-**Adapter selection.** Today it is surface-derived (`compatible_surface: Some(&surface)`), and resolving before any window exists would force `None` and change which GPU gets picked. The policy passes the first surface, so **selection for the first window is bit-identical to today**; later windows inherit that adapter. That is unavoidable when sharing one device — and it means selection is **permanent for the process**: closing window 1 and opening window 2 on a different GPU (dock/undock, eGPU hotplug) never re-runs it. **Declared out of scope**, not left implicit: re-selection would need a platform display-topology-change signal that `flui-platform` does not expose, plus a full device migration.
-
-**Which caches are shared.** `ShaderCache` only — already read-mostly and populate-once. **Not shared:** `PipelineCache` (needs a key widening), and `TextureCache`/`TexturePool`/`PathCache`/the glyph atlas, which are per-surface and mutated every frame; sharing them buys a hot-path lock for an unmeasured benefit. Revisit condition, so this is a decision and not an omission: three or more simultaneous surfaces **and** measured duplicate atlas residency at or above 32 MiB, or duplicate pipeline compiles at or above 50 ms at startup. The CPU-side font system is device-independent and is not part of this.
-
-**Recreation is an owner-thread operation.** The device-lost *observation* crosses threads (an `Arc<AtomicBool>` the raster side sets and reads). The *recreation* runs on the owner thread against owner-thread-local state and is resolved by a plain single-threaded generation compare — a stale observed generation is a no-op. It is not a CAS, and calling it one would imply a cross-thread contention that does not exist here.
-
-**And recovery must reach every lane, not just the one that observed the loss.** The device is shared per owner thread, so its loss is a property of the *thread*, not of one surface. A second lane's `Renderer` still holds an `Arc<Device>` from the pre-recovery services and would render into a dead device forever — the third of the three hazards named at the top of this decision. `GpuResourceGeneration` gating rejects that lane's *frames*, which prevents corruption but does not by itself re-point the lane at the new device; without the step below, gating alone would leave the second lane permanently starved rather than recovered.
-
-> **Recovery is a whole-owner-thread event.** `AppRuntime::recreate_gpu(observed)` mints **one** new `GpuServices` on the owner thread, then sends **every** lane on that thread a `ReplaceServices` command on the same ordered, coalesced command path as resize and attach/detach — not a broadcast on the lossy ack lane. Its full shape, including the replacement surface the owner thread builds because the lane may not, is given below.
-
-Each lane applies it at its next command drain, which happens at the top of `pump` **before** the generation compare, so no frame is ever rendered against a replaced device:
-
-- **Caches go by ownership, not by keying.** The lane drops its per-surface `TextureCache`/`TexturePool`/`PathCache`/glyph atlas wholesale, because those embed the old `Arc<Device>`; there is no entry-by-entry sweep to get wrong. The shared `ShaderCache` dies with the old `GpuServices` and the new one starts empty.
-- **The surface is recreated, not merely reconfigured — and the owner thread is what recreates it.** Today's `recover()` builds a whole new `wgpu::Instance`, and a surface from a dead instance is not reusable. Per decision 1's lifecycle line, that recreation cannot happen on the lane, so the owner thread builds each replacement surface from the platform window it already owns (it needs nothing from the lane; the lane retains no raw handles any more) and **`ReplaceServices` carries the finished surface**: `ReplaceServices { services, surface, generation }`. The lane receives a ready-made surface and configures it against the new device — it never creates one. Moving it is sound because `wgpu::Surface<'static>` is `Send`; only the raw handle it was built from is not.
-- **The lane mints the new `SurfaceGeneration`** through the mailbox's single counter as it applies the command (decision 4's fourth mint site) — the counter stays in one place even though the surface now arrives from the other side.
-- **The window between device loss and surface replacement is a real interval, and it is defined.** From the moment the raster side observes the lost device to the moment the command is applied, the lane holds a dead surface and presents nothing. It needs no special case: a frame it is mid-render on is rendering against the device that just died, so it fails on its own through the existing render-failure path, which retires its ticket, sets `device_lost` on the reliable slot, and leaves the replacement command waiting at the next drain. The interval has **two halves, and a different axis rejects in each** — stating it as one would be wrong in a way that matters. Before the owner observes the loss it is still stamping the old `GpuResourceGeneration`, and those frames are rejected on the **resource** axis. The moment `recreate_gpu` mints the new services the owner knows the new generation locally — it minted it — so from then on it stamps the new one; those frames are rejected on the **surface** axis instead, until the lane applies `ReplaceServices` and mints the matching `SurfaceGeneration`. The owner never keeps stamping a generation it has already replaced, which is what would otherwise leave recovery frames rejected forever: nothing in this record acknowledges a resource generation back to the owner, so the owner's own mint is the only thing that can advance its stamp, and it does. Rejected in both halves means rejected, not queued, so the interval cannot accumulate work. Nothing races, because the only writer to the lane's surface slot during the interval is the command path itself.
-
-**The cost, named rather than discovered later:** because the device is shared, one window's device loss blanks *every* window on that owner thread for at least a frame and recompiles the shared shader cache. That is inherent to sharing a device, not an implementation shortcut — and it is a second, independent argument for keeping the sharing scope at one owner thread. Recovery *across* owner threads is a non-goal for the reason that makes it trivial: each owner thread has its own services and its own device, so a loss on one thread is genuinely independent and there is nothing to propagate. It reopens under the same condition as process-level sharing.
-
-### 3. What paces production once the produce loop stops blocking — amending ADR-0029
-
-**What ADR-0029 decided, and the exact reach of its reasoning.** ADR-0029 made the GPU's blocking `Fifo` present the steady-state pacer and **deleted the fixed-duration frame-budget sleep on that basis** (its Decision point 3), retaining only a coarse fallback throttle for frames that never reach `present()` while a ticker keeps the loop awake. Its Evidence section measured a ~6.058 ms median tracking a 164.89 Hz display across 2100 samples — direct evidence that the block was real.
-
-That reasoning is a statement about the **produce loop**, and it holds only while the thread that produces frames is also the thread that blocks. Two corrections matter here. First, under `Fifo` with `desired_maximum_frame_latency` pinned at `1`, the stall actually lands in `get_current_texture()`, not in `present()` — both calls are on the raster side of decision 1's rule, so both move. Second, once they move, the produce loop reaches neither. **ADR-0029's pacer therefore stops pacing production**, while remaining entirely correct about what it measured: the GPU still blocks, just not on a thread whose rate anyone was relying on.
-
-**Amendment.** ADR-0029's Decision point 3 is amended: the blocking `Fifo` present is the pacer **only while the raster owner runs inline on the produce thread**. Under a threaded lane, production is paced by `FrameClock`'s own two gates — the in-flight capacity threshold (`Skip(Backpressure)`, which becomes live for the first time here; ADR-0044 §9's honest boundary is exactly that nothing increments that counter in production today) and `min_produce_interval`. The rest of ADR-0029 stands unamended: `Fifo` remains the default present mode, `ControlFlow::Wait` remains explicitly pinned, and `target_fps` remains advisory.
-
-**The fallback throttle is retained and re-predicated.** ADR-0029's `no_present_fallback_pace(presented, keeps_gate_open)` is correct only because `presented` is known *synchronously* — it is the boolean `render_scene` returns on the same thread. Threaded, that boolean is no longer available at the decision point, and the obvious substitute ("no completion drained this cycle ⇒ nothing presented") is not a substitute at all: it is a **positive-feedback anti-pacer**. The drain is empty exactly when the raster thread has not yet finished the previous frame — i.e. exactly when the GPU is the bottleneck — so the loop would sleep ~16 ms on the event-loop thread, and the slower the lane got, the more the UI would sleep. That caps a 165 Hz display near 60 and collapses the produce/present overlap this record exists to create.
-
-> The predicate must separate *"no completion yet because the lane is still working"* from *"no completion because nothing presented"*. The first is exactly `in_flight > 0` — the lane **owes** a frame. **The fallback pace applies only when `in_flight == 0` and the last known completion did not present.** While `in_flight > 0`, the clock's own backpressure gate is the pacer and no sleep is correct.
-
-**Which signal each half of that predicate reads, and why neither may be lossy.** `in_flight` is the reliable cross-thread counter ADR-0044 §9 already landed. The presented bit must **not** come from `RasterAck::Presented`/`Dropped`: `raster_owner.rs` documents the ack channel as deliberately lossy and its sender **drops the newest ack on a full channel** — which is exactly the sample this predicate reads, so a completion that genuinely presented could be missing and the loop would sleep on it. A pacing decision built on a best-effort channel is the same class of error as a wake with no carrier.
-
-> **Decision: the presented bit rides the coalesced reliable slot** — the same `SurfaceState` slot that already carries `required_generation` and `device_lost`, and that decision 7 uses for `LaneHealth`. It gains a `last_completion: Option<{ epoch, presented }>`, written by the pump unconditionally on every retire, exactly as the existing two fields are written unconditionally rather than only when their ack lands. Coalescing is the right semantics and not merely an available one: the predicate asks a latest-wins question, and a coalesced slot cannot lose the latest value by construction. There is precedent in the slot's own current contract — `device_lost` is already defined as cleared "the next time a frame presents successfully", so a present-derived fact reliably reaching the owner is a property this slot already provides.
-
-The completion ring stays what it is for — the *distribution* the latency histograms are built from. It would happen to answer this query correctly (it overwrites oldest, so the newest sample is never the one dropped), but reading it here would tie a pacing decision to when the histogram happens to be drained. Two different questions, two different carriers.
-
-This is sound only because decision 5's bounded re-poll guarantees a lost wake cannot strand `in_flight > 0` forever. The two are one mechanism seen from two sides; neither is safe alone.
-
-**Established by measurement, not by argument — and that is an exit criterion, not an aspiration.** The change that moves surface acquisition and present onto the raster thread carries the re-measurement as its exit criterion, in ADR-0029's own format (median / p90 / max over repeated windows, compared against the display's own native period rather than against `target_fps`), against a **baseline of the unchanged pacer measured earlier on the still-serial lane** so the delta has a comparand. This record stays **Proposed** until that measurement exists. An argument that the clock gates "should" pace correctly is not evidence; ADR-0029 established its own claim with a histogram and this amendment is held to the same bar.
-
-**The occluded window is named explicitly, because on that path nothing bounds anything unless a bound is designed in.** Three facts compose:
-
-1. When the driver reports occlusion, `acquire_surface_texture` returns `Ok(None)` on `wgpu::CurrentSurfaceTexture::Occluded` — the frame is skipped deliberately rather than rendered, and **nothing blocks**. There is no vsync signal on this path at all. (The converse case, where a hidden window's surface does *not* report `Occluded`, is the one that blocks instead; see the stall-watchdog non-goal.)
-2. A running ticker re-marks `Animation` demand every cycle (ADR-0044 §1), so **the demand mask self-refreshes** and the produce gate never closes on its own.
-3. `RasterOptions::target_frame_rate` is `None` by default, so `FrameClock::min_produce_interval` is `None` by default — **no throttle is configured**.
-
-Today the combination is bounded by `no_present_fallback_pace`'s fixed 16 ms sleep, and only because `presented` is synchronous. After the move, that bound has to be re-established explicitly by the re-predicated fallback above plus a configured produce interval — it is not inherited. Two platform asymmetries make this harder to observe than to reason about, and are recorded so nobody mistakes a green local run for coverage: winit emits its `Occluded` window event on X11/macOS/iOS/Web and **has no Wayland emitter at all**, so on this workspace's own Wayland reference desktop a hidden window is still "visible" to FLUI and ADR-0044 §6's hidden-surface gating never engages; and per ADR-0029's own occlusion-semantics section, Wayland compositors stop delivering frame callbacks to a hidden surface (tickers freeze, the path is unreachable) while Windows/X11 keep delivering redraws (the path is live and is the one that needs the bound).
+### 1. The split rule, and what crosses
+
+> **Owner-affine** = reads or mutates the element/render tree, demand, scheduling or input state.
+> **Raster-affine** = touches a `wgpu::Surface`, its configuration, a swapchain texture, or GPU
+> submission. Exactly one value crosses down — an owned `SceneSnapshot`. Only `Copy` outcome facts
+> cross up. **The owner thread never blocks on the raster thread.**
+
+Tie-breakers, in order: if leaving a fact on the UI thread would force a GPU block, it is
+raster-affine; if moving it would force the raster thread to read the tree, it is owner-affine;
+otherwise owner-affine, with no carve-outs.
+
+**The line runs through the surface's lifecycle:** creating or recreating a `wgpu::Surface`
+(including the device-loss rebuild) is owner-affine; *using* one — acquire, present,
+configure/resize, present-mode selection, damage marking, present timestamping — is raster-affine.
+`PresentationState`, `FrameClock`, `UpdateScheduler`, gestures/focus/IME, the demand mask,
+`wake_frame` and `SceneSnapshot` construction stay on the owner.
+
+**Why there: one platform rule.** AppKit UI objects (`NSView`, `NSWindow`) may be messaged only from
+the main thread, which on macOS is the owner thread. For surface creation this is a hard panic:
+`wgpu-hal`'s Metal `create_surface` calls `raw_window_metal::Layer::from_ns_view`, which opens with
+`MainThreadMarker::new().expect(...)`, and `raw-window-handle` proves `RawWindowHandle: !Send` at
+compile time. `configure` is off-main-safe — it touches only the retained `CAMetalLayer` — and
+`wgpu-hal` documents `Surface::dimensions` as safe off the main thread. The same rule decides three
+things, each stated once: surface creation is owner-affine (here); `request_redraw` is never called
+from the raster thread (decision 5); window destruction is never performed by the raster thread
+(decision 7). It is one rule on every platform; macOS merely enforces it at runtime (Win32 handles
+are plain integers; winit's X11 connection is `XInitThreads`-initialised and `Send + Sync`).
+
+**macOS runs `RasterMode::Inline` until upstream changes.** `wgpu-hal`'s Metal `acquire_texture`
+carries a macOS occlusion workaround that walks to the hosting `NSWindow` and sends it
+`-occlusionState` from whatever thread acquires — the raster thread under a threaded lane. It does
+not panic, but upstream's own `display_hdr_info` in the same file gates the same class of access on
+the main thread and calls off-thread use undefined behavior. Moving acquisition back to the owner
+would delete the point of the lane, so macOS joins wasm and the hot-reload plugin path on the
+inline lane. Reopen condition: a `wgpu-hal` release whose Metal `acquire_texture` no longer messages
+`NSView`/`NSWindow` off the calling thread, or an upstream statement that it is safe, verified in
+the locked version. `scripts/probe-metal-acquire-main-thread.sh` (run advisorily by the weekly
+`latest-deps` job, and reporting the newest published `wgpu-hal` when it is outside the semver range
+it inspected) answers the first disjunct; the second is prose and needs a human to read it. On macOS
+the `Occluded` signal decision 3 relies on is produced by that very block, so there the analysis
+describes the inline lane.
+
+**The layout size moves to the owner.** Layout reads the surface size back out of the backend
+(`renderer.size()`) to build the root constraints. Under the rule it may not, so
+`PresentationState` gains an owner-affine surface-size cell written by the platform resize path and
+read by layout.
+
+**The `Send` posture.** The `Renderer` moves into the thread once, at lane construction — no `Arc`,
+no `Mutex`, no lock in the public API. `RasterBackend` has a `Send` supertrait, the spawn entry point
+requires `B: Send + 'static`, and `dyn RasterBackend + Send` stays object-safe. `Renderer: Send` is
+ordinary auto-derivation, so a future `!Send` field is a compile error rather than a silently
+widened assertion; `!Sync` is unchanged. The blanket `unsafe impl Send for Renderer` this record
+originally planned to delete together with the saved raw handles was deleted earlier, independently
+of the lane, by ADR-0063: the renderer owns its surface target (`WindowTarget`, held in a
+`SurfaceLease`) and never saves raw handles. Retaining the target inside `Renderer` is transitional;
+the lease moves to the presentation when decision 2's windowed `GpuServices` constructor lands.
+
+### 2. Shared GPU services are per owner thread, not per process
+
+Every `Renderer` builds its own `Instance → Adapter → Device → Queue`. Three hazards shape sharing:
+`set_device_lost_callback` is last-writer-wins; `recover()` replaces the device wholesale, so a
+sibling holding the old `Arc<Device>` renders into a dead device; and the per-surface caches embed
+an `Arc<Device>`.
+
+**Decision:** a `flui_engine::GpuServices` holding instance/adapter/device/queue/capabilities, the
+shared `ShaderCache`, one `device_lost: Arc<AtomicBool>` behind exactly one callback install, and an
+immutable `GpuResourceGeneration` (prefixed because `flui_foundation::epoch::ResourceGeneration`
+already names worker-cache freshness). It lives in `flui-engine`, which owns all wgpu state.
+
+- **Status of the type.** An offscreen-only `GpuServices` shipped first and was deleted: it had no
+  production consumer, and a public constructor no windowed caller could reach is a misleading API.
+  It returns together with `ReplaceServices` (below), with `flui-app`'s `DeviceRecovery` seam
+  re-pointed at the owner thread in the same change. Until then `Renderer::new` is the advertised
+  entry point.
+- **The windowed half is a factory, not a holder.** `Adapter::request_adapter` resolves a
+  `compatible_surface` against the *receiving* instance's registry, so instance and surface must be
+  created together — the shape `Renderer::build_windowed_gpu_stack` already has.
+- **Scope is one owner thread.** `AppRuntime` is `thread_local!`, so two owner threads get two
+  devices. That is checked (a debug-only `created_on: ThreadId` assert), not just documented.
+  Process-level sharing waits for a second owner thread with a real GPU workload.
+- **The slot is re-settable** (an interior-mutable `Option`, not a `OnceCell`), because device-loss
+  recovery *is* re-setting it.
+- **Adapter selection** stays surface-derived: the first window picks, later windows inherit, and
+  the choice is permanent for the process. Re-selection on display-topology change is out of scope.
+- **Only `ShaderCache` is shared.** Texture/path caches and the glyph atlas are per-surface and
+  mutated every frame. Revisit at three or more simultaneous surfaces and measured duplicate atlas
+  residency ≥ 32 MiB or duplicate pipeline compiles ≥ 50 ms at startup.
+- **Recovery is a whole-owner-thread event.** The device-lost observation crosses threads; the
+  recreation runs on the owner thread, resolved by a plain generation compare (not a CAS).
+  `AppRuntime::recreate_gpu(observed)` mints one new `GpuServices` and sends every lane on that
+  thread `ReplaceServices { services, surface, generation }` on the ordered command path. The owner
+  builds each replacement surface (the lane may not); the lane drops its per-surface caches
+  wholesale, configures the new surface, and mints the new `SurfaceGeneration` through decision 4's
+  counter. Between loss and replacement, frames stamped with the old `GpuResourceGeneration` are
+  rejected on the resource axis, then frames stamped with the new one are rejected on the surface
+  axis until the lane applies the command — rejected, not queued. Cost: one window's device loss
+  blanks every window on that owner thread for at least a frame.
+
+### 3. What paces production once the produce loop stops blocking
+
+The blocking `Fifo` acquire/present paces production only while the raster owner runs inline on the
+produce thread (ADR-0058). Under a threaded lane both calls move to the raster side and the produce
+loop reaches neither. Production is then paced by:
+
+- `FrameClock`'s in-flight capacity gate (`Skip(Backpressure)`, live in production for the first
+  time — closing ADR-0044 §9's boundary) and `min_produce_interval`;
+- the platform's own pacing signal, armed before every present through the pre-present hook
+  (`RasterBackend::set_pre_present_hook`, ADR-0058 decision 1) — the raster backend fires it
+  immediately before `queue.present`, for a frame that will present only;
+- for frames that ran the pipeline but did not present, a `FallbackWake` **deadline** delivered
+  through the wake-deadline hook (`ControlFlow::WaitUntil`, ADR-0044 §7; ADR-0058 decision 2).
+  **Never a sleep:** the event-loop thread does not block.
+
+**The fallback deadline applies only when `in_flight == 0` and the last completion did not
+present.** "No completion drained this cycle" is not a substitute: the drain is empty exactly when
+the GPU is the bottleneck, so treating it as "nothing presented" would defer the UI more the slower
+the lane gets. While `in_flight > 0` the lane owes a frame, and the backpressure gate is the pacer.
+
+**The presented bit rides the coalesced reliable slot**, not the ack lane. `RasterAck` is
+deliberately lossy and drops the *newest* ack on a full channel — exactly the sample the predicate
+reads. The `SurfaceState` slot that already carries `required_generation` and `device_lost` gains
+`last_completion: Option<{ epoch, presented }>`, written by the pump on every retire; a coalesced
+latest-wins slot cannot lose the latest value. The completion ring stays the histogram's source.
+The predicate is sound only because decision 5's floor guarantees a lost wake cannot strand
+`in_flight > 0` forever.
+
+**The occluded window.** On `CurrentSurfaceTexture::Occluded` acquisition skips without blocking,
+a running ticker keeps re-marking demand (ADR-0044 §1), and no produce interval is configured by
+default — so nothing bounds the loop unless a bound is designed in. After the move that bound is the
+fallback deadline above, not something inherited. winit has no Wayland `Occluded` emitter; there the
+compositor withholds frame callbacks from a hidden surface once the pre-present hook arms them,
+while Windows/X11 keep delivering redraws and rely on the deadline.
+
+**Exit criterion.** This record is Accepted when surface acquisition and present run on the raster
+thread and a CI frame-pacing budget (median / p90 / max inter-present interval against the
+display's native period, compared with the still-serial baseline ADR-0058 measured) stays within
+budget. An argument that the clock gates "should" pace is not evidence.
 
 ### 4. One `SurfaceGeneration` counter per lane, owned by the mailbox
 
-**Where the mints are today.** Two, both inside the owner's `pump`: the resize-apply bump, and the surface-lost bump in the render-failure path. They are safe today for one reason only — `RasterOwner` is synchronous, so both run on one thread, in one call, in order. Threading the lane, and moving resize onto the handle so the platform resize path stops mutating the backend directly, puts mint sites on two threads. Attach/detach and the surface recreation that follows device-loss recovery add two more.
+Threading the lane puts `SurfaceGeneration` mint sites on two threads: resize and attach/detach
+(owner), the surface-lost bump (raster), and surface recreation during recovery.
 
-**Decision: exactly one counter per raster lane, owned by the mailbox state and mutated only under its lock.** Every mint routes through it — resize (owner thread), attach and detach, the surface-lost bump (raster thread), and surface recreation during device-loss recovery. The owner half's `current_surface_generation` stops being an independent counter and becomes **the generation of the currently applied configuration**, assigned from the value carried with the command it just applied; it is never independently incremented.
+**Decision: exactly one counter per raster lane, owned by the mailbox state and mutated only under
+its lock.** Every mint routes through it. The owner half's `current_surface_generation` becomes the
+generation of the currently applied configuration, assigned from the value carried with the command
+it applied; it is never independently incremented.
 
-**The failure this prevents.** Two counters on two threads, "reconciling on the next read", produce one of two outcomes, and neither is a tidiness complaint:
+Two counters "reconciling on the next read" fail both ways:
 
-- **False accept — the exact defect the check exists to prevent.** Both counters sit at G. The surface is lost mid-render, so the raster side bumps *its* counter to G+1; the owner has not observed it. The owner then issues a resize and mints G+1 on *its own* counter, and stamps a frame G+1 — produced against the **pre**-resize configuration. The pump compares: current is G+1, the frame is G+1, **equal** → accepted, and rendered against the **post**-resize configuration. A stale frame is published with the freshness compare returning "match".
-- **Permanent starvation.** The symmetric case: the raster counter runs ahead through repeated surface losses, the owner's never catches up, and every frame is rejected forever.
+- **False accept.** Both counters at G. The surface is lost mid-render; the raster side bumps to G+1
+  unobserved. The owner resizes, mints G+1 on its own counter, and stamps a frame G+1 produced
+  against the pre-resize configuration. The pump compares G+1 == G+1 and renders a stale frame
+  against the post-resize configuration.
+- **Permanent starvation.** The raster counter runs ahead through repeated losses and every frame
+  is rejected forever.
 
-**Lock order is unchanged.** The mint happens under the mailbox state; the state lock is released; then the surface state is written — matching the pump's existing pattern of releasing the state lock before touching surface state. No new lock-order edge is introduced. The pump takes the state lock briefly for the surface-lost mint; it already takes it once per pump, and this is a failure path, not the hot path.
+Lock order is unchanged: mint under the mailbox state, release, then write the surface state.
 
-**Liveness during a drag resize is preserved without a handshake.** The mint is generation-forward: resize returns the generation it minted, and both the platform resize event and the frame request dispatch through the same owner-thread entry point, so stamping and submitting cannot interleave with resize handling. A bounded request/ack handshake on resize is rejected: it would block the owner thread precisely while the raster thread is parked in surface acquisition, at drag event rates — the worst possible moment, in the exact scenario this design optimizes for.
+**Liveness during a drag resize needs no handshake.** The mint is generation-forward — `resize`
+returns the generation it minted, and the resize event and frame request dispatch through the same
+owner-thread entry point, so stamping and submitting cannot interleave with resize handling. A
+request/ack handshake would block the owner while the raster thread is parked in acquisition, at
+drag event rates.
 
-**Both axes are checked, and `ZERO` means "no surface".** A frame renders only if its `SurfaceGeneration` equals the applied configuration's generation **and** its `GpuResourceGeneration` equals the current `GpuServices` generation **and** the surface is attached. Only the first clause exists today. `SurfaceGeneration::ZERO` is rejected outright, which is what replaces the web runner's `Option<Renderer>` "not ready yet" state with typed data rather than an `Option`. Caches are invalidated **by ownership, not by keying**: a generation-keyed cache retains dead-device entries until eviction, while a generation-*owned* one makes reading across a bump structurally impossible.
+**Both axes are checked, and `ZERO` means "no surface".** A frame renders only if its
+`SurfaceGeneration` equals the applied configuration's generation, its `GpuResourceGeneration`
+equals the current services' generation, and the surface is attached. `SurfaceGeneration::ZERO` is
+rejected outright, replacing web's `Option<Renderer>` with typed data. Caches are invalidated by
+ownership, not keying.
 
-**The contract amendment is a single-*counter* statement, not a single-*mint-site* one.** `docs/runtime-contract.toml`'s `surface-generation-single-authority` currently reads "Only `RasterOwner` mints `SurfaceGeneration`, in the ordered command stream that reconfigures the surface". Amending that to name one mint site would be **false the first time a surface is lost**, since the render-failure path mints too. The amended statement is:
+`docs/runtime-contract.toml`'s `surface-generation-single-authority` states the single-*counter*
+rule (one mint site would be false the first time a surface is lost):
 
-> `SurfaceGeneration` is minted by exactly one counter per raster lane, owned by the raster mailbox and mutated only under its state lock. Both the owner half and the handle half mint through it; no component keeps a private counter. A frame renders only if its stamp equals the generation of the applied configuration.
+> `SurfaceGeneration` is minted by exactly one counter per raster lane, owned by the raster mailbox
+> and mutated only under its state lock. Both the owner half and the handle half mint through it; no
+> component keeps a private counter. A frame renders only if its stamp equals the generation of the
+> applied configuration.
 
-Its cited evidence changes in the same change, not later: the entry currently cites `fn resize_coalesces_latest_wins`, whose semantics move when `resize` starts returning a minted generation. Per the standing rule that an entry must cite a test whose removal makes the suite red, the citation is replaced by the new single-counter test — the one that mints from the surface-lost path, then resizes, then submits a frame stamped with the *pre*-resize generation and requires it rejected — and the old test is updated rather than left cited-but-changed.
+Its evidence is the test that mints from the surface-lost path, resizes, then submits a frame
+stamped with the pre-resize generation and requires it rejected.
 
 ### 5. The wake never crosses to the platform on the raster thread
 
-**Decision.** The raster side never calls `PlatformWindow::request_redraw`, on any backend. Its wake hook pushes onto a channel and pokes a relay; the platform's event-loop waker drains that channel **on the owner thread**, which is where the produce path already lives.
+The raster side never calls `PlatformWindow::request_redraw`. Its wake hook pushes onto a channel
+and pokes a relay; the platform's event-loop waker drains it on the owner thread. Either ground is
+sufficient: a raster-thread call would falsify `MacOSWindow`'s `unsafe impl Send` precondition
+(decision 1's rule), and the wake hook is `Send + Sync`-bound while realm state is `!Send`, so
+capturing owner state in it does not compile.
 
-**The rationale is doubled, and either ground alone would be sufficient.**
+The relay is a new verb on ADR-0039 §3's `PlatformProxy` lane, not a second wake path. Only winit
+implements a real transport today; Win32 (`PostMessageW` to a message-only HWND), AppKit
+(`CFRunLoopSource` in a common run-loop mode) and headless (flag plus pump) install
+`ClosedTransport` and need real work. Web runs inline.
 
-- **It would falsify an existing `unsafe impl`.** This is the second of the three consequences of decision 1's AppKit main-thread-affinity rule, not an independent argument: `MacOSWindow`'s own SAFETY comment justifies `unsafe impl Send for MacOSWindow` with "the NSWindow pointer is only messaged from the main thread (AppKit delivers all delegate/view callbacks there)", and `request_redraw` messages `setNeedsDisplay:` to the content view inside an `unsafe` block. A raster-thread call falsifies the stated precondition of that impl — and it does so on the one backend CI compiles but never executes, so nothing would go red.
-- **The hook cannot legally touch UI state anyway.** The raster owner's wake hook is `Send + Sync`-bound and realm/presentation state is `!Send`, so capturing anything owner-affine into it does not compile. This is a compiler refusal, not a runtime assert, and needs no test.
-
-**The relay is not a new mechanism — it is a new verb on an existing one.** ADR-0039 §3 already decided the cross-thread-to-owner lane (`PlatformProxy`/`ProxyTransport`) and already fixed the per-backend wake primitive each backend supplies: winit's `EventLoopProxy`, AppKit's `CFRunLoopSource`, Win32's `PostMessageW` to a message-only HWND, and a flag-plus-pump for headless. That record also set the discipline this one follows: a verb joins the lane's vocabulary **when a worker-side consumer exists**, and the raster lane is exactly such a consumer. This record therefore adds a drain of the raster completion channel at the lane's existing drain anchor, and defines no second, parallel wake path.
-
-**What it does not inherit is coverage.** Only the winit backend implements a real transport today; Win32, AppKit, Android and the direct/headless paths install `DirectOwnerHooks`, whose transport is `ClosedTransport` — every request permanently `Unsupported` (that third error arm being a later addition to ADR-0039's original `Full`/`OwnerGone` pair, added precisely to model a backend with no lane at all). **The relay is therefore real work on three backends, not a wiring exercise**, and this record says so rather than implying a lane exists everywhere:
-
-| Backend | Mechanism (per ADR-0039 §3) | What a failed or dropped poke means |
-|---|---|---|
-| winit | `EventLoopProxy`, over the existing owner control lane — the only one implemented today | `OwnerGone` after loop exit — terminal, and no recovery is needed, since nothing will render again |
-| Win32 | `PostMessageW` to a message-only HWND — lane not built yet | fails on a full message queue or a destroyed HWND; live resize additionally runs a **nested modal loop** |
-| AppKit | `CFRunLoopSource` — lane not built yet | requires the main run loop pumping a **common** mode; live resize is a nested modal loop |
-| headless | flag plus pump — lane not built yet | drains at the harness's own anchor; no OS queue to fail |
-| web | none — the inline lane, no raster thread | not applicable |
-
-**Because every poke can fail, a missed wake must cost time, not liveness.** "A missed wake costs one poll" is true for the coalesced state slot and **false for the retire→wake edge**, which is the only liveness mechanism when the loop is otherwise idle. And the nested-modal-loop case is not hypothetical — it is exactly the drag-resize scenario decision 4 optimizes for. **Decision: while `in_flight > 0`, the owner loop installs a `ControlFlow::WaitUntil` floor** through ADR-0044 §7's existing wake-deadline hook, so a lost poke costs at most one floor interval instead of a hang. Each backend states at its own implementation site what a failed poke does there.
-
-This bound and decision 3's pacing predicate are the same mechanism seen from two sides: "if `in_flight > 0`, the lane owes us a frame" is only safe to rely on because a lost wake cannot strand that condition forever.
+**A missed wake costs time, not liveness.** Every poke can fail, and Win32/AppKit live resize runs a
+nested modal loop. While `in_flight > 0` the owner loop installs a `ControlFlow::WaitUntil` floor
+through ADR-0044 §7's wake-deadline hook, so a lost poke costs at most one floor interval. Each
+backend states at its implementation site what a failed poke does there.
 
 ### 6. `PipelineDepth` replaces `max_frames_in_flight`
 
-**Why the existing knob is a lying API.** `RasterOptions::max_frames_in_flight` is a `NonZeroU8`, advertising a `1..=255` range. With a capacity-one mailbox and a single gate-honouring producer, a ticket lives in at most two places at once — the mailbox's one pending slot, and the one the pump is currently rendering — and the supersede-not-queue rule makes a third simultaneously-live ticket impossible. **Threading does not widen this: the mailbox capacity is the ceiling, not the thread.** The field's own documentation already spends a full paragraph explaining that most of its advertised range is unreachable, which is the tell.
+With a capacity-one mailbox and a gate-honouring producer, at most two tickets are live (the pending
+slot and the one being rendered); threading does not widen that. A `NonZeroU8` advertising
+`1..=255` was a lying API. `RasterOptions` — the field's carrier, read only by its own tests — is
+deleted outright. `PipelineDepth { Auto, NoOverlap, Overlap }` (`#[non_exhaustive]`), resolved by a
+pure `select_pipeline_policy(mode, present_mode, caps)`, arrives with the threaded lane; the
+topology is named `RasterMode { Inline, Threaded }`. `Overlap` on an `Inline` lane is clamped to
+`NoOverlap` with a warning.
 
-**Decision.** Delete `max_frames_in_flight`. `PipelineDepth { Auto, NoOverlap, Overlap }` replaces it, resolved by a pure `select_pipeline_policy(mode, present_mode, caps)`. Separately, the *topology* is named `RasterMode { Inline, Threaded }` — the lane, and the environment-override value — so that a threshold and a topology never share a word with different referents. `Overlap` requested on an `Inline` lane is **clamped** to `NoOverlap` with a warning: it is a request, not a command, since a second outstanding frame cannot overlap anything on a lane whose pump runs synchronously inside the produce. Breaking the old field is cheap and correct here: `RasterOptions` is already `#[non_exhaustive]` (so no external caller constructs it by literal), and the field's only readers anywhere in the workspace are its own tests.
+| Input | Resolves to |
+|---|---|
+| `Threaded` + `Fifo` | `Overlap` (2) — the produce thread stops blocking on vsync |
+| `Threaded` + `Mailbox`/`Immediate` | `Overlap` (2) — the clock throttle is the only pacer |
+| `Inline` (same-thread pump, wasm, diagnostic) | `NoOverlap` (1) |
+| GL backend | as above; wgpu ignores `desired_maximum_frame_latency` there |
 
-**Landed ahead of `PipelineDepth`, and wider than the field: the whole `RasterOptions` type is deleted (2026-09-17).** This record's decision named the field; the deletion took the carrier too, because `RasterOwner` stored the value and read nothing out of it — its only consumers anywhere were its own unit tests, and a public DTO whose every reader is a test asserting the round-trip is a misleading API surface rather than unfinished infrastructure. `RasterOwner::with_options`/`options` and `RasterHandle::options` are deleted with it. `PipelineDepth` and `select_pipeline_policy` arrive with the threaded lane that can act on them, at which point the pacing surface has a real consumer. The clock-side `FrameClock::set_min_produce_interval`/`set_max_in_flight` knobs are untouched; they were never the part that was lying.
+The clock-side threshold and wgpu's `desired_maximum_frame_latency` (a single source literal; see
+ADR-0058 decision 0) stay decoupled. At depth 2 with one producer a pending frame is never
+superseded, so `latest_frame_wins_supersedes_pending` stays covered only by the threaded harness.
 
-| Input | Resolves to | Why |
-|---|---|---|
-| `Threaded` + `Fifo` | `Overlap` (2) | the produce thread stops blocking on vsync — the point of this record |
-| `Threaded` + `Mailbox`/`Immediate` | `Overlap` (2) | present does not block; the clock throttle is the only pacer |
-| `Inline` (same-thread pump, wasm, diagnostic) | `NoOverlap` (1) | a second outstanding frame cannot overlap anything |
-| GL backend | as above | wgpu ignores `desired_maximum_frame_latency` there, so the clock-side counter is the only in-flight bound that exists |
+### 7. Lane health, and bounded teardown
 
-**Honest consequence — this renames a criterion #559 states by name.** The issue names "expose an advanced `max_frames_in_flight` bound" as a deliverable. This decision **satisfies that criterion in intent** — a bound exists at the advanced boundary, typed, reachable, and honest about its range — **with the name changed**. That is a naming and scope call rather than a technical one, so the criterion's re-wording is `product-steward`'s to make, not this record's. `#[non_exhaustive]` on `PipelineDepth` keeps a numeric variant available if the mailbox ever grows past one slot, so the reversal is additive.
+`LaneHealth { Running, ShutDown, Died }` rides the coalesced reliable slot; the two non-running
+states log at `error`. `Died`: `run_until_shutdown` takes `self` by value, so an unwind drops the
+owner and `submit` returns `OwnerGone` (corroborated by `JoinHandle::is_finished`). `ShutDown` vs
+`Died` is whether the shutdown one-shot fired.
 
-**Second honest consequence — the mailbox's headline property still has no production coverage after this.** At depth 2 with one gate-honouring producer: submit A takes the pending slot, the pump starts rendering A, submit B fills the slot, and a third submit is refused as backpressure — so **B is never superseded**. `latest_frame_wins_supersedes_pending` therefore remains a protocol-level property proven only by the threaded harness, with **zero production coverage**, even after this issue lands. Stated here so that the registry states it too, rather than letting a green harness imply production reach.
+**Teardown is bounded.** `JoinHandle::join` has no timeout, so the lane's `Drop` sends shutdown and
+waits on the one-shot with a deadline. On timeout it detaches with a loud error, and **the window is
+quarantined, not closed**: the presentation leaves the runtime and its
+`(JoinHandle, Arc<dyn PlatformWindow>)` moves into a process-lifetime quarantine; `close()` is never
+called on it and the OS reclaims both at exit. `ExitPolicy::OnLastWindowClosed` keys on realm slots,
+so exit is unaffected. A best-effort `minimize()` is cosmetic.
 
-**The two axes stay decoupled.** The clock-side threshold and the GPU-side `desired_maximum_frame_latency` are different knobs answering different questions. The latter stays pinned at `1` in a single source literal for the documented anti-resize-jitter reason. Deriving either from the other is a separate decision needing its own resize-jitter regression test.
-
-### 7. Lane health: three states with real detectors
-
-`LaneHealth { Running, ShutDown, Died }`, surfaced on the coalesced reliable slot and logged at `error` at minimum for the two non-running states.
-
-- **`Died`.** `run_until_shutdown` takes `self` by value, so an unwind on the raster thread **drops the owner**, which flips `owner_alive` and already makes `submit` return `OwnerGone` — a signal that exists today with nothing wired to handle it. It is treated as terminal-degraded and corroborated by `JoinHandle::is_finished`.
-- **`ShutDown` vs `Died`.** Distinguished cheaply by whether the shutdown one-shot fired.
-- **Teardown is bounded, and a detached thread takes its window with it.** `JoinHandle::join()` has no timeout, and `run_until_shutdown` parks on its condvar if the last handle drops without an explicit shutdown. The lane's `Drop` therefore sends shutdown and waits on the one-shot with a deadline; on success the join returns promptly. **On timeout it detaches — with a loud error — rather than hanging window close, and the window is quarantined rather than closed.** See below: the leak is not "a thread", it is "a thread *and* its window", and the two cannot be separated.
-
-**Why detaching alone would be unsound.** The case that produces the timeout is precisely a thread blocked in surface acquisition — so it is still holding a `wgpu::Surface<'static>` built by `Instance::create_surface_unsafe(SurfaceTargetUnsafe::RawHandle { .. })` from the window's raw handles. That call is `unsafe` for exactly one reason, and this workspace's own SAFETY comment on it states the precondition it is relying on: the handles must remain valid for the lifetime of the resulting `Surface<'static>`, "upheld because flui-app's `App` owns the window for its lifetime". Detaching the thread and then letting window close proceed falsifies that precondition, and a surface used after its window is destroyed is undefined behavior under wgpu's contract for `create_surface_unsafe` — not a condition wgpu detects or tolerates.
-
-> **Amended 2026-09-14 ([ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md)):** the `create_surface_unsafe` call and its cross-crate SAFETY precondition no longer exist — the renderer owns its surface target and wgpu's safe `create_surface` keeps that owner alive inside the `Surface`. The reason quarantine is still the only sound outcome is now the plainer one: on Win32 and AppKit the `Arc<dyn PlatformWindow>` does **not** own the native lifetime (`DestroyWindow` / `[NSWindow close]` run regardless of Rust owners), so a surface a wedged raster thread still holds must never see its window closed. The reference's unbounded form of this same wait — Flutter's `Shell::OnPlatformViewDestroyed` latching the platform thread until the raster thread releases the surface — is an ANR in production (flutter/flutter#190599, #169585); the bounded wait plus quarantine here is the documented improvement over it.
-
-Two things make this concrete rather than theoretical. **`PlatformWindow::close()` is not a request:** the Win32 implementation calls `DestroyWindow(hwnd)` synchronously, and holding an `Arc<dyn PlatformWindow>` does **not** keep the native window alive, because the `Arc` is not what owns its lifetime. And **the two obvious escapes are both closed**: the surface cannot be dropped before detaching, since the thread is blocked *inside* `get_current_texture()` on that very surface and wgpu offers no timeout or cancellation on acquisition; and the raster thread cannot destroy the window itself once its surface finally drops, because window destruction is thread-affine on exactly the backends that matter — Win32 refuses `DestroyWindow` on a window created by another thread, and AppKit requires the main thread. That last one is the third consequence of decision 1's main-thread-affinity rule, arriving from the teardown side rather than the wake side.
-
-> **Decision.** On deadline timeout, the presentation is removed from the runtime and its `(JoinHandle, Arc<dyn PlatformWindow>)` pair moves into a process-lifetime quarantine. `close()` is **never** called on a quarantined window; the OS reclaims it at process exit, together with the thread. Application exit is unaffected: `AppRuntime::should_exit` under `ExitPolicy::OnLastWindowClosed` keys on whether any realm slots remain, not on OS windows, and the quarantined presentation's slot is already gone. A best-effort `minimize()` gets it off screen where the backend implements that method (it is a default no-op elsewhere), which is cosmetic, not part of the safety argument.
-
-The cost is stated rather than minimised: a wedged raster thread now leaks a native window as well as a thread, for the process's remaining lifetime. That is the price of not hanging window close, and it is the *only* option that keeps the surface's own stated precondition true.
+Why quarantine is the only sound outcome: a wedged thread is typically blocked inside
+`get_current_texture()` on a surface built from that window, and on Win32 and AppKit the
+`Arc<dyn PlatformWindow>` does **not** own the native lifetime — `DestroyWindow` / `[NSWindow close]`
+run regardless of Rust owners — so the surface must never see its window closed. The surface cannot
+be dropped first (the thread is blocked on it; wgpu offers no cancellation), and the raster thread
+cannot destroy the window later (window destruction is thread-affine on Win32 and AppKit).
+Flutter's unbounded form of this wait — `Shell::OnPlatformViewDestroyed` latching the platform
+thread until raster releases the surface — is an ANR in production (flutter/flutter#190599,
+#169585); the bounded wait plus quarantine is the improvement. The cost: a wedged raster thread
+leaks a native window as well as a thread.
 
 ## Consequences
 
 **Positive**
 
-- The produce path stops blocking on the GPU. Produce and present genuinely overlap, and the clock's backpressure gate becomes reachable in production for the first time — closing ADR-0044 §9's stated honest boundary.
-- The four lock-wrapped backend sites in the runners are deleted, and the second, out-of-band mutator (the resize applier reaching through that lock at an arbitrary point relative to paint) becomes an ordered command on the same lane as everything else.
-- One `wgpu::Device` per owner thread instead of one per surface, with one device-lost callback and one shared shader cache — removing a real duplication, at a scope that is checked rather than assumed.
-- Stale-frame rejection, detach/resume, device loss and lane death all get typed, coalesced, reliably-delivered contracts instead of riding a lossy channel or not existing.
-- **A blanket `unsafe impl Send` is deleted rather than narrowed.** Moving surface creation to the owner thread removes `Renderer`'s reason to retain raw window/display handles, and those handles were the sole justification for the impl — over a type `raw-window-handle` itself proves `!Send`. The net unsafe surface of this record is negative.
-  > *Amended 2026-09-14 ([ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md)):* this deletion landed with #1043, **before** the lane and independently of moving surface creation to the owner thread — the renderer retains an owned `WindowTarget` (transitional; the `SurfaceLease<S>` it lives in relocates to the presentation when decision 2's windowed `GpuServices` constructor lands) and never saves raw handles, so there is no `unsafe impl Send` left for the lane to delete.
+- The produce path stops blocking on the GPU; produce and present overlap and the backpressure gate
+  becomes reachable in production.
+- The lock-wrapped backend sites are deleted, and resize becomes an ordered command on the lane.
+- One `wgpu::Device` per owner thread, one device-lost callback, one shader cache.
+- Stale-frame rejection, detach/resume, device loss and lane death get typed, reliably delivered
+  contracts.
 
-**Negative / trade-offs, each stated rather than absorbed**
+**Negative**
 
-- **The pacing model changes, and that is the highest-severity risk in this record.** ADR-0029's mechanism is the current pacer, measured. Replacing it with clock-side gates is a real behavioral change, which is why the amendment is gated on a measurement against a baseline and why this record stays Proposed until then.
-- **First-surface adapter selection becomes permanent for the process** (decision 2). Dock/undock and eGPU hotplug will not re-select.
-- **Device loss becomes a whole-owner-thread event** (decision 2). Sharing one device means one window's loss blanks every window on that thread for at least a frame and recompiles the shared shader cache. Inherent to the sharing, not an implementation shortcut.
-- **A wedged raster thread now leaks a native window, not just a thread** (decision 7). The surface's validity precondition ties the two together, so quarantining both is the only teardown that stays sound without hanging window close.
-- **On macOS this record buys nothing yet, and that has to be said rather than absorbed.** The headline benefit — the produce loop no longer blocking on the GPU — requires a threaded lane, and macOS runs `RasterMode::Inline` until the locked `wgpu-hal`'s Metal `acquire_texture` stops messaging `NSView`/`NSWindow` from the calling thread (decision 1). Everything else in this record still lands there: the single generation counter, the two-axis freshness check, the reliable-slot contracts, per-owner-thread `GpuServices`, and the deleted `unsafe impl`. The gap is the overlap, not the correctness work, and it is bounded by an upstream condition rather than by a decision of ours.
-- **The Android hot-reload plugin path is gated off under a threaded lane.** `ScenePlugin::try_render_frame` takes a `&mut Renderer` outside the frame path, and its safety argument rests on the plugin-allocated `Scene` being dropped before the library unloads, with the driver outliving it. Under a threaded lane that `Scene` crosses to the raster thread and drops there, while the driver can unload the dylib on the owner thread. Hot-reload is dev-only, feature-gated, and absent from the app crate's default graph, so "hot-reload requires the inline lane" is an acceptable constraint; **un-gating is conditioned on an unsafe audit of that path**, recorded here rather than forgotten.
-- **Web adopts the inline lane** (no threads in that build), and its clock has no pacing feedback at all — it has no visibility signal and never records a compositor tick. Pre-existing; this record must not silently widen it.
-- The unsafe surface in `flui-platform`'s window `Send`/`Sync` wrappers needs an audit before the relay ships (decision 5), specifically `MacOSWindow`. Decision 1's narrowing of the `Renderer` impl strictly *reduces* unsafe surface and is not part of that audit's motivation.
+- The pacing model changes — the highest-severity risk, hence the CI budget gating acceptance.
+- Adapter selection is permanent for the process; device loss blanks every window on the owner
+  thread.
+- A wedged raster thread leaks a native window.
+- **macOS gains nothing yet**: it runs the inline lane (decision 1). The generation counter,
+  two-axis freshness, reliable-slot contracts and per-owner-thread services still land there.
+- The Android hot-reload plugin path requires the inline lane: its `Scene` would drop on the raster
+  thread while the dylib may unload on the owner thread. Un-gating needs an unsafe audit.
+- Web runs inline, with no pacing feedback (no visibility signal, no compositor tick).
+- `flui-platform`'s window `Send`/`Sync` wrappers, `MacOSWindow` first, need an unsafe audit before
+  the relay ships.
 
 ## Alternatives considered
 
-- **Keep one counter per side and reconcile on the next read.** Rejected as unsound, not untidy — decision 4 works the false-accept case through. The reconciliation was never specified, and that is exactly where the race lives.
-- **A bounded request/ack handshake on resize**, so the owner learns the applied generation before stamping. Rejected: it blocks the owner thread precisely while the raster thread is parked in surface acquisition, at drag event rates.
-- **Keep the name `max_frames_in_flight` on an `Option<NonZeroU8>`.** Preserves the criterion's wording at the cost of shipping a number with two reachable values out of 255. Rejected in favour of the honest type; the wording is `product-steward`'s to fix.
-- **Ship both `max_frames_in_flight` and `PipelineDepth`.** Rejected: two knobs for one bound, with a precedence rule to specify and no consumer asking for either.
-- **Widen the mailbox into a queue** so a depth above 2 becomes reachable and supersede gets production coverage. Rejected deliberately: latest-frame-wins is the property the mailbox exists for, and a queue trades it for staleness.
-- **Share `GpuServices` process-wide.** Rejected for now with a named revisit condition (decision 2) — it would reintroduce a process-global GPU resource immediately after that family was deleted.
-- **Let the raster thread call `request_redraw` directly on backends where "it works".** Rejected on both grounds in decision 5; "works on the backend CI can execute" is not evidence about the two it cannot.
-- **Detach the wedged thread and close its window anyway** (relying on the surface "probably" tolerating a destroyed window). Rejected: it falsifies the precondition this workspace's own SAFETY comment on `create_surface_unsafe` states, and wgpu's contract makes use-after-destroy undefined rather than merely degraded. Also considered and closed: dropping the surface before detaching (impossible — the thread is blocked inside `get_current_texture()` on it) and letting the raster thread destroy the window once its surface drops (window destruction is thread-affine on Win32 and AppKit).
-- **Rely on `GpuResourceGeneration` gating alone to handle a second lane after device loss.** Rejected: gating rejects that lane's frames, which is correct but not sufficient — nothing re-points it at the new device, so the lane is permanently starved rather than recovered. Decision 2's `ReplaceServices` command is the missing half.
-- **Carry the pacing predicate's presented bit on the ack lane, accepting occasional loss.** Rejected: that channel drops the *newest* ack on a full channel, which is precisely the sample the predicate reads, so the loss is correlated with the decision rather than random.
-- **A stall watchdog.** Rejected — see below, where the reason is recorded as a decision.
+- **One counter per side, reconciled on read.** Unsound — decision 4's false accept.
+- **A request/ack handshake on resize.** Blocks the owner while the raster thread is parked in
+  acquisition, at drag rates.
+- **Keep `max_frames_in_flight` on an `Option<NonZeroU8>`, or ship both knobs.** A number with two
+  reachable values out of 255, or two knobs for one bound.
+- **Widen the mailbox into a queue.** Trades latest-frame-wins for staleness.
+- **Share `GpuServices` process-wide.** Reintroduces a process-global GPU resource; revisit
+  condition in decision 2.
+- **Let the raster thread call `request_redraw` where "it works".** Rejected in decision 5; working on
+  the backend CI executes says nothing about the ones it does not.
+- **Detach a wedged thread and close its window anyway.** The surface would outlive its window.
+- **Rely on `GpuResourceGeneration` gating alone after device loss.** Rejects a second lane's frames
+  but never re-points it, so it starves; `ReplaceServices` is the missing half.
+- **Carry the presented bit on the ack lane.** Its loss is correlated with the decision (newest
+  dropped first).
+- **A stall watchdog** — see below.
 
-## Non-goals — what this record deliberately does not settle
+## Non-goals
 
-**A stall watchdog, and why.** A "no completion across N produce attempts" detector was designed and dropped. It **fires on the legitimate case**: under `Fifo`, a hidden window whose surface does not report `Occluded` (that variant is per-platform and per-driver behavior, not a guarantee) blocks in `get_current_texture()` for as long as the compositor withholds a swapchain image, so the condition trips routinely — and equally for a first-use shader compile, a driver TDR, or a thread paused under a debugger. And it is **blind on the real one**: a genuine wedge with no ticker generates no produce attempts, so N never advances. The underlying problem is that distinguishing *wedged* from *slow* requires a policy on how long an occluded present may legitimately block, and **that policy has no owner**. `LaneHealth`'s three states (decision 7) ship instead, because all three have cheap, real detectors. `Stalled` is not one of them, and its absence is a decision recorded here, not a gap.
+- **A stall watchdog.** A "no completion across N produce attempts" detector fires on the
+  legitimate case (a hidden window blocking in `get_current_texture()`, a first-use shader compile,
+  a debugger pause) and is blind on the real one (a wedge with no ticker produces no attempts).
+  Distinguishing wedged from slow needs a policy on how long an occluded present may block, and that
+  policy has no owner. `LaneHealth`'s three states ship instead; the absence of `Stalled` is a
+  decision.
+- **Executable coverage for Win32, AppKit and Android hot-reload.** CI links and runs only winit and
+  headless. Win32 and AppKit rest on audit plus named manual validation — wake delivery during a
+  live-resize modal loop, `PostMessageW` against a destroyed HWND, `CFRunLoopSource` delivery in a
+  common mode — and their registry entries stay `partial` regardless of CI colour.
+- **Also out of scope:** parallel layout and parallel repaint boundaries (gated by ADR-0027's
+  prerequisites); fine-grained `DamageRegion`; host-injected devices; process-level services,
+  cross-thread recovery and adapter re-selection (decision 2); more than one raster thread per lane;
+  pipeline depth above 2 (decision 6); composition callbacks on the raster thread — they fire on the
+  owner thread through the post-frame lane, matching Flutter's UI-thread placement.
 
-**Executable coverage, stated honestly.** The workspace gate executes only the **winit and headless** backends. Win32 and AppKit are type-checked by the cross-target job, which does not link — no link, no tests — and the Android hot-reload path is never built or run in CI at all. Their correctness under this record therefore rests on audit plus **named manual validation**: for Win32, wake delivery during a live-resize nested modal loop, and `PostMessageW` failure against a destroyed HWND; for AppKit, `CFRunLoopSource` delivery in a common run-loop mode during live resize. Until those are performed, the corresponding registry entries stay `partial` **regardless of CI colour** — a green gate is not evidence about a backend it never links.
-
-**Also out of scope, each for its own reason:** parallel layout and parallel repaint boundaries — ADR-0027's follow-up "parallel repaint boundaries" is itself gated on four prerequisites none of which this record touches (an opt-in API letting a render object declare its children independently layoutable, a real per-render-object relayout-boundary oracle, a sharded font system so a benchmark measures layout rather than lock contention, and a committed regression-guarded benchmark to decide go/no-go against); fine-grained `DamageRegion` (belongs with the layer-diff work); host-injected `wgpu::Device`s; process-level `GpuServices`, device-loss recovery across owner threads, and adapter re-selection on display-topology change (decision 2); more than one raster thread per lane; a pipeline depth above 2, which needs a mailbox that is no longer a single slot (decision 6); and composition callbacks on the raster thread — they fire on the **owner** thread through the post-frame lane, matching Flutter's UI-thread placement, and the API has no production consumer today, so the drain point stays undefined until one exists.
-
-## What is untouched
-
-Prime Directive #1 (behavior loyalty) does not apply to the topology decided here — concurrency architecture and presentation architecture are sanctioned leapfrog zones under ADR-0027's Governance note. No Flutter source is cited as a behavioral oracle for any decision above; the contract in this record is the spec. Widget-tree semantics, the three-tree model, lifecycle, and the layout/paint/hit-test protocol are entirely unaffected: nothing above changes what a frame contains, only which thread produces the pixels from it and what paces the thread that asks for one.
+Widget-tree semantics, the three-tree model, lifecycle and the layout/paint/hit-test protocol are
+unaffected: nothing here changes what a frame contains, only which thread produces its pixels and
+what paces the thread that asks for one.

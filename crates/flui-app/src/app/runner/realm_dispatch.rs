@@ -1668,7 +1668,7 @@ pub(super) fn teardown_platform_realm() {
             .shutdown_execution(EXECUTION_SHUTDOWN_GRACE);
     });
 
-    // ADR-0034's install/teardown symmetry: the event loop has exited (this
+    // ADR-0038 §9's install/teardown symmetry: the event loop has exited (this
     // runs from both `run_desktop` and `run_android`, after their respective
     // `platform.run(...)` returns), so drop the platform clipboard now rather
     // than let a live platform resource (arboard on X11 owns a live X11

@@ -12,7 +12,7 @@ use std::marker::PhantomData;
 
 /// An **untyped** set of provider-data fields — the type-erased form of
 /// [`FieldMask<D>`] that element storage and the object-safe context methods
-/// carry (issue #1090, ADR-0008 §2).
+/// carry (issue #1090, ADR-0074 §5.5).
 ///
 /// Application code cannot build one with specific fields (only `NONE` and
 /// `ALL`): it passes a typed [`FieldMask<D>`], which the crate lowers once the
@@ -68,7 +68,7 @@ impl std::ops::BitOrAssign for FieldSet {
 }
 
 /// Which fields of the provider data type `D` a dependent read, or a provider
-/// update changed — one bit per field (issue #1090, ADR-0008 §2).
+/// update changed — one bit per field (issue #1090, ADR-0074 §5.5).
 ///
 /// The data type is part of the mask's type, so a selector cannot be passed to
 /// a provider whose data it does not describe: `#[derive(InheritedData)]` emits

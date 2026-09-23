@@ -67,7 +67,7 @@ pub mod context;
 // `multi_child_layout_delegate` are unconditional the same way now that
 // `RenderCustomPaint`, `RenderFlow`, `RenderCustomSingleChildLayoutBox`,
 // and `RenderCustomMultiChildLayoutBox` ship unconditionally too
-// (ADR-0007 amendments). The remaining companion-less delegate
+//. The remaining companion-less delegate
 // (`custom_clipper`) stays gated inside `delegates/mod.rs` until its
 // render object lands — opt in via `--features experimental-delegates`.
 pub mod delegates;
@@ -79,14 +79,14 @@ pub mod protocol;
 /// Re-export semantics from flui-semantics crate.
 pub use flui_semantics as semantics;
 // `objects` module removed: concrete render objects live in the `flui-objects`
-// crate (see ADR-0008 / flui-objects extraction). flui-rendering now exports
+// crate (the flui-objects extraction). flui-rendering now exports
 // only engine primitives (traits, pipeline, protocol, contexts, arena).
 pub mod slivers;
 pub mod storage;
 // Promoted from `cfg(test) pub(crate)` to the `testing` feature so
 // flui-objects' test crate can reach NoopSliver cross-crate when it enables
 // `features = ["testing"]`. Part of the custom-object-authoring test-support
-// contract (see docs/adr/ADR-0007 and the flui-objects extraction plan).
+// contract (the flui-objects extraction).
 #[cfg(any(test, feature = "testing"))]
 pub mod test_support;
 // Protocol-agnostic windowing math (ADR-0003). Its public surface names no
@@ -177,7 +177,7 @@ pub mod prelude {
     };
     // Grid, custom-paint, flow, and custom-layout delegates — always available
     // because their companion render objects ship in the default build
-    // (ADR-0007 amendments).
+    //.
     pub use crate::delegates::{
         AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate,
         FlowPaintingContext, MultiChildLayoutContext, MultiChildLayoutDelegate, SemanticsBuilder,

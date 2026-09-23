@@ -236,7 +236,7 @@ impl Platform for HeadlessPlatform {
 
         // Default: no owner lane on this backend, every
         // `OwnerPlatform::open_window` call creates directly and is always
-        // `Ready` (ADR-0039 slice 2). "For the loop's life" means "until the
+        // `Ready` (ADR-0039 §1). "For the loop's life" means "until the
         // value is dropped" here, since `run` returns immediately (ADR-0039
         // §1) -- there is no later point on this thread to defer to. Test
         // mode (`enable_deferred_window_open`) opts into the `Pending` arm

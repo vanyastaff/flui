@@ -1,18 +1,11 @@
 # ADR-0062: The paint queue is the cross-pass record; node flags are intra-pass
 
+- **Status:** Accepted
+- **Date:** 2026-09-07
+
 *A frame that fails partway keeps its queue and loses its flags. So anything a
 later pass must know lives in the queue entry — including WHY a boundary is
 queued.*
-
----
-
-- **Status:** Accepted
-- **Date:** 2026-09-07
-- **Deciders:** @vanyastaff
-- **Scope:** `flui-rendering`'s `PipelineOwner::run_paint`, `DirtyTracker`, and
-  `pipeline::dirty`'s `PaintQueue` / `PaintEntry` / `PaintKind`.
-
----
 
 ## Context
 
@@ -32,9 +25,9 @@ taken from a flag is wrong on the retry.
 
 Issue #536 added a second disposition to the paint phase — a boundary can be
 REUSED with one node's effect layers rebuilt, rather than repainted — and that
-made the disagreement reachable. Ten review rounds found fourteen defects; the
-majority were one shape: a cross-pass decision read from an intra-pass record.
-Each was fixed individually, and the next round found the next ordering.
+made the disagreement reachable. Most of the defects that followed had one
+shape: a cross-pass decision read from an intra-pass record. Fixing each one
+individually only exposed the next ordering.
 
 ## Decision
 
@@ -74,8 +67,8 @@ failed pass all reduce to the same entry.
 
 **A side map keyed by boundary** (`layer_update_boundaries`, the first
 implementation). Correct only while an invariant — "in the map ⇒ update-only,
-queued and not in the map ⇒ repaint" — is preserved at four write sites. Four
-of the fourteen defects were a write site that did not. The invariant was also
+queued and not in the map ⇒ repaint" — is preserved at four write sites, and
+several defects were a write site that did not. The invariant was also
 unfalsifiable at runtime: a `debug_assert` written against the flags could never
 fire on the case its own message named, because in that case the flag is false.
 

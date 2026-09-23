@@ -370,7 +370,7 @@ guard.** The list below is illustrative — it is here because most of these are
 the edge cases a reader expects, not as an inventory to keep in step: an empty stack, a top mid-exit-transition, a
 target already completed, an id belonging to another navigator, an unmounted
 handle, a named capture that came back empty, a user `Route::did_pop` returning
-`false` (a public trait whose default is `true`, and ADR-0024 §7.4 sanctions user
+`false` (a public trait whose default is `true`, and ADR-0024 sanctions user
 routes), `maybe_pop_with` under a `PopScope` veto — which reports *handled* while
 discarding, so it is worse than the case below — and **`maybe_pop` on a lone
 route**.
@@ -458,7 +458,7 @@ detects:
 
 ### 6. Named-route registration lives on the handle, and the app builder will replace the table wholesale
 
-**Rule:** as §4 above; ADR-0024 §3.1, amended by §7.
+**Rule:** as §4 above; ADR-0024.
 
 **Oracle:** Flutter splits registration across two widgets. `Navigator` owns
 `onGenerateRoute`/`onUnknownRoute`; `WidgetsApp` owns `routes: Map<String,

@@ -430,7 +430,7 @@ impl FallbackWake {
 ///   below.
 /// - **No-present fallback bound**: pinned by
 ///   `the_fallback_bounds_repeating_no_present_wakes_without_sleeping_on_the_loop`
-///   (ADR-0058's non-blocking deadline, replacing ADR-0029's sleep).
+///   (ADR-0058's non-blocking deadline, replacing the old fixed sleep).
 /// - **Ticker keeps the gate open**: the fallback's AND condition — pinned
 ///   by `pending_work_arms_the_fallback_like_any_other_open_gate`
 ///   (this module) and, at the binding layer, by

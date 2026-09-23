@@ -1,14 +1,14 @@
-# ADR-0069 — A `keyDown:` produces one semantic event, and the input method is a route not a second producer
+# ADR-0069: A `keyDown:` produces one semantic event, and the input method is a route not a second producer
 
 - **Status:** Accepted
 - **Date:** 2026-09-17
-- **Issue:** App.5 (`docs/ROADMAP-TRACKER.md`) — "IME working" on a native platform
-- **Supersedes:** nothing. Records the contract the macOS backend's
-  `NSTextInputClient` conformance implements.
-- **Depends on:** ADR-0030 (`text_input` capability), ADR-0032 (the cursor area is
-  a single rect), ADR-0033 (the caret is hidden while `Preedit.cursor` is `None`).
 
 ## Context
+
+This records the contract the macOS backend's `NSTextInputClient` conformance
+implements. It builds on [ADR-0030](ADR-0030-platform-text-input-ime-capability.md):
+the text-input capability, the single-rect cursor area, and the caret hidden
+while `Preedit.cursor` is `None`.
 
 A key press on the macOS native backend reaches `FLUIContentView`'s `keyDown:`
 and is converted there, by `extract_key`, into exactly one `Key::Character`.

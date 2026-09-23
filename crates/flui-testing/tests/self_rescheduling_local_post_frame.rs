@@ -1,6 +1,6 @@
 //! A local post-frame callback that reschedules **itself** must succeed and
 //! fire exactly once per completed frame — the load-bearing mechanism the IME
-//! cursor-area tracking loop (`flui-widgets::EditableText`, ADR-0032) builds
+//! cursor-area tracking loop (`flui-widgets::EditableText`, ADR-0030) builds
 //! on. This is the design's scheduler-level precondition: if a
 //! self-rescheduling `LocalPostFrameHandle::schedule_local` callback cannot be
 //! driven cleanly through the binding's own frame pump, the loop has no

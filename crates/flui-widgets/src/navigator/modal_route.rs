@@ -46,7 +46,7 @@
 //!
 //! # Divergences — none of this is parity
 //!
-//! * **Per-route `FocusScope` — landed (ADR-0022).** The page is wrapped in
+//! * **Per-route `FocusScope` — landed (ADR-0026).** The page is wrapped in
 //!   `FocusScope::with_external_node` (`routes.dart:1201-1202`) and the current
 //!   route's scope is installed through the enclosing scope's
 //!   `setFirstFocus` history chain. Still absent: `traversalEdgeBehavior` (no
@@ -254,7 +254,7 @@ impl ModalInner {
     /// [`focus_scope`](Self::focus_scope) is Flutter's
     /// `FocusScope.withExternalFocusNode` (`routes.dart:1201-1202`): heroes,
     /// text fields and `Focus` widgets in the page attach under the route's own
-    /// scope, so traversal stays within the route (ADR-0022).
+    /// scope, so traversal stays within the route (ADR-0026).
     fn build_scope(self: &Arc<Self>) -> BoxedView {
         let scope = match self.transition.get() {
             Some(transition) => ModalScope {

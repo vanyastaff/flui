@@ -1,10 +1,8 @@
 //! [`OverlayEntry`] — one independently-managed layer of an [`Overlay`].
 //!
-//! `OverlayEntry`/[`OverlayEntryId`] are published from the crate root (see
-//! `docs/adr/ADR-0036-overlay-publication-and-per-entry-scope-marker.md`); the
-//! mutation surface (`insert`/`remove`/`mark_needs_build`/…) stays
-//! `pub(crate)` — `Navigator` and `Draggable`'s feedback layer are the only
-//! in-crate callers for now, and nothing in ADR-0036 widens that.
+//! `OverlayEntry`/[`OverlayEntryId`] and the mutation surface
+//! (`insert`/`remove`/`mark_needs_build`) are public so design systems and
+//! apps can place their own layers (ADR-0076).
 //!
 //! # Flutter parity
 //!

@@ -1,4 +1,4 @@
-//! Borrowed intrinsic path parent-data slice benchmark (ADR-0010).
+//! Borrowed intrinsic path parent-data benchmark (flui-rendering ARCHITECTURE.md, parent-data accessor).
 //!
 //! Every `box_intrinsic_query_borrowed` call for a non-leaf node eagerly
 //! builds three heap collections:

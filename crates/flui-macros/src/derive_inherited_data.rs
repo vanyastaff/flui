@@ -1,5 +1,5 @@
 //! `#[derive(InheritedData)]` — field-granular inherited dependencies
-//! (issue #1090, ADR-0008 §2, ADR-0074 §5.5).
+//! (issue #1090, ADR-0074 §5.5).
 //!
 //! For a non-generic struct with named fields, emits:
 //!

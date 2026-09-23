@@ -101,7 +101,7 @@ pub mod testing;
 /// private; the signed-off surface is re-exported from the crate root below.
 pub mod navigator;
 // `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. The module
-// stays private: the types (ADR-0036) and the mutation surface
+// stays private: the types (ADR-0076) and the mutation surface
 // (`insert`/`rearrange`/`InsertPosition`/the entry lifecycle, ADR-0076) are
 // re-exported from the crate root, and nothing else is nameable, so
 // `OverlayScope` and the `Theater`/`OverlayState` machinery stay private. (A
@@ -210,7 +210,7 @@ pub use navigator::{
     RouteId, RouteKey, RoutePageBuilder, RouteRequest, RouteResult, RouteSettings,
     RouteTransitionsBuilder, SimpleRoute, TickerCanceled, TickerFuture,
 };
-// The `Overlay::of`/`maybe_of` lookup contract (ADR-0036) and the types it
+// The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
 // the crate — `Navigator` and `Draggable`'s feedback layer are its callers.
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};

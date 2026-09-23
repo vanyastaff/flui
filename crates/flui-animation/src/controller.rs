@@ -174,10 +174,10 @@ struct RepeatSample {
 ///
 /// # Thread safety
 ///
-/// The controller is `Send + Sync` via `Arc<Mutex<…>>`. Per ADR-0002 the
+/// The controller is `Send + Sync` via `Arc<Mutex<…>>`. Per ADR-0027 the
 /// controller is control-plane and would ideally be thread-affine; it remains
 /// `Send + Sync` as a recorded, scoped exception until the engine-wide `!Send`
-/// flip lands (see `docs/adr/ADR-0002-engine-wide-threading-architecture.md`).
+/// flip lands.
 /// Status listeners are always fired **after** the inner lock is released, so a
 /// status callback may re-enter the controller without deadlocking.
 ///

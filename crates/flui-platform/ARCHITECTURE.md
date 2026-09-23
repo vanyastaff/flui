@@ -643,7 +643,7 @@ or a CJK source) remains **not driven**.
 **Decision.** The iOS backend (`platforms/ios/`) binds UIKit through `objc2`
 0.6 / `objc2-ui-kit` 0.3 / `objc2-quartz-core` / `objc2-metal` / `block2` /
 `dispatch2`, and takes its framework loop-exit signal from
-`applicationWillTerminate:`. ADR-0070 carries the full record.
+`applicationWillTerminate:`. ADR-0071 carries the full record.
 
 **Why `objc2` and not the macOS backend's `cocoa`/`objc`.** The choice is not
 consistency-versus-modernity: `objc` has not released since 2019 and `cocoa`
@@ -699,7 +699,7 @@ iOS/UIKit, `objc2-foundation`, `objc2-quartz-core`, `objc2-metal`) at the
 versions `wgpu-hal` already pins. The `cocoa` 0.27 / `objc` 0.2 dependency pair
 and the `build.rs` that existed only for its `cfg` macros are removed from the
 crate; neither appears in `Cargo.lock` any more. ADR-0071 carries the full
-record (ADR-0070 chose the stack for iOS first).
+record (ADR-0071 chose the stack for iOS first).
 
 **Why.** `objc` has not released since 2019 and points at `objc2` as its
 successor; `cocoa` deprecated its whole surface in the same direction and has no

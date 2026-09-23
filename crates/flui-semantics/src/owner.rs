@@ -199,7 +199,7 @@ pub struct SemanticsOwner {
     /// flush is then a self-contained full update. While `Some`, a flush
     /// diffs each dirty node's translation against this mirror and publishes
     /// only what actually changed — which is what keeps a rebuild-everything
-    /// assembly pass (ADR-0014) from republishing an entire tree because one
+    /// assembly pass (flui-semantics ARCHITECTURE.md, semantics assembly) from republishing an entire tree because one
     /// checkbox toggled.
     published: Option<PublishedState>,
 
@@ -626,7 +626,7 @@ impl SemanticsOwner {
     /// .sendSemanticsUpdate`): an idle frame publishes nothing and returns in
     /// O(1); only nodes whose content actually changed serialize into the
     /// update. The *mechanism* diverges because FLUI rebuilds the semantics
-    /// arena every assembly pass (ADR-0014) where Flutter mutates persistent
+    /// arena every assembly pass (flui-semantics ARCHITECTURE.md, semantics assembly) where Flutter mutates persistent
     /// nodes: a rebuild marks every node dirty, so the dirty bit alone cannot
     /// say what changed. The diff therefore compares each dirty node's
     /// translation, keyed by its stable [`AccessibilityNodeId`], against a

@@ -316,7 +316,7 @@ impl RenderBox for RenderIntrinsicWidth {
         }
         // Structurally identical to perform_layout: child_constraints issues
         // intrinsic sub-queries through the new DryLayoutChildRequest::Intrinsic
-        // channel (ADR-0011 Slice 1), routed by the driver to the same memoized
+        // channel (flui-rendering ARCHITECTURE.md, dry intrinsics), routed by the driver to the same memoized
         // intrinsic_query — dry ≡ committed.
         let child_constraints = self.child_constraints(constraints, |dim, extent| {
             ctx.child_intrinsic(0, dim, extent)

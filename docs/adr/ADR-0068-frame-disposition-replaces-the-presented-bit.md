@@ -1,23 +1,14 @@
 # ADR-0068: A frame's outcome is a three-state disposition, and a withheld frame is retained under a bound
 
-*A `Result<bool>` cannot say "this frame owed the screen something and did not
-get it there". Collapsing that into "nothing was owed" parked the native macOS
-back end on a window that had never drawn. The disposition splits the two
-answers, the realm retains the withheld one, and the retention carries its own
-cap because the platform's occlusion gate does not bound it.*
-
----
-
 - **Status:** Accepted
 - **Date:** 2026-09-17
-- **Deciders:** @vanyastaff
-- **Scope:** `flui-engine`'s `RasterBackend` trait (`raster.rs`,
-  `wgpu/renderer.rs`, `raster_owner.rs`), `flui-app`'s raster lane
-  (`raster_lane.rs`) and frame tail (`ui_realm/`,
-  `presentation.rs`). Relates to [ADR-0044](ADR-0044-native-frame-pacing.md)
-  §7 and ADR-0058's fallback gate.
+- **Related:** [ADR-0044](ADR-0044-driver-loop-hybrid.md) §7 (wall-clock wake); [ADR-0058](ADR-0058-the-platform-paces-production-not-a-sleep.md) (the fallback gate)
 
----
+*A `Result<bool>` cannot say "this frame owed the screen something and did not
+get it there". Collapsing that into "nothing was owed" parked the native macOS
+back end on a window that had never drawn. `PresentDisposition` splits the two
+answers, the realm retains the withheld one, and the retention carries its own
+cap because the platform's occlusion gate does not bound it.*
 
 ## Context
 
@@ -33,18 +24,12 @@ consumed the work that produced the scene. Parking there leaves the loop with
 nothing to wake it (no scheduled frame) and nothing to draw if it did (the
 scene was taken). The window never paints again.
 
-This is reachable on ordinary cold start. Three runs of
-`target/debug/examples/sliver_demo` (`RUST_LOG=flui.pace=trace,
-flui_platform=trace, flui_engine=trace, flui_app=trace`, ~8 s, no input) under
-the native AppKit back end produced **1, 0 and 0** presented frames: the
-surface's first drawable reported `Occluded`, the frame was classified as
-finished, and the process parked in `_nextEventMatchingEventMask:untilDate:`
-at 0% CPU on a window that had never drawn.
-
-A *second* run of the same three with the retention below in place produced
-**240, 137 and 150** presented frames. The window came alive. A third set,
-measured with the cap of §4 also in place, produced **275, 334 and 449** — so
-the cap does not cost the liveness it sits behind.
+This is reachable on ordinary cold start. Under the native AppKit back end,
+`sliver_demo` cold starts presented 0 or 1 frames in ~8 s: the surface's first
+drawable reported `Occluded`, the frame was classified as finished, and the
+process parked at 0% CPU on a window that had never drawn. With the retention
+below (and later with the cap of §4 as well) the same runs presented hundreds
+of frames.
 
 ## Decision
 
@@ -105,9 +90,9 @@ does not. A window AppKit reports as occluded *does* stop reaching this arm —
 `AppLifecycleState::Hidden` → `frames_enabled == false` → `wake_action`
 short-circuits to `PumpAsync` — but that gate keys off AppKit's
 `occlusionState`, while what withdraws the drawable is the *swapchain's* own
-availability. **The measured cold-start trace has them disagreeing**:
-`occlusionState` reported the window VISIBLE (`8192`) throughout the ~132 ms
-the drawable was unavailable, across 12 consecutive withheld frames. Wherever
+availability. **Measured on cold start, they disagree**: `occlusionState`
+reported the window visible throughout the ~132 ms (12 consecutive withheld
+frames) the drawable was unavailable. Wherever
 they disagree and stay disagreeing — a window on an inactive Space, a display
 asleep — the lifecycle gate never engages and the loop is unbounded.
 
@@ -115,16 +100,13 @@ So the cap lives in the frame tail: `MAX_NOT_SHOWN_RETRIES = 128`, with the
 per-presentation streak on `PresentationState` (`record_frame_withheld` /
 `clear_not_shown_streak`). Past the cap the frame parks instead of re-arming.
 
-The value is chosen against measurement, not intuition. Across six cold starts
-the withheld transient ran 2, 2 and 3 consecutive attempts on the three runs
-measured with the cap in place and 12 (~132 ms) on the coldest — the run that
-motivated the retention. 128 sits ~10× above the worst observed (~1.2 s at the
-same pace). The two error directions are asymmetric, so the generous side is
-the right one: too large costs one bounded burst of wasted frames on a surface
-that never returns, too small reintroduces the blank window this exists to
-fix. On the runs measured with the cap in place it never engaged (`streak`
-peaked at 3), which is the calibration to want — a backstop against the
-pathological case, not a limit the ordinary transient touches.
+The value is chosen against measurement: the withheld cold-start transient ran
+at most 12 consecutive attempts (~132 ms), so 128 sits ~10× above the worst
+observed (~1.2 s at the same pace). The two error directions are asymmetric, so
+the generous side is the right one: too large costs one bounded burst of wasted
+frames on a surface that never returns, too small reintroduces the blank window
+this exists to fix. In ordinary runs the cap never engages — a backstop against
+the pathological case, not a limit the ordinary transient touches.
 
 Exhausting the budget is not permanent. The streak is cleared by any frame
 that ends otherwise, so it bounds a *continuous* withdrawal rather than
@@ -153,25 +135,11 @@ attempts before parking — the same steady-state trade the
 measured runs the loop is never observed in steady state: the withheld streak
 occurs once, at cold start, and does not recur.
 
-**A note on what the frame-rate evidence does not show.** The 240/137/150
-present counts above are *not* the idle loop this ADR guards against. Sampling
-the runs shows frames continue only while pointer events arrive: in the
-longest pointer-free gaps (269–415 ms) there are 1–2 wakes and **zero**
-presents, and the demo is a static 104-line tree with no ticker. The frame
-rate is the app servicing ~89 Hz of real pointer traffic, which is why
-`dirty=true` on every wake. The evidence therefore bounds the cold-start
-transient but cannot demonstrate the unbounded loop; the cap is justified by
-the mechanism, which is why it carries its own tests rather than resting on a
-trace that does not exercise it.
+The cold-start measurements bound the transient but do not exercise the
+unbounded loop (the demo only repaints while pointer events arrive), so the cap
+is justified by the mechanism and carries its own tests.
 
-**Verification.** One mutant per rule, each killed by exactly one test:
-reverting `retry_needs_repaint` to `false` fails
-`a_frame_the_surface_never_showed_is_retained_and_repainted`; widening the cap
-to `u32::MAX` fails `the_withheld_retry_is_bounded_and_then_parks`; dropping
-the streak clear from the `Presented` arm fails
-`a_presented_frame_clears_the_withheld_streak`.
-
-**Honest residual.** The decision is pinned; the producer is not. What is
+**Residual.** The consumer half is covered; the producer is not. What is
 executed end to end is the consumer half — a backend reporting `NotShown` is
 classified at the lane and retained and bounded by the realm — plus the
 engine's own classification table. The wgpu arm that supplies

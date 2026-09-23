@@ -168,7 +168,7 @@ impl RouteId {
 /// `MetaDataPayload` (`interaction/meta_data.rs`): cloning a route's
 /// settings must not deep-copy the payload, and that boundary is the
 /// established precedent for a type-erased user value crossing FLUI's
-/// public surface. This is exactly the shape ADR-0024 §4.1 named for this
+/// public surface. This is exactly the shape ADR-0024 named for this
 /// field.
 pub type RouteArguments = Arc<dyn Any + Send + Sync>;
 
@@ -243,12 +243,12 @@ impl RouteSettings {
     /// Attempts to downcast the arguments payload to the requested concrete
     /// type. Returns `None` if there is no payload or its type doesn't match.
     ///
-    /// Named `argument`, singular, per ADR-0024 §4.1's `settings.argument::<T>()`.
+    /// Named `argument`, singular, per ADR-0024's `settings.argument::<T>()`.
     /// The typed counterpart to [`arguments`](Self::arguments) — the same role
     /// `RenderMetaData::metadata_as` plays for its own erased payload.
     #[must_use]
     pub fn argument<T: Any + Send + Sync + 'static>(&self) -> Option<&T> {
-        self.arguments.as_ref()?.downcast_ref::<T>() // RouteSettings.arguments erasure per ADR-0024 §4.1; Gate sign-off still outstanding, see ADR-0024 §6
+        self.arguments.as_ref()?.downcast_ref::<T>() // RouteSettings.arguments erasure per ADR-0024
     }
 }
 

@@ -314,7 +314,7 @@ impl Platform for AndroidPlatform {
         tracing::info!("Starting Android platform event loop");
 
         // Converted once, up front: `on_ready` needs an `Arc<dyn Platform>`
-        // to mint `OwnerPlatform` from (ADR-0039 slice 2), and the rest of
+        // to mint `OwnerPlatform` from (ADR-0039 §1), and the rest of
         // this loop reads through the same `Arc` for its whole lifetime
         // instead of the original `Box`.
         let platform = Arc::new(*self);
@@ -500,7 +500,7 @@ impl Platform for AndroidPlatform {
             // Call on_ready outside of poll_events (FnOnce can't be called in
             // closure). Fires once, at the first `MainEvent::InitWindow` — the
             // module doc's `InitWindow -> on_ready() -> create surface`
-            // sequence (ADR-0039 slice 2: the pre-run bootstrap that used to
+            // sequence (ADR-0039 §1: the pre-run bootstrap that used to
             // run before this loop started now runs from here, in `flui-app`'s
             // `on_ready` migration). The `InitWindow` arm is what makes that
             // acquire legal: it is the first event at which

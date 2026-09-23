@@ -1100,7 +1100,7 @@ mod tests {
     // inspect serialize_layer_tree / collect_commands output. We use a local
     // `RedBox` leaf stub instead of `flui_objects::RenderColoredBox` to keep
     // flui-rendering's own test suite free of a dependency on flui-objects
-    // (concrete objects moved there as part of ADR-0008; see plan §C1).
+    // (concrete objects moved there as part of the flui-objects extraction).
 
     mod layer_tree_helpers {
         use flui_tree::Leaf;

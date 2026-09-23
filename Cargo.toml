@@ -223,7 +223,7 @@ flui-log = { path = "crates/flui-log", version = "=0.2.0-dev" }
 # Used by flui-engine, flui-app, and root examples
 # GPU RENDERING (WGPU BACKEND) - Track latest stable (30.x).
 # Update policy: bump within the same minor on security/bug fixes; bump major after
-# verifying API migration on a dedicated branch (see docs/adr/ADR-0002).
+# verifying API migration on a dedicated branch (see docs/adr/ADR-0027-owner-affine-ui-realms.md).
 wgpu = { version = "30.0", default-features = false, features = ["wgsl", "naga-ir"] }
 # GPU profiling — optional, reused by flui-engine behind the `gpu-profiler` feature.
 # Pins wgpu ^30.0, consistent with the workspace pin above. Excluded from wasm32.

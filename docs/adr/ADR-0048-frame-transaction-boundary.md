@@ -1,24 +1,7 @@
 # ADR-0048: Presentation-local frame-transaction boundary
 
-*FLUI contains failures at two nested scales. Three bounded build-side seams
-repair one failed child or removal hook locally and preserve the rest of the
-element tree. A panic or structured pipeline error that escapes those seams is
-contained by the realm's per-presentation frame boundary: that frame is
-dropped, sibling presentations continue in the same pump, other realms are
-untouched, and the last successfully presented frame stays on screen. This is
-local repair plus frame isolation, not a global tree transaction or rollback;
-the residuals below define the remaining blast radii.*
-
----
-
-- **Status:** Accepted (2026-08-18)
+- **Status:** Accepted
 - **Date:** 2026-08-18
-- **Deciders:** @vanyastaff
-- **Scope:** bounded build-side recovery in `flui-view`, the
-  per-presentation frame boundary in `UiRealm::draw_frame_entered` /
-  `draw_frame_for_presentation` / `render_frame_entered`, the typed report
-  surface in `crates/flui-app/src/app/frame_failure.rs`, and
-  `WidgetsBinding::draw_frame`'s unwind-consistency guard
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime topology
   is a sanctioned leapfrog zone); [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md)
   (`PresentationState` bundles the trees this boundary scopes);
@@ -30,7 +13,14 @@ the residuals below define the remaining blast radii.*
   frame failure recovery transactional")
 - **Issue:** [#561](https://github.com/vanyastaff/flui/issues/561)
 
----
+*FLUI contains failures at two nested scales. Three bounded build-side seams
+repair one failed child or removal hook locally and preserve the rest of the
+element tree. A panic or structured pipeline error that escapes those seams is
+contained by the realm's per-presentation frame boundary: that frame is
+dropped, sibling presentations continue in the same pump, other realms are
+untouched, and the last successfully presented frame stays on screen. This is
+local repair plus frame isolation, not a global tree transaction or rollback;
+the residuals below define the remaining blast radii.*
 
 ## Context
 
@@ -303,36 +293,16 @@ the supplied secondary config does not override either for existing siblings.
   `Committed`. A secondary failure therefore does not freeze a committed
   primary, while an uncommitted primary holds its previous hover derivation.
 
-### Measured cost of the build-side seams
+### Cost of the build-side seams
 
-The intervals below are the recorded Criterion 95% confidence intervals from
-the production reconcile harnesses. On success, dense update returns inline;
-recovery is a private `#[cold] #[inline(never)]` path. The containment column
-uses that structure and is compared with the recorded pre-containment
-baseline.
-
-| Benchmark | Baseline | Containment | Midpoint change |
-|---|---:|---:|---:|
-| dense same-slot /32 | `[8.0031, 8.0627, 8.1142] µs` | `[7.6674, 7.7051, 7.7496] µs` | −4.4% |
-| dense same-slot /256 | `[58.436, 58.927, 59.298] µs` | `[61.434, 61.784, 62.041] µs` | +4.8% |
-| dense same-slot /1024 | `[228.27, 229.97, 232.14] µs` | `[237.69, 240.46, 244.60] µs` | +4.6% |
-| dense reordered /32 | `[15.603, 15.724, 15.875] µs` | `[14.185, 14.218, 14.243] µs` | −9.6% |
-| dense reordered /256 | `[105.21, 105.63, 106.09] µs` | `[108.33, 109.38, 110.39] µs` | +3.6% |
-| dense reordered /1024 | `[426.92, 430.03, 433.33] µs` | `[440.20, 445.24, 449.51] µs` | +3.5% |
-
-The insert-side production run also recorded `scoped_build_drain` at
-`[8.4986, 8.6204, 8.7228] µs` (no scopes/256),
-`[14.796, 15.032, 15.205] µs` (sibling scopes/32),
-`[135.36, 136.92, 138.33] µs` (sibling scopes/256), and
-`[5.7700, 5.8920, 5.9761] µs` (nested published scopes/13), plus
-`global_key_reparent_latency` at `[4.7009, 4.7399, 4.7832] µs` (/32),
-`[23.176, 23.348, 23.542] µs` (/256), and
-`[86.144, 86.895, 87.775] µs` (/1024). Against their recorded baselines no
-statistically supported regression exceeded 5%.
+On success, dense update returns inline; recovery is a private
+`#[cold] #[inline(never)]` path. Measured with Criterion against the
+pre-containment baseline on the production reconcile harnesses, dense same-slot
+and reordered reconciliation moved within about ±5% (small lists faster, large
+lists up to ~5% slower), and the scoped-build-drain and GlobalKey-reparent
+benchmarks showed no statistically supported regression above 5%.
 
 ### Consistency audit — local repair, not global rollback
-
-Honestly named, per the issue's "transactional" acceptance criterion:
 
 **Re-established (retained premises are consistent):**
 - Render geometry: committed only after validation; a failed node keeps its

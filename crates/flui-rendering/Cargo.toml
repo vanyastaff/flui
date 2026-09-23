@@ -139,7 +139,7 @@ flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 flui-rendering = { path = ".", features = ["testing"] }
 # Concrete render-object catalog. The integration tests in `tests/*.rs`
 # previously imported objects from `flui_rendering::objects`; after the
-# flui-objects extraction (ADR-0008) they import from `flui_objects` instead.
+# flui-objects extraction they import from `flui_objects` instead.
 # This is a dev-only dependency — flui-rendering does not depend on
 # flui-objects in production (that would invert the layer order).
 # Checkout-only test edge; see docs/workspace-layers.toml release policy.
@@ -162,7 +162,7 @@ serde = ["flui-types/serde"]
 testing = ["flui-layer/testing"]
 
 # Gate the delegate trait modules behind an off-by-default feature until
-# their companion render object lands (ADR-0007). Each
+# their companion render object lands. Each
 # gated trait has zero production impls; gating removes the surface from
 # default builds without deleting it. `sliver_grid_delegate.rs`,
 # `custom_painter.rs`, and `flow_delegate.rs` were promoted to the default
