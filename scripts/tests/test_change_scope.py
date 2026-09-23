@@ -126,6 +126,14 @@ class CargoArgs(unittest.TestCase):
         self.assertNotIn("-p flui-cli", a["wasm_args"])
         self.assertIn("-p flui-platform", a["wasm_args"])
 
+    def test_rustdoc_covers_the_scope_with_its_testing_features(self):
+        a = ca.args_for(scope("crates/flui-material/src/lib.rs"))
+        self.assertTrue(a["doc_args"].startswith("-p flui -p flui-material"))
+        self.assertIn("--features flui/testing", a["doc_args"])
+        # a testing feature of a package outside the scope would be rejected by cargo
+        self.assertNotIn("flui-rendering/testing", a["doc_args"])
+        self.assertEqual(ca.args_for(scope("docs/x.md"))["doc_args"], "")
+
     def test_shell_format_is_safe_to_eval(self):
         # `just check-changed` evals the CLI's --format shell output; an unowned
         # file's name lands in `reason`, so a hostile file name must stay data.

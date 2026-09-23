@@ -418,6 +418,10 @@ check-changed base="origin/main":
         # shellcheck disable=SC2086
         cargo nextest run $TEST_ARGS --locked --no-fail-fast --lib --bins --tests $FEATURES
     fi
+    if [ -n "$DOC_ARGS" ]; then
+        # shellcheck disable=SC2086
+        RUSTDOCFLAGS="-D warnings" cargo doc $DOC_ARGS --no-deps --locked --document-private-items
+    fi
     # cfg-gated code this host's build never compiles (same commands as CI's fast lane)
     if [ "$CROSS_PLATFORM" = true ]; then
         for t in x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android aarch64-apple-ios; do

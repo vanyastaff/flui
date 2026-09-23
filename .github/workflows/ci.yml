@@ -288,6 +288,7 @@ jobs:
       wasm_args: ${{ steps.scope.outputs.wasm_args }}
       wasm_facade: ${{ steps.scope.outputs.wasm_facade }}
       hack_args: ${{ steps.scope.outputs.hack_args }}
+      doc_args: ${{ steps.scope.outputs.doc_args }}
       reason: ${{ steps.scope.outputs.reason }}
       packages: ${{ steps.scope.outputs.packages }}
       pkg_args: ${{ steps.scope.outputs.pkg_args }}
@@ -354,6 +355,7 @@ jobs:
       PLATFORM: ${{ needs.plan.outputs.platform }}
       WASM_ARGS: ${{ needs.plan.outputs.wasm_args }}
       HACK_ARGS: ${{ needs.plan.outputs.hack_args }}
+      DOC_ARGS: ${{ needs.plan.outputs.doc_args }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -399,6 +401,16 @@ jobs:
         run: |
           # shellcheck disable=SC2086
           cargo nextest run $TEST_ARGS --locked --no-fail-fast --lib --bins --tests $FEATURES
+
+      # The heavy `doc` job's rustdoc (doc-strict.sh's flags) over the scope:
+      # a broken intra-doc link is the typical casualty of moving code.
+      - name: cargo doc -D warnings (affected packages)
+        if: needs.plan.outputs.doc_args != ''
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          # shellcheck disable=SC2086
+          cargo doc $DOC_ARGS --no-deps --locked --document-private-items
 
       # cfg-gated code the Linux build never compiles: clippy (no link, no
       # tests) on its own target, for the affected packages only -- the same

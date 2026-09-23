@@ -12,7 +12,10 @@ runs -- the one place the test-scope policy lives, for CI's `plan` job and
   the wasm-capable packages in scope (mirroring wasm-check; the excluded set
   is read from ci.yml's NO_WASM_PKGS, not restated here);
 - a crate whose Cargo.toml changed gets the per-feature clippy pass
-  (feature-matrix's `cargo hack --each-feature`), for that crate only.
+  (feature-matrix's `cargo hack --each-feature`), for that crate only;
+- rustdoc -D warnings runs over the scope with its packages' `testing`
+  features (doc-strict.sh's flags, narrowed): a moved item's broken intra-doc
+  link otherwise merges green and fails main's `doc` job.
 
 Python >= 3.9 on purpose (no tomllib).
 """
@@ -23,6 +26,17 @@ import shlex
 import sys
 
 import change_scope as cs
+
+
+def testing_packages() -> set:
+    """Workspace packages with a `testing` feature: doc-strict.sh turns every
+    one on, since code behind it is documented too."""
+    import json
+    import subprocess
+    meta = json.loads(subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps", "--offline"],
+        cwd=cs.ROOT, check=True, capture_output=True, text=True).stdout)
+    return {p["name"] for p in meta["packages"] if "testing" in p["features"]}
 
 
 def no_wasm_packages() -> set:
@@ -41,6 +55,13 @@ def args_for(result: dict, members=None) -> dict:
         wasm_args = "--workspace " + " ".join(f"--exclude {n}" for n in sorted(no_wasm))
     else:
         wasm_args = p(scope - no_wasm)
+    # rustdoc -D warnings over the scope: doc-strict.sh's flags, narrowed.
+    # `--features x/testing` is only valid for a selected package.
+    doc_args = ""
+    if mode in ("packages", "full"):
+        testing = sorted(testing_packages() if full else testing_packages() & scope)
+        feats = f" --features {','.join(n + '/testing' for n in testing)}" if testing else ""
+        doc_args = ("--workspace" if full else p(scope)) + feats
     return {
         "mode": mode,
         "heavy_required": "true" if result["heavy_required"] else "false",
@@ -56,6 +77,7 @@ def args_for(result: dict, members=None) -> dict:
         "wasm_args": wasm_args if mode in ("packages", "full") else "",
         "wasm_facade": "true" if full or "flui" in scope else "false",
         "hack_args": p(result["manifests"]) if mode == "packages" else "",
+        "doc_args": doc_args,
     }
 
 

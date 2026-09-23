@@ -821,7 +821,10 @@ CI runs in two lanes, chosen by the `plan` job:
     `flui-app`/`flui` Android runner and `flui-cli` on Windows, when they are
     in scope;
   - wasm32 clippy for the wasm-capable crates in scope;
-  - a per-feature `cargo hack clippy` for any crate whose `Cargo.toml` changed.
+  - a per-feature `cargo hack clippy` for any crate whose `Cargo.toml` changed;
+  - rustdoc with `-D warnings` over the crates in scope, with their `testing`
+    features (the `doc` job's flags). A moved item's broken intra-doc link is
+    the typical casualty of a refactor.
 
   A workspace-wide input (clippy/nextest config, the lane's own scripts) or a
   file no crate owns widens the lane to the whole workspace. Nothing compiles
@@ -843,8 +846,7 @@ CI runs in two lanes, chosen by the `plan` job:
 still turn main red:
 
 - doc-tests (`doc-test`);
-- rustdoc with `-D warnings` (`doc`), so a broken intra-doc link is caught
-  only there;
+- rustdoc of crates outside the change's scope (`doc`);
 - linking of examples and benches (`test`'s `build --all-targets`,
   `bench-compile`);
 - the feature-gated suites (`test-features`);
