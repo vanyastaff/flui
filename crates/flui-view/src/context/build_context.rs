@@ -17,6 +17,20 @@ use flui_foundation::ElementId;
 pub(crate) mod sealed {
     /// Implemented only by `flui-view`'s build contexts.
     pub trait Sealed {}
+
+    /// Proof that a call comes from inside `flui-view`: the field-granular
+    /// recording method takes one, and only this crate can construct it, so
+    /// the untyped [`FieldSet`](crate::view::FieldSet) entry point is
+    /// uncallable from application code (the sealed-method pattern; sealing
+    /// the trait alone stops implementations, not calls).
+    #[derive(Clone, Copy, Debug)]
+    pub struct CrateToken(());
+
+    impl CrateToken {
+        pub(crate) const fn new() -> Self {
+            Self(())
+        }
+    }
 }
 
 /// Context provided to Views during the build phase.
@@ -70,6 +84,20 @@ pub(crate) mod sealed {
 /// ```compile_fail,E0277
 /// struct Mine;
 /// impl flui_view::BuildContext for Mine {}
+/// ```
+///
+/// Nor can application code call the untyped field-recording method: it takes
+/// a token only `flui-view` can construct, so an empty or foreign
+/// [`FieldSet`](crate::view::FieldSet) cannot be registered.
+///
+/// ```compile_fail,E0603
+/// use std::any::TypeId;
+/// use flui_view::{BuildContext, FieldSet};
+///
+/// fn sneak(ctx: &dyn BuildContext) {
+///     let token = flui_view::context::build_context::sealed::CrateToken::new();
+///     ctx.depend_on_inherited_fields(token, TypeId::of::<u8>(), FieldSet::NONE, &mut |_| {});
+/// }
 /// ```
 pub trait BuildContext: sealed::Sealed {
     // ========================================================================
@@ -303,14 +331,16 @@ pub trait BuildContext: sealed::Sealed {
     /// a later provider update schedules this element only if a field in the
     /// mask changed ([`InheritedView::changed_fields`]). `FieldSet::ALL`
     /// is exactly `depend_on_inherited`. The set is untyped here (this
-    /// method is object-safe); outside `flui-view` a `FieldSet` can only be
-    /// `NONE`/`ALL` (`FieldMask::erase` is crate-private), so a per-field
-    /// dependency is reachable only through the typed
-    /// [`BuildContextExt::depend_on_field`].
+    /// method is object-safe), so it is **uncallable outside `flui-view`**: it
+    /// takes a crate-private token. Application code records a per-field
+    /// dependency only through the typed [`BuildContextExt::depend_on_field`];
+    /// an empty or foreign set cannot be registered.
     ///
     /// [`InheritedView::changed_fields`]: crate::InheritedView::changed_fields
+    #[doc(hidden)]
     fn depend_on_inherited_fields(
         &self,
+        token: sealed::CrateToken,
         type_id: TypeId,
         mask: crate::view::FieldSet,
         callback: &mut dyn FnMut(&dyn std::any::Any),
@@ -760,11 +790,16 @@ fn depend_on_set<T: 'static, R, C: BuildContext + ?Sized>(
 ) -> Option<R> {
     let mut result: Option<R> = None;
     let mut once = Some(f);
-    ctx.depend_on_inherited_fields(TypeId::of::<T>(), set, &mut |any| {
-        if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
-            result = Some(call(typed));
-        }
-    });
+    ctx.depend_on_inherited_fields(
+        sealed::CrateToken::new(),
+        TypeId::of::<T>(),
+        set,
+        &mut |any| {
+            if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
+                result = Some(call(typed));
+            }
+        },
+    );
     result
 }
 

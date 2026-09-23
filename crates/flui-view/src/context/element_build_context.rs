@@ -282,11 +282,17 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
-        self.depend_on_inherited_fields(type_id, crate::view::FieldSet::ALL, callback)
+        self.depend_on_inherited_fields(
+            super::build_context::sealed::CrateToken::new(),
+            type_id,
+            crate::view::FieldSet::ALL,
+            callback,
+        )
     }
 
     fn depend_on_inherited_fields(
         &self,
+        _token: super::build_context::sealed::CrateToken,
         type_id: TypeId,
         mask: crate::view::FieldSet,
         callback: &mut dyn FnMut(&dyn Any),
@@ -859,11 +865,17 @@ impl BuildContext for BuildCtx<'_> {
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
-        self.depend_on_inherited_fields(type_id, crate::view::FieldSet::ALL, callback)
+        self.depend_on_inherited_fields(
+            super::build_context::sealed::CrateToken::new(),
+            type_id,
+            crate::view::FieldSet::ALL,
+            callback,
+        )
     }
 
     fn depend_on_inherited_fields(
         &self,
+        _token: super::build_context::sealed::CrateToken,
         type_id: TypeId,
         mask: crate::view::FieldSet,
         callback: &mut dyn FnMut(&dyn Any),
