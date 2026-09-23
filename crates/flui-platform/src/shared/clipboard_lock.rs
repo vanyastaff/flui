@@ -6,14 +6,18 @@
 //! holds the clipboard and scans the `CF_UNICODETEXT` handle through
 //! `GlobalLock`, thread B's `OpenClipboard(NULL)` therefore succeeds, its
 //! `EmptyClipboard` frees that handle, and A reads freed memory — the
-//! process dies with `STATUS_HEAP_CORRUPTION` (`0xc0000374`). Both FLUI
-//! backends that can run on Windows open with a `NULL` owner: the Win32
-//! backend's `WindowsClipboard` and, through `arboard`, the winit backend's
-//! `ArboardClipboard`. Either may exist in several instances on several
-//! threads, so a per-instance lock cannot close the race; this one can.
+//! process dies with `STATUS_HEAP_CORRUPTION` (`0xc0000374`). The winit
+//! backend's `ArboardClipboard` opens with a `NULL` owner (inside `arboard`);
+//! the Win32 backend's `WindowsClipboard` opens with its own owner window,
+//! which Win32 does not let a `NULL` opener share, but a `NULL`-owner
+//! `arboard` session would still let a `WindowsClipboard` session in beside
+//! it. Either may exist in several instances on several threads, so a
+//! per-instance lock cannot close the race; this one can.
 //!
 //! Not covered: third-party code in the same process that opens the
-//! clipboard on its own thread bypasses this lock (`docs/safety-review.md`).
+//! clipboard on its own thread bypasses this lock. It is shut out of a
+//! `WindowsClipboard` session by the owner window, but not out of an
+//! `ArboardClipboard` one (`docs/safety-review.md`).
 
 use parking_lot::{Mutex, MutexGuard};
 

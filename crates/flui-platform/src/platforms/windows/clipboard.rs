@@ -3,16 +3,28 @@
 //! Provides clipboard access using the Windows Clipboard API.
 //! Thread-safe wrapper with proper clipboard lifecycle management.
 
-use windows::Win32::{
-    Foundation::{GlobalFree, HANDLE, HGLOBAL},
-    System::{
-        DataExchange::{
-            CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
-            OpenClipboard, SetClipboardData,
+use std::sync::{OnceLock, mpsc};
+
+use windows::{
+    Win32::{
+        Foundation::{
+            ERROR_CLASS_ALREADY_EXISTS, GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, WPARAM,
         },
-        Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
-        Ole::CF_UNICODETEXT,
+        System::{
+            DataExchange::{
+                CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
+                OpenClipboard, SetClipboardData,
+            },
+            LibraryLoader::GetModuleHandleW,
+            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
+            Ole::CF_UNICODETEXT,
+        },
+        UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MSG,
+            RegisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
+        },
     },
+    core::w,
 };
 
 use crate::{shared::clipboard_lock, traits::Clipboard};
@@ -243,11 +255,15 @@ impl Clipboard for WindowsClipboard {
 /// The Win32 clipboard, open on this thread under the process-wide
 /// clipboard lock. The only way this module opens the clipboard.
 ///
-/// `OpenClipboard(NULL)` does not exclude other threads of the same process
-/// (see [`clipboard_lock`]), so opening without the lock would let another
-/// thread's `EmptyClipboard` free a handle this one is reading. Dropping
-/// the session closes the clipboard first and releases the lock after, so
-/// the next session never observes a clipboard that is still open.
+/// Two guards, for two kinds of opener in this process. FLUI's own sessions
+/// (this backend and the winit backend's `arboard`) serialize on
+/// [`clipboard_lock`]. Anyone else is shut out by Win32 itself: the session
+/// opens with [`owner_window`] as the owner, and Win32 refuses a concurrent
+/// `OpenClipboard` from any other owner, `NULL` included. With a `NULL` owner
+/// it would not — every `NULL` opener counts as the same owner, so another
+/// thread's `EmptyClipboard` could free a handle this one is reading.
+/// Dropping the session closes the clipboard first and releases the lock
+/// after, so the next session never observes a clipboard that is still open.
 struct ClipboardSession {
     _lock: clipboard_lock::SessionLock,
 }
@@ -256,12 +272,132 @@ impl ClipboardSession {
     /// Takes the process-wide lock, then opens the clipboard; `None` if
     /// another process holds it open.
     fn open() -> Option<Self> {
+        let owner = owner_window();
         let lock = clipboard_lock::acquire();
-        // SAFETY: plain FFI call with no pointer arguments; the result is
-        // checked, and the session is only constructed on success.
-        unsafe { OpenClipboard(None) }.ok()?;
+        // SAFETY: plain FFI call; `owner` is either `None` or the owner
+        // window, which is never destroyed. The result is checked, and the
+        // session is only constructed on success.
+        unsafe { OpenClipboard(owner) }.ok()?;
         Some(Self { _lock: lock })
     }
+}
+
+/// The message-only window every [`ClipboardSession`] opens the clipboard
+/// with, created on first use and never destroyed. `None` if it could not be
+/// created; sessions then fall back to a `NULL` owner, which the process-wide
+/// lock still serializes against FLUI's own callers.
+///
+/// The window lives on its own thread that does nothing but pump messages.
+/// Another process's `EmptyClipboard` *sends* `WM_DESTROYCLIPBOARD` to the
+/// current owner and blocks until it is handled, so the owner's thread must
+/// always be pumping — which the thread calling into the clipboard (possibly
+/// a worker, possibly a winit loop) cannot promise.
+fn owner_window() -> Option<HWND> {
+    static OWNER: OnceLock<Option<isize>> = OnceLock::new();
+    OWNER
+        .get_or_init(spawn_owner_thread)
+        .map(|raw| HWND(raw as *mut _))
+}
+
+/// Starts the owner thread and waits until its window exists or failed to.
+fn spawn_owner_thread() -> Option<isize> {
+    let (created, window) = mpsc::sync_channel(1);
+    let spawned = std::thread::Builder::new()
+        .name("flui-clipboard-owner".into())
+        .spawn(move || {
+            // SAFETY: the window is created on this thread, which pumps its
+            // messages from here until the process exits.
+            let hwnd = match unsafe { create_owner_window() } {
+                Ok(hwnd) => hwnd,
+                Err(error) => {
+                    let _ = created.send(Err(error));
+                    return;
+                }
+            };
+            let _ = created.send(Ok(hwnd.0 as isize));
+            let mut message = MSG::default();
+            // SAFETY: `message` is a valid, correctly sized `MSG` for both
+            // calls. `GetMessageW` returns 0 on `WM_QUIT` and -1 on error;
+            // either ends the loop.
+            unsafe {
+                while GetMessageW(&raw mut message, None, 0, 0).0 > 0 {
+                    DispatchMessageW(&raw const message);
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::error!(%error, "failed to spawn the clipboard owner thread");
+        return None;
+    }
+    // A closed channel means the thread died before reporting; it cannot
+    // have created a window that outlives it.
+    match window.recv() {
+        Ok(Ok(hwnd)) => Some(hwnd),
+        Ok(Err(error)) => {
+            tracing::error!(%error, "failed to create the clipboard owner window");
+            None
+        }
+        Err(_) => {
+            tracing::error!("the clipboard owner thread exited before creating its window");
+            None
+        }
+    }
+}
+
+/// Registers the owner window's class and creates the window on this thread.
+///
+/// # Safety
+///
+/// The calling thread must pump messages for as long as the window lives.
+unsafe fn create_owner_window() -> windows::core::Result<HWND> {
+    let class_name = w!("FLUIClipboardOwner");
+    // SAFETY: `class` and the class name it points to outlive the call, and
+    // `owner_procedure` implements the window-procedure ABI. This function
+    // runs once per process; `ERROR_CLASS_ALREADY_EXISTS` means another copy
+    // of this crate in the process registered an equivalent class, which
+    // serves just as well.
+    unsafe {
+        let instance = GetModuleHandleW(None)?;
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(owner_procedure),
+            hInstance: instance.into(),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        if RegisterClassW(&raw const class) == 0 {
+            let error = windows::core::Error::from_thread();
+            if error.code() != ERROR_CLASS_ALREADY_EXISTS.to_hresult() {
+                return Err(error);
+            }
+        }
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            class_name,
+            w!("FLUI clipboard owner"),
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            Some(HWND_MESSAGE),
+            None,
+            Some(instance.into()),
+            None,
+        )
+    }
+}
+
+/// The owner window's procedure: every message, `WM_DESTROYCLIPBOARD`
+/// included, gets the default handling — FLUI keeps no clipboard state to
+/// release and never renders formats on demand.
+unsafe extern "system" fn owner_procedure(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // SAFETY: forwards Win32's own arguments unchanged.
+    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
 
 impl Drop for ClipboardSession {
@@ -282,6 +418,92 @@ impl Drop for ClipboardSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Opens a session, retrying while another process briefly holds the
+    /// clipboard (clipboard history, a remote-desktop client).
+    fn open_session() -> ClipboardSession {
+        for _ in 0..50 {
+            if let Some(session) = ClipboardSession::open() {
+                return session;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("the clipboard stayed held by another process for a second");
+    }
+
+    #[test]
+    fn a_null_owner_open_on_another_thread_fails_while_a_session_is_open() {
+        let session = open_session();
+        let probe_opened = std::thread::spawn(|| {
+            // SAFETY: plain FFI calls with no pointer arguments. The close
+            // runs only if the probe's own open succeeded.
+            unsafe {
+                let opened = OpenClipboard(None).is_ok();
+                if opened {
+                    let _ = CloseClipboard();
+                }
+                opened
+            }
+        })
+        .join()
+        .expect("probe thread panicked");
+        drop(session);
+        assert!(
+            !probe_opened,
+            "a NULL-owner OpenClipboard on another thread succeeded while a FLUI session held the clipboard"
+        );
+    }
+
+    /// `EmptyClipboard` sends `WM_DESTROYCLIPBOARD` to the previous owner
+    /// and waits for it, so the owner thread has to be pumping. If it is
+    /// not, Windows stalls the caller for about five seconds (observed on
+    /// Windows 11) before giving up; another process emptying a clipboard
+    /// FLUI owns would hang that long.
+    #[test]
+    fn another_opener_can_empty_a_clipboard_flui_owns() {
+        let _serial = crate::shared::clipboard_lock::round_trip_serial();
+        {
+            let _session = open_session();
+            // SAFETY: plain FFI calls with no pointer arguments, made while
+            // `_session` holds the clipboard open on this thread.
+            unsafe {
+                EmptyClipboard().expect("emptying an open clipboard");
+                assert_eq!(
+                    windows::Win32::System::DataExchange::GetClipboardOwner().ok(),
+                    owner_window(),
+                    "EmptyClipboard makes the session's owner window the clipboard owner"
+                );
+            }
+        }
+
+        let (emptied, done) = mpsc::channel();
+        std::thread::spawn(move || {
+            for _ in 0..50 {
+                // SAFETY: plain FFI calls with no pointer arguments; the
+                // clipboard is emptied and closed only after this thread's
+                // own open succeeded.
+                unsafe {
+                    if OpenClipboard(None).is_ok() {
+                        let started = std::time::Instant::now();
+                        let result = EmptyClipboard();
+                        let elapsed = started.elapsed();
+                        let _ = CloseClipboard();
+                        let _ = emptied.send((result.is_ok(), elapsed));
+                        return;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        let (emptied, elapsed) = done
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the clipboard stayed held by another process for a second");
+        assert!(emptied, "EmptyClipboard failed");
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "EmptyClipboard took {elapsed:?}: the owner window is not pumping messages"
+        );
+    }
 
     #[test]
     fn test_clipboard_creation() {
