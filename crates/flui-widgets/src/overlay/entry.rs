@@ -353,9 +353,22 @@ impl OverlayEntry {
         let _prev = self.inner.rebuild.lock().replace(handle);
     }
 
-    /// Drop the rebuild capability. Called from the entry view's `dispose`.
-    pub(crate) fn clear_rebuild(&self) {
-        let _prev = self.inner.rebuild.lock().take();
+    /// Drop the rebuild capability, but only if `element` published it.
+    /// Called from the entry view's `dispose`.
+    ///
+    /// Owner-aware for the same reason as the overlay's own slot: an entry
+    /// moved from one overlay to another within a frame briefly has two
+    /// views, and the new one may publish before the old one is disposed.
+    /// An unconditional clear would then revoke the live view's capability,
+    /// leaving `mark_needs_build` inert on an entry that is on screen.
+    pub(crate) fn clear_rebuild(&self, element: Option<flui_foundation::ElementId>) {
+        let mut slot = self.inner.rebuild.lock();
+        if slot
+            .as_ref()
+            .is_some_and(|held| held.element_id() == element)
+        {
+            let _prev = slot.take();
+        }
     }
 
     /// Whether two handles name the same entry.

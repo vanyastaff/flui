@@ -192,6 +192,34 @@ impl StatelessView for TwoOverlays {
     }
 }
 
+/// Two overlays at different depths: `deep` sits two `Column`s below `shallow`,
+/// so a frame that dirties both rebuilds `shallow` first.
+#[derive(Clone)]
+struct ShallowAndDeep {
+    shallow: OverlayHandle,
+    deep: OverlayHandle,
+}
+
+impl View for ShallowAndDeep {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for ShallowAndDeep {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let deep = crate::Column::new(vec![
+            crate::Column::new(vec![Overlay::new(self.deep.clone()).into_view().boxed()])
+                .into_view()
+                .boxed(),
+        ]);
+        crate::Column::new(vec![
+            Overlay::new(self.shallow.clone()).into_view().boxed(),
+            deep.into_view().boxed(),
+        ])
+    }
+}
+
 // ============================================================================
 // TESTS
 // ============================================================================
@@ -678,6 +706,46 @@ fn one_handle_serves_one_mounted_overlay() {
     entry.mark_needs_build();
     harness.tick();
     assert_eq!(calls.get(), 2, "the first overlay still rebuilds the entry");
+}
+
+/// Moving an entry from a deeper overlay to a shallower one within one frame:
+/// the shallower overlay rebuilds first and publishes the entry's new rebuild
+/// capability, then the deeper one disposes the old view. The old view must
+/// not revoke the new one, or `mark_needs_build` goes inert on an entry that
+/// is on screen.
+///
+/// Red-check: make `OverlayEntry::clear_rebuild` take the slot
+/// unconditionally; the final `mark_needs_build` rebuilds nothing.
+#[test]
+fn an_entry_moved_between_overlays_in_one_frame_keeps_rebuilding() {
+    let calls = Calls::default();
+    let entry = counting_entry(&calls);
+    let (deep, _) = overlay_with(std::slice::from_ref(&entry));
+    let shallow = OverlayHandle::new();
+
+    let mut harness = mount(ShallowAndDeep {
+        shallow: shallow.clone(),
+        deep: deep.clone(),
+    });
+    assert_eq!(calls.get(), 1, "built once, in the deep overlay");
+
+    entry.remove();
+    shallow.insert(&entry, &InsertPosition::Top);
+    harness.tick();
+    assert_eq!(shallow.entry_ids(), vec![entry.id()]);
+    assert_eq!(calls.get(), 2, "built again, now in the shallow overlay");
+    assert!(
+        entry.is_mounted(),
+        "the new layer's capability survived the old one's dispose"
+    );
+
+    entry.mark_needs_build();
+    harness.tick();
+    assert_eq!(
+        calls.get(),
+        3,
+        "mark_needs_build still rebuilds the moved entry"
+    );
 }
 
 /// Rebuilding an `Overlay` with a different handle moves the mounted overlay

@@ -761,6 +761,7 @@ impl StatefulView for OverlayEntryView {
     fn create_state(&self) -> Self::State {
         OverlayEntryViewState {
             entry: self.entry.clone(),
+            element: None,
         }
     }
 }
@@ -768,13 +769,17 @@ impl StatefulView for OverlayEntryView {
 /// Persistent state for one overlay layer.
 pub(crate) struct OverlayEntryViewState {
     entry: OverlayEntry,
+    /// This layer's element, so `dispose` revokes only its own publication.
+    element: Option<flui_foundation::ElementId>,
 }
 
 impl ViewState<OverlayEntryView> for OverlayEntryViewState {
     /// Hand this element's rebuild capability to the entry, so
     /// [`OverlayEntry::mark_needs_build`] rebuilds this layer alone.
     fn init_state(&mut self, ctx: &dyn BuildContext) {
-        self.entry.publish_rebuild(ctx.rebuild_handle());
+        let rebuild = ctx.rebuild_handle();
+        self.element = rebuild.element_id();
+        self.entry.publish_rebuild(rebuild);
     }
 
     /// Build from `view`, not `self`: the element may have been reconciled onto a
@@ -801,9 +806,11 @@ impl ViewState<OverlayEntryView> for OverlayEntryViewState {
         );
     }
 
-    /// Revoke the capability, so a `mark_needs_build` after unmount is inert.
+    /// Revoke the capability, so a `mark_needs_build` after unmount is inert,
+    /// unless a newer view of the same entry (in another overlay) has already
+    /// published its own.
     fn dispose(&mut self) {
-        self.entry.clear_rebuild();
+        self.entry.clear_rebuild(self.element);
     }
 }
 

@@ -71,6 +71,7 @@ Before this ADR the navigator was the only caller, and it never misused the surf
 
 - **An entry lives in one overlay, once.** `insert` refuses an entry another live overlay holds, or one this overlay already holds. `rearrange` refuses foreign entries, and a repeat within one call counts once. Without this, a second insert re-pointed the entry's back-reference and left a ghost copy that `remove` could not reach.
 - **One handle serves one mounted `Overlay`.** A second concurrent mount with the same handle builds nothing, and disposing it leaves the first one mounted. The rebuild slot is released only by the element that holds it.
+- **An entry moved between overlays in one frame keeps its rebuild capability.** The entry's slot, like the overlay's, is released only by the view that published it, so the old overlay disposing its view cannot revoke the new one's.
 - **A replacement handle takes over.** An `Overlay` rebuilt with a different handle releases the old handle's slot and claims the new one (`did_update_view`), so the new list is built and the old handle reports unmounted.
 
 ### 3. A public constructor: closing ADR-0036's deferral as a benefit
@@ -96,4 +97,4 @@ Tests that read the stacking order back (`entry_ids`, in the overlay's own tests
 - The overlay is now semver surface. Changing `InsertPosition` or the entry lifecycle is a breaking change.
 - `rearrange`'s `above:`/`below:` placement of the unmentioned group stays deferred (the note on `rearrange`), because nothing needs it.
 - `navigator_tests::overlay_publishes_the_lookup_and_mutation_contract` replaces ADR-0036's guard. It pins the published names, keeps the machinery out of the crate root's `pub use` lines, and asserts the module stays private.
-- Behaviour tests pin §2 and §2a: `insert_on_an_unmounted_overlay_waits_for_the_next_mount`, `overlay_entry_remove_on_an_unmounted_overlay_takes_it_out_of_the_list`, `remove_before_the_first_mount_keeps_the_entry_out_of_the_first_build`, `an_entry_already_in_an_overlay_is_refused_elsewhere_and_twice`, `one_handle_serves_one_mounted_overlay` and `a_replacement_handle_takes_over_the_mounted_overlay`.
+- Behaviour tests pin §2 and §2a: `insert_on_an_unmounted_overlay_waits_for_the_next_mount`, `overlay_entry_remove_on_an_unmounted_overlay_takes_it_out_of_the_list`, `remove_before_the_first_mount_keeps_the_entry_out_of_the_first_build`, `an_entry_already_in_an_overlay_is_refused_elsewhere_and_twice`, `one_handle_serves_one_mounted_overlay`, `an_entry_moved_between_overlays_in_one_frame_keeps_rebuilding` and `a_replacement_handle_takes_over_the_mounted_overlay`.
