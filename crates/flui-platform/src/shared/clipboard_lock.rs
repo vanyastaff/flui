@@ -39,6 +39,9 @@ pub(crate) fn with_clipboard_session<R>(session: impl FnOnce() -> R) -> R {
 
 /// Serializes tests that assert a write → read round-trip through the one
 /// system clipboard, so parallel test threads do not read each other's text.
+/// Covers in-process runs (`cargo test`); under nextest, where every test is
+/// its own process, the `system-clipboard` test group in
+/// `.config/nextest.toml` does the same job.
 #[cfg(test)]
 pub(crate) fn round_trip_serial() -> MutexGuard<'static, ()> {
     static ROUND_TRIP: Mutex<()> = Mutex::new(());
