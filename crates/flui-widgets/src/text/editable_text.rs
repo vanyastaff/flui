@@ -26,6 +26,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_types::{
     Color, ImeEvent, Offset, Point, Rect,
     geometry::{Bounds, Pixels},
+    platform::TargetPlatform,
     typography::{TextDirection, TextSpan, TextStyle},
 };
 use flui_view::prelude::*;
@@ -160,11 +161,24 @@ fn source_offset_at_global(
 /// and masked/source distinction, both shared verbatim here.
 ///
 /// Delegates to [`RenderEditable::word_range_at_local_offset`]
-/// (`flui-objects`), which itself delegates to
-/// [`TextLayout::get_word_boundary`](flui_painting::TextLayout::get_word_boundary)
-/// — the UAX #29 word segmentation this widget's Ctrl/Alt+Arrow word-jump
-/// also uses, one layer down, so a double-tap and a keyboard word-jump
-/// agree on where a word starts and ends.
+/// (`flui-objects`), which itself delegates to `flui-painting`'s
+/// `TextLayout::get_word_boundary` (not a doc link: `flui-painting` is a
+/// dev-dependency of this crate, not a regular one, so the path would not
+/// resolve in a normal `cargo doc` build)
+/// — UAX #29 segmentation via the same `unicode-segmentation` crate this
+/// widget's own Ctrl/Alt+Arrow word-jump uses (`controller.rs`'s private
+/// `next_word_boundary`/`prev_word_boundary`), but NOT the same function:
+/// that pair answers a directional "next/
+/// previous stop" query with its own asymmetric tie-break (see the
+/// controller's `# Word unit` doc), while this one answers "which segment
+/// is under this exact position", with a DIFFERENT tie-break suited to
+/// that question. A double-tap and a keyboard word-jump can therefore
+/// land on different boundaries for the same buffer in edge cases (a
+/// caret sitting exactly on a segment boundary, say) — a known
+/// consequence of not sharing one primitive across a crate boundary that
+/// only `flui-painting` can see (`TextLayout`) and only
+/// `flui-widgets::controller` can see (the raw buffer, no shaping), not
+/// an oversight.
 fn source_word_range_at_global(
     owner: &PipelineCell,
     inner_anchor: &flui_objects::SubtreeAnchor,
@@ -661,23 +675,23 @@ impl EditableTextState {
     /// into a selection.
     ///
     /// Split out of `build` only for size; it runs on every rebuild and holds
-    /// no state of its own beyond the drag anchor, which lives in an `Rc` the
-    /// three closures share.
+    /// no state of its own beyond `drag_anchor`, shared with
+    /// [`Self::wrap_double_tap_word_select`] (see its doc).
     ///
     /// # What is deliberately absent
     ///
     /// Shift-click extension and triple-tap line selection. Each needs a
     /// click-count or a modifier this level does not see — `Listener`
     /// delivers raw pointer events, and the tap/multi-tap arbitration that
-    /// produces those lives in `flui-interaction`'s recognisers.
-    /// Double-tap word selection USED to be on this list too; it now lives
-    /// one level up, in [`EditableTextState::wrap_double_tap_word_select`],
-    /// composed around this method's own return value rather than added
-    /// here — see that method's doc.
+    /// produces those lives in `flui-interaction`'s recognisers. Double-tap
+    /// word selection lives one level up, in
+    /// [`Self::wrap_double_tap_word_select`], composed around this
+    /// method's own return value rather than added here.
     fn install_pointer_handlers(
         &self,
         field: crate::interaction::Listener,
         view: &EditableText,
+        drag_anchor: Rc<Cell<Option<usize>>>,
     ) -> impl IntoView {
         let enabled = view.enabled;
         let obscuring = view.obscure_text.then_some(view.obscuring_character);
@@ -685,11 +699,14 @@ impl EditableTextState {
         let anchor = self.inner_anchor.clone();
         let controller = Rc::clone(&self.controller);
         let focus_node = Rc::clone(&self.focus_node);
-        // Where the current drag began, in SOURCE byte space. `None` means no
-        // drag of ours is in flight, which is what makes a move that started
-        // outside this field — or one that arrived after a cancel — a no-op
+        // `drag_anchor` is where the current drag began, in SOURCE byte
+        // space, shared with `wrap_double_tap_word_select` (this method's
+        // caller passes the SAME cell to both). `None` means no drag of
+        // ours is in flight, which is what makes a move that started
+        // outside this field — or one that arrived after a cancel, OR one
+        // silenced by a double-tap widening this same contact into a word
+        // selection (see `wrap_double_tap_word_select`'s doc) — a no-op
         // rather than a selection anchored at whatever was last there.
-        let drag_anchor: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
 
         let resolve = {
             let owner = owner.clone();
@@ -782,10 +799,24 @@ impl EditableTextState {
     /// waiting for the second contact to also lift (`on_double_tap`) would
     /// put the caret and the word-select visibly out of sync for the
     /// gesture's duration.
+    ///
+    /// `drag_anchor` (the SAME cell `install_pointer_handlers` writes) is
+    /// cleared here after the word selection lands. `Listener`'s own `down`
+    /// handler already ran for this same contact (both layers see every
+    /// pointer event — see this method's `GestureDetector`-vs-`Listener`
+    /// doc above) and set the anchor to place the caret, and a touch
+    /// contact is essentially never perfectly still: the next `move`, still
+    /// on the same still-down second tap, would otherwise read that anchor
+    /// and call `set_selection(anchor, moved_to)` — collapsing the word
+    /// selection this method just made back down to a near-zero-byte range
+    /// anchored at the tap point. Clearing it makes that move a no-op
+    /// (`install_pointer_handlers`'s `moved` returns early with no anchor),
+    /// exactly like a move that arrived after a cancel.
     fn wrap_double_tap_word_select(
         &self,
         child: impl IntoView,
         view: &EditableText,
+        drag_anchor: Rc<Cell<Option<usize>>>,
     ) -> impl IntoView {
         let enabled = view.enabled;
         let obscuring = view.obscure_text.then_some(view.obscuring_character);
@@ -808,6 +839,7 @@ impl EditableTextState {
                     return;
                 };
                 controller.borrow().set_selection(range.start, range.end);
+                drag_anchor.set(None);
             })
             .child(child)
     }
@@ -1143,8 +1175,12 @@ impl ViewState<EditableText> for EditableTextState {
                 }),
             ));
 
-        let field = self.install_pointer_handlers(field, view);
-        self.wrap_double_tap_word_select(field, view)
+        // Shared with `wrap_double_tap_word_select` below: a double-tap that
+        // lands on this same contact must be able to silence the drag this
+        // anchor otherwise starts for it — see that method's doc.
+        let drag_anchor: Rc<Cell<Option<usize>>> = Rc::new(Cell::new(None));
+        let field = self.install_pointer_handlers(field, view, Rc::clone(&drag_anchor));
+        self.wrap_double_tap_word_select(field, view, drag_anchor)
     }
 
     fn dispose(&mut self) {
@@ -1417,14 +1453,38 @@ fn is_command_chord(modifiers: Modifiers) -> bool {
 }
 
 /// Whether these modifiers request WORD-granularity caret/selection/delete
-/// movement rather than character-granularity — Ctrl (Windows/Linux) or
-/// Alt (macOS's Option), matching both conventions rather than picking
-/// one, since FLUI has no per-platform keymap layer to pick for it. Arrow
-/// and Backspace keys never produce a character, so this has no AltGr
-/// carve-out to make (contrast [`is_command_chord`], which does).
+/// movement rather than character-granularity, per platform — Flutter's
+/// `DefaultTextEditingShortcuts` binds a different modifier per platform,
+/// not the same one everywhere:
+///
+/// | Platform | Word-jump modifier | Why not the other one too |
+/// |---|---|---|
+/// | macOS, iOS | Alt (Option) | Ctrl is unbound for word-jump on macOS |
+/// | Windows, Linux, Android, Fuchsia, Unknown | Control | Alt+Left/Right/Backspace are reserved by Flutter for LINE-boundary intents this crate does not implement yet (`# DEFERRED` below); treating Alt as word-jump here too would silently claim that reservation early |
+///
+/// [`TargetPlatform::current()`] (compile-time `cfg(target_os)`), the same
+/// resolution [`flui_interaction::settings::GestureSettings::native`]
+/// uses — `flui-widgets` has no ambient runtime-platform override to
+/// prefer over it, unlike `GestureSettings::for_platform`'s own explicit
+/// parameter for embedders that can host more than one platform feel.
+///
+/// # DEFERRED
+///
+/// Alt+Left/Right/Backspace as a line-boundary intent on non-Apple
+/// platforms (Flutter: `ExtendSelectionToLineBreakIntent`/
+/// `DeleteToLineBreakIntent`). Left unhandled (falls through to a plain
+/// per-character move) rather than silently reinterpreted as word-jump,
+/// so a later line-boundary implementation is not fighting an existing,
+/// wrong meaning for the chord.
+///
+/// Arrow and Backspace/Delete keys never produce a character, so this has
+/// no AltGr carve-out to make (contrast [`is_command_chord`], which does).
 #[inline]
 fn is_word_jump_modifier(modifiers: Modifiers) -> bool {
-    modifiers.contains(Modifiers::CONTROL) || modifiers.contains(Modifiers::ALT)
+    match TargetPlatform::current() {
+        TargetPlatform::MacOS | TargetPlatform::iOS => modifiers.contains(Modifiers::ALT),
+        _ => modifiers.contains(Modifiers::CONTROL),
+    }
 }
 
 /// Build the key-event handler closure for `controller`.
@@ -1482,12 +1542,10 @@ fn build_key_handler(
                 }
                 KeyEventResult::Handled
             }
-            // Ctrl/Alt+Backspace deletes the WORD behind the caret rather
-            // than one character — see `is_word_jump_modifier`'s doc for
-            // why both modifiers are accepted. This used to be a plain
-            // one-character Backspace regardless of the chord (see this
-            // arm's history for the `a_command_chord_on_backspace_...`
-            // test that documented that gap before word-delete existed).
+            // The platform's word-jump modifier + Backspace deletes the
+            // WORD behind the caret rather than one character — see
+            // `is_word_jump_modifier`'s doc for which modifier that is on
+            // this platform.
             Key::Named(NamedKey::Backspace) => {
                 if is_word_jump_modifier(event.modifiers) {
                     controller.delete_word_backward();
@@ -1496,11 +1554,8 @@ fn build_key_handler(
                 }
                 KeyEventResult::Handled
             }
-            // Ctrl/Alt+Delete is the forward mirror, added alongside
-            // Backspace for the same reason
-            // `TextEditingController::delete_word_forward`'s doc gives —
-            // this crate does not leave one half of a symmetric pair
-            // unfinished.
+            // Ctrl/Alt+Delete is the forward mirror of the Backspace arm
+            // above.
             Key::Named(NamedKey::Delete) => {
                 if is_word_jump_modifier(event.modifiers) {
                     controller.delete_word_forward();
@@ -2119,14 +2174,32 @@ mod tests {
         assert_eq!(text, "a");
     }
 
-    /// Ctrl+Backspace deletes the WHOLE current word, not one character —
-    /// this arm used to fall back to a plain character Backspace (see git
-    /// history for `a_command_chord_on_backspace_still_deletes_until_a_shortcuts_layer_exists`,
-    /// this test's predecessor, written while there was no word-delete to
-    /// route to). Alt+Backspace (macOS's Option) is the same chord — see
-    /// `is_word_jump_modifier`'s doc.
+    /// The word-jump modifier for the platform these tests actually run
+    /// on — Alt on macOS/iOS, Control everywhere else. Mirrors
+    /// `is_word_jump_modifier`'s own `match`; kept separate rather than
+    /// exposing that private function to tests so this stays an
+    /// independent check, not a tautology against the function under test.
+    fn platform_word_jump_modifier() -> Modifiers {
+        match TargetPlatform::current() {
+            TargetPlatform::MacOS | TargetPlatform::iOS => Modifiers::ALT,
+            _ => Modifiers::CONTROL,
+        }
+    }
+
+    /// The modifier that is NOT this platform's word-jump chord — Control
+    /// on macOS/iOS (unbound for word-jump there), Alt everywhere else
+    /// (reserved, unhandled — see `is_word_jump_modifier`'s `# DEFERRED`).
+    fn non_word_jump_modifier() -> Modifiers {
+        match TargetPlatform::current() {
+            TargetPlatform::MacOS | TargetPlatform::iOS => Modifiers::CONTROL,
+            _ => Modifiers::ALT,
+        }
+    }
+
+    /// The platform's word-jump modifier + Backspace deletes the WHOLE
+    /// current word, not one character.
     #[test]
-    fn ctrl_backspace_deletes_the_whole_word_behind_the_caret() {
+    fn word_jump_modifier_backspace_deletes_the_whole_word_behind_the_caret() {
         use flui_interaction::events::Code;
         use flui_interaction::testing::input::KeyEventBuilder;
 
@@ -2142,7 +2215,7 @@ mod tests {
         let event = KeyEventBuilder::new(Code::Backspace)
             .with_key(Key::Named(NamedKey::Backspace))
             .with_state(KeyState::Down)
-            .with_modifiers(Modifiers::CONTROL)
+            .with_modifiers(platform_word_jump_modifier())
             .build();
 
         assert_eq!(handler(&event), KeyEventResult::Handled);
@@ -2153,11 +2226,44 @@ mod tests {
         );
     }
 
-    /// Ctrl+Left/Right jump the caret by a WORD, not a character — the
-    /// keyboard-facing half of `TextEditingController`'s `# Word unit`
-    /// contract.
+    /// The OTHER platform's word-jump modifier does nothing special for
+    /// Backspace here — plain single-character deletion, per
+    /// `is_word_jump_modifier`'s per-platform table
+    /// (`# DEFERRED`: reserved for a future line-boundary intent on
+    /// non-Apple platforms, not silently claimed as word-delete).
     #[test]
-    fn ctrl_arrow_jumps_the_caret_by_a_word() {
+    fn non_word_jump_modifier_backspace_deletes_only_one_character() {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+
+        let controller = TextEditingController::with_text("hello worlds");
+        let focus_node = FocusNode::with_debug_label("test");
+        let handler = build_key_handler(
+            Rc::new(RefCell::new(controller.clone())),
+            Rc::clone(&focus_node),
+            Rc::new(RefCell::new(None)),
+        );
+        controller.move_caret_end();
+
+        let event = KeyEventBuilder::new(Code::Backspace)
+            .with_key(Key::Named(NamedKey::Backspace))
+            .with_state(KeyState::Down)
+            .with_modifiers(non_word_jump_modifier())
+            .build();
+
+        assert_eq!(handler(&event), KeyEventResult::Handled);
+        assert_eq!(
+            controller.text(),
+            "hello world",
+            "only the last character, not the whole word"
+        );
+    }
+
+    /// The platform's word-jump modifier + Left/Right jump the caret by a
+    /// WORD, not a character — the keyboard-facing half of
+    /// `TextEditingController`'s `# Word unit` contract.
+    #[test]
+    fn word_jump_modifier_arrow_jumps_the_caret_by_a_word() {
         use flui_interaction::events::Code;
         use flui_interaction::testing::input::KeyEventBuilder;
 
@@ -2173,7 +2279,7 @@ mod tests {
         let right = KeyEventBuilder::new(Code::ArrowRight)
             .with_key(Key::Named(NamedKey::ArrowRight))
             .with_state(KeyState::Down)
-            .with_modifiers(Modifiers::CONTROL)
+            .with_modifiers(platform_word_jump_modifier())
             .build();
         assert_eq!(handler(&right), KeyEventResult::Handled);
         assert_eq!(controller.caret_byte_offset(), 6, "start of \"world\"");
@@ -2181,13 +2287,70 @@ mod tests {
         let left = KeyEventBuilder::new(Code::ArrowLeft)
             .with_key(Key::Named(NamedKey::ArrowLeft))
             .with_state(KeyState::Down)
-            .with_modifiers(Modifiers::ALT)
+            .with_modifiers(platform_word_jump_modifier())
             .build();
         assert_eq!(handler(&left), KeyEventResult::Handled);
+        assert_eq!(controller.caret_byte_offset(), 0);
+    }
+
+    /// The OTHER platform's word-jump modifier does nothing special for
+    /// Right here — plain single-character movement.
+    #[test]
+    fn non_word_jump_modifier_arrow_moves_only_one_character() {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("test");
+        let handler = build_key_handler(
+            Rc::new(RefCell::new(controller.clone())),
+            Rc::clone(&focus_node),
+            Rc::new(RefCell::new(None)),
+        );
+        controller.move_caret_home();
+
+        let right = KeyEventBuilder::new(Code::ArrowRight)
+            .with_key(Key::Named(NamedKey::ArrowRight))
+            .with_state(KeyState::Down)
+            .with_modifiers(non_word_jump_modifier())
+            .build();
+        assert_eq!(handler(&right), KeyEventResult::Handled);
         assert_eq!(
             controller.caret_byte_offset(),
-            0,
-            "Alt is the same chord as Ctrl (macOS's Option)"
+            1,
+            "one character, not a jump to the next word's start"
+        );
+    }
+
+    /// Shift + the platform's word-jump modifier EXTENDS the selection by a
+    /// whole word, leaving the anchor — the `(true, true)` arm of the
+    /// `ArrowLeft`/`ArrowRight` key handler, untested until now (the other
+    /// three combinations of word/character × move/extend all had
+    /// coverage; this was the gap).
+    #[test]
+    fn shift_word_jump_modifier_extends_the_selection_by_a_word() {
+        use flui_interaction::events::Code;
+        use flui_interaction::testing::input::KeyEventBuilder;
+
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("test");
+        let handler = build_key_handler(
+            Rc::new(RefCell::new(controller.clone())),
+            Rc::clone(&focus_node),
+            Rc::new(RefCell::new(None)),
+        );
+        controller.move_caret_home();
+
+        let right = KeyEventBuilder::new(Code::ArrowRight)
+            .with_key(Key::Named(NamedKey::ArrowRight))
+            .with_state(KeyState::Down)
+            .with_modifiers(platform_word_jump_modifier() | Modifiers::SHIFT)
+            .build();
+        assert_eq!(handler(&right), KeyEventResult::Handled);
+        assert_eq!(
+            controller.selection(),
+            0..6,
+            "anchor stays at 0, extent jumps to the start of \"world\""
         );
     }
 
@@ -3646,6 +3809,58 @@ mod tests {
             controller.selection(),
             0..5,
             "a double-tap at the start of \"hello\" selects the whole word"
+        );
+    }
+
+    /// A word selection made by a double-tap must survive the second
+    /// contact wobbling before it lifts — near-universal on touch, where a
+    /// finger is essentially never perfectly still between down and up.
+    ///
+    /// `install_pointer_handlers`'s own `down` handler ran for this same
+    /// contact (both `Listener` and `GestureDetector` see every pointer
+    /// event) and set `drag_anchor` before `on_double_tap_down` had a
+    /// chance to widen the selection — so without clearing that anchor, the
+    /// very next move would read it and call
+    /// `set_selection(anchor, moved_to)`, collapsing the word selection
+    /// back down to a near-zero-byte range anchored at the tap point.
+    ///
+    /// Red-check: drop `drag_anchor.set(None)` from
+    /// `wrap_double_tap_word_select`'s `on_double_tap_down` closure — the
+    /// selection after the move is a tiny range near the tap point, not
+    /// `0..5`.
+    #[test]
+    fn a_double_tap_selects_the_word_even_if_the_second_contact_moves_before_lifting() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("wobbly double-tapped field");
+        let harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+
+        harness.dispatch_pointer_down(1.0, 5.0);
+        harness.dispatch_pointer_up(1.0, 5.0);
+
+        harness.dispatch_pointer_down(1.0, 5.0);
+        assert_eq!(
+            controller.selection(),
+            0..5,
+            "precondition: the second tap's down already selected the word"
+        );
+
+        // The second contact moves by a pixel before lifting.
+        harness.dispatch_pointer_move(2.0, 5.0);
+        assert_eq!(
+            controller.selection(),
+            0..5,
+            "a stray move on the still-down second contact must not clobber \
+             the word selection"
+        );
+
+        harness.dispatch_pointer_up(2.0, 5.0);
+        assert_eq!(
+            controller.selection(),
+            0..5,
+            "lifting the second contact must not change the selection either"
         );
     }
 

@@ -904,8 +904,15 @@ impl RecognizerGroup {
                 .add_pointer(pointer, position, global_position);
         }
         if self.double_tap_active() {
+            // `add_pointer_with_kind`, not the trait's `add_pointer`: this
+            // call site holds the real originating event, so
+            // `DoubleTapDetails::kind` should report the actual device
+            // rather than falling back to `PointerType::Touch`.
+            let kind = event
+                .pointer_type()
+                .unwrap_or(flui_interaction::events::PointerType::Touch);
             self.double_tap
-                .add_pointer(pointer, position, global_position);
+                .add_pointer_with_kind(pointer, position, global_position, kind);
         }
         if self.drag_active() {
             self.drag.add_pointer(pointer, position, global_position);

@@ -497,12 +497,22 @@ impl DoubleTapGestureRecognizer {
     }
 }
 
-impl GestureRecognizer for DoubleTapGestureRecognizer {
-    fn add_pointer(
+impl DoubleTapGestureRecognizer {
+    /// The same registration [`GestureRecognizer::add_pointer`] performs,
+    /// with the pointer's real device `kind` — trait callers that only have
+    /// [`GestureRecognizer::add_pointer`]'s narrower signature (no `kind`
+    /// parameter) fall back to [`PointerType::Touch`] through that method;
+    /// a caller holding the concrete type and the originating
+    /// [`crate::events::PointerEvent`] (`GestureDetector`'s own dispatch,
+    /// which has both) should call this instead, so
+    /// [`DoubleTapDetails::kind`] reports the actual device rather than a
+    /// hard-coded guess.
+    pub fn add_pointer_with_kind(
         self: &Arc<Self>,
         pointer: PointerId,
         position: Offset<Pixels>,
         global_position: Offset<Pixels>,
+        kind: PointerType,
     ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
@@ -552,7 +562,21 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
 
         self.state
             .start_tracking(pointer, position, global_position, self);
-        self.handle_down(position, global_position, PointerType::Touch);
+        self.handle_down(position, global_position, kind);
+    }
+}
+
+impl GestureRecognizer for DoubleTapGestureRecognizer {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+    ) {
+        // No `kind` in this trait method's signature — see
+        // `add_pointer_with_kind`'s doc for the caller that should use it
+        // instead when the real device kind is available.
+        self.add_pointer_with_kind(pointer, position, global_position, PointerType::Touch);
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {

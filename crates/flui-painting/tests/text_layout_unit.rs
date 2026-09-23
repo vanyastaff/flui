@@ -174,8 +174,17 @@ fn get_word_boundary_does_not_split_on_an_apostrophe() {
 /// "word" (the same degenerate shape
 /// `get_word_boundary_returns_word_not_whole_line` guards against, here
 /// triggered by script rather than by its glyph-count bug).
+///
+/// The exact boundary is pinned, not just "not the whole line": without a
+/// `cjdict`-style dictionary (which this crate does not have — see
+/// `flui-widgets/ARCHITECTURE.md`'s Mapping decision), the rule-based
+/// default segments Han per character, so `"日本語のテスト"` ("Japanese
+/// test") splits after the FIRST character `日` (3 UTF-8 bytes) rather
+/// than staying one word — a known limitation, asserted here so a future
+/// dictionary integration has a failing test to flip, not a silently
+/// stale comment.
 #[test]
-fn get_word_boundary_finds_an_internal_boundary_in_cjk_text_with_no_whitespace() {
+fn get_word_boundary_splits_cjk_per_character_not_per_word() {
     use flui_painting::TextLayout;
     use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
 
@@ -186,9 +195,73 @@ fn get_word_boundary_finds_an_internal_boundary_in_cjk_text_with_no_whitespace()
     let pos = TextPosition::new(0, TextAffinity::Downstream);
     let word = layout.get_word_boundary(pos);
 
-    assert!(
-        word.end < text.len(),
-        "a script-aware segmenter must stop before the end of the line, not return the whole \
-         line the way the old ASCII-whitespace scan did"
+    assert_eq!(word.start, 0);
+    assert_eq!(
+        word.end, 3,
+        "日 alone (3 UTF-8 bytes), not the whole word \"日本語\""
     );
+}
+
+/// The boundary tie-break matrix `get_word_boundary`'s own doc names: a
+/// WORD segment wins over an adjacent WHITESPACE one at an exact
+/// boundary, regardless of which side of the offset it is on.
+#[test]
+fn get_word_boundary_prefers_the_word_side_of_a_boundary_over_the_whitespace_side() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    let layout = TextLayout::new("foo bar", None, 14.0, None, None, TextDirection::Ltr);
+    let _ = layout.metrics();
+
+    let word_at = |offset: usize| {
+        layout.get_word_boundary(TextPosition::new(offset, TextAffinity::Downstream))
+    };
+
+    // Offset 0: always the first segment.
+    assert_eq!((word_at(0).start, word_at(0).end), (0, 3), "\"foo\"");
+    // Offset 3: the boundary between "foo" (word) and the space
+    // (whitespace) -- the word wins, even though the space is what
+    // FOLLOWS this offset.
+    assert_eq!((word_at(3).start, word_at(3).end), (0, 3), "\"foo\"");
+    // Offset 4: the boundary between the space (whitespace) and "bar"
+    // (word) -- the word wins again, even though it FOLLOWS this offset
+    // rather than precedes it. This is the case a plain
+    // prefer-the-preceding-segment rule gets wrong.
+    assert_eq!((word_at(4).start, word_at(4).end), (4, 7), "\"bar\"");
+    // Offset 7 (end of buffer): the only candidate is "bar".
+    assert_eq!((word_at(7).start, word_at(7).end), (4, 7), "\"bar\"");
+}
+
+/// A position strictly inside a ZWJ family emoji's grapheme cluster must
+/// resolve to a segment that CONTAINS the whole cluster, never split it —
+/// the painting-layer counterpart of the `flui-widgets::controller`
+/// grapheme-boundary guarantees, exercised here through the word-boundary
+/// query a double-tap actually calls.
+#[test]
+fn get_word_boundary_never_splits_inside_a_zwj_emoji_cluster() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}"; // family emoji, one grapheme
+    let text = format!("hi {family} bye");
+    let layout = TextLayout::new(&text, None, 14.0, None, None, TextDirection::Ltr);
+    let _ = layout.metrics();
+
+    let cluster_start = "hi ".len();
+    let cluster_end = cluster_start + family.len();
+
+    // Probe every byte strictly inside the cluster, not just its edges.
+    for offset in (cluster_start + 1)..cluster_end {
+        if !text.is_char_boundary(offset) {
+            continue;
+        }
+        let word = layout.get_word_boundary(TextPosition::new(offset, TextAffinity::Downstream));
+        assert!(
+            word.start <= cluster_start && word.end >= cluster_end,
+            "offset {offset} inside the cluster must resolve to a segment covering the whole \
+             cluster [{cluster_start}, {cluster_end}), got [{}, {})",
+            word.start,
+            word.end
+        );
+    }
 }

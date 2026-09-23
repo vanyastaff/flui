@@ -1098,23 +1098,34 @@ impl TextLayout {
     /// Segmentation is full UAX #29 word segmentation
     /// (`unicode-segmentation`'s `split_word_bound_indices`), not an
     /// ASCII-whitespace-run scan: a straight/curly apostrophe inside a
-    /// word (`"don't"`), a letter-digit run (`"foo123"`), and non-Latin
-    /// scripts (CJK, which has no ASCII whitespace to split on at all)
-    /// each stay or split per the standard's own rules rather than
-    /// treating every non-space byte as one undifferentiated run. This
-    /// closes the gap the previous ASCII implementation's own doc
-    /// comment named as an "Outstanding refactor". Clusters-only, not
-    /// dictionary-based: Thai/Lao/Khmer, which UAX #29 cannot segment
-    /// without a dictionary, are a known limitation — see
+    /// word (`"don't"`) stays one segment, and a letter-digit run
+    /// (`"foo123"`) stays one segment too, rather than every non-space
+    /// byte being treated as one undifferentiated run. This closes the
+    /// gap the previous ASCII implementation's own doc comment named as
+    /// an "Outstanding refactor". Clusters-only, not dictionary-based:
+    /// Thai/Lao/Khmer/Myanmar (no lexicon, no spaces — UAX #29's
+    /// rule-based default cannot find a real word boundary there at all)
+    /// AND Chinese/Japanese (ICU's oracle behavior uses a `cjdict`
+    /// word-frequency dictionary this crate does not have; the rule-based
+    /// default instead segments per character/script-run — `"東京"`
+    /// splits into `"東"` and `"京"` rather than staying the one word ICU
+    /// would find) are known limitations — see
     /// `flui-widgets/ARCHITECTURE.md`'s Mapping decision for this
     /// feature.
     ///
-    /// When `offset` sits exactly on a segment boundary, the segment that
-    /// ENDS there wins over the one that starts there — a caret sitting
-    /// right after a word, not yet into whatever follows it, double-taps
-    /// to the word just typed rather than the boundary ahead of it. `0`
-    /// itself is the one exception, always resolving to the first
-    /// segment.
+    /// # Boundary tie-break
+    ///
+    /// `0` always resolves to the first segment. Elsewhere, when `offset`
+    /// sits exactly between two segments, a WORD segment wins over an
+    /// adjacent WHITESPACE one regardless of which side it is on — a
+    /// caret right after a word (`"café "`, offset at the space) answers
+    /// with the word just typed, and a caret right before one (`"foo
+    /// bar"`, offset at `b`) answers with the word about to be typed
+    /// into, never the whitespace either straddles. Between two
+    /// non-whitespace segments (no test in this crate currently produces
+    /// this — UAX #29's default rules merge every adjacent pair this
+    /// module's own test scripts can produce) the preceding one wins, the
+    /// same as the `0`-adjacent case falling through to "first segment".
     pub fn get_word_boundary(&self, position: TextPosition) -> TextRange {
         let text = self.text.as_str();
         let total = text.len();
@@ -1130,18 +1141,35 @@ impl TextLayout {
             offset -= 1;
         }
 
+        let segments: Vec<(usize, usize, bool)> = text
+            .split_word_bound_indices()
+            .map(|(idx, word)| (idx, idx + word.len(), word.chars().all(char::is_whitespace)))
+            .collect();
+
+        let Some(&(first_start, first_end, _)) = segments.first() else {
+            return TextRange::new(total, total);
+        };
         if offset == 0 {
-            let (start, first) = text.split_word_bound_indices().next().unwrap_or((0, ""));
-            return TextRange::new(start, start + first.len());
+            return TextRange::new(first_start, first_end);
         }
 
-        text.split_word_bound_indices()
-            .map(|(idx, word)| (idx, idx + word.len()))
-            .find(|&(idx, end)| idx < offset && offset <= end)
-            .map_or_else(
-                || TextRange::new(total, total),
-                |(idx, end)| TextRange::new(idx, end),
-            )
+        let preceding = segments.iter().find(|&&(_, end, _)| end == offset).copied();
+        let following = segments
+            .iter()
+            .find(|&&(start, _, _)| start == offset)
+            .copied();
+
+        match (preceding, following) {
+            (Some((_, _, true)), Some((f_start, f_end, false))) => TextRange::new(f_start, f_end),
+            (Some((p_start, p_end, _)), _) => TextRange::new(p_start, p_end),
+            (None, Some((f_start, f_end, _))) => TextRange::new(f_start, f_end),
+            (None, None) => segments
+                .iter()
+                .find(|&&(start, end, _)| start < offset && offset < end)
+                .map_or(TextRange::new(total, total), |&(start, end, _)| {
+                    TextRange::new(start, end)
+                }),
+        }
     }
 }
 

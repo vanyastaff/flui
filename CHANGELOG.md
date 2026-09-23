@@ -48,11 +48,12 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `Shortcuts` instead), never on Shift+Enter (reserved for a future
   multiline newline), and never twice for one held key (auto-repeat is
   consumed but does not resubmit).
-- **Word-boundary text editing**: Ctrl/Alt+Left/Right,
-  Shift+Ctrl/Alt+Left/Right, Ctrl+Backspace/Delete, and double-tap word
-  selection all move/extend/delete/select by UAX #29 word segments now,
-  not one grapheme cluster or an ASCII-whitespace run at a time
-  (`flui-widgets`, `flui-painting`). `TextLayout::get_word_boundary`
+- **Word-boundary text editing**: the platform's word-jump modifier
+  (Alt/Option on macOS and iOS, Control everywhere else) + Left/Right,
+  Shift+that modifier+Left/Right, that modifier+Backspace/Delete, and
+  double-tap word selection all move/extend/delete/select by UAX #29
+  word segments now, not one grapheme cluster or an ASCII-whitespace run
+  at a time (`flui-widgets`, `flui-painting`). `TextLayout::get_word_boundary`
   (`flui-painting`) moved off its old ASCII-whitespace-run scan onto
   `unicode-segmentation`'s UAX #29 segmentation; `TextEditingController`
   gained `move_caret_word_left/right`, `extend_selection_word_left/right`,
@@ -62,7 +63,8 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   double-tap's caret into the enclosing word. See
   `crates/flui-widgets/ARCHITECTURE.md`'s Mapping decisions #19–20 for the
   segmentation-algorithm and gesture-composition choices, including the
-  known Thai/Lao/Khmer/Myanmar dictionary-segmentation limitation.
+  known Thai/Lao/Khmer/Myanmar/Chinese/Japanese segmentation
+  limitations.
 
 ### Changed
 

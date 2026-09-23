@@ -228,10 +228,14 @@ struct ComposingState {
 /// ([`Self::delete_word_backward`]/[`Self::delete_word_forward`]) step by
 /// UAX #29 **word** segments (`unicode-segmentation`'s
 /// `split_word_bound_indices`), not ASCII whitespace runs: a
-/// straight/curly apostrophe inside a word (`"don't"`), a letter-digit run
-/// (`"foo123"`), and non-Latin scripts all stay one segment per the
-/// standard's own rules, and a run of plain whitespace is skipped as a
-/// whole rather than becoming its own stop.
+/// straight/curly apostrophe inside a word (`"don't"`) and a letter-digit
+/// run (`"foo123"`) each stay one segment per the standard's own rules,
+/// and a run of plain whitespace is skipped as a whole rather than
+/// becoming its own stop. Clusters-only, not dictionary-based — CJK
+/// (segments per character/script-run, not per linguistic word) and
+/// Thai/Lao/Khmer/Myanmar (no boundary at all without a lexicon) are
+/// known limitations; see `flui-widgets/ARCHITECTURE.md`'s Mapping
+/// decision #19.
 ///
 /// Forward and backward are deliberately NOT mirror images of each other,
 /// matching the convention most editors already use: forward always
@@ -240,21 +244,19 @@ struct ComposingState {
 /// whitespace beyond it); backward returns to the **current** word's own
 /// start without skipping it — only a caret already sitting exactly at a
 /// word's start, or inside/after pure whitespace, continues back to the
-/// *previous* word's start. Structurally this mirrors Flutter's
-/// `RenderEditable._handleMoveCursorForwardByWord`/
-/// `_handleMoveCursorBackwardByWord` (`rendering/editable.dart`, tag
-/// `3.44.0`) — skip the current word, skip whitespace-only segments, land
-/// on a word's start — but is reimplemented directly over the segment
-/// list (see [`next_word_boundary`]/[`prev_word_boundary`]) rather than
-/// Flutter's own repeated `getWordBoundary` probing at a moving offset,
-/// which relies on an at-a-boundary tie-break internal to `dart:ui` this
-/// port has no way to reproduce byte-for-byte without a running Flutter to
-/// verify against. Word movement collapses an active selection to its
-/// edge without a further jump, the same rule [`Self::move_caret_left`]
-/// documents for character movement — chosen for consistency within this
-/// controller's own API, not a claim about Flutter's widgets-level
-/// `Action` plumbing for the analogous intent, which this crate does not
-/// have.
+/// *previous* word's start. Word movement collapses an active selection
+/// to its edge without a further jump, the same rule
+/// [`Self::move_caret_left`] documents for character movement.
+///
+/// This is a SEPARATE implementation from `flui-painting`'s
+/// `TextLayout::get_word_boundary` (neither is a doc link here:
+/// `flui-painting` is a dev-dependency of this crate, not a regular one,
+/// and `EditableTextState::wrap_double_tap_word_select`, which calls it,
+/// is private to `editable_text.rs`), which backs double-tap word
+/// selection one layer up — same underlying crate
+/// (`unicode-segmentation`), different tie-break, by design, because the
+/// two answer different questions: a directional jump here, a positional
+/// lookup there, not expected to agree at every boundary.
 #[derive(Clone)]
 pub struct TextEditingController {
     /// Shared text buffer + caret state.
@@ -903,11 +905,8 @@ impl TextEditingController {
     }
 
     /// Delete the WORD immediately to the right of the caret — Ctrl+Delete.
-    /// Mirror of [`Self::delete_word_backward`]; not part of the original
-    /// task brief (only Ctrl+Backspace was asked for) but added alongside
-    /// it for the same reason [`Self::delete_forward`] exists beside
-    /// [`Self::backspace`] — this crate does not leave one half of a
-    /// symmetric pair unfinished.
+    /// Mirror of [`Self::delete_word_backward`], for the same reason
+    /// [`Self::delete_forward`] exists beside [`Self::backspace`].
     pub fn delete_word_forward(&self) {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1241,24 +1240,28 @@ fn is_whitespace_only_word(segment: &str) -> bool {
 ///
 /// Finds the segment `offset` currently touches (the first one whose end
 /// is past `offset`) and returns the start of the first non-whitespace
-/// segment strictly after it, or `text.len()` if none remains.
+/// segment strictly after it, or `text.len()` if none remains. Streamed,
+/// not collected: `split_word_bound_indices` is walked once, forward,
+/// with no intermediate `Vec` — this runs on every Ctrl/Alt+Right and
+/// must not allocate a segment list for the whole buffer on every
+/// keystroke.
 fn next_word_boundary(text: &str, offset: usize) -> usize {
     let total = text.len();
     if text.is_empty() || offset >= total {
         return total;
     }
     let offset = clamp_to_char_boundary(text, offset);
-    let segments: Vec<(usize, usize, bool)> = text
+    let mut segments = text
         .split_word_bound_indices()
         .map(|(idx, word)| (idx, idx + word.len(), is_whitespace_only_word(word)))
-        .collect();
-    let Some(touching) = segments.iter().position(|&(_, end, _)| end > offset) else {
-        return total;
-    };
-    segments[touching + 1..]
-        .iter()
-        .find(|&&(_, _, whitespace_only)| !whitespace_only)
-        .map_or(total, |&(start, _, _)| start)
+        .skip_while(|&(_, end, _)| end <= offset);
+    // Consume the segment `offset` touches (already skipped-to by the
+    // `skip_while` above) without inspecting it — a word-jump always
+    // clears whatever segment it started in/on.
+    segments.next();
+    segments
+        .find(|&(_, _, whitespace_only)| !whitespace_only)
+        .map_or(total, |(start, _, _)| start)
 }
 
 /// The byte offset of the previous word-jump stop backward from `offset`
@@ -1269,7 +1272,10 @@ fn next_word_boundary(text: &str, offset: usize) -> usize {
 /// is before `offset`). If that segment is a word, returns ITS OWN start
 /// without skipping it; if it is whitespace (or `offset` already sits at
 /// a word's start), continues back to the start of the previous
-/// non-whitespace segment, or `0` if none remains.
+/// non-whitespace segment, or `0` if none remains. Streamed backward via
+/// `unicode_segmentation`'s `DoubleEndedIterator` support
+/// (`SplitWordBoundIndices::rev`) — same no-`Vec` reasoning as
+/// [`next_word_boundary`].
 fn prev_word_boundary(text: &str, offset: usize) -> usize {
     if text.is_empty() || offset == 0 {
         return 0;
@@ -1278,21 +1284,20 @@ fn prev_word_boundary(text: &str, offset: usize) -> usize {
     if offset == 0 {
         return 0;
     }
-    let segments: Vec<(usize, usize, bool)> = text
+    let mut segments = text
         .split_word_bound_indices()
         .map(|(idx, word)| (idx, idx + word.len(), is_whitespace_only_word(word)))
-        .collect();
-    let Some(touching) = segments.iter().rposition(|&(start, _, _)| start < offset) else {
+        .rev()
+        .skip_while(|&(start, _, _)| start >= offset);
+    let Some(touching) = segments.next() else {
         return 0;
     };
-    if !segments[touching].2 {
-        return segments[touching].0;
+    if !touching.2 {
+        return touching.0;
     }
-    segments[..touching]
-        .iter()
-        .rev()
-        .find(|&&(_, _, whitespace_only)| !whitespace_only)
-        .map_or(0, |&(start, _, _)| start)
+    segments
+        .find(|&(_, _, whitespace_only)| !whitespace_only)
+        .map_or(0, |(start, _, _)| start)
 }
 
 /// Clamp `offset` to the nearest extended-grapheme-cluster boundary of `s`,
@@ -2144,16 +2149,22 @@ mod tests {
         assert_eq!(super::prev_word_boundary(text, 5), 0);
     }
 
-    /// The CJK case an ASCII-whitespace scan cannot pass: no spaces at all,
-    /// so UAX #29's script-aware boundaries are the only thing that can
-    /// produce more than one stop.
+    /// The CJK case an ASCII-whitespace scan cannot pass at all — no
+    /// spaces to split on, so it would return the whole line — but this
+    /// crate's own UAX #29 segmenter does not claim linguistic-word
+    /// accuracy here either: with no `cjdict`-style dictionary (see
+    /// `flui-widgets/ARCHITECTURE.md`'s Mapping decision), Han characters
+    /// have no special merging rule, so the boundary lands after the
+    /// FIRST character (`日`, 3 UTF-8 bytes), not after the whole word
+    /// (`日本語`, "Japanese"). A known, tested limitation, pinned exactly
+    /// so a future dictionary integration has a failing test to flip.
     #[test]
-    fn cjk_text_with_no_whitespace_still_has_word_stops() {
+    fn cjk_text_splits_per_character_not_per_word() {
         let text = "日本語のテスト"; // "Japanese test", no ASCII/whitespace anywhere.
-        assert_ne!(
+        assert_eq!(
             super::next_word_boundary(text, 0),
-            text.len(),
-            "a script-aware segmenter must find an internal boundary"
+            3,
+            "stops after 日 alone, not after the whole word 日本語"
         );
     }
 
@@ -2276,6 +2287,32 @@ mod tests {
         controller.delete_word_backward();
         assert_eq!(controller.text(), "the  brown");
         assert_eq!(controller.caret_byte_offset(), 4);
+    }
+
+    /// `delete_word_backward` at the very start of the buffer is a no-op —
+    /// there is no word behind the caret to delete. Mirrors
+    /// `backspace`'s own no-op-at-zero rule.
+    #[test]
+    fn delete_word_backward_at_the_start_of_the_buffer_is_a_no_op() {
+        let controller = TextEditingController::with_text("the quick brown");
+        controller.set_caret_byte_offset(0);
+
+        controller.delete_word_backward();
+        assert_eq!(controller.text(), "the quick brown");
+        assert_eq!(controller.caret_byte_offset(), 0);
+    }
+
+    /// `delete_word_forward` at the very end of the buffer is a no-op —
+    /// there is no word ahead of the caret to delete. Mirrors
+    /// `delete_forward`'s own no-op-at-the-end rule.
+    #[test]
+    fn delete_word_forward_at_the_end_of_the_buffer_is_a_no_op() {
+        let controller = TextEditingController::with_text("the quick brown");
+        controller.move_caret_end();
+
+        controller.delete_word_forward();
+        assert_eq!(controller.text(), "the quick brown");
+        assert_eq!(controller.caret_byte_offset(), 15);
     }
 
     // ------------------------------------------------------------------

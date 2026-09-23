@@ -1456,9 +1456,14 @@ before adding one, and cite what an unmatched reference actually needs.
 `RenderEditable`'s Ctrl+Arrow word-jump and double-tap word selection both
 call) wraps `dart:ui`'s `Paragraph.getWordBoundary`, backed by ICU's
 `UBreakIterator` in word mode. ICU's word breaking is **dictionary-based**
-for Thai, Lao, Khmer, and Myanmar — scripts with no spaces between words,
-where the Unicode Standard Annex #29 default algorithm (rule-based, no
-lexicon) cannot find a linguistically correct boundary on its own.
+for two distinct groups: Thai, Lao, Khmer, and Myanmar (scripts with no
+spaces between words at all, where the Unicode Standard Annex #29
+default algorithm — rule-based, no lexicon — cannot find a linguistically
+correct boundary on its own), and separately Chinese/Japanese, via ICU's
+`cjdict` word-frequency dictionary (these scripts DO have UAX
+#29-recognized character-class boundaries, so the rule-based default
+does not fail outright the way it does for the first group — it just
+segments per character/script-run rather than per linguistic word).
 
 **Choice:** `unicode-segmentation`'s `split_word_bound_indices` — pure UAX
 #29, no dictionary data. It was already a workspace dependency (pulled in
@@ -1468,45 +1473,59 @@ no new dependency, no C binding, and no data-table download — unlike an
 ICU binding (`rust_icu`, `icu4x`), which would be a materially heavier
 addition for the one feature this touches.
 
-**Why the reference's shape does not transcribe.** ICU's dictionary tables
-for Thai/Lao/Khmer/Myanmar are the expensive part of the reference's
-behavior — megabytes of lexicon data, not an algorithm — and nothing else
-in this workspace needs them. Bringing in a full ICU dependency to correct
-four scripts' word-jump behavior, when the other ~150 scripts UAX #29
-already handles correctly for free, is the wrong trade for what this
-feature is worth today.
+**Why the reference's shape does not transcribe.** ICU's dictionary data
+— both the Thai/Lao/Khmer/Myanmar lexicons and `cjdict` — is the expensive
+part of the reference's behavior, megabytes of data, not an algorithm,
+and nothing else in this workspace needs it. Bringing in a full ICU
+dependency to correct word-jump behavior for a handful of scripts, when
+every script with UAX #29-recognized boundaries (Latin, Cyrillic, Greek,
+Arabic, Hebrew, Hangul, and more) already works correctly for free, is
+the wrong trade for what this feature is worth today.
 
 **Consequences, named rather than left to be discovered:**
 
-- **Thai/Lao/Khmer/Myanmar word-jump and word-select do not find
-  linguistically correct boundaries.** With no whitespace and no
-  UAX #29-recognized word-class transition to key on, the segmenter falls
-  back to its rule-based default for those scripts (effectively
-  per-cluster stops) rather than real word boundaries — a known,
-  documented limitation, not a silent bug. Every other script this crate's
-  tests cover (CJK, Arabic, Hebrew, Latin with apostrophes, emoji
-  clusters) segments correctly.
+- **Thai/Lao/Khmer/Myanmar word-jump and word-select do not find any
+  linguistically meaningful boundary** — no whitespace and no
+  UAX #29-recognized word-class transition to key on means the segmenter
+  falls back to its rule-based default (effectively per-cluster stops).
+- **Chinese/Japanese word-jump and word-select segment per
+  character/script-run, not per linguistic word** — `"東京"` ("Tokyo",
+  one word to ICU's `cjdict`) splits into `"東"` and `"京"` here, because
+  Han characters have no special UAX #29 word-class merging rule by
+  default (unlike consecutive Katakana, which UAX #29's own `WB13` rule
+  does merge — a script-specific rule already correct here, no dictionary
+  needed for it). A known, tested limitation
+  (`get_word_boundary_splits_cjk_per_character_not_per_word`), not a
+  silent bug.
+- **Every other script this crate's tests cover — Arabic (clusters-only,
+  see its own test's caveat below), Latin with apostrophes, emoji
+  clusters — segments correctly** per UAX #29's own rules, which is the
+  ceiling this crate claims for them; no claim is made about Hebrew,
+  which this crate does not currently test.
 - **Grapheme-cluster correctness is unaffected.** The dictionary gap is
   specific to WORD boundaries; cluster boundaries (caret, Backspace,
   Delete) use `GraphemeCursor`, a different UAX #29 mode with no
-  dictionary dependency in the reference either, and are correct for every
-  script including the four named above.
+  dictionary dependency in the reference either, and are correct for
+  every script including all the ones named above.
 
 **Replacement tests**
 (`flui-widgets::controller::tests::{word_right_lands_on_the_next_words_start_skipping_trailing_whitespace,
 word_left_returns_to_the_current_words_own_start_without_skipping_it,
 a_run_of_whitespace_is_skipped_as_one_stop_not_a_stop_per_space,
 an_apostrophe_inside_a_word_does_not_split_it,
-cjk_text_with_no_whitespace_still_has_word_stops,
+cjk_text_splits_per_character_not_per_word,
 arabic_text_word_jump_never_lands_inside_a_char}`,
 `flui-painting::tests::text_layout_unit::{get_word_boundary_selects_a_whole_whitespace_run,
 get_word_boundary_does_not_split_on_an_apostrophe,
-get_word_boundary_finds_an_internal_boundary_in_cjk_text_with_no_whitespace}`):
-each asserts a specific script/case's boundary, or — for CJK/Arabic, where
-this port does not claim byte-for-byte ICU parity — that a boundary is
-found at all and never lands inside a char, rather than degenerating to
-the whole-line/whole-cluster answer the previous ASCII-whitespace scan
-gave every non-Latin script.
+get_word_boundary_splits_cjk_per_character_not_per_word,
+get_word_boundary_prefers_the_word_side_of_a_boundary_over_the_whitespace_side,
+get_word_boundary_never_splits_inside_a_zwj_emoji_cluster}`): each asserts
+a specific, pinned boundary — including the CJK per-character split and
+the boundary tie-break matrix (`"foo bar"` at 0/3/4/7) — rather than a
+loose "some boundary was found" check. Arabic is the one exception,
+asserted only as "never lands inside a char, always makes progress",
+because this port does not claim cluster-vs-word segmentation parity for
+that script specifically, only that it is never corrupted.
 
 ### 20. `GestureDetector` composes AROUND `Listener`, not inside it, for double-tap word selection
 
@@ -1534,10 +1553,24 @@ recognizer's presence next to them. `GestureDetector`'s
 contact) and its `on_double_tap_down` callback — a genuine new capability
 this change adds to `GestureDetector`/`DoubleTapGestureRecognizer`, not
 previously exposed — widens the caret `Listener` just placed into the
-enclosing word, using the same
+enclosing word, via
 [`TextLayout::get_word_boundary`](#19-word-boundary-movement-uses-unicode-segmentation-uax-29-not-icu-dictionary-segmentation)
-Ctrl/Alt+Arrow word-jump uses one layer down, so a double-tap and a
-keyboard word-jump always agree on where a word starts and ends.
+— the same `unicode-segmentation`/UAX #29 machinery Ctrl/Alt+Arrow
+word-jump uses one layer down, but NOT the same function: the keyboard
+path's `next_word_boundary`/`prev_word_boundary`
+(`crates/flui-widgets/src/text/controller.rs`) answer a directional
+"next/previous stop" query with their own asymmetric tie-break, while
+`get_word_boundary` answers "which segment is under this exact
+position" with a different one — see decision #19's own tie-break note.
+A double-tap and a keyboard word-jump can therefore disagree at the
+exact boundary between two segments; unifying them behind one primitive
+would need a dependency edge `flui-widgets` does not currently have
+(`flui-painting` is a dev-dependency only) and is not attempted here.
+`drag_anchor.set(None)` in the same callback stops the plain tap/drag
+handling this composition wraps from clobbering the word selection on
+the second contact's next move before it lifts — near-guaranteed on
+touch, where a finger is essentially never perfectly still between down
+and up.
 
 **Why the reference's shape does not transcribe.** Flutter's
 `TextSelectionGestureDetector` is a text-specific subtype that also owns
