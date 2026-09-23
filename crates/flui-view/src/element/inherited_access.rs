@@ -33,6 +33,11 @@ use flui_foundation::ElementId;
 /// [`ElementBase::as_inherited`]: crate::view::ElementBase::as_inherited
 /// [`as_inherited_mut`]: crate::view::ElementBase::as_inherited_mut
 pub trait InheritedElementAccess {
+    // Every method that changes the dependent set takes a `CrateToken` that
+    // only `flui-view` can construct: reachable read-only through the public
+    // `ElementTree` chain, but only the framework records, resets or prunes a
+    // dependency (ADR-0074 §5.5 — a dependency recorded with an empty set
+    // would read a provider and never rebuild).
     /// Borrow the inherited view as `&dyn Any` so the caller can
     /// downcast to the concrete `V` (the `InheritedView` type).
     ///
@@ -72,8 +77,42 @@ pub trait InheritedElementAccess {
     ///
     /// Idempotent: re-registering the same id overwrites its depth
     /// (HashMap keyed by id) so reconciliation-driven depth changes are
-    /// captured without leaving stale entries.
-    fn record_dependent(&mut self, dependent: ElementId, depth: usize);
+    /// captured without leaving stale entries, and unions `mask` into the
+    /// fields it depends on (issue #1090: a dependent that read two fields in
+    /// two builds depends on both).
+    fn record_dependent(
+        &mut self,
+        token: crate::context::CrateToken,
+        dependent: ElementId,
+        depth: usize,
+        mask: crate::view::FieldSet,
+    );
+
+    /// Like [`record_dependent`](Self::record_dependent), for a read made in a
+    /// lifecycle hook (`init_state`, `did_change_dependencies`) or outside a
+    /// build drain: the fields are kept until the dependent unmounts, and
+    /// [`reset_dependent_mask`](Self::reset_dependent_mask) does not clear them.
+    fn record_lifecycle_dependent(
+        &mut self,
+        token: crate::context::CrateToken,
+        dependent: ElementId,
+        depth: usize,
+        mask: crate::view::FieldSet,
+    );
+
+    /// Reset the fields `dependent` read in `build` to `FieldSet::NONE`
+    /// (keeping its depth), right before the build drain re-applies the reads
+    /// of its latest build. A no-op when the id is not registered.
+    fn reset_dependent_mask(&mut self, token: crate::context::CrateToken, dependent: ElementId);
+
+    /// Drop `dependent` if its mask is still `NONE` after the build's reads
+    /// were re-applied — the build no longer read this provider. Returns
+    /// whether an entry was removed.
+    fn prune_unread_dependent(
+        &mut self,
+        token: crate::context::CrateToken,
+        dependent: ElementId,
+    ) -> bool;
 
     /// Release a dependent during deactivate or unmount.
     ///
@@ -82,5 +121,5 @@ pub trait InheritedElementAccess {
     /// notification to prune stale entries. This mirrors Flutter's
     /// `InheritedElement.removeDependent`, invoked from `Element.deactivate`.
     /// No-op when the id is not registered.
-    fn remove_dependent(&mut self, dependent: ElementId);
+    fn remove_dependent(&mut self, token: crate::context::CrateToken, dependent: ElementId);
 }

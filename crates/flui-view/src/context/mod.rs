@@ -14,3 +14,5 @@ pub use element_build_context::{ElementBuildContext, ElementBuildContextBuilder}
 // -internal: constructed by the behaviors during `build_scope`, applied by
 // `BuildOwner`.
 pub(crate) use element_build_context::{BuildCapabilities, BuildCtx, DependentRecord};
+// The unconstructible-outside-this-crate token gating dependency mutation.
+pub(crate) use build_context::sealed::CrateToken;

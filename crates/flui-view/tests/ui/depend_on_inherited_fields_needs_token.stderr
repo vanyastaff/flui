@@ -1,0 +1,24 @@
+error[E0603]: module `build_context` is private
+ --> tests/ui/depend_on_inherited_fields_needs_token.rs:8:37
+  |
+8 |     let token = flui_view::context::build_context::sealed::CrateToken::new();
+  |                                     ^^^^^^^^^^^^^          ---------- struct `CrateToken` is not publicly re-exported
+  |                                     |
+  |                                     private module
+  |
+note: the module `build_context` is defined here
+ --> src/context/mod.rs
+  |
+  | mod build_context;
+  | ^^^^^^^^^^^^^^^^^
+
+error[E0624]: associated function `new` is private
+ --> tests/ui/depend_on_inherited_fields_needs_token.rs:8:72
+  |
+8 |     let token = flui_view::context::build_context::sealed::CrateToken::new();
+  |                                                                        ^^^ private associated function
+  |
+ ::: src/context/build_context.rs
+  |
+  |         pub(crate) const fn new() -> Self {
+  |         --------------------------------- private associated function defined here

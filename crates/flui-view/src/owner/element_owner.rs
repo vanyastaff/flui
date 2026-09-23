@@ -201,6 +201,13 @@ pub struct ElementOwner<'a> {
     /// no tree rollback promise. Drained by
     /// [`BuildOwner::take_recovered_panics`](super::BuildOwner::take_recovered_panics).
     pub(crate) recovered_panics: &'a mut Vec<RecoveredPanic>,
+    /// Set by `build_or_recover` when the element building through this owner
+    /// had its `build` panic and an `ErrorView` substituted. Only the
+    /// `drain_build_scope` owner carries a flag; the drain reads it to keep the
+    /// element's inherited dependencies (ADR-0074 §5.5: a failed build is not
+    /// evidence of what the element reads). Control flow reads this flag, never
+    /// the diagnostic `recovered_panics` queue.
+    pub(crate) build_recovered: Option<&'a std::cell::Cell<bool>>,
 
     /// Owned handoff for behavior attribution in the one bounded lifecycle
     /// window currently running.

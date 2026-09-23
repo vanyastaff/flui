@@ -1244,6 +1244,7 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
+            build_recovered: None,
             #[cfg(feature = "signals")]
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
@@ -1735,6 +1736,9 @@ impl BuildOwner {
             // `AssertUnwindSafe` is sound because the sole cross-unwind
             // invariant — the slot is whole again — is re-established by the
             // unconditional `put_element` below.
+            // Set by `build_or_recover` if this element's build panics and is
+            // recovered (reset-on-build then keeps its masks).
+            let build_recovered = std::cell::Cell::new(false);
             let partitioned_dirty_count = self.partitioned_dirty_count();
             let build_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut element_owner = super::ElementOwner {
@@ -1768,6 +1772,7 @@ impl BuildOwner {
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
+                    build_recovered: Some(&build_recovered),
                     #[cfg(feature = "signals")]
                     reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
@@ -1880,6 +1885,32 @@ impl BuildOwner {
                     });
                 }
             }
+            // Reset-on-build (ADR-0074 §5.5, a deliberate divergence from Flutter,
+            // whose `_dependencies` accumulate until unmount): the fields this
+            // element is recorded as reading at each of its providers go back
+            // to NONE, the build's own reads are re-applied from the sink, and a
+            // provider it no longer read drops the entry. A field read only in
+            // an earlier build therefore stops rebuilding this element.
+            //
+            // A build that panicked and was recovered (ErrorView substituted;
+            // `build_or_recover` sets the owner's `build_recovered` flag) may
+            // have stopped before reading its providers: the empty sink says nothing
+            // about what the element depends on, so its previous masks are kept
+            // (the sink's records are still added) and it keeps receiving the
+            // notifications that let a fixed condition rebuild it.
+            let previous_providers = if build_recovered.get() {
+                super::inherited_dependencies::ProviderIds::default()
+            } else {
+                self.inherited_dependencies.providers_of(id)
+            };
+            for provider in &previous_providers {
+                if let Some(accessor) = tree
+                    .get_mut(*provider)
+                    .and_then(|node| node.element_mut().as_inherited_mut())
+                {
+                    accessor.reset_dependent_mask(crate::context::CrateToken::new(), id);
+                }
+            }
             for record in dep_sink.into_inner() {
                 let Some(node) = tree.get_mut(record.provider) else {
                     continue;
@@ -1887,9 +1918,34 @@ impl BuildOwner {
                 let Some(accessor) = node.element_mut().as_inherited_mut() else {
                     continue;
                 };
-                accessor.record_dependent(record.dependent, record.depth);
+                if record.lifecycle {
+                    accessor.record_lifecycle_dependent(
+                        crate::context::CrateToken::new(),
+                        record.dependent,
+                        record.depth,
+                        record.mask,
+                    );
+                } else {
+                    accessor.record_dependent(
+                        crate::context::CrateToken::new(),
+                        record.dependent,
+                        record.depth,
+                        record.mask,
+                    );
+                }
                 self.inherited_dependencies
                     .register(record.dependent, record.provider);
+            }
+            for provider in previous_providers {
+                let pruned = tree
+                    .get_mut(provider)
+                    .and_then(|node| node.element_mut().as_inherited_mut())
+                    .is_some_and(|accessor| {
+                        accessor.prune_unread_dependent(crate::context::CrateToken::new(), id)
+                    });
+                if pruned {
+                    self.inherited_dependencies.unregister(id, provider);
+                }
             }
 
             // ── Phase 2: reconcile the returned views against the node's
@@ -1929,6 +1985,7 @@ impl BuildOwner {
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
+                    build_recovered: None,
                     #[cfg(feature = "signals")]
                     reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
@@ -2364,6 +2421,7 @@ impl BuildOwner {
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
                 recovered_panics: &mut self.recovered_panics,
+                build_recovered: None,
                 #[cfg(feature = "signals")]
                 reactive: &self.reactive,
                 lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
@@ -2573,6 +2631,7 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
+            build_recovered: None,
             #[cfg(feature = "signals")]
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,

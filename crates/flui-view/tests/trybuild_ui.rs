@@ -33,4 +33,16 @@ fn ui_tests() {
     // lists the crate's own `View` impls, so adding one to flui-view means
     // regenerating it with `TRYBUILD=overwrite`.
     t.compile_fail("tests/ui/not_a_view.rs");
+    // ADR-0074 §5.5: the typed field selector cannot be bypassed.
+    t.compile_fail("tests/ui/field_mask_erase_is_private.rs");
+    // The sealed-trait snapshot lists every missing `BuildContext` method
+    // (E0046), and `signals` adds one, so each feature set has its own
+    // snapshot (issue #1269).
+    if cfg!(feature = "signals") {
+        t.compile_fail("tests/ui/build_context_is_sealed_signals.rs");
+    } else {
+        t.compile_fail("tests/ui/build_context_is_sealed.rs");
+    }
+    t.compile_fail("tests/ui/depend_on_inherited_fields_needs_token.rs");
+    t.compile_fail("tests/ui/inherited_access_mutation_needs_token.rs");
 }

@@ -1,0 +1,10 @@
+error[E0624]: method `erase` is private
+ --> tests/ui/field_mask_erase_is_private.rs:8:47
+  |
+8 |     let _untyped = FieldMask::<Theme>::bit(0).erase();
+  |                                               ^^^^^ private method
+  |
+ ::: src/view/inherited.rs
+  |
+  |     pub(crate) const fn erase(self) -> FieldSet {
+  |     ------------------------------------------- private method defined here

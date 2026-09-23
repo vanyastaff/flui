@@ -40,6 +40,7 @@
 
 mod derive_animatable;
 mod derive_diagnosticable;
+mod derive_inherited_data;
 mod derive_stateful;
 mod derive_stateless;
 mod runtime_path;
@@ -104,6 +105,35 @@ use syn::{DeriveInput, parse_macro_input};
 pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive_stateless::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Derive [`InheritedData`] for a provider's data struct: one
+/// `pub const FIELD_<NAME>: FieldMask<Self>` per field plus `field_mask_diff`, so an
+/// `InheritedView` can report which fields changed and dependents that used
+/// `depend_on_field` rebuild only for those (issue #1090).
+///
+/// Every field must be `PartialEq`; at most 64 fields.
+///
+/// ```rust,ignore
+/// #[derive(Clone, PartialEq, InheritedData)]
+/// pub struct MediaQueryData { pub size: Size, pub text_scale_factor: f32, /* … */ }
+///
+/// impl InheritedView for MediaQuery {
+///     type Data = MediaQueryData;
+///     fn changed_fields(&self, old: &Self) -> FieldMask<Self::Data> { self.data.field_mask_diff(&old.data) }
+///     /* … */
+/// }
+/// // A reader that depends on the size only:
+/// let size = ctx.depend_on_field::<MediaQuery, _>(MediaQueryData::FIELD_SIZE, |mq| mq.data().size);
+/// ```
+///
+/// [`InheritedData`]: ../flui_view/trait.InheritedData.html
+#[proc_macro_derive(InheritedData)]
+pub fn derive_inherited_data(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    derive_inherited_data::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

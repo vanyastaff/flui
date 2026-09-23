@@ -748,7 +748,7 @@ pub struct DataTableThemeData {
 /// assert_eq!(dark.brightness(), dark.color_scheme.brightness);
 /// ```
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
 pub struct ThemeData {
     /// The Material 3 color roles this theme provides.
     ///

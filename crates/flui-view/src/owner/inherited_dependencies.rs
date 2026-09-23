@@ -38,9 +38,18 @@ impl InheritedDependencies {
         }
     }
 
+    /// The providers `dependent` currently depends on (a copy; empty when
+    /// none). Used by the build drain to reset the dependent's masks before
+    /// re-deriving them from the build's reads (ADR-0074 §5.5 reset-on-build).
+    pub(crate) fn providers_of(&self, dependent: ElementId) -> ProviderIds {
+        self.active.get(&dependent).cloned().unwrap_or_default()
+    }
+
     /// Remove an active dependency from the reverse index.
     ///
-    /// Used when a provider itself unmounts and releases its forward map.
+    /// Used when a provider itself unmounts and releases its forward map, and
+    /// by the build drain when reset-on-build prunes a provider the dependent's
+    /// latest build no longer read.
     pub(crate) fn unregister(&mut self, dependent: ElementId, provider: ElementId) {
         let Some(providers) = self.active.get_mut(&dependent) else {
             return;
