@@ -5,8 +5,8 @@
 //! manifest); this compilation unit exercises the generated code against the
 //! real runtime types. `prelude::*` brings the derive; the trait is imported by name.
 
-use flui_view::{FieldMask, InheritedData as _};
 use flui_view::prelude::*;
+use flui_view::{FieldMask, InheritedData as _};
 
 #[derive(Clone, PartialEq, InheritedData)]
 struct Data {
