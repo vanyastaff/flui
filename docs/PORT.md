@@ -244,7 +244,7 @@ payload and validate its presentation/resource generation at the owner commit
 point. If no production consumer exists yet, no speculative result lane is
 kept.
 
-**Scope:** `crates/flui-app/src/app/ui_realm.rs`.
+**Scope:** `crates/flui-app/src/app/ui_realm/`.
 
 **Enforcement:** `scripts/port-check.sh`, reported as
 `ADR-0037/closed-ui-commands`. This is an extra architecture guard, not a new

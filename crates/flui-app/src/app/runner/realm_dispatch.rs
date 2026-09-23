@@ -3665,7 +3665,7 @@ mod realm_dispatch_tests {
     /// `install_platform_realm`/`install_realm_alongside` and
     /// `dispatch_platform_realm` here -- never a directly-held `UiRealm`
     /// handle -- so this is the "through `AppRuntime`" half of the
-    /// end-state invariant; `ui_realm.rs`'s `two_realms_coexist_same_thread`
+    /// end-state invariant; `ui_realm/tests/mod.rs`'s `two_realms_coexist_same_thread`
     /// family already proves the same disjointness at the `UiRealm`
     /// construction level.
     #[test]
