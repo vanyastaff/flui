@@ -57,7 +57,7 @@
 | Need | Run |
 |------|-----|
 | Local gate | `just ci` (fmt, text-check, inventory/runtime-conformance/panic-policy/port checks, clippy, doc-strict, tests, doctests) |
-| CI parity gap | Not covered by `just ci`: `feature-matrix`, `wasm-check`, `cross-typecheck`, `msrv`, `miri`, `deny`, `cli-macos`, `gpu-test` (gap detail: `docs/testing.md`) — run the matching `just <recipe>` for what you touched. `just ci-full` (forthcoming) adds the cheap subset |
+| CI parity | `just ci` is the fast local gate; `just ci-full` also runs every other CI job this host can (feature-matrix, wasm, cross-typecheck, msrv, miri, deny, gpu-test, ...). `just doctor full` names any tool it needs; what stays CI-only, and why: `docs/testing.md` |
 | One crate | `cargo nextest run -p <crate>`, or `just test-crate <crate>` / `test-name <crate> <test>` |
 | One target (no link/exec) | `just cross-typecheck` — clippies Win32/AppKit/Android/iOS |
 | Run an example | `just example-hello` / `example <name>` / `example-list` |

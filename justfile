@@ -13,6 +13,30 @@ set positional-arguments
 version := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 commit  := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 
+# The local test scope, one slice for the whole suite (docs/testing.md,
+# "What `just test-ci` runs"):
+# - `--features flui/cupertino,flui/localizations`: the facade's non-default
+#   catalogs join the workspace run through feature unification, instead of
+#   a second `-p flui --features ...` run that re-resolved features for flui's
+#   graph alone and so rebuilt every shared crate under a second hash. The
+#   default-feature facade (material only) is then not tested locally; CI's
+#   test job and feature-matrix run it.
+# - `--lib --bins --tests`: build and run what has tests, without LINKING the
+#   ~60 examples, which `cargo nextest run` otherwise links on every run.
+#   Examples still compile in `clippy --all-targets` (gate); CI's test job
+#   and `just build-all-targets` link them.
+test_ci_scope := "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations"
+
+# Interpreters for scripts/, chosen by version rather than by name: port-check
+# and friends need bash >= 4 (`mapfile`), the TOML readers need Python >= 3.11
+# (`tomllib`), and a stock macOS has bash 3.2 and Python 3.9 under the plain
+# names. scripts/lib/interpreters.sh prints the newest suitable one on PATH,
+# or the plain name when there is none -- the script then stops with its own
+# install hint instead of this justfile failing to load. `just doctor` lists
+# what is missing.
+flui_bash   := `bash scripts/lib/interpreters.sh bash`
+flui_python := `bash scripts/lib/interpreters.sh python`
+
 # Active workspace members (must match crates/* in Cargo.toml [workspace.members])
 active_crates := "flui-animation flui-app flui-assets flui-testing flui-cli flui-cupertino flui-devtools flui-engine flui-foundation flui-geometry flui-hot-reload flui-interaction flui-layer flui-localizations flui-log flui-macros flui-material flui-objects flui-painting flui-platform flui-rendering flui-scheduler flui-semantics flui-tree flui-types flui-view flui-widgets"
 
@@ -109,7 +133,7 @@ wasm-test:
     # refuses to start. Read it out of Cargo.lock rather than hardcoding it, so
     # a dependabot bump moves the tool with the lock instead of breaking this
     # recipe with a message that reads like a toolchain fault.
-    want=$(bash scripts/locked-version.sh wasm-bindgen)
+    want=$({{flui_bash}} scripts/locked-version.sh wasm-bindgen)
     have=$(wasm-bindgen --version 2>/dev/null | cut -d' ' -f2 || true)
     if [ "$have" != "$want" ]; then
         echo "wasm-bindgen-cli $want required (have: ${have:-none}); installing" >&2
@@ -145,7 +169,7 @@ wasm-test:
     # comment, a normal dependency, or a non-wasm32 target table -- none of
     # which mean "this crate has wasm tests" -- so the check would not match the
     # contract it documents, silently.
-    for name in $(python3 scripts/wasm-test-crates.py); do
+    for name in $({{flui_python}} scripts/wasm-test-crates.py); do
         dir="crates/$name"
         crates=$((crates + 1))
         crate_total=0
@@ -199,9 +223,9 @@ wasm-test:
 [doc("Really link the two wasm cdylibs and check their import surface (mirrors the CI wasm-check link steps)")]
 wasm-link-check:
     cargo build --locked --target wasm32-unknown-unknown -p flui-web-demo -p flui-painting-demo
-    bash scripts/check-wasm-imports.sh \
-      target/wasm32-unknown-unknown/debug/flui_web_demo.wasm \
-      target/wasm32-unknown-unknown/debug/flui_painting_demo.wasm
+    {{flui_bash}} scripts/check-wasm-imports.sh \
+      ${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/debug/flui_web_demo.wasm \
+      ${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/debug/flui_painting_demo.wasm
 
 # `cargo clippy` does not link, so the per-OS backends in flui-platform can be
 # type-checked from any host. Without this they are only ever compiled by
@@ -265,20 +289,20 @@ test *args:
 live-smoke:
     cargo build --package flui --features material --example sliver_demo
     cargo build --package flui-live-smoke
-    xvfb-run -a -s "-screen 0 1200x800x24" target/debug/flui-live-smoke target/debug/examples/sliver_demo
+    xvfb-run -a -s "-screen 0 1200x800x24" ${CARGO_TARGET_DIR:-target}/debug/flui-live-smoke ${CARGO_TARGET_DIR:-target}/debug/examples/sliver_demo
 
 [group("test")]
 [doc("Wayland live-smoke: close-path teardown ordering under a headless weston compositor — the demo self-closes (FLUI_SELF_CLOSE_AFTER_MS drives the real CloseRequested arm) and must exit 0, five cycles, then two more cycles on the programmatic PlatformWindow::close route (issue #919). Catches the post-quit wl_proxy use-after-free class (issue #713) the X11 smoke can never see. SKIPs with a message when weston is absent (apt install weston)")]
 live-smoke-wayland:
     cargo build --package flui --features material --example sliver_demo
     cargo build --package flui-live-smoke
-    target/debug/flui-live-smoke target/debug/examples/sliver_demo wayland
+    ${CARGO_TARGET_DIR:-target}/debug/flui-live-smoke ${CARGO_TARGET_DIR:-target}/debug/examples/sliver_demo wayland
 
 [group("test")]
 [doc("Executable AppKit close/teardown coverage on a real Mac (issue #1148 AppKit half): builds the close_path_probe example, stages it into a minimal .app bundle — the committed Info.plist clears _CFBundleGetValueForInfoKey, and the binary's fn main IS the AppKit main thread, the two floors that make unbundled libtest unable to host real AppKit windows — then runs it with RUST_LOG=info and asserts exit 0 plus the CLOSE_PATH_PROBE_RESULT=PASS marker. macOS-only by construction; skips with a message on other hosts")]
 macos-close-path:
     {{ if os() == "macos" {
-"cargo build -p flui-platform --locked --example close_path_probe\nAPP=target/macos-close-path/ClosePathProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.close_path_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/close_path_probe \"$APP/Contents/MacOS/close_path_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/close_path_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'CLOSE_PATH_PROBE_RESULT=PASS'; then\n  echo 'macos-close-path FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
+"cargo build -p flui-platform --locked --example close_path_probe\nAPP=target/macos-close-path/ClosePathProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.close_path_probe \"$APP/Contents/Info.plist\"\ncp ${CARGO_TARGET_DIR:-target}/debug/examples/close_path_probe \"$APP/Contents/MacOS/close_path_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/close_path_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'CLOSE_PATH_PROBE_RESULT=PASS'; then\n  echo 'macos-close-path FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
 } else {
 "echo 'Skipping macos-close-path on this host: the probe needs a real macOS host with an active GUI session and a staged .app bundle (AppKit window construction requires the main thread and a bundle); on a Mac run: just macos-close-path'"
 } }}
@@ -287,7 +311,7 @@ macos-close-path:
 [doc("Executable AppKit frame-pump coverage on a real Mac: builds the frame_pump_probe example, stages it into a minimal .app the same way macos-close-path does, runs it with RUST_LOG=info, and asserts exit 0 plus the FRAME_PUMP_PROBE_RESULT=PASS marker. The probe counts frames from a REAL visible window whose frame callback re-arms itself the way the engine's frame does, and requires frames to keep arriving after the primer that started them stopped — the AppKit display pass discards an in-pass setNeedsDisplay:, so a backend without the deferral runs exactly one frame and reports FAIL. macOS-only by construction; skips with a message on other hosts")]
 macos-frame-pump:
     {{ if os() == "macos" {
-"cargo build -p flui-platform --locked --example frame_pump_probe\nAPP=target/macos-frame-pump/FramePumpProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.frame_pump_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/frame_pump_probe \"$APP/Contents/MacOS/frame_pump_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/frame_pump_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'FRAME_PUMP_PROBE_RESULT=PASS'; then\n  echo 'macos-frame-pump FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
+"cargo build -p flui-platform --locked --example frame_pump_probe\nAPP=target/macos-frame-pump/FramePumpProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.frame_pump_probe \"$APP/Contents/Info.plist\"\ncp ${CARGO_TARGET_DIR:-target}/debug/examples/frame_pump_probe \"$APP/Contents/MacOS/frame_pump_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/frame_pump_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'FRAME_PUMP_PROBE_RESULT=PASS'; then\n  echo 'macos-frame-pump FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
 } else {
 "echo 'Skipping macos-frame-pump on this host: the probe needs a real macOS host with an active GUI session and a staged .app bundle — it measures frames from a visible window, so it cannot run headless or on another OS; on a Mac run: just macos-frame-pump'"
 } }}
@@ -296,7 +320,7 @@ macos-frame-pump:
 [doc("Executable resize-transient coverage on a real Mac: builds the resize_jitter_probe example into a staged .app the same way macos-frame-pump does, runs it with RUST_LOG=info, and asserts exit 0 plus the RESIZE_JITTER_PROBE_RESULT=PASS and RESIZE_JITTER_PROBE_STALE=0 markers. The probe drives a scripted burst of REAL window resizes while rendering continuously into the Metal swapchain, with the surface deliberately held frames behind the window, and counts Renderer::warn_on_size_mismatch — the acquired swapchain texture differing from the configured surface size, i.e. the frame a compositor would stretch. It pins that invariant; it does NOT discriminate desired_maximum_frame_latency, which it was built to do and measurably cannot (zero at 1 and at 2, four runs) — see the probe's own module doc and the literal's comment in renderer.rs. macOS-only by construction; skips with a message on other hosts")]
 macos-resize-jitter:
     {{ if os() == "macos" {
-"cargo build -p flui --locked --example resize_jitter_probe\nAPP=target/macos-resize-jitter/ResizeJitterProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp examples/Info.plist.resize_jitter_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/resize_jitter_probe \"$APP/Contents/MacOS/resize_jitter_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/resize_jitter_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'RESIZE_JITTER_PROBE_RESULT=PASS' || ! printf '%s\\n' \"$out\" | grep -q 'RESIZE_JITTER_PROBE_STALE=0'; then\n  echo 'macos-resize-jitter FAILED: probe exit code, PASS marker, or the zero stale-size marker is missing (output above)'\n  exit 1\nfi"
+"cargo build -p flui --locked --example resize_jitter_probe\nAPP=target/macos-resize-jitter/ResizeJitterProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp examples/Info.plist.resize_jitter_probe \"$APP/Contents/Info.plist\"\ncp ${CARGO_TARGET_DIR:-target}/debug/examples/resize_jitter_probe \"$APP/Contents/MacOS/resize_jitter_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/resize_jitter_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'RESIZE_JITTER_PROBE_RESULT=PASS' || ! printf '%s\\n' \"$out\" | grep -q 'RESIZE_JITTER_PROBE_STALE=0'; then\n  echo 'macos-resize-jitter FAILED: probe exit code, PASS marker, or the zero stale-size marker is missing (output above)'\n  exit 1\nfi"
 } else {
 "echo 'Skipping macos-resize-jitter on this host: the probe measures the Metal swapchain of a real visible AppKit window under a resize burst, so it needs a real macOS host with an active GUI session and a staged .app bundle; on a Mac run: just macos-resize-jitter'"
 } }}
@@ -305,7 +329,7 @@ macos-resize-jitter:
 [doc("Executable macOS text-input coverage on a real Mac: builds the ime_probe example, stages it into a staged .app the same way macos-frame-pump does, runs it with RUST_LOG=info, and asserts exit 0 plus the IME_PROBE_RESULT=PASS marker. The probe runs the real backend through the production launch path, reaches the window's content view through AppKit, and drives four assertions: (A, ADR-0069) one synthesized keyDown for one letter reaches the application as exactly one ImeEvent::Commit with zero Key::Character while a text input is attached, and the exact inverse with it detached; (B) the NSTextInputClient queries AppKit makes answer correctly, including the UTF-16 to byte cursor conversion; (C) a cursor area set through the trait comes back as a non-zero rect; (D) unmarkText announces the end of composition. The key events are synthesized, not human keystrokes, and NO genuine input method runs, so a real composition stays undriven - the probe covers the routing and the protocol, not the input method. macOS-only by construction; skips with a message on other hosts")]
 macos-ime:
     {{ if os() == "macos" {
-"cargo build -p flui-platform --locked --example ime_probe\nAPP=target/macos-ime/ImeProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.ime_probe \"$APP/Contents/Info.plist\"\ncp target/debug/examples/ime_probe \"$APP/Contents/MacOS/ime_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/ime_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'IME_PROBE_RESULT=PASS'; then\n  echo 'macos-ime FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
+"cargo build -p flui-platform --locked --example ime_probe\nAPP=target/macos-ime/ImeProbe.app\nrm -rf \"$APP\"\nmkdir -p \"$APP/Contents/MacOS\"\ncp crates/flui-platform/examples/Info.plist.ime_probe \"$APP/Contents/Info.plist\"\ncp ${CARGO_TARGET_DIR:-target}/debug/examples/ime_probe \"$APP/Contents/MacOS/ime_probe\"\nrc=0; out=$(RUST_LOG=info \"$APP/Contents/MacOS/ime_probe\" 2>&1) || rc=$?\nprintf '%s\\n' \"$out\"\nif [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'IME_PROBE_RESULT=PASS'; then\n  echo 'macos-ime FAILED: probe exit code or PASS marker missing (output above)'\n  exit 1\nfi"
 } else {
 "echo 'Skipping macos-ime on this host: the probe needs a real macOS host with an active GUI session and a staged .app bundle — it routes AppKit key events into a visible window, so it cannot run headless or on another OS; on a Mac run: just macos-ime'"
 } }}
@@ -314,7 +338,7 @@ macos-ime:
 [doc("Executable launch-route render coverage on a real Mac: builds the colored_box_app example and runs it through scripts/check-macos-launch-render.py, which launches the SAME bundled artifact three ways (direct exec, `open` / LaunchServices, `open -g` / LaunchServices without activation), 5 launches each, finds each launch's window by owning PID in the CoreGraphics window list, and photographs it by window number. The oracle is the pixels of that window, not frames or survival: the fixture paints pure red, and every launch must show it, because a window can exist, hold a live frame pump, and still be blank. A genuinely blank window is the control and fails (see the checker's own validation) — so the gate discriminates instead of merely passing. Each launch is also given a bounded settle, because macOS orders a window front before its first frame is presented: the oracle is retried until it holds, so a window that is merely early is not mistaken for a blank one, and the time to the capture that passed is reported as first frame after. A window-scoped capture of an unpainted window is a flat dark image whatever the display shows, so on a failure the checker also takes one screen capture of the window rectangle, only when that window is frontmost, and reports what a viewer had on screen — as a diagnostic that decides nothing. Needs Screen Recording, which is preflighted: without it the checker exits 2 (CANNOT VERIFY) rather than reporting a blank window it never saw. This closes the LaunchServices half of the blank-window observation in docs/BETA.md. macOS-only by construction; skips with a message on other hosts")]
 macos-launch-render:
     {{ if os() == "macos" {
-"cargo build -p flui --locked --example colored_box_app\nrc=0\npython3 scripts/check-macos-launch-render.py target/debug/examples/colored_box_app --runs 5 --expect 240,0,0 || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'macos-launch-render CANNOT VERIFY: this host could not take the measurement (Screen Recording not granted, or swiftc missing) — a denied capture is NOT a blank window, so nothing was decided; details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'macos-launch-render FAILED: a launch route was refused, put no window on screen, or put up a window that stayed blank for the whole settle - details and images above'\nfi\nexit \"$rc\""
+"cargo build -p flui --locked --example colored_box_app\nrc=0\n" + flui_python + " scripts/check-macos-launch-render.py ${CARGO_TARGET_DIR:-target}/debug/examples/colored_box_app --runs 5 --expect 240,0,0 || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'macos-launch-render CANNOT VERIFY: this host could not take the measurement (Screen Recording not granted, or swiftc missing) — a denied capture is NOT a blank window, so nothing was decided; details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'macos-launch-render FAILED: a launch route was refused, put no window on screen, or put up a window that stayed blank for the whole settle - details and images above'\nfi\nexit \"$rc\""
 } else {
 "echo 'Skipping macos-launch-render on this host: the gate photographs a real window on a real display, so it needs macOS with an active GUI session; on a Mac run: just macos-launch-render'"
 } }}
@@ -323,7 +347,7 @@ macos-launch-render:
 [doc("Runs the iOS demo on an iOS Simulator (the only executing coverage of the native UIKit backend). Builds examples/ios_demo for aarch64-apple-ios-sim, stages it into a minimal .app, boots a simulator, installs and launches it, captures a screenshot, and asserts the app got as far as a created Metal device and a rendered frame — read out of the simulator's unified log, since UIApplicationMain owns the process and no test harness can. macOS-host only (needs Xcode + simctl); skips with a message elsewhere.")]
 ios-sim:
     {{ if os() == "macos" {
-"set -e\nDEVICE=\"${FLUI_IOS_SIM_DEVICE:-iPhone 17 Pro}\"\nxcrun simctl boot \"$DEVICE\" 2>/dev/null || true\nxcrun simctl bootstatus \"$DEVICE\" -b >/dev/null 2>&1 || true\n\n# Arm 1 — a static Material app: Metal device created and a frame rendered.\nBUNDLE=dev.flui.ios-demo\nAPP=target/ios-sim/IosDemo.app\ncargo build -p flui --locked --features material --example ios_demo --target aarch64-apple-ios-sim\nrm -rf \"$APP\"\nmkdir -p \"$APP\"\ncp examples/Info.plist.ios_demo \"$APP/Info.plist\"\ncp target/aarch64-apple-ios-sim/debug/examples/ios_demo \"$APP/ios_demo\"\nxcrun simctl install booted \"$APP\"\nxcrun simctl terminate booted \"$BUNDLE\" 2>/dev/null || true\nxcrun simctl launch booted \"$BUNDLE\" >/dev/null\nsleep 12\nLOG=target/ios-sim/app.log\nxcrun simctl spawn booted log show --last 5m --process ios_demo > \"$LOG\" 2>/dev/null || true\nxcrun simctl io booted screenshot target/ios-sim/screen.png >/dev/null 2>&1 || true\nif ! grep -q 'Selected GPU:.*Metal' \"$LOG\" || ! grep -q 'First frame rendered' \"$LOG\"; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 1 (static app): expected \"Selected GPU ... Metal\" and \"First frame rendered\"; tail:';\n  grep 'flui]' \"$LOG\" | tail -20;\n  exit 1;\nfi\necho 'IOS_SIM arm1=PASS (Metal device created, first frame rendered)';\n\n# Arm 2 — an ANIMATED app, and the regression guard for the iOS frame-source\n# bug. Survival alone is NOT the discriminator: a request_redraw that\n# dispatches a frame synchronously AND calls setNeedsDisplay() can still\n# complete and log frames while the screen stays WHITE, because UIKit repaints\n# the opaque UIView's empty layer over the CAMetalLayer the renderer presented\n# into. The honest signal is the pixels: two screenshots of a live, animating\n# tree must DIFFER. A cropped centre square is compared so a ticking status-bar\n# clock can never masquerade as motion.\nANIM=dev.flui.anim-demo\nAAPP=target/ios-sim/AnimDemo.app\ncargo build -p flui --locked --example animated_box_app --target aarch64-apple-ios-sim\nrm -rf \"$AAPP\"\nmkdir -p \"$AAPP\"\ncp examples/Info.plist.ios_anim \"$AAPP/Info.plist\"\ncp target/aarch64-apple-ios-sim/debug/examples/animated_box_app \"$AAPP/animated_box_app\"\nxcrun simctl install booted \"$AAPP\"\nxcrun simctl terminate booted \"$ANIM\" 2>/dev/null || true\nxcrun simctl launch booted \"$ANIM\" >/dev/null\nsleep 12\ntarget_io=target/ios-sim\nxcrun simctl io booted screenshot \"$target_io/anim_a.png\" >/dev/null 2>&1 || true\nsleep 2\nxcrun simctl io booted screenshot \"$target_io/anim_b.png\" >/dev/null 2>&1 || true\ncp \"$target_io/anim_a.png\" \"$target_io/anim_a_crop.png\"\ncp \"$target_io/anim_b.png\" \"$target_io/anim_b_crop.png\"\nsips -c 240 240 \"$target_io/anim_a_crop.png\" >/dev/null 2>&1 || true\nsips -c 240 240 \"$target_io/anim_b_crop.png\" >/dev/null 2>&1 || true\nHA=$(md5 -q \"$target_io/anim_a_crop.png\")\nHB=$(md5 -q \"$target_io/anim_b_crop.png\")\nALIVE=$(pgrep -f animated_box_app | wc -l | tr -d ' ')\nxcrun simctl terminate booted \"$ANIM\" 2>/dev/null || true\nif [ \"$HA\" = \"$HB\" ]; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 2 (animated app): two screenshots 2 s apart are IDENTICAL, so no animation reached the screen (frozen or white) even though frames may be logged; see target/ios-sim/anim_{a,b}.png';\n  exit 1;\nfi\nif [ \"$ALIVE\" -lt 1 ]; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 2 (animated app): the app did not survive to the screenshot pass - request_redraw likely never returned to UIKit and iOS scene-create watchdog killed it';\n  exit 1;\nfi\necho 'IOS_SIM arm2=PASS (animated pixels differ, app survived)';\necho 'IOS_SIM_RESULT=PASS (static + animated, screenshots under target/ios-sim/)'"
+"set -e\nDEVICE=\"${FLUI_IOS_SIM_DEVICE:-iPhone 17 Pro}\"\nxcrun simctl boot \"$DEVICE\" 2>/dev/null || true\nxcrun simctl bootstatus \"$DEVICE\" -b >/dev/null 2>&1 || true\n\n# Arm 1 — a static Material app: Metal device created and a frame rendered.\nBUNDLE=dev.flui.ios-demo\nAPP=target/ios-sim/IosDemo.app\ncargo build -p flui --locked --features material --example ios_demo --target aarch64-apple-ios-sim\nrm -rf \"$APP\"\nmkdir -p \"$APP\"\ncp examples/Info.plist.ios_demo \"$APP/Info.plist\"\ncp ${CARGO_TARGET_DIR:-target}/aarch64-apple-ios-sim/debug/examples/ios_demo \"$APP/ios_demo\"\nxcrun simctl install booted \"$APP\"\nxcrun simctl terminate booted \"$BUNDLE\" 2>/dev/null || true\nxcrun simctl launch booted \"$BUNDLE\" >/dev/null\nsleep 12\nLOG=target/ios-sim/app.log\nxcrun simctl spawn booted log show --last 5m --process ios_demo > \"$LOG\" 2>/dev/null || true\nxcrun simctl io booted screenshot target/ios-sim/screen.png >/dev/null 2>&1 || true\nif ! grep -q 'Selected GPU:.*Metal' \"$LOG\" || ! grep -q 'First frame rendered' \"$LOG\"; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 1 (static app): expected \"Selected GPU ... Metal\" and \"First frame rendered\"; tail:';\n  grep 'flui]' \"$LOG\" | tail -20;\n  exit 1;\nfi\necho 'IOS_SIM arm1=PASS (Metal device created, first frame rendered)';\n\n# Arm 2 — an ANIMATED app, and the regression guard for the iOS frame-source\n# bug. Survival alone is NOT the discriminator: a request_redraw that\n# dispatches a frame synchronously AND calls setNeedsDisplay() can still\n# complete and log frames while the screen stays WHITE, because UIKit repaints\n# the opaque UIView's empty layer over the CAMetalLayer the renderer presented\n# into. The honest signal is the pixels: two screenshots of a live, animating\n# tree must DIFFER. A cropped centre square is compared so a ticking status-bar\n# clock can never masquerade as motion.\nANIM=dev.flui.anim-demo\nAAPP=target/ios-sim/AnimDemo.app\ncargo build -p flui --locked --example animated_box_app --target aarch64-apple-ios-sim\nrm -rf \"$AAPP\"\nmkdir -p \"$AAPP\"\ncp examples/Info.plist.ios_anim \"$AAPP/Info.plist\"\ncp ${CARGO_TARGET_DIR:-target}/aarch64-apple-ios-sim/debug/examples/animated_box_app \"$AAPP/animated_box_app\"\nxcrun simctl install booted \"$AAPP\"\nxcrun simctl terminate booted \"$ANIM\" 2>/dev/null || true\nxcrun simctl launch booted \"$ANIM\" >/dev/null\nsleep 12\ntarget_io=target/ios-sim\nxcrun simctl io booted screenshot \"$target_io/anim_a.png\" >/dev/null 2>&1 || true\nsleep 2\nxcrun simctl io booted screenshot \"$target_io/anim_b.png\" >/dev/null 2>&1 || true\ncp \"$target_io/anim_a.png\" \"$target_io/anim_a_crop.png\"\ncp \"$target_io/anim_b.png\" \"$target_io/anim_b_crop.png\"\nsips -c 240 240 \"$target_io/anim_a_crop.png\" >/dev/null 2>&1 || true\nsips -c 240 240 \"$target_io/anim_b_crop.png\" >/dev/null 2>&1 || true\nHA=$(md5 -q \"$target_io/anim_a_crop.png\")\nHB=$(md5 -q \"$target_io/anim_b_crop.png\")\nALIVE=$(pgrep -f animated_box_app | wc -l | tr -d ' ')\nxcrun simctl terminate booted \"$ANIM\" 2>/dev/null || true\nif [ \"$HA\" = \"$HB\" ]; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 2 (animated app): two screenshots 2 s apart are IDENTICAL, so no animation reached the screen (frozen or white) even though frames may be logged; see target/ios-sim/anim_{a,b}.png';\n  exit 1;\nfi\nif [ \"$ALIVE\" -lt 1 ]; then\n  echo 'IOS_SIM_RESULT=FAIL - arm 2 (animated app): the app did not survive to the screenshot pass - request_redraw likely never returned to UIKit and iOS scene-create watchdog killed it';\n  exit 1;\nfi\necho 'IOS_SIM arm2=PASS (animated pixels differ, app survived)';\necho 'IOS_SIM_RESULT=PASS (static + animated, screenshots under target/ios-sim/)'"
 } else {
 "echo 'Skipping ios-sim on this host: it needs a macOS host with Xcode and the iOS Simulator (xcrun simctl) plus the aarch64-apple-ios-sim target; on a Mac run: just ios-sim'"
 } }}
@@ -332,7 +356,7 @@ ios-sim:
 [doc("Executable iOS touch-and-resume coverage on the ALREADY BOOTED simulator named by <udid>: builds the Material demo for aarch64-apple-ios-sim, stages it into a minimal .app, and drives it through scripts/check-ios-input.py. The instrument is XCUITest, because nothing else can put a UITouch into the application: simctl has no touch subcommand, and host UI automation needs the Accessibility grant (and photographs the host's desktop) - XCUITest synthesizes the touch inside the simulator through the platform's own automation channel. The oracle is pixels, and has to be: the iOS backend publishes no accessibility tree, so a widget cannot be read by identifier. A real tap on a list row must change the displayed selection, Home-then-return must still display it, and two controls must behave - a fresh launch resets it (so the return comparison could have failed) and a tap on no target changes nothing (so the tap comparison distinguishes a hit from any touch). The demo's list rows are idempotent -- tapping an already-selected row changes nothing -- so retention here rests on display equality alone; a subject whose display keeps advancing can be held to the stronger oracle with `--post-return-tap`, which proves the resumed screen is live rather than the system's snapshot of the pre-Home frame. Exit 2 (CANNOT VERIFY) when the host cannot take the measurement. This closes the 'simulator UI automation timed out' gap in docs/BETA.md. macOS-host only; on a Mac run: just ios-input-check <udid>")]
 ios-input-check udid:
     {{ if os() == "macos" {
-"set -e\nBUNDLE=dev.flui.ios-demo\nAPP=target/ios-input/IosDemo.app\ncargo build -p flui --locked --features material --example ios_demo --target aarch64-apple-ios-sim\nrm -rf \"$APP\"\nmkdir -p \"$APP\"\ncp examples/Info.plist.ios_demo \"$APP/Info.plist\"\ncp target/aarch64-apple-ios-sim/debug/examples/ios_demo \"$APP/ios_demo\"\n\n# Remove any previous install before the run. xcodebuild installs the artifact\n# it was pointed at, and XCUIApplication launches whatever is installed under\n# that bundle id - so a stale copy left here could be the binary actually\n# measured. With it gone, a failed install means nothing launches and the probe\n# reports CANNOT VERIFY instead of testing the wrong build.\nxcrun simctl uninstall " + quote(udid) + " \"$BUNDLE\" 2>/dev/null || true\nrc=0\npython3 -B scripts/check-ios-input.py " + quote(udid) + " \"$APP\" || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'ios-input-check CANNOT VERIFY: this host could not take the measurement (no Xcode toolchain, the simulator was not booted, or the probe produced no report) - nothing was decided about the framework; details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'ios-input-check FAILED: a real touch did not reach a widget, or the state it changed did not survive Home/return, or a control did not behave - details and per-stage screenshots above'\nfi\nexit \"$rc\""
+"set -e\nBUNDLE=dev.flui.ios-demo\nAPP=target/ios-input/IosDemo.app\ncargo build -p flui --locked --features material --example ios_demo --target aarch64-apple-ios-sim\nrm -rf \"$APP\"\nmkdir -p \"$APP\"\ncp examples/Info.plist.ios_demo \"$APP/Info.plist\"\ncp ${CARGO_TARGET_DIR:-target}/aarch64-apple-ios-sim/debug/examples/ios_demo \"$APP/ios_demo\"\n\n# Remove any previous install before the run. xcodebuild installs the artifact\n# it was pointed at, and XCUIApplication launches whatever is installed under\n# that bundle id - so a stale copy left here could be the binary actually\n# measured. With it gone, a failed install means nothing launches and the probe\n# reports CANNOT VERIFY instead of testing the wrong build.\nxcrun simctl uninstall " + quote(udid) + " \"$BUNDLE\" 2>/dev/null || true\nrc=0\n" + flui_python + " -B scripts/check-ios-input.py " + quote(udid) + " \"$APP\" || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'ios-input-check CANNOT VERIFY: this host could not take the measurement (no Xcode toolchain, the simulator was not booted, or the probe produced no report) - nothing was decided about the framework; details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'ios-input-check FAILED: a real touch did not reach a widget, or the state it changed did not survive Home/return, or a control did not behave - details and per-stage screenshots above'\nfi\nexit \"$rc\""
 } else {
 "echo 'Skipping ios-input-check on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-input-check <udid>'"
 } }}
@@ -341,7 +365,7 @@ ios-input-check udid:
 [doc("Runs the same iOS touch-and-resume gate against an arbitrary staged .app, for candidates the CLI built rather than the in-repo demo. <app> is an already-staged .app directory (xcodebuild installs it) and <udid> an already booted simulator; extra arguments go to scripts/check-ios-input.py. Tap geometry is a property of the application, so a candidate whose widgets are not the demo's needs it: for the generated sole-flui counter, whose Increment button is at normalized y 0.097 and whose only changing text sits directly under the status-bar clock (so the region must be a centre band, or it crops out exactly what the tap changes): just ios-input-check-app <app> <udid> --target-tap 0.5,0.097 --empty-tap 0.5,0.5 --region 0.25,0.0,0.75,0.96 --post-return-tap. The last of those is the stronger resume oracle and the counter is the subject that can carry it: its button accumulates (0 -> 1 -> 2), so a tap after Home/return must advance the display, which a system snapshot of the pre-Home frame never does. It cannot be used on an idempotent subject -- the demo's rows -- where a second tap on the same row changes nothing and the requirement would fail a correct application; there the run's report names display-equality as the oracle that carried the claim. See scripts/check-ios-input.py for why each of those arguments exists. macOS-host only")]
 ios-input-check-app app udid +ARGS:
     {{ if os() == "macos" {
-"python3 -B scripts/check-ios-input.py " + quote(udid) + " " + quote(app) + " " + ARGS
+flui_python + " -B scripts/check-ios-input.py " + quote(udid) + " " + quote(app) + " " + ARGS
 } else {
 "echo 'Skipping ios-input-check-app on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-input-check-app <app> <udid>'"
 } }}
@@ -350,7 +374,7 @@ ios-input-check-app app udid +ARGS:
 [doc("Live iOS safe-area layout check: builds the sole-facade fixture for aarch64-apple-ios-sim through scripts/check-ios-safe-area.py and runs it on the ALREADY BOOTED simulator named by <udid>, asserting the marker the application writes after comparing both laid-out geometries against the view's own safeAreaInsets. Evidence belongs in docs/BETA.md § 'iOS safe-area layout'. Needs a macOS host with Xcode, the aarch64-apple-ios-sim target and a booted arm64 simulator; on a Mac run: just ios-safe-area-check <udid>")]
 ios-safe-area-check udid:
     {{ if os() == "macos" {
-"python3 -B scripts/check-ios-safe-area.py " + quote(udid) + " target/ios-safe-area-check"
+flui_python + " -B scripts/check-ios-safe-area.py " + quote(udid) + " target/ios-safe-area-check"
 } else {
 "echo 'Skipping ios-safe-area-check on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-safe-area-check <udid>'"
 } }}
@@ -367,22 +391,15 @@ test-ci-fast: _tests-outside-nested-cargo
 # The nested-cargo group: the tests that run a `cargo` of their own on a
 # project they generate (.config/nextest.toml, profile `nested-cargo`). They
 # dominate the suite's wall-clock, so `test-ci` runs them last and
-# `test-ci-fast` leaves them out. Both invocations mirror the two in
-# `_tests-outside-nested-cargo`: same packages and features, so nothing is
-# rebuilt, and the two profiles partition the suite exactly.
+# `test-ci-fast` leaves them out. Same scope as `_tests-outside-nested-cargo`,
+# so nothing is rebuilt, and the two profiles partition the suite exactly.
 [group("test")]
 [doc("Run only the nested-cargo tests (trybuild compile_fail suites, flui-cli template builds, facade consumer checks) — the last stage of `just test-ci`")]
 test-nested-cargo:
-    cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --profile nested-cargo
-    cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast --profile nested-cargo
+    cargo nextest run {{ test_ci_scope }} --profile nested-cargo
 
 _tests-outside-nested-cargo:
-    cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --profile no-nested-cargo
-    # The facade defaults to Material only, so the run above skips
-    # `tests/cupertino_demo.rs` (required-features) and the localizations
-    # assertions in `tests/facade_smoke.rs`. Same precedent as CI's
-    # flui-assets/flui-widgets feature-gated run.
-    cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast --profile no-nested-cargo
+    cargo nextest run {{ test_ci_scope }} --profile no-nested-cargo
     # Mirrors CI's dedicated flui-platform step, guarded by host OS:
     # `--all-features` is required just to compile the winit backend
     # (invisible under `default = ["desktop"]`); `FLUI_HEADLESS=1` routes
@@ -549,6 +566,9 @@ clippy-fix:
 feature-matrix: facade-combos
     cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings
     cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
+    # CI's backend-pair step: every one- and two-backend combination of
+    # flui-engine's wgpu backend features must type-check on its own.
+    cargo hack check -p flui-engine --locked --feature-powerset --include-features vulkan,metal,dx12,webgpu,gles --depth 2
 
 [group("quality")]
 [doc("Compile every supported facade feature combination in isolation")]
@@ -621,27 +641,27 @@ doc-open:
 [group("quality")]
 [doc("Build rustdoc with -D warnings (CI gate)")]
 doc-strict:
-    bash scripts/doc-strict.sh
+    {{flui_bash}} scripts/doc-strict.sh
 
 [group("quality")]
 [doc("Check crate inventories + the docs/workspace-layers.toml layer policy against Cargo metadata")]
 inventory-check: release-policy-test
-    bash scripts/check-workspace-inventory.sh
+    {{flui_bash}} scripts/check-workspace-inventory.sh
 
 [group("quality")]
 [doc("Validate the Runtime contract registry (docs/runtime-contract.toml) against the source tree")]
 runtime-conformance-check:
-    bash scripts/check-runtime-conformance.sh
+    {{flui_bash}} scripts/check-runtime-conformance.sh
 
 [group("quality")]
 [doc("Gate the expect(\"BUG: …\") panic-policy convention (docs/PANIC-POLICY.md) via its per-file ratchet")]
 panic-policy-check:
-    bash scripts/check-panic-policy.sh
+    {{flui_bash}} scripts/check-panic-policy.sh
 
 [group("quality")]
 [doc("Check every declared MSRV agrees with rust-toolchain.toml's channel (see docs/PORT.md §Version policy)")]
 toolchain-consistency-check:
-    bash scripts/check-toolchain-consistency.sh
+    {{flui_bash}} scripts/check-toolchain-consistency.sh
 
 # =============================================================================
 # Port methodology
@@ -650,12 +670,12 @@ toolchain-consistency-check:
 [group("port")]
 [doc("Run refusal-trigger grep regressions (24 triggers + named guards from docs/PORT.md)")]
 port-check:
-    bash scripts/port-check.sh
+    {{flui_bash}} scripts/port-check.sh
 
 [group("port")]
 [doc("Run refusal-trigger checks with verbose pass/fail per trigger + marker totals")]
 port-check-verbose:
-    bash scripts/port-check.sh -v
+    {{flui_bash}} scripts/port-check.sh -v
 
 # Advisory by design, and NOT part of `just ci`. It reports a LOWER BOUND on
 # citation rot: an out-of-range line or a vanished path is provably stale, but a
@@ -665,12 +685,12 @@ port-check-verbose:
 [group("docs")]
 [doc("Measure provably-stale line-number citations in docs/adr/ (issue #993)")]
 adr-citations *args:
-    python3 scripts/check-adr-citations.py {{args}}
+    {{flui_python}} scripts/check-adr-citations.py {{args}}
 
 [group("port")]
 [doc("Per-file breakdown of TODO(port) / PERF(port) / PORT NOTE markers across crates/")]
 port-markers:
-    bash scripts/port-check.sh -b
+    {{flui_bash}} scripts/port-check.sh -b
 
 # =============================================================================
 # Benchmarks
@@ -699,7 +719,7 @@ bench-all:
 [group("bench")]
 [doc("Run every criterion bench and save the numbers under a named baseline (e.g. just bench-save before-fix)")]
 bench-save name:
-    bash scripts/bench-collect.sh {{name}}
+    {{flui_bash}} scripts/bench-collect.sh {{name}}
 
 [group("bench")]
 [doc("Compare two saved baselines (requires critcmp: cargo binstall critcmp)")]
@@ -754,19 +774,19 @@ web-demo-build:
 [doc("Drive `flui run`'s worker hot-reload loop on a freshly generated --hot-reload project through the CLI's --json event stream: a label edit reloads in place (a witness the edit adds bumps and prints the host-owned counter), a syntax error is refused with the host alive, the fix reloads with the counter preserved, idle stays idle, Ctrl-C exits. Needs a macOS GUI session; the host window is brought to front before each edit because a hidden window defers the rebuild (scripts/check-hot-reload-loop.py)")]
 macos-hot-reload-loop work="target/hot-reload-loop/work":
     cargo build -p flui-cli --locked
-    python3 -B scripts/check-hot-reload-loop.py {{work}}
+    {{flui_python}} -B scripts/check-hot-reload-loop.py {{work}}
 
 [group("test")]
 [doc("Representative-workload budget on a real Mac (docs/BETA.md's \"Performance and resilience\" row): builds examples/workload_probe in release and runs it through scripts/check-macos-workload.py, which samples RSS while the probe drives itself — 20 s of scrolling a 2,000-row ListView::builder, 500 characters typed into a Material TextField, 5 s of enforced idleness — with no operator input and no synthetic OS events, then applies the budgets the script declares in its header (scroll/type p99 within 2 display periods, under 1 % of scroll frames over 2 periods, RSS growth under 10 %, at most 5 idle frames). Every run writes target/workload/<timestamp>.json with the raw phase lines, the RSS series and the verdict per budget; a failed budget is a finding to record in BETA.md, not a number to tune. Needs a macOS GUI session; skips with a message on other hosts")]
 macos-workload:
-    python3 -B scripts/check-macos-workload.py
+    {{flui_python}} -B scripts/check-macos-workload.py
 
 [group("test")]
 [doc("Window-lifecycle budget on a real Mac (docs/BETA.md's lifecycle rows): builds examples/lifecycle_probe in release and runs it. The probe runs a Material tree through the ordinary Application path, then drives its own window through AppKit from a driver thread — miniaturize/deminiaturize, hide/unhide the application, setFrame:display: — with no operator input, counting the frames the runner produces through each transition (a minimized or hidden window must cost at most 5 frames in 3 s; a restored one must run at least 30 in 2 s) and checking that the resize reaches layout as the window's new content size. Prints one JSON line per phase and LIFECYCLE_PROBE_RESULT=PASS/FAIL. Needs a macOS GUI session; skips with a message on other hosts")]
 macos-lifecycle:
     {{ if os() == "macos" {
 "cargo build -p flui --locked --release --example lifecycle_probe --features material
-rc=0; out=$(RUST_LOG=warn target/release/examples/lifecycle_probe 2>&1) || rc=$?
+rc=0; out=$(RUST_LOG=warn ${CARGO_TARGET_DIR:-target}/release/examples/lifecycle_probe 2>&1) || rc=$?
 printf '%s\\n' \"$out\"
 if [ \"$rc\" -ne 0 ] || ! printf '%s\\n' \"$out\" | grep -q 'LIFECYCLE_PROBE_RESULT=PASS'; then
   echo 'macos-lifecycle FAILED: a phase was over budget or the probe did not finish (phase lines above)'
@@ -780,7 +800,7 @@ fi"
 [doc("Assistive-technology check on a real Mac (docs/BETA.md's accessibility gap): builds examples/a11y_probe — the generated counter with the facade's `a11y` feature, so the AccessKit adapter is installed — runs it on a real window, and runs scripts/macos-ax-client.swift against the process: an AXUIElement client (what every macOS screen reader uses) that reads the window's accessibility tree, finds the Increment button by label, performs AXPress, and reads the count back as static text. No pointer or keyboard event is synthesised; if the count advances, a VoiceOver user could press the button. Exits 2 (CANNOT VERIFY) when this process is not trusted for accessibility, since a denied query decides nothing. Needs a macOS GUI session; skips with a message on other hosts")]
 macos-a11y:
     {{ if os() == "macos" {
-"rc=0\npython3 -B scripts/check-macos-a11y.py || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'macos-a11y CANNOT VERIFY: this host could not take the measurement (accessibility trust not granted, or swiftc missing) — details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'macos-a11y FAILED: the button was not in the accessibility tree, AXPress was refused, or the count did not advance (tree dumps above)'\nfi\nexit \"$rc\""
+"rc=0\n" + flui_python + " -B scripts/check-macos-a11y.py || rc=$?\nif [ \"$rc\" -eq 2 ]; then\n  echo 'macos-a11y CANNOT VERIFY: this host could not take the measurement (accessibility trust not granted, or swiftc missing) — details above'\nelif [ \"$rc\" -ne 0 ]; then\n  echo 'macos-a11y FAILED: the button was not in the accessibility tree, AXPress was refused, or the count did not advance (tree dumps above)'\nfi\nexit \"$rc\""
 } else {
 "echo 'Skipping macos-a11y on this host: the check reads a real window through the macOS accessibility API, so it needs macOS with an active GUI session; on a Mac run: just macos-a11y'"
 } }}
@@ -788,15 +808,15 @@ macos-a11y:
 [group("quality")]
 [doc("Refuse a WGSL derivative (dpdx/dpdy/fwidth, or any function that takes one) inside a branch or after a conditional return: browsers' uniformity analysis rejects the module while native naga accepts it, and no host-side oracle catches the class (scripts/check-wgsl-uniformity.py)")]
 wgsl-uniformity-check:
-    python3 -B scripts/check-wgsl-uniformity.py --self-test
-    python3 -B scripts/check-wgsl-uniformity.py
+    {{flui_python}} -B scripts/check-wgsl-uniformity.py --self-test
+    {{flui_python}} -B scripts/check-wgsl-uniformity.py
 
 [group("web")]
 [doc("Build examples/web_counter — the counter template through `flui::run_app` — to WASM with plain cargo + wasm-bindgen (no wasm-pack); serve examples/web_counter/ over HTTP and open index.html in a WebGPU-capable browser")]
 web-counter-build:
     cargo build -p flui-web-counter --locked --release --target wasm32-unknown-unknown
     wasm-bindgen --target web --out-dir examples/web_counter/pkg \
-        target/wasm32-unknown-unknown/release/flui_web_counter.wasm
+        ${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/flui_web_counter.wasm
 
 [group("web")]
 [doc("Build examples/painting_demo to WASM (requires wasm-pack)")]
@@ -877,7 +897,7 @@ watch-test crate="":
 # the hook's text fast path. Every gate this repository lost time to recently
 # was caught by something in here, not by a test.
 [group("ci")]
-[doc("Spell-check (typos) and TOML formatting (taplo) — the two CI gates with no cargo step")]
+[doc("Spell-check (typos), TOML formatting (taplo), and the nextest nested-cargo filter's three copies agreeing — the gates with no cargo step")]
 text-check:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -895,6 +915,60 @@ text-check:
     else
         echo "taplo: not installed, skipped (cargo install taplo-cli)"
     fi
+    # No tool to skip for: this one needs only a Python >= 3.11.
+    {{ flui_python }} -B scripts/check-nextest-partition.py
+
+# --- CI jobs without a recipe of their own until now (see the job -> recipe
+# table in docs/testing.md). Each mirrors its ci.yml job's commands.
+
+[group("ci")]
+[doc("Mirror of CI's test-features job: the feature-gated suites the default test run skips (flui-assets full, flui-widgets image loaders, the facade's non-default catalogs)")]
+test-features:
+    cargo nextest run -p flui-assets --locked --features full
+    cargo nextest run -p flui-widgets --locked --features images --test image
+    cargo nextest run -p flui-widgets --locked --features asset-images --lib
+    cargo nextest run -p flui-widgets --locked --features asset-images --test image_async
+    cargo nextest run -p flui-widgets --locked --features network-images --test image_network
+    cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
+
+[group("ci")]
+[doc("Mirror of CI's test job build step: build every target of every package, examples included -- the only local step that LINKS the examples (just test-ci does not; see docs/testing.md)")]
+build-all-targets:
+    cargo build --workspace --all-targets --locked
+
+[group("ci")]
+[doc("Mirror of CI's bench-compile job: compile the criterion benches without running them")]
+bench-compile:
+    cargo bench -p flui-rendering --no-run --locked
+
+[group("ci")]
+[doc("Mirror of CI's msrv job: check the workspace on the declared rust-version (read from Cargo.toml; needs that toolchain -- just doctor full)")]
+msrv:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    msrv=$(sed -n 's/^rust-version *= *"\([0-9.]*\)".*/\1/p' Cargo.toml | head -1)
+    echo "msrv: cargo +$msrv check --workspace --all-targets --locked"
+    cargo "+$msrv" check --workspace --all-targets --locked
+
+[group("ci")]
+[doc("Mirror of CI's gpu-test job's two runs (flui-engine readback suite, composited-layer update readback), one test at a time. CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a pixel mismatch here that CI does not show is a host difference to investigate, not a CI result")]
+gpu-test:
+    cargo nextest run -p flui-engine --features testing --lib --locked --no-fail-fast --test-threads 1
+    cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1
+
+[group("ci")]
+[doc("Mirror of the workflow half of CI's checks job: the paths-filter allowlist check, actionlint and zizmor (the last two skip with a message when not installed -- CI has them)")]
+workflow-lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{ flui_python }} -B scripts/check-paths-filter-allowlist.py
+    for tool in actionlint "zizmor ."; do
+        if command -v "${tool%% *}" >/dev/null 2>&1; then
+            $tool
+        else
+            echo "${tool%% *}: not installed, skipped (brew install ${tool%% *}); CI runs it"
+        fi
+    done
 
 [group("ci")]
 [doc("The non-test half of `ci` — what the pre-push hook runs")]
@@ -903,6 +977,16 @@ gate: fmt-check text-check font-assets-check inventory-check runtime-conformance
 [group("ci")]
 [doc("Run local CI gates (gate + test + doctests)")]
 ci: gate test-ci test-doc
+
+# Everything CI runs that this host can run, in one command: `just ci`, then
+# the remaining ci.yml jobs' local mirrors. What stays CI-only, and why, is the
+# table in docs/testing.md ("CI jobs and their local recipes"). Slow on
+# purpose (cargo-hack's per-feature matrix dominates); `just doctor full`
+# first names any tool it needs.
+[group("ci")]
+[doc("Run every CI job this host can run: just ci + build-all-targets, test-features, feature-matrix, wasm-check/wasm-link-check/wasm-test, cross-typecheck, bench-compile, msrv, deny, miri, workflow-lint, gpu-test, and (Linux) live-smoke. See docs/testing.md for the CI-only remainder")]
+ci-full: ci build-all-targets test-features feature-matrix wasm-check wasm-link-check wasm-test cross-typecheck bench-compile msrv deny miri workflow-lint gpu-test
+    {{ if os() == "linux" { "just live-smoke live-smoke-wayland" } else { "echo 'ci-full: live-smoke/live-smoke-wayland skipped on this host: they need xvfb-run and weston (Linux); CI runs them'" } }}
 
 # =============================================================================
 # Maintenance
@@ -914,10 +998,42 @@ install-hooks:
     git config core.hooksPath scripts/githooks
     @echo "core.hooksPath -> scripts/githooks (git push --no-verify still bypasses it)"
 
+# The target directory keeps every version and feature set ever built into it
+# and nothing prunes it (one CARGO_TARGET_DIR shared by several worktrees held
+# 17 copies of libflui_types at once; sharing one is not allowed any more --
+# docs/testing.md). `cargo sweep` resolves the
+# directory through `cargo metadata`, so CARGO_TARGET_DIR is honored. Deleting
+# artifacts under a running build fails that build ("No such file" in
+# .fingerprint/deps): run these only while nothing builds from this target.
+[group("maintenance")]
+[doc("Bound the target directory (CARGO_TARGET_DIR is honored): drop artifacts of toolchains rustup no longer has, then the oldest artifacts until it is under <max> (default 12GB). Needs cargo-sweep (just doctor). Run only while nothing builds from this target")]
+clean-stale max="12GB":
+    cargo sweep --installed .
+    cargo sweep --maxsize {{max}} .
+    @echo "clean-stale: the nested-cargo test caches are separate target roots cargo-sweep cannot see; drop them with: just clean-nested"
+
+[group("maintenance")]
+[doc("Delete the nested-cargo tests' build caches (cli-template-check/, facade-consumer-check/, tests/trybuild/ under the target directory); the next `just test-nested-cargo` rebuilds them (~9 min cold). Run only while no test run is using them")]
+clean-nested:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target=$(cargo metadata --format-version 1 --no-deps --offline | {{ flui_python }} -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+    for dir in cli-template-check facade-consumer-check tests/trybuild; do
+        if [ -d "$target/$dir" ]; then
+            echo "removing $(du -sh "$target/$dir" | cut -f1) $target/$dir"
+            rm -rf "${target:?}/$dir"
+        fi
+    done
+
 [group("maintenance")]
 [doc("Drop target/debug/incremental only (it reached 8.1 GB after one workspace test build); the next build is a full one for changed crates, nothing else is touched")]
 clean-incremental:
     rm -rf "${CARGO_TARGET_DIR:-target}/debug/incremental"
+
+[group("setup")]
+[doc("Check every tool `just ci` needs (`just doctor full`: also `just ci-full`) and print the install command for each missing one; exit 1 if any is missing. Installs nothing. Works under the stock macOS bash 3.2; without just: bash scripts/doctor.sh")]
+doctor mode="ci":
+    bash scripts/doctor.sh {{mode}}
 
 [group("maintenance")]
 [doc("Prune stale build artifacts: current-toolchain sweep + anything older than 7 days (requires cargo-sweep)")]
@@ -949,25 +1065,25 @@ outdated:
 [group("quality")]
 [doc("Test release roles, declaration closure and Cargo archive normalization on tiny fixtures")]
 release-policy-test:
-    python3 -B -m unittest discover -s scripts/tests -p test_release_policy.py
+    {{flui_python}} -B -m unittest discover -s scripts/tests -p test_release_policy.py
 
 [group("quality")]
 [doc("Show the computed product/support release inventory without creating archives")]
 release-inventory:
-    python3 -B scripts/release_policy.py --json
+    {{flui_python}} -B scripts/release_policy.py --json
 
 [group("quality")]
 [doc("Create and inspect local archives for the selected release set; no build or upload")]
 release-package-check *options:
-    python3 -B scripts/release_policy.py --package {{options}}
+    {{flui_python}} -B scripts/release_policy.py --package {{options}}
 
 [group("quality")]
 [doc("Build and test a fresh CLI-generated consumer against the release ARCHIVES, offline: packages the release set, vendors every third-party dependency, installs the archives as a Cargo directory source, and runs `flui create` without --local so the registry dependency form is what gets resolved. Pass --preview-dirty on an uncommitted tree. Slow (vendors the whole dependency set) and disk-hungry (target/release-consumer)")]
 release-consumer-check *options:
-    python3 -B scripts/release_consumer_check.py {{options}}
+    {{flui_python}} -B scripts/release_consumer_check.py {{options}}
 
 [group("quality")]
 [doc("Verify font provenance/notices, generated fixture bytes, and Cargo package file selection offline")]
 font-assets-check:
-    python3 -B -m unittest discover -s scripts/tests -p test_font_assets.py
-    python3 -B scripts/font_assets.py --package-list
+    {{flui_python}} -B -m unittest discover -s scripts/tests -p test_font_assets.py
+    {{flui_python}} -B scripts/font_assets.py --package-list

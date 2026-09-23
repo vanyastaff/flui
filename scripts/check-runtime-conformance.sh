@@ -31,12 +31,12 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 cd "${repo_root}"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "runtime-conformance: python3 not found on PATH" >&2
-  exit 2
-fi
+# The embedded program needs tomllib (Python >= 3.11); /usr/bin/python3 on
+# macOS is 3.9, so pick an interpreter by version, not by name.
+source "${script_dir}/lib/interpreters.sh"
+flui_require_python311 "runtime-conformance"
 
-python3 - "${repo_root}" <<'PY'
+"${FLUI_PYTHON}" - "${repo_root}" <<'PY'
 import re
 import sys
 import tomllib

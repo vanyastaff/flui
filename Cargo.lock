@@ -1673,6 +1673,7 @@ name = "flui"
 version = "0.2.0-dev"
 dependencies = [
  "anyhow",
+ "cargo_metadata",
  "dispatch2",
  "flui-animation",
  "flui-app",
@@ -1704,7 +1705,6 @@ dependencies = [
  "parking_lot",
  "pollster",
  "raw-window-handle",
- "serde_json",
  "tempfile",
  "toml",
  "tracing",

@@ -519,7 +519,7 @@ tempfile.workspace = true
 toml.workspace = true
 # `tests/facade_consumer.rs` reads `cargo metadata`'s `target_directory` so its
 # nested consumer builds follow a relocated `CARGO_TARGET_DIR`.
-serde_json.workspace = true
+cargo_metadata.workspace = true
 # === Foundation Layer ===
 # flui-tree = { path = "crates/flui-tree" }
 

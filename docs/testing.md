@@ -128,9 +128,9 @@ bash scripts/check-runtime-conformance.sh                  # runtime-conformance
 bash scripts/check-toolchain-consistency.sh                # toolchain-consistency-check: MSRV agrees with rust-toolchain.toml everywhere it's declared
 bash scripts/port-check.sh                                 # port-check: architecture refusal triggers
 cargo clippy --workspace --all-targets -- -D warnings      # clippy: lint gate — zero warnings
-cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --profile no-nested-cargo  # test-ci, stage 1 (flui-platform gets its own invocation below — see CI Expectations)
+cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations --profile no-nested-cargo  # test-ci, stage 1 (scope: see "What `just test-ci` runs")
 FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test-ci: flui-platform, headless (Linux only — apt install xvfb; skipped with a message on other hosts, see justfile)
-cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --profile nested-cargo  # test-ci, last stage: the nested-cargo tests (see below)
+cargo nextest run <same scope> --profile nested-cargo       # test-ci, last stage: the nested-cargo tests (see below)
 cargo test --workspace --locked --doc                      # test-doc: doc-tests (flui-platform included — its doctests need neither device above)
 bash scripts/doc-strict.sh                                # doc-strict: cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 ```
@@ -141,14 +141,54 @@ contributor can run it standalone) *and* a step in `.github/workflows/ci.yml`'s
 themselves invoked from CI; each script is its own explicit step there). A
 recipe with no CI step only runs when someone remembers to run it by hand.
 
+### What `just test-ci` runs
+
+One scope for the whole local suite (`test_ci_scope` in the justfile):
+`--workspace --exclude flui-platform --lib --bins --tests
+--features flui/cupertino,flui/localizations`, run as the two stages below.
+Two choices in it differ from CI on purpose:
+
+- **One feature slice.** The facade's non-default catalogs (`cupertino`,
+  `localizations`) join the workspace run through feature unification. The
+  alternative, a second `cargo nextest run -p flui --features ...`, resolves
+  features for `flui`'s own graph, without the dev-dependency features other
+  members switch on (`testing` and friends), so every crate the two runs share
+  was built twice under different hashes. No test is lost: the root crate has
+  no `cfg(not(feature = ...))` code, so the default-feature facade's tests are
+  a subset of these. **Not covered locally:** the facade in its default
+  configuration (Material only, no Cupertino or localizations). CI's `test`
+  job and `feature-matrix` build and test it; `just feature-matrix` does too.
+- **Examples are not linked.** `cargo nextest run` with no target flags builds
+  every example of every package it tests: about 60 binaries, each linking the
+  whole render stack, on every run. `--lib --bins --tests` selects exactly the
+  targets that have tests. Examples still **compile** in `just clippy`
+  (`--all-targets`, part of `just gate`), so a type error in one still fails
+  the local gate. What goes unchecked locally is only a *link* failure specific
+  to an example; CI's `test` job (`cargo build --workspace --all-targets`) and
+  `just build-all-targets` catch it.
+
+Measured against the previous two-slice scope (2026-09-22, M1/8 GB,
+`CARGO_BUILD_JOBS=6`, shared target, after an edit to `flui-types` so every
+crate above it rebuilds): `--no-run` 437.1 s + 107.7 s = 544.8 s before,
+326.1 s after; `debug/examples` 1.7 GB with 125 linked example binaries
+before, empty after. Test names: 9754 + 58 runs = 9769 distinct tests before
+(43 ran twice), 9769 after, none lost. This was measured on a target
+directory shared between worktrees, before the per-checkout rule below; the
+timings are indicative, and CI on the change is the authority for the test
+set.
+
 ### Nested-cargo tests
 
-About two dozen tests run a `cargo` of their own on a project they generate:
+The group is the nested-cargo tests that dominate the suite's wall-clock:
+24 tests that run a `cargo` build of their own on a project they generate —
 the trybuild `compile_fail` suites (`flui-engine`, `flui-rendering`,
 `flui-view`'s `trybuild_ui`, `flui-types`' `unit_mixing_compile_fail`), the
 `flui-cli` template tests (`cli_create::generated_*`), and every
-`flui::facade_consumer` test. Most take one to five minutes, so they set the
-suite's wall-clock while the other ~9,700 tests are quick. `.config/nextest.toml`
+`flui::facade_consumer` test. Locally, with their build caches cold, most take
+one to five minutes; the other ~9,700 tests are quick. Tests that spawn a
+`cargo` only for a trivial crate (`flui-cli`'s `cli_maintenance`, which runs
+`cargo new` and tests an empty project in seconds) are deliberately left out
+of the group. `.config/nextest.toml`
 names them with one filter and two profiles that partition the suite
 exactly: `no-nested-cargo` and `nested-cargo`.
 
@@ -177,21 +217,36 @@ Where their builds go: each nested build needs a target directory other than
 the outer one, because under `cargo test` the outer Cargo holds its build lock
 for the whole run. The template and facade-consumer builds use
 `cli-template-check/` and `facade-consumer-check/` under the workspace target
-directory as Cargo resolves it (`cargo metadata`'s `target_directory`, so a
-`CARGO_TARGET_DIR` is honored: their registry dependencies stay warm across
-checkouts that share it, while the FLUI crates themselves rebuild per checkout,
-because a path dependency's location is part of its build hash). Before this,
-they wrote to `<checkout>/target` whatever `CARGO_TARGET_DIR` said: 5-9 GB of
-private cache per checkout. trybuild keeps its own `tests/trybuild/` there, since
-it builds with a different `--cfg` and would thrash a shared cache.
+directory as Cargo resolves it (`cargo metadata`'s `target_directory`), so a
+`CARGO_TARGET_DIR` is honored. Before this, they wrote to `<checkout>/target`
+whatever `CARGO_TARGET_DIR` said. trybuild keeps its own `tests/trybuild/` there, since
+it builds with a different `--cfg` and would thrash a shared cache. Nothing
+prunes these three directories: they grow with every FLUI version and feature
+set built through them (1.5-3 GB each is normal). `just clean-nested` deletes
+them, safe whenever no test run is using them; `just clean-stale` bounds the
+main target directory the same way (oldest artifacts first, via cargo-sweep).
 
-**Limitation of a shared `CARGO_TARGET_DIR`.** trybuild writes each suite's
-generated project into `<target>/tests/trybuild/<crate>/`. Two checkouts
-sharing one target directory and running the same trybuild suite at the same
-time overwrite each other's project: a race, reported as a spurious failure.
-Run test stages from one checkout at a time, or give each checkout its own
-target directory for tests. Sharing is safe for `check`, `clippy` and builds,
-which Cargo serializes on its lock.
+**One target directory per checkout; never share one between worktrees.**
+Pointing several worktrees at one `CARGO_TARGET_DIR` looks like a cache and is
+not sound. Cargo records a workspace crate's sources in its fingerprint
+relative to the package, so the same unit (crate + features + profile) built
+in two worktrees gets the same artifact name and the same fingerprint. When
+worktree A rebuilds that unit later than B from different sources, B's next
+build compares its own files' mtimes with A's newer artifact, finds it fresh,
+and links A's code. On 2026-09-22 this compiled `flui-view` against a
+`flui-foundation` without `RebuildReason::COUNT` although the checkout's own
+source defines it, reproducibly, while `-p flui-view` alone (another feature
+set, another unit) built fine. A green run can come from someone else's
+source just as easily. trybuild adds a second failure: it writes each suite's
+project to `<target>/tests/trybuild/<crate>/`, so two checkouts running the
+same suite at once overwrite each other's project.
+
+So:
+- each worktree builds into its own `target/` (leave `CARGO_TARGET_DIR` unset,
+  or point it inside the worktree);
+- local compilation before a PR is optional; the proof is CI, which builds
+  from scratch;
+- a worktree's `target/` is deleted with the worktree once its branch merges.
 
 ## Build
 
@@ -752,6 +807,37 @@ cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (co
                                                               # of layout_subtree_borrowed_impl. Deeper sliver walks
                                                               # and intrinsics queries are not interpreted.
 ```
+
+### CI jobs and their local recipes
+
+`just ci` is the fast gate; `just ci-full` runs `just ci` plus every other
+job below that the host can run (`just doctor full` names what it needs).
+One row per job in `.github/workflows/ci.yml`:
+
+| CI job | Local recipe | Difference, or why CI-only |
+|---|---|---|
+| `checks` | `just gate` (fmt, text-check, inventory, runtime-conformance, toolchain-consistency, panic-policy, port-check, wgsl-uniformity) + `just workflow-lint` | `workflow-lint` skips actionlint/zizmor with a message when they are not installed; CI always has them |
+| `paths-filter` | — | CI only: decides which jobs a docs-only change may skip; there is nothing to skip locally |
+| `clippy` | `just clippy` (in `just gate`) | — |
+| `test` (ubuntu, macos, windows) | `just test-ci` + `just build-all-targets` | one host OS, not three; `test-ci` does not link examples (`build-all-targets` does); the flui-platform leg needs `xvfb-run` (Linux) |
+| `test-features` | `just test-features` | — |
+| `live-smoke` | `just live-smoke`, `just live-smoke-wayland` | Linux only (Xvfb, weston); `ci-full` runs them on Linux and says it skipped them elsewhere |
+| `gpu-test` | `just gpu-test` | CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a local-only mismatch is a host difference to look at, not a CI verdict |
+| `bench-compile` | `just bench-compile` | — |
+| `doc` | `just doc-strict` (in `just gate`) | — |
+| `deny` | `just deny` | its second step, re-reading ADR-0045's reopen condition when a PR touches `Cargo.lock`, reads the PR through the GitHub API: CI only (and advisory) |
+| `doc-test` | `just test-doc` (in `just ci`) | — |
+| `msrv` | `just msrv` | needs the `rust-version` toolchain (`just doctor full`) |
+| `miri` | `just miri` | nightly + miri; advisory in CI too (`continue-on-error`) |
+| `feature-matrix` | `just feature-matrix` | CI splits the packages into three parallel slices and first asserts the slices cover the workspace exactly once; locally it is one run over the workspace, which needs no such check |
+| `wasm-check` | `just wasm-check`, `just wasm-link-check`, `just wasm-test` | `wasm-link-check` needs `wasm-tools`; `wasm-test` installs the locked `wasm-bindgen-cli` itself |
+| `cli-macos` | `just test-ci` (flui-cli's tests) + `just cross-typecheck` (its iOS clippy line) | the same commands; they only mean "macOS" on a Mac |
+| `cross-typecheck` | `just cross-typecheck` | needs the four targets (`just doctor full`) |
+| `ci` | — | CI only: the single required check, which verifies that every gated job ran and passed |
+
+The other workflows (`weekly.yml`, `release.yml`, `docs.yml`,
+`coderabbit-trigger.yml`) are scheduled or event-driven, not per-PR gates, and
+have no local mirror.
 
 The `gpu-test` job additionally runs the full `testing` readback
 suite on a windows-latest runner (WARP software rasterizer) and is

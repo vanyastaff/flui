@@ -40,7 +40,13 @@
 # With no argument it resolves the newest wgpu-hal `cargo metadata` reports. An
 # explicit path probes that file instead, which is how the classifier is
 # exercised against mutated copies to show it discriminates at all.
+# Deliberately no `-e`: an empty grep/curl result is this probe's signal ("the
+# fact moved"), handled below; `-e` with pipefail would abort on it instead
+# of reporting it.
 set -uo pipefail
+# `mapfile` below needs bash >= 4; macOS /bin/bash is 3.2.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/interpreters.sh"
+flui_require_bash4 "$0"
 
 say() {
     echo "$*"

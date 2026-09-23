@@ -16,17 +16,17 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 2
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "workspace-inventory: python3 not found on PATH" >&2
-  exit 2
-fi
+# The embedded program needs tomllib (Python >= 3.11); /usr/bin/python3 on
+# macOS is 3.9, so pick an interpreter by version, not by name.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/interpreters.sh"
+flui_require_python311 "workspace-inventory"
 
 metadata_file="$(mktemp)"
 trap 'rm -f "${metadata_file}"' EXIT
 
 cargo metadata --no-deps --format-version 1 >"${metadata_file}"
 
-python3 -B - "${repo_root}" "${metadata_file}" <<'PY'
+"${FLUI_PYTHON}" -B - "${repo_root}" "${metadata_file}" <<'PY'
 import json
 import re
 import sys

@@ -33,29 +33,14 @@ fn checkout_root() -> Option<&'static Path> {
 /// directory itself) follows a relocated target instead of rebuilding from
 /// cold inside every checkout.
 fn workspace_target_dir(root: &Path) -> PathBuf {
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--no-deps",
-            "--offline",
-        ])
+    cargo_metadata::MetadataCommand::new()
         .current_dir(root)
-        .output()
-        .expect("run cargo metadata for the workspace target directory");
-    assert!(
-        output.status.success(),
-        "cargo metadata failed:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("cargo metadata emits JSON");
-    PathBuf::from(
-        metadata["target_directory"]
-            .as_str()
-            .expect("cargo metadata reports `target_directory`"),
-    )
+        .no_deps()
+        .other_options(vec!["--offline".to_string()])
+        .exec()
+        .expect("run cargo metadata for the workspace target directory")
+        .target_directory
+        .into_std_path_buf()
 }
 
 fn dependency(package: &str, path: &Path, defaults: bool) -> toml::Value {
