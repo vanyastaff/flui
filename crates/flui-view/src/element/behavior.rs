@@ -1389,11 +1389,13 @@ where
     ) {
         self.add_dependent(dependent, depth, mask);
     }
+
     fn reset_dependent_mask(&mut self, dependent: ElementId) {
         if let Some(entry) = self.dependents.get_mut(&dependent) {
             entry.mask = crate::view::FieldMask::NONE;
         }
     }
+
     fn prune_unread_dependent(&mut self, dependent: ElementId) -> bool {
         match self.dependents.get(&dependent) {
             Some(entry) if entry.mask.is_empty() => {

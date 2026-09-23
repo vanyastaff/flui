@@ -113,6 +113,25 @@ impl StatelessView for FailingSizeReader {
     }
 }
 
+/// Reads `size` while `reads` is true and nothing from `MediaQuery` otherwise.
+#[derive(Clone, StatelessView)]
+struct DroppingReader {
+    reads: Rc<Cell<bool>>,
+    builds: Count,
+}
+
+impl StatelessView for DroppingReader {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.builds.set(self.builds.get() + 1);
+        if self.reads.get() {
+            let size = MediaQuery::size_of(ctx).expect("MediaQuery ancestor");
+            SizedBox::new(size.width.0 / 100.0, 1.0)
+        } else {
+            SizedBox::new(1.0, 1.0)
+        }
+    }
+}
+
 /// Stops parent-driven rebuilds so only dependency notifications reach the
 /// leaves.
 #[derive(Clone)]
@@ -389,4 +408,42 @@ fn a_build_that_panics_before_reading_keeps_its_dependency() {
         px(10.0),
         "the reader rendered the new width after recovering"
     );
+}
+
+#[test]
+fn a_build_that_stops_reading_the_provider_is_pruned_from_its_dependents() {
+    // Reset-on-build prune: an element whose latest build read nothing from a
+    // provider leaves that provider's dependents map (and the reverse index),
+    // and no provider change rebuilds it any more.
+    let reads = Rc::new(Cell::new(true));
+    let builds = count();
+    let reader = DroppingReader {
+        reads: Rc::clone(&reads),
+        builds: Rc::clone(&builds),
+    };
+    let wrap = |reader: &DroppingReader| {
+        use flui_view::ViewExt;
+        StaticChild {
+            inner: reader.clone().boxed(),
+        }
+    };
+    let mut laid = lay_out(
+        MediaQuery::new(data(800.0, 1.0), wrap(&reader)),
+        loose(4000.0),
+    );
+    assert_eq!(laid.inherited_dependent_count::<MediaQuery>(), 1);
+
+    // The size change rebuilds it; this build reads nothing from MediaQuery.
+    reads.set(false);
+    laid.pump_widget(MediaQuery::new(data(900.0, 1.0), wrap(&reader)));
+    assert_eq!(builds.get(), 2, "the size change reached the reader");
+    assert_eq!(
+        laid.inherited_dependent_count::<MediaQuery>(),
+        0,
+        "the entry whose mask stayed NONE was pruned"
+    );
+
+    // Neither field rebuilds it now.
+    laid.pump_widget(MediaQuery::new(data(1000.0, 1.5), wrap(&reader)));
+    assert_eq!(builds.get(), 2, "a pruned element is not notified");
 }

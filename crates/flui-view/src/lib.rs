@@ -258,6 +258,9 @@ pub mod prelude {
     // traits) makes the collision well-defined: `#[derive(StatelessView)]`
     // picks the macro, `impl StatelessView for X { … }` picks the trait.
     pub use flui_macros::{InheritedData, StatefulView, StatelessView};
+    // The trait under the derive, so `field_mask_diff` resolves with the
+    // prelude alone (same name, separate namespaces, as above).
+    pub use crate::InheritedData;
 
     // Logging
     pub use crate::context::{BuildContext, BuildContextExt};

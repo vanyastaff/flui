@@ -293,8 +293,9 @@ drain goes through the same function, so it does the same for the elements it bu
 `media_query_fields.rs` pins it (read `size` in the first build, `text_scale_factor` in the
 second → a later size-only change rebuilds nothing). Cost: one hash lookup per previous
 provider per build; benefit: no stale rebuilds from reads a conditional branch stopped making.
-A build that panics is not evidence of what the element reads: when this element's build (or
-its dependency hook) is recovered with an `ErrorView`, its previous masks are kept and the
+A build that panics is not evidence of what the element reads: when this element's build is
+recovered with an `ErrorView` (a flag `build_or_recover` sets on the drain's owner, not a
+scan of the diagnostic panic queue), its previous masks are kept and the
 sink's records are only added, and the signal registry likewise restores the previous read set
 when the build unwinds — so the element stays subscribed and rebuilds once the failing
 condition clears (`a_build_that_panics_before_reading_keeps_its_dependency`,

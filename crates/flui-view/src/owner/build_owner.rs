@@ -1244,6 +1244,7 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
+            build_recovered: None,
             #[cfg(feature = "signals")]
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
@@ -1735,9 +1736,9 @@ impl BuildOwner {
             // `AssertUnwindSafe` is sound because the sole cross-unwind
             // invariant — the slot is whole again — is re-established by the
             // unconditional `put_element` below.
-            // Recovered panics recorded from here on belong to this element's
-            // build window (reset-on-build keeps its masks when one is its own).
-            let recovered_before = self.recovered_panics.len();
+            // Set by `build_or_recover` if this element's build panics and is
+            // recovered (reset-on-build then keeps its masks).
+            let build_recovered = std::cell::Cell::new(false);
             let partitioned_dirty_count = self.partitioned_dirty_count();
             let build_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut element_owner = super::ElementOwner {
@@ -1771,6 +1772,7 @@ impl BuildOwner {
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
+                    build_recovered: Some(&build_recovered),
                     #[cfg(feature = "signals")]
                     reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
@@ -1890,16 +1892,13 @@ impl BuildOwner {
             // provider it no longer read drops the entry. A field read only in
             // an earlier build therefore stops rebuilding this element.
             //
-            // A build that panicked and was recovered (ErrorView substituted,
-            // `build_or_recover`) or whose dependency hook panicked may have
-            // stopped before reading its providers: the empty sink says nothing
+            // A build that panicked and was recovered (ErrorView substituted;
+            // `build_or_recover` sets the owner's `build_recovered` flag) may
+            // have stopped before reading its providers: the empty sink says nothing
             // about what the element depends on, so its previous masks are kept
             // (the sink's records are still added) and it keeps receiving the
             // notifications that let a fixed condition rebuild it.
-            let build_recovered = self.recovered_panics[recovered_before..].iter().any(|panic| {
-                matches!(panic.at, super::RecoveredAt::Element { element, .. } if element == id)
-            });
-            let previous_providers = if build_recovered {
+            let previous_providers = if build_recovered.get() {
                 super::inherited_dependencies::ProviderIds::default()
             } else {
                 self.inherited_dependencies.providers_of(id)
@@ -1970,6 +1969,7 @@ impl BuildOwner {
                     owner_tag: self.owner_tag,
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
+                    build_recovered: None,
                     #[cfg(feature = "signals")]
                     reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
@@ -2405,6 +2405,7 @@ impl BuildOwner {
                 owner_tag: self.owner_tag,
                 tree_observer: &mut self.tree_observer,
                 recovered_panics: &mut self.recovered_panics,
+                build_recovered: None,
                 #[cfg(feature = "signals")]
                 reactive: &self.reactive,
                 lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
@@ -2614,6 +2615,7 @@ impl BuildOwner {
             owner_tag: self.owner_tag,
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
+            build_recovered: None,
             #[cfg(feature = "signals")]
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,

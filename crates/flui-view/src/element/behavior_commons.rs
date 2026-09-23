@@ -227,6 +227,9 @@ where
                 format!("building {behavior_name}"),
             );
             let error_view = crate::view::ErrorView::build_error_view(&panic.error);
+            if let Some(flag) = owner.build_recovered {
+                flag.set(true);
+            }
             owner.push_recovered_panic(panic); // logs at error level
             error_view
         }
