@@ -822,13 +822,18 @@ CI runs in two lanes, chosen by the `plan` job:
     in scope;
   - wasm32 clippy for the wasm-capable crates in scope;
   - a per-feature `cargo hack clippy` for the changed crates that have
-    features, and for any crate whose `Cargo.toml` changed (their dependents
-    keep the default build; `feature-matrix` covers the rest);
-  - the `flui-app`/`flui` iOS runner's clippy, when `flui-app` is in scope, in
-    a separate macOS job (`fast-lane-ios`), because it needs xcrun;
+    features, for any crate whose `Cargo.toml` changed, and for each
+    dependent whose edge to a crate in scope only a non-default feature
+    compiles (an optional dependency, or one a non-default feature names).
+    Other dependents keep the default build. More than three such dependents
+    send the PR to the heavy lane, whose `feature-matrix` covers them;
+  - the `flui-app`/`flui` iOS runner's clippy, when either is in scope, in a
+    separate macOS job (`fast-lane-ios`), because it needs xcrun;
   - rustdoc with `-D warnings` over the crates in scope, with their `testing`
     features (the `doc` job's flags). A moved item's broken intra-doc link is
-    the typical casualty of a refactor.
+    the typical casualty of a refactor;
+  - the doctests of the library crates in scope (`cargo test --doc`, the
+    `doc-test` job narrowed): nextest runs none.
 
   A workspace-wide input (clippy/nextest config, the lane's own scripts) or a
   file no crate owns widens the lane to the whole workspace. Nothing compiles
@@ -839,11 +844,13 @@ CI runs in two lanes, chosen by the `plan` job:
   `workflow_dispatch`, a pull request that changes an input of the heavy jobs,
   or a pull request labelled `full-ci`. The heavy-job inputs are `Cargo.lock`,
   the root `Cargo.toml`, `.cargo/`, the toolchain file (either spelling), a
-  workflow, and any script
-  a heavy job runs (read from `ci.yml`, the justfile included). Adding the
-  label dispatches CI on the PR's branch through `full-ci.yml`; on a fork PR
-  it fails, saying so, since a fork's branch cannot be dispatched here. Later
-  pushes to a labelled PR take the heavy lane directly. Every job below runs.
+  workflow, a WGSL shader (only a GPU job compiles one), and any script a
+  heavy job runs (read from `ci.yml`, the justfile included). Adding the label
+  re-runs the PR's own CI run through `full-ci.yml`, so the heavy result
+  replaces the fast one in the same `ci` check; `plan` reads the label from
+  the API. On a fork PR it fails, saying so (its token cannot re-run
+  anything): re-run CI from the PR's Checks tab instead. Later pushes to a
+  labelled PR take the heavy lane directly. Every job below runs.
 
   A red heavy run on main or nightly opens (or comments on) the "CI is red on
   main" issue. The rule is fix forward within the hour, or revert.
@@ -851,16 +858,17 @@ CI runs in two lanes, chosen by the `plan` job:
 **Only the heavy lane checks these**, so a pull request can merge green and
 still turn main red:
 
-- doc-tests (`doc-test`);
-- rustdoc of crates outside the change's scope (`doc`);
+- doc-tests and rustdoc of crates outside the change's scope (`doc-test`,
+  `doc`);
 - linking of examples and benches (`test`'s `build --all-targets`,
   `bench-compile`);
 - the feature-gated suites (`test-features`);
-- the per-feature matrix beyond changed manifests (`feature-matrix`);
+- the per-feature matrix of dependents that reach the change under a
+  default feature or not at all (`feature-matrix`);
 - the facade in its default feature set;
 - GPU readback (`gpu-test`), miri, msrv, `live-smoke`;
 - macOS's `flui-cli` suite (`cli-macos`; its iOS runner clippy also runs in
-  `fast-lane-ios` when `flui-app` is in scope);
+  `fast-lane-ios` when `flui-app` or `flui` is in scope);
 - linking and running the wasm32 tests (`wasm-check`).
 
 Label a change that is likely to break one of these `full-ci`.
@@ -901,9 +909,7 @@ in `.github/workflows/ci.yml`:
 The other workflows (`weekly.yml`, `release.yml`, `docs.yml`,
 `coderabbit-trigger.yml`) are scheduled or event-driven, not per-PR gates, and
 have no local mirror. `full-ci.yml` only turns the `full-ci` label into a
-`workflow_dispatch` of `ci.yml` on the PR's branch. GitHub dispatches only
-workflows present on the default branch, so it works once `ci.yml`'s
-`workflow_dispatch` trigger is on main.
+re-run of the PR's own `ci.yml` run.
 
 The `gpu-test` job additionally runs the full `testing` readback
 suite on a windows-latest runner (WARP software rasterizer) and is

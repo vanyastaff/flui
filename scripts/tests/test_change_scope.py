@@ -39,6 +39,10 @@ class Modes(unittest.TestCase):
         self.assertEqual(scope("docs/a.md", "README.md")["mode"], "docs")
         self.assertEqual(scope()["mode"], "docs")
 
+    def test_shaders_require_the_heavy_lane(self):
+        r = scope("crates/flui-engine/src/shaders/rect_instanced.wgsl")
+        self.assertTrue(r["heavy_required"])
+
     def test_heavy_inputs_require_the_heavy_lane(self):
         for path in ("Cargo.lock", "Cargo.toml", ".cargo/config.toml", "rust-toolchain.toml",
                      "rust-toolchain", ".github/workflows/ci.yml"):
@@ -126,16 +130,39 @@ class CargoArgs(unittest.TestCase):
         self.assertNotIn("-p flui-cli", a["wasm_args"])
         self.assertIn("-p flui-platform", a["wasm_args"])
 
-    def test_per_feature_pass_covers_the_changed_crates_features(self):
-        # a source-only change to a crate with non-default features gets the
-        # per-feature clippy; its dependents do not (feature-matrix covers them)
+    def test_per_feature_pass_covers_feature_gated_dependents(self):
+        # flui-widgets reaches flui-assets only through its optional
+        # `asset-images` edge: a source-only flui-assets change must compile
+        # that edge, which the default build never does
         a = ca.args_for(scope("crates/flui-assets/src/lib.rs"))
-        self.assertEqual(a["hack_args"], "-p flui-assets")
-        self.assertNotIn("flui-widgets", a["hack_args"])
+        self.assertIn("-p flui-assets", a["hack_args"])
+        self.assertIn("-p flui-widgets", a["hack_args"])
+        self.assertEqual(a["heavy_required"], "false")
 
-    def test_ios_leg_when_flui_app_is_in_scope(self):
+    def test_default_on_optional_edges_need_no_per_feature_pass(self):
+        # `flui` takes flui-material through its default `material` feature
+        self.assertEqual(ca.args_for(scope("crates/flui-material/src/lib.rs"))["hack_args"], "")
+
+    def test_many_feature_gated_dependents_take_the_heavy_lane(self):
+        a = ca.args_for(scope("crates/flui-view/src/lib.rs"))
+        self.assertEqual(a["heavy_required"], "true")
+        self.assertIn("feature-matrix", a["reason"])
+
+    def test_ios_leg_when_flui_app_or_the_facade_is_in_scope(self):
         self.assertEqual(ca.args_for(scope("crates/flui-view/src/lib.rs"))["cross_ios"], "true")
-        self.assertEqual(ca.args_for(scope("crates/flui-material/src/lib.rs"))["cross_ios"], "false")
+        # the facade gates code on iOS too
+        self.assertEqual(ca.args_for(scope("src/lib.rs"))["cross_ios"], "true")
+        self.assertEqual(ca.args_for(scope("crates/flui-cli/src/main.rs"))["cross_ios"], "false")
+
+    def test_doctests_cover_the_scopes_library_packages(self):
+        a = ca.args_for(scope("crates/flui-material/src/lib.rs"))
+        self.assertEqual(a["doctest_args"], "-p flui -p flui-material")
+        # flui-web-counter is in scope but has no rlib: `cargo test --doc -p` would reject it
+        self.assertIn("flui-web-counter", a["packages"])
+        self.assertNotIn("flui-web-counter", a["doctest_args"])
+        # an included README is doctest source
+        self.assertIn("-p flui-animation", ca.args_for(scope("crates/flui-animation/README.md"))["doctest_args"])
+        self.assertEqual(ca.args_for(scope("docs/x.md"))["doctest_args"], "")
 
     def test_rustdoc_covers_the_scope_with_its_testing_features(self):
         a = ca.args_for(scope("crates/flui-material/src/lib.rs"))

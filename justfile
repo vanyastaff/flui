@@ -401,7 +401,7 @@ check-changed base="origin/main":
     eval "$({{ flui_bash }} scripts/affected-crates.sh --base {{ base }} --worktree --format shell)"
     echo "check-changed: $REASON"
     if [ "$HEAVY_REQUIRED" = true ]; then
-        echo "check-changed: this change feeds CI's heavy jobs (Cargo.lock, toolchain, workflows or a heavy job's script): the PR will run the heavy lane; locally, consider just ci-full"
+        echo "check-changed: only CI's heavy jobs check part of this change (see the reason above): the PR will run the heavy lane; locally, consider just ci-full"
     fi
     cargo fmt --all -- --check
     case "$MODE" in
@@ -421,6 +421,10 @@ check-changed base="origin/main":
     if [ -n "$DOC_ARGS" ]; then
         # shellcheck disable=SC2086
         RUSTDOCFLAGS="-D warnings" cargo doc $DOC_ARGS --no-deps --locked --document-private-items
+    fi
+    if [ -n "$DOCTEST_ARGS" ]; then
+        # shellcheck disable=SC2086
+        cargo test $DOCTEST_ARGS --locked --doc
     fi
     # cfg-gated code this host's build never compiles (same commands as CI's fast lane)
     if [ "$CROSS_PLATFORM" = true ]; then

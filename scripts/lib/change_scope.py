@@ -49,8 +49,8 @@ DOCS_ONLY = (
     "crates/*/CHANGELOG.md",
 )
 
-# Workspace-wide inputs whose breakage shows up in the heavy jobs (msrv,
-# feature-matrix, wasm, cross, gpu, doc, miri): the heavy lane runs.
+# Inputs whose breakage shows up only in the heavy jobs (msrv, feature-matrix,
+# wasm, cross, gpu, doc, miri): the heavy lane runs.
 HEAVY_TRIGGERS = (
     "Cargo.toml",  # the root manifest: workspace deps, lints, profiles
     "Cargo.lock",
@@ -58,6 +58,9 @@ HEAVY_TRIGGERS = (
     "rust-toolchain.toml",
     "rust-toolchain",  # the extensionless form; rustup prefers it over .toml
     ".github/workflows/**",
+    # Shaders: clippy only embeds them as strings and no build script parses
+    # them; the first thing that compiles one is a GPU job's shader module.
+    "**/*.wgsl",
 )
 
 # Everything depends on these, and the fast lane checks what they change.

@@ -11,14 +11,19 @@ runs -- the one place the test-scope policy lives, for CI's `plan` job and
   flui-cli Windows paths (mirroring the cross-typecheck job), and wasm32 for
   the wasm-capable packages in scope (mirroring wasm-check; the excluded set
   is read from ci.yml's NO_WASM_PKGS, not restated here);
-- the changed crates themselves (not their dependents), when they have
-  features, and any crate whose Cargo.toml changed, get the per-feature
-  clippy pass (feature-matrix's `cargo hack --each-feature`);
-- the flui-app/flui iOS runner gets a macOS clippy leg when flui-app is in
-  scope (it needs xcrun, so it is a separate job, `fast-lane-ios`);
+- the per-feature clippy pass (feature-matrix's `cargo hack --each-feature`)
+  covers the changed crates that have features, any crate whose Cargo.toml
+  changed, and every dependent in scope whose edge to an in-scope package only
+  exists under one of its features (optional, or named in a feature): the
+  default build never compiles the code on that edge;
+- the flui-app/flui iOS runner gets a macOS clippy leg whenever either is in
+  scope, like the Android runner (it needs xcrun, so it is a separate job,
+  `fast-lane-ios`);
 - rustdoc -D warnings runs over the scope with its packages' `testing`
   features (doc-strict.sh's flags, narrowed): a moved item's broken intra-doc
-  link otherwise merges green and fails main's `doc` job.
+  link otherwise merges green and fails main's `doc` job;
+- doctests run over the scope's library packages (the heavy `doc-test` job,
+  narrowed): nextest never executes them.
 
 Python >= 3.9 on purpose (no tomllib).
 """
@@ -31,20 +36,73 @@ import sys
 import change_scope as cs
 
 
-_FEATURES = None
+_META = None
 
 
-def package_features() -> dict:
-    """Workspace package name -> its declared feature names (cached)."""
-    global _FEATURES
-    if _FEATURES is None:
+def workspace_packages() -> dict:
+    """Workspace package name -> its `cargo metadata --no-deps` entry (cached)."""
+    global _META
+    if _META is None:
         import json
         import subprocess
         meta = json.loads(subprocess.run(
             ["cargo", "metadata", "--format-version", "1", "--no-deps", "--offline"],
             cwd=cs.ROOT, check=True, capture_output=True, text=True).stdout)
-        _FEATURES = {p["name"]: set(p["features"]) for p in meta["packages"]}
-    return _FEATURES
+        _META = {p["name"]: p for p in meta["packages"]}
+    return _META
+
+
+def package_features() -> dict:
+    """Workspace package name -> its declared feature names."""
+    return {n: set(p["features"]) for n, p in workspace_packages().items()}
+
+
+def library_packages() -> set:
+    """Packages with a library target rustdoc can run doctests for
+    (`cargo test --doc -p` errors on a package without one)."""
+    kinds = {"lib", "rlib", "dylib", "proc-macro"}
+    return {n for n, p in workspace_packages().items()
+            if any(kinds & set(t["kind"]) for t in p["targets"])}
+
+
+def _default_features(pkg: dict) -> set:
+    """The feature names `default` turns on, transitively, within `pkg`."""
+    on, todo = set(), ["default"]
+    while todo:
+        f = todo.pop()
+        if f in on or f not in pkg["features"]:
+            continue
+        on.add(f)
+        todo += [v for v in pkg["features"][f] if "/" not in v and not v.startswith("dep:")]
+    return on
+
+
+def feature_gated_dependents(scope: set) -> set:
+    """Packages in `scope` whose dependency on another in-scope package is
+    compiled only under a non-default feature: the dependency is optional and
+    no default feature activates it, or a non-default feature names it
+    (`dep:x`, `x/f`, `x?/f`) -- code behind `cfg(feature = ...)` then reaches
+    into it. A change to that package can break the code on the edge while
+    the default build stays green."""
+    found = set()
+    for name in scope:
+        pkg = workspace_packages().get(name)
+        if not pkg:
+            continue
+        defaults = _default_features(pkg)
+        values = lambda feats: [v for f in feats for v in pkg["features"][f]]  # noqa: E731
+        on_by_default = values(defaults)
+        off_by_default = values(set(pkg["features"]) - defaults)
+        for dep in pkg["dependencies"]:
+            if dep["name"] not in scope or dep["name"] == name or dep.get("kind") == "dev":
+                continue
+            key = dep.get("rename") or dep["name"]
+            names = lambda vals: any(  # noqa: E731
+                v in (key, f"dep:{key}") or v.startswith((f"{key}/", f"{key}?/")) for v in vals)
+            if (dep.get("optional") and not names(on_by_default)) or names(off_by_default):
+                found.add(name)
+                break
+    return found
 
 
 def testing_packages() -> set:
@@ -57,6 +115,10 @@ def featured_packages() -> set:
     """Packages with a feature besides `default`: the ones a per-feature pass
     can reach code in that the default build never compiles."""
     return {n for n, f in package_features().items() if f - {"default"}}
+
+
+# More feature-gated dependents than this: the heavy lane (see args_for).
+MAX_FEATURE_GATED_DEPENDENTS = 3
 
 
 def no_wasm_packages() -> set:
@@ -82,10 +144,21 @@ def args_for(result: dict, members=None) -> dict:
         testing = sorted(testing_packages() if full else testing_packages() & scope)
         feats = f" --features {','.join(n + '/testing' for n in testing)}" if testing else ""
         doc_args = ("--workspace" if full else p(scope)) + feats
+    # Dependents that compile the change only under a feature get the
+    # per-feature pass below; past a handful, that is the heavy lane's sliced
+    # feature-matrix job, not a fast-lane step.
+    heavy_required, reason = result["heavy_required"], result["reason"]
+    gated = set()
+    if mode == "packages":
+        gated = (feature_gated_dependents(scope) & featured_packages()) - set(result.get("seeds", []))
+        if len(gated) > MAX_FEATURE_GATED_DEPENDENTS:
+            heavy_required = True
+            reason += (f"; {len(gated)} dependents reach the change only under a feature"
+                       f" ({', '.join(sorted(gated)[:4])}, ...): the feature-matrix job covers them")
     return {
         "mode": mode,
-        "heavy_required": "true" if result["heavy_required"] else "false",
-        "reason": result["reason"],
+        "heavy_required": "true" if heavy_required else "false",
+        "reason": reason,
         "packages": " ".join(packages),
         "pkg_args": "--workspace" if full else p(scope),
         "test_args": "--workspace --exclude flui-platform" if full else p(scope - {"flui-platform"}),
@@ -94,16 +167,21 @@ def args_for(result: dict, members=None) -> dict:
         "cross_platform": "true" if full or "flui-platform" in scope else "false",
         "cross_app": "true" if full or scope & {"flui-app", "flui"} else "false",
         "cross_cli": "true" if full or "flui-cli" in scope else "false",
-        # the flui-app / flui iOS runner: its clippy needs macOS (xcrun)
-        "cross_ios": "true" if full or "flui-app" in scope else "false",
+        # the flui-app / flui iOS runner: its clippy needs macOS (xcrun); the
+        # facade gates code on iOS too, so either one in scope runs it
+        "cross_ios": "true" if full or scope & {"flui-app", "flui"} else "false",
         "wasm_args": wasm_args if mode in ("packages", "full") else "",
         "wasm_facade": "true" if full or "flui" in scope else "false",
         # per-feature clippy for the crates the change is IN (seeds) that have
-        # features, and for any crate whose manifest changed; their dependents
+        # features, for any crate whose manifest changed, and for dependents
+        # whose edge into the scope only a feature compiles; other dependents
         # get the default build only (the heavy feature-matrix covers the rest)
-        "hack_args": p((set(result.get("seeds", [])) & featured_packages()) | set(result["manifests"]))
+        "hack_args": p((set(result.get("seeds", [])) & featured_packages()) | set(result["manifests"]) | gated)
         if mode == "packages" else "",
         "doc_args": doc_args,
+        # doctests (nextest runs none): the heavy doc-test job's command, narrowed
+        "doctest_args": ("--workspace" if full else p(scope & library_packages()))
+        if mode in ("packages", "full") else "",
     }
 
 

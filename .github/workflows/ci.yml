@@ -46,9 +46,11 @@ on:
     # No `labeled` here: a run for an unrelated label would post its own `ci`
     # check on the same commit, and the latest one is what a required check
     # reads -- a skipped or no-op `ci` would mask a red one. Adding the
-    # `full-ci` label instead dispatches this workflow on the PR's branch
-    # (.github/workflows/full-ci.yml); later pushes to a labelled PR pick the
-    # heavy lane up here through `plan`.
+    # `full-ci` label instead RE-RUNS this PR's own run
+    # (.github/workflows/full-ci.yml), so the heavy result replaces the fast
+    # one in the same `ci` check; `plan` reads the label live, since a re-run
+    # keeps the original event payload. Later pushes to a labelled PR pick
+    # the heavy lane up here the same way.
   push:
     branches: [main]
   merge_group:
@@ -252,7 +254,8 @@ jobs:
   # plan — what this run has to build. Two independent answers:
   #
   #   heavy  "true" on push to main, merge_group, schedule, workflow_dispatch,
-  #          and on a pull_request carrying the `full-ci` label: every job
+  #          and on a pull_request carrying the `full-ci` label (read live
+  #          from the API) or changing a heavy-job input: every job
   #          below runs. Otherwise (an ordinary pull_request) only the fast
   #          lane does, and the heavy jobs skip -- expected, see `ci`.
   #   mode   on a pull_request, from scripts/affected-crates.sh (the same
@@ -279,6 +282,11 @@ jobs:
     name: plan
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # `pull-requests: read`: the `full-ci` label is read from the API, not
+    # from the event payload (a re-run replays the payload it started with).
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       heavy: ${{ steps.scope.outputs.heavy }}
       mode: ${{ steps.scope.outputs.mode }}
@@ -290,6 +298,7 @@ jobs:
       wasm_facade: ${{ steps.scope.outputs.wasm_facade }}
       hack_args: ${{ steps.scope.outputs.hack_args }}
       doc_args: ${{ steps.scope.outputs.doc_args }}
+      doctest_args: ${{ steps.scope.outputs.doctest_args }}
       reason: ${{ steps.scope.outputs.reason }}
       packages: ${{ steps.scope.outputs.packages }}
       pkg_args: ${{ steps.scope.outputs.pkg_args }}
@@ -311,16 +320,26 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          FULL_CI_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          FULL_CI_LABEL=false
           if [ "$EVENT" != pull_request ]; then
             bash scripts/affected-crates.sh --full --format github > scope.txt
             heavy=true
           else
+            # live, not from the payload: `full-ci` re-runs this very run. No
+            # pipe into `grep -q` (its early exit would fail the pipeline).
+            labels=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.labels[].name')
+            if grep -qx full-ci <<<"$labels"; then
+              FULL_CI_LABEL=true
+            fi
             bash scripts/affected-crates.sh --base "$BASE_SHA" --format github > scope.txt
-            # heavy when the change feeds a heavy job (Cargo.lock, toolchain,
-            # workflows, a heavy job's script) or the PR carries `full-ci`
+            # heavy when the change feeds only a heavy job (Cargo.lock,
+            # toolchain, workflows, a heavy job's script, a shader, feature-
+            # gated edges into many dependents) or the PR carries `full-ci`
             heavy=false
             if grep -qx 'heavy_required=true' scope.txt || [ "$FULL_CI_LABEL" = true ]; then
               heavy=true
@@ -357,6 +376,7 @@ jobs:
       WASM_ARGS: ${{ needs.plan.outputs.wasm_args }}
       HACK_ARGS: ${{ needs.plan.outputs.hack_args }}
       DOC_ARGS: ${{ needs.plan.outputs.doc_args }}
+      DOCTEST_ARGS: ${{ needs.plan.outputs.doctest_args }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -412,6 +432,15 @@ jobs:
         run: |
           # shellcheck disable=SC2086
           cargo doc $DOC_ARGS --no-deps --locked --document-private-items
+
+      # The heavy `doc-test` job over the scope's library packages: nextest
+      # executes no doctests, and a README pulled in with `include_str!` is
+      # one.
+      - name: cargo test --doc (affected packages)
+        if: needs.plan.outputs.doctest_args != ''
+        run: |
+          # shellcheck disable=SC2086
+          cargo test $DOCTEST_ARGS --locked --doc
 
       # cfg-gated code the Linux build never compiles: clippy (no link, no
       # tests) on its own target, for the affected packages only -- the same
