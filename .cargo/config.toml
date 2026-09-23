@@ -1,55 +1,27 @@
-# Cargo configuration for FLUI workspace
+# Cargo configuration for the FLUI workspace.
 # https://doc.rust-lang.org/cargo/reference/config.html
+#
+# Only settings that differ from Cargo's defaults live here. Profiles live in
+# the root `Cargo.toml`.
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Build settings
-# ═══════════════════════════════════════════════════════════════════════════════
-[build]
-# No `jobs` pin. Cargo defaults to the logical CPU count; a checked-in number is
-# wrong for every other machine (it was 8, which on an 8-core / 8 GB laptop with
-# two cargo processes meant 16 rustc and swap). Cap per machine or per run with
-# `CARGO_BUILD_JOBS=<n>` in the environment, or `cargo ... -j <n>`.
+# No `[build] jobs` pin: Cargo defaults to the logical CPU count, and a
+# checked-in number is wrong for every other machine. Cap per machine or per
+# run with `CARGO_BUILD_JOBS=<n>` or `cargo ... -j <n>`.
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Linker configuration - faster linking
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# Windows - use native MSVC linker (faster than GNU ld)
-[target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "link-arg=/DEBUG:NONE"] # Faster release builds
-
-# Linux — `rust-lld` has been the default linker for x86_64-unknown-linux-gnu
-# since Rust 1.90 (the target spec reports linker flavor `gnu-lld-cc`,
-# self-contained), so an lld opt-in buys nothing any more. The one remaining
-# upgrade is mold; opt in locally by uncommenting the block. Kept commented in
-# the committed config: not every environment (or GitHub runner image) ships
-# it, and a missing linker fails builds with a cryptic error.
+# Linkers: the platform defaults are right. Linux has used the self-contained
+# `rust-lld` since Rust 1.90; macOS uses the Apple linker. mold is a local
+# opt-in on Linux (not every runner image ships it, and a missing linker fails
+# with a cryptic error):
 # [target.x86_64-unknown-linux-gnu]
 # linker = "clang"
 # rustflags = ["-C", "link-arg=-fuse-ld=mold"]
-
-# macOS uses the default Apple linker; no separate lld installation is required.
-# https://doc.rust-lang.org/rustc/platform-support/apple-darwin.html
-# Alternative linkers are a local opt-in, as on Linux above.
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Android NDK targets
-# ═══════════════════════════════════════════════════════════════════════════════
-[target.aarch64-linux-android]
-# linker = "path/to/ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android21-clang"
-
-[target.armv7-linux-androideabi]
-# linker = "path/to/ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/armv7a-linux-androideabi21-clang"
-
-[target.x86_64-linux-android]
-# linker = "path/to/ndk/toolchains/llvm/prebuilt/windows-x86_64/bin/x86_64-linux-android21-clang"
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# WASM target
-# ═══════════════════════════════════════════════════════════════════════════════
-# Atomics/bulk-memory only needed for multi-threaded WASM (SharedArrayBuffer).
-# Uncomment when enabling Web Workers with shared memory.
-# rustflags = ["-C", "target-feature=+atomics,+bulk-memory,+mutable-globals"]
+#
+# Windows keeps MSVC's default PDB output. `-C link-arg=/DEBUG:NONE` would drop
+# it for every profile, and a debug-build panic backtrace then has no frames at
+# all; release builds strip debuginfo through their profile instead.
+# `rust-lld` was measured as a Windows linker: a one-line edit in flui-widgets
+# rebuilt its tests in 6.7-7.1 s against link.exe's 7.3-7.5 s, too small a win
+# to take on a second linker's edge cases.
 
 [target.wasm32-unknown-unknown]
 # Lets `cargo test --target wasm32-unknown-unknown` actually RUN the tests
@@ -63,40 +35,10 @@ rustflags = ["-C", "link-arg=/DEBUG:NONE"] # Faster release builds
 # unaffected.
 runner = "wasm-bindgen-test-runner"
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Profile-specific rustflags
-# ═══════════════════════════════════════════════════════════════════════════════
-[profile.dev]
-# Split debug info for faster incremental builds (Linux/macOS)
-# split-debuginfo = "unpacked"
+# Android builds go through `cargo ndk`, which sets the NDK linkers itself
+# (docs/getting-started.md).
 
-[profile.release]
-# LTO for release builds (better optimization, slower compile)
-# lto = "thin"
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Registry settings
-# ═══════════════════════════════════════════════════════════════════════════════
-[registries.crates-io]
-protocol = "sparse" # Faster index updates
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Network settings
-# ═══════════════════════════════════════════════════════════════════════════════
-[net]
-retry = 3
-git-fetch-with-cli = false
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Environment variables for build scripts
-# ═══════════════════════════════════════════════════════════════════════════════
-[env]
 # Incremental compilation is governed by `[profile.dev] incremental` in the root
-# `Cargo.toml` (ON for local development) and by `CARGO_INCREMENTAL=0` in each CI
-# workflow's environment. A `CARGO_INCREMENTAL` entry here would be inert for that
-# purpose: `[env]` sets variables for the processes Cargo executes, not for Cargo's
-# own profile resolution. Building through `sccache`? Export `CARGO_INCREMENTAL=0`
-# in your shell — the reasons are beside the profile key.
-
-# Faster shader compilation for wgpu
-# WGPU_BACKEND = "vulkan"  # or "dx12" on Windows
+# `Cargo.toml` (on for local development) and by `CARGO_INCREMENTAL=0` in CI. An
+# `[env]` entry here would not reach it: `[env]` feeds the processes Cargo runs,
+# not Cargo's own profile resolution.
