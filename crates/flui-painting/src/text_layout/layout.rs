@@ -16,6 +16,7 @@ use flui_types::{
     },
 };
 use parking_lot::Mutex;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::error::RegisterFontError;
 
@@ -1089,66 +1090,94 @@ impl TextLayout {
 
     /// Returns the word boundary at the given text position.
     ///
-    /// The implementation expands left and right from `position.offset`
-    /// (a byte offset into `self.text`, matching cosmic-text's
-    /// `glyph.start` convention used elsewhere in this module) over
-    /// runs of non-whitespace characters. Multi-byte UTF-8 codepoints
-    /// are stepped via `str::char_indices` so we never split inside a
-    /// codepoint.
+    /// `position.offset` is a byte offset into `self.text` (matching
+    /// cosmic-text's `glyph.start` convention used elsewhere in this
+    /// module), snapped to the nearest preceding char boundary so an
+    /// off-boundary offset never panics a slice.
     ///
-    /// Semantics are deliberately "non-whitespace run", not full
-    /// UAX #29 word segmentation; full segmentation would need the
-    /// `unicode-segmentation` crate, which is filed as an
-    /// `Outstanding refactor`. The previous implementation was
-    /// O(n²) in the glyph count *and* incorrect for the common ASCII
-    /// case (every byte index was a glyph start, so every call
-    /// returned the entire line).
+    /// Segmentation is full UAX #29 word segmentation
+    /// (`unicode-segmentation`'s `split_word_bound_indices`), not an
+    /// ASCII-whitespace-run scan: a straight/curly apostrophe inside a
+    /// word (`"don't"`) stays one segment, and a letter-digit run
+    /// (`"foo123"`) stays one segment too, rather than every non-space
+    /// byte being treated as one undifferentiated run. This closes the
+    /// gap the previous ASCII implementation's own doc comment named as
+    /// an "Outstanding refactor". Clusters-only, not dictionary-based:
+    /// Thai/Lao/Khmer/Myanmar (no lexicon, no spaces — UAX #29's
+    /// rule-based default cannot find a real word boundary there at all)
+    /// AND Chinese/Japanese (ICU's oracle behavior uses a `cjdict`
+    /// word-frequency dictionary this crate does not have; the rule-based
+    /// default instead segments per character/script-run — `"東京"`
+    /// splits into `"東"` and `"京"` rather than staying the one word ICU
+    /// would find) are known limitations — see
+    /// `flui-widgets/ARCHITECTURE.md`'s Mapping decision for this
+    /// feature.
+    ///
+    /// # Boundary tie-break
+    ///
+    /// `0` always resolves to the first segment. Elsewhere, when `offset`
+    /// sits exactly between two segments:
+    ///
+    /// - One side WHITESPACE, the other a real segment: the non-whitespace
+    ///   side wins regardless of which side it is on — a caret right
+    ///   after a word (`"café "`, offset at the space) answers with the
+    ///   word just typed, and a caret right before one (`"foo bar"`,
+    ///   offset at `b`) answers with the word about to be typed into,
+    ///   never the whitespace either straddles.
+    /// - Both sides non-whitespace (`"(foo"` at the `(`/`f` boundary,
+    ///   `"日本語"` at the `日`/`本` boundary — UAX #29 gives every CJK
+    ///   character its own segment without a dictionary, so this case is
+    ///   common there, not an edge case): the FOLLOWING segment wins
+    ///   (downstream affinity) — a double-tap landing exactly on the
+    ///   second character of a CJK run must select THAT character, not
+    ///   the one before it.
     pub fn get_word_boundary(&self, position: TextPosition) -> TextRange {
         let text = self.text.as_str();
         let total = text.len();
-        let mut offset = position.offset.min(total);
 
+        if text.is_empty() {
+            return TextRange::new(0, 0);
+        }
+
+        let mut offset = position.offset.min(total);
         // Snap to the nearest preceding char boundary so we never
         // dereference inside a multi-byte codepoint.
         while offset > 0 && !text.is_char_boundary(offset) {
             offset -= 1;
         }
 
-        let bytes = text.as_bytes();
+        let segments: Vec<(usize, usize, bool)> = text
+            .split_word_bound_indices()
+            .map(|(idx, word)| (idx, idx + word.len(), word.chars().all(char::is_whitespace)))
+            .collect();
 
-        // Walk left across non-whitespace bytes. We can scan by byte
-        // because every char-boundary byte of an ASCII whitespace
-        // character is itself ASCII (0..0x80), and continuation bytes
-        // (0x80..0xC0) are never whitespace. The result is always a
-        // valid char boundary because the moment we hit a whitespace
-        // byte we stop one byte *after* it (or at 0).
-        let mut start = offset;
-        while start > 0 {
-            let prev = bytes[start - 1];
-            if prev.is_ascii_whitespace() {
-                break;
-            }
-            // Step over continuation bytes to the next char start.
-            start -= 1;
-            while start > 0 && !text.is_char_boundary(start) {
-                start -= 1;
-            }
+        let Some(&(first_start, first_end, _)) = segments.first() else {
+            return TextRange::new(total, total);
+        };
+        if offset == 0 {
+            return TextRange::new(first_start, first_end);
         }
 
-        // Walk right across non-whitespace.
-        let mut end = offset;
-        while end < total {
-            let cur = bytes[end];
-            if cur.is_ascii_whitespace() {
-                break;
-            }
-            end += 1;
-            while end < total && !text.is_char_boundary(end) {
-                end += 1;
-            }
-        }
+        let preceding = segments.iter().find(|&&(_, end, _)| end == offset).copied();
+        let following = segments
+            .iter()
+            .find(|&&(start, _, _)| start == offset)
+            .copied();
 
-        TextRange::new(start, end)
+        match (preceding, following) {
+            // Whitespace vs. word (either side): the word wins.
+            (Some((_, _, true)), Some((f_start, f_end, false))) => TextRange::new(f_start, f_end),
+            // Word vs. word: the following one wins (downstream affinity).
+            (Some((_, _, false)), Some((f_start, f_end, false))) => TextRange::new(f_start, f_end),
+            (Some((p_start, p_end, _)), _) => TextRange::new(p_start, p_end),
+            (None, Some((f_start, f_end, _))) => TextRange::new(f_start, f_end),
+            (None, None) => segments
+                .iter()
+                .find(|&&(start, end, _)| start < offset && offset < end)
+                .map_or(TextRange::new(total, total), |&(start, end, _)| {
+                    TextRange::new(start, end)
+                }),
+        }
     }
 }
 

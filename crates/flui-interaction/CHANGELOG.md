@@ -8,6 +8,25 @@ Versioning: per `docs/release.md` policy.
 
 ### Added
 
+- `DoubleTapGestureRecognizer::with_on_double_tap_down` /
+  `DoubleTapDetails`-carrying `on_double_tap_down` callback (Flutter
+  parity: `DoubleTapGestureRecognizer.onDoubleTapDown`) — fires at the
+  second contact's own DOWN (once validated against the first tap's
+  timing and slop), ahead of and independently from `on_double_tap`,
+  which still waits for that contact to also lift cleanly. `DoubleTapDetails`
+  is now re-exported from the crate root alongside
+  `DoubleTapGestureRecognizer`. Closes the gap `flui-widgets`'
+  `GestureDetector` needed to add double-tap word selection to
+  `EditableText` without reimplementing tap-count/slop/timeout tracking a
+  second time.
+- `DoubleTapGestureRecognizer::add_pointer_with_kind` — the same
+  registration `GestureRecognizer::add_pointer` performs, but with the
+  pointer's real device `kind` instead of a hard-coded
+  `PointerType::Touch`. The trait method's narrower signature carries no
+  `kind` parameter, so it now delegates to this one with the same
+  `Touch` fallback; a caller holding the concrete recognizer and the
+  originating event (`flui-widgets::GestureDetector`'s own dispatch) uses
+  this instead, so `DoubleTapDetails::kind` reports the actual device.
 - `ImpulseVelocityTracker` — Android's default fling-velocity strategy since 8.1 (AOSP `VelocityTracker.cpp` impulse model: kinetic-energy bookkeeping, from-rest boundary condition). Flutter ships least-squares only; impulse discounts stale samples on sharp deceleration, tracking the finger's final intent.
 - `OneEuroFilter` / `OneEuroFilter2D` — speed-adaptive low-pass for stylus/pointer smoothing (Casiez, Roussel & Vogel, CHI 2012) with the paper's recommended defaults (`min_cutoff=1.0`, `beta=0.007`, `d_cutoff=1.0`).
 - `GestureSettings::for_platform(TargetPlatform)` (runtime platform dispatch, Flutter `defaultTargetPlatform` model) + cfg-seeded `GestureSettings::native()`; `android_defaults()` (AOSP `ViewConfiguration`: 8 dp slop, 16 dp paging, 300 ms double-tap, 400 ms long-press, 50–8000 dp/s fling) and `ios_defaults()` (10 pt `allowableMovement`; extrapolated fields documented).
@@ -42,6 +61,7 @@ Versioning: per `docs/release.md` policy.
 - **Leak:** `GestureArenaTeam` held a strong `Arc` to itself (`self_ref`), a write-only reference cycle keeping every team alive for the process lifetime.
 - `ScaleGestureRecognizer` routed every Move/Up to the primary pointer, so the second finger never updated its own slot and two-finger pinch produced no scale updates. Events are now routed by the event's own pointer id (Flutter `scale.dart` parity).
 - `DoubleTapGestureRecognizer` inter-tap timeout now fires `on_double_tap_cancel` and releases the arena (Flutter `_reset → _checkCancel` parity); reset is atomic under one lock.
+- **Stuck recognizer:** `DoubleTapGestureRecognizer::handle_move` pre-set `phase = Cancelled` before calling `handle_cancel`, whose own guard (`phase != Ready && phase != Cancelled`) then read `Cancelled` already and skipped its entire reset — no `on_double_tap_cancel`, no arena release, and the phase never returned to `Ready`. A contact dragged past touch slop before lifting therefore disabled double-tap on that recognizer permanently, until whatever owned it was rebuilt from scratch. Latent since the recognizer's first version; found auditing `flui-widgets`' new `EditableText` double-tap composition, which put every `EditableText` behind this recognizer for the first time.
 - `PointerEventResampler` computed interpolated positions but never emitted the synthesized Move while still advancing `last_position`; it now emits per Flutter `resampler.dart`.
 
 - `LongPressGestureRecognizer::did_exceed_deadline` now calls `try_fire_timer` before resolving Accepted so `on_long_press_start` fires (was resolving without firing the start callback).

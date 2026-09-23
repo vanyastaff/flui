@@ -62,7 +62,7 @@ pub mod tap;
 pub mod tap_and_drag;
 
 // Re-export concrete recognizers
-pub use double_tap::DoubleTapGestureRecognizer;
+pub use double_tap::{DoubleTapDetails, DoubleTapGestureRecognizer};
 pub use drag::{
     DragCancelCallback, DragDownCallback, DragDownDetails, DragEndCallback, DragEndDetails,
     DragGestureRecognizer, DragStartCallback, DragStartDetails, DragUpdateCallback,

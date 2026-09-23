@@ -11,9 +11,9 @@ use std::{
 };
 
 use flui_interaction::{
-    DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
-    DragStartDetails, DragUpdateDetails, GestureRecognizer, LongPressGestureRecognizer,
-    PointerDispatch, PointerEventExt, TapGestureRecognizer,
+    DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
+    DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
+    LongPressGestureRecognizer, PointerDispatch, PointerEventExt, TapGestureRecognizer,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
@@ -23,6 +23,10 @@ use crate::{GestureArenaScope, Listener, Semantics};
 /// A no-argument gesture callback (Flutter's `onTap` / `onLongPress` /
 /// `onDoubleTap`) — fired with no details when the gesture is recognized.
 type GestureCallback = Rc<dyn Fn()>;
+/// Carries the tap's position — Flutter's `onDoubleTapDown(TapDownDetails)`.
+/// See [`GestureDetector::on_double_tap_down`]'s doc for why this is a
+/// separate callback from `on_double_tap` rather than widening it.
+type DoubleTapDownHandler = Rc<dyn Fn(DoubleTapDetails)>;
 /// Pan callbacks carry the drag's details (position, delta, velocity).
 type PanStartHandler = Rc<dyn Fn(DragStartDetails)>;
 type PanUpdateHandler = Rc<dyn Fn(DragUpdateDetails)>;
@@ -137,6 +141,7 @@ pub struct GestureDetector {
     on_secondary_tap: Option<GestureCallback>,
     on_long_press: Option<GestureCallback>,
     on_double_tap: Option<GestureCallback>,
+    on_double_tap_down: Option<DoubleTapDownHandler>,
     on_pan_start: Option<PanStartHandler>,
     on_pan_update: Option<PanUpdateHandler>,
     on_pan_end: Option<PanEndHandler>,
@@ -157,6 +162,7 @@ impl Default for GestureDetector {
             on_secondary_tap: None,
             on_long_press: None,
             on_double_tap: None,
+            on_double_tap_down: None,
             on_pan_start: None,
             on_pan_update: None,
             on_pan_end: None,
@@ -178,6 +184,7 @@ impl std::fmt::Debug for GestureDetector {
             .field("on_secondary_tap", &self.on_secondary_tap.is_some())
             .field("on_long_press", &self.on_long_press.is_some())
             .field("on_double_tap", &self.on_double_tap.is_some())
+            .field("on_double_tap_down", &self.on_double_tap_down.is_some())
             .field("on_pan_start", &self.on_pan_start.is_some())
             .field("on_pan_update", &self.on_pan_update.is_some())
             .field("on_pan_end", &self.on_pan_end.is_some())
@@ -251,6 +258,24 @@ impl GestureDetector {
     #[must_use]
     pub fn on_double_tap(mut self, callback: impl Fn() + 'static) -> Self {
         self.on_double_tap = Some(Rc::new(callback));
+        self
+    }
+
+    /// Called the instant the second contact of a double-tap goes down —
+    /// Flutter parity: `onDoubleTapDown(TapDownDetails)`
+    /// (`gestures/double_tap.dart`). Fires before, and independently of,
+    /// [`on_double_tap`](Self::on_double_tap): the recognizer already knows
+    /// the gesture is a double tap once the second contact is validated
+    /// (timing + slop against the first), and a consumer that wants the
+    /// tap's position as soon as that is known — double-tap word selection,
+    /// say, which wants to select immediately rather than wait for the
+    /// second contact to also lift cleanly — should not have to wait the
+    /// extra down-to-up round trip `on_double_tap` needs. Both callbacks
+    /// fire for a gesture that completes normally; only `on_double_tap_down`
+    /// fires if the second contact is then dragged past slop or cancelled.
+    #[must_use]
+    pub fn on_double_tap_down(mut self, callback: impl Fn(DoubleTapDetails) + 'static) -> Self {
+        self.on_double_tap_down = Some(Rc::new(callback));
         self
     }
 
@@ -407,6 +432,8 @@ pub struct GestureDetectorState {
     long_press_slot: Rc<RefCell<Option<GestureCallback>>>,
     /// The live `on_double_tap`, refreshed each `build`.
     double_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
+    /// The live `on_double_tap_down`, refreshed each `build`.
+    double_tap_down_slot: Rc<RefCell<Option<DoubleTapDownHandler>>>,
     /// The live pan callbacks, refreshed each `build`.
     pan_slot: Rc<RefCell<PanCallbacks>>,
     /// The live horizontal-drag callbacks, refreshed each `build`.
@@ -455,6 +482,7 @@ impl StatefulView for GestureDetector {
             secondary_tap_slot: Rc::new(RefCell::new(self.on_secondary_tap.clone())),
             long_press_slot: Rc::new(RefCell::new(self.on_long_press.clone())),
             double_tap_slot: Rc::new(RefCell::new(self.on_double_tap.clone())),
+            double_tap_down_slot: Rc::new(RefCell::new(self.on_double_tap_down.clone())),
             pan_slot: Rc::new(RefCell::new(PanCallbacks {
                 start: self.on_pan_start.clone(),
                 update: self.on_pan_update.clone(),
@@ -579,11 +607,18 @@ impl ViewState<GestureDetector> for GestureDetectorState {
 
         let double_tap = {
             let slot = Rc::clone(&self.double_tap_slot);
-            DoubleTapGestureRecognizer::new(arena.clone()).with_on_double_tap(move |_details| {
-                if let Some(handler) = slot.borrow().clone() {
-                    handler();
-                }
-            })
+            let down_slot = Rc::clone(&self.double_tap_down_slot);
+            DoubleTapGestureRecognizer::new(arena.clone())
+                .with_on_double_tap(move |_details| {
+                    if let Some(handler) = slot.borrow().clone() {
+                        handler();
+                    }
+                })
+                .with_on_double_tap_down(move |details| {
+                    if let Some(handler) = down_slot.borrow().clone() {
+                        handler(details);
+                    }
+                })
         };
 
         let drag = {
@@ -675,6 +710,9 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         self.double_tap_slot
             .borrow_mut()
             .clone_from(&view.on_double_tap);
+        self.double_tap_down_slot
+            .borrow_mut()
+            .clone_from(&view.on_double_tap_down);
         {
             let mut slot = self.pan_slot.borrow_mut();
             slot.start.clone_from(&view.on_pan_start);
@@ -764,6 +802,7 @@ impl GestureDetectorState {
             secondary_tap_slot: Rc::clone(&self.secondary_tap_slot),
             long_press_slot: Rc::clone(&self.long_press_slot),
             double_tap_slot: Rc::clone(&self.double_tap_slot),
+            double_tap_down_slot: Rc::clone(&self.double_tap_down_slot),
             pan_slot: Rc::clone(&self.pan_slot),
             horizontal_drag_slot: Rc::clone(&self.horizontal_drag_slot),
         };
@@ -800,6 +839,7 @@ struct RecognizerGroup {
     secondary_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     long_press_slot: Rc<RefCell<Option<GestureCallback>>>,
     double_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
+    double_tap_down_slot: Rc<RefCell<Option<DoubleTapDownHandler>>>,
     pan_slot: Rc<RefCell<PanCallbacks>>,
     horizontal_drag_slot: Rc<RefCell<HorizontalDragCallbacks>>,
 }
@@ -816,9 +856,12 @@ impl RecognizerGroup {
         slot_is_some(&self.long_press_slot)
     }
 
-    /// The double-tap recognizer participates iff `on_double_tap` is set.
+    /// The double-tap recognizer participates iff `on_double_tap` OR
+    /// `on_double_tap_down` is set — a detector configured with only the
+    /// latter (word selection, which never needs `on_double_tap` itself)
+    /// must still join the arena, or its own callback would never fire.
     fn double_tap_active(&self) -> bool {
-        slot_is_some(&self.double_tap_slot)
+        slot_is_some(&self.double_tap_slot) || slot_is_some(&self.double_tap_down_slot)
     }
 
     /// The drag recognizer participates iff any pan callback is set.
@@ -860,9 +903,28 @@ impl RecognizerGroup {
             self.long_press
                 .add_pointer(pointer, position, global_position);
         }
-        if self.double_tap_active() {
+        // Primary button (or no button info at all -- touch/pen contacts
+        // carry none, and default to allowed) only: a Secondary/Auxiliary
+        // mouse-down must not register a double-tap. `TapButton`'s own
+        // Secondary/Tertiary slots exist precisely so right-/middle-click
+        // has its own gesture family, not this one -- two quick
+        // right-clicks firing `on_double_tap_down` on a wrapped
+        // `EditableText` would select a word from a context-menu gesture.
+        if self.double_tap_active() && is_primary_button_down(event) {
+            // `add_pointer_with_kind`, not the trait's `add_pointer`: this
+            // call site holds the real originating event, so
+            // `DoubleTapDetails::kind` should report the actual device
+            // rather than falling back to `PointerType::Touch`.
+            //
+            // Fully-qualified, not a `use` import: `events::PointerEventExt`
+            // and the `PointerEventExtTrait` already imported above (as
+            // `PointerEventExt`) both define `position()` for the same
+            // `PointerEvent` type -- importing the former too would make
+            // `event.position()` two lines up ambiguous (E0034).
+            let kind = flui_interaction::events::PointerEventExt::pointer_type(event)
+                .unwrap_or(flui_interaction::events::PointerType::Touch);
             self.double_tap
-                .add_pointer(pointer, position, global_position);
+                .add_pointer_with_kind(pointer, position, global_position, kind);
         }
         if self.drag_active() {
             self.drag.add_pointer(pointer, position, global_position);
@@ -881,9 +943,22 @@ impl RecognizerGroup {
         if self.long_press_active() {
             self.long_press.handle_event(dispatch);
         }
-        if self.double_tap_active() {
-            self.double_tap.handle_event(dispatch);
-        }
+        // NOT gated on `double_tap_active()`, unlike the others: a
+        // rebuild can flip the slot to empty WHILE `double_tap` is
+        // already mid-gesture for a pointer it registered while still
+        // active (`EditableText::enabled` toggling false between a
+        // first tap's down and up, say). Gating this call the same way
+        // `handle_down`'s registration is gated would then never deliver
+        // that pointer's Up/Cancel, orphaning the recognizer in
+        // `FirstDown`/`SecondDown` forever — nothing else polls it out
+        // of a phase that isn't `WaitingForSecond` (`check_timeout`'s
+        // own guard). Safe to call unconditionally: `handle_event`
+        // no-ops on a pointer id it never registered via `add_pointer`
+        // (`self.state.primary_pointer()` won't match), and the
+        // CALLBACK itself still won't fire while disabled — that is
+        // gated separately, by the live slot the callback closure reads
+        // at call time, not by this participation check.
+        self.double_tap.handle_event(dispatch);
         if self.drag_active() {
             self.drag.handle_event(dispatch);
         }
@@ -893,8 +968,26 @@ impl RecognizerGroup {
     }
 }
 
-/// `true` when the no-argument callback slot currently holds a handler.
-fn slot_is_some(slot: &Rc<RefCell<Option<GestureCallback>>>) -> bool {
+/// Whether a `PointerEvent::Down` is the Primary mouse button (or carries
+/// no button info at all — touch and pen contacts don't, and default to
+/// allowed, matching `TapGestureRecognizer::down_button`'s own
+/// `unwrap_or(TapButton::Primary)` convention). Anything else (`Down` with
+/// `Some(Secondary)`/`Some(Auxiliary)`) is a right- or middle-click, which
+/// has its own gesture family (`TapButton::Secondary`/`Tertiary`) and must
+/// not also register as a double-tap.
+fn is_primary_button_down(event: &flui_interaction::events::PointerEvent) -> bool {
+    if let flui_interaction::events::PointerEvent::Down(data) = event {
+        data.button
+            .is_none_or(|button| button == flui_interaction::events::PointerButton::Primary)
+    } else {
+        true
+    }
+}
+
+/// `true` when a callback slot currently holds a handler — generic over
+/// the callback's own type (`GestureCallback`, `DoubleTapDownHandler`,
+/// ...) since only presence, never the callback itself, is read here.
+fn slot_is_some<T>(slot: &Rc<RefCell<Option<T>>>) -> bool {
     slot.borrow().is_some()
 }
 

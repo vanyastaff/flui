@@ -1447,3 +1447,191 @@ inherited no flight, and (c) both heroes' placeholders are cleared. Red-check:
 deleting the `finish_all` call from `did_detach` leaves the overlay count one
 entry high (`left: 4, right: 3`) and both placeholders set.
 
+### 19. Word-boundary movement uses `unicode-segmentation` (UAX #29), not ICU dictionary segmentation
+
+**Rule:** Prime Directive #2 — search the market/existing dependency graph
+before adding one, and cite what an unmatched reference actually needs.
+
+**Oracle:** Flutter's `TextPainter.getWordBoundary` (which
+`RenderEditable`'s Ctrl+Arrow word-jump and double-tap word selection both
+call) wraps `dart:ui`'s `Paragraph.getWordBoundary`, backed by ICU's
+`UBreakIterator` in word mode. ICU's word breaking is **dictionary-based**
+for two distinct groups: Thai, Lao, Khmer, and Myanmar (scripts with no
+spaces between words at all, where the Unicode Standard Annex #29
+default algorithm — rule-based, no lexicon — cannot find a linguistically
+correct boundary on its own), and separately Chinese/Japanese, via ICU's
+`cjdict` word-frequency dictionary (these scripts DO have UAX
+#29-recognized character-class boundaries, so the rule-based default
+does not fail outright the way it does for the first group — it just
+segments per character/script-run rather than per linguistic word).
+
+**Choice:** `unicode-segmentation`'s `split_word_bound_indices` — pure UAX
+#29, no dictionary data. It was already a workspace dependency (pulled in
+for extended-grapheme-cluster caret/Backspace/Delete, landed before this
+change) and pure Rust, so wiring it into word-boundary movement too adds
+no new dependency, no C binding, and no data-table download — unlike an
+ICU binding (`rust_icu`, `icu4x`), which would be a materially heavier
+addition for the one feature this touches.
+
+**Why the reference's shape does not transcribe.** ICU's dictionary data
+— both the Thai/Lao/Khmer/Myanmar lexicons and `cjdict` — is the expensive
+part of the reference's behavior, megabytes of data, not an algorithm,
+and nothing else in this workspace needs it. Bringing in a full ICU
+dependency to correct word-jump behavior for a handful of scripts, when
+every script with UAX #29-recognized boundaries (Latin, Cyrillic, Greek,
+Arabic, Hebrew, Hangul, and more) already works correctly for free, is
+the wrong trade for what this feature is worth today.
+
+**Consequences, named rather than left to be discovered:**
+
+- **Thai/Lao/Khmer/Myanmar word-jump and word-select do not find any
+  linguistically meaningful boundary** — no whitespace and no
+  UAX #29-recognized word-class transition to key on means the segmenter
+  falls back to its rule-based default (effectively per-cluster stops).
+- **Chinese/Japanese word-jump and word-select segment per
+  character/script-run, not per linguistic word** — `"東京"` ("Tokyo",
+  one word to ICU's `cjdict`) splits into `"東"` and `"京"` here, because
+  Han characters have no special UAX #29 word-class merging rule by
+  default (unlike consecutive Katakana, which UAX #29's own `WB13` rule
+  does merge — a script-specific rule already correct here, no dictionary
+  needed for it). A known, tested limitation
+  (`get_word_boundary_splits_cjk_per_character_not_per_word`), not a
+  silent bug.
+- **Every other script this crate's tests cover — Arabic (clusters-only,
+  see its own test's caveat below), Latin with apostrophes, emoji
+  clusters — segments correctly** per UAX #29's own rules, which is the
+  ceiling this crate claims for them; no claim is made about Hebrew,
+  which this crate does not currently test.
+- **Grapheme-cluster correctness is unaffected.** The dictionary gap is
+  specific to WORD boundaries; cluster boundaries (caret, Backspace,
+  Delete) use `GraphemeCursor`, a different UAX #29 mode with no
+  dictionary dependency in the reference either, and are correct for
+  every script including all the ones named above.
+- **The word-jump modifier's platform source is compile-time only, and
+  that is already known wrong for at least one real target.**
+  `is_word_jump_modifier` resolves `TargetPlatform::current()` — a
+  `cfg(target_os)` compile-time constant — once per `EditableText` key
+  handler, in `build_key_handler`. `wasm32` matches none of
+  `current()`'s `target_os` arms and falls through to `Unknown` →
+  Control, but a `flui` app compiled to `wasm32` and running in a Safari
+  tab on macOS needs Alt instead: native Ctrl+Arrow is the OS's own
+  Spaces-switch shortcut there, so a page that binds Control for
+  word-jump would never even see the chord. Web and embedded targets
+  need `TargetPlatform` resolved at RUNTIME, not baked in at compile
+  time — the exact gap `GestureSettings::native`'s own doc already flags
+  for the analogous gesture-settings case
+  (`flui-interaction/src/settings.rs:286-292`: "Anything that can host
+  more than one platform feel ... must resolve a runtime
+  `TargetPlatform` and call `for_platform` instead"). `word_jump_modifier`
+  is already split into a pure `(platform) -> Modifiers` function
+  specifically so a future runtime-resolved source has one place to
+  plug in — `build_key_handler`'s `let platform = TargetPlatform::current();`
+  — without touching the mapping table itself. Not fixed here: this
+  change did not add a runtime-platform-resolution mechanism to
+  `flui-widgets`, and inventing one for this one call site would be
+  premature relative to `GestureSettings`' own still-open gap.
+
+**Replacement tests**
+(`flui-widgets::controller::tests::{word_right_lands_on_the_next_words_start_skipping_trailing_whitespace,
+word_left_returns_to_the_current_words_own_start_without_skipping_it,
+a_run_of_whitespace_is_skipped_as_one_stop_not_a_stop_per_space,
+an_apostrophe_inside_a_word_does_not_split_it,
+cjk_text_splits_per_character_not_per_word,
+arabic_text_word_jump_never_lands_inside_a_char}`,
+`flui-widgets::text::editable_text::tests::word_jump_modifier_maps_every_platform`
+(the platform table itself, every `TargetPlatform` variant),
+`flui-painting::tests::text_layout_unit::{get_word_boundary_selects_a_whole_whitespace_run,
+get_word_boundary_does_not_split_on_an_apostrophe,
+get_word_boundary_splits_cjk_per_character_not_per_word,
+get_word_boundary_prefers_the_word_side_of_a_boundary_over_the_whitespace_side,
+get_word_boundary_prefers_the_following_segment_between_two_word_segments,
+get_word_boundary_word_vs_punctuation_boundary,
+get_word_boundary_two_space_run_boundary_matrix,
+get_word_boundary_at_the_buffers_own_leading_and_trailing_whitespace,
+get_word_boundary_never_splits_inside_a_zwj_emoji_cluster}`): each asserts
+a specific, pinned boundary — including the CJK per-character split and
+the boundary tie-break matrices (`"foo bar"` at 0/3/4/7; `"(foo"` at 1;
+`"日本語"` at 3; `"foo, bar"` at 3/4; `"foo  bar"` at 3/4/5; leading/
+trailing whitespace at a buffer's own edges) — rather than a loose "some
+boundary was found" check. Arabic is the one exception, asserted only as
+"never lands inside a char, always makes progress",
+because this port does not claim cluster-vs-word segmentation parity for
+that script specifically, only that it is never corrupted.
+
+### 20. `GestureDetector` composes AROUND `Listener`, not inside it, for double-tap word selection
+
+**Rule:** Prime Directive #2 — reuse tested framework machinery
+(`flui_interaction::DoubleTapGestureRecognizer` via
+`flui_widgets::GestureDetector`) rather than hand-rolling tap-count/slop/
+timeout tracking a second time inside `EditableText`'s own pointer
+handlers.
+
+**Oracle:** Flutter's `EditableText` composes its own
+`TextSelectionGestureDetector` (a `RawGestureDetector` subclass) around
+the text span, wiring `onDoubleTapDown` to
+`_handleDoubleTapDown` → `renderEditable.selectWord`
+(`widgets/editable_text.dart`, `widgets/text_selection.dart`).
+
+**Choice:** `EditableTextState::wrap_double_tap_word_select` composes the
+existing, generic `flui_widgets::GestureDetector` as the OUTER parent of
+`install_pointer_handlers`'s `Listener`-based field, not the reverse.
+`Listener` stays exactly as it already was — arena-free (its own
+established, tested contract) — so plain tap-to-place-caret and
+drag-to-select are byte-for-byte unaffected by the double-tap
+recognizer's presence next to them. `GestureDetector`'s
+`DoubleTapGestureRecognizer` watches the SAME pointer stream in parallel
+(both layers use `HitTestBehavior::Opaque`, so both receive every
+contact) and its `on_double_tap_down` callback — a genuine new capability
+this change adds to `GestureDetector`/`DoubleTapGestureRecognizer`, not
+previously exposed — widens the caret `Listener` just placed into the
+enclosing word, via
+[`TextLayout::get_word_boundary`](#19-word-boundary-movement-uses-unicode-segmentation-uax-29-not-icu-dictionary-segmentation)
+— the same `unicode-segmentation`/UAX #29 machinery Ctrl/Alt+Arrow
+word-jump uses one layer down, but NOT the same function: the keyboard
+path's `next_word_boundary`/`prev_word_boundary`
+(`crates/flui-widgets/src/text/controller.rs`) answer a directional
+"next/previous stop" query with their own asymmetric tie-break, while
+`get_word_boundary` answers "which segment is under this exact
+position" with a different one — see decision #19's own tie-break note.
+A double-tap and a keyboard word-jump can therefore disagree at the
+exact boundary between two segments; unifying them behind one primitive
+would need a dependency edge `flui-widgets` does not currently have
+(`flui-painting` is a dev-dependency only) and is not attempted here.
+`drag_anchor.set(None)` in the same callback stops the plain tap/drag
+handling this composition wraps from clobbering the word selection on
+the second contact's next move before it lifts — near-guaranteed on
+touch, where a finger is essentially never perfectly still between down
+and up.
+
+**Why the reference's shape does not transcribe.** Flutter's
+`TextSelectionGestureDetector` is a text-specific subtype that also owns
+triple-tap and drag-selection-handle gestures this port does not have
+yet; building an equivalent specialized subtype for one callback would be
+premature machinery for what `GestureDetector`'s existing generic API,
+widened by one method, already covers.
+
+**Consequences, named rather than left to be discovered:**
+
+- **`on_double_tap` itself is deliberately left unset** on this detector
+  — word selection only needs the earlier `on_double_tap_down` signal, not
+  confirmation that the second contact also lifted cleanly.
+- **This exposed a real participation-gating gap in `GestureDetector`
+  itself**, fixed in the same change:
+  `RecognizerGroup::double_tap_active` checked only whether `on_double_tap`
+  was set, so a detector configured with only `on_double_tap_down` would
+  never have joined the arena and its own callback would never have
+  fired. Caught before it shipped by writing a detector-only test first.
+
+**Replacement tests**
+(`flui-interaction::recognizers::double_tap::tests::on_double_tap_down_fires_at_the_second_contacts_own_down_not_its_up`,
+`flui-widgets::tests::gesture_detector_advanced::{double_tap_down_fires_before_the_second_contact_lifts,
+on_double_tap_down_alone_with_no_on_double_tap_still_participates}`,
+`flui-widgets::text::editable_text::tests::a_double_tap_selects_the_word_under_it`):
+the recognizer-level tests pin the DOWN-not-UP timing and the
+participation-gating fix in isolation; the widget-level test is the
+end-to-end proof that a double-tap on a mounted `EditableText` actually
+selects the word, not just that the underlying callback fires. Red-check
+for the last one: skip wrapping `install_pointer_handlers`'s return value
+in `wrap_double_tap_word_select` — the selection stays collapsed after
+the second tap.
+

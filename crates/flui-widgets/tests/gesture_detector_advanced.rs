@@ -132,6 +132,156 @@ fn double_tap_fires_on_two_quick_taps() {
     );
 }
 
+/// `on_double_tap_down` fires at the second contact's own DOWN, ahead of
+/// (and independently of) `on_double_tap`, which waits for that contact to
+/// also lift cleanly — the whole point of the callback, per its own doc.
+#[test]
+fn double_tap_down_fires_before_the_second_contact_lifts() {
+    let downs = Arc::new(AtomicUsize::new(0));
+    let taps = Arc::new(AtomicUsize::new(0));
+    let (down_cb, tap_cb) = (Arc::clone(&downs), Arc::clone(&taps));
+
+    let mut scoped = lay_out(
+        GestureDetector::new()
+            .on_double_tap_down(move |_details| {
+                down_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .on_double_tap(move || {
+                tap_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(target()),
+        tight(100.0, 100.0),
+    );
+
+    // First tap.
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    scoped.pump_for(Duration::from_millis(50));
+
+    // Second contact: DOWN only so far, no up yet.
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    assert_eq!(
+        downs.load(Ordering::SeqCst),
+        1,
+        "on_double_tap_down fires the instant the second contact goes down"
+    );
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        0,
+        "on_double_tap must not fire yet -- the second contact has not lifted"
+    );
+
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "on_double_tap fires once the second contact lifts cleanly"
+    );
+}
+
+/// `DoubleTapDetails::kind` reports the REAL pointer device, not a
+/// hard-coded `PointerType::Touch` guess — regression coverage for the
+/// `add_pointer_with_kind` fix. The test harness's `dispatch_pointer_down`
+/// synthesizes `PointerType::Mouse` events specifically (see
+/// `flui-widgets/src/testing.rs`), so a detector that still hard-coded
+/// `Touch` would fail this even though every earlier double-tap test in
+/// this file only checked that the callback fired at all, never what
+/// device it reported.
+#[test]
+fn double_tap_down_reports_the_real_pointer_kind() {
+    use flui_interaction::events::PointerType;
+
+    let kind = Arc::new(std::sync::Mutex::new(None));
+    let kind_cb = Arc::clone(&kind);
+
+    let mut scoped = lay_out(
+        GestureDetector::new()
+            .on_double_tap_down(move |details| {
+                // PORT-CHECK-OK-LOCK: PointerType is Copy, no significant drop
+                *kind_cb.lock().unwrap() = Some(details.kind);
+            })
+            .child(target()),
+        tight(100.0, 100.0),
+    );
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    scoped.pump_for(Duration::from_millis(50));
+    scoped.dispatch_pointer_down(50.0, 50.0);
+
+    assert_eq!(
+        *kind.lock().unwrap(),
+        Some(PointerType::Mouse),
+        "the harness dispatches Mouse events; on_double_tap_down must report \
+         the real kind, not a hard-coded Touch"
+    );
+}
+
+/// Two quick RIGHT-clicks must not register as a double-tap.
+/// `TapButton::Secondary`/`Tertiary` are their own gesture family
+/// (`on_secondary_tap`) precisely so a context-menu click never also
+/// means something to a co-mounted double-tap consumer — on a wrapped
+/// `EditableText`, an unguarded double-tap would select a word out of a
+/// right-click gesture.
+#[test]
+fn double_tap_down_is_not_recognized_from_a_secondary_button() {
+    let downs = Arc::new(AtomicUsize::new(0));
+    let down_cb = Arc::clone(&downs);
+
+    let mut scoped = lay_out(
+        GestureDetector::new()
+            .on_double_tap_down(move |_details| {
+                down_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(target()),
+        tight(100.0, 100.0),
+    );
+
+    scoped.dispatch_secondary_down(50.0, 50.0);
+    scoped.dispatch_secondary_up(50.0, 50.0);
+    scoped.pump_for(Duration::from_millis(50));
+    scoped.dispatch_secondary_down(50.0, 50.0);
+
+    assert_eq!(
+        downs.load(Ordering::SeqCst),
+        0,
+        "two quick right-clicks must not register as a double-tap"
+    );
+}
+
+/// A detector configured with ONLY `on_double_tap_down` (no `on_double_tap`
+/// at all — `EditableText`'s own double-tap word-select composition never
+/// sets `on_double_tap`) must still join the arena for its own callback to
+/// have any chance of firing. Regression coverage for exactly that gap:
+/// `RecognizerGroup::double_tap_active` originally gated participation on
+/// `on_double_tap` alone, which would have made this configuration silently
+/// never fire anything.
+#[test]
+fn on_double_tap_down_alone_with_no_on_double_tap_still_participates() {
+    let downs = Arc::new(AtomicUsize::new(0));
+    let in_cb = Arc::clone(&downs);
+
+    let mut scoped = lay_out(
+        GestureDetector::new()
+            .on_double_tap_down(move |_details| {
+                in_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(target()),
+        tight(100.0, 100.0),
+    );
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    scoped.pump_for(Duration::from_millis(50));
+    scoped.dispatch_pointer_down(50.0, 50.0);
+
+    assert_eq!(
+        downs.load(Ordering::SeqCst),
+        1,
+        "on_double_tap_down alone must still fire without on_double_tap set"
+    );
+}
+
 #[test]
 fn second_tap_after_the_window_is_not_a_double_tap() {
     let double_taps = Arc::new(AtomicUsize::new(0));

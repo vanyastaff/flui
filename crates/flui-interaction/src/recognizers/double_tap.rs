@@ -77,9 +77,12 @@ pub struct DoubleTapGestureRecognizer {
     first_entry: Arc<Mutex<Option<GestureArenaEntry>>>,
 }
 
+// Field names keep Flutter's `onDoubleTap`-style callback names (parity).
+#[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct DoubleTapCallbacks {
     on_double_tap: Option<DoubleTapCallback>,
+    on_double_tap_down: Option<DoubleTapCallback>,
     on_double_tap_cancel: Option<DoubleTapCallback>,
 }
 
@@ -181,6 +184,25 @@ impl DoubleTapGestureRecognizer {
         self
     }
 
+    /// Set the double-tap-DOWN callback — fires the instant the second
+    /// contact goes down (validated by timing/slop against the first tap),
+    /// not after it lifts. Flutter parity:
+    /// `DoubleTapGestureRecognizer.onDoubleTapDown` — exists for exactly
+    /// the case `on_double_tap` cannot serve: a consumer (double-tap word
+    /// selection, say) that wants the tap's position as soon as the
+    /// gesture is confirmed, without waiting the extra down-to-up round
+    /// trip `on_double_tap` needs to also confirm the tap didn't drag past
+    /// slop or get cancelled. Both callbacks may fire for the same
+    /// gesture: `on_double_tap_down` first, `on_double_tap` after, if the
+    /// second contact lifts cleanly.
+    pub fn with_on_double_tap_down(
+        self: Arc<Self>,
+        callback: impl Fn(DoubleTapDetails) + 'static,
+    ) -> Arc<Self> {
+        self.callbacks.borrow_mut().on_double_tap_down = Some(Rc::new(callback));
+        self
+    }
+
     /// Set the double tap cancel callback
     pub fn with_on_double_tap_cancel(
         self: Arc<Self>,
@@ -245,6 +267,21 @@ impl DoubleTapGestureRecognizer {
                     // Valid second tap down.
                     state.phase = DoubleTapPhase::SecondDown;
                     state.current_position = Some(position);
+                    drop(state);
+
+                    // Clone-then-drop-then-call: `state` above is already
+                    // released before this runs, but the callback itself is
+                    // arbitrary user code that may re-enter this recognizer
+                    // (e.g. through the arena) — never call it while a lock
+                    // this function took is still held.
+                    let callback = self.callbacks.borrow().on_double_tap_down.clone();
+                    if let Some(callback) = callback {
+                        callback(DoubleTapDetails {
+                            global_position,
+                            local_position: position,
+                            kind,
+                        });
+                    }
                 }
             }
             _ => {}
@@ -269,8 +306,19 @@ impl DoubleTapGestureRecognizer {
             DoubleTapPhase::FirstDown | DoubleTapPhase::SecondDown
         ) && self.check_slop(position)
         {
-            // Moved too far, cancel
-            state.phase = DoubleTapPhase::Cancelled;
+            // Moved too far, cancel. Release the lock and let
+            // `handle_cancel` itself drive the phase transition -- it
+            // already resets to `DoubleTapPhase::Ready` via
+            // `DoubleTapState::default()` once its own guard
+            // (`phase != Ready && phase != Cancelled`) passes. Setting
+            // `Cancelled` here FIRST used to make that guard fail
+            // immediately (phase already reads `Cancelled` by the time
+            // `handle_cancel` checks it), skipping the reset entirely and
+            // stranding the recognizer in `Cancelled` forever: every
+            // later `handle_down` falls through the `Ready`/
+            // `WaitingForSecond` match arms into `_ => {}`, so a contact
+            // that drags past slop then lifts permanently disables
+            // double-tap on that field until it remounts.
             drop(state);
 
             self.handle_cancel(position, global_position, kind);
@@ -462,12 +510,22 @@ impl DoubleTapGestureRecognizer {
     }
 }
 
-impl GestureRecognizer for DoubleTapGestureRecognizer {
-    fn add_pointer(
+impl DoubleTapGestureRecognizer {
+    /// The same registration [`GestureRecognizer::add_pointer`] performs,
+    /// with the pointer's real device `kind` — trait callers that only have
+    /// [`GestureRecognizer::add_pointer`]'s narrower signature (no `kind`
+    /// parameter) fall back to [`PointerType::Touch`] through that method;
+    /// a caller holding the concrete type and the originating
+    /// [`crate::events::PointerEvent`] (`GestureDetector`'s own dispatch,
+    /// which has both) should call this instead, so
+    /// [`DoubleTapDetails::kind`] reports the actual device rather than a
+    /// hard-coded guess.
+    pub fn add_pointer_with_kind(
         self: &Arc<Self>,
         pointer: PointerId,
         position: Offset<Pixels>,
         global_position: Offset<Pixels>,
+        kind: PointerType,
     ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
@@ -517,7 +575,21 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
 
         self.state
             .start_tracking(pointer, position, global_position, self);
-        self.handle_down(position, global_position, PointerType::Touch);
+        self.handle_down(position, global_position, kind);
+    }
+}
+
+impl GestureRecognizer for DoubleTapGestureRecognizer {
+    fn add_pointer(
+        self: &Arc<Self>,
+        pointer: PointerId,
+        position: Offset<Pixels>,
+        global_position: Offset<Pixels>,
+    ) {
+        // No `kind` in this trait method's signature — see
+        // `add_pointer_with_kind`'s doc for the caller that should use it
+        // instead when the real device kind is available.
+        self.add_pointer_with_kind(pointer, position, global_position, PointerType::Touch);
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
@@ -565,6 +637,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
             entry.release();
         }
         self.callbacks.borrow_mut().on_double_tap = None;
+        self.callbacks.borrow_mut().on_double_tap_down = None;
         self.callbacks.borrow_mut().on_double_tap_cancel = None;
     }
 
@@ -808,6 +881,147 @@ mod tests {
 
         // Should NOT have called double tap callback
         assert!(!*tapped.lock());
+    }
+
+    /// A contact that drags past touch slop before lifting must cancel
+    /// AND RESET — not strand the recognizer permanently. Regression for
+    /// `handle_move` pre-setting `phase = Cancelled` before calling
+    /// `handle_cancel`, whose own guard (`phase != Ready && phase !=
+    /// Cancelled`) then read `Cancelled` already and skipped its entire
+    /// reset, leaving every later `handle_down` fall through into the
+    /// match's `_ => {}` arm forever. The concrete sequence this pins:
+    /// down, move past slop, up, then a completely fresh double-tap —
+    /// which must still work.
+    #[test]
+    fn an_over_slop_move_cancels_back_to_ready_not_stuck_in_cancelled() {
+        let arena = GestureArena::new();
+        let recognizer = DoubleTapGestureRecognizer::new(arena);
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let start = Offset::new(px(100.0), px(100.0));
+        let dragged_to = Offset::new(px(500.0), px(500.0));
+
+        recognizer.add_pointer(pointer, start, start);
+        recognizer.handle_move(dragged_to, dragged_to, PointerType::Touch);
+        assert_eq!(
+            recognizer.gesture_state.lock().phase,
+            DoubleTapPhase::Ready,
+            "an over-slop move must cancel all the way back to Ready, not \
+             strand the recognizer in Cancelled"
+        );
+        let up_event = make_up_event(dragged_to, PointerType::Touch);
+        recognizer.handle_event(PointerDispatch::at_root(&up_event));
+
+        // A completely fresh double-tap, entirely after the cancelled
+        // drag, must still be recognized.
+        let tapped = Arc::new(Mutex::new(false));
+        let tapped_clone = Arc::clone(&tapped);
+        let recognizer = recognizer.with_on_double_tap(move |_details| {
+            *tapped_clone.lock() = true;
+        });
+
+        let pos = Offset::new(px(10.0), px(10.0));
+        recognizer.add_pointer(pointer, pos, pos);
+        recognizer.handle_event(PointerDispatch::at_root(&make_up_event(
+            pos,
+            PointerType::Touch,
+        )));
+        recognizer.handle_down(pos, pos, PointerType::Touch);
+        recognizer.handle_event(PointerDispatch::at_root(&make_up_event(
+            pos,
+            PointerType::Touch,
+        )));
+
+        assert!(
+            *tapped.lock(),
+            "double-tap must still work after an earlier over-slop cancel"
+        );
+    }
+
+    #[test]
+    fn on_double_tap_down_fires_at_the_second_contacts_own_down_not_its_up() {
+        let arena = GestureArena::new();
+        let down_seen = Arc::new(Mutex::new(None));
+        let down_seen_clone = down_seen.clone();
+        let up_seen = Arc::new(Mutex::new(false));
+        let up_seen_clone = up_seen.clone();
+
+        let recognizer = DoubleTapGestureRecognizer::new(arena)
+            .with_on_double_tap_down(move |details| {
+                // PORT-CHECK-OK-LOCK: Option<Offset<Pixels>> is Copy, no significant drop
+                *down_seen_clone.lock() = Some(details.local_position);
+            })
+            .with_on_double_tap(move |_details| {
+                *up_seen_clone.lock() = true;
+            });
+
+        let pointer = PointerId::new(2).expect("nonzero pointer id");
+        let first_pos = Offset::new(px(100.0), px(100.0));
+
+        // First tap: down + up, entering the inter-tap window.
+        recognizer.add_pointer(pointer, first_pos, first_pos);
+        let up_event = make_up_event(first_pos, PointerType::Touch);
+        recognizer.handle_event(PointerDispatch::at_root(&up_event));
+        assert_eq!(
+            recognizer.gesture_state.lock().phase,
+            DoubleTapPhase::WaitingForSecond
+        );
+
+        // Second tap: DOWN only so far, no up yet.
+        let second_pos = Offset::new(px(102.0), px(101.0)); // within slop
+        recognizer.handle_down(second_pos, second_pos, PointerType::Touch);
+
+        assert_eq!(
+            *down_seen.lock(),
+            Some(second_pos),
+            "on_double_tap_down must fire the instant the second contact goes down"
+        );
+        assert!(
+            !*up_seen.lock(),
+            "on_double_tap must not fire yet -- the second contact has not lifted"
+        );
+
+        // Lifting the second contact fires on_double_tap too, same gesture.
+        let second_up = make_up_event(second_pos, PointerType::Touch);
+        recognizer.handle_event(PointerDispatch::at_root(&second_up));
+        assert!(
+            *up_seen.lock(),
+            "on_double_tap fires once the second contact lifts cleanly"
+        );
+    }
+
+    /// `dispose` must release EVERY callback's captured state, not just
+    /// `on_double_tap`/`on_double_tap_cancel` — `on_double_tap_down` was
+    /// added after `dispose` was first written and was missed there,
+    /// leaking whatever a caller's closure captured for as long as the
+    /// caller kept its own clone of the (disposed, otherwise inert)
+    /// recognizer alive.
+    #[test]
+    fn dispose_releases_the_on_double_tap_down_callbacks_captured_state() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let arena = GestureArena::new();
+        let captured = Arc::new(AtomicUsize::new(0));
+        let captured_clone = Arc::clone(&captured);
+
+        let recognizer =
+            DoubleTapGestureRecognizer::new(arena).with_on_double_tap_down(move |_details| {
+                captured_clone.fetch_add(1, Ordering::SeqCst);
+            });
+
+        assert_eq!(
+            Arc::strong_count(&captured),
+            2,
+            "precondition: the closure holds one clone"
+        );
+
+        recognizer.dispose();
+
+        assert_eq!(
+            Arc::strong_count(&captured),
+            1,
+            "dispose must release on_double_tap_down's captured state too"
+        );
     }
 
     #[test]
