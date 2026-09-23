@@ -11,10 +11,15 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 | Rust | 1.98 | MSRV floor in `workspace.package.rust-version`; development toolchain pinned separately in `rust-toolchain.toml`. `rustup` installs/selects it automatically on first `cargo` invocation. |
 | Cargo | bundled with Rust | Workspace uses `resolver = "3"` (MSRV-aware) and edition 2024. |
 | Git | any recent | Required to clone the repo. |
-| Python | 3.11+ | Required for repository verification scripts (`just ci`), which import `tomllib`. Ensure `python3` on `PATH` selects this version; not required to run an application. |
+| Python | 3.11+ | Required for repository verification scripts (`just ci`), which import `tomllib`. The justfile picks a Python >= 3.11 by version (`python3.12` counts), so `python3` may stay the system one; not required to run an application. |
+| Bash | 4+ | Required by `port-check` and a few other scripts (`mapfile`). macOS ships 3.2 as `/bin/bash`: `brew install bash`; the justfile finds the newer one. |
 | `cargo-ndk` | 3.x | Required only for Android targets. |
 | `wasm-pack` | 0.13+ | Required only for `examples/web_demo` and `examples/painting_demo`. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android. |
+
+`just doctor` checks every tool `just ci` needs and prints the install command
+for each missing one (`just doctor full` adds what `just ci-full` needs); without
+`just` yet, run `bash scripts/doctor.sh`.
 
 The GPU dependency version is defined by `wgpu` in `[workspace.dependencies]`
 in `Cargo.toml`; consult that manifest when checking driver or backend requirements.

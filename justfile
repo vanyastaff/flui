@@ -13,6 +13,20 @@ set positional-arguments
 version := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 commit  := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 
+# The local test scope, one slice for the whole suite (docs/testing.md,
+# "What `just test-ci` runs"):
+# - `--features flui/cupertino,flui/localizations`: the facade's non-default
+#   catalogs join the workspace run through feature unification, instead of
+#   a second `-p flui --features ...` run that re-resolved features for flui's
+#   graph alone and so rebuilt every shared crate under a second hash. The
+#   default-feature facade (material only) is then not tested locally; CI's
+#   test job and feature-matrix run it.
+# - `--lib --bins --tests`: build and run what has tests, without LINKING the
+#   ~60 examples, which `cargo nextest run` otherwise links on every run.
+#   Examples still compile in `clippy --all-targets` (gate); CI's test job
+#   and `just build-all-targets` link them.
+test_ci_scope := "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations"
+
 # Interpreters for scripts/, chosen by version rather than by name: port-check
 # and friends need bash >= 4 (`mapfile`), the TOML readers need Python >= 3.11
 # (`tomllib`), and a stock macOS has bash 3.2 and Python 3.9 under the plain
@@ -377,22 +391,15 @@ test-ci-fast: _tests-outside-nested-cargo
 # The nested-cargo group: the tests that run a `cargo` of their own on a
 # project they generate (.config/nextest.toml, profile `nested-cargo`). They
 # dominate the suite's wall-clock, so `test-ci` runs them last and
-# `test-ci-fast` leaves them out. Both invocations mirror the two in
-# `_tests-outside-nested-cargo`: same packages and features, so nothing is
-# rebuilt, and the two profiles partition the suite exactly.
+# `test-ci-fast` leaves them out. Same scope as `_tests-outside-nested-cargo`,
+# so nothing is rebuilt, and the two profiles partition the suite exactly.
 [group("test")]
 [doc("Run only the nested-cargo tests (trybuild compile_fail suites, flui-cli template builds, facade consumer checks) — the last stage of `just test-ci`")]
 test-nested-cargo:
-    cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --profile nested-cargo
-    cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast --profile nested-cargo
+    cargo nextest run {{ test_ci_scope }} --profile nested-cargo
 
 _tests-outside-nested-cargo:
-    cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --profile no-nested-cargo
-    # The facade defaults to Material only, so the run above skips
-    # `tests/cupertino_demo.rs` (required-features) and the localizations
-    # assertions in `tests/facade_smoke.rs`. Same precedent as CI's
-    # flui-assets/flui-widgets feature-gated run.
-    cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast --profile no-nested-cargo
+    cargo nextest run {{ test_ci_scope }} --profile no-nested-cargo
     # Mirrors CI's dedicated flui-platform step, guarded by host OS:
     # `--all-features` is required just to compile the winit backend
     # (invisible under `default = ["desktop"]`); `FLUI_HEADLESS=1` routes
@@ -559,6 +566,9 @@ clippy-fix:
 feature-matrix: facade-combos
     cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings
     cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
+    # CI's backend-pair step: every one- and two-backend combination of
+    # flui-engine's wgpu backend features must type-check on its own.
+    cargo hack check -p flui-engine --locked --feature-powerset --include-features vulkan,metal,dx12,webgpu,gles --depth 2
 
 [group("quality")]
 [doc("Compile every supported facade feature combination in isolation")]
@@ -908,6 +918,58 @@ text-check:
     # No tool to skip for: this one needs only a Python >= 3.11.
     {{ flui_python }} -B scripts/check-nextest-partition.py
 
+# --- CI jobs without a recipe of their own until now (see the job -> recipe
+# table in docs/testing.md). Each mirrors its ci.yml job's commands.
+
+[group("ci")]
+[doc("Mirror of CI's test-features job: the feature-gated suites the default test run skips (flui-assets full, flui-widgets image loaders, the facade's non-default catalogs)")]
+test-features:
+    cargo nextest run -p flui-assets --locked --features full
+    cargo nextest run -p flui-widgets --locked --features images --test image
+    cargo nextest run -p flui-widgets --locked --features asset-images --lib
+    cargo nextest run -p flui-widgets --locked --features asset-images --test image_async
+    cargo nextest run -p flui-widgets --locked --features network-images --test image_network
+    cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
+
+[group("ci")]
+[doc("Mirror of CI's test job build step: build every target of every package, examples included -- the only local step that LINKS the examples (just test-ci does not; see docs/testing.md)")]
+build-all-targets:
+    cargo build --workspace --all-targets --locked
+
+[group("ci")]
+[doc("Mirror of CI's bench-compile job: compile the criterion benches without running them")]
+bench-compile:
+    cargo bench -p flui-rendering --no-run --locked
+
+[group("ci")]
+[doc("Mirror of CI's msrv job: check the workspace on the declared rust-version (read from Cargo.toml; needs that toolchain -- just doctor full)")]
+msrv:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    msrv=$(sed -n 's/^rust-version *= *"\([0-9.]*\)".*/\1/p' Cargo.toml | head -1)
+    echo "msrv: cargo +$msrv check --workspace --all-targets --locked"
+    cargo "+$msrv" check --workspace --all-targets --locked
+
+[group("ci")]
+[doc("Mirror of CI's gpu-test job's two runs (flui-engine readback suite, composited-layer update readback), one test at a time. CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a pixel mismatch here that CI does not show is a host difference to investigate, not a CI result")]
+gpu-test:
+    cargo nextest run -p flui-engine --features testing --lib --locked --no-fail-fast --test-threads 1
+    cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1
+
+[group("ci")]
+[doc("Mirror of the workflow half of CI's checks job: the paths-filter allowlist check, actionlint and zizmor (the last two skip with a message when not installed -- CI has them)")]
+workflow-lint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{ flui_python }} -B scripts/check-paths-filter-allowlist.py
+    for tool in actionlint "zizmor ."; do
+        if command -v "${tool%% *}" >/dev/null 2>&1; then
+            $tool
+        else
+            echo "${tool%% *}: not installed, skipped (brew install ${tool%% *}); CI runs it"
+        fi
+    done
+
 [group("ci")]
 [doc("The non-test half of `ci` — what the pre-push hook runs")]
 gate: fmt-check text-check font-assets-check inventory-check runtime-conformance-check panic-policy-check toolchain-consistency-check port-check wgsl-uniformity-check clippy doc-strict
@@ -915,6 +977,16 @@ gate: fmt-check text-check font-assets-check inventory-check runtime-conformance
 [group("ci")]
 [doc("Run local CI gates (gate + test + doctests)")]
 ci: gate test-ci test-doc
+
+# Everything CI runs that this host can run, in one command: `just ci`, then
+# the remaining ci.yml jobs' local mirrors. What stays CI-only, and why, is the
+# table in docs/testing.md ("CI jobs and their local recipes"). Slow on
+# purpose (cargo-hack's per-feature matrix dominates); `just doctor full`
+# first names any tool it needs.
+[group("ci")]
+[doc("Run every CI job this host can run: just ci + build-all-targets, test-features, feature-matrix, wasm-check/wasm-link-check/wasm-test, cross-typecheck, bench-compile, msrv, deny, miri, workflow-lint, gpu-test, and (Linux) live-smoke. See docs/testing.md for the CI-only remainder")]
+ci-full: ci build-all-targets test-features feature-matrix wasm-check wasm-link-check wasm-test cross-typecheck bench-compile msrv deny miri workflow-lint gpu-test
+    {{ if os() == "linux" { "just live-smoke live-smoke-wayland" } else { "echo 'ci-full: live-smoke/live-smoke-wayland skipped on this host: they need xvfb-run and weston (Linux); CI runs them'" } }}
 
 # =============================================================================
 # Maintenance
