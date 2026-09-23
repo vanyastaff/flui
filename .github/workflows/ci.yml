@@ -338,8 +338,11 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
-          # PRs restore main's cache; only main writes one.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Restores the cache the heavy `test` job saves on main (same
+          # shared-key): this job never runs on main, so a job-keyed cache
+          # would always be cold.
+          shared-key: workspace-tests
+          save-if: false
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
@@ -478,6 +481,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
+          # Shared with `fast-lane`, which restores what this job saves on main.
+          shared-key: workspace-tests
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # Per tokio: binary caching breaks on macOS — guard for when macOS
           # joins the matrix.
