@@ -56,6 +56,7 @@ HEAVY_TRIGGERS = (
     "Cargo.lock",
     ".cargo/**",
     "rust-toolchain.toml",
+    "rust-toolchain",  # the extensionless form; rustup prefers it over .toml
     ".github/workflows/**",
 )
 
@@ -189,10 +190,11 @@ def owning_package(path: str, owned: dict):
 
 
 def classify(files: list):
-    """dict: mode, packages (sorted), manifests (packages whose Cargo.toml
-    changed), heavy_required (bool), reason."""
+    """dict: mode, packages (sorted scope), seeds (the packages a changed file
+    belongs to), manifests (packages whose Cargo.toml changed),
+    heavy_required (bool), reason."""
     code = [f for f in files if not is_docs_only(f)]
-    result = {"mode": "docs", "packages": [], "manifests": [], "heavy_required": False,
+    result = {"mode": "docs", "packages": [], "seeds": [], "manifests": [], "heavy_required": False,
               "reason": "only documentation changed" if files else "no changes"}
     if not files or not code:
         return result
@@ -231,6 +233,6 @@ def classify(files: list):
             if user not in scope:
                 scope.add(user)
                 todo.append(user)
-    result.update(mode="packages", packages=sorted(scope), manifests=sorted(manifests),
+    result.update(mode="packages", packages=sorted(scope), seeds=sorted(seeds), manifests=sorted(manifests),
                   reason=f"changed: {', '.join(sorted(seeds))}; plus {len(scope) - len(seeds)} dependents")
     return result

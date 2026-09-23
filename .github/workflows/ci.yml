@@ -285,6 +285,7 @@ jobs:
       cross_platform: ${{ steps.scope.outputs.cross_platform }}
       cross_app: ${{ steps.scope.outputs.cross_app }}
       cross_cli: ${{ steps.scope.outputs.cross_cli }}
+      cross_ios: ${{ steps.scope.outputs.cross_ios }}
       wasm_args: ${{ steps.scope.outputs.wasm_args }}
       wasm_facade: ${{ steps.scope.outputs.wasm_facade }}
       hack_args: ${{ steps.scope.outputs.hack_args }}
@@ -485,6 +486,43 @@ jobs:
           path: "**/*.snap.new"
           if-no-files-found: ignore
           retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # fast-lane-ios — the flui-app / flui iOS runner's clippy, which needs
+  # macOS (xcrun) and so cannot join `fast-lane` on Linux. Runs on an
+  # ordinary PR when flui-app is in scope; the heavy `cli-macos` job runs the
+  # same command otherwise.
+  # ─────────────────────────────────────────────────────────────────────────
+  fast-lane-ios:
+    name: fast-lane-ios
+    needs: [checks, plan]
+    if: needs.plan.outputs.heavy != 'true' && needs.plan.outputs.cross_ios == 'true' && (needs.plan.outputs.mode == 'packages' || needs.plan.outputs.mode == 'full')
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable + clippy (+ iOS target)
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy
+          targets: aarch64-apple-ios
+
+      - name: Add the iOS target to the pinned toolchain
+        run: rustup target add aarch64-apple-ios
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          shared-key: macos-ios
+          save-if: false
+          cache-bin: false
+
+      - name: cargo clippy (ios runner)
+        run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
   # clippy — workspace lint with -D warnings. Split out of `checks` so it runs
@@ -1692,6 +1730,8 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
+          # Shared with `fast-lane-ios`, which restores what this job saves on main.
+          shared-key: macos-ios
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # Per tokio: binary caching breaks on macOS.
           cache-bin: false
@@ -1813,7 +1853,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, fast-lane, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
+    needs: [checks, plan, fast-lane, fast-lane-ios, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, bench-compile, doc, deny, doc-test, msrv, miri]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1837,9 +1877,10 @@ jobs:
       #    `plan` alone, and the aggregator recomputes it from `plan`'s
       #    outputs instead of trusting each job's `if:`:
       #      heavy lane (main, merge queue, nightly, dispatch, `full-ci`):
-      #        only fast-lane skips; every heavy job must succeed
+      #        only fast-lane and fast-lane-ios skip; every heavy job must succeed
       #      ordinary PR, mode packages/full: every heavy job skips,
-      #        fast-lane and deny must succeed
+      #        fast-lane and deny must succeed, fast-lane-ios too when plan
+      #        puts the iOS runner in scope (cross_ios)
       #      ordinary PR, mode none (repo tooling only): heavy + fast-lane skip
       #      ordinary PR, mode docs: heavy + fast-lane + deny skip
       #    Any other skip (a drifted `if:`, a cancellation) or a job that ran
@@ -1859,6 +1900,7 @@ jobs:
             miri
           HEAVY: ${{ needs.plan.outputs.heavy }}
           MODE: ${{ needs.plan.outputs.mode }}
+          CROSS_IOS: ${{ needs.plan.outputs.cross_ios }}
           EVENT: ${{ github.event_name }}
         run: |
           python3 - <<'EOF'
@@ -1879,13 +1921,13 @@ jobs:
           if needs.get("plan", {}).get("result") != "success":
               expected = None  # without a plan there is no expectation to check against
           elif heavy:
-              expected = {"fast-lane"}
+              expected = {"fast-lane", "fast-lane-ios"}
           elif mode in ("packages", "full"):
-              expected = set(heavy_jobs)
+              expected = set(heavy_jobs) | ({"fast-lane-ios"} if os.environ.get("CROSS_IOS") != "true" else set())
           elif mode == "none":
-              expected = heavy_jobs | {"fast-lane"}
+              expected = heavy_jobs | {"fast-lane", "fast-lane-ios"}
           elif mode == "docs":
-              expected = heavy_jobs | {"fast-lane", "deny"}
+              expected = heavy_jobs | {"fast-lane", "fast-lane-ios", "deny"}
           else:
               expected = None
           skipped = {j for j, d in needs.items() if d["result"] == "skipped"}

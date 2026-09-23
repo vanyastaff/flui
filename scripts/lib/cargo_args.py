@@ -11,8 +11,11 @@ runs -- the one place the test-scope policy lives, for CI's `plan` job and
   flui-cli Windows paths (mirroring the cross-typecheck job), and wasm32 for
   the wasm-capable packages in scope (mirroring wasm-check; the excluded set
   is read from ci.yml's NO_WASM_PKGS, not restated here);
-- a crate whose Cargo.toml changed gets the per-feature clippy pass
-  (feature-matrix's `cargo hack --each-feature`), for that crate only;
+- the changed crates themselves (not their dependents), when they have
+  features, and any crate whose Cargo.toml changed, get the per-feature
+  clippy pass (feature-matrix's `cargo hack --each-feature`);
+- the flui-app/flui iOS runner gets a macOS clippy leg when flui-app is in
+  scope (it needs xcrun, so it is a separate job, `fast-lane-ios`);
 - rustdoc -D warnings runs over the scope with its packages' `testing`
   features (doc-strict.sh's flags, narrowed): a moved item's broken intra-doc
   link otherwise merges green and fails main's `doc` job.
@@ -28,15 +31,32 @@ import sys
 import change_scope as cs
 
 
+_FEATURES = None
+
+
+def package_features() -> dict:
+    """Workspace package name -> its declared feature names (cached)."""
+    global _FEATURES
+    if _FEATURES is None:
+        import json
+        import subprocess
+        meta = json.loads(subprocess.run(
+            ["cargo", "metadata", "--format-version", "1", "--no-deps", "--offline"],
+            cwd=cs.ROOT, check=True, capture_output=True, text=True).stdout)
+        _FEATURES = {p["name"]: set(p["features"]) for p in meta["packages"]}
+    return _FEATURES
+
+
 def testing_packages() -> set:
     """Workspace packages with a `testing` feature: doc-strict.sh turns every
     one on, since code behind it is documented too."""
-    import json
-    import subprocess
-    meta = json.loads(subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--no-deps", "--offline"],
-        cwd=cs.ROOT, check=True, capture_output=True, text=True).stdout)
-    return {p["name"] for p in meta["packages"] if "testing" in p["features"]}
+    return {n for n, f in package_features().items() if "testing" in f}
+
+
+def featured_packages() -> set:
+    """Packages with a feature besides `default`: the ones a per-feature pass
+    can reach code in that the default build never compiles."""
+    return {n for n, f in package_features().items() if f - {"default"}}
 
 
 def no_wasm_packages() -> set:
@@ -74,9 +94,15 @@ def args_for(result: dict, members=None) -> dict:
         "cross_platform": "true" if full or "flui-platform" in scope else "false",
         "cross_app": "true" if full or scope & {"flui-app", "flui"} else "false",
         "cross_cli": "true" if full or "flui-cli" in scope else "false",
+        # the flui-app / flui iOS runner: its clippy needs macOS (xcrun)
+        "cross_ios": "true" if full or "flui-app" in scope else "false",
         "wasm_args": wasm_args if mode in ("packages", "full") else "",
         "wasm_facade": "true" if full or "flui" in scope else "false",
-        "hack_args": p(result["manifests"]) if mode == "packages" else "",
+        # per-feature clippy for the crates the change is IN (seeds) that have
+        # features, and for any crate whose manifest changed; their dependents
+        # get the default build only (the heavy feature-matrix covers the rest)
+        "hack_args": p((set(result.get("seeds", [])) & featured_packages()) | set(result["manifests"]))
+        if mode == "packages" else "",
         "doc_args": doc_args,
     }
 
@@ -91,7 +117,7 @@ def main(argv: list) -> int:
     ap.add_argument("--full", action="store_true", help="the whole workspace, no diff (CI's heavy lane)")
     args = ap.parse_args(argv)
     if args.full:
-        result = {"mode": "full", "packages": [], "manifests": [], "heavy_required": False,
+        result = {"mode": "full", "packages": [], "seeds": [], "manifests": [], "heavy_required": False,
                   "reason": "heavy lane: the whole workspace"}
     else:
         files = args.files if args.files is not None else cs.changed_files(args.base, args.worktree)

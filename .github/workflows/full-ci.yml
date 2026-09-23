@@ -24,6 +24,15 @@ jobs:
     permissions:
       actions: write
     steps:
+      # A fork's branch does not exist in this repository, and dispatching
+      # would run the fork's code with this repository's token. Say so instead
+      # of silently leaving the PR on its fast-lane result.
+      - name: Refuse a fork pull request
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::error::full-ci cannot dispatch the heavy lane for a fork PR: push the branch to this repository, or run CI there by hand"
+          exit 1
+
       - name: Dispatch ci.yml on the PR branch
         env:
           GH_TOKEN: ${{ github.token }}

@@ -38,10 +38,10 @@ class AggregatorSkipRule(unittest.TestCase):
         cls.heavy_jobs = step["env"]["HEAVY_JOBS"]
         cls.gated = [j for j in cls.jobs if j not in ("ci", "notify-main-red")]
 
-    def aggregate(self, heavy, mode, results, event="pull_request"):
+    def aggregate(self, heavy, mode, results, event="pull_request", cross_ios="false"):
         needs = {j: {"result": results.get(j, "success")} for j in self.gated}
         env = dict(os.environ, NEEDS=json.dumps(needs), HEAVY_JOBS=self.heavy_jobs,
-                   HEAVY=heavy, MODE=mode, EVENT=event)
+                   HEAVY=heavy, MODE=mode, EVENT=event, CROSS_IOS=cross_ios)
         run = subprocess.run([sys.executable, "-c", self.code], env=env, cwd=ROOT,
                              capture_output=True, text=True)
         return run.returncode, run.stdout + run.stderr
@@ -64,22 +64,32 @@ class AggregatorSkipRule(unittest.TestCase):
         self.assertEqual(gated_on_heavy, set(self.heavy_jobs.split()))
 
     def test_heavy_lane(self):
-        self.assertGreen("true", "full", {"fast-lane": "skipped"}, event="push")
-        self.assertRed("true", "full", {"fast-lane": "skipped", "miri": "skipped"}, event="push", expect="miri")
-        self.assertRed("true", "full", {"fast-lane": "skipped", "test": "failure"}, event="push", expect="test")
-        self.assertRed("true", "full", {}, event="push", expect="fast-lane")
+        fast = {"fast-lane": "skipped", "fast-lane-ios": "skipped"}
+        self.assertGreen("true", "full", fast, event="push")
+        self.assertRed("true", "full", {**fast, "miri": "skipped"}, event="push", expect="miri")
+        self.assertRed("true", "full", {**fast, "test": "failure"}, event="push", expect="test")
+        self.assertRed("true", "full", {"fast-lane-ios": "skipped"}, event="push", expect="fast-lane")
 
     def test_fast_lane_packages_and_full(self):
         for mode in ("packages", "full"):
-            self.assertGreen("false", mode, self.skipped())
-        self.assertRed("false", "packages", {**self.skipped(), "fast-lane": "failure"}, expect="fast-lane")
-        ran_anyway = {k: v for k, v in self.skipped().items() if k != "doc"}
+            self.assertGreen("false", mode, self.skipped("fast-lane-ios"))
+        self.assertRed("false", "packages", {**self.skipped("fast-lane-ios"), "fast-lane": "failure"}, expect="fast-lane")
+        ran_anyway = {k: v for k, v in self.skipped("fast-lane-ios").items() if k != "doc"}
         self.assertRed("false", "packages", ran_anyway, expect="doc")
 
+    def test_ios_leg_follows_the_plan(self):
+        # in scope: it must run and pass
+        self.assertGreen("false", "packages", self.skipped(), cross_ios="true")
+        self.assertRed("false", "packages", self.skipped("fast-lane-ios"), cross_ios="true", expect="fast-lane-ios")
+        self.assertRed("false", "packages", {**self.skipped(), "fast-lane-ios": "failure"}, cross_ios="true",
+                       expect="fast-lane-ios")
+        # out of scope: it must skip
+        self.assertRed("false", "packages", self.skipped(), cross_ios="false", expect="fast-lane-ios")
+
     def test_fast_lane_tooling_and_docs(self):
-        self.assertGreen("false", "none", self.skipped("fast-lane"))
-        self.assertGreen("false", "docs", self.skipped("fast-lane", "deny"))
-        self.assertRed("false", "docs", self.skipped("fast-lane"), expect="deny")
+        self.assertGreen("false", "none", self.skipped("fast-lane", "fast-lane-ios"))
+        self.assertGreen("false", "docs", self.skipped("fast-lane", "fast-lane-ios", "deny"))
+        self.assertRed("false", "docs", self.skipped("fast-lane", "fast-lane-ios"), expect="deny")
 
     def test_failed_plan_is_red(self):
         self.assertRed("", "", {"plan": "failure"}, expect="no usable plan")

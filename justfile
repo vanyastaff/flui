@@ -439,6 +439,11 @@ check-changed base="origin/main":
         if have_target x86_64-pc-windows-msvc; then cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
         else echo "check-changed: skipped flui-cli on windows (rustup target add x86_64-pc-windows-msvc; CI runs it)"; fi
     fi
+    if [ "$CROSS_IOS" = true ]; then
+        if [ "$(uname -s)" = Darwin ] && have_target aarch64-apple-ios; then
+            cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
+        else echo "check-changed: skipped the iOS runner (needs macOS + rustup target add aarch64-apple-ios; CI's fast-lane-ios runs it)"; fi
+    fi
     if [ -n "$WASM_ARGS" ]; then
         if have_target wasm32-unknown-unknown; then
             # shellcheck disable=SC2086

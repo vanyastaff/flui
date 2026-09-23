@@ -821,7 +821,11 @@ CI runs in two lanes, chosen by the `plan` job:
     `flui-app`/`flui` Android runner and `flui-cli` on Windows, when they are
     in scope;
   - wasm32 clippy for the wasm-capable crates in scope;
-  - a per-feature `cargo hack clippy` for any crate whose `Cargo.toml` changed;
+  - a per-feature `cargo hack clippy` for the changed crates that have
+    features, and for any crate whose `Cargo.toml` changed (their dependents
+    keep the default build; `feature-matrix` covers the rest);
+  - the `flui-app`/`flui` iOS runner's clippy, when `flui-app` is in scope, in
+    a separate macOS job (`fast-lane-ios`), because it needs xcrun;
   - rustdoc with `-D warnings` over the crates in scope, with their `testing`
     features (the `doc` job's flags). A moved item's broken intra-doc link is
     the typical casualty of a refactor.
@@ -834,10 +838,12 @@ CI runs in two lanes, chosen by the `plan` job:
 - **Heavy lane**: a push to main, the merge queue, the nightly schedule,
   `workflow_dispatch`, a pull request that changes an input of the heavy jobs,
   or a pull request labelled `full-ci`. The heavy-job inputs are `Cargo.lock`,
-  the root `Cargo.toml`, `.cargo/`, the toolchain, a workflow, and any script
+  the root `Cargo.toml`, `.cargo/`, the toolchain file (either spelling), a
+  workflow, and any script
   a heavy job runs (read from `ci.yml`, the justfile included). Adding the
-  label dispatches CI on the PR's branch through `full-ci.yml`. Later pushes to
-  a labelled PR take the heavy lane directly. Every job below runs.
+  label dispatches CI on the PR's branch through `full-ci.yml`; on a fork PR
+  it fails, saying so, since a fork's branch cannot be dispatched here. Later
+  pushes to a labelled PR take the heavy lane directly. Every job below runs.
 
   A red heavy run on main or nightly opens (or comments on) the "CI is red on
   main" issue. The rule is fix forward within the hour, or revert.
@@ -853,7 +859,8 @@ still turn main red:
 - the per-feature matrix beyond changed manifests (`feature-matrix`);
 - the facade in its default feature set;
 - GPU readback (`gpu-test`), miri, msrv, `live-smoke`;
-- macOS's `flui-cli` suite and iOS runner (`cli-macos`);
+- macOS's `flui-cli` suite (`cli-macos`; its iOS runner clippy also runs in
+  `fast-lane-ios` when `flui-app` is in scope);
 - linking and running the wasm32 tests (`wasm-check`).
 
 Label a change that is likely to break one of these `full-ci`.
@@ -872,6 +879,7 @@ in `.github/workflows/ci.yml`:
 | `checks` | `just gate` (fmt, text-check, inventory, runtime-conformance, toolchain-consistency, panic-policy, port-check, wgsl-uniformity) + `just workflow-lint` | `workflow-lint` skips actionlint/zizmor with a message when they are not installed; CI always has them |
 | `plan` | `scripts/affected-crates.sh` (`just check-changed` runs it) | decides the lane and the affected packages; CI passes the PR's base SHA, `check-changed` diffs against `origin/main` and adds uncommitted files |
 | `fast-lane` | `just check-changed` | same packages and arguments; the cross-target and wasm32 clippy and the per-feature pass for changed manifests run only when their rustup target or cargo-hack is installed (`just doctor full`); the flui-platform leg needs `xvfb-run` (Linux) |
+| `fast-lane-ios` | `just check-changed` (on a Mac with the iOS target) | the same iOS runner clippy as `cli-macos`, run on a PR when `flui-app` is in scope |
 | `clippy` | `just clippy` (in `just gate`) | — |
 | `test` (ubuntu, macos, windows) | `just test-ci` + `just build-all-targets` | one host OS, not three; `test-ci` does not link examples (`build-all-targets` does); the flui-platform leg needs `xvfb-run` (Linux) |
 | `test-features` | `just test-features` | — |

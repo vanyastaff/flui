@@ -41,7 +41,7 @@ class Modes(unittest.TestCase):
 
     def test_heavy_inputs_require_the_heavy_lane(self):
         for path in ("Cargo.lock", "Cargo.toml", ".cargo/config.toml", "rust-toolchain.toml",
-                     ".github/workflows/ci.yml"):
+                     "rust-toolchain", ".github/workflows/ci.yml"):
             r = scope(path)
             self.assertEqual((r["mode"], r["heavy_required"]), ("full", True), path)
 
@@ -125,6 +125,17 @@ class CargoArgs(unittest.TestCase):
         a = ca.args_for(scope("crates/flui-platform/src/lib.rs"))
         self.assertNotIn("-p flui-cli", a["wasm_args"])
         self.assertIn("-p flui-platform", a["wasm_args"])
+
+    def test_per_feature_pass_covers_the_changed_crates_features(self):
+        # a source-only change to a crate with non-default features gets the
+        # per-feature clippy; its dependents do not (feature-matrix covers them)
+        a = ca.args_for(scope("crates/flui-assets/src/lib.rs"))
+        self.assertEqual(a["hack_args"], "-p flui-assets")
+        self.assertNotIn("flui-widgets", a["hack_args"])
+
+    def test_ios_leg_when_flui_app_is_in_scope(self):
+        self.assertEqual(ca.args_for(scope("crates/flui-view/src/lib.rs"))["cross_ios"], "true")
+        self.assertEqual(ca.args_for(scope("crates/flui-material/src/lib.rs"))["cross_ios"], "false")
 
     def test_rustdoc_covers_the_scope_with_its_testing_features(self):
         a = ca.args_for(scope("crates/flui-material/src/lib.rs"))
