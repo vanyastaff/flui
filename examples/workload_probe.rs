@@ -348,7 +348,8 @@ impl Probe {
                         let _ = self.controller.stop();
 
                         // Arm the independent, non-demanding idle observer.
-                        if let Some(handle) = self.post_frame.lock().clone() {
+                        let handle = self.post_frame.lock().clone();
+                        if let Some(handle) = handle {
                             schedule_idle_observer(handle, Arc::clone(&self.idle_frames));
                         }
 

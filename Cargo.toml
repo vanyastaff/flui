@@ -406,6 +406,11 @@ undocumented_unsafe_blocks = "allow"
 dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
+# A lock guard in an `if let`/`match` scrutinee lives through the whole arm,
+# so a value dropped or a callback run inside the arm executes under the lock;
+# a destructor that re-enters the same lock deadlocks. Bind the value with
+# `let` first, then branch on it.
+significant_drop_in_scrutinee = "warn"
 # Allow reasonable exceptions
 cast_precision_loss = "allow"
 module_name_repetitions = "allow"

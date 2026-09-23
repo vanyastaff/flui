@@ -63,7 +63,8 @@ impl Stream for Controlled {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // PORT-CHECK-OK-LOCK: plain data: Option<Result<Payload(i32), Boom(&'static str)>>, no Drop
-        if let Some(event) = self.channel.events.lock().pop_front() {
+        let event = self.channel.events.lock().pop_front();
+        if let Some(event) = event {
             return Poll::Ready(event);
         }
         let _prev = self.channel.waker.lock().replace(cx.waker().clone());

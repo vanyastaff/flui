@@ -414,7 +414,8 @@ mod tests {
 
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             // PORT-CHECK-OK-LOCK: plain data: Event holds only i32/&'static str
-            if let Some(event) = self.channel.events.lock().pop_front() {
+            let event = self.channel.events.lock().pop_front();
+            if let Some(event) = event {
                 return Poll::Ready(event);
             }
             let _prev = self.channel.waker.lock().replace(cx.waker().clone());

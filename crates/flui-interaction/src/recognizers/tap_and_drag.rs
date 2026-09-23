@@ -369,7 +369,8 @@ impl TapAndDragGestureRecognizer {
 
     /// Distance from initial position to `current` (or 0 if no initial).
     fn distance_from_initial(&self, current: Offset<Pixels>) -> f32 {
-        match self.drag_state.lock().initial {
+        let initial = self.drag_state.lock().initial;
+        match initial {
             Some(initial) => (current - initial).distance().0,
             None => 0.0,
         }

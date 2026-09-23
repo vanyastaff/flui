@@ -121,7 +121,8 @@ impl<V: View + Clone + 'static> HistogramProbe<V> {
         let controller = AnimationController::with_detached_ticker(CONTROLLER_CYCLE);
         let window = Arc::new(Mutex::new(TickWindow::default()));
         controller.add_listener(Arc::new(move || {
-            if let Some(deltas) = window.lock().record(Instant::now()) {
+            let deltas = window.lock().record(Instant::now());
+            if let Some(deltas) = deltas {
                 log_window(deltas);
             }
         }));

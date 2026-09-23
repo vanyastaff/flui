@@ -56,7 +56,8 @@ impl std::future::Future for Controlled {
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // PORT-CHECK-OK-LOCK: plain data: Result<Payload(i32), Boom(&'static str)>, no Drop
-        if let Some(result) = self.result.lock().take() {
+        let result = self.result.lock().take();
+        if let Some(result) = result {
             return Poll::Ready(result);
         }
         let _prev = self.waker.lock().replace(cx.waker().clone());

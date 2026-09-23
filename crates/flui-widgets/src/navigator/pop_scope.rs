@@ -87,7 +87,8 @@ impl PopEntryRegistry {
         // Clone out so a callback may mount/unmount scopes without deadlock.
         let entries = self.entries.lock().clone();
         for entry in &entries {
-            if let Some(callback) = entry.on_pop_invoked.lock().clone() {
+            let callback = entry.on_pop_invoked.lock().clone();
+            if let Some(callback) = callback {
                 callback(did_pop);
             }
         }

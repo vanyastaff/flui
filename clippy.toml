@@ -5,6 +5,9 @@
 # the `unwrap_used` gate that guards production paths.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+# `print_stdout`/`print_stderr` (on in the foundation crates) do not apply to
+# tests, where printing is how a failure explains itself.
+allow-print-in-tests = true
 
 # MSRV-aware lints (e.g. incompatible_msrv, std_instead_of_core) respect the
 # workspace floor instead of assuming latest stable.

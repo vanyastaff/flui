@@ -227,7 +227,8 @@ impl FlightInner {
         // `_heroOpacity = _proxyAnimation.drive(_reverseTween.chain(CurveTween(
         //  Interval(_proxyAnimation.value, 1.0))))` (`:689-691`): `_reverseTween` is
         // `1 -> 0`, so the opacity is `1 - interval(t)`.
-        let opacity = match *self.fade_from.lock() {
+        let fade_from = *self.fade_from.lock();
+        let opacity = match fade_from {
             Some(from) => 1.0 - Interval::linear(from, 1.0).transform(self.proxy.value()),
             None => 1.0,
         };
@@ -278,15 +279,18 @@ impl Drop for FlightInner {
     /// [`gesture_wake_subscription`]: FlightInner::gesture_wake_subscription
     fn drop(&mut self) {
         // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(status_id) = self.subscriptions.lock().take() {
+        let status_id = self.subscriptions.lock().take();
+        if let Some(status_id) = status_id {
             self.proxy.remove_status_listener(status_id);
         }
         // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(id) = self.proxy_wake_subscription.lock().take() {
+        let id = self.proxy_wake_subscription.lock().take();
+        if let Some(id) = id {
             self.proxy.remove_listener(id);
         }
         // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(id) = self.gesture_wake_subscription.lock().take() {
+        let id = self.gesture_wake_subscription.lock().take();
+        if let Some(id) = id {
             self.gesture_signal.notifier().remove_listener(id);
         }
     }
@@ -389,15 +393,18 @@ impl HeroFlight {
         }
 
         // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(status_id) = self.inner.subscriptions.lock().take() {
+        let status_id = self.inner.subscriptions.lock().take();
+        if let Some(status_id) = status_id {
             self.inner.proxy.remove_status_listener(status_id);
         }
         // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(id) = self.inner.proxy_wake_subscription.lock().take() {
+        let id = self.inner.proxy_wake_subscription.lock().take();
+        if let Some(id) = id {
             self.inner.proxy.remove_listener(id);
         }
         // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(id) = self.inner.gesture_wake_subscription.lock().take() {
+        let id = self.inner.gesture_wake_subscription.lock().take();
+        if let Some(id) = id {
             self.inner.gesture_signal.notifier().remove_listener(id);
         }
 
@@ -784,7 +791,8 @@ impl FlightManager {
         // `if (existingFlight != null) existingFlight.divert(manifest)` (`:1051-1052`):
         // divert redirects the airborne flight in place, keeping its one overlay entry,
         // rather than an end-and-restart. The flight stays in the map under its tag.
-        if let Some(existing) = self.flights.lock().get(&manifest.tag).cloned() {
+        let existing = self.flights.lock().get(&manifest.tag).cloned();
+        if let Some(existing) = existing {
             existing.divert(manifest, plan);
             return;
         }

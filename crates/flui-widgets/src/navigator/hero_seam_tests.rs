@@ -895,7 +895,8 @@ fn observers_are_notified_before_a_dying_routes_overlay_entry_is_torn_down() {
             let _prev = self.handle.lock().replace(navigator);
         }
         fn did_pop(&self, _route: RouteId, _previous: Option<RouteId>) {
-            if let Some(navigator) = self.handle.lock().clone() {
+            let navigator = self.handle.lock().clone();
+            if let Some(navigator) = navigator {
                 // PORT-CHECK-OK-LOCK: plain data: usize, no Drop
                 *self.entries_at_pop.lock() = Some(navigator.tracked_entry_count());
             }

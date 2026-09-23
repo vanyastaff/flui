@@ -150,7 +150,8 @@ impl<T> RouteResult<T> {
     /// legitimately absent (Dart's `T?`).
     #[must_use]
     pub fn try_take(&self) -> Option<Option<T>> {
-        match core::mem::replace(&mut self.shared.lock().value, Completion::Pending) {
+        let completion = core::mem::replace(&mut self.shared.lock().value, Completion::Pending);
+        match completion {
             Completion::Done(value) => Some(value),
             Completion::Pending => None,
         }

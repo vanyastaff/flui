@@ -1346,7 +1346,8 @@ impl BuildOwner {
     #[must_use]
     pub fn pending_rebuild_reasons(&self, element: ElementId) -> Option<RebuildReasons> {
         let mut pending = self.dirty_reasons.get(&element).copied();
-        if let Some(external) = self.external_inbox.lock().get(&element).copied() {
+        let external = self.external_inbox.lock().get(&element).copied();
+        if let Some(external) = external {
             match &mut pending {
                 Some(reasons) => reasons.merge(external),
                 None => pending = Some(external),
@@ -4562,7 +4563,8 @@ mod tests {
                 && self.reschedules_left.load(Ordering::Relaxed) > 0
             {
                 self.reschedules_left.fetch_sub(1, Ordering::Relaxed);
-                if let Some(handle) = self.handle_slot.lock().clone() {
+                let handle = self.handle_slot.lock().clone();
+                if let Some(handle) = handle {
                     handle.schedule(RebuildReason::StateChange);
                 }
             }
@@ -5943,7 +5945,8 @@ mod tests {
             _ctx: &dyn crate::BuildContext,
         ) -> impl crate::IntoView {
             if self.swap_to_new.load(Ordering::Relaxed) {
-                if let Some(handle) = self.old_handle_slot.lock().clone() {
+                let handle = self.old_handle_slot.lock().clone();
+                if let Some(handle) = handle {
                     handle.schedule(self.stale_notify_reason);
                 }
                 StaleIdNewChild {

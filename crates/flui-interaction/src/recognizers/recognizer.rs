@@ -277,7 +277,8 @@ impl RecognizerBase {
     /// competing members receive `reject_gesture`. No-op when not tracking a
     /// pointer or when the arena entry is already resolved or gone.
     pub fn accept_tracked(&self) {
-        if let Some(entry) = self.tracked_entry.lock().clone() {
+        let entry = self.tracked_entry.lock().clone();
+        if let Some(entry) = entry {
             entry.resolve(GestureDisposition::Accepted);
         }
     }

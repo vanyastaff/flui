@@ -389,7 +389,8 @@ mod tests {
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
             // PORT-CHECK-OK-LOCK: plain data: Result<Payload, Boom> holds only i32/&'static str
-            if let Some(result) = self.result.lock().take() {
+            let result = self.result.lock().take();
+            if let Some(result) = result {
                 Poll::Ready(result)
             } else {
                 let _prev = self.waker.lock().replace(cx.waker().clone());

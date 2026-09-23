@@ -431,12 +431,12 @@ impl Spinner {
     fn finish(&self, glyph: StyledObject<&'static str>, message: impl Display) {
         let Some(active) = &self.0 else { return };
         active.stop.store(true, Ordering::SeqCst);
-        if let Some(handle) = active
+        let handle = active
             .thread
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
+            .take();
+        if let Some(handle) = handle {
             let _ = handle.join();
         }
         let _ = block(glyph, &message.to_string());
@@ -459,12 +459,12 @@ impl Drop for Spinner {
         // redrawing over whatever the error path prints next.
         if let Some(active) = &self.0 {
             active.stop.store(true, Ordering::SeqCst);
-            if let Some(handle) = active
+            let handle = active
                 .thread
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-            {
+                .take();
+            if let Some(handle) = handle {
                 let _ = handle.join();
             }
         }

@@ -1254,7 +1254,8 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             }
             active_count.fetch_add(1, Ordering::AcqRel);
             rebuild.schedule(flui_view::RebuildReason::StateChange);
-            if let Some(callback) = config.lock().on_drag_started.clone() {
+            let callback = config.lock().on_drag_started.clone();
+            if let Some(callback) = callback {
                 callback();
             }
 

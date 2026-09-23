@@ -222,7 +222,8 @@ impl ModalInner {
         }
 
         let mut barrier = AbsorbPointer::new().absorbing(true);
-        if let Some(color) = *self.barrier_color.lock() {
+        let color = *self.barrier_color.lock();
+        if let Some(color) = color {
             barrier = barrier.child(ColoredBox::new(color));
         }
 

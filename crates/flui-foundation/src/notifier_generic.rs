@@ -327,7 +327,8 @@ mod tests {
         let n2 = n.clone();
         let cell2 = Arc::clone(&id_b_cell);
         let _a = n.add(Arc::new(move |()| {
-            if let Some(id) = *cell2.lock() {
+            let id = *cell2.lock();
+            if let Some(id) = id {
                 n2.remove(id);
             }
         }));

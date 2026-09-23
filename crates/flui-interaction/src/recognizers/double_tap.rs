@@ -419,7 +419,8 @@ impl DoubleTapGestureRecognizer {
             // The held first contact can differ from the currently tracked
             // second contact. Withdraw both exact entries before user code.
             // PORT-CHECK-OK-LOCK: shared arena handle, not last owner
-            if let Some(entry) = self.first_entry.lock().take() {
+            let entry = self.first_entry.lock().take();
+            if let Some(entry) = entry {
                 entry.resolve(GestureDisposition::Rejected);
                 entry.release();
             }
@@ -633,7 +634,8 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         // Avoids retaining one Arc<dyn GestureArenaMember> after unmount
         // mid-inter-tap-window.
         // PORT-CHECK-OK-LOCK: shared arena handle, not last owner
-        if let Some(entry) = self.first_entry.lock().take() {
+        let entry = self.first_entry.lock().take();
+        if let Some(entry) = entry {
             entry.release();
         }
         self.callbacks.borrow_mut().on_double_tap = None;
@@ -711,7 +713,8 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
         // If a competitor won while we held the first entry across the inter-tap
         // window, drain the hold so the entry is not left held.
         // PORT-CHECK-OK-LOCK: shared arena handle, not last owner
-        if let Some(entry) = self.first_entry.lock().take() {
+        let entry = self.first_entry.lock().take();
+        if let Some(entry) = entry {
             entry.release();
         }
     }
