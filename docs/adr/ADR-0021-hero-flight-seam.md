@@ -11,7 +11,7 @@
 - **Deciders:** chief-architect; consult rendering owner (**S4**, the ancestor-relative paint transform — the one seam that cannot be worked around), view owner (**S6**, post-frame callbacks from a view; **S7**, hero discovery without an element walk), animation owner (flight animation composition, `ProxyAnimation` re-parenting mid-flight), repository owner (public API: `Hero`, `HeroController`, tag type), qa-lead (deterministic flight tests through a real `Vsync`).
 - **Relates to:** consumes ADR-0019 (Navigator, Overlay, observers) and ADR-0020 (`PageRoute`, `ModalRoute.offstage`, `RenderOffstage`, `RenderTheater`). **Corrects** ADR-0019 §6 blocker (4) and tracker B1.4 precondition (4).
 - **Blocks:** tracker B1.4.
-- **Gate:** ARCH-GATE (this doc). Each slice below carries its own DEV-GATE; the public surface has a parity + sign-off gate at U6, per the [Definition of Done](../../AGENTS.md#definition-of-done-anti-cheating).
+- **Gate:** ARCH-GATE (this doc). Each slice below carries its own DEV-GATE; the public surface has a parity + sign-off gate at U6, per the [Definition of Done](../../AGENTS.md#definition-of-done).
 
 ---
 

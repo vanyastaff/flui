@@ -9,7 +9,7 @@
 - **Deciders:** chief-architect; consult view owner (`Navigator::of` handle shape, the two lock hazards in §3), api-design-lead *(role does not exist in this repo — see* Gate 2 *)*, repository owner (the `dyn Any` pop-result divergence: a public API shape we cannot walk back), qa-lead (headless determinism: driving a route transition inside a test frame).
 - **Relates to:** reuses [`ADR-0018`](ADR-0018-async-builder-seam.md)'s `RebuildHandle` verbatim, and the "state publishes its handle into a shared cell at `init_state`" pattern from [`ADR-0017`](ADR-0017-build-during-layout-callback-seam.md) U1 (`LayoutConstraintsCell`) / ADR-0018 U4 (`SharedSlot`). Constrained by [`FOUNDATIONS.md`](../FOUNDATIONS.md) and [`PANIC-POLICY.md`](../PANIC-POLICY.md).
 - **Blocks:** `Navigator`/routing (tracker B1.1). Transitively blocks `Hero` (tracker B1.1) — see §6.
-- **Gate:** ARCH-GATE (this doc) → DEV-GATE per slice → **parity + sign-off gate before public export** (U4), per the [Definition of Done](../../AGENTS.md#definition-of-done-anti-cheating).
+- **Gate:** ARCH-GATE (this doc) → DEV-GATE per slice → **parity + sign-off gate before public export** (U4), per the [Definition of Done](../../AGENTS.md#definition-of-done).
 
 ---
 
@@ -344,7 +344,7 @@ Two smaller forced divergences, recorded now so they are not "discovered" later:
 
 ## 5. Dependency-ordered implementation sequence
 
-The reference confirms the shape the task proposed, with **one adjustment**: the parity/sign-off gate moves *before* public export, not after. That is not a preference — ADR-0017 U4 and ADR-0018 U6 both established that a public export made before the `.flutter/` cross-check is unrecoverable, and the [Definition of Done](../../AGENTS.md#definition-of-done-anti-cheating) requires the reference check to precede the parity claim. Export is the reward for the gate, not its precondition.
+The reference confirms the shape the task proposed, with **one adjustment**: the parity/sign-off gate moves *before* public export, not after. That is not a preference — ADR-0017 U4 and ADR-0018 U6 both established that a public export made before the `.flutter/` cross-check is unrecoverable, and the [Definition of Done](../../AGENTS.md#definition-of-done) requires the reference check to precede the parity claim. Export is the reward for the gate, not its precondition.
 
 | Unit | Scope | Exit gate |
 |------|-------|-----------|

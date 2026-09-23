@@ -4,7 +4,7 @@ Describe the change and why it belongs in FLUI.
 
 ## Verification
 
-- [ ] `just ci`
+- [ ] `just check-changed` (CI runs the rest)
 - [ ] Flutter reference checked for render/layout/paint/lifecycle/reconciliation changes, or not applicable
 - [ ] New or changed behavior has tests that would fail without this change
 - [ ] Public API changes are documented

@@ -9,7 +9,7 @@
 - **Deciders:** chief-architect; consult animation owner (ticker ownership: who is FLUI's `vsync:`), view owner (route → navigator and route → overlay-entry back-references, both of which ADR-0019 deliberately omitted), rendering owner (`RenderOffstage` correction, `maintainSize`), repository owner (any public API — `TransitionRoute`/`ModalRoute`/`PageRoute` shape, and whether `Overlay` becomes public), qa-lead (deterministic transition tests: driving a controller inside a headless frame).
 - **Relates to:** implements ADR-0019 §5 **U5**. Depends on the seams ADR-0019 U2 already carved out (`PushCompletion::Animating`, `Route::finished_when_popped`, `RouteHistory::notify_push_completed`) — all of which currently have **no production producer**.
 - **Blocks:** route animation; modal dialogs; `PageRoute`. Transitively blocks `Hero` (tracker B1.4), which additionally needs `ModalRoute::offstage`.
-- **Gate:** ARCH-GATE (this doc) → DEV-GATE per slice → **parity + sign-off gate before public export** (U5.4), per the [Definition of Done](../../AGENTS.md#definition-of-done-anti-cheating).
+- **Gate:** ARCH-GATE (this doc) → DEV-GATE per slice → **parity + sign-off gate before public export** (U5.4), per the [Definition of Done](../../AGENTS.md#definition-of-done).
 
 ---
 
