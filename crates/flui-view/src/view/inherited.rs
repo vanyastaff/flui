@@ -361,15 +361,17 @@ mod tests {
         );
         // Masks union across registrations (two reads of different fields in
         // one build); the depth is the latest.
+        let dep3 = ElementId::new(3);
         element
             .behavior_mut()
-            .add_dependent(dep2, 6, FieldMask::bit(1));
+            .add_dependent(dep3, 6, FieldMask::bit(1));
         element
             .behavior_mut()
-            .add_dependent(dep2, 7, FieldMask::bit(2));
-        let entry = element.behavior().dependents()[&dep2];
+            .add_dependent(dep3, 7, FieldMask::bit(2));
+        let entry = element.behavior().dependents()[&dep3];
         assert_eq!(entry.depth, 7);
         assert_eq!(entry.mask, FieldMask::bit(1) | FieldMask::bit(2));
+        element.behavior_mut().remove_dependent(dep3);
 
         element.behavior_mut().remove_dependent(dep1);
         assert_eq!(element.behavior().dependents().len(), 1);
