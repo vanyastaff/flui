@@ -796,7 +796,12 @@ incremental = true
 debug = "line-tables-only"
 
 [profile.dev.package."*"]
-opt-level = 2 # Optimize dependencies (they don't change often)
+# Dependencies are compiled once and rebuilt only when Cargo.lock moves, so
+# their optimization is paid rarely and repaid on every run: wgpu/naga shader
+# translation, cosmic-text shaping and lyon tessellation dominate debug-build
+# frame time and test wall-clock. Workspace crates stay at opt-level 1 for
+# fast rebuilds.
+opt-level = 3
 # No debuginfo at all for dependencies — they inherited `line-tables-only` from
 # `dev`, and wgpu/naga/cosmic-text/lyon are the bulk of the dependency graph.
 # Stepping into a dep is rare enough to raise this for one package when needed.
