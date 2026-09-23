@@ -379,6 +379,41 @@ flui_python + " -B scripts/check-ios-safe-area.py " + quote(udid) + " target/ios
 "echo 'Skipping ios-safe-area-check on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: just ios-safe-area-check <udid>'"
 } }}
 
+# The pre-PR check (AGENTS.md): what CI's fast lane runs, locally. The scope
+# comes from scripts/affected-crates.sh -- the script CI's `plan` job runs --
+# over this branch's diff against origin/main PLUS uncommitted and untracked
+# files, so CI and local pick the same packages from the same arguments.
+[group("test")]
+[doc("Pre-PR check: fmt, then clippy + nextest over the crates this branch changes (vs origin/main, uncommitted work included) and every workspace crate depending on them -- CI's fast lane, same scope script. Refuses a CARGO_TARGET_DIR outside the checkout (docs/testing.md: one target per checkout)")]
+check-changed base="origin/main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+        case "$(cd "$CARGO_TARGET_DIR" 2>/dev/null && pwd || echo "$CARGO_TARGET_DIR")" in
+            "$PWD"/*) ;;
+            *) echo "check-changed: CARGO_TARGET_DIR=$CARGO_TARGET_DIR is outside this checkout; a target shared between worktrees links stale code (docs/testing.md). Unset it." >&2; exit 2 ;;
+        esac
+    fi
+    eval "$({{ flui_bash }} scripts/affected-crates.sh --base {{ base }} --worktree --format shell)"
+    echo "check-changed: $REASON"
+    cargo fmt --all -- --check
+    case "$MODE" in
+        docs|none) echo "check-changed: nothing to compile ($MODE)"; exit 0 ;;
+    esac
+    echo "check-changed: packages: ${PACKAGES:-<whole workspace>}"
+    # shellcheck disable=SC2086 # the *_ARGS are argument lists by design
+    cargo clippy $PKG_ARGS --all-targets --locked -- -D warnings
+    case " $PACKAGES " in
+        *" flui-engine "*|"  ") cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings ;;
+    esac
+    if [ -n "$TEST_ARGS" ]; then
+        # shellcheck disable=SC2086
+        cargo nextest run $TEST_ARGS --locked --no-fail-fast --lib --bins --tests $FEATURES
+    fi
+    if [ "$PLATFORM" = true ]; then
+        {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else { "echo 'check-changed: flui-platform is in scope, but its suite needs xvfb-run (Linux); CI runs it'" } }}
+    fi
+
 [group("test")]
 [doc("Run the workspace test scope used by CI: every test outside the nested-cargo group, then that group as the last stage (the flui-platform step needs xvfb-run on Linux — apt install xvfb; skipped with a message on other hosts)")]
 test-ci: _tests-outside-nested-cargo test-nested-cargo
@@ -957,7 +992,7 @@ gpu-test:
     cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1
 
 [group("ci")]
-[doc("Mirror of the workflow half of CI's checks job: the paths-filter allowlist check, actionlint and zizmor (the last two skip with a message when not installed -- CI has them)")]
+[doc("Mirror of the workflow half of CI's checks job: the docs-only allowlist check, actionlint and zizmor (the last two skip with a message when not installed -- CI has them)")]
 workflow-lint:
     #!/usr/bin/env bash
     set -euo pipefail

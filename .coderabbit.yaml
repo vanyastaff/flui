@@ -359,9 +359,11 @@ reviews:
         - A job's display name equals its key — `needs` and required-status
           contexts reference the key.
         - Adding a job means adding it to the `ci` aggregator's `needs`; the
-          aggregator parses `ci.yml` at run time and fails on a missing key,
-          and treats `skipped` as red unless the job is listed in
-          `ALLOWED_SKIPS` with a reason.
+          aggregator parses `ci.yml` at run time and fails on a missing key.
+          A job may skip only where `plan` says so (fast lane vs heavy lane,
+          and the change's mode); the aggregator recomputes that expectation
+          from `plan`'s outputs and fails on any other skip. A new heavy job
+          goes into the aggregator's `HEAVY_JOBS` list.
         - Feature-matrix passes must stay split (a targetless libs/bins pass
           and a `--tests --benches --examples` pass). Folding them into
           `--all-targets` lets dev-dependency feature unification hide broken
