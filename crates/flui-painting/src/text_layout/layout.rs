@@ -1116,16 +1116,21 @@ impl TextLayout {
     /// # Boundary tie-break
     ///
     /// `0` always resolves to the first segment. Elsewhere, when `offset`
-    /// sits exactly between two segments, a WORD segment wins over an
-    /// adjacent WHITESPACE one regardless of which side it is on — a
-    /// caret right after a word (`"café "`, offset at the space) answers
-    /// with the word just typed, and a caret right before one (`"foo
-    /// bar"`, offset at `b`) answers with the word about to be typed
-    /// into, never the whitespace either straddles. Between two
-    /// non-whitespace segments (no test in this crate currently produces
-    /// this — UAX #29's default rules merge every adjacent pair this
-    /// module's own test scripts can produce) the preceding one wins, the
-    /// same as the `0`-adjacent case falling through to "first segment".
+    /// sits exactly between two segments:
+    ///
+    /// - One side WHITESPACE, the other a real segment: the non-whitespace
+    ///   side wins regardless of which side it is on — a caret right
+    ///   after a word (`"café "`, offset at the space) answers with the
+    ///   word just typed, and a caret right before one (`"foo bar"`,
+    ///   offset at `b`) answers with the word about to be typed into,
+    ///   never the whitespace either straddles.
+    /// - Both sides non-whitespace (`"(foo"` at the `(`/`f` boundary,
+    ///   `"日本語"` at the `日`/`本` boundary — UAX #29 gives every CJK
+    ///   character its own segment without a dictionary, so this case is
+    ///   common there, not an edge case): the FOLLOWING segment wins
+    ///   (downstream affinity) — a double-tap landing exactly on the
+    ///   second character of a CJK run must select THAT character, not
+    ///   the one before it.
     pub fn get_word_boundary(&self, position: TextPosition) -> TextRange {
         let text = self.text.as_str();
         let total = text.len();
@@ -1160,7 +1165,10 @@ impl TextLayout {
             .copied();
 
         match (preceding, following) {
+            // Whitespace vs. word (either side): the word wins.
             (Some((_, _, true)), Some((f_start, f_end, false))) => TextRange::new(f_start, f_end),
+            // Word vs. word: the following one wins (downstream affinity).
+            (Some((_, _, false)), Some((f_start, f_end, false))) => TextRange::new(f_start, f_end),
             (Some((p_start, p_end, _)), _) => TextRange::new(p_start, p_end),
             (None, Some((f_start, f_end, _))) => TextRange::new(f_start, f_end),
             (None, None) => segments

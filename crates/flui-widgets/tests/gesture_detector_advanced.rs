@@ -179,6 +179,44 @@ fn double_tap_down_fires_before_the_second_contact_lifts() {
     );
 }
 
+/// `DoubleTapDetails::kind` reports the REAL pointer device, not a
+/// hard-coded `PointerType::Touch` guess — regression coverage for the
+/// `add_pointer_with_kind` fix. The test harness's `dispatch_pointer_down`
+/// synthesizes `PointerType::Mouse` events specifically (see
+/// `flui-widgets/src/testing.rs`), so a detector that still hard-coded
+/// `Touch` would fail this even though every earlier double-tap test in
+/// this file only checked that the callback fired at all, never what
+/// device it reported.
+#[test]
+fn double_tap_down_reports_the_real_pointer_kind() {
+    use flui_interaction::events::PointerType;
+
+    let kind = Arc::new(std::sync::Mutex::new(None));
+    let kind_cb = Arc::clone(&kind);
+
+    let mut scoped = lay_out(
+        GestureDetector::new()
+            .on_double_tap_down(move |details| {
+                // PORT-CHECK-OK-LOCK: PointerType is Copy, no significant drop
+                *kind_cb.lock().unwrap() = Some(details.kind);
+            })
+            .child(target()),
+        tight(100.0, 100.0),
+    );
+
+    scoped.dispatch_pointer_down(50.0, 50.0);
+    scoped.dispatch_pointer_up(50.0, 50.0);
+    scoped.pump_for(Duration::from_millis(50));
+    scoped.dispatch_pointer_down(50.0, 50.0);
+
+    assert_eq!(
+        *kind.lock().unwrap(),
+        Some(PointerType::Mouse),
+        "the harness dispatches Mouse events; on_double_tap_down must report \
+         the real kind, not a hard-coded Touch"
+    );
+}
+
 /// A detector configured with ONLY `on_double_tap_down` (no `on_double_tap`
 /// at all — `EditableText`'s own double-tap word-select composition never
 /// sets `on_double_tap`) must still join the arena for its own callback to

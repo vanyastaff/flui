@@ -232,6 +232,129 @@ fn get_word_boundary_prefers_the_word_side_of_a_boundary_over_the_whitespace_sid
     assert_eq!((word_at(7).start, word_at(7).end), (4, 7), "\"bar\"");
 }
 
+/// At a boundary between TWO non-whitespace segments, the FOLLOWING one
+/// wins (downstream affinity) -- the case
+/// [`get_word_boundary_prefers_the_word_side_of_a_boundary_over_the_whitespace_side`]
+/// doesn't cover, since one whitespace-vs-word rule cannot answer a
+/// punctuation-vs-word or CJK-character-vs-CJK-character boundary. This
+/// is the practical bug this test guards: without it, a double-tap
+/// landing exactly on a CJK character's leading edge (a real, common
+/// case for scripts with no dictionary segmentation, see the
+/// per-character-CJK test) selects the character BEFORE it instead.
+#[test]
+fn get_word_boundary_prefers_the_following_segment_between_two_word_segments() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    let word_at = |layout: &TextLayout, offset: usize| {
+        layout.get_word_boundary(TextPosition::new(offset, TextAffinity::Downstream))
+    };
+
+    let paren_foo = TextLayout::new("(foo", None, 14.0, None, None, TextDirection::Ltr);
+    let _ = paren_foo.metrics();
+    let word = word_at(&paren_foo, 1);
+    assert_eq!(
+        (word.start, word.end),
+        (1, 4),
+        "\"(\"/\"foo\" boundary: \"foo\" wins, not \"(\""
+    );
+
+    let cjk = TextLayout::new("日本語", None, 14.0, None, None, TextDirection::Ltr);
+    let _ = cjk.metrics();
+    let word = word_at(&cjk, 3);
+    assert_eq!(
+        (word.start, word.end),
+        (3, 6),
+        "日/本 boundary: 本 wins, not 日 -- a double-tap landing on 本 must select 本"
+    );
+}
+
+/// A word-vs-punctuation boundary is still a word-vs-word case for this
+/// tie-break (punctuation is simply not whitespace): both sides of
+/// `"foo, bar"`'s `,` land on the comma, for different reasons depending
+/// on which boundary is probed.
+#[test]
+fn get_word_boundary_word_vs_punctuation_boundary() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    let layout = TextLayout::new("foo, bar", None, 14.0, None, None, TextDirection::Ltr);
+    let _ = layout.metrics();
+
+    let word_at = |offset: usize| {
+        layout.get_word_boundary(TextPosition::new(offset, TextAffinity::Downstream))
+    };
+
+    // "foo"/"," boundary: both non-whitespace, the FOLLOWING one (",")
+    // wins.
+    let word = word_at(3);
+    assert_eq!((word.start, word.end), (3, 4), "\",\"");
+    // ","/" " boundary: "," is not whitespace, " " is -- "," wins as the
+    // non-whitespace side, same rule as the plain word-vs-whitespace
+    // matrix, just landing on the SAME range as the case above by
+    // coincidence of this string.
+    let word = word_at(4);
+    assert_eq!((word.start, word.end), (3, 4), "\",\"");
+}
+
+/// A multi-space run is still one segment regardless of where inside or
+/// at which edge of it `offset` falls — the whitespace-run test
+/// ([`get_word_boundary_selects_a_whole_whitespace_run`]) already covers
+/// the interior; this pins both edges too, against a two-space run
+/// specifically (the three-space one that test already used could not
+/// distinguish "the whole run" from "a two-space sub-range").
+#[test]
+fn get_word_boundary_two_space_run_boundary_matrix() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    let layout = TextLayout::new("foo  bar", None, 14.0, None, None, TextDirection::Ltr);
+    let _ = layout.metrics();
+
+    let word_at = |offset: usize| {
+        layout.get_word_boundary(TextPosition::new(offset, TextAffinity::Downstream))
+    };
+
+    assert_eq!((word_at(3).start, word_at(3).end), (0, 3), "\"foo\"");
+    assert_eq!(
+        (word_at(4).start, word_at(4).end),
+        (3, 5),
+        "inside the gap: the whole two-space run"
+    );
+    assert_eq!((word_at(5).start, word_at(5).end), (5, 8), "\"bar\"");
+}
+
+/// Leading and trailing whitespace at the buffer's own edges: `0` always
+/// answers with the first segment regardless of whether it is
+/// whitespace (unaffected by the word-vs-whitespace tie-break, which
+/// only applies to an INTERIOR boundary between two segments); the very
+/// end of a buffer that ends in whitespace answers with that trailing
+/// run, since there is no following segment to prefer instead.
+#[test]
+fn get_word_boundary_at_the_buffers_own_leading_and_trailing_whitespace() {
+    use flui_painting::TextLayout;
+    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+
+    let leading = TextLayout::new("  foo", None, 14.0, None, None, TextDirection::Ltr);
+    let _ = leading.metrics();
+    let word = leading.get_word_boundary(TextPosition::new(0, TextAffinity::Downstream));
+    assert_eq!(
+        (word.start, word.end),
+        (0, 2),
+        "offset 0 is always the first segment, even when it is whitespace"
+    );
+
+    let trailing = TextLayout::new("foo ", None, 14.0, None, None, TextDirection::Ltr);
+    let _ = trailing.metrics();
+    let word = trailing.get_word_boundary(TextPosition::new(4, TextAffinity::Downstream));
+    assert_eq!(
+        (word.start, word.end),
+        (3, 4),
+        "the end of the buffer with no following segment answers with the \
+         trailing whitespace run itself"
+    );
+}
+
 /// A position strictly inside a ZWJ family emoji's grapheme cluster must
 /// resolve to a segment that CONTAINS the whole cluster, never split it —
 /// the painting-layer counterpart of the `flui-widgets::controller`

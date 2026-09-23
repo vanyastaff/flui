@@ -908,8 +908,13 @@ impl RecognizerGroup {
             // call site holds the real originating event, so
             // `DoubleTapDetails::kind` should report the actual device
             // rather than falling back to `PointerType::Touch`.
-            let kind = event
-                .pointer_type()
+            //
+            // Fully-qualified, not a `use` import: `events::PointerEventExt`
+            // and the `PointerEventExtTrait` already imported above (as
+            // `PointerEventExt`) both define `position()` for the same
+            // `PointerEvent` type -- importing the former too would make
+            // `event.position()` two lines up ambiguous (E0034).
+            let kind = flui_interaction::events::PointerEventExt::pointer_type(event)
                 .unwrap_or(flui_interaction::events::PointerType::Touch);
             self.double_tap
                 .add_pointer_with_kind(pointer, position, global_position, kind);
@@ -943,8 +948,10 @@ impl RecognizerGroup {
     }
 }
 
-/// `true` when the no-argument callback slot currently holds a handler.
-fn slot_is_some(slot: &Rc<RefCell<Option<GestureCallback>>>) -> bool {
+/// `true` when a callback slot currently holds a handler — generic over
+/// the callback's own type (`GestureCallback`, `DoubleTapDownHandler`,
+/// ...) since only presence, never the callback itself, is read here.
+fn slot_is_some<T>(slot: &Rc<RefCell<Option<T>>>) -> bool {
     slot.borrow().is_some()
 }
 

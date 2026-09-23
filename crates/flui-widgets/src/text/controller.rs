@@ -854,8 +854,8 @@ impl TextEditingController {
     /// Move the selection's EXTENT one WORD left, leaving the anchor —
     /// Shift+Ctrl/Alt+Left. The word-granularity counterpart of
     /// [`Self::extend_selection_left`] — see its doc for why this shares
-    /// [`Self::extend_to`] rather than duplicating the anchor-preserving
-    /// logic.
+    /// the same private `extend_to` helper rather than duplicating the
+    /// anchor-preserving logic.
     pub fn extend_selection_word_left(&self) {
         self.extend_to(|guard| {
             let caret = guard.selection.caret;

@@ -1507,6 +1507,29 @@ the wrong trade for what this feature is worth today.
   Delete) use `GraphemeCursor`, a different UAX #29 mode with no
   dictionary dependency in the reference either, and are correct for
   every script including all the ones named above.
+- **The word-jump modifier's platform source is compile-time only, and
+  that is already known wrong for at least one real target.**
+  `is_word_jump_modifier` resolves `TargetPlatform::current()` — a
+  `cfg(target_os)` compile-time constant — once per `EditableText` key
+  handler, in `build_key_handler`. `wasm32` matches none of
+  `current()`'s `target_os` arms and falls through to `Unknown` →
+  Control, but a `flui` app compiled to `wasm32` and running in a Safari
+  tab on macOS needs Alt instead: native Ctrl+Arrow is the OS's own
+  Spaces-switch shortcut there, so a page that binds Control for
+  word-jump would never even see the chord. Web and embedded targets
+  need `TargetPlatform` resolved at RUNTIME, not baked in at compile
+  time — the exact gap `GestureSettings::native`'s own doc already flags
+  for the analogous gesture-settings case
+  (`flui-interaction/src/settings.rs:286-292`: "Anything that can host
+  more than one platform feel ... must resolve a runtime
+  `TargetPlatform` and call `for_platform` instead"). `word_jump_modifier`
+  is already split into a pure `(platform) -> Modifiers` function
+  specifically so a future runtime-resolved source has one place to
+  plug in — `build_key_handler`'s `let platform = TargetPlatform::current();`
+  — without touching the mapping table itself. Not fixed here: this
+  change did not add a runtime-platform-resolution mechanism to
+  `flui-widgets`, and inventing one for this one call site would be
+  premature relative to `GestureSettings`' own still-open gap.
 
 **Replacement tests**
 (`flui-widgets::controller::tests::{word_right_lands_on_the_next_words_start_skipping_trailing_whitespace,
@@ -1515,15 +1538,23 @@ a_run_of_whitespace_is_skipped_as_one_stop_not_a_stop_per_space,
 an_apostrophe_inside_a_word_does_not_split_it,
 cjk_text_splits_per_character_not_per_word,
 arabic_text_word_jump_never_lands_inside_a_char}`,
+`flui-widgets::text::editable_text::tests::word_jump_modifier_maps_every_platform`
+(the platform table itself, every `TargetPlatform` variant),
 `flui-painting::tests::text_layout_unit::{get_word_boundary_selects_a_whole_whitespace_run,
 get_word_boundary_does_not_split_on_an_apostrophe,
 get_word_boundary_splits_cjk_per_character_not_per_word,
 get_word_boundary_prefers_the_word_side_of_a_boundary_over_the_whitespace_side,
+get_word_boundary_prefers_the_following_segment_between_two_word_segments,
+get_word_boundary_word_vs_punctuation_boundary,
+get_word_boundary_two_space_run_boundary_matrix,
+get_word_boundary_at_the_buffers_own_leading_and_trailing_whitespace,
 get_word_boundary_never_splits_inside_a_zwj_emoji_cluster}`): each asserts
 a specific, pinned boundary — including the CJK per-character split and
-the boundary tie-break matrix (`"foo bar"` at 0/3/4/7) — rather than a
-loose "some boundary was found" check. Arabic is the one exception,
-asserted only as "never lands inside a char, always makes progress",
+the boundary tie-break matrices (`"foo bar"` at 0/3/4/7; `"(foo"` at 1;
+`"日本語"` at 3; `"foo, bar"` at 3/4; `"foo  bar"` at 3/4/5; leading/
+trailing whitespace at a buffer's own edges) — rather than a loose "some
+boundary was found" check. Arabic is the one exception, asserted only as
+"never lands inside a char, always makes progress",
 because this port does not claim cluster-vs-word segmentation parity for
 that script specifically, only that it is never corrupted.
 

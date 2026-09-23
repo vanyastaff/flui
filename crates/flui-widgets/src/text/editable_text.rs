@@ -1452,21 +1452,47 @@ fn is_command_chord(modifiers: Modifiers) -> bool {
         || (modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT))
 }
 
-/// Whether these modifiers request WORD-granularity caret/selection/delete
-/// movement rather than character-granularity, per platform — Flutter's
-/// `DefaultTextEditingShortcuts` binds a different modifier per platform,
-/// not the same one everywhere:
+/// The modifier that requests WORD-granularity caret/selection/delete
+/// movement on `platform` — Flutter's `DefaultTextEditingShortcuts` binds
+/// a different modifier per platform, not the same one everywhere:
 ///
 /// | Platform | Word-jump modifier | Why not the other one too |
 /// |---|---|---|
 /// | macOS, iOS | Alt (Option) | Ctrl is unbound for word-jump on macOS |
-/// | Windows, Linux, Android, Fuchsia, Unknown | Control | Alt+Left/Right/Backspace are reserved by Flutter for LINE-boundary intents this crate does not implement yet (`# DEFERRED` below); treating Alt as word-jump here too would silently claim that reservation early |
+/// | Windows, Linux, Android, Fuchsia, Unknown | Control | Alt+Left/Right/Backspace are reserved by Flutter for LINE-boundary intents this crate does not implement yet (see [`is_word_jump_modifier`]'s `# DEFERRED`); treating Alt as word-jump here too would silently claim that reservation early |
 ///
-/// [`TargetPlatform::current()`] (compile-time `cfg(target_os)`), the same
-/// resolution [`flui_interaction::settings::GestureSettings::native`]
-/// uses — `flui-widgets` has no ambient runtime-platform override to
-/// prefer over it, unlike `GestureSettings::for_platform`'s own explicit
-/// parameter for embedders that can host more than one platform feel.
+/// A pure function of `platform`, table-tested against every
+/// [`TargetPlatform`] variant so the mapping itself is verified
+/// regardless of which host actually runs the test suite (this crate's
+/// tests run on `ubuntu-latest` in CI, which alone would never exercise
+/// the macOS/iOS arm).
+#[inline]
+fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
+    match platform {
+        TargetPlatform::MacOS | TargetPlatform::iOS => Modifiers::ALT,
+        _ => Modifiers::CONTROL,
+    }
+}
+
+/// Whether these modifiers request WORD-granularity movement on
+/// `platform` — see [`word_jump_modifier`]'s doc for the table.
+///
+/// # Platform source is a known limitation
+///
+/// Every caller in this file resolves `platform` from
+/// [`TargetPlatform::current()`] (compile-time `cfg(target_os)`) once,
+/// in [`build_key_handler`] — a single injection point rather than each
+/// call site re-resolving it, so a future runtime override has one place
+/// to change. That source is already known wrong for at least one real
+/// target: `wasm32` matches none of `current()`'s `cfg(target_os)` arms
+/// and falls to `Unknown` → Control, but a macOS browser tab needs Alt
+/// too (native Ctrl+Arrow is the OS's own Spaces-switch shortcut there,
+/// so Control would never even reach this handler). Web and embedded
+/// targets need `TargetPlatform` resolved at RUNTIME instead — the same
+/// gap `GestureSettings::native`'s own doc already flags for the
+/// analogous gesture-settings case
+/// (`flui-interaction/src/settings.rs`). Tracked, not fixed here — see
+/// `flui-widgets/ARCHITECTURE.md`'s Mapping decision #19.
 ///
 /// # DEFERRED
 ///
@@ -1480,11 +1506,8 @@ fn is_command_chord(modifiers: Modifiers) -> bool {
 /// Arrow and Backspace/Delete keys never produce a character, so this has
 /// no AltGr carve-out to make (contrast [`is_command_chord`], which does).
 #[inline]
-fn is_word_jump_modifier(modifiers: Modifiers) -> bool {
-    match TargetPlatform::current() {
-        TargetPlatform::MacOS | TargetPlatform::iOS => modifiers.contains(Modifiers::ALT),
-        _ => modifiers.contains(Modifiers::CONTROL),
-    }
+fn is_word_jump_modifier(modifiers: Modifiers, platform: TargetPlatform) -> bool {
+    modifiers.contains(word_jump_modifier(platform))
 }
 
 /// Build the key-event handler closure for `controller`.
@@ -1505,6 +1528,11 @@ fn build_key_handler(
     focus_node: Rc<FocusNode>,
     on_submitted: Rc<RefCell<Option<SubmitCallback>>>,
 ) -> KeyEventHandler {
+    // Resolved once, at handler-construction time, not per keystroke — the
+    // one place a future runtime-resolved platform would be injected
+    // instead of `TargetPlatform::current()`. See `is_word_jump_modifier`'s
+    // doc for why the compile-time source itself is a known limitation.
+    let platform = TargetPlatform::current();
     Rc::new(move |event| {
         let controller = controller.borrow();
         if !focus_node.can_request_focus() {
@@ -1547,7 +1575,7 @@ fn build_key_handler(
             // `is_word_jump_modifier`'s doc for which modifier that is on
             // this platform.
             Key::Named(NamedKey::Backspace) => {
-                if is_word_jump_modifier(event.modifiers) {
+                if is_word_jump_modifier(event.modifiers, platform) {
                     controller.delete_word_backward();
                 } else {
                     controller.backspace();
@@ -1557,7 +1585,7 @@ fn build_key_handler(
             // Ctrl/Alt+Delete is the forward mirror of the Backspace arm
             // above.
             Key::Named(NamedKey::Delete) => {
-                if is_word_jump_modifier(event.modifiers) {
+                if is_word_jump_modifier(event.modifiers, platform) {
                     controller.delete_word_forward();
                 } else {
                     controller.delete_forward();
@@ -1577,7 +1605,7 @@ fn build_key_handler(
             // `ExtendSelectionToNextWordBoundaryIntent` pair.
             Key::Named(NamedKey::ArrowLeft) => {
                 let extend = event.modifiers.contains(Modifiers::SHIFT);
-                let by_word = is_word_jump_modifier(event.modifiers);
+                let by_word = is_word_jump_modifier(event.modifiers, platform);
                 match (by_word, extend) {
                     (true, true) => controller.extend_selection_word_left(),
                     (true, false) => controller.move_caret_word_left(),
@@ -1588,7 +1616,7 @@ fn build_key_handler(
             }
             Key::Named(NamedKey::ArrowRight) => {
                 let extend = event.modifiers.contains(Modifiers::SHIFT);
-                let by_word = is_word_jump_modifier(event.modifiers);
+                let by_word = is_word_jump_modifier(event.modifiers, platform);
                 match (by_word, extend) {
                     (true, true) => controller.extend_selection_word_right(),
                     (true, false) => controller.move_caret_word_right(),
@@ -2175,15 +2203,11 @@ mod tests {
     }
 
     /// The word-jump modifier for the platform these tests actually run
-    /// on — Alt on macOS/iOS, Control everywhere else. Mirrors
-    /// `is_word_jump_modifier`'s own `match`; kept separate rather than
-    /// exposing that private function to tests so this stays an
-    /// independent check, not a tautology against the function under test.
+    /// on — `super::word_jump_modifier`, the same function
+    /// `is_word_jump_modifier` itself calls, kept under a plain name here
+    /// for test-call-site readability.
     fn platform_word_jump_modifier() -> Modifiers {
-        match TargetPlatform::current() {
-            TargetPlatform::MacOS | TargetPlatform::iOS => Modifiers::ALT,
-            _ => Modifiers::CONTROL,
-        }
+        super::word_jump_modifier(TargetPlatform::current())
     }
 
     /// The modifier that is NOT this platform's word-jump chord — Control
@@ -2193,6 +2217,35 @@ mod tests {
         match TargetPlatform::current() {
             TargetPlatform::MacOS | TargetPlatform::iOS => Modifiers::CONTROL,
             _ => Modifiers::ALT,
+        }
+    }
+
+    /// `word_jump_modifier` is a pure function of `TargetPlatform` — table
+    /// every variant explicitly, since this CI only ever runs on
+    /// `ubuntu-latest` and a test keyed to `TargetPlatform::current()`
+    /// would never exercise the macOS/iOS arm on any real run.
+    #[test]
+    fn word_jump_modifier_maps_every_platform() {
+        assert_eq!(
+            super::word_jump_modifier(TargetPlatform::MacOS),
+            Modifiers::ALT
+        );
+        assert_eq!(
+            super::word_jump_modifier(TargetPlatform::iOS),
+            Modifiers::ALT
+        );
+        for platform in [
+            TargetPlatform::Windows,
+            TargetPlatform::Linux,
+            TargetPlatform::Android,
+            TargetPlatform::Fuchsia,
+            TargetPlatform::Unknown,
+        ] {
+            assert_eq!(
+                super::word_jump_modifier(platform),
+                Modifiers::CONTROL,
+                "{platform:?}"
+            );
         }
     }
 
@@ -2351,6 +2404,22 @@ mod tests {
             controller.selection(),
             0..6,
             "anchor stays at 0, extent jumps to the start of \"world\""
+        );
+
+        // Shift + word-jump-modifier + Left shrinks the SAME selection back
+        // by a word, exercising the `ArrowLeft` arm's own `(true, true)`
+        // branch (the `ArrowRight` case above only proves the `ArrowRight`
+        // arm's).
+        let left = KeyEventBuilder::new(Code::ArrowLeft)
+            .with_key(Key::Named(NamedKey::ArrowLeft))
+            .with_state(KeyState::Down)
+            .with_modifiers(platform_word_jump_modifier() | Modifiers::SHIFT)
+            .build();
+        assert_eq!(handler(&left), KeyEventResult::Handled);
+        assert_eq!(
+            controller.selection(),
+            0..0,
+            "anchor stays at 0, extent jumps back to the start of \"hello\""
         );
     }
 

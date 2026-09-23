@@ -19,6 +19,14 @@ Versioning: per `docs/release.md` policy.
   `GestureDetector` needed to add double-tap word selection to
   `EditableText` without reimplementing tap-count/slop/timeout tracking a
   second time.
+- `DoubleTapGestureRecognizer::add_pointer_with_kind` — the same
+  registration `GestureRecognizer::add_pointer` performs, but with the
+  pointer's real device `kind` instead of a hard-coded
+  `PointerType::Touch`. The trait method's narrower signature carries no
+  `kind` parameter, so it now delegates to this one with the same
+  `Touch` fallback; a caller holding the concrete recognizer and the
+  originating event (`flui-widgets::GestureDetector`'s own dispatch) uses
+  this instead, so `DoubleTapDetails::kind` reports the actual device.
 - `ImpulseVelocityTracker` — Android's default fling-velocity strategy since 8.1 (AOSP `VelocityTracker.cpp` impulse model: kinetic-energy bookkeeping, from-rest boundary condition). Flutter ships least-squares only; impulse discounts stale samples on sharp deceleration, tracking the finger's final intent.
 - `OneEuroFilter` / `OneEuroFilter2D` — speed-adaptive low-pass for stylus/pointer smoothing (Casiez, Roussel & Vogel, CHI 2012) with the paper's recommended defaults (`min_cutoff=1.0`, `beta=0.007`, `d_cutoff=1.0`).
 - `GestureSettings::for_platform(TargetPlatform)` (runtime platform dispatch, Flutter `defaultTargetPlatform` model) + cfg-seeded `GestureSettings::native()`; `android_defaults()` (AOSP `ViewConfiguration`: 8 dp slop, 16 dp paging, 300 ms double-tap, 400 ms long-press, 50–8000 dp/s fling) and `ios_defaults()` (10 pt `allowableMovement`; extrapolated fields documented).
