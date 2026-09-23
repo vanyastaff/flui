@@ -903,7 +903,14 @@ impl RecognizerGroup {
             self.long_press
                 .add_pointer(pointer, position, global_position);
         }
-        if self.double_tap_active() {
+        // Primary button (or no button info at all -- touch/pen contacts
+        // carry none, and default to allowed) only: a Secondary/Auxiliary
+        // mouse-down must not register a double-tap. `TapButton`'s own
+        // Secondary/Tertiary slots exist precisely so right-/middle-click
+        // has its own gesture family, not this one -- two quick
+        // right-clicks firing `on_double_tap_down` on a wrapped
+        // `EditableText` would select a word from a context-menu gesture.
+        if self.double_tap_active() && is_primary_button_down(event) {
             // `add_pointer_with_kind`, not the trait's `add_pointer`: this
             // call site holds the real originating event, so
             // `DoubleTapDetails::kind` should report the actual device
@@ -936,15 +943,44 @@ impl RecognizerGroup {
         if self.long_press_active() {
             self.long_press.handle_event(dispatch);
         }
-        if self.double_tap_active() {
-            self.double_tap.handle_event(dispatch);
-        }
+        // NOT gated on `double_tap_active()`, unlike the others: a
+        // rebuild can flip the slot to empty WHILE `double_tap` is
+        // already mid-gesture for a pointer it registered while still
+        // active (`EditableText::enabled` toggling false between a
+        // first tap's down and up, say). Gating this call the same way
+        // `handle_down`'s registration is gated would then never deliver
+        // that pointer's Up/Cancel, orphaning the recognizer in
+        // `FirstDown`/`SecondDown` forever — nothing else polls it out
+        // of a phase that isn't `WaitingForSecond` (`check_timeout`'s
+        // own guard). Safe to call unconditionally: `handle_event`
+        // no-ops on a pointer id it never registered via `add_pointer`
+        // (`self.state.primary_pointer()` won't match), and the
+        // CALLBACK itself still won't fire while disabled — that is
+        // gated separately, by the live slot the callback closure reads
+        // at call time, not by this participation check.
+        self.double_tap.handle_event(dispatch);
         if self.drag_active() {
             self.drag.handle_event(dispatch);
         }
         if self.horizontal_drag_active() {
             self.horizontal_drag.handle_event(dispatch);
         }
+    }
+}
+
+/// Whether a `PointerEvent::Down` is the Primary mouse button (or carries
+/// no button info at all — touch and pen contacts don't, and default to
+/// allowed, matching `TapGestureRecognizer::down_button`'s own
+/// `unwrap_or(TapButton::Primary)` convention). Anything else (`Down` with
+/// `Some(Secondary)`/`Some(Auxiliary)`) is a right- or middle-click, which
+/// has its own gesture family (`TapButton::Secondary`/`Tertiary`) and must
+/// not also register as a double-tap.
+fn is_primary_button_down(event: &flui_interaction::events::PointerEvent) -> bool {
+    if let flui_interaction::events::PointerEvent::Down(data) = event {
+        data.button
+            .is_none_or(|button| button == flui_interaction::events::PointerButton::Primary)
+    } else {
+        true
     }
 }
 

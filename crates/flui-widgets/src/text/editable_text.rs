@@ -4053,6 +4053,66 @@ mod tests {
         );
     }
 
+    /// The field being disabled BETWEEN a first tap's down and up — not
+    /// disabled for the whole gesture, as the test above covers — must
+    /// not strand the double-tap recognizer either. The rebuild that
+    /// flips `enabled` to `false` removes the `on_double_tap_down` slot,
+    /// so `RecognizerGroup::double_tap_active` stops gating NEW
+    /// registrations; without `forward` still delivering events to an
+    /// ALREADY-tracked pointer regardless of that gate, the recognizer's
+    /// own Up handler would never run, leaving it stuck in `FirstDown`
+    /// forever — even after re-enabling, since nothing else polls a
+    /// recognizer out of that phase.
+    ///
+    /// The completing tap is the SECOND contact's own DOWN, not a third
+    /// dispatch: once the first tap's Up reaches the recognizer at all
+    /// (the fix under test), it is already `WaitingForSecond` by the
+    /// time this re-enables, so the very next down completes the SAME
+    /// pair. An earlier version of this test dispatched a third down
+    /// "for a fresh double-tap" — which, precisely BECAUSE the first
+    /// pair was still live, was actually the second half of a doomed
+    /// THIRD tap, and its own `Listener`-driven single-tap caret
+    /// placement collapsed the selection the real double-tap had just
+    /// made, failing this test for the wrong reason.
+    ///
+    /// Red-check: re-add `if self.double_tap_active() { ... }` around
+    /// `RecognizerGroup::forward`'s `self.double_tap.handle_event(...)`
+    /// call — the second tap's down then starts a fresh `FirstDown`
+    /// instead of completing the pair, and nothing is selected.
+    #[test]
+    fn toggling_disabled_between_the_first_taps_down_and_up_does_not_strand_the_recognizer() {
+        let controller = TextEditingController::with_text("hello world");
+        let focus_node = FocusNode::with_debug_label("toggled field");
+        let mut harness = crate::test_harness::mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+
+        // First tap starts while enabled...
+        harness.dispatch_pointer_down(1.0, 5.0);
+        // ...the field is disabled before that same contact lifts...
+        harness.swap_root(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node)).enabled(false),
+        );
+        harness.dispatch_pointer_up(1.0, 5.0);
+        // ...then re-enabled.
+        harness.swap_root(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+
+        // The second contact of the SAME pair: the recognizer must still
+        // be `WaitingForSecond`, not stuck in `FirstDown`.
+        harness.dispatch_pointer_down(1.0, 5.0);
+
+        assert_eq!(
+            controller.selection(),
+            0..5,
+            "the double-tap must still complete after enabled toggled off \
+             then on mid-gesture, not strand the recognizer in FirstDown"
+        );
+    }
+
     /// A move with no drag in flight must not anchor a selection at whatever
     /// offset was last there. The pointer-up clears the anchor, so a move
     /// after it is somebody else's.

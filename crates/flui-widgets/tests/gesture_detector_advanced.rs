@@ -217,6 +217,38 @@ fn double_tap_down_reports_the_real_pointer_kind() {
     );
 }
 
+/// Two quick RIGHT-clicks must not register as a double-tap.
+/// `TapButton::Secondary`/`Tertiary` are their own gesture family
+/// (`on_secondary_tap`) precisely so a context-menu click never also
+/// means something to a co-mounted double-tap consumer — on a wrapped
+/// `EditableText`, an unguarded double-tap would select a word out of a
+/// right-click gesture.
+#[test]
+fn double_tap_down_is_not_recognized_from_a_secondary_button() {
+    let downs = Arc::new(AtomicUsize::new(0));
+    let down_cb = Arc::clone(&downs);
+
+    let mut scoped = lay_out(
+        GestureDetector::new()
+            .on_double_tap_down(move |_details| {
+                down_cb.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(target()),
+        tight(100.0, 100.0),
+    );
+
+    scoped.dispatch_secondary_down(50.0, 50.0);
+    scoped.dispatch_secondary_up(50.0, 50.0);
+    scoped.pump_for(Duration::from_millis(50));
+    scoped.dispatch_secondary_down(50.0, 50.0);
+
+    assert_eq!(
+        downs.load(Ordering::SeqCst),
+        0,
+        "two quick right-clicks must not register as a double-tap"
+    );
+}
+
 /// A detector configured with ONLY `on_double_tap_down` (no `on_double_tap`
 /// at all — `EditableText`'s own double-tap word-select composition never
 /// sets `on_double_tap`) must still join the arena for its own callback to
