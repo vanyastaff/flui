@@ -527,6 +527,7 @@ previously only a documented convention.
 - **`BuildContext`-level platform capability** — only with a concrete widget consumer; token joins `check-frame-capability-scope.sh` in the same change (trigger #22).
 - **Win32 message-only-HWND wake + AppKit `CFRunLoopSource` wake** — the slice-3 lane adoptions; each is its own PR carrying the ADR-0027 §3 wake contract and the §4 drain-gate test.
 - **flui-platform CI test re-inclusion** — the honest gap in slice 1's verification story closes only when the STATUS_HEAP_CORRUPTION investigation lands; tracked there, not here.
+  - *Note (2026-09-23):* closed. The crash was a Win32 clipboard use-after-free (`OpenClipboard(NULL)` does not exclude other threads of the process), fixed by a process-wide clipboard session lock (`flui-platform/src/shared/clipboard_lock.rs`, `docs/safety-review.md`). flui-platform's suite now runs on windows-latest in CI's `platform-windows` job. No test there drives `WindowsPlatform::run` yet, so the Win32 `on_ready` ordering noted above is still verified by reading `fn run` only.
 - **wasm posture** — single-threaded: `OwnerPlatform` is trivially constructible by the RAF loop; `PlatformProxy` is inert (`OwnerGone` after teardown never occurs because teardown never runs — ADR-0027 §7 notes web keeps its owner host for the page lifetime). No special casing required, but the web backend's `OwnerOps` impl should assert nothing rather than emulate marshaling.
 
 ## Window-independent owner signals and pending opens

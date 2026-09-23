@@ -496,12 +496,10 @@ _tests-outside-nested-cargo:
     # a handful of winit-internals unit tests construct `WinitPlatform::new()`
     # directly and need a real (if virtual) X11 connection for clipboard
     # init, which `xvfb-run` supplies — a Linux-only tool, hence the guard.
-    # On Windows this is not a missing-tool gap: STATUS_HEAP_CORRUPTION
-    # (H9, docs/ROADMAP-TRACKER.md) is an unresolved crash in this crate's
-    # Windows backend, so the tests must not run there at all. 175/175
+    # Windows needs neither (mirrors CI's `platform-windows` job). 175/175
     # pass on Linux, 5x-verified stable — see docs/testing.md for what stays
     # excluded and why.
-    {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else if os() == "windows" { "echo 'Skipping flui-platform tests: STATUS_HEAP_CORRUPTION (H9, docs/ROADMAP-TRACKER.md) is an unresolved Windows crash in this crate -- do not run its tests on a Windows host until that investigation lands a fix.'" } else { "echo 'Skipping flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md.'" } }}
+    {{ if os() == "linux" { "FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else if os() == "windows" { "cargo nextest run -p flui-platform --locked --all-features --no-fail-fast" } else { "echo 'Skipping flui-platform tests on this host: the CI-mirroring invocation needs xvfb-run (Linux-only) for the winit backend X11-dependent tests; see docs/testing.md.'" } }}
 
 [group("test")]
 [doc("Test a single crate (e.g. just test-crate flui-tree)")]
@@ -523,10 +521,9 @@ test-debug *args:
 test-all:
     cargo test --workspace --no-fail-fast
 
-# Excludes flui-platform to match the CI `test` job — that crate's suite is red
-# independently of the profile (STATUS_HEAP_CORRUPTION investigation, see
-# AGENTS.md), so including it would make this recipe permanently red and
-# useless as a gate.
+# Excludes flui-platform to match the CI `test` job: its winit event-loop tests
+# need one process per test (winit allows one EventLoop per process), which
+# `cargo test` does not give them; CI runs the crate under nextest instead.
 [group("test")]
 [doc("Run tests against the release profile (excludes flui-platform, as CI does)")]
 test-release:
