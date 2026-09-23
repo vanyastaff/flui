@@ -124,6 +124,23 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `rust-toolchain.toml`'s channel, so the declaration can no longer drift
   silently across those files.
 
+### Fixed
+
+- **Win32 clipboard use-after-free** (`flui-platform`): `OpenClipboard(NULL)` does not exclude
+  other threads of the same process, so a clipboard write on one thread could free the text a
+  read on another thread was scanning, aborting the process with `STATUS_HEAP_CORRUPTION`. All
+  FLUI clipboard sessions on Windows (the Win32 backend and the winit backend's `arboard`
+  clipboard) now run under one process-wide lock. This was the crash that kept
+  `flui-platform`'s suite off Windows; it now runs on windows-latest in the new
+  `platform-windows` CI job and in `just test-ci` on Windows.
+- **winit backend parked after an exit requested in `about_to_wait` on Windows**
+  (`flui-platform`): winit's Windows runner blocks on the control flow set in `about_to_wait`
+  before it checks the exit flag, and `about_to_wait` kept setting `ControlFlow::Wait` even
+  when it had just requested the exit (the harness self-close, `FLUI_SELF_CLOSE_AFTER_MS`,
+  fires there). The loop then stayed parked until an unrelated message arrived. It now sets
+  `Poll` once the loop is exiting; the self-close test asserts the loop ends within 10 s (it
+  took 361 s before).
+
 ## [0.1.0] - 2026-09-21
 
 First tagged release of the workspace. On crates.io this cut ships

@@ -54,11 +54,17 @@ rest of the workspace stays `unsafe`-free. Every unsafe block carries a
 
 ## Testing status
 
-Tests are currently **excluded from the CI nextest run** pending the
-Windows-only `STATUS_HEAP_CORRUPTION` investigation (tracked as Cross.P /
-item H9 in [`docs/archive/ROADMAP-TRACKER.md`](../../docs/archive/ROADMAP-TRACKER.md)). The
-crash does not reproduce on Linux checkouts, where only the headless backend
-compiles; lib tests pass locally on the headless backend.
+The suite runs under nextest in CI on Linux (the `test` job's dedicated step,
+headless + Xvfb) and on Windows (the `platform-windows` job, default and all
+features). Run it with nextest, not `cargo test`: the winit tests that drive a
+real event loop need one process per test, because winit allows one
+`EventLoop` per process. macOS and the mobile backends are lint-only in CI
+(`cross-typecheck`).
+
+The Win32 clipboard is opened only under a process-wide lock
+(`shared::clipboard_lock`): `OpenClipboard(NULL)` does not exclude other
+threads of the same process, and a reader racing a writer on two threads was a
+use-after-free that aborted the process with `STATUS_HEAP_CORRUPTION`.
 
 ## Documentation
 

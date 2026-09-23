@@ -626,11 +626,21 @@ fn close_requested_drops_window_callbacks_and_self_close_exits_the_loop() {
         },
         arm_now,
     };
+    let loop_started = Instant::now();
     event_loop
         .run_app(&mut app)
         .expect("event loop runs to completion");
+    let loop_ran_for = loop_started.elapsed();
     worker.join().expect("worker thread does not panic");
 
+    // The self-close's exit must end the loop promptly, not whenever an
+    // unrelated message next wakes a parked loop (on Windows that was six
+    // minutes: `about_to_wait` re-armed `ControlFlow::Wait` after `exit()`).
+    assert!(
+        loop_ran_for < Duration::from_secs(10),
+        "run_app took {loop_ran_for:?}: the exit requested by the close arm must end the \
+         loop without waiting for another event"
+    );
     assert!(
         callback_dropped.load(Ordering::SeqCst),
         "CloseRequested must drop the window's registered callbacks inside the close \
