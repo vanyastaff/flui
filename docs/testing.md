@@ -810,14 +810,36 @@ cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (co
 
 ### CI jobs and their local recipes
 
-`just ci` is the fast gate; `just ci-full` runs `just ci` plus every other
-job below that the host can run (`just doctor full` names what it needs).
-One row per job in `.github/workflows/ci.yml`:
+CI runs in two lanes, chosen by the `plan` job:
+
+- **Fast lane**: an ordinary pull request. It runs `checks`, `deny`, and
+  `fast-lane`: clippy and nextest over the changed crates and every workspace
+  crate that depends on them. The whole workspace is used when a
+  workspace-wide input changed: `Cargo.lock`, the root `Cargo.toml`,
+  `.cargo/`, the toolchain, or a workflow. Nothing compiles for a
+  documentation-only or tooling-only change. The scope comes from
+  `scripts/affected-crates.sh`; `just check-changed` runs the same script with
+  the same arguments before a PR. It also counts uncommitted work.
+- **Heavy lane**: a push to main, the merge queue, the nightly schedule,
+  `workflow_dispatch`, or a pull request labelled `full-ci`. Every job below
+  runs. A red heavy run on main or nightly opens (or comments on) the
+  "CI is red on main" issue. The rule is fix forward within the hour, or
+  revert.
+
+The `ci` aggregator recomputes which jobs this lane and change should skip
+from `plan`'s outputs. It fails on any other skip, and on a job that ran where
+it should have skipped.
+
+Locally, `just check-changed` is the pre-PR check. `just ci` is the full local
+gate and is optional: CI is the proof. `just ci-full` mirrors the heavy jobs
+this host can run, and `just doctor full` names what it needs. One row per job
+in `.github/workflows/ci.yml`:
 
 | CI job | Local recipe | Difference, or why CI-only |
 |---|---|---|
 | `checks` | `just gate` (fmt, text-check, inventory, runtime-conformance, toolchain-consistency, panic-policy, port-check, wgsl-uniformity) + `just workflow-lint` | `workflow-lint` skips actionlint/zizmor with a message when they are not installed; CI always has them |
-| `paths-filter` | — | CI only: decides which jobs a docs-only change may skip; there is nothing to skip locally |
+| `plan` | `scripts/affected-crates.sh` (`just check-changed` runs it) | decides the lane and the affected packages; CI passes the PR's base SHA, `check-changed` diffs against `origin/main` and adds uncommitted files |
+| `fast-lane` | `just check-changed` | same packages and arguments; the flui-platform leg needs `xvfb-run` (Linux) |
 | `clippy` | `just clippy` (in `just gate`) | — |
 | `test` (ubuntu, macos, windows) | `just test-ci` + `just build-all-targets` | one host OS, not three; `test-ci` does not link examples (`build-all-targets` does); the flui-platform leg needs `xvfb-run` (Linux) |
 | `test-features` | `just test-features` | — |
@@ -833,7 +855,8 @@ One row per job in `.github/workflows/ci.yml`:
 | `wasm-check` | `just wasm-check`, `just wasm-link-check`, `just wasm-test` | `wasm-link-check` needs `wasm-tools`; `wasm-test` installs the locked `wasm-bindgen-cli` itself |
 | `cli-macos` | `just test-ci` (flui-cli's tests) + `just cross-typecheck` (its iOS clippy line) | the same commands; they only mean "macOS" on a Mac |
 | `cross-typecheck` | `just cross-typecheck` | needs the four targets (`just doctor full`) |
-| `ci` | — | CI only: the single required check, which verifies that every gated job ran and passed |
+| `ci` | — | CI only: the single required check. It verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the plan skips |
+| `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red heavy run on main or nightly |
 
 The other workflows (`weekly.yml`, `release.yml`, `docs.yml`,
 `coderabbit-trigger.yml`) are scheduled or event-driven, not per-PR gates, and
