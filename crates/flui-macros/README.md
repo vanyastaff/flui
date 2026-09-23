@@ -79,6 +79,32 @@ With only the facade dependency, the generated implementation calls:
 ::flui::view::element::ElementKind::stateful(self)
 ```
 
+### `#[derive(InheritedData)]`
+
+Field-granular inherited dependencies (issue #1090). For a non-generic struct with
+named fields, generates one `pub const FIELD_<NAME>: FieldMask` per field (declaration
+order, bit 0 first; `r#type` becomes `FIELD_TYPE`) and `impl InheritedData for T` whose
+`field_mask_diff` unions the mask of every field that differs (`!=`, so each field must be
+`PartialEq`). An `InheritedView` whose `Data` derives it overrides `changed_fields` with
+`self.data().field_mask_diff(old.data())`, and a dependent that read one field through
+`BuildContextExt::depend_on_field(T::FIELD_SIZE, ..)` rebuilds only when that field changes:
+
+```rust,ignore
+use flui::prelude::*;
+
+#[derive(Clone, PartialEq, InheritedData)]
+struct MediaQueryData {
+    size: Size,
+    text_scale_factor: f32,
+}
+
+// In a reader's build:
+let size = ctx.depend_on_field::<MediaQueryData, _>(MediaQueryData::FIELD_SIZE, |d| d.size);
+```
+
+Refused at compile time, with the reason named: more than 64 fields (the mask is 64 bits;
+split the provider data), tuple or unit structs, enums, unions, and generic structs.
+
 ## Keys
 
 The derives intentionally do not generate a custom `View::key()` method; the

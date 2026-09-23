@@ -1265,6 +1265,7 @@ where
 ///
 /// [`FieldMask::ALL`]: crate::view::FieldMask::ALL
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DependentEntry {
     /// Depth captured at `depend_on_inherited` time.
     pub depth: usize,
@@ -1279,8 +1280,9 @@ pub struct DependentEntry {
 ///
 /// # Dependents map
 ///
-/// Stored as `HashMap<ElementId, usize>` — dependent id mapped to its
-/// depth in the element tree. The depth is captured at
+/// Stored as `HashMap<ElementId, DependentEntry>` — dependent id mapped to its
+/// depth in the element tree and the provider fields it read
+/// ([`FieldMask`](crate::view::FieldMask), #1090). The depth is captured at
 /// `depend_on_inherited` time and used during `on_view_updated` to call
 /// `ElementOwner::schedule_build_for` with a typed rebuild reason, without an
 /// extra tree traversal (the tree is not in scope at `on_view_updated`
@@ -1339,7 +1341,7 @@ impl<V: InheritedView> InheritedBehavior<V> {
     /// Idempotent: re-registering the same `element` overwrites its
     /// stored depth (depths can change across reconciliation, so the
     /// latest call wins). HashMap inherently dedups on key.
-    pub fn add_dependent(
+    pub(crate) fn add_dependent(
         &mut self,
         element: ElementId,
         depth: usize,
@@ -1358,7 +1360,7 @@ impl<V: InheritedView> InheritedBehavior<V> {
         self.dependents.remove(&element);
     }
 
-    /// Get all dependent elements (id -> depth map).
+    /// Get all dependent elements (id -> depth + fields read).
     pub fn dependents(&self) -> &HashMap<ElementId, DependentEntry> {
         &self.dependents
     }
@@ -1386,6 +1388,20 @@ where
         mask: crate::view::FieldMask,
     ) {
         self.add_dependent(dependent, depth, mask);
+    }
+    fn reset_dependent_mask(&mut self, dependent: ElementId) {
+        if let Some(entry) = self.dependents.get_mut(&dependent) {
+            entry.mask = crate::view::FieldMask::NONE;
+        }
+    }
+    fn prune_unread_dependent(&mut self, dependent: ElementId) -> bool {
+        match self.dependents.get(&dependent) {
+            Some(entry) if entry.mask.is_empty() => {
+                self.dependents.remove(&dependent);
+                true
+            }
+            _ => false,
+        }
     }
 
     fn remove_dependent(&mut self, dependent: ElementId) {
@@ -1431,13 +1447,16 @@ where
         self.data = core.view().data().clone();
         self.view_cache = core.view().clone();
 
-        // Compare old vs new view; if `update_should_notify` returns
-        // true, schedule rebuild for every dependent.
+        // Compare old vs new view: `changed_fields(old)` says WHICH fields
+        // changed (`FieldMask::ALL`/`NONE` from `update_should_notify` for a
+        // provider that never opted in), and only dependents whose recorded
+        // mask intersects are scheduled.
         //
         // Flutter parity: `framework.dart:6414`
         // `InheritedElement.notifyClients(InheritedWidget old)` calls
         // `widget.updateShouldNotify(old)` and on true iterates
-        // `_dependents.keys` to enqueue each dependent for build.
+        // `_dependents.keys` to enqueue each dependent for build; the mask
+        // intersection is the typed form of `InheritedModel`'s aspect check.
         // Field-granular (#1090): the provider reports WHICH fields changed
         // (`FieldMask::ALL` for a provider that never opted in — the
         // `update_should_notify` default), and only dependents whose recorded

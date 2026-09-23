@@ -177,8 +177,13 @@ pub trait InheritedView: Clone + 'static + Sized {
 
     /// Should dependents be notified when this View updates?
     ///
-    /// Called when a new InheritedView replaces an old one.
-    /// If this returns `true`, all dependents will be rebuilt.
+    /// Called when a new InheritedView replaces an old one. It feeds the
+    /// **default** [`changed_fields`](Self::changed_fields): `true` means every
+    /// field (`FieldMask::ALL`), `false` means none. The notify path reads only
+    /// `changed_fields`, so a provider that overrides that method (a
+    /// `#[derive(InheritedData)]` data type) never has this one consulted —
+    /// keep it consistent (`self.data != old.data`) for readers of the code,
+    /// but it is not a second gate.
     fn update_should_notify(&self, old: &Self) -> bool;
 
     /// Which fields changed since `old` — the field-granular form of
@@ -354,6 +359,17 @@ mod tests {
             element.behavior().dependents().get(&dep1).map(|e| e.depth),
             Some(5)
         );
+        // Masks union across registrations (two reads of different fields in
+        // one build); the depth is the latest.
+        element
+            .behavior_mut()
+            .add_dependent(dep2, 6, FieldMask::bit(1));
+        element
+            .behavior_mut()
+            .add_dependent(dep2, 7, FieldMask::bit(2));
+        let entry = element.behavior().dependents()[&dep2];
+        assert_eq!(entry.depth, 7);
+        assert_eq!(entry.mask, FieldMask::bit(1) | FieldMask::bit(2));
 
         element.behavior_mut().remove_dependent(dep1);
         assert_eq!(element.behavior().dependents().len(), 1);
@@ -382,5 +398,44 @@ mod tests {
 
         // Same theme should not notify
         assert!(!provider_same.update_should_notify(&provider1));
+    }
+
+    #[test]
+    fn field_mask_bit_union_intersects_is_empty() {
+        let a = FieldMask::bit(0);
+        let b = FieldMask::bit(63);
+        assert!(FieldMask::NONE.is_empty());
+        assert!(!a.is_empty());
+        assert!(!a.intersects(b));
+        let both = a.union(b);
+        assert!(both.intersects(a) && both.intersects(b));
+        assert_eq!(a | b, both);
+        let mut acc = FieldMask::NONE;
+        acc |= b;
+        assert_eq!(acc, b);
+        assert!(FieldMask::ALL.intersects(a) && FieldMask::ALL.intersects(b));
+        assert!(!FieldMask::NONE.intersects(FieldMask::ALL));
+        assert_eq!(FieldMask::bit(3).bits(), 0b1000);
+    }
+
+    #[test]
+    #[should_panic(expected = "FieldMask carries 64 fields")]
+    fn field_mask_bit_out_of_range_panics() {
+        let _ = FieldMask::bit(64);
+    }
+
+    #[test]
+    fn changed_fields_defaults_to_all_or_none_from_update_should_notify() {
+        let a = TestThemeProvider {
+            theme: TestTheme { color: 1 },
+            child: DummyView,
+        };
+        let same = a.clone();
+        let other = TestThemeProvider {
+            theme: TestTheme { color: 2 },
+            child: DummyView,
+        };
+        assert_eq!(a.changed_fields(&same), FieldMask::NONE);
+        assert_eq!(a.changed_fields(&other), FieldMask::ALL);
     }
 }

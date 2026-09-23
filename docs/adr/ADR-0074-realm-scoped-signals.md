@@ -256,12 +256,16 @@ The prototype's effects phase ran only in the headless harness, never in the pro
 (`draw_frame_impl`), which is the first of ADR-0075's requirements. Until then, side effects
 run from callbacks, `did_update_view`, or realm commands.
 
-### 5.5 One registry for signals and `InheritedView` field masks (#1090)
+### 5.5 One scheduler and one discipline, two registries: `InheritedView` field masks (#1090)
 
 The reader set keyed by `SignalSlot` is the same *kind* of edge #1090 needs keyed by
 `(provider TypeId, field bit)`: a dependent recorded with what it read, notified only when
-that changed. Epic **A4** lands the field-mask half on the inherited path with one
-discipline and one code path:
+that changed. Epic **A4** lands the field-mask half on the inherited path with the same
+scheduler (`schedule_build_for`, `RebuildReason::DependencyChange`) and the same discipline
+(re-derive the read set on every build, below) — but in its own registry
+(`InheritedBehavior::dependents` + the reverse index in `InheritedDependencies`), not the
+signal arena. Structural unification of the two registries is #1254's question, not this
+section's claim:
 
 - `FieldMask(u64)` and the opt-in `#[derive(InheritedData)]` (one `FIELD_<NAME>` constant
   per field plus `field_mask_diff`) on the provider's data type;
@@ -274,6 +278,21 @@ discipline and one code path:
 - `MediaQuery::size_of(cx)` / `text_scale_factor_of` / … and `Theme::color_scheme_of` /
   `text_theme_of` (plus the general `depend_on_fields(cx, mask, f)`) are the field
   accessors; `MediaQuery::of` / `Theme::of` keep the whole-provider dependency.
+
+**Mapping decision — reset-on-build (deliberate divergence from Flutter).** Flutter's
+`Element._dependencies` and `InheritedElement._dependents` accumulate from the first
+`dependOnInheritedElement` until unmount: a widget that read `MediaQuery.sizeOf` once keeps
+rebuilding on size changes even after it stopped reading it. Here the fields an element is
+recorded as reading at each of its providers are those of its **latest** build: in the
+build drain (`BuildOwner::drain_build_scope`, right after the element's `build` — the
+signal registry re-derives its reader set in the same build) the element's masks at its previous providers reset to `NONE`, the
+build's reads re-accumulate from the dependency sink, and a provider entry still at `NONE`
+afterwards is removed (and dropped from the reverse index). The `LayoutBuilder`-scoped
+drain goes through the same function, so it does the same for the elements it builds. The signal registry got the same rule in §5.1;
+`a_rebuild_re_derives_the_field_set_so_a_dropped_read_stops_depending` in
+`media_query_fields.rs` pins it (read `size` in the first build, `text_scale_factor` in the
+second → a later size-only change rebuilds nothing). Cost: one hash lookup per previous
+provider per build; benefit: no stale rebuilds from reads a conditional branch stopped making.
 
 #1090's acceptance tests (`crates/flui-widgets/tests/media_query_fields.rs`,
 `crates/flui-material/tests/theme_fields.rs`) pin: a size-only change rebuilds the size

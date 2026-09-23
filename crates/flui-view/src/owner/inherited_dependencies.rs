@@ -41,6 +41,13 @@ impl InheritedDependencies {
     /// Remove an active dependency from the reverse index.
     ///
     /// Used when a provider itself unmounts and releases its forward map.
+    /// The providers `dependent` currently depends on (a copy; empty when
+    /// none). Used by the build drain to reset the dependent's masks before
+    /// re-deriving them from the build's reads (ADR-0074 §5.5 reset-on-build).
+    pub(crate) fn providers_of(&self, dependent: ElementId) -> ProviderIds {
+        self.active.get(&dependent).cloned().unwrap_or_default()
+    }
+
     pub(crate) fn unregister(&mut self, dependent: ElementId, provider: ElementId) {
         let Some(providers) = self.active.get_mut(&dependent) else {
             return;

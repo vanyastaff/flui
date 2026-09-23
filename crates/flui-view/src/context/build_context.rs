@@ -552,14 +552,8 @@ pub trait BuildContextExt: BuildContext {
     /// let color: Option<Color> = ctx.depend_on::<MyTheme, _>(|t| t.data().primary_color);
     /// ```
     fn depend_on<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
-        let mut result: Option<R> = None;
-        let mut once = Some(f);
-        self.depend_on_inherited(TypeId::of::<T>(), &mut |any| {
-            if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
-                result = Some(call(typed));
-            }
-        });
-        result
+        // One path: the whole-provider dependency is the ALL mask.
+        self.depend_on_field::<T, R>(crate::view::FieldMask::ALL, f)
     }
 
     /// Look up data from an ancestor InheritedView (without dependency).

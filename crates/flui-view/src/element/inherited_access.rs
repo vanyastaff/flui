@@ -82,6 +82,16 @@ pub trait InheritedElementAccess {
         mask: crate::view::FieldMask,
     );
 
+    /// Reset the fields `dependent` is recorded as reading to `FieldMask::NONE`
+    /// (keeping its depth), right before the build drain re-applies the reads
+    /// of its latest build. A no-op when the id is not registered.
+    fn reset_dependent_mask(&mut self, dependent: ElementId);
+
+    /// Drop `dependent` if its mask is still `NONE` after the build's reads
+    /// were re-applied — the build no longer read this provider. Returns
+    /// whether an entry was removed.
+    fn prune_unread_dependent(&mut self, dependent: ElementId) -> bool;
+
     /// Release a dependent during deactivate or unmount.
     ///
     /// The reverse ownership index supplies the exact provider ids, so

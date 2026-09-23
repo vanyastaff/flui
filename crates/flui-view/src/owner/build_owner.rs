@@ -1880,6 +1880,21 @@ impl BuildOwner {
                     });
                 }
             }
+            // Reset-on-build (ADR-0074 §5.5, a deliberate divergence from Flutter,
+            // whose `_dependencies` accumulate until unmount): the fields this
+            // element is recorded as reading at each of its providers go back
+            // to NONE, the build's own reads are re-applied from the sink, and a
+            // provider it no longer read drops the entry. A field read only in
+            // an earlier build therefore stops rebuilding this element.
+            let previous_providers = self.inherited_dependencies.providers_of(id);
+            for provider in &previous_providers {
+                if let Some(accessor) = tree
+                    .get_mut(*provider)
+                    .and_then(|node| node.element_mut().as_inherited_mut())
+                {
+                    accessor.reset_dependent_mask(id);
+                }
+            }
             for record in dep_sink.into_inner() {
                 let Some(node) = tree.get_mut(record.provider) else {
                     continue;
@@ -1890,6 +1905,15 @@ impl BuildOwner {
                 accessor.record_dependent(record.dependent, record.depth, record.mask);
                 self.inherited_dependencies
                     .register(record.dependent, record.provider);
+            }
+            for provider in previous_providers {
+                let pruned = tree
+                    .get_mut(provider)
+                    .and_then(|node| node.element_mut().as_inherited_mut())
+                    .is_some_and(|accessor| accessor.prune_unread_dependent(id));
+                if pruned {
+                    self.inherited_dependencies.unregister(id, provider);
+                }
             }
 
             // ── Phase 2: reconcile the returned views against the node's

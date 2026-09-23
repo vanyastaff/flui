@@ -166,15 +166,38 @@ fn changing_one_theme_slot_rebuilds_that_slots_readers_and_whole_theme_readers_o
 }
 
 #[test]
-fn the_whole_theme_reader_rebuilds_for_any_slot_and_slot_masks_are_distinct() {
+fn changing_the_text_theme_rebuilds_text_readers_and_whole_theme_readers_only() {
+    let c = counters();
     let base = ThemeData::light();
-    let mut other = base.clone();
-    other.text_theme = ThemeData::dark().text_theme;
-    let changed = flui_view::InheritedData::field_mask_diff(&base, &other);
-    assert!(changed.intersects(ThemeData::FIELD_TEXT_THEME));
-    assert!(!changed.intersects(ThemeData::FIELD_COLOR_SCHEME));
-    assert!(
-        flui_view::FieldMask::ALL.intersects(changed),
-        "a whole-type dependent sees every change"
+    let mut laid = lay_out(Theme::new(base.clone(), subtree(&c)), loose(4000.0));
+    assert_eq!(total(&c.text), PER_KIND as u32);
+
+    // Only the text theme changes.
+    let mut retexted = base.clone();
+    retexted.text_theme = ThemeData::dark().text_theme;
+    assert_ne!(
+        retexted.text_theme, base.text_theme,
+        "test setup: the slot must differ"
+    );
+    assert_eq!(
+        retexted.color_scheme, base.color_scheme,
+        "test setup: color scheme untouched"
+    );
+    laid.pump_widget(Theme::new(retexted, subtree(&c)));
+
+    assert_eq!(
+        total(&c.text),
+        2 * PER_KIND as u32,
+        "text-theme readers rebuilt"
+    );
+    assert_eq!(
+        total(&c.whole),
+        2 * PER_KIND as u32,
+        "whole-theme readers rebuilt"
+    );
+    assert_eq!(
+        total(&c.color),
+        PER_KIND as u32,
+        "color-scheme readers did NOT rebuild"
     );
 }

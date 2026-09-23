@@ -73,6 +73,30 @@ impl StatelessView for NonDependent {
     }
 }
 
+/// Reads `size` while `read_size` is true, `text_scale_factor` otherwise;
+/// the switch is flipped from outside between builds.
+#[derive(Clone, StatelessView)]
+struct SwitchingReader {
+    read_size: Rc<Cell<bool>>,
+    builds: Count,
+}
+
+impl StatelessView for SwitchingReader {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.builds.set(self.builds.get() + 1);
+        let side = if self.read_size.get() {
+            MediaQuery::size_of(ctx)
+                .expect("MediaQuery ancestor")
+                .width
+                .0
+                / 100.0
+        } else {
+            MediaQuery::text_scale_factor_of(ctx).expect("MediaQuery ancestor")
+        };
+        SizedBox::new(side, 1.0)
+    }
+}
+
 /// Stops parent-driven rebuilds so only dependency notifications reach the
 /// leaves.
 #[derive(Clone)]
@@ -257,4 +281,52 @@ fn padding_and_insets_masks_are_distinct_fields() {
     assert!(changed.intersects(MediaQueryData::FIELD_VIEW_INSETS));
     assert!(!changed.intersects(MediaQueryData::FIELD_PADDING));
     assert!(!changed.intersects(MediaQueryData::FIELD_SIZE));
+}
+
+#[test]
+fn a_rebuild_re_derives_the_field_set_so_a_dropped_read_stops_depending() {
+    // Reset-on-build (ADR-0074 §5.5 mapping decision): the fields an element
+    // is recorded as reading are those of its LATEST build, not the union of
+    // every build since mount (Flutter accumulates `_dependencies` until
+    // unmount). Read `size` in the first build and `text_scale_factor` in the
+    // second: a later size-only change must not rebuild the element.
+    let read_size = Rc::new(Cell::new(true));
+    let builds = count();
+    let reader = SwitchingReader {
+        read_size: Rc::clone(&read_size),
+        builds: Rc::clone(&builds),
+    };
+    let wrap = |reader: &SwitchingReader| {
+        use flui_view::ViewExt;
+        StaticChild {
+            inner: reader.clone().boxed(),
+        }
+    };
+    let mut laid = lay_out(
+        MediaQuery::new(data(800.0, 1.0), wrap(&reader)),
+        loose(4000.0),
+    );
+    assert_eq!(builds.get(), 1);
+
+    // Second build, triggered by the size it read; it now reads only the scale.
+    read_size.set(false);
+    laid.pump_widget(MediaQuery::new(data(900.0, 1.0), wrap(&reader)));
+    assert_eq!(builds.get(), 2, "the size change rebuilt the reader");
+
+    // Size-only change: the last build did not read size, so no rebuild.
+    laid.pump_widget(MediaQuery::new(data(1000.0, 1.0), wrap(&reader)));
+    assert_eq!(
+        builds.get(),
+        2,
+        "a field read only in an earlier build no longer rebuilds the element"
+    );
+
+    // The field it does read still does.
+    laid.pump_widget(MediaQuery::new(data(1000.0, 1.5), wrap(&reader)));
+    assert_eq!(builds.get(), 3, "a scale change rebuilds the reader");
+    assert_eq!(
+        laid.size(laid.current_root()).width,
+        px(1.5),
+        "the reader rendered the new scale"
+    );
 }

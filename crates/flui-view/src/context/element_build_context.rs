@@ -292,9 +292,9 @@ impl BuildContext for ElementBuildContext {
         // Walk ancestors looking for an Element whose view_type_id
         // matches; the first one is the nearest InheritedView<T>.
         //
-        // Records this element in the matched InheritedElement's
-        // dependent map so a subsequent rebuild with
-        // `update_should_notify == true` schedules us for rebuild.
+        // Records this element (with the fields it read, #1090) in the
+        // matched InheritedElement's dependent map so a later provider update
+        // whose `changed_fields` intersects that mask schedules us for rebuild.
         //
         // Flutter parity: `framework.dart:5081`
         // `dependOnInheritedWidgetOfExactType` -> the matched

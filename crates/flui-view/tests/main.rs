@@ -47,6 +47,8 @@ mod global_key_duplication;
 mod global_key_reparent;
 #[path = "greeting_widget_loc_golden.rs"]
 mod greeting_widget_loc_golden;
+#[path = "inherited_data_derive.rs"]
+mod inherited_data_derive;
 #[path = "inherited_dependency.rs"]
 mod inherited_dependency;
 #[path = "key_roundtrip.rs"]
