@@ -172,7 +172,10 @@ Measured against the previous two-slice scope (2026-09-22, M1/8 GB,
 crate above it rebuilds): `--no-run` 437.1 s + 107.7 s = 544.8 s before,
 326.1 s after; `debug/examples` 1.7 GB with 125 linked example binaries
 before, empty after. Test names: 9754 + 58 runs = 9769 distinct tests before
-(43 ran twice), 9769 after, none lost.
+(43 ran twice), 9769 after, none lost. This was measured on a target
+directory shared between worktrees, before the per-checkout rule below; the
+timings are indicative, and CI on the change is the authority for the test
+set.
 
 ### Nested-cargo tests
 
@@ -214,34 +217,36 @@ Where their builds go: each nested build needs a target directory other than
 the outer one, because under `cargo test` the outer Cargo holds its build lock
 for the whole run. The template and facade-consumer builds use
 `cli-template-check/` and `facade-consumer-check/` under the workspace target
-directory as Cargo resolves it (`cargo metadata`'s `target_directory`, so a
-`CARGO_TARGET_DIR` is honored: their registry dependencies stay warm across
-checkouts that share it, while the FLUI crates themselves rebuild per checkout,
-because a path dependency's location is part of its build hash). Before this,
-they wrote to `<checkout>/target` whatever `CARGO_TARGET_DIR` said: 5-9 GB of
-private cache per checkout. trybuild keeps its own `tests/trybuild/` there, since
+directory as Cargo resolves it (`cargo metadata`'s `target_directory`), so a
+`CARGO_TARGET_DIR` is honored. Before this, they wrote to `<checkout>/target`
+whatever `CARGO_TARGET_DIR` said. trybuild keeps its own `tests/trybuild/` there, since
 it builds with a different `--cfg` and would thrash a shared cache. Nothing
 prunes these three directories: they grow with every FLUI version and feature
 set built through them (1.5-3 GB each is normal). `just clean-nested` deletes
 them, safe whenever no test run is using them; `just clean-stale` bounds the
 main target directory the same way (oldest artifacts first, via cargo-sweep).
 
-**Limitation of a shared `CARGO_TARGET_DIR`.** trybuild writes each suite's
-generated project into `<target>/tests/trybuild/<crate>/`. Two checkouts
-sharing one target directory and running the same trybuild suite at the same
-time overwrite each other's project: a race, reported as a spurious failure.
-Run test stages from one checkout at a time, or give each checkout its own
-target directory for tests. Sharing is safe for `check`, `clippy` and builds,
-which Cargo serializes on its lock.
+**One target directory per checkout; never share one between worktrees.**
+Pointing several worktrees at one `CARGO_TARGET_DIR` looks like a cache and is
+not sound. Cargo records a workspace crate's sources in its fingerprint
+relative to the package, so the same unit (crate + features + profile) built
+in two worktrees gets the same artifact name and the same fingerprint. When
+worktree A rebuilds that unit later than B from different sources, B's next
+build compares its own files' mtimes with A's newer artifact, finds it fresh,
+and links A's code. On 2026-09-22 this compiled `flui-view` against a
+`flui-foundation` without `RebuildReason::COUNT` although the checkout's own
+source defines it, reproducibly, while `-p flui-view` alone (another feature
+set, another unit) built fine. A green run can come from someone else's
+source just as easily. trybuild adds a second failure: it writes each suite's
+project to `<target>/tests/trybuild/<crate>/`, so two checkouts running the
+same suite at once overwrite each other's project.
 
-A shared target is a cache, not a guarantee. On 2026-09-22 a `just ci` in one
-worktree failed to compile `flui-view` against a `flui-foundation` that lacked
-a constant its own source defined (`RebuildReason::COUNT`), and the same
-`cargo test -p flui-view --no-run` passed immediately afterwards with nothing
-else building. The stale artifact's origin was not established. So an
-inexplicable compile error under a shared `CARGO_TARGET_DIR` is re-run first,
-and a result that has to be trusted on its own (a merge gate, a measurement)
-comes from a checkout's own target directory.
+So:
+- each worktree builds into its own `target/` (leave `CARGO_TARGET_DIR` unset,
+  or point it inside the worktree);
+- local compilation before a PR is optional; the proof is CI, which builds
+  from scratch;
+- a worktree's `target/` is deleted with the worktree once its branch merges.
 
 ## Build
 

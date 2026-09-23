@@ -999,8 +999,9 @@ install-hooks:
     @echo "core.hooksPath -> scripts/githooks (git push --no-verify still bypasses it)"
 
 # The target directory keeps every version and feature set ever built into it
-# -- several worktrees sharing one CARGO_TARGET_DIR held 17 copies of
-# libflui_types at once -- and nothing prunes it. `cargo sweep` resolves the
+# and nothing prunes it (one CARGO_TARGET_DIR shared by several worktrees held
+# 17 copies of libflui_types at once; sharing one is not allowed any more --
+# docs/testing.md). `cargo sweep` resolves the
 # directory through `cargo metadata`, so CARGO_TARGET_DIR is honored. Deleting
 # artifacts under a running build fails that build ("No such file" in
 # .fingerprint/deps): run these only while nothing builds from this target.
