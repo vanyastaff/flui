@@ -19,14 +19,60 @@ use parking_lot::{Mutex, MutexGuard};
 
 static CLIPBOARD: Mutex<()> = Mutex::new(());
 
-/// Proof that the caller holds the process-wide clipboard lock.
-pub(crate) type SessionLock = MutexGuard<'static, ()>;
+/// Proof that the caller holds the process-wide clipboard lock; releases it
+/// on drop.
+pub(crate) struct SessionLock {
+    _guard: MutexGuard<'static, ()>,
+    #[cfg(debug_assertions)]
+    _reentrancy: reentrancy::Marker,
+}
 
 /// Blocks until no other FLUI clipboard session in this process is open.
 /// Hold the returned lock from before `OpenClipboard` until after
-/// `CloseClipboard`. Not reentrant.
+/// `CloseClipboard`.
+///
+/// Not reentrant: acquiring again on a thread that already holds it would
+/// deadlock silently, so debug builds panic on that instead.
 pub(crate) fn acquire() -> SessionLock {
-    CLIPBOARD.lock()
+    #[cfg(debug_assertions)]
+    let reentrancy = reentrancy::Marker::enter();
+    SessionLock {
+        _guard: CLIPBOARD.lock(),
+        #[cfg(debug_assertions)]
+        _reentrancy: reentrancy,
+    }
+}
+
+/// Debug-build detection of a nested [`acquire`] on one thread.
+#[cfg(debug_assertions)]
+mod reentrancy {
+    use std::cell::Cell;
+
+    thread_local! {
+        static SESSION_OPEN: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Marks this thread as holding the clipboard lock until dropped.
+    pub(super) struct Marker;
+
+    impl Marker {
+        /// Runs before the lock is taken, so a nested acquire panics
+        /// instead of blocking on the lock its own thread holds.
+        pub(super) fn enter() -> Self {
+            let already_open = SESSION_OPEN.with(|open| open.replace(true));
+            assert!(
+                !already_open,
+                "clipboard session lock acquired again on the thread that holds it:                  the lock is not reentrant, so this would deadlock"
+            );
+            Self
+        }
+    }
+
+    impl Drop for Marker {
+        fn drop(&mut self) {
+            SESSION_OPEN.with(|open| open.set(false));
+        }
+    }
 }
 
 /// Runs `session` — a call that opens and closes the clipboard itself, such
@@ -77,6 +123,20 @@ mod tests {
         });
         writer.join().expect("clipboard writer thread panicked");
         reader.join().expect("clipboard reader thread panicked");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "not reentrant")]
+    fn a_nested_acquire_on_one_thread_panics_instead_of_deadlocking() {
+        let _outer = super::acquire();
+        let _inner = super::acquire();
+    }
+
+    #[test]
+    fn releasing_the_lock_lets_the_same_thread_take_it_again() {
+        drop(super::acquire());
+        drop(super::acquire());
     }
 
     #[test]
