@@ -481,7 +481,7 @@ impl StatefulView for WorkloadDriver {
 }
 
 impl ViewState<WorkloadDriver> for WorkloadDriverState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         if let Some(handle) = ctx.post_frame_handle() {
             *self.probe.post_frame.lock() = Some(handle);
         }

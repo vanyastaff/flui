@@ -100,7 +100,7 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::Size;
 use flui_types::painting::Clip;
 use flui_types::typography::TextDirection;
-use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, RebuildHandle, ViewExt, ViewState};
 
 use crate::animated::VsyncScope;
@@ -586,7 +586,7 @@ impl StatefulView for Dismissible {
 }
 
 impl ViewState<Dismissible> for DismissibleState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
 
         let rebuild_for_value = rebuild.clone();
@@ -1680,7 +1680,7 @@ mod tests {
     }
 
     impl ViewState<RebuildHandleCapture> for RebuildHandleCaptureState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             let _prev = self.captured.borrow_mut().replace(ctx.rebuild_handle());
         }
 

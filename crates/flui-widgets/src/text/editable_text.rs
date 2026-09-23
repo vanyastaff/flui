@@ -883,7 +883,7 @@ impl EditableTextState {
 }
 
 impl ViewState<EditableText> for EditableTextState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.focus_manager = Some(ctx.focus_manager());
 
         // Resolve the focus parent first, but attach only after every
@@ -1158,7 +1158,7 @@ impl ViewState<EditableText> for EditableTextState {
         self.focus_node.set_can_request_focus(new_view.enabled);
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let parent = crate::__private::enclosing_focus_parent(ctx);
         if self
             .parent

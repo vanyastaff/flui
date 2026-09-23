@@ -650,7 +650,7 @@ mod tests {
     }
 
     impl ViewState<InitStatePanicProbe> for InitStatePanicProbeState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             (self.run)(ctx);
         }
 

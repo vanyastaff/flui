@@ -188,7 +188,7 @@ pub(crate) struct RouteSubtreeAnchorState {
 }
 
 impl ViewState<RouteSubtreeAnchor> for RouteSubtreeAnchorState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.cell.publish_element(ctx.element_id());
     }
 

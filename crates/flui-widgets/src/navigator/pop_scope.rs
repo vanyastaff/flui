@@ -254,7 +254,7 @@ impl ViewState<PopScope> for PopScopeState {
     /// `ModalRoute.registerPopEntry` (`routes.dart:2117`), through the route's
     /// ambient registry. A `PopScope` outside any route finds none and stays
     /// inert.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         if let Some(registry) = ctx.get::<PopEntryScope, _>(|scope| scope.registry.clone()) {
             registry.register(Arc::clone(&self.entry));
             self.registry = Some(registry);

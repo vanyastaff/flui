@@ -198,11 +198,11 @@ impl StatefulView for FocusRoot {
 }
 
 impl ViewState<FocusRoot> for FocusRootState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.manager = Some(ctx.focus_manager());
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.manager = Some(ctx.focus_manager());
     }
 
@@ -670,7 +670,7 @@ impl ViewState<Focus> for FocusState {
     /// an external node before mount is observed when attach fulfills it
     /// (`_FocusState.initState` + `didChangeDependencies`,
     /// `focus_scope.dart:565-630`).
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.focus_manager = Some(ctx.focus_manager());
         self.rebuild_handle = Some(ctx.rebuild_handle());
         let parent = enclosing_focus_parent(ctx);
@@ -689,7 +689,7 @@ impl ViewState<Focus> for FocusState {
         self.try_autofocus();
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         // The provider changed: move the node — with focus — under the new
         // parent. `_focusAttachment.reparent()` in `didChangeDependencies`
         // (`focus_scope.dart:618-623`), via ADR-0022's adopt.
@@ -832,7 +832,7 @@ impl ViewState<Focus> for FocusState {
 pub fn install_rect_provider(
     node: &Rc<FocusNode>,
     anchor: &SubtreeAnchor,
-    ctx: &dyn BuildContext,
+    ctx: &dyn LifecycleContext,
 ) -> (RectProvider, FocusNodeRegistration) {
     let anchor = anchor.clone();
     let owner = ctx.pipeline_owner();
@@ -992,7 +992,7 @@ impl FocusScopeState {
 }
 
 impl ViewState<FocusScope> for FocusScopeState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.focus_manager = Some(ctx.focus_manager());
         self.rebuild_handle = Some(ctx.rebuild_handle());
         self.focus_listener_id = Some(self.add_focus_listener(self.scope.as_focus_node()));
@@ -1005,7 +1005,7 @@ impl ViewState<FocusScope> for FocusScopeState {
         self.parent = Some(parent);
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         // An enclosing provider changed: move this scope — subtree, focus and
         // all — under the new parent (ADR-0022).
         let parent = enclosing_focus_parent(ctx);

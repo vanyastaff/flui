@@ -81,7 +81,7 @@ impl StatefulView for AgentCounter {
 }
 
 impl ViewState<AgentCounter> for AgentCounterState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.count.bind(ctx);
     }
 

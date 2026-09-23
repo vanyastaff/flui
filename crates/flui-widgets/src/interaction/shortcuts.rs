@@ -363,11 +363,11 @@ impl StatefulView for DefaultFocusTraversal {
 }
 
 impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.focus_owner = Some(ctx.focus_manager());
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.focus_owner = Some(ctx.focus_manager());
     }
 

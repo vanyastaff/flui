@@ -106,7 +106,7 @@ struct LocalPostFrameProbeState {
 }
 
 impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = self.rebuild.lock().replace(ctx.rebuild_handle());
         let handle = ctx
             .local_post_frame_handle()
@@ -149,7 +149,7 @@ impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
 }
 
 impl ViewState<PostFrameProbe> for PostFrameProbeState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let handle = ctx
             .post_frame_handle()
             .expect("the binding must install a PostFrameHandle");

@@ -8,7 +8,7 @@
 mod build_context;
 mod element_build_context;
 
-pub use build_context::{BuildContext, BuildContextExt};
+pub use build_context::{BuildContext, BuildContextExt, LifecycleContext};
 pub use element_build_context::{ElementBuildContext, ElementBuildContextBuilder};
 // Build-time borrowed context + its deferred dependent-record (PR-K). Crate
 // -internal: constructed by the behaviors during `build_scope`, applied by

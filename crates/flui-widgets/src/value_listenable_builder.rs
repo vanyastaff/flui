@@ -44,7 +44,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::{ListenerId, ValueListenable};
-use flui_view::context::BuildContext;
+use flui_view::context::{BuildContext, LifecycleContext};
 use flui_view::element::ElementKind;
 use flui_view::{BoxedView, IntoView, RebuildHandle, StatefulView, View, ViewExt, ViewState};
 
@@ -207,7 +207,7 @@ impl<T: 'static> ValueListenableBuilderState<T> {
 
 impl<T: 'static> ViewState<ValueListenableBuilder<T>> for ValueListenableBuilderState<T> {
     /// `_ValueListenableBuilderState.initState`: subscribe to the listenable.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.handle = Some(ctx.rebuild_handle());
         self.subscribe();
     }

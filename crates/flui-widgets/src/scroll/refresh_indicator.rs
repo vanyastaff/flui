@@ -45,7 +45,9 @@ use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::Color;
 use flui_view::prelude::StatefulView;
-use flui_view::{BuildContext, BuildContextExt, Child, IntoView, ViewExt, ViewState};
+use flui_view::{
+    BuildContext, BuildContextExt, Child, IntoView, LifecycleContext, ViewExt, ViewState,
+};
 
 use crate::animated::VsyncScope;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
@@ -408,7 +410,7 @@ impl StatefulView for RefreshIndicator {
 }
 
 impl ViewState<RefreshIndicator> for RefreshIndicatorState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // Push the fling simulation's current pixel value into the scroll
         // controller on each tick — the same wiring Scrollable uses.
         let fling_ref = self.fling_controller.clone();

@@ -608,7 +608,7 @@ struct FeedbackAnchorState {
 }
 
 impl ViewState<FeedbackAnchor> for FeedbackAnchorState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.signal.publish_rebuild(ctx.rebuild_handle());
     }
 
@@ -763,7 +763,7 @@ struct DragOriginState {
 }
 
 impl ViewState<DragOrigin> for DragOriginState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.node.set(ctx.find_render_object());
     }
 
@@ -1220,7 +1220,7 @@ impl<T: Clone + Send + Sync + 'static> StatefulView for Draggable<T> {
 }
 
 impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableState<T> {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let arena = GestureArenaScope::of(ctx);
         let rebuild = ctx.rebuild_handle();
 
@@ -1320,7 +1320,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     /// `BuildContext`. Re-resolved on every dependency change, not just once:
     /// `Overlay::maybe_of` depends (ADR-0036), so a *different* enclosing
     /// overlay later replacing this one is exactly what re-fires this hook.
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = std::mem::replace(&mut *self.overlay.lock(), Overlay::maybe_of(ctx));
         let _prev = std::mem::replace(&mut *self.hit_test.borrow_mut(), ctx.hit_test_handle());
         let _prev = std::mem::replace(&mut *self.pipeline.borrow_mut(), ctx.pipeline_owner());
@@ -1491,7 +1491,7 @@ mod tests {
     }
 
     impl ViewState<RebuildHandleCapture> for RebuildHandleCaptureState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             let _prev = self.captured.borrow_mut().replace(ctx.rebuild_handle());
         }
 

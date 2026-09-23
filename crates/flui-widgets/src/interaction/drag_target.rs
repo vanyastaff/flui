@@ -651,7 +651,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<DragTarget<T>> for DragTargetSt
     /// Publishes the target's rebuild capability into the slot, so a
     /// transition driven from a gesture callback can refresh the builder — a
     /// lifecycle hook, never `build` (port-check trigger #22).
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.slot.publish_rebuild(ctx.rebuild_handle());
     }
 

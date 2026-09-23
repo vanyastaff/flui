@@ -156,7 +156,7 @@ mod probe {
     }
 
     impl ViewState<ProbeRoot> for ProbeRootState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             if let Some(handle) = ctx.post_frame_handle() {
                 schedule_frame_observer(handle, Arc::clone(&self.witness));
             }

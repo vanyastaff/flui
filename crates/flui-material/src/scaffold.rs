@@ -507,7 +507,7 @@ impl StatefulView for Scaffold {
 }
 
 impl ViewState<Scaffold> for ScaffoldState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.rebuild = Some(ctx.rebuild_handle());
         self.element_id = Some(ctx.element_id());
         // The primary, guaranteed-to-run registration point — see this
@@ -516,7 +516,7 @@ impl ViewState<Scaffold> for ScaffoldState {
         self.sync_messenger_registration(ctx);
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         // Best-effort re-home: `ScaffoldMessengerScope::maybe_of` is a
         // no-dependency ambient lookup (`ctx.get`, not `ctx.depend_on`),
         // per its own doc — so this hook only fires here if some OTHER

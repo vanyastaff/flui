@@ -214,7 +214,7 @@ impl TabBarViewState {
 }
 
 impl ViewState<TabBarView> for TabBarViewState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.rebuild = Some(ctx.rebuild_handle());
     }
 

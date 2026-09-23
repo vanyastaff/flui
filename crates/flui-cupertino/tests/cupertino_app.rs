@@ -238,7 +238,7 @@ impl flui_view::StatefulView for BrightnessRoot {
 }
 
 impl flui_view::ViewState<BrightnessRoot> for BrightnessRootState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.source.rebuild.set(Some(ctx.rebuild_handle()));
     }
 

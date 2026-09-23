@@ -111,7 +111,7 @@ impl StatefulView for SignalOwner {
 }
 
 impl ViewState<SignalOwner> for SignalOwnerState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let own = ctx.signal(7u32);
         self.published.set(Some(own));
         self.own = Some(own);

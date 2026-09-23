@@ -2624,7 +2624,7 @@ impl ViewState<Navigator> for NavigatorState {
     /// continuation later schedules through (`settle_wake`, ADR-0064) —
     /// lifecycle-only, per trigger #22 — alongside the other three
     /// lifecycle-only captures below.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // The navigator owns the clock its route transitions
         // register with — the FLUI shape of Flutter's `vsync: navigator!`. Read
         // once, here, exactly as `AnimatedSize`/`Scrollable` read theirs.

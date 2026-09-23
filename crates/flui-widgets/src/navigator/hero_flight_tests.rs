@@ -819,7 +819,7 @@ struct MoverState {
 }
 
 impl ViewState<Mover> for MoverState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = self.rebuild.lock().replace(ctx.rebuild_handle());
     }
 
@@ -1148,7 +1148,7 @@ struct HeroGateState {
     tag_name: &'static str,
 }
 impl ViewState<HeroGate> for HeroGateState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = self.rebuild.lock().replace(ctx.rebuild_handle());
     }
     fn build(&self, _view: &HeroGate, _ctx: &dyn BuildContext) -> impl IntoView {

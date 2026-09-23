@@ -483,7 +483,7 @@ pub struct InteractiveViewerState {
 }
 
 impl ViewState<InteractiveViewer> for InteractiveViewerState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.pipeline_cell = ctx.pipeline_owner();
     }
 

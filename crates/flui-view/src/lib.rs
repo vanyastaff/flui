@@ -177,7 +177,10 @@ pub use binding::GlobalKeyRegistryComposite;
 // Child helpers
 pub use child::{Child, Children};
 // Context
-pub use context::{BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder};
+pub use context::{
+    BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder,
+    LifecycleContext,
+};
 // Element types
 pub use element::Lifecycle;
 // Notification system
@@ -264,7 +267,7 @@ pub mod prelude {
     pub use crate::InheritedData;
 
     // Logging
-    pub use crate::context::{BuildContext, BuildContextExt};
+    pub use crate::context::{BuildContext, BuildContextExt, LifecycleContext};
     pub use crate::{
         binding::{
             AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation,

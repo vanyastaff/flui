@@ -40,7 +40,7 @@ struct Root;
 struct State;
 impl StatefulView for Root { type State=State; fn create_state(&self)->State { State } }
 impl ViewState<Root> for State {
-    fn init_state(&mut self, ctx:&dyn BuildContext) {
+    fn init_state(&mut self, ctx:&dyn LifecycleContext) {
         let pipeline=ctx.pipeline_owner().expect("real pipeline");
         SNAPSHOT.with(|slot| *slot.borrow_mut()=Some(Box::new(move || pipeline.with(|owner| {
             let tree=owner.render_tree();

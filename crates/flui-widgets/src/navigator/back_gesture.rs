@@ -472,7 +472,7 @@ impl std::fmt::Debug for BackGestureDetectorState {
 }
 
 impl ViewState<BackGestureDetector> for BackGestureDetectorState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.recognizer = Some(self.build_recognizer(ctx));
     }
 

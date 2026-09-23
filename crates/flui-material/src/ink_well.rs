@@ -283,7 +283,7 @@ impl StatefulView for InkWell {
 }
 
 impl ViewState<InkWell> for InkWellState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // ADR-0018: `rebuild_handle()` is acquired here, fired later (from
         // the states-controller listener and the press-deactivation status
         // listener below) — never called from `build`.

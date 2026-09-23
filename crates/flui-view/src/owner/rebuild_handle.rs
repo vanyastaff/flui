@@ -75,7 +75,7 @@ struct Active {
 /// # Example
 ///
 /// ```rust,ignore
-/// fn init_state(&mut self, ctx: &dyn BuildContext) {
+/// fn init_state(&mut self, ctx: &dyn LifecycleContext) {
 ///     let handle = ctx.rebuild_handle();
 ///     std::thread::spawn(move || {
 ///         let value = expensive();
@@ -181,7 +181,7 @@ mod tests {
     use flui_types::geometry::px;
 
     use crate::{
-        BuildOwner, RebuildHandle, RebuildReason,
+        BuildOwner, LifecycleContext, RebuildHandle, RebuildReason,
         context::BuildContext,
         tree::ElementTree,
         view::{IntoView, RenderView, RootRenderView, StatefulView, View, ViewState},
@@ -215,7 +215,7 @@ mod tests {
     }
 
     impl ViewState<Capturing> for CapturingState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             // The capability outlives the borrow of `ctx`.
             let _prev = self.captured.lock().replace(ctx.rebuild_handle());
         }

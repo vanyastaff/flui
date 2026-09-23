@@ -634,7 +634,7 @@ impl ScaffoldMessengerHandle {
     /// [`Self::new`]'s doc for why this is deferred out of construction, and
     /// the module docs' "Deferring `on_closed` out of the build phase"
     /// section for what the post-frame handle is for.
-    pub(crate) fn attach(&self, ctx: &dyn BuildContext) {
+    pub(crate) fn attach(&self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
         let rebuild_for_listener = rebuild.clone();
         self.shared
@@ -917,7 +917,7 @@ impl StatefulView for ScaffoldMessenger {
 }
 
 impl ViewState<ScaffoldMessenger> for ScaffoldMessengerState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.handle.attach(ctx);
     }
 

@@ -12,7 +12,7 @@
 //!
 //! - `RebuildHandle` — captured in `init_state`, called from the task's
 //!   completion to schedule a rebuild. Never acquired in `build`.
-//! - `AsyncDriver` — reached through [`BuildContext::async_driver`], which
+//! - `AsyncDriver` — reached through [`LifecycleContext::async_driver`], which
 //!   yields the driver *this binding's frame step polls*. The task is spawned
 //!   with `spawn_local_eager`, so an immediately-ready future completes inline.
 //! - [`AsyncSnapshot`] / [`ConnectionState`] — the state machine.
@@ -53,7 +53,7 @@ use parking_lot::Mutex;
 use super::async_slot::{InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, apply_fold};
 use crate::{
     RebuildHandle,
-    context::BuildContext,
+    context::{BuildContext, LifecycleContext},
     view::{IntoView, StatefulView, View, ViewState},
 };
 
@@ -296,7 +296,7 @@ where
     E: Send + Sync + 'static,
 {
     /// `_FutureBuilderState.initState`: seed from `initialData`, then subscribe.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // Capture the capabilities here — the ONLY lifecycle hook handed a
         // context. `did_update_view` and `dispose` receive none.
         self.handle = Some(ctx.rebuild_handle());

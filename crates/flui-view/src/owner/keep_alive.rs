@@ -154,7 +154,7 @@ impl KeepAliveHolds {
 ///     lease: Option<KeepAliveLease>,
 /// }
 ///
-/// fn init_state(&mut self, ctx: &dyn BuildContext) {
+/// fn init_state(&mut self, ctx: &dyn LifecycleContext) {
 ///     self.keep_alive = ctx.keep_alive_handle();
 /// }
 ///
@@ -218,7 +218,7 @@ impl KeepAliveHandle {
 /// }
 ///
 /// impl ViewState<Editor> for EditorState {
-///     fn init_state(&mut self, ctx: &dyn BuildContext) {
+///     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
 ///         self.keep_alive = ctx.keep_alive_lease();
 ///     }
 /// }

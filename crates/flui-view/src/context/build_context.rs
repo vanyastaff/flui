@@ -40,7 +40,11 @@ pub(crate) mod sealed {
 /// - Dependency injection (InheritedView lookups)
 /// - Ancestor lookups (find ancestors by type)
 /// - Dirty marking for rebuilds
-/// - Presentation-owned lifecycle capabilities such as focus and text input
+/// - Signal reads (`signals` feature)
+///
+/// Presentation capabilities (rebuild scheduling, post-frame work, focus, text
+/// input, keep-alive, the render tree) live on [`LifecycleContext`], which only
+/// lifecycle hooks receive.
 ///
 /// # Important Notes
 ///
@@ -122,30 +126,6 @@ pub trait BuildContext: sealed::Sealed {
     /// Only valid in debug builds.
     fn is_building(&self) -> bool;
 
-    // ========================================================================
-    // Rebuild capability
-    // ========================================================================
-
-    /// An owned, `'static` handle that schedules **this** element for rebuild on
-    /// the next frame.
-    ///
-    /// Capture it in `ViewState::init_state` (or `did_change_dependencies`) and
-    /// call [`RebuildHandle::schedule`](crate::RebuildHandle::schedule) from a
-    /// completion callback on any thread. `schedule()` only writes to
-    /// `BuildOwner`'s shared inbox and requests a frame; the rebuild itself runs
-    /// on the frame thread inside `build_scope`.
-    ///
-    /// # Never acquire this during `build`
-    ///
-    /// Scheduling from `build` is an unbounded rebuild loop, and scheduling from
-    /// layout or paint would rebuild the tree mid-frame. `scripts/port-check.sh`
-    /// trigger **#22** rejects `rebuild_handle()` in `build` / `perform_layout` /
-    /// `paint` / composite bodies, as [`FOUNDATIONS.md`] requires of any
-    /// out-of-catalog `mark_needs_build` driver.
-    ///
-    /// [`FOUNDATIONS.md`]: ../../../docs/FOUNDATIONS.md
-    fn rebuild_handle(&self) -> crate::RebuildHandle;
-
     /// The realm's reactive graph (ADR-0074). Reachable from every lifecycle
     /// hook and callback; the graph is owned by the `BuildOwner`.
     #[cfg(feature = "signals")]
@@ -155,146 +135,6 @@ pub trait BuildContext: sealed::Sealed {
     /// Called by `Signal::get`/`with`; a no-op outside a build.
     #[cfg(feature = "signals")]
     fn signal_read(&self, slot: crate::reactive::SignalSlot);
-
-    /// The binding's frame-driven async task driver, if a binding
-    /// installed one.
-    ///
-    /// Spawn subscriptions from `ViewState::init_state` / `did_change_dependencies`
-    /// and hold the returned [`crate::TaskToken`] in the state — dropping it cancels.
-    ///
-    /// `None` when the tree is not bound to a binding (a bare `ElementTree` in a
-    /// unit test), reported honestly rather than by silently spawning into a
-    /// driver nobody polls. Never reach for some OTHER binding's or realm's
-    /// `UpdateScheduler` from a widget: `HeadlessBinding` drives its own
-    /// binding-local `UpdateScheduler`, and a production `UiRealm` likewise owns
-    /// its own — a task spawned into the wrong one would never run.
-    fn async_driver(&self) -> Option<crate::AsyncDriver>;
-
-    /// The binding's post-frame capability — schedule work that must observe this
-    /// frame's committed layout. The callback receives [`crate::FrameTiming`].
-    ///
-    /// `None` when no binding installed one. Acquire it in a lifecycle hook
-    /// (`init_state` / `did_change_dependencies`), never in `build`/layout/paint —
-    /// the same rule `rebuild_handle` follows (port-check trigger #22).
-    fn post_frame_handle(&self) -> Option<crate::PostFrameHandle>;
-
-    /// The binding's OWNER-LOCAL post-frame capability — like
-    /// [`post_frame_handle`](Self::post_frame_handle), but the returned handle
-    /// may capture `Rc`/`RefCell` state (it is `!Send`) because it addresses
-    /// its lane directly rather than through the scheduler's cross-thread
-    /// queue. This is what real widget code wants almost always: the tree is
-    /// itself owner-affine, and `schedule_local`'s callback runs on the same
-    /// thread that acquired the handle. Callbacks registered here and
-    /// callbacks registered on [`post_frame_handle`](Self::post_frame_handle)
-    /// (this frame's, on either handle, from anywhere) run in exactly one
-    /// order — the order they were registered in, not "shared queue first" or
-    /// "local queue first" — so interleaving the two is well-defined.
-    ///
-    /// Scheduling returns [`crate::LocalPostFrameScheduleError`] if its lane has closed.
-    ///
-    /// `None` when no binding installed one. Acquire it in a lifecycle hook
-    /// (`init_state` / `did_change_dependencies`), never in
-    /// `build`/layout/paint — the same rule `post_frame_handle` follows
-    /// (port-check trigger #22).
-    fn local_post_frame_handle(&self) -> Option<crate::LocalPostFrameHandle>;
-
-    /// The binding's IME/text-input attach-detach capability, if a binding
-    /// installed one.
-    ///
-    /// The presentation-owned `flui_interaction::TextInputOwner` installs a
-    /// concrete weak `TextInputHandle` into its build owner during realm
-    /// construction. `flui-widgets`, where `EditableText` lives, can therefore
-    /// attach and detach its client without naming the application layer or
-    /// selecting an ambient "current" presentation.
-    ///
-    /// `None` when no binding installed one (a bare `ElementTree` in a unit
-    /// test). Acquire it in a lifecycle hook (`init_state` /
-    /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
-    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
-
-    /// The realm's fresh-hit-test capability, if a binding installed an
-    /// interaction lane.
-    ///
-    /// Answers "what is under this global position **right now**" — which is
-    /// not a question pointer dispatch can answer. Dispatch resolves a
-    /// hit-test path once, at `PointerDown`, and replays that cached route for
-    /// every later `Move`/`Up`, so a gesture that moves over something new
-    /// never learns about it. `DragTarget` discovery is the case that needs
-    /// this: the reference re-tests at the pointer's *current* position on
-    /// every move, deliberately independent of where the drag went down.
-    ///
-    /// The snapshot returned is owned and immediately stale — the ids in it
-    /// name render objects that a later frame may have moved or dropped.
-    /// Dispatch from it synchronously; do not store it.
-    ///
-    /// `None` when no binding installed an interaction lane (a bare
-    /// `ElementTree` in a unit test). Acquire it in a lifecycle hook
-    /// (`init_state` / `did_change_dependencies`), never in
-    /// `build`/layout/paint — port-check trigger #22. Mid-frame the answer
-    /// would describe a tree the asking phase is still mutating.
-    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle>;
-
-    /// Take a keep-alive hold on the lazy sliver child this element lives
-    /// inside, so it survives scrolling out of the cache band.
-    ///
-    /// Always issued, **including when this element is not currently inside a
-    /// lazy sliver**. The hold names its holder, not a child; the child is
-    /// resolved when eviction asks. So a lease taken outside a list simply
-    /// holds nothing, and starts holding if the element is later grafted into
-    /// one — which a `GlobalKey` state moved into a list does. Refusing here
-    /// instead would make that refusal permanent: `init_state` is the only
-    /// guaranteed acquisition point, `activate` and `did_update_view` receive
-    /// no context, and acquiring from `build` is forbidden.
-    ///
-    /// The returned [`KeepAliveLease`](crate::owner::KeepAliveLease) releases
-    /// the hold when it drops, so keeping the child alive is exactly "keep the
-    /// lease in your `ViewState`". Several descendants may each hold
-    /// independently; the child survives while any of them does.
-    ///
-    /// Acquire it in a lifecycle hook (`init_state` /
-    /// `did_change_dependencies`), never inside `build`, `perform_layout` or
-    /// `paint` — the same rule `post_frame_handle` and `text_input_handle`
-    /// follow, enforced by `scripts/check-frame-capability-scope.sh`. A hold
-    /// taken during a frame phase would be re-taken on every rebuild.
-    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease;
-
-    /// A retained capability to take keep-alive holds later.
-    ///
-    /// [`Self::keep_alive_lease`] takes one hold now, which serves an item
-    /// that is keep-worthy from the start. This serves the case it cannot: a
-    /// state that becomes keep-worthy *after* `init_state` — an editor that
-    /// becomes dirty, a video that starts playing — or one that releases a
-    /// hold and later needs another. There is no second lifecycle hook to ask
-    /// from, so the capability is acquired once and the holds are taken from
-    /// it whenever the answer changes. Same shape, and same reason, as
-    /// [`rebuild_handle`](Self::rebuild_handle).
-    ///
-    /// Acquire it in `init_state` / `did_change_dependencies`, never inside a
-    /// frame phase — enforced by `scripts/check-frame-capability-scope.sh`.
-    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle;
-
-    /// Presentation-local lifecycle observation. Acquire in `init_state` or
-    /// `did_change_dependencies`, never in build/layout/paint. Bare owners
-    /// without a presentation source return `None`.
-    fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
-        None
-    }
-
-    /// This element tree's exact focus manager.
-    ///
-    /// A build owner always has one focus tree, so this capability is
-    /// non-optional. Acquire and retain it from `ViewState::init_state` or
-    /// `did_change_dependencies`; use the retained `Rc` from later input or
-    /// lifecycle callbacks.
-    ///
-    /// # Never acquire this during `build`
-    ///
-    /// Imperative focus changes can synchronously notify listeners and schedule
-    /// rebuilds. Acquiring the manager from `build`, layout, paint, or
-    /// compositing makes that side effect part of a frame phase and can create
-    /// re-entrant or unbounded frame work. Port-check trigger #22 guards
-    /// `focus_manager()` alongside the other lifecycle-only capabilities.
-    fn focus_manager(&self) -> std::rc::Rc<flui_interaction::FocusManager>;
 
     // ========================================================================
     // Inherited Data (Dependency Injection)
@@ -454,43 +294,6 @@ pub trait BuildContext: sealed::Sealed {
     /// The RenderObject ID if found, None otherwise.
     fn find_render_object(&self) -> Option<flui_foundation::RenderId>;
 
-    /// The render tree this element is mounted in.
-    ///
-    /// [`find_render_object`](Self::find_render_object) hands out a `RenderId`, and
-    /// a `RenderId` alone answers nothing: geometry lives in the
-    /// [`PipelineOwner`](flui_rendering::pipeline::PipelineOwner) that owns the
-    /// node. Flutter has no equivalent because a Dart `RenderObject` *is* the
-    /// handle — `renderObject.size`, `renderObject.getTransformTo(ancestor)`
-    /// (`heroes.dart:952`, `:999`, `:1014-1018`). This is that reference,
-    /// reified.
-    ///
-    /// The returned [`PipelineCell`](flui_rendering::pipeline::PipelineCell) is an
-    /// owner-local, closure-scoped handle to the whole render tree's owner
-    /// (`!Send + !Sync`, shallow-shares the same underlying `PipelineOwner` on
-    /// `clone`): `with`/`with_mut` run a closure against it, and `with_mut`
-    /// panics if called while any `with`/`with_mut` borrow from the same cell
-    /// is already live on the call stack (see `PipelineCell`'s own docs for the
-    /// full reentrancy contract).
-    ///
-    /// # This IS a frame capability (port-check trigger #22)
-    ///
-    /// Acquire it in `ViewState::init_state`/`did_change_dependencies`, store
-    /// it, and use it later from a callback — never call this method from
-    /// `build`/`layout`/`paint`; the capability-scope scanner
-    /// (`scripts/check-frame-capability-scope.sh`) enforces this mechanically.
-    /// The hazard isn't the acquisition itself (a bare handle is inert) —
-    /// it's that a `build`/`layout`/`paint` body calling `.with_mut()`
-    /// synchronously on it would reenter the pipeline mid-transaction, which
-    /// `PipelineCell::with_mut`'s own reentrancy guard turns into an
-    /// immediate panic rather than a silent, ill-timed mid-build mutation.
-    /// What this method is *for* is the opposite direction: code outside the
-    /// tree (a routing observer, a `HeroController`) holding an owned handle
-    /// so it can resolve a `RenderId` to geometry from a post-frame callback,
-    /// after layout commits — not a synchronous read mid-build.
-    ///
-    /// `None` before the element is mounted under a pipeline owner.
-    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell>;
-
     // ========================================================================
     // Tree Traversal
     // ========================================================================
@@ -542,6 +345,224 @@ pub trait BuildContext: sealed::Sealed {
     ///
     /// Corresponds to Flutter's `BuildContext.dispatchNotification()`.
     fn dispatch_notification(&self, notification: &dyn crate::element::Notification);
+}
+
+/// The context a [`ViewState`](crate::ViewState) lifecycle hook receives:
+/// everything [`BuildContext`] offers, plus the **presentation capabilities**.
+///
+/// A capability is a handle that acts on presentation state outside the
+/// build/layout/paint transaction — scheduling a rebuild, queueing post-frame
+/// work, attaching an IME client, moving focus, holding a lazy child alive,
+/// reaching the render tree. Taken from `build` it would be re-acquired on
+/// every rebuild, and firing it there would feed the frame that is still
+/// running (an unbounded rebuild loop, or a mutation after `build_scope`).
+///
+/// So the capabilities are reachable only from
+/// [`ViewState::init_state`](crate::ViewState::init_state) and
+/// [`ViewState::did_change_dependencies`](crate::ViewState::did_change_dependencies),
+/// which receive `&dyn LifecycleContext`. `build` receives `&dyn BuildContext`,
+/// where these methods do not exist — the rule is a type error, not a review
+/// comment (ADR-0078). Acquire the handle in a hook, keep it in the state, and
+/// fire it from a callback:
+///
+/// ```compile_fail,E0599
+/// use flui_view::BuildContext;
+///
+/// fn build_body(ctx: &dyn BuildContext) {
+///     let _ = ctx.rebuild_handle();
+/// }
+/// ```
+///
+/// Sealed like [`BuildContext`]: only `flui-view`'s contexts implement it.
+pub trait LifecycleContext: BuildContext {
+    /// An owned, `'static` handle that schedules **this** element for rebuild on
+    /// the next frame.
+    ///
+    /// Capture it in `ViewState::init_state` (or `did_change_dependencies`) and
+    /// call [`RebuildHandle::schedule`](crate::RebuildHandle::schedule) from a
+    /// completion callback on any thread. `schedule()` only writes to
+    /// `BuildOwner`'s shared inbox and requests a frame; the rebuild itself runs
+    /// on the frame thread inside `build_scope`.
+    ///
+    /// # Never acquire this during `build`
+    ///
+    /// Scheduling from `build` is an unbounded rebuild loop, and scheduling from
+    /// layout or paint would rebuild the tree mid-frame. Only lifecycle hooks
+    /// receive a [`LifecycleContext`], so `build` cannot reach this method.
+    fn rebuild_handle(&self) -> crate::RebuildHandle;
+
+    /// The binding's frame-driven async task driver, if a binding
+    /// installed one.
+    ///
+    /// Spawn subscriptions from `ViewState::init_state` / `did_change_dependencies`
+    /// and hold the returned [`crate::TaskToken`] in the state — dropping it cancels.
+    ///
+    /// `None` when the tree is not bound to a binding (a bare `ElementTree` in a
+    /// unit test), reported honestly rather than by silently spawning into a
+    /// driver nobody polls. Never reach for some OTHER binding's or realm's
+    /// `UpdateScheduler` from a widget: `HeadlessBinding` drives its own
+    /// binding-local `UpdateScheduler`, and a production `UiRealm` likewise owns
+    /// its own — a task spawned into the wrong one would never run.
+    fn async_driver(&self) -> Option<crate::AsyncDriver>;
+
+    /// The binding's post-frame capability — schedule work that must observe this
+    /// frame's committed layout. The callback receives [`crate::FrameTiming`].
+    ///
+    /// `None` when no binding installed one. Acquire it in a lifecycle hook
+    /// (`init_state` / `did_change_dependencies`), never in `build`/layout/paint —
+    /// the same rule `rebuild_handle` follows.
+    fn post_frame_handle(&self) -> Option<crate::PostFrameHandle>;
+
+    /// The binding's OWNER-LOCAL post-frame capability — like
+    /// [`post_frame_handle`](Self::post_frame_handle), but the returned handle
+    /// may capture `Rc`/`RefCell` state (it is `!Send`) because it addresses
+    /// its lane directly rather than through the scheduler's cross-thread
+    /// queue. This is what real widget code wants almost always: the tree is
+    /// itself owner-affine, and `schedule_local`'s callback runs on the same
+    /// thread that acquired the handle. Callbacks registered here and
+    /// callbacks registered on [`post_frame_handle`](Self::post_frame_handle)
+    /// (this frame's, on either handle, from anywhere) run in exactly one
+    /// order — the order they were registered in, not "shared queue first" or
+    /// "local queue first" — so interleaving the two is well-defined.
+    ///
+    /// Scheduling returns [`crate::LocalPostFrameScheduleError`] if its lane has closed.
+    ///
+    /// `None` when no binding installed one. Acquire it in a lifecycle hook
+    /// (`init_state` / `did_change_dependencies`), never in
+    /// `build`/layout/paint — the same rule `post_frame_handle` follows.
+    fn local_post_frame_handle(&self) -> Option<crate::LocalPostFrameHandle>;
+
+    /// The binding's IME/text-input attach-detach capability, if a binding
+    /// installed one.
+    ///
+    /// The presentation-owned `flui_interaction::TextInputOwner` installs a
+    /// concrete weak `TextInputHandle` into its build owner during realm
+    /// construction. `flui-widgets`, where `EditableText` lives, can therefore
+    /// attach and detach its client without naming the application layer or
+    /// selecting an ambient "current" presentation.
+    ///
+    /// `None` when no binding installed one (a bare `ElementTree` in a unit
+    /// test). Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
+    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
+
+    /// The realm's fresh-hit-test capability, if a binding installed an
+    /// interaction lane.
+    ///
+    /// Answers "what is under this global position **right now**" — which is
+    /// not a question pointer dispatch can answer. Dispatch resolves a
+    /// hit-test path once, at `PointerDown`, and replays that cached route for
+    /// every later `Move`/`Up`, so a gesture that moves over something new
+    /// never learns about it. `DragTarget` discovery is the case that needs
+    /// this: the reference re-tests at the pointer's *current* position on
+    /// every move, deliberately independent of where the drag went down.
+    ///
+    /// The snapshot returned is owned and immediately stale — the ids in it
+    /// name render objects that a later frame may have moved or dropped.
+    /// Dispatch from it synchronously; do not store it.
+    ///
+    /// `None` when no binding installed an interaction lane (a bare
+    /// `ElementTree` in a unit test). Acquire it in a lifecycle hook
+    /// (`init_state` / `did_change_dependencies`), never in
+    /// `build`/layout/paint. Mid-frame the answer
+    /// would describe a tree the asking phase is still mutating.
+    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle>;
+
+    /// Take a keep-alive hold on the lazy sliver child this element lives
+    /// inside, so it survives scrolling out of the cache band.
+    ///
+    /// Always issued, **including when this element is not currently inside a
+    /// lazy sliver**. The hold names its holder, not a child; the child is
+    /// resolved when eviction asks. So a lease taken outside a list simply
+    /// holds nothing, and starts holding if the element is later grafted into
+    /// one — which a `GlobalKey` state moved into a list does. Refusing here
+    /// instead would make that refusal permanent: `init_state` is the only
+    /// guaranteed acquisition point, `activate` and `did_update_view` receive
+    /// no context, and acquiring from `build` is forbidden.
+    ///
+    /// The returned [`KeepAliveLease`](crate::owner::KeepAliveLease) releases
+    /// the hold when it drops, so keeping the child alive is exactly "keep the
+    /// lease in your `ViewState`". Several descendants may each hold
+    /// independently; the child survives while any of them does.
+    ///
+    /// Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), never inside `build`, `perform_layout` or
+    /// `paint` — the same rule `post_frame_handle` and `text_input_handle`
+    /// follow. A hold taken during a frame phase would be re-taken on every
+    /// rebuild.
+    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease;
+
+    /// A retained capability to take keep-alive holds later.
+    ///
+    /// [`Self::keep_alive_lease`] takes one hold now, which serves an item
+    /// that is keep-worthy from the start. This serves the case it cannot: a
+    /// state that becomes keep-worthy *after* `init_state` — an editor that
+    /// becomes dirty, a video that starts playing — or one that releases a
+    /// hold and later needs another. There is no second lifecycle hook to ask
+    /// from, so the capability is acquired once and the holds are taken from
+    /// it whenever the answer changes. Same shape, and same reason, as
+    /// [`rebuild_handle`](Self::rebuild_handle).
+    ///
+    /// Acquire it in `init_state` / `did_change_dependencies`, never inside a
+    /// frame phase.
+    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle;
+
+    /// Presentation-local lifecycle observation. Acquire in `init_state` or
+    /// `did_change_dependencies`, never in build/layout/paint. Bare owners
+    /// without a presentation source return `None`.
+    fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
+        None
+    }
+
+    /// This element tree's exact focus manager.
+    ///
+    /// A build owner always has one focus tree, so this capability is
+    /// non-optional. Acquire and retain it from `ViewState::init_state` or
+    /// `did_change_dependencies`; use the retained `Rc` from later input or
+    /// lifecycle callbacks.
+    ///
+    /// # Never acquire this during `build`
+    ///
+    /// Imperative focus changes can synchronously notify listeners and schedule
+    /// rebuilds. Acquiring the manager from `build`, layout, paint, or
+    /// compositing makes that side effect part of a frame phase and can create
+    /// re-entrant or unbounded frame work.
+    fn focus_manager(&self) -> std::rc::Rc<flui_interaction::FocusManager>;
+
+    /// The render tree this element is mounted in.
+    ///
+    /// [`find_render_object`](BuildContext::find_render_object) hands out a `RenderId`, and
+    /// a `RenderId` alone answers nothing: geometry lives in the
+    /// [`PipelineOwner`](flui_rendering::pipeline::PipelineOwner) that owns the
+    /// node. Flutter has no equivalent because a Dart `RenderObject` *is* the
+    /// handle — `renderObject.size`, `renderObject.getTransformTo(ancestor)`
+    /// (`heroes.dart:952`, `:999`, `:1014-1018`). This is that reference,
+    /// reified.
+    ///
+    /// The returned [`PipelineCell`](flui_rendering::pipeline::PipelineCell) is an
+    /// owner-local, closure-scoped handle to the whole render tree's owner
+    /// (`!Send + !Sync`, shallow-shares the same underlying `PipelineOwner` on
+    /// `clone`): `with`/`with_mut` run a closure against it, and `with_mut`
+    /// panics if called while any `with`/`with_mut` borrow from the same cell
+    /// is already live on the call stack (see `PipelineCell`'s own docs for the
+    /// full reentrancy contract).
+    ///
+    /// # This IS a frame capability
+    ///
+    /// Acquire it in `ViewState::init_state`/`did_change_dependencies`, store
+    /// it, and use it later from a callback — never from `build`/`layout`/
+    /// `paint`. The hazard isn't the acquisition itself (a bare handle is inert) —
+    /// it's that a `build`/`layout`/`paint` body calling `.with_mut()`
+    /// synchronously on it would reenter the pipeline mid-transaction, which
+    /// `PipelineCell::with_mut`'s own reentrancy guard turns into an
+    /// immediate panic rather than a silent, ill-timed mid-build mutation.
+    /// What this method is *for* is the opposite direction: code outside the
+    /// tree (a routing observer, a `HeroController`) holding an owned handle
+    /// so it can resolve a `RenderId` to geometry from a post-frame callback,
+    /// after layout commits — not a synchronous read mid-build.
+    ///
+    /// `None` before the element is mounted under a pipeline owner.
+    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell>;
 }
 
 /// Extension trait for typed InheritedView lookups.
@@ -822,6 +843,7 @@ impl<C: BuildContext + ?Sized> BuildContextExt for C {}
 mod tests {
     use super::*;
 
-    // Check that BuildContext is object-safe
+    // Check that both context traits are object-safe
     fn _assert_object_safe(_: &dyn BuildContext) {}
+    fn _assert_lifecycle_object_safe(_: &dyn LifecycleContext) {}
 }

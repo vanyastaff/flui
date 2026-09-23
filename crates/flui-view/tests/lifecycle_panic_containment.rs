@@ -59,8 +59,8 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
     AnimatedView, BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementNode, ElementTree,
-    ErrorView, GlobalKey, InheritedView, IntoView, LifecycleHook, RebuildReason, RecoveredAt,
-    RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
+    ErrorView, GlobalKey, InheritedView, IntoView, LifecycleContext, LifecycleHook, RebuildReason,
+    RecoveredAt, RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -160,7 +160,7 @@ impl StatefulView for InitStatePanicChild {
 }
 
 impl ViewState<InitStatePanicChild> for InitStatePanicChildState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.failed_id.set(Some(ctx.element_id()));
         self.init_calls.set(self.init_calls.get() + 1);
         panic!("induced child init_state panic");
@@ -263,7 +263,7 @@ impl StatefulView for DisposeCounter {
 }
 
 impl ViewState<DisposeCounter> for DisposeCounterState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.init_state_calls.set(self.init_state_calls.get() + 1);
     }
 

@@ -32,7 +32,7 @@ impl StatefulView for DisposeProbeView {
 }
 
 impl ViewState<DisposeProbeView> for DisposeProbeState {
-    fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         let handle = ctx.rebuild_handle();
         let _prev = self.handle_slot.borrow_mut().replace(handle.clone());
         self.handle = Some(handle);

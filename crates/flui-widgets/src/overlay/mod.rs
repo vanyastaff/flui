@@ -639,7 +639,7 @@ impl ViewState<Overlay> for OverlayState {
     ///
     /// `init_state` is the correct hook and the only permitted one: port-check
     /// trigger #22 rejects acquiring a `RebuildHandle` from `build`/layout/paint.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
         self.serving = self.shared.claim_rebuild(&rebuild);
         self.rebuild = Some(rebuild);
@@ -776,7 +776,7 @@ pub(crate) struct OverlayEntryViewState {
 impl ViewState<OverlayEntryView> for OverlayEntryViewState {
     /// Hand this element's rebuild capability to the entry, so
     /// [`OverlayEntry::mark_needs_build`] rebuilds this layer alone.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
         self.element = rebuild.element_id();
         self.entry.publish_rebuild(rebuild);

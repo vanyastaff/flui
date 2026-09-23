@@ -45,7 +45,7 @@ impl StatefulView for Counter {
 }
 
 impl ViewState<Counter> for CounterState {
-    fn init_state(&mut self, cx: &dyn BuildContext) {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
         // Creation and a write from a lifecycle hook: legal.
         let count = cx.signal(self.view.seed);
         let other = cx.signal(0u32);

@@ -621,8 +621,8 @@ mod did_change_dependencies_on_inherited_update {
 
     use flui_view::{
         BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementTree, ErrorView,
-        InheritedView, IntoView, LifecycleHook, RebuildReason, RecoveredAt, RenderView,
-        StatefulView, StatelessView, View, ViewExt, ViewState,
+        InheritedView, IntoView, LifecycleContext, LifecycleHook, RebuildReason, RecoveredAt,
+        RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
     };
 
     use super::{DummyChild, LeafView, MyTheme};
@@ -659,7 +659,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl ViewState<ProbeDependent> for ProbeDependentState {
-        fn did_change_dependencies(&mut self, _ctx: &dyn BuildContext) {
+        fn did_change_dependencies(&mut self, _ctx: &dyn LifecycleContext) {
             self.dcd_calls += 1;
             self.probe
                 .lock()
@@ -1056,7 +1056,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl ViewState<PanicDcd> for PanicDcdState {
-        fn did_change_dependencies(&mut self, _ctx: &dyn BuildContext) {
+        fn did_change_dependencies(&mut self, _ctx: &dyn LifecycleContext) {
             panic!("induced did_change_dependencies panic (build-window panic-safety test)");
         }
 
@@ -1706,7 +1706,8 @@ mod build_window_panic_restores_slot {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use flui_view::{
-        BuildContext, BuildOwner, ElementTree, IntoView, StatefulView, View, ViewExt, ViewState,
+        BuildContext, BuildOwner, ElementTree, IntoView, LifecycleContext, StatefulView, View,
+        ViewExt, ViewState,
     };
 
     use super::LeafView;
@@ -1726,7 +1727,7 @@ mod build_window_panic_restores_slot {
     }
 
     impl ViewState<PanicOnInit> for PanicOnInitState {
-        fn init_state(&mut self, _ctx: &dyn BuildContext) {
+        fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
             panic!("induced init_state panic (build-window panic-safety test)");
         }
 

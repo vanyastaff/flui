@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_interaction::FocusNode;
-use flui_view::prelude::{BuildContext, StatefulView, StatelessView};
+use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView, StatelessView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
 // Only the `#[cfg(debug_assertions)]` invalid-configuration tests drive a tree
 // by hand and assert on the ErrorView substitution, which is debug-only.
@@ -57,7 +57,7 @@ impl std::fmt::Debug for FocusLifecycleProbeState {
 }
 
 impl ViewState<FocusLifecycleProbe> for FocusLifecycleProbeState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.init_count.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -195,7 +195,7 @@ impl std::fmt::Debug for AnimationProbeState {
 }
 
 impl ViewState<AnimationProbe> for AnimationProbeState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.init_count.fetch_add(1, Ordering::Relaxed);
         let ambient = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
         // PORT-CHECK-OK-LOCK: plain data: bool, no Drop

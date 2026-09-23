@@ -275,7 +275,7 @@ impl StatefulView for DemoHome {
 }
 
 impl ViewState<DemoHome> for DemoHomeState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.count.bind(ctx);
         self.expanded.bind(ctx);
         self.scroll_offset.bind(ctx);

@@ -3414,7 +3414,7 @@ mod tests {
             TestView
         }
 
-        fn did_change_dependencies(&mut self, _ctx: &dyn crate::BuildContext) {
+        fn did_change_dependencies(&mut self, _ctx: &dyn crate::LifecycleContext) {
             self.dependency_calls.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -4321,7 +4321,7 @@ mod tests {
     }
 
     impl crate::ViewState<MidDrainLeaf> for MidDrainLeafState {
-        fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
             if let Some(slot) = &self.handle_slot {
                 let _prev = slot.lock().replace(ctx.rebuild_handle());
             }
@@ -4486,7 +4486,7 @@ mod tests {
     }
 
     impl crate::ViewState<MidDrainSelfRescheduler> for MidDrainSelfReschedulerState {
-        fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
             let _prev = self.handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
@@ -4548,7 +4548,7 @@ mod tests {
     }
 
     impl crate::ViewState<MidDrainCountedRescheduler> for MidDrainCountedReschedulerState {
-        fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
             let _prev = self.handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
@@ -4605,7 +4605,7 @@ mod tests {
     }
 
     impl crate::ViewState<MidDrainChainLink> for MidDrainChainLinkState {
-        fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
             let _prev = self.own_handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
@@ -4659,7 +4659,7 @@ mod tests {
     }
 
     impl crate::ViewState<MidDrainRootPanic> for MidDrainRootPanicState {
-        fn did_change_dependencies(&mut self, _ctx: &dyn crate::BuildContext) {
+        fn did_change_dependencies(&mut self, _ctx: &dyn crate::LifecycleContext) {
             assert!(
                 !self.trigger_panic.load(Ordering::Relaxed),
                 "MidDrainRootPanic: deliberate did_change_dependencies panic"
@@ -5846,7 +5846,7 @@ mod tests {
     }
 
     impl crate::ViewState<StaleIdOldChild> for StaleIdOldChildState {
-        fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
             let _prev = self.handle_slot.lock().replace(ctx.rebuild_handle());
         }
 

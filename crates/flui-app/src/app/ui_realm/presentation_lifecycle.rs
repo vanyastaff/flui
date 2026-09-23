@@ -401,7 +401,7 @@ mod tests {
         }
     }
     impl flui_view::ViewState<SubscriptionView> for SubscriptionState {
-        fn init_state(&mut self, context: &dyn flui_view::BuildContext) {
+        fn init_state(&mut self, context: &dyn flui_view::LifecycleContext) {
             let handle = context
                 .lifecycle_handle()
                 .expect("app presentation capability");

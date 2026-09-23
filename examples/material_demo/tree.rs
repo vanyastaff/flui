@@ -418,7 +418,7 @@ impl StatefulView for FormPage {
 }
 
 impl ViewState<FormPage> for FormPageState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
         self.rebuild = Some(rebuild.clone());
         self.attempt.bind(ctx);
@@ -667,7 +667,7 @@ impl StatefulView for MaterialDemoHome {
 }
 
 impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.rebuild = Some(ctx.rebuild_handle());
         // Lifecycle-only acquisition (ADR-0021, port-check trigger #22) — see
         // `vertical_slice_demo::DemoHomeState::init_state`'s matching comment
@@ -880,7 +880,7 @@ impl StatefulView for CounterTab {
 }
 
 impl ViewState<CounterTab> for CounterTabState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.rebuild = Some(ctx.rebuild_handle());
     }
 

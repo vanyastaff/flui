@@ -20,7 +20,7 @@ use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{AnimatableExt, Animation, ProxyAnimation};
 use flui_objects::RenderAnimatedOpacity;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
     BoxedView, BuildContextExt, IntoView, RenderObjectContext, RenderView, View, ViewExt,
     ViewState, impl_render_view,
@@ -123,7 +123,7 @@ impl StatefulView for AnimatedOpacity {
 }
 
 impl ViewState<AnimatedOpacity> for AnimatedOpacityState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
             self.animation.register(vsync);
         }

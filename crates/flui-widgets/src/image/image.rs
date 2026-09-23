@@ -322,7 +322,7 @@ pub struct ImageState {
 #[cfg(feature = "asset-images")]
 impl ViewState<Image> for ImageState {
     /// `_ImageState.initState`: resolve the provider the widget mounted with.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.resolver.init(ctx);
     }
 

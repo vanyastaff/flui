@@ -232,7 +232,7 @@ fn a_destination_lost_mid_flight_does_not_panic_or_leak() {
         rebuild: Arc<Mutex<Option<flui_view::RebuildHandle>>>,
     }
     impl ViewState<Gate> for GateState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             let _prev = self.rebuild.lock().replace(ctx.rebuild_handle());
         }
         fn build(&self, _v: &Gate, _c: &dyn BuildContext) -> impl IntoView {

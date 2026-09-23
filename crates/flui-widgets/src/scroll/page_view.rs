@@ -50,7 +50,7 @@ use flui_rendering::view::{
 use flui_types::layout::Axis;
 use flui_view::prelude::StatefulView;
 use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, BuildContext, IntoView, ViewExt, ViewState};
+use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{
@@ -647,7 +647,7 @@ impl StatefulView for PageView {
 }
 
 impl ViewState<PageView> for PageViewState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.register_page_listener();
     }
 

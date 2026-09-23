@@ -876,7 +876,7 @@ impl ViewState<Hero> for HeroState {
     /// Everything a hero needs from outside itself is acquired **here**, in the one
     /// lifecycle hook that has a `BuildContext` and is not a frame phase: the route's
     /// registry, the render tree, and the rebuild capability (port-check trigger #22).
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = std::mem::replace(&mut *self.handle.inner.owner.lock(), ctx.pipeline_owner());
         let _prev = self
             .handle

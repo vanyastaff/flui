@@ -343,7 +343,7 @@ struct Counter;
 struct CounterState { count: Option<Signal<u32>> }
 
 impl ViewState<Counter> for CounterState {
-    fn init_state(&mut self, cx: &dyn BuildContext) {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
         self.count = Some(cx.signal(0u32));            // owned by this element,
     }                                                  // released with it
     fn build(&self, _v: &Counter, cx: &dyn BuildContext) -> impl IntoView {

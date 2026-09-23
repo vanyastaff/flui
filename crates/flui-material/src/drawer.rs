@@ -716,7 +716,7 @@ impl StatefulView for DrawerController {
 }
 
 impl ViewState<DrawerController> for DrawerControllerState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
         let _prev = self.core.rebuild.borrow_mut().replace(rebuild.clone());
 

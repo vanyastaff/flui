@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 use flui_animation::{AnimationController, Vsync, VsyncRegistration};
 use flui_foundation::Listenable;
 use flui_view::{
-    BuildContext, BuildContextExt, IntoView, StatefulView, StatelessView, View, ViewState,
+    BuildContext, BuildContextExt, IntoView, LifecycleContext, StatefulView, StatelessView, View,
+    ViewState,
 };
 use flui_widgets::VsyncScope;
 use parking_lot::Mutex;
@@ -192,7 +193,7 @@ impl<V: View + Clone + 'static> ViewState<HistogramProbeInner<V>> for HistogramP
     /// Lifecycle-only (ADR-0021, port-check trigger #22): registers with the
     /// ambient `VsyncScope` and starts the free-running cycle here, never
     /// from `build`.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let Some(controller) = self.controller.as_ref() else {
             return;
         };

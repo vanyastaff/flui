@@ -27,7 +27,7 @@ impl StatefulView for AsyncCaptureProbeView {
 }
 
 impl ViewState<AsyncCaptureProbeView> for AsyncCaptureProbeState {
-    fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         if let Some(driver) = ctx.async_driver() {
             let _prev = self
                 .captured

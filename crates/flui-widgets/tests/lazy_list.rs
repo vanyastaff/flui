@@ -687,7 +687,7 @@ impl StatefulView for ProbeItem {
 }
 
 impl ViewState<ProbeItem> for ProbeItemState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.log.lock().push((self.index, "init"));
     }
     fn build(&self, _view: &ProbeItem, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1244,7 +1244,7 @@ impl StatefulView for KeyedRow {
 }
 
 impl ViewState<KeyedRow> for KeyedRowState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         // One entry per STATE created: a preserved element never adds a
         // second entry for its id, a remounted one does.
         self.log.lock().push(self.born_as);
@@ -1498,7 +1498,7 @@ impl StatefulView for CountingItem {
 }
 
 impl ViewState<CountingItem> for CountingItemState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.log.lock().push("init");
     }
     fn build(&self, _view: &CountingItem, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1665,7 +1665,7 @@ impl StatefulView for KeptItem {
 }
 
 impl ViewState<KeptItem> for KeptItemState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.log.lock().push((self.index, "init"));
         if self.keep {
             self.lease = Some(ctx.keep_alive_lease());
@@ -1839,7 +1839,7 @@ impl StatefulView for ReleasableItem {
 }
 
 impl ViewState<ReleasableItem> for ReleasableItemState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.log.lock().push((self.index, "init"));
         self.lease = Some(ctx.keep_alive_lease());
     }
@@ -2029,7 +2029,7 @@ impl StatefulView for BecomesKeepWorthy {
 }
 
 impl ViewState<BecomesKeepWorthy> for BecomesKeepWorthyState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.log.lock().push((self.index, "init"));
         // The capability, not a hold: nothing is keep-worthy yet.
         self.handle = Some(ctx.keep_alive_handle());

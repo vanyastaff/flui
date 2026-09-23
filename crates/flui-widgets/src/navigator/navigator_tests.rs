@@ -1634,7 +1634,7 @@ mod local_history {
     }
 
     impl ViewState<HandleProbe> for HandleProbeState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             let _prev =
                 std::mem::replace(&mut *self.sink.lock(), LocalHistoryHandle::maybe_of(ctx));
         }

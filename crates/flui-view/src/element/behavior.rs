@@ -20,7 +20,7 @@ use flui_rendering::{
 
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
-    context::{BuildContext, BuildCtx},
+    context::{BuildContext, BuildCtx, LifecycleContext},
     owner::LifecycleHook,
     view::{
         AnimatedView, InheritedView, IntoView, ProxyView, RenderView, StatefulView, StatelessView,
@@ -45,8 +45,17 @@ pub(crate) enum BuildCtxChoice<'a> {
 }
 
 impl BuildCtxChoice<'_> {
-    /// Borrow the chosen context as the object-safe trait.
+    /// Borrow the chosen context as `build` sees it: no presentation
+    /// capabilities.
     pub(crate) fn as_ctx(&self) -> &dyn BuildContext {
+        match self {
+            Self::Live(ctx) => ctx,
+        }
+    }
+
+    /// Borrow the same context as a lifecycle hook sees it, with the
+    /// presentation capabilities of [`LifecycleContext`].
+    pub(crate) fn as_lifecycle_ctx(&self) -> &dyn LifecycleContext {
         match self {
             Self::Live(ctx) => ctx,
         }
@@ -736,7 +745,10 @@ where
         // `init_state` exactly once even if the element is clean.
         if !self.initialized {
             let sink_start = lifecycle_sink_len(owner);
-            let init = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.init_state(ctx)));
+            let lifecycle_ctx = ctx_choice.as_lifecycle_ctx();
+            let init = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                self.state.init_state(lifecycle_ctx);
+            }));
             mark_lifecycle_records(owner, sink_start);
             if let Err(payload) = init {
                 owner.record_armed_lifecycle_panic(
@@ -955,7 +967,8 @@ where
         let ctx_choice = make_build_ctx(core, owner);
         let sink_start = lifecycle_sink_len(owner);
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            self.state.did_change_dependencies(ctx_choice.as_ctx());
+            self.state
+                .did_change_dependencies(ctx_choice.as_lifecycle_ctx());
         }));
         mark_lifecycle_records(owner, sink_start);
         if let Err(payload) = outcome {

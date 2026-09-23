@@ -13,7 +13,7 @@ use std::{any::TypeId, rc::Rc, sync::Arc};
 use flui_interaction::FocusManager;
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementBuildContextBuilder,
-    ElementTree, IntoView, Lifecycle, StatelessView, View, ViewExt,
+    ElementTree, IntoView, Lifecycle, LifecycleContext, StatelessView, View, ViewExt,
 };
 use parking_lot::RwLock;
 use static_assertions::assert_not_impl_any;

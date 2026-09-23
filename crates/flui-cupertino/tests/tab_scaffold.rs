@@ -188,7 +188,7 @@ impl StatefulView for AnimationProbe {
 }
 
 impl ViewState<AnimationProbe> for AnimationProbeState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
             let registration = vsync.register(self.controller.clone());
             self.registration = Some((vsync, registration));
