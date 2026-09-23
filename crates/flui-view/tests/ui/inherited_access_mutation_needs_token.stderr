@@ -1,0 +1,15 @@
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+ --> tests/ui/inherited_access_mutation_needs_token.rs:9:12
+  |
+9 |     access.remove_dependent(dependent);
+  |            ^^^^^^^^^^^^^^^^ --------- argument #1 of type `context::build_context::sealed::CrateToken` is missing
+  |
+note: method defined here
+ --> src/element/inherited_access.rs
+  |
+  |     fn remove_dependent(&mut self, token: crate::context::CrateToken, dependent: ElementId);
+  |        ^^^^^^^^^^^^^^^^
+help: provide the argument
+  |
+9 |     access.remove_dependent(/* context::build_context::sealed::CrateToken */, dependent);
+  |                             +++++++++++++++++++++++++++++++++++++++++++++++++

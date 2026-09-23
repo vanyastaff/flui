@@ -256,19 +256,79 @@ The prototype's effects phase ran only in the headless harness, never in the pro
 (`draw_frame_impl`), which is the first of ADR-0075's requirements. Until then, side effects
 run from callbacks, `did_update_view`, or realm commands.
 
-### 5.5 One registry for signals and `InheritedView` field masks (#1090)
+### 5.5 One scheduler and one discipline, two registries: `InheritedView` field masks (#1090)
 
 The reader set keyed by `SignalSlot` is the same *kind* of edge #1090 needs keyed by
 `(provider TypeId, field bit)`: a dependent recorded with what it read, notified only when
-that changed. The intent is one dependency discipline, not two mechanisms with different
-rules: read-is-depend, re-derived per build, scheduled through the same heap. The field-mask
-half is epic **A4** (branch `a4/inherited-field-masks`), paused until this PR merges; it
-lives on `InheritedBehavior::dependents` (masks per dependent) so `depend_on::<Theme, _>`
-and `depend_on_field::<Theme, _>(Theme::FIELD_COLOR_SCHEME, ..)` share one code path. It
-is not a condition of this ADR (the first draft called it a go-condition; that was
-overreach — an accepted ADR cannot carry an unmet condition). Issue #1254 (ALT-2,
-`#[derive(Observable)]`) asks whether the field-mask registry should become the *only*
-registry with signals as its one-field case; that is decided before the catalog accepts
+that changed. Epic **A4** lands the field-mask half on the inherited path with the same
+scheduler (`schedule_build_for`, `RebuildReason::DependencyChange`) and the same discipline
+(re-derive the read set on every build, below) — but in its own registry
+(`InheritedBehavior::dependents` + the reverse index in `InheritedDependencies`), not the
+signal arena. Structural unification of the two registries is #1254's question, not this
+section's claim:
+
+- `FieldMask<D>` — a 64-bit field set **typed by the provider's data type** — and the
+  opt-in `#[derive(InheritedData)]` (one `FIELD_<NAME>: FieldMask<Self>` constant per field
+  plus `field_mask_diff`). `depend_on_field::<T, _>` takes `FieldMask<T::Data>`, so a
+  selector of another data type is a compile error rather than a silently wrong
+  subscription (a `compile_fail` doctest pins it); element storage and the object-safe
+  context method carry the untyped `FieldSet`; the lowering (`FieldMask::erase`) and the
+  recording helper are crate-private, so outside `flui-view` a `FieldSet` is only `NONE`/`ALL`
+  and the typed selector cannot be bypassed (a second `compile_fail` doctest pins it). The
+  marker is invariant in `D` (`PhantomData<fn(D) -> D>`), so subtyping cannot coerce one data
+  type's mask into another's, and `BuildContext` is sealed so a downstream context cannot
+  forward an erased set to a different provider `TypeId`. Market
+  check: Compose's `derivedStateOf`/`snapshotFlow` and SwiftUI's `@Observable` track reads
+  per property with no untyped selector at all; a typed mask is the closest static shape
+  that keeps one provider type per `TypeId` lookup;
+- `InheritedView::changed_fields(old)` — `ALL`/`NONE` by default from
+  `update_should_notify`, per-field for a provider whose data implements `InheritedData`;
+- `InheritedBehavior::dependents` stores `DependentEntry { depth, mask, lifecycle_mask }`;
+  `on_view_updated` schedules a dependent only if `mask | lifecycle_mask` intersects the
+  changed set. `depend_on::<T, _>` records `FieldSet::ALL` through the same path as
+  `depend_on_field`: whole-provider parity is the degenerate mask, not a second mechanism;
+- `MediaQuery::size_of(cx)` / `text_scale_factor_of` / … and `Theme::color_scheme_of` /
+  `text_theme_of` (plus the general `depend_on_fields(cx, mask, f)`) are the field
+  accessors; `MediaQuery::of` / `Theme::of` keep the whole-provider dependency.
+
+**Mapping decision — reset-on-build (deliberate divergence from Flutter).** Flutter's
+`Element._dependencies` and `InheritedElement._dependents` accumulate from the first
+`dependOnInheritedElement` until unmount: a widget that read `MediaQuery.sizeOf` once keeps
+rebuilding on size changes even after it stopped reading it. Here the fields an element is
+recorded as reading at each of its providers are those of its **latest** build: in the
+build drain (`BuildOwner::drain_build_scope`, right after the element's `build` — the
+signal registry re-derives its reader set in the same build) the element's masks at its previous providers reset to `NONE`, the
+build's reads re-accumulate from the dependency sink, and a provider entry still at `NONE`
+afterwards is removed (and dropped from the reverse index). The `LayoutBuilder`-scoped
+drain goes through the same function, so it does the same for the elements it builds. The signal registry got the same rule in §5.1;
+`a_rebuild_re_derives_the_field_set_so_a_dropped_read_stops_depending` in
+`media_query_fields.rs` pins it (read `size` in the first build, `text_scale_factor` in the
+second → a later size-only change rebuilds nothing). Cost: one hash lookup per previous
+provider per build; benefit: no stale rebuilds from reads a conditional branch stopped making.
+Reset-on-build covers reads made in **`build` only**. A read in `init_state` or
+`did_change_dependencies` is recorded in a separate `lifecycle_mask` that **accumulates until
+unmount**, as in Flutter. It is deliberately not re-derived per `did_change_dependencies`
+call: that hook does not run on the first build after `init_state` here, so resetting on it
+would drop what `init_state` read; the cost is that a conditional read in a lifecycle hook
+stays subscribed until unmount (Flutter's behavior for every read). Why this matters: framework states such as `FocusState` and `DraggableState` acquire an
+inherited value in a lifecycle hook and do not re-read it in `build`, and a rebuild from any
+other cause must not unsubscribe them
+(`a_dependency_acquired_in_a_lifecycle_hook_survives_a_rebuild_that_does_not_reread_it`).
+A build that panics is not evidence of what the element reads: when this element's build is
+recovered with an `ErrorView` (a flag `build_or_recover` sets on the drain's owner, not a
+scan of the diagnostic panic queue), its previous masks are kept and the
+sink's records are only added, and the signal registry likewise restores the previous read set
+when the build unwinds — so the element stays subscribed and rebuilds once the failing
+condition clears (`a_build_that_panics_before_reading_keeps_its_dependency`,
+`a_build_that_unwinds_keeps_its_previous_read_set`).
+
+#1090's acceptance tests (`crates/flui-widgets/tests/media_query_fields.rs`,
+`crates/flui-material/tests/theme_fields.rs`) pin: a size-only change rebuilds the size
+readers and the whole-`of` readers, not the text-scale readers; the reverse; an equal
+provider swap rebuilds nobody; a field reader still rebuilds when its own field changes
+after an unrelated one. `rebuild_exactness` (non-dependents never rebuild) stays.
+Issue #1254 (ALT-2, `#[derive(Observable)]`) asks whether this registry should become the
+*only* one with signals as its one-field case; decided before the catalog accepts
 `Signal<T>` inputs.
 
 ### 5.6 What the three screens look like

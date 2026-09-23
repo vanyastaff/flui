@@ -8,6 +8,27 @@ Versioning: per `docs/release.md` policy.
 
 ### Added
 
+- **Public overlay mutation API** (ADR-0076), re-exported from the crate
+  root: `InsertPosition`, `OverlayHandle::{new, insert,
+  rearrange, is_mounted}`, `Overlay::new`, and `OverlayEntry::{new, remove,
+  mark_needs_build, set_opaque, set_maintain_state, is_attached}`. That is
+  exactly what the navigator drives, which is Flutter's public
+  `OverlayState`/`OverlayEntry` surface. Inserting into an unmounted overlay
+  changes the list and takes effect when an `Overlay` mounts with the same
+  handle again. The API refuses misuse, with a logged error and no panic: an
+  entry lives in one overlay, once, and one handle serves one mounted
+  `Overlay`. An `Overlay` rebuilt with another handle moves onto it.
+
+- **`testing::harness`** (the element-level harness, formerly the
+  crate-private `test_harness`) and **`testing::overlay_probe`**, behind the
+  `testing` feature, which now also enables an optional `flui-platform`
+  dependency for the harness's recording `PlatformTextInput`.
+- **`localization::axis_direction_from_axis_reverse_and_directionality`** is
+  public (Flutter's `getAxisDirectionFromAxisReverseAndDirectionality`).
+- **`__private`** (doc-hidden): workspace-only seams for the sibling widget
+  crates split out of this one (#1272). No semver guarantee; port-check
+  `SEAM/widgets-private` refuses importers outside `crates/flui-*`.
+
 - **`TextEditingController::clear()`/`set_text()`**. `set_text` replaces
   the whole buffer, collapses the caret to the end (a deliberate
   divergence from Flutter's `TextEditingController.text` setter, which
@@ -60,6 +81,9 @@ Versioning: per `docs/release.md` policy.
 
 ### Changed
 
+- `OverlayEntry::remove` on an unmounted overlay now takes the entry out of
+  the list. Previously it returned early, as Flutter does, which left a
+  detached entry for the next mount to build (ADR-0076 §2).
 - **`TextField` renamed to `RawTextField`** (and `TextFieldState` to
   `RawTextFieldState`) — a breaking rename, sanctioned pre-1.0, so the
   facade's `flui::prelude` can give `TextField` one unconditional meaning

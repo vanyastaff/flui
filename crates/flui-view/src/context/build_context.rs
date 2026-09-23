@@ -12,6 +12,27 @@ use std::any::TypeId;
 
 use flui_foundation::ElementId;
 
+/// The seal behind [`BuildContext`]: public-in-private, so no crate outside
+/// `flui-view` can name it or implement it.
+pub(crate) mod sealed {
+    /// Implemented only by `flui-view`'s build contexts.
+    pub trait Sealed {}
+
+    /// Proof that a call comes from inside `flui-view`: the field-granular
+    /// recording method takes one, and only this crate can construct it, so
+    /// the untyped [`FieldSet`](crate::view::FieldSet) entry point is
+    /// uncallable from application code (the sealed-method pattern; sealing
+    /// the trait alone stops implementations, not calls).
+    #[derive(Clone, Copy, Debug)]
+    pub struct CrateToken(());
+
+    impl CrateToken {
+        pub(crate) const fn new() -> Self {
+            Self(())
+        }
+    }
+}
+
 /// Context provided to Views during the build phase.
 ///
 /// `BuildContext` provides Views with:
@@ -48,7 +69,37 @@ use flui_foundation::ElementId;
 ///     }
 /// }
 /// ```
-pub trait BuildContext {
+///
+/// # Sealed
+///
+/// Only `flui-view` implements this trait (the live drain context and
+/// `ElementBuildContext`). A downstream implementation could forward the
+/// untyped [`FieldSet`](crate::view::FieldSet) that
+/// [`BuildContextExt::depend_on_field`] passes to
+/// [`depend_on_inherited_fields`](Self::depend_on_inherited_fields) to a
+/// different provider `TypeId`, registering one data type's field bits against
+/// another provider; sealing keeps the typed selector the only way a field
+/// dependency is recorded (ADR-0074 §5.5).
+///
+/// ```compile_fail,E0277
+/// struct Mine;
+/// impl flui_view::BuildContext for Mine {}
+/// ```
+///
+/// Nor can application code call the untyped field-recording method: it takes
+/// a token only `flui-view` can construct, so an empty or foreign
+/// [`FieldSet`](crate::view::FieldSet) cannot be registered.
+///
+/// ```compile_fail,E0603
+/// use std::any::TypeId;
+/// use flui_view::{BuildContext, FieldSet};
+///
+/// fn sneak(ctx: &dyn BuildContext) {
+///     let token = flui_view::context::build_context::sealed::CrateToken::new();
+///     ctx.depend_on_inherited_fields(token, TypeId::of::<u8>(), FieldSet::NONE, &mut |_| {});
+/// }
+/// ```
+pub trait BuildContext: sealed::Sealed {
     // ========================================================================
     // Identity & State
     // ========================================================================
@@ -275,6 +326,26 @@ pub trait BuildContext {
         callback: &mut dyn FnMut(&dyn std::any::Any),
     ) -> bool;
 
+    /// [`depend_on_inherited`](Self::depend_on_inherited) at **field**
+    /// granularity (issue #1090): the dependency is recorded with `mask`, and
+    /// a later provider update schedules this element only if a field in the
+    /// mask changed ([`InheritedView::changed_fields`]). `FieldSet::ALL`
+    /// is exactly `depend_on_inherited`. The set is untyped here (this
+    /// method is object-safe), so it is **uncallable outside `flui-view`**: it
+    /// takes a crate-private token. Application code records a per-field
+    /// dependency only through the typed [`BuildContextExt::depend_on_field`];
+    /// an empty or foreign set cannot be registered.
+    ///
+    /// [`InheritedView::changed_fields`]: crate::InheritedView::changed_fields
+    #[doc(hidden)]
+    fn depend_on_inherited_fields(
+        &self,
+        token: sealed::CrateToken,
+        type_id: TypeId,
+        mask: crate::view::FieldSet,
+        callback: &mut dyn FnMut(&dyn std::any::Any),
+    ) -> bool;
+
     /// Look up data from an ancestor InheritedView WITHOUT registering a
     /// dependency.
     ///
@@ -490,6 +561,90 @@ pub trait BuildContextExt: BuildContext {
         self.reactive().signal_owned_by(self.element_id(), value)
     }
 
+    /// [`depend_on`](Self::depend_on) at **field** granularity (issue #1090):
+    /// read through `f` as usual, but depend only on the fields in `mask` —
+    /// the `FIELD_*` constants a `#[derive(InheritedData)]` data type emits.
+    /// Changing `Theme.text_scale` then no longer rebuilds a
+    /// `Theme::FIELD_COLOR_SCHEME` reader. Read-is-depend: there is no way to
+    /// read a field through this method without depending on it.
+    ///
+    /// ```rust,ignore
+    /// let size = ctx.depend_on_field::<MediaQuery, _>(MediaQueryData::FIELD_SIZE, |mq| mq.data().size);
+    /// ```
+    ///
+    /// The mask is typed by the provider's data (`FieldMask<T::Data>`). This
+    /// compiles:
+    ///
+    /// ```no_run
+    /// use flui_view::{BoxedView, BuildContext, BuildContextExt, FieldMask, InheritedView, View};
+    ///
+    /// #[derive(Clone, PartialEq)]
+    /// struct SizeData { size: u32 }
+    /// impl SizeData { const FIELD_SIZE: FieldMask<SizeData> = FieldMask::bit(0); }
+    /// #[derive(Clone, PartialEq)]
+    /// struct ThemeData { color: u32 }
+    /// impl ThemeData { const FIELD_COLOR: FieldMask<ThemeData> = FieldMask::bit(0); }
+    ///
+    /// #[derive(Clone)]
+    /// struct SizeProvider { data: SizeData, child: BoxedView }
+    /// impl InheritedView for SizeProvider {
+    ///     type Data = SizeData;
+    ///     fn data(&self) -> &SizeData { &self.data }
+    ///     fn child(&self) -> &dyn View { &self.child }
+    ///     fn update_should_notify(&self, old: &Self) -> bool { self.data != old.data }
+    /// }
+    ///
+    /// fn read(ctx: &dyn BuildContext) -> Option<u32> {
+    ///     ctx.depend_on_field::<SizeProvider, _>(SizeData::FIELD_SIZE, |p| p.data.size)
+    /// }
+    /// ```
+    ///
+    /// and the same code with a selector of another data type does not:
+    ///
+    /// ```compile_fail,E0308
+    /// use flui_view::{BoxedView, BuildContext, BuildContextExt, FieldMask, InheritedView, View};
+    ///
+    /// #[derive(Clone, PartialEq)]
+    /// struct SizeData { size: u32 }
+    /// impl SizeData { const FIELD_SIZE: FieldMask<SizeData> = FieldMask::bit(0); }
+    /// #[derive(Clone, PartialEq)]
+    /// struct ThemeData { color: u32 }
+    /// impl ThemeData { const FIELD_COLOR: FieldMask<ThemeData> = FieldMask::bit(0); }
+    ///
+    /// #[derive(Clone)]
+    /// struct SizeProvider { data: SizeData, child: BoxedView }
+    /// impl InheritedView for SizeProvider {
+    ///     type Data = SizeData;
+    ///     fn data(&self) -> &SizeData { &self.data }
+    ///     fn child(&self) -> &dyn View { &self.child }
+    ///     fn update_should_notify(&self, old: &Self) -> bool { self.data != old.data }
+    /// }
+    ///
+    /// fn read(ctx: &dyn BuildContext) -> Option<u32> {
+    ///     ctx.depend_on_field::<SizeProvider, _>(ThemeData::FIELD_COLOR, |p| p.data.size)
+    /// }
+    /// ```
+    fn depend_on_field<T: crate::InheritedView, R>(
+        &self,
+        mask: crate::view::FieldMask<T::Data>,
+        f: impl FnOnce(&T) -> R,
+    ) -> Option<R> {
+        // An empty mask would read the provider and never rebuild: the read
+        // is promoted to the whole-provider dependency instead of silently
+        // opting out (read-is-depend holds for every public read path).
+        let set = if mask.is_empty() {
+            tracing::debug!(
+                target: "flui::signals",
+                provider = std::any::type_name::<T>(),
+                "depend_on_field with an empty mask; recorded as a whole-provider dependency"
+            );
+            crate::view::FieldSet::ALL
+        } else {
+            mask.erase()
+        };
+        depend_on_set::<T, R, _>(self, set, f)
+    }
+
     /// Look up data from an ancestor InheritedView (with dependency).
     ///
     /// Typed callback wrapper over [`BuildContext::depend_on_inherited`].
@@ -513,14 +668,8 @@ pub trait BuildContextExt: BuildContext {
     /// let color: Option<Color> = ctx.depend_on::<MyTheme, _>(|t| t.data().primary_color);
     /// ```
     fn depend_on<T: 'static, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
-        let mut result: Option<R> = None;
-        let mut once = Some(f);
-        self.depend_on_inherited(TypeId::of::<T>(), &mut |any| {
-            if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
-                result = Some(call(typed));
-            }
-        });
-        result
+        // One path: the whole-provider dependency is the ALL set.
+        depend_on_set::<T, R, _>(self, crate::view::FieldSet::ALL, f)
     }
 
     /// Look up data from an ancestor InheritedView (without dependency).
@@ -639,6 +788,32 @@ pub trait BuildContextExt: BuildContext {
         });
         result
     }
+}
+
+/// The one recording path behind [`BuildContextExt::depend_on`] and
+/// [`BuildContextExt::depend_on_field`]: look up `T`, record the dependency
+/// with `set`, and call `f`. Crate-private on purpose — an untyped set must
+/// not reach a provider from application code, or a selector of another data
+/// type could be registered (the typed `depend_on_field` is the only public
+/// field-granular entry).
+fn depend_on_set<T: 'static, R, C: BuildContext + ?Sized>(
+    ctx: &C,
+    set: crate::view::FieldSet,
+    f: impl FnOnce(&T) -> R,
+) -> Option<R> {
+    let mut result: Option<R> = None;
+    let mut once = Some(f);
+    ctx.depend_on_inherited_fields(
+        sealed::CrateToken::new(),
+        TypeId::of::<T>(),
+        set,
+        &mut |any| {
+            if let (Some(typed), Some(call)) = (any.downcast_ref::<T>(), once.take()) {
+                result = Some(call(typed));
+            }
+        },
+    );
+    result
 }
 
 impl<C: BuildContext + ?Sized> BuildContextExt for C {}

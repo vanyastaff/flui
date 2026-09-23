@@ -5,8 +5,23 @@
 - **Relates to:** [ADR-0016](ADR-0016-unified-font-system-registration.md) (one
   shared `FontSystem`, which this record does not disturb),
   [ADR-0002](ADR-0002-engine-wide-threading-architecture.md) §G3 (`FONT_SYSTEM`
-  sharding, still open and unaffected by shaper choice)
+  sharding, still open and unaffected by shaper choice),
+  [ADR-0067](ADR-0067-engine-owned-glyph-atlas.md) (landed 2026-09-18, after
+  this record: removed glyphon and made the engine's glyph atlas consume
+  shaper-agnostic `GlyphImage` bitmaps rather than a cosmic-text-specific
+  buffer — this record's dominant "no wgpu-side glyphon-equivalent for
+  parley" re-open trigger below is arguably satisfied by that change alone,
+  independent of any shaping-performance argument)
 - **Supersedes nothing.**
+- **Challenged by:** [ADR-0077](ADR-0077-migrate-to-parley.md) (Proposed,
+  2026-09-22) — a parley-vs-cosmic-text research spike found parley faster
+  and lighter on every corpus tested at document scale, addressing this
+  record's cost argument on the *shaping* side specifically, but did not
+  test rasterization/glyph-atlas compatibility (`GlyphKey`, `SharedFontSystem::rasterize`,
+  both still cosmic-text-bound per ADR-0067) — the piece of this record's
+  cost estimate ADR-0077 has not yet re-verified. This line records the
+  challenge; it is not a supersession until ADR-0077 (or a successor) is
+  itself Accepted with that gap closed.
 
 ## Context
 

@@ -56,6 +56,14 @@ Flutter can only catch these at runtime via `_debugCheckStateIsActiveForAncestor
 
 ### 2. Read-IS-subscribe, field-precise inherited dependencies
 
+> **Landed (epic A4, issue #1090):** `FieldMask`, `#[derive(InheritedData)]`,
+> `InheritedView::changed_fields`, `BuildContextExt::depend_on_field`, masked
+> `InheritedBehavior::dependents`, and the `MediaQuery`/`Theme` field accessors. The
+> constants are `Type::FIELD_<NAME>` rather than the `Theme::primary` selector sketched
+> below (a derive cannot mint a method-path selector); the diff is the derive's `!=` per
+> field, not a `PartialEq` bound on the whole type. ADR-0074 §5.5 records how it shares
+> the reader discipline with signals.
+
 Reading an inherited value *is* subscribing to it, at **field** granularity:
 
 ```rust

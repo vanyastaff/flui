@@ -9,6 +9,8 @@ use std::rc::Rc;
 
 use flui_view::BoxedView;
 
+use crate::__private::SaltingChildKey as _;
+
 // The `SliverList` type lives in `flui-view` (co-located with its element
 // implementation).  Re-exporting it here keeps the widgets-crate API surface
 // unchanged: users `use flui_widgets::SliverList` as before.

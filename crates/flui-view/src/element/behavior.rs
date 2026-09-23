@@ -53,6 +53,25 @@ impl BuildCtxChoice<'_> {
     }
 }
 
+/// Length of the drain's dependency sink before a lifecycle hook runs (`None`
+/// outside a drain, where reads are recorded directly as lifecycle reads).
+fn lifecycle_sink_len(owner: &crate::ElementOwner<'_>) -> Option<usize> {
+    owner.build_view.map(|handle| handle.dep_sink.lock().len())
+}
+
+/// Tag every dependency record a lifecycle hook pushed since `start` so the
+/// drain keeps it across rebuilds (ADR-0074 §5.5: reset-on-build re-derives
+/// only what `build` reads).
+fn mark_lifecycle_records(owner: &crate::ElementOwner<'_>, start: Option<usize>) {
+    let (Some(handle), Some(start)) = (owner.build_view, start) else {
+        return;
+    };
+    let mut sink = handle.dep_sink.lock();
+    for record in sink.iter_mut().skip(start) {
+        record.lifecycle = true;
+    }
+}
+
 /// Pick the build context for `core`'s `build()` from `owner`.
 ///
 /// `BuildHandle` is `Copy`, so reading `owner.build_view` lifts the borrowed
@@ -716,9 +735,10 @@ where
         // `should_build` guard so a freshly-mounted `StatefulView` calls
         // `init_state` exactly once even if the element is clean.
         if !self.initialized {
-            if let Err(payload) =
-                std::panic::catch_unwind(AssertUnwindSafe(|| self.state.init_state(ctx)))
-            {
+            let sink_start = lifecycle_sink_len(owner);
+            let init = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.init_state(ctx)));
+            mark_lifecycle_records(owner, sink_start);
+            if let Err(payload) = init {
                 owner.record_armed_lifecycle_panic(
                     core.self_id(),
                     TypeId::of::<V>(),
@@ -933,9 +953,12 @@ where
         // ancestor chain, matching Flutter (`framework.dart:5977-5982` runs
         // the hook with the element's live `BuildContext`).
         let ctx_choice = make_build_ctx(core, owner);
-        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let sink_start = lifecycle_sink_len(owner);
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
             self.state.did_change_dependencies(ctx_choice.as_ctx());
-        })) {
+        }));
+        mark_lifecycle_records(owner, sink_start);
+        if let Err(payload) = outcome {
             owner.record_armed_lifecycle_panic(
                 core.self_id(),
                 TypeId::of::<V>(),
@@ -1259,6 +1282,37 @@ where
 // InheritedBehavior
 // ============================================================================
 
+/// One dependent of an `InheritedElement`: its tree depth (for the dirty heap)
+/// and the fields it read (issue #1090; [`FieldSet::ALL`] for a whole-type
+/// dependency).
+///
+/// Only `depth` is public: the recorded field sets are crate-private, so
+/// one provider's set cannot be read out and reused against another.
+///
+/// [`FieldSet::ALL`]: crate::view::FieldSet::ALL
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DependentEntry {
+    /// Depth captured at `depend_on_inherited` time.
+    pub depth: usize,
+    /// Fields read in the dependent's latest `build` (re-derived per build,
+    /// ADR-0074 §5.5 reset-on-build).
+    pub(crate) mask: crate::view::FieldSet,
+    /// Fields read in `init_state` / `did_change_dependencies`: kept until
+    /// unmount, never reset by a rebuild (a state that acquires a value in a
+    /// lifecycle hook and does not re-read it in `build` stays subscribed).
+    pub(crate) lifecycle_mask: crate::view::FieldSet,
+}
+
+impl DependentEntry {
+    /// Every field this dependent is notified for: build reads plus
+    /// lifecycle reads.
+    #[must_use]
+    pub(crate) fn fields(&self) -> crate::view::FieldSet {
+        self.mask | self.lifecycle_mask
+    }
+}
+
 /// Behavior for InheritedView elements.
 ///
 /// Manages dependents tracking and data caching. Similar to ProxyView but with
@@ -1266,8 +1320,9 @@ where
 ///
 /// # Dependents map
 ///
-/// Stored as `HashMap<ElementId, usize>` — dependent id mapped to its
-/// depth in the element tree. The depth is captured at
+/// Stored as `HashMap<ElementId, DependentEntry>` — dependent id mapped to its
+/// depth in the element tree and the provider fields it read
+/// ([`FieldSet`](crate::view::FieldSet), #1090). The depth is captured at
 /// `depend_on_inherited` time and used during `on_view_updated` to call
 /// `ElementOwner::schedule_build_for` with a typed rebuild reason, without an
 /// extra tree traversal (the tree is not in scope at `on_view_updated`
@@ -1299,7 +1354,7 @@ pub struct InheritedBehavior<V: InheritedView> {
     /// the time `depend_on_inherited` was called). The depth is needed
     /// for `BuildOwner::schedule_build_for(id, depth, reason)` so the rebuild
     /// heap orders dependents correctly without a separate tree walk.
-    pub dependents: HashMap<ElementId, usize>,
+    pub dependents: HashMap<ElementId, DependentEntry>,
     /// Marker for view type.
     _phantom: PhantomData<V>,
 }
@@ -1326,8 +1381,36 @@ impl<V: InheritedView> InheritedBehavior<V> {
     /// Idempotent: re-registering the same `element` overwrites its
     /// stored depth (depths can change across reconciliation, so the
     /// latest call wins). HashMap inherently dedups on key.
-    pub(crate) fn add_dependent(&mut self, element: ElementId, depth: usize) {
-        self.dependents.insert(element, depth);
+    pub(crate) fn add_dependent(
+        &mut self,
+        element: ElementId,
+        depth: usize,
+        mask: crate::view::FieldSet,
+    ) {
+        let entry = self.dependents.entry(element).or_insert(DependentEntry {
+            depth,
+            mask: crate::view::FieldSet::NONE,
+            lifecycle_mask: crate::view::FieldSet::NONE,
+        });
+        entry.depth = depth;
+        entry.mask |= mask;
+    }
+
+    /// Register a dependent read made in a lifecycle hook: unions into the
+    /// kept-until-unmount `lifecycle_mask`.
+    pub(crate) fn add_lifecycle_dependent(
+        &mut self,
+        element: ElementId,
+        depth: usize,
+        mask: crate::view::FieldSet,
+    ) {
+        let entry = self.dependents.entry(element).or_insert(DependentEntry {
+            depth,
+            mask: crate::view::FieldSet::NONE,
+            lifecycle_mask: crate::view::FieldSet::NONE,
+        });
+        entry.depth = depth;
+        entry.lifecycle_mask |= mask;
     }
 
     /// Remove a dependent element.
@@ -1335,8 +1418,8 @@ impl<V: InheritedView> InheritedBehavior<V> {
         self.dependents.remove(&element);
     }
 
-    /// Get all dependent elements (id -> depth map).
-    pub fn dependents(&self) -> &HashMap<ElementId, usize> {
+    /// Get all dependent elements (id -> depth + fields read).
+    pub fn dependents(&self) -> &HashMap<ElementId, DependentEntry> {
         &self.dependents
     }
 }
@@ -1356,11 +1439,47 @@ where
         &self.view_cache as &dyn std::any::Any
     }
 
-    fn record_dependent(&mut self, dependent: ElementId, depth: usize) {
-        self.add_dependent(dependent, depth);
+    fn record_dependent(
+        &mut self,
+        _token: crate::context::CrateToken,
+        dependent: ElementId,
+        depth: usize,
+        mask: crate::view::FieldSet,
+    ) {
+        self.add_dependent(dependent, depth, mask);
     }
 
-    fn remove_dependent(&mut self, dependent: ElementId) {
+    fn record_lifecycle_dependent(
+        &mut self,
+        _token: crate::context::CrateToken,
+        dependent: ElementId,
+        depth: usize,
+        mask: crate::view::FieldSet,
+    ) {
+        self.add_lifecycle_dependent(dependent, depth, mask);
+    }
+
+    fn reset_dependent_mask(&mut self, _token: crate::context::CrateToken, dependent: ElementId) {
+        if let Some(entry) = self.dependents.get_mut(&dependent) {
+            entry.mask = crate::view::FieldSet::NONE;
+        }
+    }
+
+    fn prune_unread_dependent(
+        &mut self,
+        _token: crate::context::CrateToken,
+        dependent: ElementId,
+    ) -> bool {
+        match self.dependents.get(&dependent) {
+            Some(entry) if entry.fields().is_empty() => {
+                self.dependents.remove(&dependent);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn remove_dependent(&mut self, _token: crate::context::CrateToken, dependent: ElementId) {
         self.remove_dependent(dependent);
     }
 }
@@ -1403,19 +1522,34 @@ where
         self.data = core.view().data().clone();
         self.view_cache = core.view().clone();
 
-        // Compare old vs new view; if `update_should_notify` returns
-        // true, schedule rebuild for every dependent.
+        // Compare old vs new view: `changed_fields(old)` says WHICH fields
+        // changed (`ALL`/`NONE` from `update_should_notify` for a
+        // provider that never opted in), and only dependents whose recorded
+        // mask intersects are scheduled.
         //
         // Flutter parity: `framework.dart:6414`
         // `InheritedElement.notifyClients(InheritedWidget old)` calls
         // `widget.updateShouldNotify(old)` and on true iterates
-        // `_dependents.keys` to enqueue each dependent for build.
-        if core.view().update_should_notify(old_view) {
+        // `_dependents.keys` to enqueue each dependent for build; the mask
+        // intersection is the typed form of `InheritedModel`'s aspect check.
+        // Field-granular (#1090): the provider reports WHICH fields changed
+        // (`ALL` for a provider that never opted in — the
+        // `update_should_notify` default), and only dependents whose recorded
+        // mask intersects are scheduled. One path for both granularities.
+        let changed = core.view().changed_fields(old_view).erase();
+        if changed.is_empty() {
+            tracing::trace!("InheritedBehavior::on_view_updated no notify (no field changed)");
+        } else {
             tracing::debug!(
-                "InheritedBehavior::on_view_updated notifying {} dependents",
+                changed = changed.bits(),
+                "InheritedBehavior::on_view_updated notifying dependents of {} candidates",
                 self.dependents.len()
             );
-            for (&dep_id, &dep_depth) in &self.dependents {
+            for (&dep_id, entry) in &self.dependents {
+                if !entry.fields().intersects(changed) {
+                    continue;
+                }
+                let dep_depth = entry.depth;
                 // Flutter parity (`framework.dart:6371-6374`):
                 // `notifyDependent` calls `dependent.didChangeDependencies`.
                 // We split this across two phases — the set-flag part
@@ -1429,10 +1563,6 @@ where
                 owner.note_dependency_change(dep_id);
                 owner.schedule_build_for(dep_id, dep_depth, crate::RebuildReason::DependencyChange);
             }
-        } else {
-            tracing::trace!(
-                "InheritedBehavior::on_view_updated no notify (update_should_notify=false)"
-            );
         }
     }
 

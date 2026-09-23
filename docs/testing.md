@@ -851,7 +851,10 @@ CI runs in two lanes, chosen by the `plan` job:
   replaces the fast one in the same `ci` check; `plan` reads the label from
   the API. On a fork PR it fails, saying so (its token cannot re-run
   anything): re-run CI from the PR's Checks tab instead. Later pushes to a
-  labelled PR take the heavy lane directly. Every job below runs.
+  labelled PR take the heavy lane directly. Every job below runs. The path is
+  proven on #1273 (2026-09-23): the label re-ran run 35815534194 as attempt
+  2, `plan` logged `full-ci-label=true heavy=true`, and the PR's `ci` check
+  was that attempt's job.
 
   A red heavy run on main or nightly opens (or comments on) the "CI is red on
   main" issue. The rule is fix forward within the hour, or revert.

@@ -20,7 +20,7 @@ use flui_geometry::{EdgeInsets, px};
 use flui_types::Size;
 use flui_types::platform::Brightness;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, InheritedView, impl_inherited_view};
+use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
 
 /// Ambient logical-screen data provided to descendants by a [`MediaQuery`]
 /// ancestor.
@@ -47,7 +47,7 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 /// | [`padding`](Self::padding) | `MediaQueryData.padding` |
 /// | [`view_insets`](Self::view_insets) | `MediaQueryData.viewInsets` |
 /// | [`platform_brightness`](Self::platform_brightness) | `MediaQueryData.platformBrightness` |
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
 pub struct MediaQueryData {
     /// Logical size of the current display surface (window or full screen).
     ///
@@ -159,6 +159,61 @@ impl MediaQuery {
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<MediaQueryData> {
         ctx.depend_on::<Self, _>(|mq| mq.data.clone())
     }
+
+    /// Depend on **one field group** of the nearest `MediaQuery` (issue
+    /// #1090): `mask` is one or more `MediaQueryData::FIELD_*` constants, and
+    /// this element rebuilds only when a masked field changes. `None` without
+    /// a `MediaQuery` ancestor. The `*_of` accessors below are the common
+    /// single-field forms.
+    pub fn depend_on_fields<R>(
+        ctx: &dyn BuildContext,
+        mask: FieldMask<MediaQueryData>,
+        f: impl FnOnce(&MediaQueryData) -> R,
+    ) -> Option<R> {
+        ctx.depend_on_field::<Self, _>(mask, |mq| f(&mq.data))
+    }
+
+    /// The window size, depending on `size` only.
+    #[must_use]
+    pub fn size_of(ctx: &dyn BuildContext) -> Option<Size> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_SIZE, |d| d.size)
+    }
+
+    /// The device pixel ratio, depending on `device_pixel_ratio` only.
+    #[must_use]
+    pub fn device_pixel_ratio_of(ctx: &dyn BuildContext) -> Option<f32> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_DEVICE_PIXEL_RATIO, |d| {
+            d.device_pixel_ratio
+        })
+    }
+
+    /// The text scale factor, depending on `text_scale_factor` only.
+    #[must_use]
+    pub fn text_scale_factor_of(ctx: &dyn BuildContext) -> Option<f32> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_TEXT_SCALE_FACTOR, |d| {
+            d.text_scale_factor
+        })
+    }
+
+    /// The safe-area padding, depending on `padding` only.
+    #[must_use]
+    pub fn padding_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_PADDING, |d| d.padding)
+    }
+
+    /// The view insets (keyboard), depending on `view_insets` only.
+    #[must_use]
+    pub fn view_insets_of(ctx: &dyn BuildContext) -> Option<EdgeInsets> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_VIEW_INSETS, |d| d.view_insets)
+    }
+
+    /// The platform brightness, depending on `platform_brightness` only.
+    #[must_use]
+    pub fn platform_brightness_of(ctx: &dyn BuildContext) -> Option<Brightness> {
+        Self::depend_on_fields(ctx, MediaQueryData::FIELD_PLATFORM_BRIGHTNESS, |d| {
+            d.platform_brightness
+        })
+    }
 }
 
 impl std::fmt::Debug for MediaQuery {
@@ -184,6 +239,10 @@ impl InheritedView for MediaQuery {
         // Rebuild descendants when any field of the media data changes — the
         // same contract as Flutter's `MediaQueryData.==`.
         self.data != old.data
+    }
+
+    fn changed_fields(&self, old: &Self) -> FieldMask<MediaQueryData> {
+        self.data.field_mask_diff(&old.data)
     }
 }
 

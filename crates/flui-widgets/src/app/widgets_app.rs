@@ -580,7 +580,7 @@ mod tests {
 
     use super::*;
     use crate::localization::{Directionality, LocalizationsDelegate};
-    use crate::test_harness::mount;
+    use crate::testing::harness::mount;
     use crate::{
         BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, MediaQuery, SizedBox,
         WidgetsLocalizations,

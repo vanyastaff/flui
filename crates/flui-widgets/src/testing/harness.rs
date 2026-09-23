@@ -1,15 +1,18 @@
-//! A headless widget harness for `flui-widgets`' **in-crate** unit tests.
+//! An element-level headless harness for `flui-*` widget crates' unit tests.
 //!
-//! [`crate::testing::lay_out`] is the canonical integration harness, but the
-//! private `overlay` / `navigator` modules need element-tree probes
-//! (`children_of`, `view_type_of`) and withholdable IME/post-frame
-//! capabilities that `LaidOut` deliberately does not expose. This is the
+//! [`lay_out`](super::lay_out) is the canonical geometry harness, but route,
+//! overlay and text-editing code needs element-tree probes (`children_of`,
+//! `view_type_of`) and withholdable IME/post-frame capabilities that
+//! [`LaidOut`](super::LaidOut) deliberately does not expose. This is the
 //! trimmed element-level equivalent: it keeps `lay_out`'s load-bearing
 //! ordering (**binding first, so the async driver is installed before the
 //! mount `build_scope`**), drops the geometry helpers, and shares the
 //! pointer-contact identity and sample-interval policy with the canonical
-//! harness via [`crate::testing::PointerContacts`] /
-//! [`crate::testing::POINTER_SAMPLE_INTERVAL`].
+//! harness via [`PointerContacts`] / [`POINTER_SAMPLE_INTERVAL`].
+//!
+//! Compiled like the rest of [`testing`](super): for this crate's own tests,
+//! or under the `testing` feature, which the navigation, scrolling and
+//! text-editing crates enable from their dev-dependencies.
 
 use std::any::TypeId;
 use std::rc::Rc;
@@ -30,11 +33,11 @@ use flui_types::Offset;
 use flui_types::geometry::{Bounds, Pixels, px};
 use flui_view::{ElementNode, RootRenderView, View};
 
-use crate::testing::{POINTER_SAMPLE_INTERVAL, PointerContacts};
+use super::{POINTER_SAMPLE_INTERVAL, PointerContacts};
 use crate::{Align, FocusRoot, GestureArenaScope};
 
 /// A mounted, laid-out widget tree.
-pub(crate) struct Harness {
+pub struct Harness {
     binding: HeadlessBinding,
     /// Focus owner of the exact `BuildOwner` backing this mounted tree.
     focus_manager: Rc<flui_interaction::FocusManager>,
@@ -60,8 +63,18 @@ pub(crate) struct Harness {
     contacts: PointerContacts,
 }
 
+impl std::fmt::Debug for Harness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Harness")
+            .field("root_element", &self.root_element)
+            .field("root_view_size", &self.root_view_size)
+            .field("text_input_installed", &self.text_input_owner.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Mount `root` as the render-tree root and drive one frame.
-pub(crate) fn mount(root: impl View) -> Harness {
+pub fn mount(root: impl View) -> Harness {
     mount_with_capabilities(
         root,
         PostFrameCapability::Installed,
@@ -76,7 +89,7 @@ pub(crate) fn mount(root: impl View) -> Harness {
 /// out of reach here — that half is covered at the `flui-app` layer); it
 /// exists so `EditableText`'s own attach/detach/dispatch wiring is testable
 /// from this crate without standing up a full binding.
-pub(crate) fn mount_with_ime(root: impl View) -> Harness {
+pub fn mount_with_ime(root: impl View) -> Harness {
     mount_with_capabilities(
         root,
         PostFrameCapability::Installed,
@@ -88,8 +101,11 @@ pub(crate) fn mount_with_ime(root: impl View) -> Harness {
 ///
 /// [`TextInputHandle`]: flui_interaction::TextInputHandle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TextInputCapability {
+pub enum TextInputCapability {
+    /// A working handle over a harness-owned `TextInputOwner`, recording
+    /// every cursor-area and IME-allowed call.
     Installed,
+    /// No handle: `BuildContext::text_input_handle()` returns `None`.
     Absent,
 }
 
@@ -106,14 +122,16 @@ pub(crate) enum TextInputCapability {
 /// [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
 /// [`LocalPostFrameHandle`]: flui_scheduler::LocalPostFrameHandle
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PostFrameCapability {
+pub enum PostFrameCapability {
+    /// Both post-frame handles are installed, as a real binding does.
     Installed,
+    /// Neither handle is installed.
     Absent,
 }
 
 /// [`mount`], but able to withhold the post-frame and/or text-input
 /// capability.
-pub(crate) fn mount_with_capabilities(
+pub fn mount_with_capabilities(
     root: impl View,
     post_frame: PostFrameCapability,
     text_input: TextInputCapability,
@@ -187,12 +205,12 @@ pub(crate) fn mount_with_capabilities(
 
 impl Harness {
     /// Focus manager that owns this harness's mounted tree.
-    pub(crate) fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
+    pub fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
         Rc::clone(&self.focus_manager)
     }
 
     /// Run an owner-side test action under the binding's full local scope.
-    pub(crate) fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
+    pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
         self.binding.enter_owner_scope(callback)
     }
 
@@ -235,7 +253,9 @@ impl Harness {
         result
     }
 
-    pub(crate) fn dispatch_pointer_down(&self, x: f32, y: f32) {
+    /// Begin a new mouse contact at logical `(x, y)`, hit-testing the mounted
+    /// render tree.
+    pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
         let event = make_down_event_for_id(
             self.begin_contact(),
             Offset::new(px(x), px(y)),
@@ -245,7 +265,9 @@ impl Harness {
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
 
-    pub(crate) fn dispatch_pointer_move(&self, x: f32, y: f32) {
+    /// Move the in-flight contact to logical `(x, y)`, one sample interval
+    /// after the previous event.
+    pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
         self.advance_pointer_clock();
         let event = make_move_event_for_id(
             self.current_contact(),
@@ -256,7 +278,8 @@ impl Harness {
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
 
-    pub(crate) fn dispatch_pointer_up(&self, x: f32, y: f32) {
+    /// Lift the in-flight contact at logical `(x, y)`.
+    pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
         let event = make_up_event_for_id(
             self.current_contact(),
             Offset::new(px(x), px(y)),
@@ -269,7 +292,7 @@ impl Harness {
     /// Cancel the in-flight contact — the platform withdrawing a gesture
     /// (a system gesture taking over, a window losing the pointer). Carries no
     /// position, matching `make_cancel_event_for_id`.
-    pub(crate) fn dispatch_pointer_cancel(&self) {
+    pub fn dispatch_pointer_cancel(&self) {
         let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);
         self.binding
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
@@ -285,7 +308,7 @@ impl Harness {
     /// installs no `TextInputHandle` at all, so there is nothing to record,
     /// and a test reading this without IME installed is testing the wrong
     /// harness.
-    pub(crate) fn cursor_area_calls(&self) -> Vec<Bounds<Pixels>> {
+    pub fn cursor_area_calls(&self) -> Vec<Bounds<Pixels>> {
         self.cursor_area_calls
             .as_ref()
             .expect(
@@ -297,7 +320,7 @@ impl Harness {
     }
 
     /// Platform IME enable/disable calls in delivery order.
-    pub(crate) fn ime_allowed_calls(&self) -> Vec<bool> {
+    pub fn ime_allowed_calls(&self) -> Vec<bool> {
         self.ime_allowed_calls
             .as_ref()
             .expect("ime_allowed_calls requires mount_with_ime")
@@ -306,7 +329,7 @@ impl Harness {
     }
 
     /// Deliver an IME event to this harness's active text client.
-    pub(crate) fn dispatch_ime(&self, event: &flui_types::ImeEvent) {
+    pub fn dispatch_ime(&self, event: &flui_types::ImeEvent) {
         self.text_input_owner
             .as_ref()
             .expect("dispatch_ime requires mount_with_ime")
@@ -314,14 +337,14 @@ impl Harness {
     }
 
     /// Number of active clients in this harness's presentation-local registry.
-    pub(crate) fn active_ime_clients(&self) -> usize {
+    pub fn active_ime_clients(&self) -> usize {
         self.text_input_owner
             .as_ref()
             .expect("active_ime_clients requires mount_with_ime")
             .active_count()
     }
     /// The root element id.
-    pub(crate) fn root(&mut self) -> ElementId {
+    pub fn root(&mut self) -> ElementId {
         let logical_root_type = self.logical_root_type;
         self.binding
             .tree_mut()
@@ -336,7 +359,7 @@ impl Harness {
     /// `OverlayHandle` / `OverlayEntry` scheduled through its `RebuildHandle`
     /// rebuilds. Every rebuild assertion depends on this: a root-dirtying pump
     /// would rebuild the whole tree and prove nothing.
-    pub(crate) fn tick(&mut self) {
+    pub fn tick(&mut self) {
         self.binding.pump_frame(Duration::ZERO);
     }
 
@@ -345,7 +368,7 @@ impl Harness {
     /// Goes through `ElementTree::update`, whose dispatch is keyed by `TypeId`, so
     /// the root's *type* must not change between frames. Toggling a field on one
     /// root type is how a subtree gets unmounted.
-    pub(crate) fn swap_root(&mut self, new_root: impl View) {
+    pub fn swap_root(&mut self, new_root: impl View) {
         let scoped = GestureArenaScope::new(self.binding.arena().clone(), FocusRoot::new(new_root));
         let aligned = Align::new(Alignment::TOP_LEFT).child(scoped);
         let root = RootRenderView::new(aligned, self.root_view_size.0, self.root_view_size.1);
@@ -355,7 +378,7 @@ impl Harness {
 
     /// The ordered children of `parent`, read through the public `ElementNode`
     /// surface (`parent()` + `slot()`); `child_ids()` is crate-private.
-    pub(crate) fn children_of(&mut self, parent: ElementId) -> Vec<ElementId> {
+    pub fn children_of(&mut self, parent: ElementId) -> Vec<ElementId> {
         let mut kids: Vec<(usize, ElementId)> = self
             .binding
             .tree_mut()
@@ -371,13 +394,13 @@ impl Harness {
     ///
     /// A post-frame callback registered here is drained by `pump_frame`'s
     /// `UpdateScheduler::drive_frame`, after the pipeline commits layout.
-    pub(crate) fn scheduler(&self) -> &flui_scheduler::UpdateScheduler {
+    pub fn scheduler(&self) -> &flui_scheduler::UpdateScheduler {
         self.binding.scheduler()
     }
 
     /// The shared pipeline owner, so a post-frame callback can read committed
     /// geometry from inside the frame.
-    pub(crate) fn pipeline_owner(&self) -> PipelineCell {
+    pub fn pipeline_owner(&self) -> PipelineCell {
         self.pipeline_owner.clone()
     }
 
@@ -385,7 +408,7 @@ impl Harness {
     /// `BuildOwner`, so a test can `schedule_local` a callback that captures
     /// the (`!Send`) [`PipelineCell`] — `add_post_frame_callback`'s `Send`
     /// bound cannot carry it.
-    pub(crate) fn local_post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
+    pub fn local_post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
         self.binding
             .build_owner_mut()
             .local_post_frame_handle()
@@ -398,7 +421,7 @@ impl Harness {
     /// The one structural probe a widget-level test has: it says *which* render
     /// objects a view built, without duplicating the render-layer harness in
     /// `flui-objects`, which is where their behavior is pinned.
-    pub(crate) fn render_debug_names(&self) -> Vec<&'static str> {
+    pub fn render_debug_names(&self) -> Vec<&'static str> {
         self.pipeline_owner.with(|owner| {
             owner
                 .render_tree()
@@ -409,7 +432,7 @@ impl Harness {
     }
 
     /// The concrete view type behind element `id`.
-    pub(crate) fn view_type_of(&mut self, id: ElementId) -> TypeId {
+    pub fn view_type_of(&mut self, id: ElementId) -> TypeId {
         self.binding
             .tree_mut()
             .get(id)
@@ -418,7 +441,7 @@ impl Harness {
     }
 
     /// The parent of element `id`, if any.
-    pub(crate) fn parent_of(&mut self, id: ElementId) -> Option<ElementId> {
+    pub fn parent_of(&mut self, id: ElementId) -> Option<ElementId> {
         self.binding
             .tree_mut()
             .get(id)
@@ -426,7 +449,7 @@ impl Harness {
     }
 
     /// Every mounted element whose view is of type `ty`, in arbitrary order.
-    pub(crate) fn elements_of_type(&mut self, ty: TypeId) -> Vec<ElementId> {
+    pub fn elements_of_type(&mut self, ty: TypeId) -> Vec<ElementId> {
         self.binding
             .tree_mut()
             .iter_nodes()
@@ -436,7 +459,7 @@ impl Harness {
     }
 
     /// The only child of `parent`.
-    pub(crate) fn only_child(&mut self, parent: ElementId) -> ElementId {
+    pub fn only_child(&mut self, parent: ElementId) -> ElementId {
         let kids = self.children_of(parent);
         assert_eq!(kids.len(), 1, "expected exactly one child of {parent:?}");
         kids[0]

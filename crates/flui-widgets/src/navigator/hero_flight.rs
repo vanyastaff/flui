@@ -67,8 +67,8 @@ use parking_lot::Mutex;
 use super::hero::{HeroHandle, HeroTag, RectTweenFactory, ShuttleBuilder};
 use super::hero_controller::{FlightDirection, HeroFlightManifest};
 use super::navigator::UserGestureSignal;
-use crate::overlay::{InsertPosition, OverlayEntry, OverlayHandle};
 use crate::{IgnorePointer, Opacity, Positioned, Stack, StackFit};
+use crate::{InsertPosition, OverlayEntry, OverlayHandle};
 
 /// The `_HeroFlightManifest`-derived facts a divert can replace: which way the
 /// flight runs, which two heroes it connects, and the coordinate space its
@@ -331,7 +331,7 @@ impl HeroFlight {
 
     /// The overlay entry this flight presents its shuttle in, while it has one.
     #[cfg(test)]
-    pub(crate) fn entry_id(&self) -> Option<crate::overlay::OverlayEntryId> {
+    pub(crate) fn entry_id(&self) -> Option<crate::OverlayEntryId> {
         self.inner.entry.lock().as_ref().map(OverlayEntry::id)
     }
 

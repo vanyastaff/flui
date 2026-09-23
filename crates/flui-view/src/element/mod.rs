@@ -48,8 +48,8 @@ pub use flui_tree::IndexedSlot;
 pub use arity::{ElementArity, Leaf, Optional, Single, Variable};
 pub use async_slot::{InitialDataFactory, SnapshotBuilder};
 pub use behavior::{
-    AnimatedBehavior, ElementBehavior, InheritedBehavior, ParentDataBehavior, ProxyBehavior,
-    RenderBehavior, StatefulBehavior, StatelessBehavior,
+    AnimatedBehavior, DependentEntry, ElementBehavior, InheritedBehavior, ParentDataBehavior,
+    ProxyBehavior, RenderBehavior, StatefulBehavior, StatelessBehavior,
 };
 pub use future_builder::{BoxedResultFuture, FutureBuilder, FutureBuilderState, FutureFactory};
 pub use generic::ElementCore;

@@ -14,6 +14,9 @@
 //! are thin re-export shims over it, so mount ordering, pointer-contact
 //! identity, and virtual-clock policy cannot drift apart between crates again.
 
+pub mod harness;
+pub mod overlay_probe;
+
 use std::any::TypeId;
 use std::cell::Cell;
 use std::collections::HashSet;

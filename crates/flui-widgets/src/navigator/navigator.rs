@@ -83,7 +83,7 @@ use super::route::{
 };
 use super::subtree::RouteSubtree;
 use crate::animated::VsyncScope;
-use crate::overlay::{Overlay, OverlayEntry, OverlayHandle};
+use crate::{Overlay, OverlayEntry, OverlayHandle};
 
 static NEXT_NAVIGATOR_COMMAND_TARGET_ID: AtomicU64 = AtomicU64::new(1);
 

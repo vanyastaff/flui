@@ -402,7 +402,7 @@ mod tests {
 
     use super::*;
     use crate::SizedBox;
-    use crate::test_harness::mount;
+    use crate::testing::harness::mount;
 
     fn key_down(character: &str, modifiers: Modifiers) -> KeyEvent {
         KeyEvent {
@@ -547,7 +547,7 @@ mod intent_tests {
     use super::super::actions::{Action, ActionOutcome, Actions, CallbackAction, Intent};
     use super::*;
     use crate::SizedBox;
-    use crate::test_harness::mount;
+    use crate::testing::harness::mount;
 
     struct SaveIntent;
     impl Intent for SaveIntent {}
@@ -707,7 +707,7 @@ mod tab_tests {
 
     use super::super::focus::FocusScope;
     use super::*;
-    use crate::test_harness::mount;
+    use crate::testing::harness::mount;
     use crate::{Positioned, SizedBox, Stack};
 
     fn tab(shift: bool) -> KeyEvent {

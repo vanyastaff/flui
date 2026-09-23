@@ -8,7 +8,7 @@ use flui_rendering::protocol::SliverProtocol;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
-use crate::support::generic_render_view_element;
+use crate::__private::generic_render_view_element;
 
 /// Places multiple sliver children in a linear array along the main axis,
 /// presenting them to the enclosing viewport as a single sliver.

@@ -35,7 +35,7 @@ use super::page_route::PageRoute;
 use super::route::{PushCompletion, Route, RouteSettings};
 use crate::SizedBox;
 use crate::animated::VsyncScope;
-use crate::test_harness::{Harness, mount};
+use crate::testing::harness::{Harness, mount};
 
 // ============================================================================
 // PROBES
@@ -451,7 +451,7 @@ fn navigator_of_self_check_finds_current_navigator() {
 /// `expect` below fires.
 #[test]
 fn overlay_of_from_route_content_resolves_the_navigators_own_overlay() {
-    use crate::overlay::{Overlay, OverlayHandle};
+    use crate::{Overlay, OverlayHandle};
 
     /// A stateless leaf that runs `on_build` on its own nested `BuildContext`.
     #[derive(Clone)]
@@ -1208,28 +1208,21 @@ fn public_no_internal_route_stack_exports() {
     super::export_guard::assert_not_exported("lib.rs", LIB, &INTERNAL);
 }
 
-/// `Overlay` / `OverlayEntry` / `OverlayEntryId` / `OverlayHandle` are
-/// published from the crate root (ADR-0036: the `Overlay::of`/`maybe_of`
-/// lookup contract). The mutation surface and the view/state machinery
-/// (`OverlayScope`, `OverlayShared`, `InsertPosition`, `OnstagePlan`,
-/// `OverlayState`, `OverlayEntryView`, `OverlayEntryViewState`, `Theater`)
-/// stays private — `Navigator` and `Draggable`'s feedback layer reach it
-/// in-crate through `crate::overlay::*`, not through this re-export. The
-/// `overlay` module itself also stays a private `mod` (not `pub mod`): every
-/// re-export is a deliberate, individually-named `pub use`, not a module-wide
-/// opening.
+/// The overlay's published contract: the lookup types (ADR-0036) plus the
+/// mutation surface `flui-navigation` drives from outside this crate
+/// (ADR-0076), all re-exported from the crate root while the `overlay` module
+/// itself stays private, so nothing else in it is nameable. The view/state
+/// machinery (`OverlayScope`, `OverlayShared`, `OnstagePlan`, `OverlayState`,
+/// `OverlayEntryView`, `OverlayEntryViewState`, `Theater`) stays private;
+/// Rust visibility enforces that inside the module, and this guard keeps it
+/// out of the crate root's `pub use` lines.
 ///
-/// This replaces an earlier guard test whose premise — that no part of
-/// `overlay` should ever be exported — ADR-0036 deliberately reverses; see
-/// the ADR for why the lookup contract, not the mutation surface, is the
-/// right cut.
-///
-/// Red-check: remove the `pub use overlay::{...}` line from `lib.rs` — the
-/// first loop's assertion fails. Add `pub mod overlay;` — the last assertion
-/// fails. Add any of the mutation-surface names to a `pub use` line — the
-/// `assert_not_exported` call fails.
+/// Red-check: drop `InsertPosition` from the `pub use overlay::{...}` line in
+/// `lib.rs`, and the first loop fails. Make it `pub mod overlay;`, and the
+/// module assertion fails. Add any machinery name to a `pub use` line,
+/// and `assert_not_exported` fails.
 #[test]
-fn overlay_publishes_only_the_lookup_contract_types() {
+fn overlay_publishes_the_lookup_and_mutation_contract() {
     const LIB: &str = include_str!("../lib.rs");
 
     let exported: Vec<&str> = LIB
@@ -1243,10 +1236,16 @@ fn overlay_publishes_only_the_lookup_contract_types() {
         })
         .collect();
 
-    for published in ["Overlay", "OverlayEntry", "OverlayEntryId", "OverlayHandle"] {
+    for published in [
+        "Overlay",
+        "OverlayEntry",
+        "OverlayEntryId",
+        "OverlayHandle",
+        "InsertPosition",
+    ] {
         assert!(
             exported.contains(&published),
-            "{published} must be re-exported from lib.rs — ADR-0036 publishes it"
+            "{published} must be re-exported from lib.rs (ADR-0036 / ADR-0076)"
         );
     }
 
@@ -1256,7 +1255,6 @@ fn overlay_publishes_only_the_lookup_contract_types() {
         &[
             "OverlayScope",
             "OverlayShared",
-            "InsertPosition",
             "OnstagePlan",
             "OverlayState",
             "OverlayEntryView",
@@ -1265,14 +1263,14 @@ fn overlay_publishes_only_the_lookup_contract_types() {
         ],
     );
 
+    // The module itself stays private: a public `mod overlay` would make the
+    // `pub` `OverlayState` (visible only because `StatefulView::State` must be)
+    // nameable as `flui_widgets::overlay::OverlayState`.
     for line in LIB.lines() {
         let code = line.trim_start();
-        if code.starts_with("//") {
-            continue;
-        }
         assert!(
             !code.starts_with("pub mod overlay"),
-            "the overlay module itself must stay a private `mod`, not `pub mod`: {line}"
+            "ADR-0076: the overlay module stays private, the API is re-exported: {line}"
         );
     }
 }

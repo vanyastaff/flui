@@ -28,7 +28,8 @@ use super::observer::NavigatorObserver;
 use super::overlay_route::SimpleRoute;
 use super::page_route::{PageRoute, PopupRoute};
 use super::transition_route::TransitionHandle;
-use crate::test_harness::{Harness, mount};
+use crate::testing::harness::{Harness, mount};
+use crate::testing::overlay_probe::OverlayProbe as _;
 use crate::{Center, ColoredBox, Column, MainAxisSize, SizedBox};
 
 const TRANSITION: Duration = Duration::from_millis(300);

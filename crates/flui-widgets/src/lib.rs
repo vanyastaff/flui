@@ -69,6 +69,12 @@
 
 mod support;
 
+// Framework seams for the sibling `flui-*` widget crates: no semver
+// guarantee, workspace-only (port-check refuses any other importer).
+#[doc(hidden)]
+pub mod __private; // PORT-CHECK-OK-SP4: consumed by the crates split out of this one (#1272); drop the marker once flui-text-editing imports it
+mod anchored_box;
+
 pub mod animated;
 pub mod app;
 mod async_builders;
@@ -80,14 +86,6 @@ pub mod image;
 pub mod interaction;
 pub mod layout;
 pub mod localization;
-// Headless widget harness shared by the in-crate unit tests of the private
-// `overlay` / `navigator` modules. The public `testing` module below serves
-// integration tests; this trimmed element-level variant exists because those
-// private modules need element-tree probes and IME capabilities `LaidOut`
-// does not expose.
-#[cfg(test)]
-mod test_harness;
-
 // Canonical headless mount/layout/pointer harness (`testing::LaidOut`).
 // Compiled for this crate's own tests (`cfg(test)`, where the dev-dependency
 // on `flui-testing` supplies the frame driver) or when a consumer enables the
@@ -102,11 +100,11 @@ pub mod testing;
 /// route stack, its lifecycle, the flush algorithm and the result channel are
 /// private; the signed-off surface is re-exported from the crate root below.
 pub mod navigator;
-// `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. `Overlay`,
-// `OverlayEntry`, `OverlayEntryId` and `OverlayHandle` are re-exported below
-// (ADR-0036); the mutation surface (`insert`/`rearrange`/`OverlayScope`/the
-// `Theater`/`OverlayState` machinery) stays private. `Navigator` and
-// `Draggable`'s feedback layer are the in-crate consumers of that surface. (A
+// `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. The module
+// stays private: the types (ADR-0036) and the mutation surface
+// (`insert`/`rearrange`/`InsertPosition`/the entry lifecycle, ADR-0076) are
+// re-exported from the crate root, and nothing else is nameable, so
+// `OverlayScope` and the `Theater`/`OverlayState` machinery stay private. (A
 // `///` doc here would be concatenated with the module's own `//!` docs and
 // resolve its intra-doc links in the crate root.)
 mod overlay;
@@ -215,7 +213,7 @@ pub use navigator::{
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0036) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
 // the crate — `Navigator` and `Draggable`'s feedback layer are its callers.
-pub use overlay::{Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
+pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use scroll::{

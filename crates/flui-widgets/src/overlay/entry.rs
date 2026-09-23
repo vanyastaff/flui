@@ -137,8 +137,11 @@ impl OverlayEntry {
     /// An entry that builds its subtree with `builder`, attached to no overlay.
     ///
     /// `opaque` and `maintain_state` both default to `false`, as in Flutter
-    /// (`overlay.dart:117-121`).
-    pub(crate) fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static) -> Self {
+    /// (`overlay.dart:117-121`). The builder runs on each build of this entry's
+    /// layer (its first build, [`mark_needs_build`](Self::mark_needs_build),
+    /// and an ancestor rebuild that reaches it), never on insertion.
+    #[must_use]
+    pub fn new(builder: impl Fn(&dyn BuildContext) -> BoxedView + 'static) -> Self {
         Self {
             inner: Arc::new(EntryInner {
                 id: OverlayEntryId::next(),
@@ -176,15 +179,25 @@ impl OverlayEntry {
         self.inner.maintain_state.load(Ordering::Relaxed)
     }
 
+    /// Set whether this entry covers the whole overlay, so the entries below it
+    /// that do not [`maintain state`](Self::set_maintain_state) are not built.
+    ///
     /// Flutter's `opaque` setter (`overlay.dart:138-146`): a change rebuilds the
     /// **overlay**, not the entry, because `OverlayState.build` reads it.
-    pub(crate) fn set_opaque(&self, opaque: bool) {
+    /// Setting the value it already has does nothing. On an entry that is not
+    /// [attached](Self::is_attached), or whose overlay is unmounted, the flag is
+    /// stored and read by the next build that includes the entry.
+    pub fn set_opaque(&self, opaque: bool) {
         self.set_build_flag(&self.inner.opaque, opaque);
     }
 
+    /// Set whether this entry stays built (its state kept) while an
+    /// [opaque](Self::set_opaque) entry above covers it.
+    ///
     /// Flutter's `maintainState` setter (`overlay.dart:165-173`), which likewise
-    /// goes through `_didChangeEntryOpacity`.
-    pub(crate) fn set_maintain_state(&self, maintain_state: bool) {
+    /// goes through `_didChangeEntryOpacity`: same rebuild and no-op rules as
+    /// [`set_opaque`](Self::set_opaque).
+    pub fn set_maintain_state(&self, maintain_state: bool) {
         self.set_build_flag(&self.inner.maintain_state, maintain_state);
     }
 
@@ -219,8 +232,17 @@ impl OverlayEntry {
             .is_some_and(RebuildHandle::is_active)
     }
 
-    /// Whether this entry currently belongs to an overlay whose state is alive.
-    pub(crate) fn is_attached(&self) -> bool {
+    /// Whether this entry is in an overlay's list right now (inserted and not
+    /// yet removed). It says nothing about whether the entry's subtree is
+    /// built, or whether that overlay is mounted; for the overlay, see
+    /// [`OverlayHandle::is_mounted`](super::OverlayHandle::is_mounted).
+    ///
+    /// Flutter's `_overlay != null`. `true` from
+    /// [`OverlayHandle::insert`](super::OverlayHandle::insert) (or `rearrange`)
+    /// until [`remove`](Self::remove), including while the overlay is not
+    /// mounted; `false` once every handle to the overlay is dropped.
+    #[must_use]
+    pub fn is_attached(&self) -> bool {
         self.attached_overlay().is_some()
     }
 
@@ -236,7 +258,8 @@ impl OverlayEntry {
             .and_then(RebuildHandle::element_id)
     }
 
-    /// Rebuild **only this entry's** subtree on the next frame.
+    /// Rebuild **only this entry's** subtree on the next frame. Call it when
+    /// state the builder reads has changed outside the widget tree.
     ///
     /// Flutter's `OverlayEntry.markNeedsBuild` (`overlay.dart:250`), which reaches
     /// one `_OverlayEntryWidgetState` through the entry's `GlobalKey` and calls
@@ -252,14 +275,14 @@ impl OverlayEntry {
     /// red-check, and deleted rather than shipped untested.
     ///
     /// [`remove`]: Self::remove
-    pub(crate) fn mark_needs_build(&self) {
+    pub fn mark_needs_build(&self) {
         if let Some(handle) = self.inner.rebuild.lock().as_ref() {
             handle.schedule(flui_view::RebuildReason::StateChange);
         }
     }
 
     /// Detach from the overlay holding this entry and schedule that overlay to
-    /// rebuild without it.
+    /// rebuild without it; the layer's state is disposed on that frame.
     ///
     /// Flutter's `OverlayEntry.remove` (`overlay.dart:226-243`). Two of its three
     /// guards are ported; the third has no analogue:
@@ -267,14 +290,22 @@ impl OverlayEntry {
     /// - *"An OverlayEntry should be removed only once"* — Flutter `assert`s.
     ///   Removing twice is caller error, not a framework invariant, so
     ///   [`PANIC-POLICY`] forbids a panic here: the second call logs and returns.
-    /// - `if (!overlay.mounted) return;` — a dropped overlay makes this a no-op.
-    ///   Here the `Weak` upgrade fails and we return, so a stale entry handle can
-    ///   never resurrect a dead overlay.
+    /// - `if (!overlay.mounted) return;` is **not** ported, deliberately. In
+    ///   Flutter the entry list dies with the unmounted `OverlayState`; here the
+    ///   [`OverlayHandle`](super::OverlayHandle) owns the list and a later mount
+    ///   builds it (ADR-0076 §2), so returning early would leave a detached
+    ///   entry in the list for that mount to build, with no way left to remove
+    ///   it. The entry always leaves the list; the rebuild is scheduled only if
+    ///   the overlay is mounted. A dropped overlay (every handle gone) still
+    ///   makes this a no-op: the `Weak` upgrade fails and nothing is resurrected.
     /// - the `persistentCallbacks` post-frame deferral is unnecessary (see module
     ///   docs).
     ///
+    /// After `remove`, [`is_attached`](Self::is_attached) is `false` and the
+    /// entry may be inserted again (only dispose is terminal in Flutter too).
+    ///
     /// [`PANIC-POLICY`]: ../../../../../docs/PANIC-POLICY.md
-    pub(crate) fn remove(&self) {
+    pub fn remove(&self) {
         let Some(shared) = self.detach() else {
             tracing::error!(
                 entry = self.inner.id.get(),
@@ -284,13 +315,9 @@ impl OverlayEntry {
             return;
         };
 
-        // `if (!overlay.mounted) return;` (`overlay.dart:231-233`) — Flutter detaches
-        // the entry but leaves the unmounted overlay's list alone. Found by a
-        // parity re-check: FLUI used to mutate it regardless.
-        if !shared.is_mounted() {
-            return;
-        }
-
+        // Always out of the list, mounted or not: the handle's list outlives the
+        // mounted overlay (see the doc above for why Flutter's unmounted early
+        // return does not apply). `schedule_rebuild` is inert when unmounted.
         shared.retain_entries(|entry| entry.id() != self.inner.id);
         shared.schedule_rebuild();
     }
@@ -299,7 +326,7 @@ impl OverlayEntry {
 
     /// Take the overlay back-reference, upgrading it. `None` when this entry is
     /// attached to nothing, or when its overlay's shared state has been dropped.
-    fn attached_overlay(&self) -> Option<Arc<OverlayShared>> {
+    pub(super) fn attached_overlay(&self) -> Option<Arc<OverlayShared>> {
         self.inner.overlay.lock().as_ref().and_then(Weak::upgrade)
     }
 
@@ -326,9 +353,22 @@ impl OverlayEntry {
         let _prev = self.inner.rebuild.lock().replace(handle);
     }
 
-    /// Drop the rebuild capability. Called from the entry view's `dispose`.
-    pub(crate) fn clear_rebuild(&self) {
-        let _prev = self.inner.rebuild.lock().take();
+    /// Drop the rebuild capability, but only if `element` published it.
+    /// Called from the entry view's `dispose`.
+    ///
+    /// Owner-aware for the same reason as the overlay's own slot: an entry
+    /// moved from one overlay to another within a frame briefly has two
+    /// views, and the new one may publish before the old one is disposed.
+    /// An unconditional clear would then revoke the live view's capability,
+    /// leaving `mark_needs_build` inert on an entry that is on screen.
+    pub(crate) fn clear_rebuild(&self, element: Option<flui_foundation::ElementId>) {
+        let mut slot = self.inner.rebuild.lock();
+        if slot
+            .as_ref()
+            .is_some_and(|held| held.element_id() == element)
+        {
+            let _prev = slot.take();
+        }
     }
 
     /// Whether two handles name the same entry.

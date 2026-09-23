@@ -195,7 +195,7 @@ where
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(build));
     #[cfg(feature = "signals")]
     if let Some(id) = building {
-        owner.reactive.end_element_build(id);
+        owner.reactive.end_element_build(id, outcome.is_ok());
     }
     match outcome {
         Ok(child_view) => child_view,
@@ -227,6 +227,9 @@ where
                 format!("building {behavior_name}"),
             );
             let error_view = crate::view::ErrorView::build_error_view(&panic.error);
+            if let Some(flag) = owner.build_recovered {
+                flag.set(true);
+            }
             owner.push_recovered_panic(panic); // logs at error level
             error_view
         }

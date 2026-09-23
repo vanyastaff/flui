@@ -10,7 +10,7 @@ mod locale_resolution;
 mod localizations;
 mod widgets_localizations;
 
-pub(crate) use directionality::axis_direction_from_axis_reverse_and_directionality;
+pub use directionality::axis_direction_from_axis_reverse_and_directionality;
 pub use directionality::{Directionality, resolve_alignment};
 pub use locale_resolution::basic_locale_list_resolution;
 pub use localizations::{

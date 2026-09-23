@@ -379,7 +379,7 @@ mod tests {
 
     use super::*;
     use crate::SizedBox;
-    use crate::test_harness::mount;
+    use crate::testing::harness::mount;
 
     struct AddToCounter(usize);
     impl Intent for AddToCounter {}

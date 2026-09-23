@@ -85,7 +85,7 @@ use parking_lot::Mutex;
 use super::modal_route::ModalHandle;
 use super::route::RouteId;
 use super::subtree::RouteSubtreeCell;
-use crate::overlay::OverlayEntry;
+use crate::OverlayEntry;
 
 /// A lifecycle transition a route asks its navigator to make.
 ///

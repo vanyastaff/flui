@@ -197,6 +197,8 @@ impl ElementBuildContext {
     }
 }
 
+impl super::build_context::sealed::Sealed for ElementBuildContext {}
+
 impl BuildContext for ElementBuildContext {
     fn element_id(&self) -> ElementId {
         self.element_id
@@ -280,12 +282,27 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        self.depend_on_inherited_fields(
+            super::build_context::sealed::CrateToken::new(),
+            type_id,
+            crate::view::FieldSet::ALL,
+            callback,
+        )
+    }
+
+    fn depend_on_inherited_fields(
+        &self,
+        _token: super::build_context::sealed::CrateToken,
+        type_id: TypeId,
+        mask: crate::view::FieldSet,
+        callback: &mut dyn FnMut(&dyn Any),
+    ) -> bool {
         // Walk ancestors looking for an Element whose view_type_id
         // matches; the first one is the nearest InheritedView<T>.
         //
-        // Records this element in the matched InheritedElement's
-        // dependent map so a subsequent rebuild with
-        // `update_should_notify == true` schedules us for rebuild.
+        // Records this element (with the fields it read, #1090) in the
+        // matched InheritedElement's dependent map so a later provider update
+        // whose `changed_fields` intersects that mask schedules us for rebuild.
         //
         // Flutter parity: `framework.dart:5081`
         // `dependOnInheritedWidgetOfExactType` -> the matched
@@ -330,7 +347,14 @@ impl BuildContext for ElementBuildContext {
         };
 
         // Register dependency (id + depth).
-        accessor.record_dependent(self_id, self_depth);
+        // Outside a build drain there is no build whose reads could
+        // re-derive this one, so it is kept like a lifecycle read.
+        accessor.record_lifecycle_dependent(
+            crate::context::CrateToken::new(),
+            self_id,
+            self_depth,
+            mask,
+        );
         owner.register_inherited_dependency(self_id, ancestor_id);
         drop(owner);
 
@@ -641,6 +665,13 @@ pub(crate) struct DependentRecord {
     pub(crate) dependent: ElementId,
     /// The dependent's tree depth (for dirty-heap ordering).
     pub(crate) depth: usize,
+    /// The provider fields the dependent read (#1090).
+    pub(crate) mask: crate::view::FieldSet,
+    /// Recorded from `init_state` / `did_change_dependencies` rather than
+    /// `build`: such reads are kept until unmount (Flutter's accumulate
+    /// semantics), not re-derived per build (ADR-0074 §5.5). Set by the
+    /// stateful behavior after the hook returns.
+    pub(crate) lifecycle: bool,
 }
 
 /// Build-time [`BuildContext`] backed by a live, borrowed read view of the
@@ -760,6 +791,8 @@ impl<'b> BuildCtx<'b> {
     }
 }
 
+impl super::build_context::sealed::Sealed for BuildCtx<'_> {}
+
 impl BuildContext for BuildCtx<'_> {
     fn element_id(&self) -> ElementId {
         self.element_id
@@ -837,6 +870,21 @@ impl BuildContext for BuildCtx<'_> {
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
+        self.depend_on_inherited_fields(
+            super::build_context::sealed::CrateToken::new(),
+            type_id,
+            crate::view::FieldSet::ALL,
+            callback,
+        )
+    }
+
+    fn depend_on_inherited_fields(
+        &self,
+        _token: super::build_context::sealed::CrateToken,
+        type_id: TypeId,
+        mask: crate::view::FieldSet,
+        callback: &mut dyn FnMut(&dyn Any),
+    ) -> bool {
         let Some(provider_id) = self.find_inherited_provider(type_id) else {
             return false;
         };
@@ -863,6 +911,8 @@ impl BuildContext for BuildCtx<'_> {
             provider: provider_id,
             dependent: self.element_id,
             depth: self.depth,
+            mask,
+            lifecycle: false,
         });
         callback(accessor.view_as_any());
         true

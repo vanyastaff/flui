@@ -38,6 +38,21 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `signals` on `flui-testing`/`flui-app`); facade feature `signals`; the feature's tests run
   in CI. FOUNDATIONS C1 amended. Derived values and effects are deferred to ADR-0075
   (Proposed).
+- **Field-granular inherited dependencies** (issue #1090, ADR-0008 §2): `FieldMask<D>`
+  (typed by the provider data; a mismatched selector does not compile) and the untyped
+  `FieldSet` it erases to, `#[derive(InheritedData)]` (one `FIELD_<NAME>: FieldMask<Self>` per
+  field + `field_mask_diff`),
+  `InheritedView::changed_fields`, `BuildContextExt::depend_on_field`. An
+  `InheritedElement` records which fields each dependent read and notifies only the
+  dependents whose fields changed; `depend_on` is the whole-provider mask. The field
+  accessors are `MediaQuery::size_of`, `device_pixel_ratio_of`, `text_scale_factor_of`,
+  `padding_of`, `view_insets_of`, `platform_brightness_of`, `depend_on_fields` and
+  `Theme::color_scheme_of`, `text_theme_of`, `depend_on_fields`; `MediaQueryData` and
+  `ThemeData` derive `InheritedData`. `InheritedElementAccess::record_dependent` takes the
+  mask; `InheritedBehavior::dependents` values are `DependentEntry { depth, mask }`
+  (`#[non_exhaustive]`). Reset-on-build: an element's recorded `build` fields are those of its
+  latest build (reads in `init_state`/`did_change_dependencies` are kept until unmount) (a deliberate divergence from Flutter's accumulate-until-unmount
+  `_dependencies`; ADR-0074 §5.5 mapping decision).
 - **Rebuild and relayout telemetry**: `BuildOwner::last_frame_build_report()` (elements
   rebuilt by the last `build_scope`, split by `RebuildReason`) and
   `PipelineOwner::layout_roots_total()` (monotonic count of drained layout roots).
