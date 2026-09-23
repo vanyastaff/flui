@@ -222,27 +222,27 @@ pub struct WindowCallbacks {
     /// Called when an input event (pointer, keyboard) is delivered to this
     /// window. Returns `DispatchEventResult` indicating if the event was
     /// consumed.
-    pub on_input: Mutex<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_input: Mutex<Option<Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>>>,
 
     /// Called when the platform requests a new frame to be rendered.
-    pub on_request_frame: Mutex<Option<Box<dyn FnMut() + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_request_frame: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
     /// Called when the window is resized. Parameters: new size (logical), scale
     /// factor.
-    pub on_resize: Mutex<Option<Box<dyn FnMut(Size<Pixels>, f32) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_resize: Mutex<Option<Box<dyn FnMut(Size<Pixels>, f32) + Send>>>,
 
     /// Called when the window is moved.
-    pub on_moved: Mutex<Option<Box<dyn FnMut() + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_moved: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
     /// Called when the window is about to be destroyed. Only fires once
     /// (FnOnce).
-    pub on_close: Mutex<Option<Box<dyn FnOnce() + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_close: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 
     /// Called to ask if the window should close. Return `false` to veto.
-    pub on_should_close: Mutex<Option<Box<dyn FnMut() -> bool + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_should_close: Mutex<Option<Box<dyn FnMut() -> bool + Send>>>,
 
     /// Called when the window gains or loses focus. Parameter: is_active.
-    pub on_active_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_active_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
 
     /// Called when the window's visibility (occlusion) changes. Parameter:
     /// is_visible (`true` when the window becomes visible/unoccluded).
@@ -262,14 +262,14 @@ pub struct WindowCallbacks {
     /// Where no signal is ever delivered, this callback simply never fires
     /// — the window is treated as always visible (the same behavior as
     /// before this callback existed).
-    pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
 
     /// Called when the mouse enters or leaves the window. Parameter:
     /// is_hovered.
-    pub on_hover_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_hover_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
 
     /// Called when the system appearance (light/dark) changes.
-    pub on_appearance_changed: Mutex<Option<Box<dyn FnMut() + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_appearance_changed: Mutex<Option<Box<dyn FnMut() + Send>>>,
 
     /// Called when the GPU surface's availability changes. Parameter:
     /// `has_surface` (`false` means the surface must be released before this
@@ -281,7 +281,7 @@ pub struct WindowCallbacks {
     /// [`crate::traits::PlatformWindow::on_surface_status_change`] for the contract and for
     /// why a backend that never emits it is harmless while one that emits only
     /// `false` is not.
-    pub on_surface_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>, // PORT-CHECK-OK-SP6: PlatformHandlers callback storage; FR-029 #5 sanctioned; SP-6 lock-placement tracked
+    pub on_surface_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
 
     safe_area_dispatch: Mutex<DispatchState<flui_types::geometry::EdgeInsets>>,
     on_safe_area_change: Mutex<Option<Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>>>,

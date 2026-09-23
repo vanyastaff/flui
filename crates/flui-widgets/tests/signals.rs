@@ -194,9 +194,9 @@ impl StatefulView for WriterInBuild {
 impl ViewState<WriterInBuild> for WriterInBuildState {
     fn build(&self, _view: &WriterInBuild, ctx: &dyn BuildContext) -> impl IntoView {
         let r = ctx.reactive();
-        // PORT-CHECK-OK-24: this test proves the run-time refusal of a write in build.
+        // This test proves the run-time refusal of a write in build.
         self.view.outcome.set(Some(self.view.sig.set(&r, 99)));
-        // PORT-CHECK-OK-24: same for a slot creation in build.
+        // Same for a slot creation in build.
         self.view.created.set(Some(r.try_signal(0u8).map(|_| ())));
         SizedBox::square(1.0)
     }

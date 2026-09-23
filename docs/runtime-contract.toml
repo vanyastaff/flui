@@ -23,14 +23,11 @@
 #   - Forbidden patterns/paths (retired intermediaries, a public generic UI
 #     executor, an `unsafe impl Sync for Renderer`, a `flui-presentation`
 #     crate) stay absent from `crates/**/*.rs`.
-#   - New ambient singletons and public lock-shaped surfaces in the runtime
-#     crates are caught by scanning for `impl_binding_singleton!(`,
-#     `fn instance() -> &'static`, and `PORT-CHECK-OK-SP6` markers, and
-#     requiring every hit to be registered below with an owning issue. This
-#     net sees exactly what those textual markers see: a singleton built
-#     without the macro/idiom, or a lock surface that never needed an SP-6
-#     marker (because port-check trigger #12's grammar missed it), is invisible
-#     to it. Full Rust-surface analysis is not claimed.
+#   - New ambient singletons in the runtime crates are caught by scanning for
+#     `impl_binding_singleton!(` and `fn instance() -> &'static`, and
+#     requiring every hit to be registered below with an owning issue. A
+#     singleton built without the macro/idiom is invisible to this net; full
+#     Rust-surface analysis is not claimed.
 #
 # States:
 #   implemented           — verified against current code, with evidence below
@@ -3447,40 +3444,6 @@ owner_issue = 553
 note = "shared_font_system()/FONT_SYSTEM: SharedEngineServices::resolve() (invoked from AppRuntime::ensure_services() at realm install) is the CONSTRUCTING owner -- it calls flui_painting::shared_font_system() explicitly, eagerly installing the process-wide FontSystem instead of leaving it to whichever text-measurement call happens to run first. The READ path stays ambient on layout hot paths -- cross-realm register_font staleness mid-layout is a named, bounded hazard (Mutex<FontSystem> makes it staleness not a data race), not closed until fonts get their own owner-local-access/sharding follow-up (ADR-0027 follow-up 6). ADR-0065 narrowed the mutation surface to one door: SharedFontSystem::register_font (append-only, bumps generation()) is the only way the database changes after construction; shape() hands out a Shaper that can resolve and shape but cannot reach the database, and the embedded baseline faces (flui_painting::fonts, `bundled-fonts`) are installed at construction rather than by the engine. The hazard is therefore exactly the register_font-vs-layout staleness named above, and every shaped-text cache keys on generation() so it heals at the next layout. A second CONSTRUCTING path exists for tests only: flui_painting::text_layout::init_font_system_with_faces (reached through flui_testing::fonts::pin_font_faces) installs a FontSystem built from caller-supplied faces instead of the host's, so a test that commits layout is not pinned to its author's font installation. It is one-shot and returns false rather than mutating when the font system already exists -- it cannot race the owner above, only lose to it. This is a construction path, not a new mutation path: it does not widen the register_font hazard."
 
 # =============================================================================
-# Public lock-shaped surface allowlist (runtime crates)
-# =============================================================================
-#
-# The checker scans flui-app, flui-scheduler, flui-platform, and flui-engine
-# for `PORT-CHECK-OK-SP6` markers (port-check trigger #12's exemption
-# grammar); every file containing one must be listed here with an owning
-# issue. This sees exactly what the SP-6 marker sees — a lock-shaped public
-# surface that trigger #12's grammar misses is invisible to both gates.
-
-[[lock_exemption]]
-file = "crates/flui-platform/src/platforms/windows/platform.rs"
-reason = "WindowsPlatform public handlers Arc<Mutex<PlatformHandlers>> field"
-owner_issue = 551
-markers = ["PORT-CHECK-OK-SP6: WindowsPlatform handlers"]
-
-[[lock_exemption]]
-file = "crates/flui-platform/src/shared/handlers.rs"
-reason = "PlatformHandlers public Mutex<Option<Box<dyn FnMut>>> callback storage"
-owner_issue = 551
-markers = [
-    "pub on_input: Mutex<Option<Box<dyn FnMut(PlatformInput)",
-    "pub on_request_frame: Mutex<Option<Box<dyn FnMut()",
-    "pub on_resize: Mutex<Option<Box<dyn FnMut(Size<Pixels>, f32)",
-    "pub on_moved: Mutex<Option<Box<dyn FnMut()",
-    "pub on_close: Mutex<Option<Box<dyn FnOnce()",
-    "pub on_should_close: Mutex<Option<Box<dyn FnMut() -> bool",
-    "pub on_active_status_change: Mutex<Option<Box<dyn FnMut(bool)",
-    "pub on_visibility_status_change: Mutex<Option<Box<dyn FnMut(bool)",
-    "pub on_hover_status_change: Mutex<Option<Box<dyn FnMut(bool)",
-    "pub on_appearance_changed: Mutex<Option<Box<dyn FnMut()",
-    "pub on_surface_status_change: Mutex<Option<Box<dyn FnMut(bool)",
-]
-
-# =============================================================================
 # Process-global guards (transitional; retire with the singletons)
 # =============================================================================
 #
@@ -3725,7 +3688,7 @@ private `RawHandles` newtype carrying just those two fields, so `Renderer` \
 now derives the bound from its field types instead of asserting it \
 directly. Reintroducing a manual impl on `Renderer` itself re-widens the \
 assertion back to every field, silently, exactly as before. This scan is \
-workspace-wide (no `scope`), unlike a port-check.sh `check()`, which closes \
+workspace-wide (no `scope`), which closes \
 a same-crate-different-file reintroduction a file-scoped grep would miss. \
 Not closed by this entry: an arbitrary `type` alias to `Renderer` under a \
 different name (e.g. `type X = Renderer; unsafe impl Send for X {}`) — no \

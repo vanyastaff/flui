@@ -33,7 +33,7 @@
 //!
 //! ## C4 rule — no `Matrix4` in this module
 //!
-//! This module is `Matrix4`-free by port-check Trigger 19 (same rule as
+//! This module is `Matrix4`-free (same rule as
 //! `batches/`).  Transforms live in `GpuStateStack` (glam internally) and cross
 //! the record/replay boundary as baked float arrays in the `DrawSegment` IR.
 

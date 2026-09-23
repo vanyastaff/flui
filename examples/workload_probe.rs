@@ -447,7 +447,7 @@ impl StatelessView for WorkloadRoot {
 
 /// Owns the tick controller's lifecycle: registers it with the ambient
 /// [`VsyncScope`] and starts the free run in `init_state` (ADR-0021,
-/// port-check trigger #22 — lifecycle-only acquisition), never from `build`.
+/// lifecycle-only acquisition), never from `build`.
 #[derive(Clone, StatefulView)]
 struct WorkloadDriver {
     scroll_controller: ScrollController,

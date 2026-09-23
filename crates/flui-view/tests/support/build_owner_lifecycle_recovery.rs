@@ -61,7 +61,6 @@ impl crate::StatefulView for InitPanicView {
 
 impl crate::ViewState<InitPanicView> for InitPanicState {
     fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
-        // PORT-CHECK-OK-LOCK: plain data: ElementId is Copy
         *self.failed_id.lock() = Some(ctx.element_id());
         panic!("scoped descendant init_state panic");
     }

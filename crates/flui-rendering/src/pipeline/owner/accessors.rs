@@ -1619,7 +1619,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// `None` until [`Self::set_semantics_enabled`]`(true)` lazily creates
     /// one; `None` again once the matching `false` transition disposes it.
-    /// Read-only by design (SP-6 / port-check: no lock, no `&mut` escape —
+    /// Read-only by design (no lock, no `&mut` escape —
     /// the owner's tree is written only by `Semantics::run_semantics`).
     #[inline]
     pub fn semantics_owner(&self) -> Option<&flui_semantics::SemanticsOwner> {

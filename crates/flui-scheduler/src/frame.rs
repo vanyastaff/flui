@@ -426,7 +426,6 @@ pub type LifecycleStateCallback = Box<dyn Fn(AppLifecycleState) + Send + Sync>;
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
 pub enum FramePhase {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Waiting for frame to start
     #[default]
     Idle = 0,

@@ -16,7 +16,7 @@ bound, a payload type.
 
 ### 1. `DragTarget` publishes a shared `DragTargetSlot`, not its `State`
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — behavior is the
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — behavior is the
 floor, structure is designed for Rust; every divergence names what is better,
 replaces the oracle's test, and drops no edge case by accident.
 
@@ -173,7 +173,7 @@ pointer was never over.
 
 ### 4. Named routes split into six untyped entry points and two typed ones, and a request that cannot be served is a typed error
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — behavior is the
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — behavior is the
 floor, and a divergence names what is better, replaces the oracle's test, and
 drops no edge case by accident. Gated as [ADR-0024](../../docs/adr/ADR-0024-named-routes-seam.md) §7.3.
 
@@ -583,7 +583,7 @@ settings object it was handed.
 
 ### 9. A route factory is handed the request only — the navigator accessor is withdrawn
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — the reference's
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — the reference's
 observable behavior is the floor; where a contract can be improved, improve it
 and record what is better.
 
@@ -752,7 +752,7 @@ clean `Err`.
 
 ### 11. A route's `settings` are write-only, so the factory relays values instead — recorded, with its trigger
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — a behavior the
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a behavior the
 reference handles is dropped only by decision, recorded where a reader will find
 it.
 
@@ -919,7 +919,7 @@ tree.
 
 ### 14. `ParentDataView` ancestry is checked at attach, with catalog diagnostic labels
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — framework-user
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — framework-user
 composition errors must not surface as internal render-protocol panics.
 
 **Oracle:** Flutter's `ParentDataWidget` / `_updateParentData` rejects misuse
@@ -951,7 +951,7 @@ message is not `BoxLayoutCtx::from_erased`. Happy paths remain in
 
 ### 15. `Container` is one render object, not a conditional widget stack
 
-**Rule:** Prime Directive #1 — a convenience widget's implementation shape must
+**Rule:** Design stance ("Flutter is a reference, not a spec") — a convenience widget's implementation shape must
 not make the caller's unkeyed child state depend on which cosmetic options are
 set.
 
@@ -1187,7 +1187,7 @@ detecting it.
 
 ### 16. A push's entrance-transition future is awaited outside the flush that installed it
 
-**Rule:** Prime Directive #1 — a Flutter contract carried over a flush-timing
+**Rule:** Design stance ("Flutter is a reference, not a spec") — a Flutter contract carried over a flush-timing
 constraint the reference never has, so the mapping decision belongs here
 beside the local placement it governs; [ADR-0064](../../docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md)
 records the cross-crate design this decision consumes.
@@ -1219,7 +1219,7 @@ queued command is drained.
 
 ### 17. `Semantics` action builders take `Send + Sync` handlers, so the caller hoists the `Arc` where the reference's closure captures a `State` field
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — the reference's
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — the reference's
 observable behavior is the floor; where a contract is better, improve it and
 record what is. This file's own scope note puts a callback bound here rather
 than in an ADR: it is local to this crate.
@@ -1381,7 +1381,7 @@ halves are independently pinned), and the same mutation of `on_set_text` turns
 
 ### 18. Replacing a `HeroController` retires its in-flight flights, restoring both heroes
 
-**Rule:** Prime Directive #1 — the reference's observable behavior is the floor;
+**Rule:** Design stance ("Flutter is a reference, not a spec") — the reference's observable behavior is the floor;
 where the reference has no behaviour (no analogue exists), FLUI names the rule,
 justifies it, and pins it with a test. This entry is local to the crate, so it
 lives here rather than in an ADR.
@@ -1449,7 +1449,7 @@ entry high (`left: 4, right: 3`) and both placeholders set.
 
 ### 19. Word-boundary movement uses `unicode-segmentation` (UAX #29), not ICU dictionary segmentation
 
-**Rule:** Prime Directive #2 — search the market/existing dependency graph
+**Rule:** Design stance ("Look around before settling") — search the market/existing dependency graph
 before adding one, and cite what an unmatched reference actually needs.
 
 **Oracle:** Flutter's `TextPainter.getWordBoundary` (which
@@ -1560,7 +1560,7 @@ that script specifically, only that it is never corrupted.
 
 ### 20. `GestureDetector` composes AROUND `Listener`, not inside it, for double-tap word selection
 
-**Rule:** Prime Directive #2 — reuse tested framework machinery
+**Rule:** Design stance ("Look around before settling") — reuse tested framework machinery
 (`flui_interaction::DoubleTapGestureRecognizer` via
 `flui_widgets::GestureDetector`) rather than hand-rolling tap-count/slop/
 timeout tracking a second time inside `EditableText`'s own pointer

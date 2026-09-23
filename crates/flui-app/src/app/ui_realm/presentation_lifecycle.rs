@@ -139,7 +139,6 @@ impl UiRealm {
         for presentation in self.presentations.iter() {
             presentation.closing_requested.set(true);
             presentation.widgets().lifecycle_source().begin_close();
-            // PORT-CHECK-OK-LOCK: plain data: retained pointer events, no Drop
             presentation.held_pointer_input().borrow_mut().clear();
         }
         self.reconcile_lifecycle(Vec::new());
@@ -149,7 +148,6 @@ impl UiRealm {
         if let Some(presentation) = self.presentations.get(id) {
             presentation.closing_requested.set(true);
             presentation.widgets().lifecycle_source().begin_close();
-            // PORT-CHECK-OK-LOCK: plain data: retained pointer events, no Drop
             presentation.held_pointer_input().borrow_mut().clear();
             self.reconcile_lifecycle(Vec::new());
         }

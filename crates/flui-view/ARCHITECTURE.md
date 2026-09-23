@@ -1,12 +1,10 @@
 # flui-view Architecture
 
 Per-crate ledger for architecture decisions that span more than one module in
-this crate, as required by [`docs/PORT.md`](../../docs/PORT.md) §Per-crate
-`ARCHITECTURE.md` template. Partial: this file exists for the `## Mapping
+this crate. Partial: this file exists for the `## Mapping
 decisions` entries below; a full crate architecture writeup is deferred.
 [`UNIFIED_ELEMENT.md`](UNIFIED_ELEMENT.md) is the crate's existing element
-behaviour taxonomy and remains a sibling appendix, per `docs/PORT.md`'s graft
-note for this crate.
+behaviour taxonomy and remains a sibling appendix.
 
 ---
 

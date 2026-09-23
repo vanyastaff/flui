@@ -257,7 +257,7 @@ struct AnimatedBoxDemoState {
 }
 
 impl ViewState<AnimatedBoxDemo> for AnimatedBoxDemoState {
-    /// Lifecycle-only (ADR-0021, port-check trigger #22): registers with the
+    /// Lifecycle-only (ADR-0021): registers with the
     /// ambient `VsyncScope` and starts the bounce here, never from `build`.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {

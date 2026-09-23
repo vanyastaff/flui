@@ -45,7 +45,7 @@
 // Modules
 pub mod app;
 pub mod bindings;
-pub mod embedder; // PORT-CHECK-OK-SP4: embedder API surface; binding entry for app integrators
+pub mod embedder;
 
 // Primary exports - Flutter naming
 pub use app::{

@@ -63,7 +63,7 @@ class Modes(unittest.TestCase):
             self.assertEqual((r["mode"], r["heavy_required"]), ("full", False), path)
 
     def test_checks_only_tooling_compiles_nothing(self):
-        self.assertEqual(scope("scripts/port-check.sh", "typos.toml")["mode"], "none")
+        self.assertEqual(scope("scripts/check-panic-policy.sh", "typos.toml")["mode"], "none")
 
     def test_unattributable_file_is_full(self):
         self.assertEqual(scope("some-new-dir/thing.txt")["mode"], "full")

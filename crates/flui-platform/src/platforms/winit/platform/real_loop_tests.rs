@@ -406,7 +406,6 @@ fn winit_lane_post_unwind_straggler_event_is_tolerated() {
                         .find(|id| !keys_before.contains(id))
                 })
                 .expect("a new winit id must have appeared");
-            // PORT-CHECK-OK-LOCK: plain data: WinitWindowId is Copy
             *stale_id_for_worker.lock() = Some(new_id);
 
             // Abandon without claiming -- same unwind path as the
@@ -818,7 +817,6 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             }));
             let close_thread_for_callback = Arc::clone(&close_thread_for_worker);
             window.on_close(Box::new(move || {
-                // PORT-CHECK-OK-LOCK: plain data: ThreadId is Copy
                 *close_thread_for_callback.lock() = Some(thread::current().id());
             }));
             let _prev = kept_window_for_worker.lock().replace(Arc::clone(&window));
@@ -982,7 +980,6 @@ fn frame_callback_owner_is_released_by_complete_window_close() {
                 ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
             };
 
-            // PORT-CHECK-OK-LOCK: no significant drop: Weak downgrade never drops the pointee
             *weak_window_for_worker.lock() = Some(Arc::downgrade(&window));
 
             let probe = RendererProbe {

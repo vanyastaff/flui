@@ -62,7 +62,6 @@ impl Stream for Controlled {
     type Item = Result<Payload, Boom>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // PORT-CHECK-OK-LOCK: plain data: Option<Result<Payload(i32), Boom(&'static str)>>, no Drop
         let event = self.channel.events.lock().pop_front();
         if let Some(event) = event {
             return Poll::Ready(event);

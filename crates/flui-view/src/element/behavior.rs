@@ -120,7 +120,8 @@ where
     // The rebuild capability is minted from the element's own core,
     // which already holds the `ExternalBuildScheduler` installed at mount — the
     // same channel `AnimatedView` rides. `build` must not call `schedule()`;
-    // port-check trigger #22 enforces that a handle is not even acquired there.
+    // it receives a `BuildContext`, which has no capability methods, so a
+    // handle cannot even be acquired there.
     // The pipeline owner comes off the core, not off the tree node: `build_scope`
     // has the element *extracted* from its node for the duration of the build
     // (`ElementNode::element` panics in that window), so a `BuildContext` cannot

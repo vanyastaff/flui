@@ -26,7 +26,6 @@ pub enum FlexDirection {
 /// How children are aligned along the main axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MainAxisAlignment {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Children are placed at the start.
     #[default]
     Start,
@@ -52,7 +51,6 @@ pub use flui_types::layout::MainAxisSize;
 /// How children are aligned along the cross axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CrossAxisAlignment {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Children are aligned at the start.
     #[default]
     Start,

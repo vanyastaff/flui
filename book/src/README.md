@@ -6,7 +6,7 @@ three-tree pipeline — immutable `View` configuration → mutable `Element` lif
 port: where Flutter's contracts are good, FLUI starts from them and says so; where they are not,
 or where Rust's ownership model asks for something different, FLUI diverges and records the
 reasoning as an ADR. See [`AGENTS.md`](https://github.com/vanyastaff/flui/blob/main/AGENTS.md)'s
-Prime Directive for the full policy.
+Design stance for the full policy.
 
 This book is a skeleton (tracked as H2 in the beta roadmap): the structure is here, and every
 section is either filled with real, verified content or an explicit stub pointing at the working

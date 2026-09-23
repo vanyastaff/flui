@@ -44,7 +44,6 @@ struct MediaQueryProbe {
 
 impl StatelessView for MediaQueryProbe {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        // PORT-CHECK-OK-LOCK: plain data: MediaQueryData, no Drop
         *self.captured.borrow_mut() = Some(MediaQuery::of(ctx));
         SizedBox::new(10.0, 10.0)
     }

@@ -1,4 +1,4 @@
-[← Foundations](FOUNDATIONS.md) · [Port Methodology](PORT.md) · [Back to README](../README.md)
+[← Foundations](FOUNDATIONS.md) · [Back to README](../README.md)
 
 # FLUI Roadmap
 
@@ -18,4 +18,4 @@ Milestones are ordered by dependency, not by calendar; a milestone closes when i
 
 ---
 
-[← Foundations](FOUNDATIONS.md) · [Port Methodology](PORT.md) · [Back to README](../README.md)
+[← Foundations](FOUNDATIONS.md) · [Back to README](../README.md)

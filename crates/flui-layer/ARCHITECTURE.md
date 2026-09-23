@@ -1,6 +1,6 @@
 # flui-layer Architecture
 
-The per-crate record for `flui-layer` as defined by [`docs/PORT.md`](../../docs/PORT.md): the
+The per-crate record for `flui-layer`: the
 Flutter → Rust mapping, every divergence from `layer.dart` with the reason and the test that
 replaces the Flutter one, the thread-safety surface, and what is deliberately not here.
 

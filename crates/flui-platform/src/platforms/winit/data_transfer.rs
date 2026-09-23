@@ -86,7 +86,7 @@ struct DragDropState {
 /// until the clipboard transport lands (ADR-0038 §6).
 #[derive(Debug, Default)]
 pub struct WinitDataTransfer {
-    /// Private lock; no guard escapes any signature (SP-6).
+    /// Private lock; no guard escapes any signature.
     state: Mutex<DragDropState>,
 }
 

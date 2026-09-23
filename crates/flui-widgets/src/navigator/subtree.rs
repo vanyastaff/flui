@@ -117,12 +117,10 @@ impl RouteSubtreeCell {
     }
 
     fn publish_element(&self, element_id: ElementId) {
-        // PORT-CHECK-OK-LOCK: plain data: ElementId is Copy
         *self.element.lock() = Some(element_id);
     }
 
     fn clear_element(&self) {
-        // PORT-CHECK-OK-LOCK: plain data: Option<ElementId>, no Drop
         *self.element.lock() = None;
     }
 

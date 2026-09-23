@@ -787,7 +787,7 @@ struct Mover {
 
 impl Mover {
     /// Grow, and schedule the rebuild that makes it visible. `RebuildHandle` is
-    /// acquired in `init_state` and fired from here — never from `build` (trigger #22).
+    /// acquired in `init_state` and fired from here — never from `build`.
     fn grow(&self) {
         self.tall.store(true, Ordering::SeqCst);
         if let Some(rebuild) = self.rebuild.lock().as_ref() {

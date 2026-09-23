@@ -457,7 +457,6 @@ impl RawInputHandler {
 
     /// Clear all tracking state.
     pub fn reset(&self) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         self.tracking.borrow_mut().clear();
     }
 }

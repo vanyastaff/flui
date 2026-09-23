@@ -333,11 +333,11 @@ impl flui_view::ViewState<HitTestCapture> for HitTestCaptureState {
 /// The bootstrap installs the fresh-hit-test capability, and it answers.
 ///
 /// Production installs one per presentation, so a harness that did not would
-/// answer `None` to `BuildContext::hit_test_handle()` exactly where a real app
+/// answer `None` to `LifecycleContext::hit_test_handle()` exactly where a real app
 /// answers `Some` — and a widget whose behavior rides on a fresh hit test (a
 /// `Draggable` discovering the `DragTarget` it has moved over) would be
 /// untestable in the tier that is meant to cover it. Acquired in `init_state`,
-/// which is the only place port-check trigger #22 allows.
+/// a lifecycle hook — `build`'s `BuildContext` has no such method.
 #[test]
 fn the_bootstrap_installs_a_working_fresh_hit_test_capability() {
     let captured = Rc::new(RefCell::new(None));

@@ -711,7 +711,6 @@ impl Clipboard for MockClipboard {
     }
 
     fn write_text(&self, text: String) {
-        // PORT-CHECK-OK-LOCK: plain data: String
         *self.content.lock() = Some(text);
     }
 }

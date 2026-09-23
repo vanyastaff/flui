@@ -576,7 +576,6 @@ impl TabBarState {
             let id = resolved.add_listener(move || {
                 rebuild.schedule(flui_view::RebuildReason::AnimationTick);
             });
-            // PORT-CHECK-OK-LOCK: plain data: ListenerId is Copy
             *self.listener_id.borrow_mut() = Some(id);
             let _prev = self.controller.borrow_mut().replace(resolved.clone());
         }

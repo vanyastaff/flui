@@ -17,7 +17,7 @@ use super::{PipelineCell, WeakPipelineCell};
 /// A [`HitTestProbe`] backed by a live [`PipelineCell`].
 ///
 /// Installed on a realm's interaction lane at construction, so widget code
-/// reaching `BuildContext::hit_test_handle()` tests against the same tree
+/// reaching `LifecycleContext::hit_test_handle()` tests against the same tree
 /// pointer dispatch walks — not a parallel registry that would drift from it.
 ///
 /// Holds the cell **weakly**. The lane outlives any one presentation, so a
@@ -26,7 +26,7 @@ use super::{PipelineCell, WeakPipelineCell};
 /// to fail closed after a close into ones that quietly keep working.
 ///
 /// Liveness is a **separate** signal from that weak reference, because the two
-/// are different facts. `BuildContext::pipeline_owner()` hands out a strong
+/// are different facts. `LifecycleContext::pipeline_owner()` hands out a strong
 /// `PipelineCell`, and a widget that stores one keeps the tree's allocation
 /// alive past its presentation's close; a probe treating "the allocation is
 /// freed" as "the presentation closed" would go on answering from a detached
@@ -226,7 +226,7 @@ mod tests {
 
     /// A retained tree does not keep a closed presentation answerable.
     ///
-    /// `BuildContext::pipeline_owner()` hands out a STRONG `PipelineCell`, and
+    /// `LifecycleContext::pipeline_owner()` hands out a STRONG `PipelineCell`, and
     /// a widget may legitimately store one. If that were the only liveness
     /// signal, such a widget would keep this probe's weak reference
     /// upgradeable after its presentation closed, and the handle would go on

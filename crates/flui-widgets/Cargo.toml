@@ -184,8 +184,7 @@ serde = ["flui-types/serde"]
 # optional `flui-testing` dep plus the `testing` surfaces of flui-rendering
 # (pipeline inspection) and flui-interaction (synthetic event constructors).
 # Named `testing` to match the flui-rendering/flui-layer convention for
-# feature-gated `src/testing` modules (the shape port-check trigger 11
-# sanctions).
+# feature-gated `src/testing` modules.
 testing = [
     "dep:flui-testing",
     "dep:flui-platform",

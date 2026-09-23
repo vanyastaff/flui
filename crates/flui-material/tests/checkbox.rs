@@ -77,7 +77,6 @@ fn tap_fires_on_changed_with_the_next_value() {
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
         themed(Checkbox::new(false).on_changed(move |next| {
-            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             *recorder.borrow_mut() = Some(next);
         })),
         constraints(),
@@ -105,7 +104,6 @@ fn tristate_cycle_survives_a_rebuild_between_each_tap() {
 
     let build = |value: Option<bool>, sink: Rc<RefCell<Option<bool>>>| {
         themed(Checkbox::tristate(value).on_changed(move |next| {
-            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             *sink.borrow_mut() = next;
         }))
     };

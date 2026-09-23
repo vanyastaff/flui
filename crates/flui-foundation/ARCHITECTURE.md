@@ -1,6 +1,6 @@
 # Flutter Foundation Types - Complete Reference
 
-> **Template note (grafted 2026-05-19):** This document was retro-fitted to the per-crate `ARCHITECTURE.md` template defined in [`docs/PORT.md`](../../docs/PORT.md). The existing Flutter walk (sections 1-17) plays the role of `## Flutter source mapping`; the Architecture Decision Summary at the bottom plays the role of `## Mapping decisions`. The `## Thread safety`, `## Friction log`, and `## Outstanding refactors` sections were appended without rewriting the existing body.
+> **Template note (grafted 2026-05-19):** This document was retro-fitted to the per-crate `ARCHITECTURE.md` shape. The existing Flutter walk (sections 1-17) plays the role of `## Flutter source mapping`; the Architecture Decision Summary at the bottom plays the role of `## Mapping decisions`. The `## Thread safety`, `## Friction log`, and `## Outstanding refactors` sections were appended without rewriting the existing body.
 
 This document maps ALL types from Flutter's `foundation` library to their usage patterns across the Flutter codebase, providing guidance for FLUI implementation.
 

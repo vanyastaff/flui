@@ -72,7 +72,6 @@ for manifest in root.rglob("Cargo.toml"):
 docs_that_must_list_all = [
     root / "README.md",
     root / "docs" / "crates.md",
-    root / "docs" / "PORT.md",
 ]
 
 for path in docs_that_must_list_all:
@@ -85,7 +84,6 @@ current_inventory_files = [
     root / "AGENTS.md",
     root / "README.md",
     root / "docs" / "crates.md",
-    root / "docs" / "PORT.md",
     root / "docs" / "architecture.md",
     root / "justfile",
 ]
@@ -278,13 +276,8 @@ for package in workspace_packages:
 # reverse edge must never exist, or Flutter's own pre-decoupling coupling
 # (material/cupertino baked into the framework core) reappears in FLUI.
 #
-# This lives here, not in `port-check.sh`'s regex triggers, because it is a
-# `Cargo.toml` dependency-graph fact, not a source-pattern fact — the same
-# reason `port-check.sh`'s own dependency-adjacent checks (N-geom.U16, the
-# sanctioned-dyn-boundary allowlist, ...) grep `.rs` sources: they audit
-# *usage*, whereas this needs the declared dependency edge itself. This
-# script already parses `cargo metadata`'s per-package `dependencies` (see
-# the path/version check above) — the only place in the repo doing that today.
+# This is a `Cargo.toml` dependency-graph fact, checked against the
+# per-package `dependencies` this script already reads from `cargo metadata`.
 #
 # Keep this set explicit because the guard spans every dependency kind, unlike
 # the normal-edge layer rule below.
@@ -802,6 +795,16 @@ for path in sorted(root.rglob("*")):
             f"{path.relative_to(root)} still names `{stale_package_name}`; the "
             "package is `flui-testing`"
         )
+
+# An ADR number is a citable identifier: code, docs and the runtime contract
+# cite `ADR-NNNN`, so two records sharing a number make every citation of it
+# ambiguous. Scanned from filenames.
+adr_numbers: dict[str, list[str]] = {}
+for adr in sorted((root / "docs" / "adr").glob("ADR-[0-9][0-9][0-9][0-9]-*.md")):
+    adr_numbers.setdefault(adr.name[4:8], []).append(adr.name)
+for number, names in sorted(adr_numbers.items()):
+    if len(names) > 1:
+        errors.append(f"ADR-{number} is used by more than one record: {', '.join(names)}")
 
 if errors:
     print("workspace-inventory: drift detected", file=sys.stderr)

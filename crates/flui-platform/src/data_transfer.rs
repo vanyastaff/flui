@@ -437,7 +437,7 @@ struct OfferSlot {
 
 /// Slab of live offers with generation-checked lookup. One per platform
 /// instance, private inside its [`DataTransferSource`]. Not a public-API
-/// lock: backends hold it behind their existing state lock (SP-6 — no guard
+/// lock: backends hold it behind their existing state lock (no guard
 /// escapes a public signature).
 ///
 /// This is the **single minting authority** for [`DataTransferId`]s
@@ -541,7 +541,7 @@ impl OfferTable {
 // ============================================================================
 
 /// Shared oneshot state between a [`TransferRequest`] and its
-/// [`TransferCompleter`]. Private; no guard ever escapes (SP-6).
+/// [`TransferCompleter`]. Private; no guard ever escapes.
 #[derive(Debug)]
 struct TransferShared {
     slot: Mutex<TransferSlot>,

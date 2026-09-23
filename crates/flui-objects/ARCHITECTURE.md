@@ -1,8 +1,7 @@
 # flui-objects Architecture
 
-Per-crate ledger for the concrete `RenderBox` / `RenderSliver` catalog, as
-required by [`docs/PORT.md`](../../docs/PORT.md) §Per-crate `ARCHITECTURE.md`
-template. Mapping decisions that span more than one module in this crate land
+Per-crate ledger for the concrete `RenderBox` / `RenderSliver` catalog.
+Mapping decisions that span more than one module in this crate land
 here so later parity work does not treat a deliberate divergence as accidental
 drift. Module-level `//! # Mapping decisions` comments may repeat a local note
 and should cite this file when the contract is shared.

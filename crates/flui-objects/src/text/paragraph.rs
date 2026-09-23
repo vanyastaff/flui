@@ -319,8 +319,7 @@ impl RenderBox for RenderParagraph {
 
 /// Maps the painting-side [`TextDirection`] onto `flui-semantics`'s own
 /// parallel enum of the same name (two definitions of the same Flutter
-/// concept, consolidation tracked — see that type's `PORT-CHECK-OK-SP3`
-/// marker).
+/// concept).
 fn semantics_text_direction(direction: TextDirection) -> flui_rendering::semantics::TextDirection {
     match direction {
         TextDirection::Ltr => flui_rendering::semantics::TextDirection::Ltr,

@@ -110,10 +110,9 @@ borrow checker is what keeps record logic out of the coordinator.
 `GpuStateStack` stores transforms as `glam::Mat4`; the conversion from
 `flui_types::Matrix4` happens once, at `LayerDispatcher`'s `CommandRenderer`
 implementation, and `Matrix4` never appears in `batches/`, `pipeline_set.rs`,
-or `replay/` (port-check trigger 19). Direct `glam` is expected in the GPU
-modules and refused in the GPU-free ones (`raster*`, `dispatch`, `error`,
-`fonts`, `frame_timing`, `layer_state_stack`, `superellipse`; port-check
-`N-geom.U16`).
+or `replay/`. Direct `glam` is expected in the GPU modules and kept out of
+the GPU-free ones (`raster*`, `dispatch`, `error`, `fonts`, `frame_timing`,
+`layer_state_stack`, `superellipse`).
 
 ### Layer traversal is iterative
 
@@ -168,7 +167,7 @@ instead of silently skipping.
 ## Ownership and thread safety
 
 `flui-engine` runs on the render thread. No `Arc<Mutex<_>>` guards any
-engine subsystem (port-check trigger 7 watches for one returning); every
+engine subsystem, and none should come back; every
 shared handle is a wgpu ref-count.
 
 | Site | Type | Ownership |

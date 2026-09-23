@@ -132,8 +132,8 @@ impl<V: View + Clone + 'static> RootRenderElement<V> {
 
     /// Get the [`PipelineCell`].
     ///
-    /// No SP-6 marker needed: `PipelineCell` is a lock-free, closure-scoped
-    /// handle, not a lock guard.
+    /// `PipelineCell` is a lock-free, closure-scoped handle, not a lock
+    /// guard.
     pub fn pipeline_owner(&self) -> Option<&PipelineCell> {
         self.pipeline_owner.as_ref()
     }

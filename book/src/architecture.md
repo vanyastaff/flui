@@ -1,7 +1,7 @@
 # Architecture
 
 The deep architectural material lives in the repository's own `docs/`, where it is checked
-against the source tree by CI (`port-check`, `runtime-conformance-check`, `inventory-check`) — this
+against the source tree by CI (`runtime-conformance-check`, `inventory-check`) and the compiler — this
 page is an index into it, not a restatement, so it can't drift out of sync with what those gates
 actually enforce.
 
@@ -12,8 +12,8 @@ actually enforce.
   `flui-engine` → `wgpu`).
 - [`docs/FOUNDATIONS.md`](https://github.com/vanyastaff/flui/blob/main/docs/FOUNDATIONS.md) — the
   architecture contract and the locked contracts (C1–C9).
-- [`docs/PORT.md`](https://github.com/vanyastaff/flui/blob/main/docs/PORT.md) — the Flutter
-  translation rules, the 23 refusal triggers `port-check` enforces, and the type map.
+- [`AGENTS.md`](https://github.com/vanyastaff/flui/blob/main/AGENTS.md) — the design stance
+  toward Flutter and the rules the compiler and gates enforce.
 
 ## Per-crate architecture
 

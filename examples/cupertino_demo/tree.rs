@@ -219,7 +219,7 @@ impl StatefulView for SettingsTab {
 
 impl ViewState<SettingsTab> for SettingsTabState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // Lifecycle-only acquisition (ADR-0018, port-check trigger #22) —
+        // Lifecycle-only acquisition (ADR-0018) —
         // matches `material_demo::tree::MaterialDemoHomeState::init_state`.
         self.rebuild = Some(ctx.rebuild_handle());
     }

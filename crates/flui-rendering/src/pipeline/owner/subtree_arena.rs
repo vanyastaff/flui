@@ -885,7 +885,6 @@ unsafe fn layout_subtree_borrowed_impl(
                 return Ok(stand_in());
             }
             Some(FailedAttempt::Layout(_)) => {
-                // PORT-CHECK-OK-LOCK: plain data: Copy id inserted into a HashSet
                 arena.poison_retries.lock().insert(id);
             }
             Some(FailedAttempt::IntrinsicOnly) => return Ok(stand_in()),
@@ -1744,7 +1743,6 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                 return Ok(stand_in());
             }
             Some(FailedAttempt::Layout(_)) => {
-                // PORT-CHECK-OK-LOCK: plain data: Copy id inserted into a HashSet
                 arena.poison_retries.lock().insert(id);
             }
             Some(FailedAttempt::IntrinsicOnly) => return Ok(stand_in()),

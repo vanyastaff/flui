@@ -123,7 +123,7 @@ pub enum MultiDragAxis {
 /// interactive region). When `Some(handle)` is returned, the recogniser calls
 /// `update`/`end`/`cancel` on that handle.
 pub type MultiDragStartCallback =
-    Rc<dyn Fn(PointerId, Offset<Pixels>) -> Option<Box<dyn MultiDragHandle>>>; // PORT-CHECK-OK-DYN: per-pointer handle trait; ≤3 workspace sites, marker preferred over allowlist promotion.
+    Rc<dyn Fn(PointerId, Offset<Pixels>) -> Option<Box<dyn MultiDragHandle>>>; // per-pointer handle trait; ≤3 workspace sites, marker preferred over allowlist promotion.
 
 /// Per-pointer state. Mirrors Flutter's `MultiDragPointerState`.
 ///
@@ -150,7 +150,7 @@ struct MultiDragPointerState {
     /// `true` once the arena has accepted this pointer.
     accepted: bool,
     /// User's handle, populated after `accepted`.
-    client: Option<Rc<dyn MultiDragHandle>>, // PORT-CHECK-OK-DYN: owner-local per-pointer drag client.
+    client: Option<Rc<dyn MultiDragHandle>>, // owner-local per-pointer drag client.
     /// Velocity tracker fed while `pending` and after `accepted`.
     velocity_tracker: VelocityTracker,
     /// Timestamp of the most recent movement accumulated before acceptance.
@@ -487,7 +487,7 @@ impl MultiDragGestureRecognizer {
             }
             return;
         };
-        let client: Rc<dyn MultiDragHandle> = Rc::from(handle); // PORT-CHECK-OK-DYN: owner-local per-pointer drag client returned by the public factory.
+        let client: Rc<dyn MultiDragHandle> = Rc::from(handle); // owner-local per-pointer drag client returned by the public factory.
 
         let update = {
             let mut map = self.pointers.lock();
@@ -793,8 +793,7 @@ mod tests {
     }
 
     // Returns the concrete fixture; callers box it at the `Option<Box<dyn …>>`
-    // slot, so no `dyn` appears in this signature (keeps port-check trigger 9
-    // satisfied without a fmt-fragile inline marker).
+    // slot, so no `dyn` appears in this signature.
     fn counting_handle(cancels: Arc<AtomicUsize>) -> CountingHandle {
         CountingHandle {
             updates: Arc::new(AtomicUsize::new(0)),

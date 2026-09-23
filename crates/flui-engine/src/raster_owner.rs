@@ -393,7 +393,7 @@ struct PendingFrame {
 // ---------------------------------------------------------------------------
 
 /// The latest-frame-wins slot plus coalesced resize plus shutdown flag,
-/// guarded by one lock. Never `pub` (SP-6: no lock types in public API) —
+/// guarded by one lock. Never `pub` (no lock types in public API) —
 /// [`RasterHandle`] and [`RasterOwner`] are the only ways in.
 #[derive(Default)]
 struct MailboxState {

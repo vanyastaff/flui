@@ -149,10 +149,10 @@ impl ViewKey for CellKey {
     }
 
     fn key_eq(&self, other: &dyn ViewKey) -> bool {
-        // PORT-CHECK-OK-DOWNCAST: `key_eq` takes `&dyn ViewKey` and is
+        // `key_eq` takes `&dyn ViewKey` and is
         // contractually a comparison against this key's own type — every key
         // in the workspace implements it this way (see `SaltedKey`).
-        let same_kind = other.as_any().downcast_ref::<Self>(); // PORT-CHECK-OK-DOWNCAST: see above
+        let same_kind = other.as_any().downcast_ref::<Self>(); // see above
         same_kind
             .is_some_and(|other| self.row.part_eq(&other.row) && self.cell.part_eq(&other.cell))
     }

@@ -190,7 +190,7 @@ impl<T: Copy> StateCell<T> {
         // Mint the handle before taking the borrow, and let a previously
         // stored handle drop only after the borrow has fallen: a
         // `RebuildHandle` carries `Arc`s whose destructors must never run
-        // under this slot's `RefMut` (LockDiscipline/StatementDrop).
+        // under this slot's `RefMut`.
         let handle = ctx.rebuild_handle();
         let previous = self.rebuild.borrow_mut().replace(handle);
         drop(previous);
@@ -358,7 +358,7 @@ impl<T> StateHandle<T> {
         // Mint the handle before taking the borrow, and let a previously
         // stored handle drop only after the borrow has fallen: a
         // `RebuildHandle` carries `Arc`s whose destructors must never run
-        // under this slot's `RefMut` (LockDiscipline/StatementDrop).
+        // under this slot's `RefMut`.
         let handle = ctx.rebuild_handle();
         let previous = self.rebuild.borrow_mut().replace(handle);
         drop(previous);

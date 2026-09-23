@@ -466,11 +466,9 @@ pub struct ScaffoldState {
     handle: DrawerHandle,
     /// Acquired in [`init_state`](ViewState::init_state), per ADR-0018 —
     /// `build_drawer_controller`'s `on_open_changed` closures capture a
-    /// clone of this stored handle rather than calling `ctx.rebuild_handle()`
-    /// from inside `build()` (trigger #22: a frame-phase-only capability
-    /// must be acquired at `init_state`/`did_change_dependencies`, not
-    /// `build`, even when the call site is laundered through a private
-    /// helper). `None` only in the window between `create_state` and the
+    /// clone of this stored handle: `build()` receives a `BuildContext`,
+    /// which has no `rebuild_handle()` — only `LifecycleContext` offers it.
+    /// `None` only in the window between `create_state` and the
     /// first `init_state` — never observed by `build`, which always runs
     /// after `init_state`.
     rebuild: Option<RebuildHandle>,

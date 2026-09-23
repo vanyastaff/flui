@@ -219,8 +219,8 @@ impl std::fmt::Debug for SnackBarAction {
 pub struct SnackBarActionState {
     triggered: Rc<Cell<bool>>,
     /// Acquired in [`init_state`](ViewState::init_state), per ADR-0018
-    /// (trigger #22: a frame-phase-only capability may not be acquired from
-    /// `build`, even to hand straight to a press closure) — `None` only in
+    /// (`build` receives a `BuildContext`, which has no `rebuild_handle()`,
+    /// so it cannot be taken there even for a press closure) — `None` only in
     /// the window between `create_state` and the first `init_state`, never
     /// observed by `build`.
     rebuild: Option<RebuildHandle>,

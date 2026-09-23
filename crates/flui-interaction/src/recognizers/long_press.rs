@@ -189,7 +189,6 @@ impl LongPressGestureRecognizer {
 
     /// Update gesture settings
     pub fn set_settings(&self, settings: GestureSettings) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.settings.lock() = settings;
     }
 
@@ -1004,7 +1003,6 @@ mod tests {
             arena,
             GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(100)),
         )
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         .with_on_long_press_start(move |_| *s_clone.lock() = true);
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
@@ -1262,7 +1260,6 @@ mod tests {
 
         let fired = Arc::new(Mutex::new(false));
         let fired_flag = Arc::clone(&fired);
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         let recognizer = recognizer.with_on_long_press(move || *fired_flag.lock() = true);
 
         // Hold past the deadline, then drift a hair — inside the slop radius,
@@ -1367,7 +1364,6 @@ mod tests {
             arena.clone(),
             GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(60)),
         )
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         .with_on_long_press_start(move |_| *s_clone.lock() = true);
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");

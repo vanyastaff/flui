@@ -252,7 +252,7 @@ bitflags! {
         /// this on the render object as `_wasRepaintBoundary`; in FLUI it
         /// lives here so the paint phase can flip the bit through a single
         /// atomic store rather than acquiring a write lock on the trait
-        /// object). See `docs/PORT.md` Refusal trigger 1 — this flag was
+        /// object). This flag was
         /// introduced alongside the refactor that removed the
         /// `RwLock<Box<dyn RenderObject<P>>>` field.
         ///

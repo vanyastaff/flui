@@ -1219,7 +1219,6 @@ mod tests {
         assert_eq!(calls.borrow().as_slice(), &["leaf", "parent"]);
 
         child.set_on_key_event(Rc::new(|_| KeyEventResult::SkipRemainingHandlers));
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         calls.borrow_mut().clear();
         assert!(!manager.dispatch_key_event(&key_event()));
         assert!(calls.borrow().is_empty());
@@ -2149,7 +2148,6 @@ mod tests {
         // manager was left fully functional after the bounded drop.
         nodes[0].remove_listener(listener_0);
         nodes[1].remove_listener(listener_1);
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         edges.borrow_mut().clear();
         let settled = manager
             .primary_focus()
@@ -2278,7 +2276,6 @@ mod tests {
         let second_id_value = manager.add_listener(Rc::new(move |_, _| {
             second_calls_for_listener.set(second_calls_for_listener.get() + 1);
         }));
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *second_id.borrow_mut() = Some(second_id_value);
 
         nodes[1].request_focus();
@@ -2314,7 +2311,6 @@ mod tests {
         let second_id_value = node.add_listener(Rc::new(move || {
             second_calls_for_listener.set(second_calls_for_listener.get() + 1);
         }));
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *second_id.borrow_mut() = Some(second_id_value);
 
         node.request_focus();

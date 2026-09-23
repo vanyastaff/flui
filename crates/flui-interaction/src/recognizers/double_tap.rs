@@ -166,7 +166,6 @@ impl DoubleTapGestureRecognizer {
 
     /// Update gesture settings
     pub fn set_settings(&self, settings: GestureSettings) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.settings.lock() = settings;
     }
 
@@ -353,7 +352,6 @@ impl DoubleTapGestureRecognizer {
                 if let Some(entry) = &first_entry {
                     entry.hold();
                 }
-                // PORT-CHECK-OK-LOCK: shared arena handle, not last owner
                 *self.first_entry.lock() = first_entry;
             }
             DoubleTapPhase::SecondDown => {
@@ -418,7 +416,6 @@ impl DoubleTapGestureRecognizer {
 
             // The held first contact can differ from the currently tracked
             // second contact. Withdraw both exact entries before user code.
-            // PORT-CHECK-OK-LOCK: shared arena handle, not last owner
             let entry = self.first_entry.lock().take();
             if let Some(entry) = entry {
                 entry.resolve(GestureDisposition::Rejected);
@@ -633,7 +630,6 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
         // reject_gesture was a no-op (arena already settled or no active entry).
         // Avoids retaining one Arc<dyn GestureArenaMember> after unmount
         // mid-inter-tap-window.
-        // PORT-CHECK-OK-LOCK: shared arena handle, not last owner
         let entry = self.first_entry.lock().take();
         if let Some(entry) = entry {
             entry.release();
@@ -712,7 +708,6 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
         }
         // If a competitor won while we held the first entry across the inter-tap
         // window, drain the hold so the entry is not left held.
-        // PORT-CHECK-OK-LOCK: shared arena handle, not last owner
         let entry = self.first_entry.lock().take();
         if let Some(entry) = entry {
             entry.release();
@@ -951,7 +946,6 @@ mod tests {
 
         let recognizer = DoubleTapGestureRecognizer::new(arena)
             .with_on_double_tap_down(move |details| {
-                // PORT-CHECK-OK-LOCK: Option<Offset<Pixels>> is Copy, no significant drop
                 *down_seen_clone.lock() = Some(details.local_position);
             })
             .with_on_double_tap(move |_details| {
@@ -1065,7 +1059,6 @@ mod tests {
         let cancelled = Arc::new(Mutex::new(false));
         let cancelled_clone = cancelled.clone();
         let recognizer = DoubleTapGestureRecognizer::new(arena.clone())
-            // PORT-CHECK-OK-LOCK: plain data, no significant drop
             .with_on_double_tap_cancel(move |_| *cancelled_clone.lock() = true);
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");

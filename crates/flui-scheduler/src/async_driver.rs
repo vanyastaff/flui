@@ -753,7 +753,7 @@ impl AsyncDriver {
 
     /// Number of tasks the driver is holding.
     ///
-    /// A count, never a guard — the lock stays private (SP-6).
+    /// A count, never a guard — the lock stays private.
     #[must_use]
     pub fn pending_task_count(&self) -> usize {
         self.inner.store.lock().tasks.len()
@@ -787,7 +787,7 @@ impl AsyncDriver {
     }
 
     /// Diagnostic: `true` if both of this driver's locks are currently
-    /// free — never blocks, and never exposes a guard (SP-6: this crate
+    /// free — never blocks, and never exposes a guard (this crate
     /// hands out no lock guard from any public signature).
     ///
     /// Backs `flui-scheduler`'s own scheduler-wide lock-discipline oracle
@@ -1481,8 +1481,8 @@ mod tests {
         driver.poll_ready();
         // Swap the recorded order out and drop it after the guard releases
         // (`u32` has no significant Drop, but this keeps the shape uniform
-        // with every other lock site this sweep touches — see
-        // `LockDiscipline/StatementDrop` in docs/PORT.md).
+        // with every other lock site here: nothing drops while its own
+        // guard is still held).
         let discarded_order = std::mem::take(&mut *order.lock());
         drop(discarded_order);
 
@@ -1647,8 +1647,8 @@ mod tests {
             // guard (a `let` statement's own temporary) releases here, before
             // `held`'s drop below. The assertion under test is about the
             // DRIVER's store lock, not this one; the extraction is shaped this
-            // way so the line does not carry the very scrutinee shape the
-            // `LockDiscipline/StatementDrop` trigger rejects.
+            // way so the line does not carry the very scrutinee shape
+            // `clippy::significant_drop_in_scrutinee` rejects.
             let held = own_token_for_task.lock().take();
             if let Some(held) = held {
                 assert!(

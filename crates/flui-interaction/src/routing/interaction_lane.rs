@@ -776,7 +776,6 @@ impl InteractionLane {
             routes: RefCell::new(HashMap::new()),
         });
         LOCAL_LANES.with(|registry| {
-            // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
             registry.borrow_mut().insert(lane_id, Rc::downgrade(&inner));
         });
         Ok(Self { inner })
@@ -803,7 +802,7 @@ impl InteractionLane {
 
 /// The fresh-hit-test capability, and only that.
 ///
-/// Reached from widget code as `BuildContext::hit_test_handle()`. Acquire it
+/// Reached from widget code as `LifecycleContext::hit_test_handle()`. Acquire it
 /// in `init_state` / `did_change_dependencies` and call it from a gesture
 /// callback; the frame-capability scope guard rejects acquisition inside
 /// `build`, layout, or paint, because a hit test mid-frame reads a tree that
@@ -2043,7 +2042,6 @@ mod tests {
             .get(&target.target_id)
             .cloned()
             .expect("registered probe cell");
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         *cell.borrow_mut() = Some(Rc::downgrade(&handler_cell));
         target
     }

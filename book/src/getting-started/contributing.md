@@ -8,7 +8,7 @@ The authoritative contributor references live in the repository, not duplicated 
 stay in one place as they evolve:
 
 - [`AGENTS.md`](https://github.com/vanyastaff/flui/blob/main/AGENTS.md) — the single agent/contributor
-  guide: the Prime Directive, worktree workflow, commands, architecture constraints, and the
+  guide: the design stance, worktree workflow, commands, enforced rules, and the
   Definition of Done.
 - [`CONTRIBUTING.md`](https://github.com/vanyastaff/flui/blob/main/CONTRIBUTING.md) — planning a
   large change, git hygiene, reporting bugs, security.

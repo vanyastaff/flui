@@ -125,8 +125,8 @@ mod shrink_wrapping_viewport;
 #[path = "signals.rs"]
 mod signals;
 #[cfg(feature = "signals")]
-#[path = "signals_scanner_accepted.rs"]
-mod signals_scanner_accepted;
+#[path = "signals_legal_shapes.rs"]
+mod signals_legal_shapes;
 #[path = "slide_transition.rs"]
 mod slide_transition;
 #[path = "sliver_opacity.rs"]

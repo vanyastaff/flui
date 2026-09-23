@@ -335,7 +335,7 @@ pub enum ElementKind {
     /// An `InheritedView` element.
     Inherited(Box<dyn InheritedElementBase>),
     /// A notification-listener element.
-    Notification(Box<dyn NotificationElementBase>), // PORT-CHECK-OK-DYN: closed ElementKind storage variant
+    Notification(Box<dyn NotificationElementBase>), // closed ElementKind storage variant
     /// A `RenderView` element with no children (e.g. `Text`, `Image`).
     /// No blanket impl exists in Phase 1; the slot is reserved for
     /// Phase 2/3 leaf-render bodies.

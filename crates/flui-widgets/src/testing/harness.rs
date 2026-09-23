@@ -82,7 +82,7 @@ pub fn mount(root: impl View) -> Harness {
     )
 }
 
-/// [`mount`], but with a working `BuildContext::text_input_handle()` — the
+/// [`mount`], but with a working `LifecycleContext::text_input_handle()` — the
 /// only capability [`mount`] withholds by default. The installed handle
 /// wraps a harness-owned `flui_interaction::TextInputOwner` directly (no
 /// `flui-app`/`PlatformWindow` involved, so `set_ime_allowed` toggling is
@@ -105,14 +105,14 @@ pub enum TextInputCapability {
     /// A working handle over a harness-owned `TextInputOwner`, recording
     /// every cursor-area and IME-allowed call.
     Installed,
-    /// No handle: `BuildContext::text_input_handle()` returns `None`.
+    /// No handle: `LifecycleContext::text_input_handle()` returns `None`.
     Absent,
 }
 
 /// Whether the binding hands `BuildContext` a [`PostFrameHandle`]/
 /// [`LocalPostFrameHandle`] at all — `Absent` withholds both, together.
 ///
-/// `BuildContext::post_frame_handle()`/`local_post_frame_handle()` return an
+/// `LifecycleContext::post_frame_handle()`/`local_post_frame_handle()` return an
 /// `Option`, so "no post-frame capability" is a real, reachable configuration
 /// — an embedder that drives frames itself, or any binding that simply never
 /// calls `install_build_capabilities`. Code that acquires either handle must
@@ -167,7 +167,7 @@ pub fn mount_with_capabilities(
             let recorded: Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>> =
                 Arc::new(parking_lot::Mutex::new(Vec::new()));
             let ime_allowed = Arc::new(parking_lot::Mutex::new(Vec::new()));
-            let platform: Arc<dyn flui_platform::traits::PlatformTextInput> = // PORT-CHECK-OK-DYN: headless harness supplies the same direct OS-capability boundary as a presentation.
+            let platform: Arc<dyn flui_platform::traits::PlatformTextInput> = // headless harness supplies the same direct OS-capability boundary as a presentation.
             Arc::new(HarnessTextInput {
                 cursor_areas: Arc::clone(&recorded),
                 ime_allowed: Arc::clone(&ime_allowed),

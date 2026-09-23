@@ -239,7 +239,7 @@ impl<T: Clone + Send + Sync + 'static> DragTarget<T> {
 /// the drag's discovery), never an error and never a panic.
 fn typed_as<T: Clone + Send + Sync + 'static>(data: &ErasedDragData) -> Option<T> {
     let payload = Arc::clone(data);
-    payload.downcast::<T>().ok().map(|typed| (*typed).clone()) // PORT-CHECK-OK-DOWNCAST: reverses this boundary's own erasure; see this function's doc.
+    payload.downcast::<T>().ok().map(|typed| (*typed).clone()) // reverses this boundary's own erasure; see this function's doc.
 }
 
 /// One `DragTarget<T>`'s callbacks as a *drag* sees them.
@@ -261,7 +261,7 @@ trait TargetCallbacks: Send + Sync {
 
 /// One target's callbacks, shared between its element and every drag that has
 /// discovered it.
-type SharedTargetCallbacks = Arc<dyn TargetCallbacks>; // PORT-CHECK-OK-DYN: a drag drives targets whose `T` it cannot name — see `TargetCallbacks`.
+type SharedTargetCallbacks = Arc<dyn TargetCallbacks>; // a drag drives targets whose `T` it cannot name — see `TargetCallbacks`.
 
 /// The `T`-typed side of [`TargetCallbacks`]: one snapshot of a
 /// `DragTarget<T>`'s four callbacks, refreshed into the slot on every build so
@@ -375,8 +375,8 @@ pub struct DragTargetSlot {
     /// `_rejectedAvatars`, which the oracle keys by avatar identity).
     entered: Mutex<Vec<EnteredDrag>>,
     /// The target element's rebuild capability, published by
-    /// `DragTargetState::init_state` — never from `build` (port-check trigger
-    /// #22). Stands in for the oracle's `setState`.
+    /// `DragTargetState::init_state` — never from `build`. Stands in for the
+    /// oracle's `setState`.
     rebuild: Mutex<Option<RebuildHandle>>,
     /// `false` once the target's element is disposed.
     mounted: AtomicBool,
@@ -393,7 +393,7 @@ impl std::fmt::Debug for DragTargetSlot {
 
 impl DragTargetSlot {
     fn new(callbacks: SharedTargetCallbacks) -> Self {
-        // PORT-CHECK-OK-DYN: constructor for the field above.
+        // Constructor for the field above.
         Self {
             callbacks: Mutex::new(callbacks),
             entered: Mutex::new(Vec::new()),
@@ -403,7 +403,7 @@ impl DragTargetSlot {
     }
 
     fn set_callbacks(&self, callbacks: SharedTargetCallbacks) {
-        // PORT-CHECK-OK-DYN: per-build refresh of the field above.
+        // Per-build refresh of the field above.
         let _prev = std::mem::replace(&mut *self.callbacks.lock(), callbacks);
     }
 
@@ -419,7 +419,7 @@ impl DragTargetSlot {
     /// Clone the callbacks out from under the lock, so user code never runs
     /// while this slot holds one.
     fn callbacks(&self) -> SharedTargetCallbacks {
-        // PORT-CHECK-OK-DYN: reader for the field above.
+        // Reader for the field above.
         Arc::clone(&self.callbacks.lock())
     }
 
@@ -650,7 +650,7 @@ impl<T: Clone + Send + Sync + 'static> StatefulView for DragTarget<T> {
 impl<T: Clone + Send + Sync + 'static> ViewState<DragTarget<T>> for DragTargetState<T> {
     /// Publishes the target's rebuild capability into the slot, so a
     /// transition driven from a gesture callback can refresh the builder — a
-    /// lifecycle hook, never `build` (port-check trigger #22).
+    /// lifecycle hook, never `build`.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.slot.publish_rebuild(ctx.rebuild_handle());
     }

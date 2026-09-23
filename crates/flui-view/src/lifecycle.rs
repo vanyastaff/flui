@@ -40,7 +40,7 @@ struct Inner(RefCell<State>);
 
 /// Weak, owner-local capability for one presentation's lifecycle history.
 ///
-/// Acquire from `BuildContext::lifecycle_handle` in `init_state` or
+/// Acquire from `LifecycleContext::lifecycle_handle` in `init_state` or
 /// `did_change_dependencies`. This is not the realm scheduler aggregate.
 #[derive(Clone)]
 pub struct LifecycleHandle {

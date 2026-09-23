@@ -842,7 +842,6 @@ fn did_change_next_did_change_previous_ordering() {
     let mut history = RouteHistory::new();
 
     let (bottom, _r0) = history.add_initial(Probe::new(&bottom_log));
-    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<Event>), no Drop
     bottom_log.lock().clear();
 
     let (top, _r1) = history.push(Probe::new(&top_log));
@@ -861,9 +860,7 @@ fn did_change_next_did_change_previous_ordering() {
     );
 
     // A redundant flush announces nothing new.
-    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<Event>), no Drop
     bottom_log.lock().clear();
-    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<Event>), no Drop
     top_log.lock().clear();
     history.flush(true);
     assert!(bottom_log.lock().is_empty(), "no redundant re-announcement");
@@ -883,7 +880,6 @@ fn pop_announces_did_pop_next_not_a_redundant_did_change_next() {
     let (_bottom, _r0) = history.add_initial(Probe::new(&bottom_log));
     let (top, _r1) = history.push(Probe::new(&Log::default()));
 
-    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<Event>), no Drop
     bottom_log.lock().clear();
     history.pop(None);
 
@@ -951,7 +947,6 @@ fn flush_disposes_removed_routes_after_notifications() {
     });
     settle(&mut history, &observers);
 
-    // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<Event>), no Drop
     order.lock().clear();
     history.pop(None);
     settle(&mut history, &observers);

@@ -91,11 +91,11 @@ pub mod child;
 pub mod context;
 pub mod element;
 pub mod key;
-pub mod macros; // PORT-CHECK-OK-SP4: macros consumed via #[macro_export] (no qualified path); intentional API surface
+pub mod macros;
 pub mod owner;
 #[cfg(feature = "signals")]
 pub mod reactive;
-pub mod seq; // PORT-CHECK-OK-SP4: seq/Children API surface; consumed via prelude re-exports
+pub mod seq;
 pub mod state_cell;
 pub mod tree;
 pub mod view;

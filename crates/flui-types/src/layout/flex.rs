@@ -7,7 +7,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FlexFit {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Child is forced to fill the available space (the default).
     ///
     /// This is the behavior for `Expanded` widgets.

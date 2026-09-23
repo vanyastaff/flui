@@ -90,7 +90,7 @@ enum PendingScrollCommand {
     AnimateTo {
         target_pixels: f32,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+        curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     },
     /// Stop whatever is currently driving the fling controller — `jump_to`
     /// supersedes any pending or in-flight `animate_to`.
@@ -336,7 +336,7 @@ impl ScrollController {
         &self,
         target_pixels: f32,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+        curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     ) {
         if duration.is_zero() {
             self.jump_to(target_pixels);

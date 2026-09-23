@@ -4,7 +4,7 @@ See [Contributing to FLUI](getting-started/contributing.md) for the walkthrough,
 the source:
 
 - [`AGENTS.md`](https://github.com/vanyastaff/flui/blob/main/AGENTS.md) — the contributor/agent
-  guide: Prime Directive, worktree workflow, commands, architecture constraints, Definition of
+  guide: design stance, worktree workflow, commands, enforced rules, Definition of
   Done.
 - [`CONTRIBUTING.md`](https://github.com/vanyastaff/flui/blob/main/CONTRIBUTING.md) — planning a
   large change, git hygiene, reporting bugs, security.

@@ -108,7 +108,7 @@ impl_inherited_view!(FocusParentProvider);
 ///
 /// Every presentation is rooted in [`FocusRoot`], so a missing provider is a
 /// broken embedder invariant rather than a reason to reach for the
-/// lifecycle-only `BuildContext::focus_manager` capability from arbitrary
+/// lifecycle-only `LifecycleContext::focus_manager` capability from arbitrary
 /// build paths.
 pub fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Rc<FocusNode> {
     ctx.depend_on::<FocusParentProvider, _>(|provider| Rc::clone(&provider.parent))

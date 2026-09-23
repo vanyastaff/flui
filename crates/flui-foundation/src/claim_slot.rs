@@ -8,7 +8,7 @@
 //! whatever the reply carries (a created window, on the winit lane). A
 //! claim slot closes that gap: the requester side and the owner side share
 //! one small state machine, and every transition is linearized under the
-//! slot's own private lock (SP-6: this module exposes no lock guard or
+//! slot's own private lock (this module exposes no lock guard or
 //! channel endpoint in any public signature).
 //!
 //! ```text
@@ -864,7 +864,7 @@ mod tests {
     /// Pins `register_waker`'s extract-then-drop ordering: reverting it to
     /// `*slot = Some(waker.clone())` (a bound-guard assignment — `slot` is
     /// already a named `MutexGuard`, not re-derived from `.lock()` on this
-    /// statement's own line, so `LockDiscipline/StatementDrop` cannot see
+    /// statement's own line, so `clippy::significant_drop_in_scrutinee` cannot see
     /// this shape) drops the DISPLACED waker — executor vtable code — while
     /// `slot` is still held. A waker whose own `Drop` re-enters this same
     /// slot's `is_unlocked()` observes the lock still held under the bug.

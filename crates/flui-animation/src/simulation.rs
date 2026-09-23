@@ -29,7 +29,6 @@ use std::f32::consts::PI;
 /// to be considered at rest.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tolerance {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Maximum distance from target to be considered "at rest".
     pub distance: f32,
     /// Maximum velocity to be considered "at rest".
@@ -71,7 +70,6 @@ impl Default for Tolerance {
 /// - Velocity via [`dx()`](Simulation::dx)
 /// - Completion state via [`is_done()`](Simulation::is_done)
 pub trait Simulation: Send + Sync {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The position of the object at the given time.
     fn x(&self, time: f32) -> f32;
 
@@ -121,7 +119,6 @@ impl<S: Simulation + ?Sized> Simulation for Box<S> {
 /// Used to configure [`SpringSimulation`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpringDescription {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The mass of the spring (m).
     pub mass: f32,
     /// The spring constant / stiffness (k).
@@ -317,7 +314,6 @@ fn spring_regime(spring: SpringDescription) -> SpringType {
 /// The type of spring behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SpringType {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// A spring that does not bounce and returns to rest in the shortest time.
     CriticallyDamped,
     /// A spring that bounces (oscillates) before settling.
@@ -331,7 +327,6 @@ pub enum SpringType {
 /// Models a particle attached to a spring following Hooke's law.
 #[derive(Debug, Clone)]
 pub struct SpringSimulation {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     end_position: f32,
     solution: SpringSolution,
     tolerance: Tolerance,
@@ -614,7 +609,6 @@ fn near_zero(value: f32, threshold: f32) -> bool {
 /// A friction simulation that slows an object by a constant deceleration.
 #[derive(Debug, Clone)]
 pub struct FrictionSimulation {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     drag: f32,
     drag_log: f32,
     initial_position: f32,
@@ -760,7 +754,6 @@ impl Simulation for FrictionSimulation {
 /// A gravity simulation with constant acceleration.
 #[derive(Debug, Clone)]
 pub struct GravitySimulation {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     acceleration: f32,
     initial_position: f32,
     initial_velocity: f32,
@@ -869,7 +862,6 @@ impl Simulation for ScrollSpringSimulation {
 /// Wraps another simulation, clamping its position to `[x_min, x_max]` and its
 /// velocity to `[dx_min, dx_max]`. Mirrors Flutter's `ClampedSimulation`.
 pub struct ClampedSimulation {
-    // PORT-CHECK-OK-SP3: parallel to flui-types::physics::ClampedSimulation, which wraps the value-physics Simulation (position/velocity, no Send+Sync); this wraps animation's Simulation (x/dx + Send+Sync). Distinct trait contracts; consolidation tracked.
     inner: Box<dyn Simulation>,
     x_min: f32,
     x_max: f32,
@@ -930,7 +922,6 @@ impl Simulation for ClampedSimulation {
 /// the content extent stops cleanly at the edge.
 #[derive(Debug, Clone)]
 pub struct BoundedFrictionSimulation {
-    // PORT-CHECK-OK-SP3: parallel to flui-types::physics::BoundedFrictionSimulation; that one wraps the value-physics Simulation (position/velocity), this wraps animation's Simulation (x/dx + Send+Sync). Distinct trait contracts; consolidation tracked.
     friction: FrictionSimulation,
     min_x: f32,
     max_x: f32,

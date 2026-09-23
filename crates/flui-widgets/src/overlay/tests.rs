@@ -1402,7 +1402,6 @@ fn overlay_of_panics_with_a_helpful_message_without_an_overlay_ancestor() {
             let text = payload_text(payload.as_ref())
                 .unwrap_or_default()
                 .to_owned();
-            // PORT-CHECK-OK-LOCK: plain data: String, no Drop
             *message_for_probe.lock() = Some(text);
         }
     });

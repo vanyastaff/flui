@@ -1,4 +1,4 @@
-[Port Methodology](PORT.md) · [Roadmap →](ROADMAP.md) · [Back to README](../README.md)
+[Roadmap →](ROADMAP.md) · [Back to README](../README.md)
 
 # FLUI Architecture Foundations
 
@@ -24,7 +24,7 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 | [`research/2026-05-22-architectural-contracts.md`](research/2026-05-22-architectural-contracts.md) | The high-stakes public-surface contracts |
 | [`research/2026-05-22-rust-ui-ecosystem-lessons.md`](research/2026-05-22-rust-ui-ecosystem-lessons.md) | Lessons from GPUI / Xilem / Druid / Iced / Vello |
 | [`research/2026-05-22-technology-adoption-matrix.md`](research/2026-05-22-technology-adoption-matrix.md) | Per-subsystem behavior/structure adoption decisions |
-| [`research/2026-05-22-architecture-correction-plan.md`](research/2026-05-22-architecture-correction-plan.md) | The systemic-defect inventory + 6 new refusal triggers |
+| [`research/2026-05-22-architecture-correction-plan.md`](research/2026-05-22-architecture-correction-plan.md) | The systemic-defect inventory |
 | [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md) | The target workspace topology |
 | [`research/2026-08-01-ui-runtime-evolution-study.md`](research/2026-08-01-ui-runtime-evolution-study.md) | Cross-framework runtime, multi-window, concurrency, embedding, and frame-pacing evidence |
 | [`research/2026-08-01-runtime-architecture-execution-plan.md`](research/2026-08-01-runtime-architecture-execution-plan.md) | Dependency-ordered completion plan for ADR-0027/0037 and hostable runtime foundations |
@@ -88,7 +88,7 @@ These nine decisions are the "right contract." Each is committed by the **first 
 
 ### C1 — Reactivity: `setState` canonical, `memoize` added, realm-scoped signals (amended by ADR-0074)
 
-Flutter's `setState` + `InheritedWidget` + depth-ordered dirty-element list is the **sole** canonical state model. The catalog crates — `flui-widgets`, `flui-material`, `flui-cupertino` — never take a dependency on a signals crate. This is mandated explicitly: signals are not the *external* model, and the mechanisms beneath it are open to improvement; the ecosystem research confirms it (Xilem converged away from signals; Druid died of the `Data: Clone + PartialEq` constraint-creep). **The one addition:** Xilem's `memoize`, surfaced as the typed `View::can_update` of Part II item 4 plus a `Memo<V>` combinator — Flutter's own internal short-circuit, made first-class. Application state carries **no trait bound beyond `'static`** — the Druid mistake is the one most dangerous trap; do not repeat it. **Amended by [ADR-0074](adr/ADR-0074-realm-scoped-signals.md) (2026-09-22, beta-roadmap mandate that locked contracts are revisable explicitly):** a realm-owned reactive graph (`Signal<T>` and its reader registry, `flui-view` feature `signals`) is a first-class application-state layer of the view crate; derived values and effects are ADR-0075's subject (Proposed) and not yet part of the contract. Reading a signal in `build` is the sanctioned subscription path — the same class of edge as `depend_on`, so trigger 22's capability list is untouched; **writing** or **creating** a signal inside `build`/`layout`/`paint` is refused (trigger 24 statically, `SignalError::{WrittenDuringBuild, CreatedDuringBuild}` at run time). The catalog crates may accept `Signal<T>` values as widget inputs but never own application state, and `setState`/`InheritedWidget`/the depth-ordered dirty list remain the mechanism a signal write feeds: the smallest sound invalidation unit stays the Element.
+Flutter's `setState` + `InheritedWidget` + depth-ordered dirty-element list is the **sole** canonical state model. The catalog crates — `flui-widgets`, `flui-material`, `flui-cupertino` — never take a dependency on a signals crate. This is mandated explicitly: signals are not the *external* model, and the mechanisms beneath it are open to improvement; the ecosystem research confirms it (Xilem converged away from signals; Druid died of the `Data: Clone + PartialEq` constraint-creep). **The one addition:** Xilem's `memoize`, surfaced as the typed `View::can_update` of Part II item 4 plus a `Memo<V>` combinator — Flutter's own internal short-circuit, made first-class. Application state carries **no trait bound beyond `'static`** — the Druid mistake is the one most dangerous trap; do not repeat it. **Amended by [ADR-0074](adr/ADR-0074-realm-scoped-signals.md) (2026-09-22, beta-roadmap mandate that locked contracts are revisable explicitly):** a realm-owned reactive graph (`Signal<T>` and its reader registry, `flui-view` feature `signals`) is a first-class application-state layer of the view crate; derived values and effects are ADR-0075's subject (Proposed) and not yet part of the contract. Reading a signal in `build` is the sanctioned subscription path — the same class of edge as `depend_on`, so reading needs no `LifecycleContext` capability; **writing** or **creating** a signal inside `build`/`layout`/`paint` is refused at run time (`SignalError::{WrittenDuringBuild, CreatedDuringBuild}`). The catalog crates may accept `Signal<T>` values as widget inputs but never own application state, and `setState`/`InheritedWidget`/the depth-ordered dirty list remain the mechanism a signal write feeds: the smallest sound invalidation unit stays the Element.
 
 ### C2 — Heterogeneous children: a `ViewSeq` trait with two load-bearing paths
 
@@ -105,7 +105,7 @@ The C2 design document must specify **both** paths to equal depth — most real 
 
 ### C4 — `View` trait & element storage
 
-The `View` trait stays object-safe (the children machinery needs it) with **no lifetime parameter** on the public surface. Element storage is slab-backed `ElementNode` carrying the closed `ElementKind` enum over the finite element families (Stateless/Stateful/Proxy/Inherited/Notification/Render/Root/Error, with animation and parent-data folded into their host families). Reconciliation and lifecycle drive the `ElementBase` surface through this closed storage boundary; the runtime `downcast_ref::<V>()` update path is replaced by typed dispatch guarded by port-check. Co-designed with C6.
+The `View` trait stays object-safe (the children machinery needs it) with **no lifetime parameter** on the public surface. Element storage is slab-backed `ElementNode` carrying the closed `ElementKind` enum over the finite element families (Stateless/Stateful/Proxy/Inherited/Notification/Render/Root/Error, with animation and parent-data folded into their host families). Reconciliation and lifecycle drive the `ElementBase` surface through this closed storage boundary; the runtime `downcast_ref::<V>()` update path is replaced by typed dispatch. Co-designed with C6.
 
 ### C5 — `BuildContext`: callback-form, no lifetime, single-threaded
 
@@ -121,7 +121,7 @@ Library crates use `Result<T, E>` + per-crate `#[non_exhaustive]` `thiserror` en
 
 ### C8 — Async edges: the render path is strictly synchronous
 
-`async fn` is forbidden on `build`/`layout`/`paint`/`perform_layout`/`composite` (PORT.md refusal trigger 3). Async lives only at three named edges — IO (`flui-assets`), the scheduler (`flui-scheduler`), the build pipeline (`flui-build`). Async may *deliver work to* a frame (an asset finishes loading → mark dirty → next frame uses it); it may never run *inside* one.
+`async fn` is forbidden on `build`/`layout`/`paint`/`perform_layout`/`composite`; the trait signatures are synchronous, so an `async` implementation does not compile. Async lives only at three named edges — IO (`flui-assets`), the scheduler (`flui-scheduler`), the build pipeline (`flui-build`). Async may *deliver work to* a frame (an asset finishes loading → mark dirty → next frame uses it); it may never run *inside* one.
 
 ### C9 — The type-erasure boundary
 
@@ -289,24 +289,16 @@ These are not a "repair project." They are the first stretch of normal construct
 
 ---
 
-## Part VI — The standing quality discipline
+## Part VI — Keeping the defects closed
 
-The eight systemic patterns above are closed *durably* by turning each detectable pattern into a **refusal trigger** — a rule [`PORT.md`](PORT.md) refuses to let regrow, enforced by `scripts/port-check.sh`. This is the difference between "we fixed the defects" (a snapshot that decays as 480k LOC of catalog is written) and "the defects cannot recur."
-
-PORT.md carries **7 refusal triggers** today. The foundations add **6** (full text and detection regexes in the architecture-correction research doc):
-
-| # | Refuses |
-|---|---|
-| 8 | A production-reachable `fn` whose body is empty / a lone `tracing::warn!` / `unimplemented!` while its name asserts an effect |
-| 9 | Two functions or types implementing the same responsibility, one with zero production callers |
-| 10 | A public type/trait name defined in two `flui-*` crates without one re-exporting the other |
-| 11 | A `pub` module/trait family with zero production consumers, not behind an `unstable-*` feature gate |
-| 12 | `RwLock`/`Mutex` appearing in a `pub fn` return type or public field type |
-| 13 | `unwrap`/`expect`/`panic!`/`unimplemented!`/`assert!` reachable from a `pub fn` on its arguments, in a library crate |
-
-Two patterns (absent lifecycle protocols; pass-through hierarchies) are not mechanically detectable and become **construction rules** in PORT.md: every resource-owning type implements the lifecycle protocol (`dispose` + disposed-assert + a dirty bit for frame-loop types); Flutter abstract-class chains port to behavior-carrying Rust shapes, never to mirror trait hierarchies.
-
-The **Mythos methodology** (audit → design → plan → atomic-commit waves, `port-check.sh` on every PR) is not a temporary remediation effort — after it finishes hardening the existing crates it becomes the *standing discipline* embedded in every roadmap phase's exit gate. Every render object, every widget, every Material component is built to this bar.
+A defect class stays closed when the compiler or clippy rejects it, not when a document forbids
+it. Presentation capabilities are reachable only through `LifecycleContext` (ADR-0078); lock
+guards in branch scrutinees, `todo!`/`unimplemented!`/`dbg!`, and printing from foundation
+crates are clippy lints; unit-wrapper conversions are `compile_fail` doctests. What no tool can
+see — resource-owning types implement the lifecycle protocol (`dispose` + disposed-assert + a
+dirty bit for frame-loop types), Flutter abstract-class chains become behavior-carrying Rust
+shapes rather than mirror trait hierarchies, no speculative public surface — is design guidance
+in `AGENTS.md` and each crate's `ARCHITECTURE.md`, checked in review.
 
 ---
 
@@ -315,12 +307,11 @@ The **Mythos methodology** (audit → design → plan → atomic-commit waves, `
 This document is the **architecture contract** for the port. Its relationship to the other governing documents:
 
 - **`FOUNDATIONS.md`** (this document) — *what* (the target architecture, the locked contracts, the crate graph).
-- [`PORT.md`](PORT.md) — *how* (the port methodology, refusal triggers, mapping rules).
 - [`ROADMAP.md`](ROADMAP.md) — *when / in what order* (the dependency-ordered construction phases).
 - [`AGENTS.md`](../AGENTS.md) — the cross-tool ratified rules living in this checkout today. (There is no `.specify/memory/constitution.md` here — that path, and the amendment it once needed, are stale; `AGENTS.md` is kept current directly instead.)
 
-**Amendment.** A change to a locked contract (Part III) or the target crate graph (Part IV) requires: documented rationale, a corresponding `PORT.md` sync if affected, and — once construction has begun — an explicit migration assessment, because a contract change after Phase 1 has catalog-wide blast radius. The contracts are locked precisely so that they are *not* casually amended.
+**Amendment.** A change to a contract (Part III) or the crate graph (Part IV) is made by an ADR that says what changes and why, and names the migration. Pre-1.0 that is the cheap time to do it; the contracts are written down so a change is deliberate, not so it is avoided.
 
 ---
 
-[Port Methodology](PORT.md) · [Roadmap →](ROADMAP.md) · [Back to README](../README.md)
+[Roadmap →](ROADMAP.md) · [Back to README](../README.md)

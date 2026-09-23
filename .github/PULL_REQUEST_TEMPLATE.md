@@ -13,7 +13,7 @@ Describe the change and why it belongs in FLUI.
 ## Architecture
 
 - [ ] Layering still follows `docs/FOUNDATIONS.md`
-- [ ] No new banned patterns from `docs/PORT.md`
+- [ ] No new lock on per-node render state, no capability acquired outside lifecycle hooks (AGENTS.md)
 - [ ] New dependencies are declared through workspace dependencies when shared
 
 ## Notes

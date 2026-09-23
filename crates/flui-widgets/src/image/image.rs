@@ -110,7 +110,6 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 #[cfg_attr(feature = "asset-images", derive(StatefulView))]
 #[cfg_attr(not(feature = "asset-images"), derive(StatelessView))]
 pub struct Image {
-    // PORT-CHECK-OK-SP3: widget view type; `flui_types::painting::Image` is the pixel-data handle — distinct concepts at different crate layers
     provider: Arc<dyn ImageProvider + Send + Sync>,
     fit: ImageFit,
     alignment: ImageAlignment,

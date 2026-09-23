@@ -55,7 +55,6 @@ impl std::future::Future for Controlled {
     type Output = Result<Payload, Boom>;
 
     fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // PORT-CHECK-OK-LOCK: plain data: Result<Payload(i32), Boom(&'static str)>, no Drop
         let result = self.result.lock().take();
         if let Some(result) = result {
             return Poll::Ready(result);
@@ -86,7 +85,6 @@ impl Completer {
     /// Rust analogue of Dart's `SynchronousFuture`.
     fn ready(result: Result<Payload, Boom>) -> Self {
         let completer = Self::new();
-        // PORT-CHECK-OK-LOCK: plain data: Result<Payload(i32), Boom(&'static str)>, no Drop
         *completer.result.lock() = Some(result);
         completer
     }
@@ -110,7 +108,6 @@ impl Completer {
 
     /// Complete from outside a frame, as a real async completion would.
     fn complete(&self, result: Result<Payload, Boom>) {
-        // PORT-CHECK-OK-LOCK: plain data: Result<Payload(i32), Boom(&'static str)>, no Drop
         *self.result.lock() = Some(result);
         if let Some(waker) = self.waker.lock().as_ref() {
             waker.wake_by_ref();

@@ -78,7 +78,6 @@ impl BridgeShared {
     /// a fresh screen reader — see the `latest` field doc.
     pub(crate) fn retain_if_self_contained(&self, update: &TreeUpdate) {
         if update.tree.is_some() {
-            // PORT-CHECK-OK-LOCK: plain data: accesskit TreeUpdate has no Drop
             *self.latest.lock() = Some(update.clone());
         }
     }

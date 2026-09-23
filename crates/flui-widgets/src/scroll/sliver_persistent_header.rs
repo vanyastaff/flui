@@ -50,7 +50,7 @@ use crate::scroll::scroll_position_scope::ScrollPositionScope;
 /// `SliverPersistentHeader`.
 #[derive(Clone, StatelessView)]
 pub struct SliverPersistentHeader {
-    delegate: Rc<dyn SliverPersistentHeaderDelegate>, // PORT-CHECK-OK-DYN: carries flui-view's SharedHeaderDelegate erasure (justified at its declaration) through the facade
+    delegate: Rc<dyn SliverPersistentHeaderDelegate>, // carries flui-view's SharedHeaderDelegate erasure (justified at its declaration) through the facade
     pinned: bool,
     floating: bool,
 }

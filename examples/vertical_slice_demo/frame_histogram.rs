@@ -191,7 +191,7 @@ struct HistogramProbeState {
 }
 
 impl<V: View + Clone + 'static> ViewState<HistogramProbeInner<V>> for HistogramProbeState {
-    /// Lifecycle-only (ADR-0021, port-check trigger #22): registers with the
+    /// Lifecycle-only (ADR-0021): registers with the
     /// ambient `VsyncScope` and starts the free-running cycle here, never
     /// from `build`.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {

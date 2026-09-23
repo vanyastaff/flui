@@ -88,7 +88,7 @@ struct OwnerState {
 /// The returned `Rc` is intentional: widgets receive weak handles derived from
 /// this exact owner, while the presentation retains the only strong ownership.
 pub struct TextInputOwner {
-    platform: Option<Arc<dyn PlatformTextInput>>, // PORT-CHECK-OK-DYN: direct OS text-input capability owned by one presentation; no intermediary.
+    platform: Option<Arc<dyn PlatformTextInput>>, // direct OS text-input capability owned by one presentation; no intermediary.
     next_token: Cell<NonZeroU64>,
     state: RefCell<OwnerState>,
 }
@@ -97,7 +97,7 @@ impl TextInputOwner {
     /// Create the text-input owner for one presentation.
     #[must_use]
     pub fn new(
-        platform: Option<Arc<dyn PlatformTextInput>>, // PORT-CHECK-OK-DYN: direct presentation OS capability.
+        platform: Option<Arc<dyn PlatformTextInput>>, // direct presentation OS capability.
     ) -> Rc<Self> {
         Rc::new(Self {
             platform,
@@ -356,7 +356,7 @@ mod tests {
 
     fn owner_with_recorder() -> (Rc<TextInputOwner>, Arc<RecordingTextInput>) {
         let recorder = Arc::new(RecordingTextInput::default());
-        let capability: Arc<dyn PlatformTextInput> = recorder.clone(); // PORT-CHECK-OK-DYN: test exercises the real erased OS-capability boundary.
+        let capability: Arc<dyn PlatformTextInput> = recorder.clone(); // test exercises the real erased OS-capability boundary.
         (TextInputOwner::new(Some(capability)), recorder)
     }
 

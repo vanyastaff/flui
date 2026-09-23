@@ -19,7 +19,7 @@ const REASON_COUNT: usize = 10;
 
 /// Counting/logging [`TreeObserver`].
 ///
-/// Interior state is private atomics; nothing here exposes a lock (SP-6).
+/// Interior state is private atomics; nothing here exposes a lock.
 /// Counter updates use `Relaxed` (bare tallies; the observation contract
 /// serializes emissions per realm), while the end-of-stream flag is
 /// Release/Acquire so a snapshot that observes the stream end also
@@ -48,7 +48,7 @@ impl InspectorCounters {
     /// cross-counter consistency is NOT guaranteed (a snapshot taken
     /// mid-frame may show a mount whose paired rebuild is not yet counted).
     /// Per-counter monotonicity is the only invariant. Clones values out,
-    /// returns no guard (SP-6).
+    /// returns no guard.
     #[must_use]
     pub fn snapshot(&self) -> InspectorSnapshot {
         // Acquire on the final flag FIRST: it pairs with the Release store

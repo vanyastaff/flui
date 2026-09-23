@@ -29,7 +29,7 @@
 //!    *current* global position on every move, independent of wherever the
 //!    drag's own pointer went down, and walks the result for
 //!    `RenderMetaData`-tagged `DragTarget`s. FLUI does the same now:
-//!    `BuildContext::hit_test_handle()` (acquired in `init_state` /
+//!    `LifecycleContext::hit_test_handle()` (acquired in `init_state` /
 //!    `did_change_dependencies`, never from a frame phase) runs a fresh test
 //!    against the live render tree, and [`DragTarget`](crate::DragTarget)
 //!    publishes an `Arc<DragTargetSlot>` as its hit-test payload for the walk
@@ -355,15 +355,15 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// time (data, callbacks, axis, max-drags). Refreshed each `build`.
     config: Arc<Mutex<DragConfig>>,
     /// The nearest ancestor `Overlay`'s handle, if any — resolved in
-    /// `did_change_dependencies` (a lifecycle hook, per port-check trigger
-    /// #22 and ADR-0018's pattern), not in `build` or from inside the
+    /// `did_change_dependencies` (a lifecycle hook, per
+    /// ADR-0018's pattern), not in `build` or from inside the
     /// `on_start` gesture callback, neither of which holds a `BuildContext`.
     /// `Arc<Mutex<_>>` so the `on_start` closure captured once in
     /// `init_state` always reads the latest resolution.
     overlay: Arc<Mutex<Option<OverlayHandle>>>,
     /// The fresh-hit-test capability, resolved in `init_state` /
     /// `did_change_dependencies` — a lifecycle hook, never `build` or a
-    /// gesture callback (port-check trigger #22), because a hit test taken
+    /// gesture callback, because a hit test taken
     /// mid-frame reads a tree that phase is still mutating.
     ///
     /// Owner-local (`Rc<RefCell<_>>`, not `Arc<Mutex<_>>`): `HitTestHandle`
@@ -376,8 +376,8 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// published by the [`DragOrigin`] mounted under the `Listener`.
     listener_node: Rc<Cell<Option<flui_foundation::RenderId>>>,
     /// The render tree, for converting those local positions to the root's
-    /// space. A lifecycle-acquired capability like the two above (port-check
-    /// trigger #22): only ever read from a gesture callback, never from a
+    /// space. A lifecycle-acquired capability like the two above:
+    /// only ever read from a gesture callback, never from a
     /// frame phase.
     pipeline: Rc<RefCell<Option<flui_rendering::pipeline::PipelineCell>>>,
     /// The currently-mounted feedback layer, if any is showing. Owner-local
@@ -519,8 +519,8 @@ struct FeedbackSignal {
     /// [`FeedbackAnchorState::build`].
     offset: Arc<Mutex<Offset<Pixels>>>,
     /// The mounted [`FeedbackAnchor`] element's own rebuild capability,
-    /// published by [`FeedbackAnchorState::init_state`] (never from `build` —
-    /// port-check trigger #22) so [`DragSession::update`] can reposition it
+    /// published by [`FeedbackAnchorState::init_state`] (never from `build`)
+    /// so [`DragSession::update`] can reposition it
     /// without reaching into any `Rc`-backed type.
     rebuild: Arc<Mutex<Option<RebuildHandle>>>,
 }
@@ -545,7 +545,6 @@ impl FeedbackSignal {
     }
 
     fn set_offset(&self, offset: Offset<Pixels>) {
-        // PORT-CHECK-OK-LOCK: plain data: Offset is Copy
         *self.offset.lock() = offset;
     }
 
@@ -812,7 +811,7 @@ fn drag_targets_on(
     path.iter()
         .filter_map(|entry| {
             let payload = Arc::clone(entry.metadata.as_ref()?);
-            let slot = payload.downcast::<DragTargetSlot>().ok()?; // PORT-CHECK-OK-DOWNCAST: the hit-test payload channel is `dyn Any` by construction (`HitTestEntry::metadata`); this is the `metaData is _DragTargetState` test of the oracle's `_getDragTargets`.
+            let slot = payload.downcast::<DragTargetSlot>().ok()?; // the hit-test payload channel is `dyn Any` by construction (`HitTestEntry::metadata`); this is the `metaData is _DragTargetState` test of the oracle's `_getDragTargets`.
             slot.accepts_data_type(data).then(|| EnteredTarget {
                 at: DragPosition {
                     global,
@@ -1304,7 +1303,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
                 active: RefCell::new(None),
                 offset: Mutex::new(Offset::ZERO),
                 feedback,
-            }) as Box<dyn MultiDragHandle>) // PORT-CHECK-OK-DYN: see flui-interaction's MultiDragStartCallback — the per-pointer handle `MultiDragGestureRecognizer::with_on_start` requires.
+            }) as Box<dyn MultiDragHandle>) // see flui-interaction's MultiDragStartCallback — the per-pointer handle `MultiDragGestureRecognizer::with_on_start` requires.
         });
 
         self.recognizer = Some(
@@ -1316,7 +1315,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     /// nearest ancestor `Overlay`, the fresh-hit-test capability, and the
     /// render tree.
     ///
-    /// A lifecycle hook, not `build` (port-check trigger #22) and not the
+    /// A lifecycle hook, not `build` and not the
     /// `on_start` gesture callback above, neither of which holds a
     /// `BuildContext`. Re-resolved on every dependency change, not just once:
     /// `Overlay::maybe_of` depends (ADR-0036), so a *different* enclosing

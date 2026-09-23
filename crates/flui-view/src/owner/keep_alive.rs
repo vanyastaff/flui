@@ -194,7 +194,7 @@ impl KeepAliveHandle {
 /// A live keep-alive hold. Dropping it releases the hold.
 ///
 /// Acquire one from
-/// [`BuildContext::keep_alive_lease`](crate::context::BuildContext::keep_alive_lease)
+/// [`LifecycleContext::keep_alive_lease`](crate::context::LifecycleContext::keep_alive_lease)
 /// in `init_state` (never during `build`, `perform_layout` or `paint` — see the
 /// frame-capability scope rule) and store it in your `ViewState`. While it
 /// lives, the lazy sliver child containing it survives scrolling out of the

@@ -116,7 +116,7 @@ pub(crate) struct OverlayShared {
     entries: Mutex<Vec<OverlayEntry>>,
 
     /// `Some` only while the `Overlay` is mounted; published in `init_state` and
-    /// cleared in `dispose`, per port-check trigger #22 (never acquired in
+    /// cleared in `dispose` (never acquired in
     /// `build`). A handle for an unmounted overlay is the reason a stale
     /// [`OverlayHandle`] is inert rather than a panic.
     rebuild: Mutex<Option<RebuildHandle>>,
@@ -637,8 +637,8 @@ impl ViewState<Overlay> for OverlayState {
     /// Publish the rebuild capability so [`OverlayHandle`] mutations, which run
     /// outside any frame phase, can schedule this element.
     ///
-    /// `init_state` is the correct hook and the only permitted one: port-check
-    /// trigger #22 rejects acquiring a `RebuildHandle` from `build`/layout/paint.
+    /// `init_state` is the correct hook: only `LifecycleContext` offers
+    /// `rebuild_handle()`, so `build`/layout/paint cannot acquire one.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
         self.serving = self.shared.claim_rebuild(&rebuild);

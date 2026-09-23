@@ -126,7 +126,6 @@ impl SharedEngineServices {
         )
     )]
     pub(super) fn set_accessibility_features(&self, features: AccessibilityFeatures) {
-        // PORT-CHECK-OK-LOCK: plain data: AccessibilityFeatures (bool flags), no Drop
         *self.accessibility_features.write() = features;
     }
 
@@ -609,7 +608,7 @@ pub(crate) struct AppRuntime {
     /// before running any task, including the frame pump that drives the
     /// scheduler through `PersistentCallbacks`. That makes the fence blind
     /// exactly when a frame phase is actually running, which is the one case
-    /// trigger #22 exists to catch. `UpdateScheduler` is a single-`Arc` handle (see
+    /// the fence exists to catch. `UpdateScheduler` is a single-`Arc` handle (see
     /// `flui-scheduler`'s `UpdateScheduler`/`SchedulerInner` split), so cloning it
     /// here to survive the checkout is cheap — an `Arc::clone`, not a new
     /// scheduler. Set at checkout, cleared at restore

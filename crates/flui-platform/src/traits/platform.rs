@@ -53,7 +53,6 @@ pub enum WindowReveal {
 /// Window creation options
 #[derive(Debug, Clone)]
 pub struct WindowOptions {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Window title
     pub title: String,
     /// Initial window size (logical pixels)

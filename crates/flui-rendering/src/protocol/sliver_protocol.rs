@@ -44,7 +44,7 @@ impl Protocol for SliverProtocol {
     type HitTest = SliverHitTest;
     type DefaultParentData = SliverParentData;
 
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
+    // Protocol-layout-erasure — sanctioned erased layout-context boundary
     type LayoutCtxErased<'ctx> = dyn SliverLayoutCtxErased + 'ctx;
 
     // No sliver layout cache yet: no sliver object exposes intrinsic
@@ -98,7 +98,7 @@ impl Protocol for SliverProtocol {
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
         let mut typed = SliverLayoutCtx::<flui_tree::Leaf, SliverParentData>::new(constraints);
-        // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
+        // Protocol-layout-erasure — sanctioned erased layout-context boundary
         let erased: &mut dyn SliverLayoutCtxErased = &mut typed;
         f(erased)
     }
@@ -296,7 +296,7 @@ enum SliverLayoutCtxStorage<'ctx, P: ParentData + Default> {
     ///
     /// Completion writes through to the erased ctx in addition to filling
     /// the local cache, keeping both views consistent.
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure (Core.2 W3.1 sliver leaf bridge)
+    // Protocol-layout-erasure (Core.2 W3.1 sliver leaf bridge)
     Proxy {
         constraints: SliverConstraints,
         child_geometries: ProxySliverChildGeometryCache,
@@ -377,7 +377,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     /// **Visibility** — `pub(crate)`. The only sanctioned consumer is the
     /// `RenderObject<SliverProtocol>` blanket impl in
     /// [`crate::traits::RenderSliver`].
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure (Core.2 W3.1 sliver leaf bridge)
+    // Protocol-layout-erasure (Core.2 W3.1 sliver leaf bridge)
     pub(crate) fn from_erased(erased: &'ctx mut dyn SliverLayoutCtxErased) -> Self {
         let constraints = erased.constraints();
         debug_assert!(

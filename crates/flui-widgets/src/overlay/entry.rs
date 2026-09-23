@@ -102,7 +102,7 @@ struct EntryInner {
     /// `dispose`. `None` before mount and after unmount, which makes
     /// [`OverlayEntry::mark_needs_build`] correctly inert in both windows.
     ///
-    /// Acquired in `init_state` — never in `build` — per port-check trigger #22.
+    /// Acquired in `init_state` — never in `build`.
     rebuild: Mutex<Option<RebuildHandle>>,
 
     /// Whether this entry occludes the whole overlay, so the ones below it need
@@ -343,7 +343,6 @@ impl OverlayEntry {
     /// Re-attaching a previously removed entry is legal — Flutter also allows it
     /// (`_overlay` is nulled, not poisoned; only `dispose` is terminal).
     pub(crate) fn attach(&self, shared: &Arc<OverlayShared>) {
-        // PORT-CHECK-OK-LOCK: plain data: Weak downgrade, no Drop
         *self.inner.overlay.lock() = Some(Arc::downgrade(shared));
     }
 

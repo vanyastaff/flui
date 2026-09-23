@@ -113,7 +113,6 @@ fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
     post_frame_handle
         .schedule_local(move |_timing| {
             calls_cb.fetch_add(1, Ordering::SeqCst);
-            // PORT-CHECK-OK-LOCK: plain data: Option<Size> (Copy)
             *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
         })
         .expect("the lane outlives this call");

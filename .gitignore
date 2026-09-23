@@ -238,3 +238,6 @@ examples/*/pkg/
 
 # mdBook build output (built by `mdbook build book/`, deployed by .github/workflows/docs.yml)
 /book/book/
+
+# Per-run agent checklist (AGENTS.md "Long runs"); lives in the worktree, never committed.
+/TASKS.md

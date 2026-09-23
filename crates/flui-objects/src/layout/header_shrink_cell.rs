@@ -49,8 +49,7 @@ struct CellState {
 /// Shared shrink-state mailbox between a persistent header's render object and
 /// its element.
 ///
-/// The `Mutex` is private and no guard crosses the API boundary (SP-6 /
-/// port-check "no locks in public API").
+/// The `Mutex` is private and no guard crosses the API boundary.
 #[derive(Debug, Default)]
 pub struct HeaderShrinkCell {
     inner: Mutex<CellState>,

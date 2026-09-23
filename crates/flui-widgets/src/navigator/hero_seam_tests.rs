@@ -231,7 +231,6 @@ fn observers_attach_and_detach_in_registration_order() {
     let mut harness = mount_navigator(&navigator);
     assert_eq!(*log.lock(), vec!["attach:a", "attach:b", "attach:c"]);
 
-    // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
     log.lock().clear();
     unmount_navigator(&mut harness, &navigator);
     assert_eq!(*log.lock(), vec!["detach:a", "detach:b", "detach:c"]);
@@ -253,7 +252,6 @@ fn unmounting_the_navigator_detaches_its_observers_exactly_once() {
     navigator.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
 
     let mut harness = mount_navigator(&navigator);
-    // PORT-CHECK-OK-LOCK: plain data: recording log, no Drop
     log.lock().clear();
 
     unmount_navigator(&mut harness, &navigator);
@@ -530,7 +528,6 @@ fn route_subtree_ids_are_published_before_layout_commits() {
         .boxed()
     }));
     let pushed = navigator.current().expect("pushed");
-    // PORT-CHECK-OK-LOCK: plain data: RouteId is Copy
     *route_cell.lock() = Some(pushed);
 
     // What the post-frame callback of the very same frame sees.
@@ -897,7 +894,6 @@ fn observers_are_notified_before_a_dying_routes_overlay_entry_is_torn_down() {
         fn did_pop(&self, _route: RouteId, _previous: Option<RouteId>) {
             let navigator = self.handle.lock().clone();
             if let Some(navigator) = navigator {
-                // PORT-CHECK-OK-LOCK: plain data: usize, no Drop
                 *self.entries_at_pop.lock() = Some(navigator.tracked_entry_count());
             }
         }

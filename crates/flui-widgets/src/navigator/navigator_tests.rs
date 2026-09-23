@@ -54,7 +54,6 @@ impl Built {
         self.0.lock().contains(&name)
     }
     fn clear(&self) {
-        // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
         self.0.lock().clear();
     }
 }
@@ -2957,7 +2956,6 @@ fn a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it
                 .boxed()
         }));
         harness.tick();
-        // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
         spy.0.lock().clear();
 
         let popped = handle.pop();

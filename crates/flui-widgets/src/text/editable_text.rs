@@ -151,7 +151,7 @@ fn source_offset_at_global(
                 .get(editable_id)?
                 .as_box()?
                 .render_object()
-                .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: the pointer handlers reach the one concrete render object type this widget mounts under `inner_anchor`, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — the same sanctioned boundary as `CursorAreaLoop::global_caret_rect`; see docs/PORT.md FR-033/widgets.
+                .downcast_ref::<RenderEditable>()?; // the pointer handlers reach the one concrete render object type this widget mounts under `inner_anchor`, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — the same sanctioned boundary as `CursorAreaLoop::global_caret_rect`.
             let to_root = owner.transform_to(editable_id, root_id)?;
             let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
             let masked = editable.byte_offset_for_local_offset(Offset::new(x, y))?;
@@ -208,7 +208,7 @@ fn source_word_range_at_global(
                 .get(editable_id)?
                 .as_box()?
                 .render_object()
-                .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: same sanctioned boundary as `source_offset_at_global` above; see docs/PORT.md FR-033/widgets.
+                .downcast_ref::<RenderEditable>()?; // same sanctioned boundary as `source_offset_at_global` above.
             let to_root = owner.transform_to(editable_id, root_id)?;
             let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
             let masked = editable.word_range_at_local_offset(Offset::new(x, y))?;
@@ -268,7 +268,7 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 /// # IME composition
 ///
 /// On focus gain, `EditableTextState` attaches an IME client through
-/// [`BuildContext::text_input_handle`] (acquired in `init_state`, per the
+/// [`LifecycleContext::text_input_handle`] (acquired in `init_state`, per the
 /// frame-capability rule that method's doc states) — its callback routes
 /// each [`ImeEvent`] to the matching [`TextEditingController`] composing
 /// operation (`Preedit` → `set_composing_text`, `Commit` → `commit_text`,
@@ -560,7 +560,7 @@ pub struct EditableTextState {
     /// Acquired in `init_state`, never in `build` — the pointer handlers need
     /// it to reach the anchored `RenderEditable` and to map a global point
     /// into that object's local space, and a frame phase is not where a
-    /// presentation capability may be taken (port-check trigger 22).
+    /// presentation capability may be taken.
     pipeline_owner: Option<PipelineCell>,
     /// The node this field's node hangs under — the nearest enclosing focus
     /// parent at mount, or the root scope's backing node. Detached from in
@@ -599,7 +599,7 @@ pub struct EditableTextState {
     ime_focus_transition: Option<ImeFocusTransition>,
     /// The IME attach/detach capability, acquired once in `init_state` (the
     /// frame-capability rule `post_frame_handle` follows —
-    /// `BuildContext::text_input_handle`'s doc). `None` when no binding
+    /// `LifecycleContext::text_input_handle`'s doc). `None` when no binding
     /// installed one (a bare `ElementTree` in a unit test): the field then
     /// simply never attaches, rather than panicking or silently no-opping
     /// through a stub.
@@ -941,7 +941,7 @@ impl ViewState<EditableText> for EditableTextState {
         // 5. Attach/detach the IME client on this field's own focus
         //    transitions. `text_input_handle()` is a frame capability —
         //    acquired here, in `init_state`, never in `build` (see
-        //    `BuildContext::text_input_handle`'s doc) — and stored so the
+        //    `LifecycleContext::text_input_handle`'s doc) — and stored so the
         //    focus-listener closure below (which cannot borrow `&mut self`)
         //    and `dispose` can both reach it. `local_post_frame_handle()` and
         //    `pipeline_owner()` are acquired alongside it for the same
@@ -995,7 +995,6 @@ impl ViewState<EditableText> for EditableTextState {
                         return;
                     }
                 };
-                // PORT-CHECK-OK-LOCK: plain data: ClientToken(NonZeroU64), no Drop
                 *ime_token_for_focus.borrow_mut() = Some(token);
 
                 if let Some(post_frame) = post_frame_handle_for_focus.clone() {
@@ -1446,7 +1445,7 @@ impl CursorAreaLoop {
                 .get(editable_id)?
                 .as_box()?
                 .render_object()
-                .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: ADR-0032 IME cursor-area loop reaches the one concrete render object type it knows sits under `inner_anchor` (an `EditableTextRenderView`'s `RenderEditable`) through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — see docs/PORT.md FR-033/widgets.
+                .downcast_ref::<RenderEditable>()?; // ADR-0032 IME cursor-area loop reaches the one concrete render object type it knows sits under `inner_anchor` (an `EditableTextRenderView`'s `RenderEditable`) through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure.
             let local_rect = editable
                 .rect_for_composing_range()
                 .unwrap_or_else(|| editable.caret_local_rect());
@@ -1727,10 +1726,8 @@ fn build_key_handler(
                 // `EditableText` (`examples/todo.rs`'s `add_item` calls
                 // `TextEditingController::clear()` from inside its
                 // `on_submitted` callback). Calling it while either guard
-                // is still held is exactly the hazard
-                // `LockDiscipline/StatementDrop` (`docs/PORT.md`) guards
-                // against for a `Mutex`/`RwLock`, applied here to a
-                // `RefCell` the grep doesn't reach.
+                // is still held is the same drop-under-guard hazard as for a
+                // `Mutex`/`RwLock`, applied here to a `RefCell`.
                 let Some(callback) = on_submitted.borrow().clone() else {
                     return KeyEventResult::Ignored;
                 };
@@ -3770,7 +3767,7 @@ mod tests {
             for (_, node) in tree.iter() {
                 let editable = node
                     .as_box()
-                    .and_then(|b| b.render_object().downcast_ref::<RenderEditable>()); // PORT-CHECK-OK-DOWNCAST: test-only reach to the one concrete render object type this widget mounts, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — same sanctioned boundary as `CursorAreaLoop::global_caret_rect` above; see docs/PORT.md FR-033/widgets.
+                    .and_then(|b| b.render_object().downcast_ref::<RenderEditable>()); // test-only reach to the one concrete render object type this widget mounts, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — same sanctioned boundary as `CursorAreaLoop::global_caret_rect` above.
                 if let Some(editable) = editable {
                     return f.take().map(|f| f(editable));
                 }

@@ -296,7 +296,6 @@ fn the_builder_hook_resolves_the_published_theme() {
     let seen_in_builder = Arc::clone(&seen);
     let theme = CupertinoThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED);
     let app = CupertinoApp::with_builder(move |ctx, _child| {
-        // PORT-CHECK-OK-LOCK: plain data: Color is Copy
         *seen_in_builder.lock().unwrap() = Some(CupertinoTheme::of(ctx).primary_color());
         SizedBox::shrink().boxed()
     })

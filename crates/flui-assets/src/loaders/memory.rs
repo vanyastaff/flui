@@ -119,7 +119,6 @@ where
     /// Clears all assets from memory.
     pub fn clear(&self) {
         let _prev = std::mem::take(&mut *self.storage.write());
-        // PORT-CHECK-OK-LOCK: plain data: AssetMetadata has no Drop
         self.metadata.write().clear();
     }
 }

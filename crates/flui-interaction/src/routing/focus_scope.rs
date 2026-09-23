@@ -864,7 +864,6 @@ impl FocusNode {
             });
         }
 
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         *child.parent.borrow_mut() = Some(Rc::downgrade(self));
         self.children.borrow_mut().push(Rc::clone(child));
 
@@ -938,23 +937,18 @@ impl FocusNode {
 
         let children = std::mem::take(&mut *current.children.borrow_mut());
         for child in &children {
-            // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
             *child.parent.borrow_mut() = Some(Rc::downgrade(replacement));
         }
         let _old_children = std::mem::replace(&mut *replacement.children.borrow_mut(), children);
 
         parent.children.borrow_mut()[sibling_index] = Rc::clone(replacement);
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         *replacement.parent.borrow_mut() = Some(Rc::downgrade(&parent));
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         *replacement.manager_binding.borrow_mut() = ManagerBinding::Bound(Rc::downgrade(&manager));
         replacement.attached.set(true);
         replacement.bump_attachment_generation();
 
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         current.parent.borrow_mut().take();
         current.attached.set(false);
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         *current.manager_binding.borrow_mut() = ManagerBinding::Unbound;
         current.bump_attachment_generation();
         if let Some(scope) = current.as_scope() {
@@ -1011,7 +1005,6 @@ impl FocusNode {
                 old_scope.forget_subtree(node);
             }
 
-            // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
             *node.parent.borrow_mut() = Some(Rc::downgrade(self));
             self.children.borrow_mut().push(Rc::clone(node));
             node.bump_attachment_generation();
@@ -1077,7 +1070,6 @@ impl FocusNode {
     }
 
     fn bind_subtree(node: &Rc<FocusNode>, manager: &Rc<FocusManager>) {
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         *node.manager_binding.borrow_mut() = ManagerBinding::Bound(Rc::downgrade(manager));
         node.attached.set(true);
         for child in node.children() {
@@ -1136,7 +1128,6 @@ impl FocusNode {
         self.children
             .borrow_mut()
             .retain(|held| !Rc::ptr_eq(held, child));
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         child.parent.borrow_mut().take();
         Self::unbind_subtree(child);
 
@@ -1147,7 +1138,6 @@ impl FocusNode {
 
     fn unbind_subtree(node: &Rc<FocusNode>) {
         node.attached.set(false);
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         *node.manager_binding.borrow_mut() = ManagerBinding::Unbound;
         node.bump_attachment_generation();
         for child in node.children() {
@@ -1158,7 +1148,6 @@ impl FocusNode {
     pub(crate) fn close_owned_tree(node: &Rc<FocusNode>) {
         let children = std::mem::take(&mut *node.children.borrow_mut());
         for child in children {
-            // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
             child.parent.borrow_mut().take();
             Self::tombstone_subtree(&child);
         }
@@ -1168,7 +1157,6 @@ impl FocusNode {
     fn tombstone_subtree(node: &Rc<FocusNode>) {
         let children = std::mem::take(&mut *node.children.borrow_mut());
         for child in children {
-            // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
             child.parent.borrow_mut().take();
             Self::tombstone_subtree(&child);
         }
@@ -1178,7 +1166,6 @@ impl FocusNode {
     fn tombstone_node(node: &Rc<FocusNode>) {
         node.attached.set(false);
         node.pending_focus_request.set(false);
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         *node.manager_binding.borrow_mut() = ManagerBinding::Closed;
         node.bump_attachment_generation();
         node.clear_on_key_event();
@@ -1186,7 +1173,6 @@ impl FocusNode {
         node.clear_rect_provider();
         if let Some(scope) = node.as_scope() {
             scope.pending_first_focus.set(false);
-            // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
             scope.focus_history.borrow_mut().clear();
         }
     }
@@ -1294,7 +1280,6 @@ impl FocusScopeNode {
 
     pub(crate) fn new_root(manager: Weak<FocusManager>) -> Rc<Self> {
         let scope = Self::with_debug_label("Root Focus Scope");
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         *scope.inner.manager_binding.borrow_mut() = ManagerBinding::Bound(manager);
         scope.inner.attached.set(true);
         scope
@@ -1468,7 +1453,6 @@ impl FocusScopeNode {
 
     fn clear_replaced_state(&self) {
         self.pending_first_focus.set(false);
-        // PORT-CHECK-OK-LOCK: no significant drop (Weak downgrade / plain enum)
         self.focus_history.borrow_mut().clear();
     }
 

@@ -197,7 +197,6 @@ fn double_tap_down_reports_the_real_pointer_kind() {
     let mut scoped = lay_out(
         GestureDetector::new()
             .on_double_tap_down(move |details| {
-                // PORT-CHECK-OK-LOCK: PointerType is Copy, no significant drop
                 *kind_cb.lock().unwrap() = Some(details.kind);
             })
             .child(target()),

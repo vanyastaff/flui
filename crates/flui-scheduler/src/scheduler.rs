@@ -731,7 +731,6 @@ struct IdleDeadlineGuard<'a> {
 
 impl Drop for IdleDeadlineGuard<'_> {
     fn drop(&mut self) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.slot.lock() = None;
     }
 }
@@ -1274,7 +1273,6 @@ impl UpdateScheduler {
     #[tracing::instrument(skip(self))]
     pub fn handle_begin_frame(&self, vsync_time: Instant) -> FrameId {
         // Store vsync time for all tickers to use
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.current_vsync_time.lock() = Some(vsync_time);
 
         // Create frame timing with vsync timestamp. `FrameTiming` labels its
@@ -1287,7 +1285,6 @@ impl UpdateScheduler {
         timing.phase = FramePhase::Build;
 
         let frame_id = timing.id;
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.current_frame.lock() = Some(timing);
         self.inner
             .frame
@@ -1305,7 +1302,6 @@ impl UpdateScheduler {
         // its own (now stale) id still in `frame_thread`, mistake itself
         // for the current driver, and drop a cross-thread wake for the
         // frame actually in flight.
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.frame_thread.lock() = Some(std::thread::current().id());
         self.inner.frame.frame_count.fetch_add(1, Ordering::Relaxed);
 
@@ -1657,7 +1653,6 @@ impl UpdateScheduler {
                     .frame
                     .scheduler_phase
                     .store(SchedulerPhase::Idle as u8, Ordering::Release);
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *self.inner.frame.current_vsync_time.lock() = None;
             }
             // The post-frame callback's panic happened first in this frame's
@@ -1687,7 +1682,6 @@ impl UpdateScheduler {
 
         // Return to idle
         self.set_scheduler_phase(SchedulerPhase::Idle);
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.current_vsync_time.lock() = None;
     }
 
@@ -1754,7 +1748,6 @@ impl UpdateScheduler {
             .frame
             .scheduler_phase
             .store(SchedulerPhase::Idle as u8, Ordering::Release);
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.current_vsync_time.lock() = None;
         self.inner.callbacks.cancelled.clear();
 
@@ -1925,7 +1918,6 @@ impl UpdateScheduler {
     ) -> (FrameId, R) {
         use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.frame.idle_deadline.lock() = Some(deadline.0);
 
         // Entered for the whole frame, the panic path included: on a panic
@@ -3259,7 +3251,6 @@ impl UpdateScheduler {
     ///
     /// Called when time dilation changes to avoid large time jumps.
     pub fn reset_epoch(&self) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.binding.epoch_start.lock() = Duration::ZERO;
     }
 
@@ -3372,7 +3363,6 @@ impl UpdateScheduler {
             callback(&timings);
         }
 
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.binding.last_timings_report.lock() = Instant::now();
         count
     }
@@ -3394,7 +3384,6 @@ impl UpdateScheduler {
     /// This is typically called internally when performance mode requests
     /// change, but can also be called by the platform integration layer.
     pub fn set_performance_mode(&self, mode: PerformanceMode) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.inner.binding.current_performance_mode.lock() = mode;
     }
 

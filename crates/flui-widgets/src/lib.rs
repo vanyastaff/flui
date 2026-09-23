@@ -70,9 +70,9 @@
 mod support;
 
 // Framework seams for the sibling `flui-*` widget crates: no semver
-// guarantee, workspace-only (port-check refuses any other importer).
+// guarantee, workspace-only.
 #[doc(hidden)]
-pub mod __private; // PORT-CHECK-OK-SP4: consumed by the crates split out of this one (#1272); drop the marker once flui-text-editing imports it
+pub mod __private;
 mod anchored_box;
 
 pub mod animated;

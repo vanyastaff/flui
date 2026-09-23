@@ -183,7 +183,6 @@ mod gpu_tests {
     ///
     /// **Fails if:**
     /// - Gradient still falls through to SrcOver (src dominates instead of multiplying).
-    /// - Warn-fallback string reappears (Trigger 20 negative-grep catches this statically).
     #[test]
     fn linear_gradient_multiply_matches_cpu_oracle() {
         let (device, queue) = acquire_test_device_and_queue();

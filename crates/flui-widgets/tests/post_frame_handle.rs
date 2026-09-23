@@ -7,7 +7,7 @@
 //! touched.
 //!
 //! The capability is acquired in `init_state` — a lifecycle hook, never `build`
-//! (port-check trigger #22) — and fired by the real `pump_frame` frame order.
+//! — and fired by the real `pump_frame` frame order.
 
 use std::cell::Cell;
 use std::rc::Rc;

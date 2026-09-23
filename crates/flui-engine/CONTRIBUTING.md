@@ -131,7 +131,6 @@ For a change confined to this crate, the parts that matter most:
 | engine tests | `cargo nextest run -p flui-engine --features testing` | The readback oracles |
 | docs | `RUSTDOCFLAGS="-D warnings" cargo doc -p flui-engine --no-deps` | Broken intra-doc links; the crate renamed a lot of public surface recently |
 | doc examples | `cargo test -p flui-engine --doc` | Every `///` example in this crate is compile-checked |
-| architecture contract | `just port-check` | The 23 refusal triggers, several of which name `flui-engine` files |
 | runtime contract | `just runtime-conformance-check` | The crate-root export manifest is explicit and checked |
 
 ## Invariants that are easy to break by accident
@@ -142,14 +141,13 @@ For a change confined to this crate, the parts that matter most:
   off-by-one that only shows up at runtime.
 - **`Matrix4` → `glam` at one boundary.** `Matrix4`-to-`glam` conversion
   happens in `layer_dispatcher.rs` and nowhere else. The record path
-  (`batches/`), the pipeline set, and `replay/` are glam-only; port-check
-  trigger #19 enforces it.
-- **`lyon` lives in `tessellator.rs`.** Trigger #21: the tessellator is the
+  (`batches/`), the pipeline set, and `replay/` are glam-only.
+- **`lyon` lives in `tessellator.rs`.** The tessellator is the
   one adapter over that crate, so a lyon type never leaks into the Command
   IR or a pipeline layout — the same reason `etagere` stays behind `glyph_atlas.rs`.
 - **No `async fn` on the hot path.** Async is for the acquisition edges
   (`Renderer::new`, `recover`, `HeadlessRenderer::new`) only. The layer walk,
-  the dispatch, and the replay path are sync — trigger #3.
+  the dispatch, and the replay path are sync.
 - **`DrawSegment` stays `Clone`, and holds no `PooledTexture`.** Textures
   are acquired at replay, never stored at record; the derive is what bars a
   `PooledTexture` field (it is `!Clone`). It does not bar a raw wgpu handle —
@@ -186,5 +184,4 @@ The crate is ~40k non-test lines. The densest files, and what each owns:
   and `flui.gpu` target events carry the per-frame GPU detail.
 - A behavior question about what Flutter would do: `.flutter/` is the
   reference, pinned at tag `3.44.0` (`git -C .flutter describe --tags`). Check
-  it rather than reasoning from memory — see
-  [`docs/PORT.md`](../../docs/PORT.md).
+  it rather than reasoning from memory.

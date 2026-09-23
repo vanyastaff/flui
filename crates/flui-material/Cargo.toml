@@ -45,7 +45,7 @@ flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 # `FocusNode` — `InkWell::focus_node`'s external-node pass-through.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 # `PostFrameHandle` — `ScaffoldMessenger` defers a tick-driven `SnackBar`
-# `on_closed` callback out of the build phase through it (trigger #22).
+# `on_closed` callback out of the build phase through it.
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 tracing = { workspace = true }
 

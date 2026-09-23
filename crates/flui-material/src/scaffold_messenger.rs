@@ -117,8 +117,8 @@
 //!   e.g. the entrance animation finishing, or the display timer expiring
 //!   and starting the exit reverse, which later settles on its own). Firing
 //!   arbitrary caller-supplied `on_closed` code inline, mid-`build`, is the
-//!   same hazard trigger #22 names for `rebuild_handle`/`post_frame_handle`
-//!   themselves: an `on_closed` that calls `show_snack_bar` would mutate the
+//!   same hazard that keeps `rebuild_handle`/`post_frame_handle` out of
+//!   `build`: an `on_closed` that calls `show_snack_bar` would mutate the
 //!   queue and schedule further rebuilds *after* this build's siblings have
 //!   already built against the pre-mutation tree, silently.
 //!   `MessengerCore::pop_and_advance` instead defers the fire through the
@@ -353,7 +353,7 @@ struct MessengerCore {
     /// `None` until [`ScaffoldMessengerHandle::attach`] runs.
     rebuild: RefCell<Option<RebuildHandle>>,
     /// Acquired in [`ScaffoldMessengerHandle::attach`] (`init_state`, per
-    /// ADR-0021/trigger #22). `None` until then, or if no binding installed
+    /// ADR-0021). `None` until then, or if no binding installed
     /// one — see the module docs' "Deferring `on_closed` out of the build
     /// phase" section for the synchronous fallback that implies.
     post_frame: RefCell<Option<LocalPostFrameHandle>>,
@@ -493,7 +493,6 @@ impl MessengerCore {
         );
         if let Some(vsync) = self.vsync.borrow().as_ref() {
             let registration = vsync.register(controller.clone());
-            // PORT-CHECK-OK-LOCK: plain data: VsyncRegistration(u64), no Drop
             *self.duration_vsync_registration.borrow_mut() = Some(registration);
         }
         if let Some(rebuild) = self.rebuild.borrow().clone() {
@@ -643,13 +642,11 @@ impl ScaffoldMessengerHandle {
                 rebuild_for_listener.schedule(flui_view::RebuildReason::AnimationTick);
             }));
         let _prev = self.shared.rebuild.borrow_mut().replace(rebuild);
-        // PORT-CHECK-OK-LOCK: plain data: LocalPostFrameHandle (Weak+Weak), no Drop
         *self.shared.post_frame.borrow_mut() = ctx.local_post_frame_handle();
 
         let vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
         if let Some(vsync) = &vsync {
             let registration = vsync.register(self.shared.entry_controller.clone());
-            // PORT-CHECK-OK-LOCK: plain data: VsyncRegistration(u64), no Drop
             *self.shared.entry_vsync_registration.borrow_mut() = Some(registration);
         }
         let _prev = std::mem::replace(&mut *self.shared.vsync.borrow_mut(), vsync);
@@ -1069,7 +1066,6 @@ mod tests {
         let reason_for_cb = Rc::clone(&reason);
         handle
             .show_snack_bar(snack_bar("a"))
-            // PORT-CHECK-OK-LOCK: plain data: SnackBarClosedReason, no Drop
             .on_closed(move |r| *reason_for_cb.borrow_mut() = Some(r));
 
         handle.shared.entry_controller.set_value(1.0); // fully shown
@@ -1272,12 +1268,10 @@ mod tests {
         let current_closed_for_cb = Rc::clone(&current_closed);
         handle
             .show_snack_bar(snack_bar("current"))
-            // PORT-CHECK-OK-LOCK: plain data: SnackBarClosedReason, no Drop
             .on_closed(move |reason| *current_closed_for_cb.borrow_mut() = Some(reason));
         let queued_closed_for_cb = Rc::clone(&queued_closed);
         handle
             .show_snack_bar(snack_bar("queued"))
-            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             .on_closed(move |_| *queued_closed_for_cb.borrow_mut() = true);
 
         handle.shared.entry_controller.set_value(1.0); // "current" fully shown
@@ -1333,7 +1327,6 @@ mod tests {
         let reason_for_cb = Rc::clone(&reason);
         handle
             .show_snack_bar(snack_bar("a"))
-            // PORT-CHECK-OK-LOCK: plain data: SnackBarClosedReason, no Drop
             .on_closed(move |r| *reason_for_cb.borrow_mut() = Some(r));
 
         handle.shared.entry_controller.set_value(1.0); // fully shown, display timer starts

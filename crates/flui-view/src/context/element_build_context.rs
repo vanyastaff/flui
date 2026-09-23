@@ -126,13 +126,11 @@ impl ElementBuildContext {
 
     /// Get a reference to the tree.
     pub fn tree(&self) -> &Arc<RwLock<ElementTree>> {
-        // PORT-CHECK-OK-SP6: ElementBuildContext tree accessor; pre-existing SP-6
         &self.tree
     }
 
     /// Get a reference to the owner.
     pub fn build_owner(&self) -> &Arc<RwLock<BuildOwner>> {
-        // PORT-CHECK-OK-SP6: ElementBuildContext build_owner accessor; pre-existing SP-6
         &self.owner
     }
 
@@ -629,7 +627,7 @@ impl LifecycleContext for ElementBuildContext {
     fn focus_manager(&self) -> Rc<FocusManager> {
         self.owner.read().focus_manager()
     }
-    /// See [`BuildContext::pipeline_owner`]. The owner is on this element's own
+    /// See [`LifecycleContext::pipeline_owner`]. The owner is on this element's own
     /// node — no ancestor walk.
     fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
         let tree = self.tree.read();
@@ -721,8 +719,8 @@ pub(crate) struct BuildCtx<'b> {
     dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
     /// Owned rebuild capability for `element_id`, minted by `make_build_ctx`
     /// from the element's own core. Cloned out by
-    /// [`BuildContext::rebuild_handle`]; the build itself never schedules —
-    /// port-check trigger #22 forbids even acquiring it here.
+    /// [`LifecycleContext::rebuild_handle`]; the build itself never schedules —
+    /// `build` sees this context as a `BuildContext`, which cannot hand it out.
     rebuild: crate::RebuildHandle,
     /// What the binding and the element's core handed this context.
     capabilities: BuildCapabilities,
@@ -1040,11 +1038,10 @@ impl LifecycleContext for BuildCtx<'_> {
     fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
         // `init_state` runs with a `BuildCtx` — the same context type `build`
         // gets — so this must serve a real lease rather than refuse one. The
-        // "never from a frame phase" half is a STATIC rule, enforced by
-        // `scripts/check-frame-capability-scope.sh` scanning for the token
-        // inside `build`/`perform_layout`/`paint`, exactly as it is for
-        // `text_input_handle` and `focus_manager`, which are acquired from
-        // `init_state` through this same context.
+        // "never from a frame phase" half is a TYPE rule: `build` sees this
+        // context only as `&dyn BuildContext`, which has no `keep_alive_lease`,
+        // exactly as for `text_input_handle` and `focus_manager`, which are
+        // acquired from `init_state` through this same context.
         self.keep_alive_handle().hold()
     }
     fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {

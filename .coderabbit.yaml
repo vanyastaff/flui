@@ -2,8 +2,8 @@
 #
 # CodeRabbit configuration for FLUI.
 #
-# The substance of what a reviewer must know lives in AGENTS.md, docs/PORT.md
-# and docs/FOUNDATIONS.md — this file points CodeRabbit at them
+# The substance of what a reviewer must know lives in AGENTS.md and
+# docs/FOUNDATIONS.md — this file points CodeRabbit at them
 # (knowledge_base.code_guidelines) and encodes the few things a document
 # cannot: which paths are worth reviewing, and which repo-specific gates a
 # pull request has to clear.
@@ -508,36 +508,24 @@ reviews:
 
           FAIL otherwise, listing each unreachable item as
           `path/to/file.rs:LINE — item_name`. A test-only caller does not
-          count as reachable. Speculative `pub mod` with zero workspace
-          consumers is a documented refusal trigger.
+          count as reachable, and neither does a speculative `pub mod` with
+          zero workspace consumers.
 
-      - name: Port refusal triggers
+      - name: Architecture rules
         mode: warning
         instructions: |
-          Scan the diff for patterns docs/PORT.md refuses at write time and
-          `scripts/port-check.sh` gates in CI. Report each hit with file and
-          line:
+          These rules have no dedicated gate (clippy and the type system cover
+          the rest). Report each hit in the diff with file and line:
 
           - `RwLock` or another interior-mutability primitive wrapping
             `Box<dyn RenderObject<_>>` in render, view, layer, painting or
-            engine storage.
+            engine storage, or any lock on per-node state touched inside
+            `perform_layout`/`paint`.
           - `Box<dyn View>` stored as a struct field in an element child
             collection.
-          - `async fn` on `View::build`, `RenderObject::layout` or
-            `RenderObject::paint`, or anywhere else on the frame path.
-          - `Mutex` on dirty-list state mutated during build/layout/paint.
-          - `unimplemented!()` or `todo!()` in a production `fn` body, outside
-            platform-init stubs on linux/ios/android.
-          - `From<f32>` implemented for a unit wrapper in flui-geometry.
           - A `pub fn` returning a `MutexGuard`, or a `pub` field of lock type.
-          - A new `dyn` boundary not in the trigger-9 allowlist in
-            `scripts/port-check.sh`.
-          - `rebuild_handle()`, `post_frame_handle()`, `text_input_handle()`
-            or `focus_manager()` called inside a `build`, `perform_layout` or
-            `paint` body. These are acquired in `init_state` /
-            `did_change_dependencies` and used later; adding a new capability
-            to `BuildContext` means adding its token to
-            `scripts/check-frame-capability-scope.sh` in the same change.
+          - A new crate-to-crate dependency that points up the layer DAG in
+            `docs/workspace-layers.toml`.
 
           PASS if none are present.
 
@@ -601,9 +589,8 @@ reviews:
     clippy:
       enabled: true
     ast-grep:
-      # Security/essentials pack only. FLUI's own banned patterns are already
-      # gated by scripts/port-check.sh and are expressed above as review
-      # instructions and pre-merge checks rather than duplicated as rules.
+      # Security/essentials pack only. FLUI's own rules live in clippy, the
+      # type system and the review instructions above.
       # To add repo-specific structural rules, create a directory of ast-grep
       # rule YAML files and list it under rule_dirs.
       essential_rules: true
@@ -667,8 +654,6 @@ knowledge_base:
     filePatterns:
       - "**/AGENTS.md"
       - "**/ARCHITECTURE.md"
-      - files: "docs/PORT.md"
-        applyTo: "crates/**/*.rs,platforms/**/*.rs,src/**/*.rs"
       - files: "docs/FOUNDATIONS.md"
         applyTo: "crates/**/*.rs,**/Cargo.toml"
       - files: "docs/PANIC-POLICY.md"

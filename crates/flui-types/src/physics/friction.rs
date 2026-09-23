@@ -15,7 +15,6 @@ use super::{Simulation, Tolerance};
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FrictionSimulation {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Exponential decay rate k (NOT Flutter's drag coefficient cₓ; k = −ln(cₓ)).
     /// Higher = faster decay.
     decay_rate: f32,
@@ -206,7 +205,6 @@ impl Simulation for FrictionSimulation {
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoundedFrictionSimulation {
-    // PORT-CHECK-OK-SP3: parallel to flui-animation::simulation::BoundedFrictionSimulation; the two physics layers use distinct Simulation traits (position/velocity here vs x/dx + Send+Sync there). Consolidation tracked.
     /// The underlying friction simulation
     friction: FrictionSimulation,
 

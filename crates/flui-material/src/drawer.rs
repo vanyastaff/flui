@@ -726,7 +726,6 @@ impl ViewState<DrawerController> for DrawerControllerState {
         let vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
         if let Some(vsync) = &vsync {
             let registration = vsync.register(self.core.controller.clone());
-            // PORT-CHECK-OK-LOCK: plain data: VsyncRegistration(u64), no Drop
             *self.core.vsync_registration.borrow_mut() = Some(registration);
         }
         let _prev = std::mem::replace(&mut *self.core.vsync.borrow_mut(), vsync);

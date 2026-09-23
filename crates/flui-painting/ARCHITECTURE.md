@@ -149,7 +149,7 @@ for a caller that wants to check.
 
 ### 6. The zero-area background guard sits on the FILL, not on a caller
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — behaviour is the floor, and an
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — behaviour is the floor, and an
 improvement over the reference owes a named record plus a replacement test.
 
 **Choice:** `paint_box_decoration` records no background — colour or gradient — when either
@@ -186,7 +186,7 @@ that pinned the old unconditional behaviour is deleted rather than left contradi
 
 ### 7. `anti_alias` is a paint OPTION, not a `BoxDecoration` field
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #2 — pick the best-known shape and say
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Look around before settling") — pick the best-known shape and say
 where it comes from.
 
 **Choice:** `paint_box_decoration` takes a `DecorationPaintOptions` alongside the decoration, and
@@ -238,7 +238,7 @@ snapshots untouched while making the opt-out visible to any test reading those l
 
 ### 8. A style's font family is resolved against the host before it reaches the shaper
 
-**Rule:** Prime Directive rule #1 — a behavioural divergence from the reference is recorded with the
+**Rule:** Design stance ("Flutter is a reference, not a spec") — a behavioural divergence from the reference is recorded with the
 test that replaces the reference's own coverage.
 
 **Choice:** [`src/text_layout/font_resolve.rs`](src/text_layout/font_resolve.rs) picks the family a
@@ -342,7 +342,7 @@ reverted; that was verified, not assumed.
 
 ### 9. Intrinsic width probes skip `max_lines` truncation, floor at ellipsis
 
-**Rule:** Prime Directive rule #1 — Flutter is not a clean oracle for this edge
+**Rule:** Design stance ("Flutter is a reference, not a spec") — Flutter is not a clean oracle for this edge
 ([flutter/flutter#13512](https://github.com/flutter/flutter/issues/13512) still open; pinned
 `text_painter_test.dart` skips the intrinsic/`maxLines` block). Record the FLUI contract and
 replace the skipped reference with a FLUI test.

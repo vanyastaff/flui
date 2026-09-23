@@ -235,7 +235,6 @@ impl<'a> PointerTeardownGuard<'a> {
 
 impl Drop for PointerTeardownGuard<'_> {
     fn drop(&mut self) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         self.active.borrow_mut().remove(&self.pointer);
     }
 }

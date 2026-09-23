@@ -265,7 +265,6 @@ impl TapAndDragGestureRecognizer {
 
     /// Update settings.
     pub fn set_settings(&self, settings: GestureSettings) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.settings.lock() = settings;
     }
 
@@ -355,9 +354,7 @@ impl TapAndDragGestureRecognizer {
     /// Reset FSM and per-gesture tracking state to Ready. Called after
     /// tap-up, drag-end, or cancel.
     fn reset(&self) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.phase.lock() = Phase::Ready;
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.accepted.lock() = None;
         let mut ds = self.drag_state.lock();
         ds.initial = None;
@@ -410,7 +407,6 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             // velocity instead of however the test process happened to be scheduled.
             ds.velocity_tracker.add_position(self.state.now(), position);
         }
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.phase.lock() = Phase::Down;
     }
 
@@ -522,7 +518,6 @@ impl TapAndDragGestureRecognizer {
                         });
                     }
 
-                    // PORT-CHECK-OK-LOCK: plain data, no significant drop
                     *self.phase.lock() = Phase::Dragging;
                     {
                         let mut ds = self.drag_state.lock();
@@ -601,7 +596,6 @@ impl TapAndDragGestureRecognizer {
                     let ds = self.drag_state.lock();
                     (ds.initial, ds.initial_global, ds.tap_viable)
                 };
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *self.phase.lock() = Phase::Finished;
 
                 // Resolve the arena BEFORE firing any tap callback. `stop_tracking`
@@ -648,7 +642,6 @@ impl TapAndDragGestureRecognizer {
                         local_position: position,
                     });
                 }
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *self.phase.lock() = Phase::Finished;
                 self.state.stop_tracking();
                 self.reset();
@@ -672,7 +665,6 @@ impl TapAndDragGestureRecognizer {
         // Cancel carries no details, in either space, so both positions are
         // accepted and dropped rather than being made to look meaningful.
         let _ = (position, global_position);
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.phase.lock() = Phase::Finished;
         self.state.reject();
         self.reset();
@@ -696,7 +688,6 @@ impl crate::recognizers::OneSequenceGestureRecognizer for TapAndDragGestureRecog
                 // Record the win; `handle_up` reads `self.accepted` after the
                 // resolving sweep and fires the deferred tap callbacks only
                 // then. Firing here is a lock-during-callback hazard.
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *self.accepted.lock() = Some(true);
             }
             crate::arena::GestureDisposition::Rejected => {
@@ -707,9 +698,7 @@ impl crate::recognizers::OneSequenceGestureRecognizer for TapAndDragGestureRecog
                 // `arena.resolve` again would re-lock the same entry and
                 // deadlock. The handle_* paths (handle_cancel, dispose)
                 // own the actual `state.reject()` call.
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *self.accepted.lock() = Some(false);
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *self.phase.lock() = Phase::Ready;
             }
         }
@@ -726,13 +715,11 @@ impl GestureArenaMember for TapAndDragGestureRecognizer {
         // sweep and fires the deferred tap callbacks. Do NOT invoke user
         // callbacks here — the arena holds its entry lock while dispatching
         // and user code may re-enter it (lock-during-callback hazard).
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.accepted.lock() = Some(true);
     }
 
     fn reject_gesture(&self, _pointer: PointerId) {
         // Record the loss so the deferred tap callbacks never fire.
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.accepted.lock() = Some(false);
 
         // The arena is already holding its entry-lock while dispatching
@@ -743,7 +730,6 @@ impl GestureArenaMember for TapAndDragGestureRecognizer {
         //
         // Clean up recogniser-owned state directly without touching the
         // arena so the next add_pointer cycle starts fresh.
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.phase.lock() = Phase::Ready;
         let mut ds = self.drag_state.lock();
         ds.initial = None;
@@ -888,7 +874,6 @@ mod tests {
             let drag_start = Arc::new(Mutex::new(false));
             let started = drag_start.clone();
             let rec = TapAndDragGestureRecognizer::new(GestureArena::new())
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 .with_on_drag_start(move |_| *started.lock() = true);
 
             let origin = Offset::new(Pixels(0.0), Pixels(0.0));
@@ -1245,7 +1230,6 @@ mod clock_source_tests {
         let reported = Arc::new(Mutex::new(0.0_f32));
         let sink = Arc::clone(&reported);
         let recognizer = TapAndDragGestureRecognizer::new(arena).with_on_drag_end(move |details| {
-            // PORT-CHECK-OK-LOCK: plain data, no significant drop
             *sink.lock() = details.velocity.pixels_per_second.dx.get();
         });
 

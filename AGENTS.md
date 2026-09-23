@@ -1,8 +1,8 @@
 # AGENTS.md
 
 The one guide for every agent runtime and human contributor (`CLAUDE.md` just imports it). It
-records what isn't derivable from the code: the project's design stance, the rules the gates
-enforce, and the conventions the gates can't check.
+records what isn't derivable from the code: the project's design stance, the rules the compiler
+and gates enforce, and the conventions they can't check.
 
 ---
 
@@ -14,23 +14,31 @@ everywhere else. Five trees — `View` (immutable config) → `Element` (lifecyc
 alongside for accessibility — then `flui-engine` → `wgpu`. Pre-1.0: breaking changes are cheap
 now and expensive once consumers exist, so fix a bad shape instead of working around it.
 
-## Prime Directive
+## Design stance
 
-1. **Flutter is a reference, not a spec.** Its three-tree model, lifecycle ordering and
-   layout/paint/hit-test protocol are the starting point; structure and style are idiomatic Rust
-   (compile-time child arity, `NonZeroUsize` IDs, slab arenas, `thiserror`/`Result`). Matching a
-   Flutter contract means naming it and proving it with a test. Diverging on purpose is fine —
-   record it (an ADR when protocol-level, a `## Mapping decisions` entry in the crate's
-   `ARCHITECTURE.md` when local) and have a test assert the shipped behavior. Losing a behavior
-   by accident is never fine. **Leapfrog zones (ADR-0027)** — multi-window ownership,
-   runtime/scheduling topology, concurrency, presentation architecture — aren't bound by
-   Flutter's widget-tree semantics at all. `.flutter/` and `.gpui/` are optional gitignored
-   reference clones; cite the revision you actually read.
-2. **Look at the field before settling on a design** — Compose, SwiftUI, and the Rust UI crates
-   (egui, Iced, Xilem/Masonry, Bevy UI, GPUI, Dioxus, Slint) — for API shape, architecture and
-   style. Where Flutter has no strong contract (animation curves, velocity prediction, color
-   interpolation, input smoothing) it isn't even the baseline; propose the best shape you find.
-3. **Done means verified and recorded** — see [Definition of Done](#definition-of-done).
+- **Flutter is a reference, not a spec.** Its three-tree model, lifecycle ordering and
+  layout/paint/hit-test protocol are a good starting point, and its tests are a useful floor for
+  behavior. Structure, API and style are idiomatic Rust (compile-time child arity, `NonZeroUsize`
+  IDs, slab arenas, `thiserror`/`Result`). Diverge whenever the result is better; record why —
+  an ADR for a cross-crate contract, a `## Mapping decisions` entry in the crate's
+  `ARCHITECTURE.md` for a local one — and let a test pin the behavior you ship. Multi-window
+  ownership, runtime/scheduling topology, concurrency and presentation architecture aren't bound
+  by Flutter at all (ADR-0027). `.flutter/` and `.gpui/` are optional gitignored reference clones.
+- **Look around before settling.** Compose, SwiftUI and the Rust UI crates (egui, Iced,
+  Xilem/Masonry, Bevy UI, GPUI, Dioxus, Slint) often have the better shape; where Flutter has no
+  strong contract (animation curves, velocity prediction, color interpolation, input smoothing)
+  it isn't the baseline at all. Prefer a mature crate over a hand-rolled one.
+- **Make rules types, not reviews.** If the compiler can reject a mistake, encode it (arity
+  types, sealed traits, `LifecycleContext`); if clippy can, turn the lint on; a comment or a
+  grep is the last resort.
+- **Frame path is synchronous.** No `async` in build/layout/paint; async lives at IO, scheduler
+  and tooling edges, and delivers results to the next frame. Locks guard shared infrastructure
+  only: a lock on per-node state touched inside `perform_layout`/`paint` puts contention (and a
+  deadlock risk) on every frame, and a lock in a public signature makes callers part of the
+  locking protocol.
+- **Layers, not micro-crates.** A crate is a layer with one-way dependencies; a feature inside a
+  layer is a module (`flui-widgets` stays one crate). Shared code moves down a layer, not
+  sideways into a copy.
 
 ## Codebase map
 
@@ -47,15 +55,14 @@ the readable version. Bottom to top:
 - **Compositing** — `flui-layer`, `flui-semantics`, `flui-animation`.
 - **Render machine** — `flui-rendering` (the `RenderBox`/`RenderSliver` protocols),
   `flui-objects` (the concrete render-object catalog), `flui-engine` (layers → `wgpu`).
-- **Spine & catalog** — `flui-view` (View/Element, `BuildContext`, reconciliation),
-  `flui-widgets`, `flui-testing` (deterministic headless frame driver on a virtual clock),
-  `flui-material`, `flui-cupertino`, `flui-localizations`.
+- **Spine & catalog** — `flui-view` (View/Element, `BuildContext`/`LifecycleContext`,
+  reconciliation, signals), `flui-widgets`, `flui-testing` (deterministic headless frame driver
+  on a virtual clock), `flui-material`, `flui-cupertino`, `flui-localizations`.
 - **Composition roots** — `flui-app` (per-window `UiRealm`s, the run loop), `flui-cli`,
   `flui-devtools`, `flui-hot-reload`, and the facade.
 
-The non-obvious invariants live in the per-crate `ARCHITECTURE.md` files (engine, foundation,
-layer, painting, platform, rendering, scheduler, widgets) — read the one for the crate you're
-changing before changing it.
+The non-obvious invariants live in the per-crate `ARCHITECTURE.md` files — read the one for the
+crate you're changing before changing it.
 
 ## Working here
 
@@ -63,35 +70,54 @@ changing before changing it.
   `git worktree add -b <area>/<slug> ../flui-wt-<slug> origin/main`. Review someone else's PR
   from your own directory (`gh pr diff`/`checkout`), not inside their worktree.
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
-  `just check-changed` green first; CI is the proof. Risky PRs get the `full-ci` label. Use
+  `just check-changed` green first; CI is the proof. Before asking for review, review the branch
+  against `main` yourself and list only what would block the merge: file and line, why it is
+  wrong, how to show it fails. Risky PRs get the `full-ci` label. Use
   `Refs #N`; `Closes`/`Fixes #N` only when merging should close it (GitHub's linker ignores
   negation around it).
 - **Red main:** fix forward within the hour, or revert. A red heavy run on main or nightly opens a
   "CI is red on main" issue; close it once main is green.
-- **Hands off unless the task is about them:** `.github/workflows/`,
-  `docs/runtime-contract.toml`, `docs/workspace-layers.toml`, `docs/archive/`, and `Cargo.lock`
-  edited by hand.
-- **No internal process-ID markers** (`Cycle N`, `PR #NNN review`, `Phase B`) in code or docs —
-  state the invariant, not the history that produced it. `U##`/`SC-NNN` are documented
-  exceptions; `FR-NNN`/`ADR-NNNN` are fine because a checker greps them. Archival roots are
-  exempt (`docs/{audits,brainstorms,ideation,plans,research,superpowers}`,
+- **Leave these alone unless the task is about them:** `.github/workflows/` (it is the merge
+  path, and a change there decides what every other PR must pass); `docs/runtime-contract.toml`
+  and `docs/workspace-layers.toml` (checked registries — editing them changes what the gates
+  accept, so an edit is a contract change, not a fix); `docs/archive/` (a historical record);
+  `Cargo.lock` by hand (cargo regenerates it, a hand edit drifts from the manifests).
+- **No internal process-ID markers** (`Cycle N`, `PR #NNN review`, `Phase B`, slice/wave labels)
+  in code or docs — state the invariant, not the history that produced it. `ADR-NNNN` citations
+  are fine. Archival roots are exempt (`docs/{audits,brainstorms,ideation,plans,research,superpowers}`,
   `.rust-studio/specs`, `specs`, `openspec`).
 - **A new gate** is a justfile recipe *and* a step in CI's `checks` job — a recipe alone never
-  reaches the merge path. A doc pulled in with `include_str!` is source: keep it out of
-  `DOCS_ONLY` in `scripts/lib/change_scope.py`.
+  reaches the merge path. Prefer a lint or a type over a new script. A doc pulled in with
+  `include_str!` is source: keep it out of `DOCS_ONLY` in `scripts/lib/change_scope.py`.
+
+## Long runs
+
+The maintainer usually hands over a whole task and comes back later.
+
+- If a step doesn't need the maintainer's decision, keep going; put the status in the same
+  message as the next action.
+- Stop and ask only when you can't proceed without them, or before something irreversible or
+  outward-facing: deleting data, force-pushing, merging, publishing, or changes outside your
+  worktree.
+- For a task of more than a few steps, keep a checklist in `TASKS.md` at the worktree root
+  (git-ignored): tick what's done, append what you find. It survives context compaction and
+  shows where the run is.
+- Split large sweeps (an audit, a migration across many crates) between subagents with
+  disjoint files; check each one's evidence before accepting it.
+- End every run with three sections: **Waiting on you**, **Changed**, **Found** — with the
+  command output behind each claim, and what you could not verify.
 
 ## Commands
 
 | Need | Run |
 |------|-----|
 | Before a PR | `just check-changed` — fmt + clippy + nextest over changed crates and their dependents (the same scope script as CI's fast lane) |
-| Full local gate | `just ci` = `just gate` (fmt, text, inventory, runtime-conformance, panic-policy, toolchain, port-check, clippy, doc-strict) + tests + doctests; the pre-push hook runs `just gate` |
+| Full local gate | `just ci` = `just gate` (fmt, text, inventory, runtime-conformance, panic-policy, toolchain, wgsl, clippy, doc-strict) + tests + doctests; the pre-push hook runs `just gate` |
 | CI heavy jobs locally | `just ci-full`; `just doctor full` names any missing tool; job table in `docs/testing.md` |
 | One crate / one test | `cargo nextest run -p <crate>`, `just test-crate <crate>`, `just test-name <crate> <test>` |
 | Other targets (no link) | `just cross-typecheck` — clippy for Win32 / AppKit / Android / iOS |
 | Examples | `just example-hello`, `just example <name>`, `just example-list` |
 | Render-object catalog | `cargo test -p flui-objects --test render_object_harness` |
-| Port rules detail | `just port-check-verbose` |
 | Toolchain | `rust-toolchain.toml` is the source of truth; pre-1.0 the MSRV tracks latest stable. `scripts/check-toolchain-consistency.sh` keeps every copy in sync |
 
 Gotchas: nextest doesn't run doctests (`cargo test --doc`). A flaky test that isn't yours usually
@@ -100,43 +126,42 @@ to that test module rather than serializing the suite. The dev host is shared an
 memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only change needs only
 the script gates.
 
-## Architecture Constraints
+## What the compiler and gates enforce
 
-Enforced by `just port-check` / CI. The 24 refusal triggers + FR-033, with the reasoning behind
-each, are in [`docs/PORT.md`](docs/PORT.md).
-
-| Rule | Checked by |
-|------|------------|
-| **ID offset** — slab indices are 0-based; public IDs (`ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`: insert `slab_index + 1`, look up `id.get() - 1` | `port-check` |
-| No `RwLock<Box<dyn RenderObject>>`; no `async fn` in build/layout/paint/composite/render | `port-check` |
-| No `unimplemented!()`/`todo!()` in production code (linux/ios/android init stubs excepted); no `Box<dyn View>` child fields | `port-check` #8 |
-| No `From<f32>` for flui-geometry unit wrappers; `dyn` only at sanctioned boundaries | `port-check` #9 (allowlist) |
-| No locks in public API (`pub fn -> MutexGuard`); no `println!`/`eprintln!`/`dbg!` in foundation/tree/macros | `port-check` |
-| `flui-log` is a dependency only of `flui-app`, `flui-cli` and the facade | `inventory-check` |
-| Presentation capabilities (`rebuild_handle`, `post_frame_handle`, `text_input_handle`, `focus_manager`) are acquired in `init_state`/`did_change_dependencies`, never in `build`/`perform_layout`/`paint` | `port-check` #22, `check-frame-capability-scope.sh` |
-| `thiserror` in libraries, `anyhow` in apps; `expect("BUG: <invariant>")` for internal invariants, no bare `unwrap()` in production | `clippy::unwrap_used`, [`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md) |
+| Rule | Enforced by |
+|------|-------------|
+| Presentation capabilities (`rebuild_handle`, `post_frame_handle`, `focus_manager`, `text_input_handle`, `keep_alive_*`, `pipeline_owner`, `async_driver`, …) are acquired only in `init_state`/`did_change_dependencies` | type system: they live on `LifecycleContext`, which only those hooks receive (ADR-0078) |
+| Signals are read in `build`, never written or created there | run-time guard in `flui-view::reactive` (ADR-0074) |
+| **ID offset** — slab indices are 0-based; public IDs (`ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`: insert `slab_index + 1`, look up `id.get() - 1` | `NonZeroUsize` + ID newtypes |
+| No lock guard held across an `if let`/`match` arm | `clippy::significant_drop_in_scrutinee` |
+| No `todo!`/`unimplemented!`/`dbg!` in production (linux/ios/android init stubs carry an `#[expect]`) | clippy `todo`/`unimplemented`/`dbg_macro` |
+| No `println!`/`eprintln!` in `flui-foundation`/`flui-tree`/`flui-macros` | clippy `print_stdout`/`print_stderr` |
+| No `From<f32>` for `flui-geometry` unit wrappers | `compile_fail` doctests in `flui-geometry` |
+| `thiserror` in libraries, `anyhow` in apps; `expect("BUG: <invariant>")` for internal invariants, no bare `unwrap()` in production | `clippy::unwrap_used`, `check-panic-policy.sh` ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) |
+| Crate layering; `flui-log` only in `flui-app`, `flui-cli` and the facade; unique ADR numbers | `inventory-check` (`docs/workspace-layers.toml`) |
+| No new process-global singletons in the runtime crates | `runtime-conformance-check` (`docs/runtime-contract.toml`) |
 
 ## ADR Policy
 
-ADRs (`docs/adr/`) can be revised freely, but explicitly: a new ADR with
-`Supersedes: ADR-XXXX`, and `Superseded-by: ADR-YYYY` added to the old one. Shipped code that
-silently disagrees with an accepted ADR is a defect — either the code is wrong or the ADR needs
-superseding.
+ADRs (`docs/adr/`) record cross-crate decisions the code still follows. Revise them freely but
+explicitly: a new ADR with `Supersedes: ADR-XXXX`, and `Superseded-by: ADR-YYYY` added to the old
+one. Code that silently disagrees with an accepted ADR is a defect — either the code is wrong or
+the ADR needs superseding. Delete an ADR whose decision no longer exists in the code; git keeps
+the history.
 
 ## Extending FLUI
 
 | Adding | What it takes |
 |--------|---------------|
-| **Render object** (`RenderBox`/`RenderSliver`) | Implement in `flui-objects` (protocol in `flui-rendering`) → register in `RENDER_OBJECT_TYPES` → `harness_*` tests in `render_object_harness` → Flutter equivalent, or its absence, in `## Mapping decisions` |
-| **Widget** | `View`/`ViewState` in `flui-widgets` or the facade, backed by a render object → `SemanticsConfiguration` for assistive tech → a test that fails without it → divergences recorded |
-| **Platform capability** (a new `BuildContext` handle) | Lifecycle-acquired (ADR-0018/0021/0030/0037) → backend in `flui-platform` with no platform types leaking out → token in `check-frame-capability-scope.sh` → a test that fails without it → ADR if protocol-level |
+| **Render object** (`RenderBox`/`RenderSliver`) | Implement in `flui-objects` (protocol in `flui-rendering`) → register in `RENDER_OBJECT_TYPES` → `harness_*` tests in `render_object_harness` → note a Flutter divergence in `## Mapping decisions` |
+| **Widget** | `View`/`ViewState` in `flui-widgets` or the facade, backed by a render object → `SemanticsConfiguration` for assistive tech → a test that fails without it |
+| **Platform capability** (a new handle) | Backend in `flui-platform` with no platform types leaking out → a method on `LifecycleContext`, not `BuildContext`, so `build` cannot reach it → a test that fails without it → ADR if it changes a cross-crate contract |
 | **Crate** | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
 | **Example using `material`/`cupertino`** | `[[example]] required-features = [...]` (`just facade-combos` relies on it) |
 
 ## Definition of Done
 
-A green gate proves the gates pass, not that the behavior exists — the harness and port-check
-can't see an uncovered path. So a change is done when:
+A green gate proves the gates pass, not that the behavior exists. So a change is done when:
 
 - new behavior has a test that fails without the change, and every concrete
   `RenderBox`/`RenderSliver` has harness tests;
@@ -148,7 +173,6 @@ can't see an uncovered path. So a change is done when:
 | Question | Read |
 |----------|------|
 | Is it planned? What changed recently? | `docs/ROADMAP.md`, `CHANGELOG.md` |
-| Render / layout / paint change | `docs/PORT.md` (rules, triggers, type map), then `.flutter/` |
 | Dependencies, layering, a new crate | `docs/workspace-layers.toml`, root `Cargo.toml` `[workspace.dependencies]`, `docs/crates.md` |
 | Writing a frame-driving test | `docs/testing.md` (use the shallowest tier that can fail), `crates/flui-rendering/docs/TESTING.md` |
 | Contracts, pipeline, panics | `docs/FOUNDATIONS.md`, `docs/architecture.md`, `docs/PANIC-POLICY.md` |

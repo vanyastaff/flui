@@ -38,7 +38,6 @@ struct StaticResolveCapture {
 impl StatelessView for StaticResolveCapture {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let resolved = CupertinoColor::Static(self.sentinel).resolve(ctx);
-        // PORT-CHECK-OK-LOCK: plain data: Color is Copy
         *self.captured.lock().unwrap() = Some(resolved);
         SizedBox::shrink()
     }

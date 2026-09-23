@@ -94,7 +94,6 @@ pub use crate::layout::TextBaseline;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 /// The directionality in which text flows.
 pub enum TextDirection {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Left-to-right text direction.
     #[default]
     Ltr,

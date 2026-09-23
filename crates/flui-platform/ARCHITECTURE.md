@@ -1,8 +1,7 @@
 # flui-platform Architecture
 
 Per-crate ledger for architecture decisions that span more than one module in
-this crate, as required by [`docs/PORT.md`](../../docs/PORT.md) §Per-crate
-`ARCHITECTURE.md` template. Partial: this file exists for the `## Mapping
+this crate. Partial: this file exists for the `## Mapping
 decisions` entries below; a full crate architecture writeup is deferred.
 
 ---

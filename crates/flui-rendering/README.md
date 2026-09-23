@@ -34,8 +34,8 @@ into.
 
 Layout, paint, hit-test, and dirty-propagation behavior is ported 1:1 from
 Flutter's `rendering/` library (behavior, not structure). Changes here must be
-cross-checked against the reference; the harness suite and `docs/PORT.md`'s
-refusal triggers are the enforcement.
+cross-checked against the reference; the harness suite is the enforcement, and
+a deliberate divergence is recorded in `ARCHITECTURE.md` `## Mapping decisions`.
 
 ## Documentation
 

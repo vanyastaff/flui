@@ -63,8 +63,7 @@ A stateless view is `#[derive(Clone, StatelessView)]` plus `impl StatelessView f
 
 ## For contributors and agents
 
-- [AGENTS.md](AGENTS.md): the guide every agent runtime loads — prime directive, code navigation, build and CI commands, definition of done.
-- [Port methodology](docs/PORT.md): the mapping rules and the refusal triggers `just port-check` enforces.
+- [AGENTS.md](AGENTS.md): the guide every agent runtime loads — design stance, code navigation, build and CI commands, definition of done.
 - [Roadmap](docs/ROADMAP.md): dependency-ordered phases and what lands next.
 - [Panic policy](docs/PANIC-POLICY.md): `expect("BUG: …")` for invariants, `Result` for everything else.
 - [Contributing](docs/contributing.md): the `just ci` gate to run before any commit.

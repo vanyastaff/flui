@@ -291,7 +291,7 @@ pub struct GeneratedRoute {
     /// than a bare box because this type has a [`Drop`] impl, which forbids
     /// moving the field out — the push takes it, and the drop that follows then
     /// finds nothing left to dispose.
-    push: Option<Box<dyn ErasedPush>>, // PORT-CHECK-OK-DYN: the named-route result-handle erasure (ADR-0024 §7.2) — one generator answers many names, so the route type cannot appear in the factory's signature; private to this module and reachable only through `GeneratedRoute`
+    push: Option<Box<dyn ErasedPush>>, // the named-route result-handle erasure (ADR-0024 §7.2) — one generator answers many names, so the route type cannot appear in the factory's signature; private to this module and reachable only through `GeneratedRoute`
 }
 
 /// A generated route that never reached a navigator still owes
@@ -417,7 +417,7 @@ impl<T: Send + 'static> TypedPush<T> {
     ) -> (RouteId, RouteResult<T>) {
         let (id, erased) = self.route.push(handle, mode);
         let typed = *erased
-            .downcast::<RouteResult<T>>() // PORT-CHECK-OK-DOWNCAST: the named-route result-handle erasure (ADR-0024 §7.2); `GeneratedRoute::checked` compared `TypeId::of::<T>()` against the route's own `Output` before this token could exist
+            .downcast::<RouteResult<T>>() // the named-route result-handle erasure (ADR-0024 §7.2); `GeneratedRoute::checked` compared `TypeId::of::<T>()` against the route's own `Output` before this token could exist
             .expect(
                 "BUG: a TypedPush<T> exists only after TypeId::of::<T>() matched the route's \
                  Output, so the boxed result is a RouteResult<T>; reaching this means something \

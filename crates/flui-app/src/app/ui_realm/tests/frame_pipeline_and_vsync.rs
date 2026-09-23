@@ -406,7 +406,6 @@ fn production_post_frame_callback_observes_this_frames_committed_layout() {
     post_frame_handle
         .schedule_local(move |_timing| {
             calls_cb.fetch_add(1, Ordering::SeqCst);
-            // PORT-CHECK-OK-LOCK: plain data: Option<Size>, no Drop
             *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
         })
         .expect("the realm's local post-frame lane outlives this call");

@@ -1,6 +1,6 @@
 # Architecture: flui-interaction
 
-Crate-level design notes for `flui_interaction`. Per the [`docs/PORT.md`](../docs/PORT.md) per-crate `ARCHITECTURE.md` template (line 770) and the workspace `## Thread safety` precedent at this crate (line 778).
+Crate-level design notes for `flui_interaction`: the Flutter mapping, the deliberate divergences, thread safety, friction and outstanding refactors.
 
 ## Flutter source mapping
 
@@ -74,10 +74,10 @@ the executable gesture graph from accidentally becoming cross-thread.
 
 Where the Rust shape diverges from the Dart shape and why. Each entry
 names the conflict, the choice, and the reference (a strategy clause,
-a refusal trigger, or a precedent plan).
+a design rule, or a precedent plan).
 
 - **Recogniser duplication-via-`Arc` vs Dart's `ChangeNotifier` mixin.** Flutter's `TapGestureRecognizer extends ChangeNotifier` — a single class is the recogniser, the listener hub, and the lifecycle owner. In Rust the recogniser is a `Clone` struct and the lifecycle is on `RecognizerBase` (so multiple consumers can hold `Arc<Self>` cheaply). The trade-off: Dart users mutate recogniser fields directly; Rust users get a stable struct API but cannot observe field changes without an explicit notifier (deferred — Flutter's `ChangeNotifier` is in `flui-foundation::Notifier`).
-- **Pointer event types are W3C `ui-events`, not a local re-implementation.** The Dart `pointer_event.dart` types are mirrored by `ui_events::pointer::*` (W3C-compliant). The mapping is type-to-type with a `DeviceId = i32` shim at the `InputEvent` enum layer. Reduces divergence from the platform layer's event types and is sanctioned by [`docs/PORT.md` ecosystem table](../docs/PORT.md) (line 700).
+- **Pointer event types are W3C `ui-events`, not a local re-implementation.** The Dart `pointer_event.dart` types are mirrored by `ui_events::pointer::*` (W3C-compliant). The mapping is type-to-type with a `DeviceId = i32` shim at the `InputEvent` enum layer. Reduces divergence from the platform layer's event types and follows the workspace preference for a mature crate over a hand-rolled one.
 - **`TapButton` enum vs Dart's `kPrimaryButton` constants.** Flutter has `kPrimaryButton` / `kSecondaryButton` / `kTertiaryButton` as top-level `int` constants. Rust uses a typed `TapButton` enum (`src/recognizers/tap.rs:51-59`) with explicit `from_pointer_button` mapping — type-system enforcement vs runtime constants. The trade-off: the `TapButton` enum is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
 - **`ArenaEntryData` is `pub(crate)` struct vs Dart's `_GestureArenaEntry` private class.** Flutter keeps the per-pointer state as private fields on `_GestureArenaManager`; Rust uses a `pub(crate)` `SmallVec<[Arc<dyn GestureArenaMember>; 4]>` to keep the hot path alloc-free for ≤ 4 members (the typical tap + drag + long-press + double-tap case). The inline-4 capacity is justified by the bench: the `add_busy` case in `benches/gesture_arena_bench.rs` measures the heap-fallback cost separately.
 - **Sealed traits vs Dart's `implements` mixin.** `GestureArenaMember` and `HitTestable` are sealed (supertrait `sealed::Sealed`). The blanket impl via `CustomGestureRecognizer` / `CustomHitTestable` is the only sanctioned extension point. The rationale is the same as the flui-foundation `sealed::Sealed` precedent: API evolution without breaking changes.
@@ -120,7 +120,7 @@ the app boundary; the crate does not install one. Filter via
 
 ## Friction log
 
-- **`docs/ARCHITECTURE.md` (this file) is the template-driven version;** the pre-template `crates/flui-interaction/docs/ARCHITECTURE.md` body (gesture state-machine diagrams, hit testing walk) lives as a companion. Per [`docs/PORT.md` line 798](../docs/PORT.md), relocation to crate root is deferred to the doc-tidying PR.
+- **`docs/ARCHITECTURE.md` (this file) is the template-driven version;** the pre-template `crates/flui-interaction/docs/ARCHITECTURE.md` body (gesture state-machine diagrams, hit testing walk) lives as a companion. Relocation to crate root is deferred to a doc-tidying pass.
 - **`is_resolved(pointer)` returns `bool` not `Result`.** Arena resolution can't fail in this design (the worst case is a `parking_lot::Mutex` poison — the `Deref` impl swallows it for ergonomics, and the arena entry is dropped). If you need poison-detection, wrap the call site in `catch_unwind` rather than changing the API.
 - **`make_*_event` test helpers are `#[cfg(any(test, feature = "testing"))]`.** The benches depend on the `testing` feature being enabled in `dev-dependencies`. Documented at `Cargo.toml`; the gates will surface any missing opt-in.
 
@@ -136,7 +136,7 @@ the app boundary; the crate does not install one. Filter via
 
 These live alongside this templated `ARCHITECTURE.md` and are
 referenced from it. They predate the template and remain as
-subsystem-level deep-dives (per [`docs/PORT.md` line 134](../docs/PORT.md)):
+subsystem-level deep-dives:
 
 - [`docs/GESTURES.md`](docs/GESTURES.md) — gesture catalogue.
 - [`docs/HIT_TESTING.md`](docs/HIT_TESTING.md) — hit-test walk.

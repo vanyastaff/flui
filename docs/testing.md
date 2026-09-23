@@ -126,7 +126,6 @@ cargo fmt --all -- --check                                # fmt-check: formatter
 bash scripts/check-workspace-inventory.sh                  # inventory-check: crate inventory + layer-policy drift guard
 bash scripts/check-runtime-conformance.sh                  # runtime-conformance-check: docs/runtime-contract.toml vs. source tree
 bash scripts/check-toolchain-consistency.sh                # toolchain-consistency-check: MSRV agrees with rust-toolchain.toml everywhere it's declared
-bash scripts/port-check.sh                                 # port-check: architecture refusal triggers
 cargo clippy --workspace --all-targets -- -D warnings      # clippy: lint gate — zero warnings
 cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations --profile no-nested-cargo  # test-ci, stage 1 (scope: see "What `just test-ci` runs")
 FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test-ci: flui-platform, headless (Linux only — apt install xvfb; skipped with a message on other hosts, see justfile)
@@ -265,7 +264,7 @@ On a shared, memory-constrained dev machine — several agent worktrees against 
 one compiling worker at a time (see AGENTS.md's Commands table) — every worktree points at the
 same `CARGO_TARGET_DIR`, and `CARGO_BUILD_JOBS` is sized to available RAM rather than core count.
 A docs-only change never needs a `cargo` invocation at all: `just fmt-check text-check
-inventory-check port-check` is the full local gate for it, which is what lets a docs worktree stay
+inventory-check` is the full local gate for it, which is what lets a docs worktree stay
 green without contending for the shared build. One concrete consequence of the shared
 `CARGO_TARGET_DIR`: the trybuild suites (`flui-engine::compile_fail`, `flui-rendering::compile_fail`,
 `unit_mixing_compile_fail::ui`, `trybuild_ui::ui_tests` — see `.config/nextest.toml`) each drive a
@@ -783,7 +782,6 @@ typos
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit
 bash scripts/check-workspace-inventory.sh
-bash scripts/port-check.sh -v
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo hack clippy --workspace --locked --each-feature --optional-deps --keep-going -- -D warnings  # feature-matrix job, then a --tests --benches --examples pass
 just facade-combos                                            # isolated per-combination facade builds (same job)
@@ -887,7 +885,7 @@ in `.github/workflows/ci.yml`:
 
 | CI job | Local recipe | Difference, or why CI-only |
 |---|---|---|
-| `checks` | `just gate` (fmt, text-check, inventory, runtime-conformance, toolchain-consistency, panic-policy, port-check, wgsl-uniformity) + `just workflow-lint` | `workflow-lint` skips actionlint/zizmor with a message when they are not installed; CI always has them |
+| `checks` | `just gate` (fmt, text-check, inventory, runtime-conformance, toolchain-consistency, panic-policy, wgsl-uniformity) + `just workflow-lint` | `workflow-lint` skips actionlint/zizmor with a message when they are not installed; CI always has them |
 | `plan` | `scripts/affected-crates.sh` (`just check-changed` runs it) | decides the lane and the affected packages; CI passes the PR's base SHA, `check-changed` diffs against `origin/main` and adds uncommitted files |
 | `fast-lane` | `just check-changed` | same packages and arguments; the cross-target and wasm32 clippy and the per-feature pass for changed manifests run only when their rustup target or cargo-hack is installed (`just doctor full`); the flui-platform leg needs `xvfb-run` (Linux) |
 | `fast-lane-ios` | `just check-changed` (on a Mac with the iOS target) | the same iOS runner clippy as `cli-macos`, run on a PR when `flui-app` is in scope |

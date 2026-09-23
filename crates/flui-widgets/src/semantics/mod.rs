@@ -77,7 +77,6 @@ impl SemanticsOptions {
 
 /// Annotates a subtree with accessibility semantics.
 #[derive(Clone, Debug)]
-// PORT-CHECK-OK-SP3: widget view type; `flui_rendering::pipeline::Semantics` is a typestate phase marker, not the accessibility widget/config object
 pub struct Semantics {
     configuration: SemanticsConfiguration,
     options: SemanticsOptions,

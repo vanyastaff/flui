@@ -152,7 +152,6 @@ For focused work in this crate:
 ```bash
 cargo test -p flui-view --features test-utils --all-targets
 cargo clippy -p flui-view --features test-utils --all-targets -- -D warnings
-bash scripts/port-check.sh -v
 ```
 
 In the Codex sandbox for this repository, use a writable target directory:

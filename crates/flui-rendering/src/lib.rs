@@ -81,7 +81,7 @@ pub use flui_semantics as semantics;
 // `objects` module removed: concrete render objects live in the `flui-objects`
 // crate (see ADR-0008 / flui-objects extraction). flui-rendering now exports
 // only engine primitives (traits, pipeline, protocol, contexts, arena).
-pub mod slivers; // PORT-CHECK-OK-SP4: sliver protocol + objects; the cross-crate consumer is the future flui-view scrollable widgets (see ADR-0003 / ROADMAP Core.1). This branch removed the façade flui-view→render coupling, which is what surfaced the module as cross-crate-consumer-less.
+pub mod slivers;
 pub mod storage;
 // Promoted from `cfg(test) pub(crate)` to the `testing` feature so
 // flui-objects' test crate can reach NoopSliver cross-crate when it enables
@@ -93,7 +93,7 @@ pub mod test_support;
 // render/sliver/protocol type, so it stays a general-purpose abstraction and is
 // cheaply extractable into a standalone crate once a 2nd direct consumer
 // appears. The `SliverConstraints -> ScrollWindow` adapter lives outside it.
-pub mod virtualization; // PORT-CHECK-OK-SP4: agnostic windowing core; intra-crate consumer is the criterion bench (excluded from the cross-crate consumer search); cross-crate consumers are `flui-objects`' `RenderSliverList` and a future standalone flui-virtualization crate (see ADR-0003).
+pub mod virtualization;
 // Render-object test harness. Compiled only for this crate's own tests
 // (`cfg(test)`) or when a consumer enables the `testing` feature. Builds
 // real `PipelineOwner` trees through the production pipeline and exposes a

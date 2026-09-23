@@ -104,7 +104,7 @@ pub(super) struct ImageResolver {
     key: Option<ImageCacheKey>,
     /// The provider the live subscription resolves through. Held because
     /// `init_state` is handed no view.
-    provider: Arc<dyn ImageProvider + Send + Sync>, // PORT-CHECK-OK-DYN: the same erased provider handle `Image` itself stores
+    provider: Arc<dyn ImageProvider + Send + Sync>, // the same erased provider handle `Image` itself stores
     /// Whether to keep the previous frame across a key change.
     gapless_playback: bool,
 }

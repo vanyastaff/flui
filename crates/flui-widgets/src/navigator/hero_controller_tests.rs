@@ -487,7 +487,7 @@ fn every_eligible_top_change_gets_its_own_measurement() {
 
 /// **A capability that cannot be acquired must not be paid for first.**
 ///
-/// `BuildContext::post_frame_handle()` is an `Option`, so a binding may install none.
+/// `LifecycleContext::post_frame_handle()` is an `Option`, so a binding may install none.
 /// `maybe_start` therefore acquires it *before* flipping the destination offstage:
 /// Flutter's `addPostFrameCallback` cannot fail (`heroes.dart:967-968`), FLUI's can,
 /// and the only code that ever calls `set_offstage(false)` is the measurement that

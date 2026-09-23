@@ -279,7 +279,7 @@ impl ViewState<DemoHome> for DemoHomeState {
         self.count.bind(ctx);
         self.expanded.bind(ctx);
         self.scroll_offset.bind(ctx);
-        // Lifecycle-only acquisition (ADR-0021, port-check trigger #22): lets
+        // Lifecycle-only acquisition (ADR-0021): lets
         // `RenderViewport::perform_layout`'s committed content extents flush
         // a coalesced notification after layout instead of never notifying —
         // see `ScrollPosition`'s docs. A no-op read (`max_scroll_extent()`

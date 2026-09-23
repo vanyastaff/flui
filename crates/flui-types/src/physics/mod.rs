@@ -41,7 +41,6 @@ pub use tolerance::Tolerance;
 /// let vel = sim.velocity(0.1);
 /// ```
 pub trait Simulation {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Returns the position at `time` seconds, in logical pixels.
     #[must_use]
     fn position(&self, time: f32) -> f32;
@@ -75,7 +74,6 @@ pub trait Simulation {
 /// delegate to the inner simulation unchanged.
 #[derive(Debug, Clone)]
 pub struct ClampedSimulation<S: Simulation> {
-    // PORT-CHECK-OK-SP3: parallel to flui-animation::simulation::ClampedSimulation; the two physics layers use distinct Simulation traits (position/velocity here vs x/dx + Send+Sync there). Consolidation tracked.
     /// The underlying simulation
     pub simulation: S,
 

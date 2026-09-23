@@ -4101,7 +4101,6 @@ fn two_path_clips_under_one_boundary_resolve_in_paint_order() {
                 "run {run}: a full paint must resolve two sibling path clips \
                  in tree order",
             );
-            // PORT-CHECK-OK-LOCK: plain data: Vec<char>, no Drop
             sequence.borrow_mut().clear();
             let before_a = painted_a.load(Ordering::Relaxed);
             let before_b = painted_b.load(Ordering::Relaxed);

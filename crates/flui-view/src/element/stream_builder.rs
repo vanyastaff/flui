@@ -413,7 +413,6 @@ mod tests {
         type Item = Result<Payload, Boom>;
 
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-            // PORT-CHECK-OK-LOCK: plain data: Event holds only i32/&'static str
             let event = self.channel.events.lock().pop_front();
             if let Some(event) = event {
                 return Poll::Ready(event);

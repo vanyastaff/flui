@@ -319,7 +319,6 @@ pub struct WindowInfo {
 /// Options for creating a new window.
 #[derive(Debug, Clone)]
 pub struct WindowOptions {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Window title.
     pub title: String,
 

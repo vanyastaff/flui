@@ -370,7 +370,7 @@ impl ScrollableState {
     /// `apply_content_dimensions`) can flush a coalesced notification after
     /// layout instead of never notifying at all.
     ///
-    /// Lifecycle-only (ADR-0021, port-check trigger #22): called from
+    /// Lifecycle-only (ADR-0021): called from
     /// `init_state`/`did_change_dependencies`, never from `build`. A no-op
     /// when no handle is available yet — `set_flush_handle` is idempotent, so
     /// a later call (e.g. from `did_change_dependencies`) still installs it.

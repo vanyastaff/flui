@@ -1,6 +1,6 @@
-//! The **accepted** fixture of refusal trigger 24 (`scripts/check-signal-write-scope.sh
-//! --self-test` scans this file): every legal shape the scanner must not
-//! report, as real code that compiles and runs under the `signals` feature.
+//! Every legal way to touch a signal, run through the real pipeline: none of
+//! these may trip the run-time guard that refuses writes and creation during
+//! `build` (`SignalError::WrittenDuringBuild` / `CreatedDuringBuild`).
 //!
 //! - reads in `build` (`get`, `with`, `try_get`, `peek`) are the subscription path;
 //! - one-argument `Cell::set(x)` is not a signal write;

@@ -253,7 +253,7 @@ pub(crate) type RouteModals = Arc<Mutex<HashMap<RouteId, ModalHandle>>>;
 #[derive(Clone)]
 pub(crate) struct PopPacing {
     pub(crate) duration: Duration,
-    pub(crate) curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see the struct doc — erased easing-curve transform, ADR-0021 §7n shape
+    pub(crate) curve: Arc<dyn Curve + Send + Sync>, // see the struct doc — erased easing-curve transform, ADR-0021 §7n shape
 }
 
 /// `RouteId -> PopPacing`, a one-shot override the navigator sets immediately

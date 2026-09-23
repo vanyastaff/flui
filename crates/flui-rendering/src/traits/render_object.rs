@@ -865,7 +865,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     // Pipeline Integration
     // ========================================================================
     //
-    // Historical note (see docs/PORT.md): the trait
+    // Historical note: the trait
     // formerly carried a `set_was_repaint_boundary(&mut self, bool)` method.
     // It was a leaky abstraction -- framework bookkeeping that only existed
     // on the trait because Flutter's Dart classes are flat. The bit now lives

@@ -884,7 +884,7 @@ impl From<Pixels> for PixelDelta {
 // PixelDelta models a platform scroll/pointer delta — a measured input delta
 // (native f64 from the OS event stream), not a logical-pixel coordinate, so
 // explicit f64 construction here does not weaken the Pixels unit barrier.
-// PORT-CHECK-OK-UNIT: platform scroll/pointer delta, not a coordinate.
+// Platform scroll/pointer delta, not a coordinate.
 impl From<f64> for PixelDelta {
     #[inline]
     fn from(value: f64) -> Self {

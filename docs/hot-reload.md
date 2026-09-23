@@ -235,7 +235,7 @@ For a full `flui-app` desktop runner, the same `HotReloadDriver` can wrap a plug
 ## Design Constraints
 
 - **Immediate-mode friendly:** scene plugins rebuild each frame path — code changes show up on next reload without stale retained state.
-- **Sanctioned `dyn` boundary:** `flui_hot_reload::dynlib` is the only approved dynamic loading surface (see `PORT.md`).
+- **Sanctioned `dyn` boundary:** `flui_hot_reload::dynlib` is the only approved dynamic loading surface.
 - **No WASM layer 2:** `HotReloadDriver` is `#[cfg(not(target_arch = "wasm32"))]`.
 - **Dev-only:** hot-reload is not shipped in release builds; use static linking for production plugins.
 
