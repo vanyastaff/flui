@@ -10,7 +10,7 @@ use flui_types::{Pixels, Size, painting::Image as PixelImage};
 #[cfg(not(feature = "asset-images"))]
 use flui_view::prelude::StatelessView;
 #[cfg(feature = "asset-images")]
-use flui_view::prelude::{StatefulView, ViewState};
+use flui_view::prelude::{LifecycleContext, StatefulView, ViewState};
 use flui_view::{BoxedView, BuildContext, IntoView, RenderView, View, ViewExt, impl_render_view};
 
 use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, MemoryImage};

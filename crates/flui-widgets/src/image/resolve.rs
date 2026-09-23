@@ -42,7 +42,7 @@ use std::sync::Arc;
 
 use flui_scheduler::{AsyncDriver, TaskToken};
 use flui_types::painting::Image as PixelImage;
-use flui_view::context::BuildContext;
+use flui_view::context::LifecycleContext;
 use flui_view::{RebuildHandle, RebuildReason};
 use parking_lot::Mutex;
 
@@ -143,7 +143,7 @@ impl ImageResolver {
 
     /// `_ImageState.initState` + `_resolveImage`: capture the lifecycle
     /// capabilities, then start the first resolve.
-    pub(super) fn init(&mut self, ctx: &dyn BuildContext) {
+    pub(super) fn init(&mut self, ctx: &dyn LifecycleContext) {
         self.handle = Some(ctx.rebuild_handle());
         self.driver = ctx.async_driver();
         let key = self.provider.cache_key();
