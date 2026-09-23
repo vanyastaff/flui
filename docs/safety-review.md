@@ -128,6 +128,38 @@ AddressSanitizer/MemorySanitizer were not run: this increment uses Miri for the
 bounded allocation protocol and ordinary native tests for loader behavior. No
 claim is made about sanitizer coverage or unexecuted foreign-image paths.
 
+## Win32 clipboard: cross-thread sessions
+
+**Defect.** `OpenClipboard(NULL)` does not exclude other threads of the same
+process: while one thread holds the clipboard, a second thread's
+`OpenClipboard(NULL)` also succeeds (verified directly on Windows 11 with two
+threads and a barrier). A writer's `EmptyClipboard` then frees the
+`CF_UNICODETEXT` handle a reader on another thread is scanning through
+`GlobalLock`, a use-after-free that aborts the process with
+`STATUS_HEAP_CORRUPTION` (`0xc0000374`). It reproduced with `WindowsClipboard`
+alone, with `arboard` alone (it opens with a `NULL` owner too) and with the two
+mixed; writer/writer and reader/reader pairs never crashed. `WindowsClipboard`'s
+lock was per instance, so it did not help across instances.
+
+**Fix.** `flui-platform/src/shared/clipboard_lock.rs` holds one process-wide
+lock. The Win32 backend can only open the clipboard through
+`ClipboardSession`, which takes that lock before `OpenClipboard` and releases
+it after `CloseClipboard`. `ArboardClipboard` runs each `arboard` call under
+the same lock on Windows.
+
+**Verification.** Three tests in `clipboard_lock.rs` race a reader against a
+writer on two threads (Win32/Win32, arboard→Win32, arboard/arboard). With the
+lock replaced by a per-call mutex, `cargo test -p flui-platform --all-features
+--lib clipboard_lock` aborted with `0xc0000374` in 3 of 3 runs. With the lock,
+it passed 3 of 3; the full in-process lib suite (`--skip real_loop_tests`)
+passed 20 of 20, and `cargo nextest run -p flui-platform` passed with default
+and all features.
+
+**Residual.** Third-party code in the same process that opens the clipboard
+with a `NULL` owner on another thread is outside this lock. Opening with an
+owner window (a message-only `HWND`) would make Win32 itself refuse a
+concurrent `NULL`-owner opener; not done here.
+
 ## Independent reviewer sign-off
 
 `cargo clippy -p flui --test facade_consumer --all-features --offline -- -D warnings`
