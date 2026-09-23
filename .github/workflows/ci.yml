@@ -37,6 +37,11 @@ name: CI
 #                    (verified: GET /branches/main/protection -> 404), so
 #                    nothing here actually blocks a merge yet; that's a repo-
 #                    settings decision for the maintainer, not this file
+# Toolchain: every job compiles with rust-toolchain.toml's pinned channel;
+# `dtolnay/rust-toolchain@stable` only installs rustup and components, and
+# rustup then overrides to the pin (each job's log says so). `cargo xtask
+# toolchain`, in `checks`, holds `rust-version` to that channel's minor, so
+# every job is also the MSRV build; there is no separate msrv job.
 # Patterns borrowed from linebender/xilem (gated `checks` job, cargo-hack
 # feature matrix, Swatinem cache + taiki-e/install-action for pinned tool
 # versions) and tokio (aggregator `ci` job; nextest as primary runner).
