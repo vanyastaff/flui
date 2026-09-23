@@ -1286,6 +1286,9 @@ where
 /// and the fields it read (issue #1090; [`FieldSet::ALL`] for a whole-type
 /// dependency).
 ///
+/// Only `depth` is public: the recorded field sets are crate-private, so
+/// one provider's set cannot be read out and reused against another.
+///
 /// [`FieldSet::ALL`]: crate::view::FieldSet::ALL
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -1294,18 +1297,18 @@ pub struct DependentEntry {
     pub depth: usize,
     /// Fields read in the dependent's latest `build` (re-derived per build,
     /// ADR-0074 §5.5 reset-on-build).
-    pub mask: crate::view::FieldSet,
+    pub(crate) mask: crate::view::FieldSet,
     /// Fields read in `init_state` / `did_change_dependencies`: kept until
     /// unmount, never reset by a rebuild (a state that acquires a value in a
     /// lifecycle hook and does not re-read it in `build` stays subscribed).
-    pub lifecycle_mask: crate::view::FieldSet,
+    pub(crate) lifecycle_mask: crate::view::FieldSet,
 }
 
 impl DependentEntry {
     /// Every field this dependent is notified for: build reads plus
     /// lifecycle reads.
     #[must_use]
-    pub fn fields(&self) -> crate::view::FieldSet {
+    pub(crate) fn fields(&self) -> crate::view::FieldSet {
         self.mask | self.lifecycle_mask
     }
 }
