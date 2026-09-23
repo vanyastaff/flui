@@ -174,7 +174,7 @@ pub mod platforms;
 pub mod shared;
 pub mod task;
 pub mod traits;
-pub mod window; // PORT-CHECK-OK-SP4: window API surface; binding entry for platform integrators
+pub mod window;
 
 // Re-export configuration types
 // ==================== Platform Detection ====================
@@ -230,7 +230,7 @@ pub use traits::{
     WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
     WindowShowError,
 };
-// The owner-thread capability (ADR-0039 slice 2): minted only by a backend,
+// The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.
 pub use traits::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,

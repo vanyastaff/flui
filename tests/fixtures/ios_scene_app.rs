@@ -93,7 +93,7 @@ impl StatefulView for Body {
     }
 }
 impl ViewState<Body> for State {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         INITS.fetch_add(1, Ordering::SeqCst);
         self.rebuild = Some(ctx.rebuild_handle());
         let (_, subscription) = ctx

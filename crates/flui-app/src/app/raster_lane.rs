@@ -137,7 +137,7 @@ pub(crate) trait FrameSink {
 /// Everything that touches it runs on the owner thread in practice, but
 /// the platform's frame/resize callback registrations require `Send`
 /// closures, so it is `Arc`-shared behind a private, uncontended
-/// `parking_lot::Mutex` (never exposed — SP-6) rather than `Rc`/`Cell`.
+/// `parking_lot::Mutex` (never exposed) rather than `Rc`/`Cell`.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug)]
 pub(crate) struct LaneStamp {

@@ -105,7 +105,7 @@ where
     /// first `Resume` (module doc, `platforms/android/mod.rs`'s
     /// "# Surface Lifecycle": `Resume` arrives before any window exists, so
     /// only `InitWindow` can carry a presentation). Migrated here from
-    /// before `run()` (ADR-0039 slice 2): `on_ready` is `FnOnce` and fires
+    /// before `run()` (ADR-0039 §1): `on_ready` is `FnOnce` and fires
     /// exactly once, matching the once-only pre-run bootstrap semantics it
     /// replaced. **The surface-recreation path is no longer untouched**: this
     /// bootstrap registers `on_surface_status_change`, which releases the
@@ -132,7 +132,7 @@ where
                 .expect("BUG: bootstrap_android runs only after install_owner_platform")
         }
 
-        // 0. Wire the platform clipboard (ADR-0034).
+        // 0. Wire the platform clipboard (ADR-0038 §9).
         let clipboard = owner_platform_installed(|owner| owner.shared().clipboard());
         APP_RUNTIME.with(|slot| slot.borrow().set_platform_clipboard(clipboard));
 

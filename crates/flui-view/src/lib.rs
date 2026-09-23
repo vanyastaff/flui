@@ -91,11 +91,11 @@ pub mod child;
 pub mod context;
 pub mod element;
 pub mod key;
-pub mod macros; // PORT-CHECK-OK-SP4: macros consumed via #[macro_export] (no qualified path); intentional API surface
+pub mod macros;
 pub mod owner;
 #[cfg(feature = "signals")]
 pub mod reactive;
-pub mod seq; // PORT-CHECK-OK-SP4: seq/Children API surface; consumed via prelude re-exports
+pub mod seq;
 pub mod state_cell;
 pub mod tree;
 pub mod view;
@@ -177,7 +177,10 @@ pub use binding::GlobalKeyRegistryComposite;
 // Child helpers
 pub use child::{Child, Children};
 // Context
-pub use context::{BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder};
+pub use context::{
+    BuildContext, BuildContextExt, ElementBuildContext, ElementBuildContextBuilder,
+    LifecycleContext,
+};
 // Element types
 pub use element::Lifecycle;
 // Notification system
@@ -264,7 +267,7 @@ pub mod prelude {
     pub use crate::InheritedData;
 
     // Logging
-    pub use crate::context::{BuildContext, BuildContextExt};
+    pub use crate::context::{BuildContext, BuildContextExt, LifecycleContext};
     pub use crate::{
         binding::{
             AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation,

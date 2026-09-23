@@ -10,7 +10,7 @@
 //! It is built for the simulator target (`aarch64-apple-ios-sim`), staged into
 //! a minimal `.app`, and launched by `just ios-sim`, which captures the app's
 //! console and asserts on the engine's own frame evidence (`surface frame
-//! submitted and presented`) — the same instrument ADR-0029's pacing
+//! submitted and presented`) — the same instrument ADR-0058's pacing
 //! measurement used on both platforms.
 //!
 //! No `tracing_subscriber` init here: `run_app` installs the process-wide

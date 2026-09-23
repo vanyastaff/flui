@@ -194,7 +194,6 @@ impl MultiTapGestureRecognizer {
 
     /// Update gesture settings
     pub fn set_settings(&self, settings: GestureSettings) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.settings.lock() = settings;
     }
 
@@ -570,7 +569,6 @@ mod tests {
         // Three required, only one arrives: the gesture stays `Collecting`,
         // which is the phase `check_timeout` acts on.
         let recognizer = MultiTapGestureRecognizer::new(arena, 3)
-            // PORT-CHECK-OK-LOCK: plain data, no significant drop
             .with_on_multi_tap_cancel(move |_| *flag.lock() = true);
 
         recognizer.add_pointer(
@@ -634,7 +632,6 @@ mod tests {
             let cancelled = Arc::new(Mutex::new(false));
             let flag = cancelled.clone();
             let recognizer = MultiTapGestureRecognizer::new(arena.clone(), 2)
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 .with_on_multi_tap_cancel(move |_| *flag.lock() = true);
 
             let origin = Offset::new(Pixels(100.0), Pixels(100.0));
@@ -688,7 +685,6 @@ mod tests {
         let recognizer =
             MultiTapGestureRecognizer::new(arena, 2).with_on_multi_tap(move |details| {
                 *tapped_clone.lock() = true;
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *count_clone.lock() = details.pointer_count;
             });
 
@@ -734,7 +730,6 @@ mod tests {
         let recognizer =
             MultiTapGestureRecognizer::new(arena, 3).with_on_multi_tap(move |details| {
                 *tapped_clone.lock() = true;
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *count_clone.lock() = details.pointer_count;
             });
 
@@ -788,7 +783,6 @@ mod tests {
 
         let recognizer =
             MultiTapGestureRecognizer::new(arena, 2).with_on_multi_tap(move |details| {
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *center_clone.lock() = details.center;
             });
 

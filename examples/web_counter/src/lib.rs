@@ -48,7 +48,7 @@ impl StatefulView for CounterView {
 }
 
 impl ViewState<CounterView> for CounterState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.count.bind(ctx);
     }
 

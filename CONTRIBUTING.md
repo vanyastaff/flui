@@ -2,9 +2,9 @@
 
 Welcome! The rules for a change live in two places:
 
-- [`AGENTS.md`](AGENTS.md) — how to work (worktrees, task/report format, commits, PRs, what not
+- [`AGENTS.md`](AGENTS.md) — the codebase map, how to work (worktrees, commits, PRs, what not
   to touch), the local gate commands, the architecture-constraint table, and the Definition of
-  Done. Written for humans and agents alike.
+  Done. Written for humans and agents alike; `CLAUDE.md` imports it.
 - [`docs/FOUNDATIONS.md`](docs/FOUNDATIONS.md) — the architecture contract: target architecture,
   locked contracts, target crate graph.
 
@@ -22,8 +22,8 @@ code, in this order:
 3. **Contract** — what changes for callers: public API, observable behavior, error cases, edge
    cases.
 4. **Reference check** — for render/layout/paint/hit-test/semantics/scheduling changes, what does
-   `.flutter/` do (see [`docs/PORT.md`](docs/PORT.md))? If FLUI diverges, name what's better and
-   how a test proves it.
+   `.flutter/` do? If FLUI diverges, name what's better and how a test proves it (see
+   [`AGENTS.md`](AGENTS.md)'s Design stance).
 5. **Plan** — the dependency-ordered steps, each one shippable.
 
 Put the record where the change is: an ADR under `docs/adr/` for a protocol-level or cross-crate
@@ -32,11 +32,11 @@ design document with no code, and a code change with no record, are both incompl
 
 ## Git Hygiene
 
-- Never run destructive git operations without explicit user permission: `git checkout`,
-  `git reset --hard`, `git stash`, `git push --force`, `git branch -D`. Prefer non-destructive
-  alternatives (new branches, new commits, tags).
-- Hooks must not be skipped. `--no-verify`, `--no-gpg-sign`, and equivalents are reserved for
-  explicit user requests.
+- Destructive git operations need an explicit go-ahead, because they throw away work that may
+  exist nowhere else: `git checkout`, `git reset --hard`, `git stash`, `git push --force`,
+  `git branch -D`. Prefer non-destructive alternatives (new branches, new commits, tags).
+- Keep hooks on: they run the same gate CI will, only earlier. `--no-verify`, `--no-gpg-sign`
+  and equivalents are for when the maintainer explicitly asks.
 - `just install-hooks` points git at the checked-in pre-push hook (`just gate`, the non-test half
   of `just ci`), with a text-only fast path for markdown-only pushes.
 

@@ -53,7 +53,6 @@ pub enum WindowReveal {
 /// Window creation options
 #[derive(Debug, Clone)]
 pub struct WindowOptions {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Window title
     pub title: String,
     /// Initial window size (logical pixels)
@@ -425,7 +424,7 @@ pub trait Platform: Send + Sync + 'static {
 
     /// The data-transfer transport (ADR-0038). Contract: returns clones of
     /// ONE source instance per platform instance — the source owns
-    /// connection-like state (the offer table), and per ADR-0034 §3 such
+    /// connection-like state (the offer table), and per ADR-0038 §9 such
     /// state must live behind an `Arc` the platform clones out, never be
     /// reconstructed per call (two independently minted tables would split
     /// the id space and let cross-table ids pass each other's generation

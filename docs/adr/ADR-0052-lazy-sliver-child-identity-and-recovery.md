@@ -1,5 +1,9 @@
 # ADR-0052: Lazy sliver child identity, relocation, and per-item recovery
 
+- **Status:** Accepted
+- **Date:** 2026-09-03
+- **Related:** [ADR-0050](ADR-0050-global-key-identity-and-frame-reservations.md) (GlobalKey identity and the duplicate verdict), [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md), [ADR-0003](ADR-0003-virtualization-core-and-reentrant-build.md), [ADR-0053](ADR-0053-one-lazy-child-lifecycle-for-multi-box-slivers.md); issue #530
+
 *A lazy sliver's resident children are reconciled against a changed data
 source in two phases into a fresh map — every keyed resident is matched by
 key wherever it now sits, relocated in place when its index moved, and
@@ -9,21 +13,6 @@ moves out of it. A per-item wrapper carries the item's key salted, never as
 its `GlobalKey`. A panicking item builder yields a render-owning error box at
 exactly that index. A `GlobalKey` graft out of the list makes the list forget
 the child.*
-
----
-
-- **Status:** Accepted (2026-09-03)
-- **Date:** 2026-09-03
-- **Deciders:** @vanyastaff
-- **Scope:** `SparseChildren` (`crates/flui-view/src/element/sparse_children.rs`),
-  the lazy adaptors (`crates/flui-view/src/element/sliver_adaptor.rs`),
-  `ChildManager::forget_child`, `ElementTree::relocate_sparse_child`,
-  `SaltedKey` (`crates/flui-foundation/src/key.rs`), `RepaintBoundary`'s
-  forwarded key, `RenderErrorBox` (`crates/flui-objects/src/proxy/error_box.rs`),
-  `ErrorView` as a render view.
-- **Related:** [ADR-0050](ADR-0050-global-key-identity-and-frame-reservations.md)
-  (GlobalKey identity and the duplicate verdict), [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
-  [ADR-0003](ADR-0003-virtualization-core-and-reentrant-build.md), issue #530.
 
 ## Context
 
@@ -152,41 +141,25 @@ laid out.
   FLUI reconciles before it evicts (so a keyed item can move with the viewport
   and keep its state) and therefore skips the keyless residents the band is
   about to drop — a scroll that rebuilds the host costs no builder call for an
-  item it does not keep (`grid_view_builder_does_not_cache_item_builder_calls_across_scroll`
-  pins the count). The `_didUnderflow` look-ahead one past the last key is covered
+  item it does not keep. The `_didUnderflow` look-ahead one past the last key is covered
   structurally: the adaptor's render update forces a layout, and the band walk
   re-requests the next index inside the same frame's fixpoint. `updateChild`'s
   layout-offset preservation across a render swap is covered by the walk
   rewriting every in-band offset from the virtualizer each pass.
-- **Gap recorded here, closed by issue #838 (2026-09-04).** A `GlobalKey`'d
-  *descendant* of an unkeyed subtree that a parent removes used to be unmounted
-  at once, where Flutter deactivates the subtree and lets another parent retake
-  the descendant before `finalizeTree`. It was tree-wide (dense parents too),
-  and it surfaced here because the per-item `RepaintBoundary` is itself an
-  unkeyed wrapper: a lazy item under one could not be grafted to another list
-  with its state, so the graft test had to turn boundaries off to run at all.
-  `remove_subtree` now stops its walk at a keyed descendant and routes it
-  through the soft-remove path instead — not descending is the other half,
-  since a retaken element keeps its own children. The graft test runs with the
-  default boundary on, which is what an app would actually write, and is red
-  without the change.
-
-  Two things the first draft of that change got wrong, both caught in review.
-  It described itself as tree-wide while covering only the sparse and root
-  paths: an ordinary DENSE parent removes through
-  `id_reconcile::remove_child`, which carried its own copy of the same subtree
-  walk and kept freeing keyed descendants. The copies are gone — that path
-  delegates to `remove_subtree`, so there is one implementation and it cannot
-  drift again. And deactivation is not right for every caller:
-  `detach_root_widget` is permanent teardown with no frame after it, so a
-  deactivated element would sit in the inactive queue with `dispose` never
-  run and a later attach could retake stale state. `SubtreeRemoval` makes the
-  two cases explicit at the call site rather than assuming one behaviour fits
-  both.
+- **Keyed descendants of removed subtrees are deactivated, not unmounted**
+  (issue #838). `remove_subtree` stops its walk at a `GlobalKey`'d descendant
+  and routes it through the soft-remove path, so another parent can retake it
+  before finalization, as Flutter does; a retaken element keeps its own
+  children. This is tree-wide: `id_reconcile::remove_child` delegates to
+  `remove_subtree`, so there is one implementation. It matters here because
+  the per-item `RepaintBoundary` is an unkeyed wrapper, so without it a lazy
+  item could not be grafted to another list with its state. Permanent teardown
+  (`detach_root_widget`) has no frame after it, so it must not deactivate;
+  `SubtreeRemoval` makes the two cases explicit at the call site.
 
 ## Alternatives considered
 
-- **In-place single-map remap.** Rejected on review: any shift or swap of two
+- **In-place single-map remap.** Rejected: any shift or swap of two
   keyed residents orphans one element (still attached, stamped, unevictable)
   and trips the band walk's uniqueness assertion.
 - **Band-local key matching only, before building.** Rejected: it needs the

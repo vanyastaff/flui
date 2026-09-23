@@ -135,7 +135,7 @@ pub enum BuildCapabilities {
     /// Only the async driver.
     ///
     /// Does not install post-frame, lifecycle, or interaction handles, so a test can assert
-    /// how code behaves when `BuildContext::post_frame_handle()` returns
+    /// how code behaves when `LifecycleContext::post_frame_handle()` returns
     /// `None` — a real, reachable configuration for an embedder that drives
     /// frames itself. The async driver still goes in: withholding it too
     /// would change *which* capability the test is about, since the mount

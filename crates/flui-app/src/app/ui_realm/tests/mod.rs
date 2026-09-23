@@ -1100,7 +1100,7 @@ fn two_presentations_in_one_realm_do_not_share_a_hit_test_tree() {
 ///
 /// Under `SharedRealm` the realm outlives any one presentation, so the
 /// realm ticket alone cannot say "closed". Neither can the pipeline's
-/// allocation: `BuildContext::pipeline_owner()` hands out a STRONG
+/// allocation: `LifecycleContext::pipeline_owner()` hands out a STRONG
 /// `PipelineCell`, so a widget that stored one keeps the tree alive past
 /// the close — and a probe reading liveness from the allocation would go
 /// on answering from a detached tree with nothing to catch it.

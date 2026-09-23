@@ -451,11 +451,10 @@ mod merge_wake_deadlines_tests {
 ///     never re-exported; `OwnerPlatform` isn't `Clone`, so there is no way
 ///     to escape this closure with a durable owned copy — every access
 ///     re-crosses the fence.
-/// (b) **Static scan.** This function's name carries the scanner token
-///     `owner_platform`, so `scripts/check-frame-capability-scope.sh`
-///     (trigger #22) mechanically rejects any call from inside
-///     `build`/`perform_layout`/`paint`/composite bodies, across every
-///     crate the scanner sweeps.
+/// (b) **Scope rule.** Never call it from inside
+///     `build`/`perform_layout`/`paint`/composite bodies. This is a free
+///     function, not a `LifecycleContext` method, so no type withholds it
+///     from a frame phase; (c) is the check.
 /// (c) **Runtime backstop.** `debug_assert!`s that the installed realm's own
 ///     scheduler (`AppRuntime::installed_realm_phase`) is not inside the
 ///     frame transaction. "Not inside a frame phase" per the ADR means
@@ -528,7 +527,7 @@ pub(crate) fn with_owner_platform<R>(
             ),
             "BUG: with_owner_platform called while the installed realm's scheduler is inside \
              the frame transaction (phase {phase:?}) -- owner_platform must \
-             not be acquired from build/layout/paint (ADR-0039 §6, trigger #22)"
+             not be acquired from build/layout/paint (ADR-0039 §6)"
         );
     }
     let owner = APP_RUNTIME.with(|slot| slot.borrow().owner_platform.clone());

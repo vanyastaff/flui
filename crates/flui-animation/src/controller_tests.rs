@@ -3006,7 +3006,6 @@ fn every_delivery_runs_with_the_controller_lock_free() {
     let observed = Arc::new(Mutex::new(None));
     let observed2 = Arc::clone(&observed);
     future.when_complete_or_cancel(move |_outcome| {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *observed2.lock() = Some(inner.try_lock().is_some());
     });
 
@@ -3068,7 +3067,6 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     let seen = Arc::new(Mutex::new(None));
     let seen2 = Arc::clone(&seen);
     future.when_complete_or_cancel(move |outcome| {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *seen2.lock() = Some(outcome);
     });
 

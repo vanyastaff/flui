@@ -12,6 +12,6 @@ parts that differ.
 - [State: setState, InheritedView, ValueNotifier](state.md) — the ways state enters the tree.
 
 Every claim on these pages is checked against the real trait/struct definitions in `crates/` —
-see AGENTS.md's Prime Directive for why that matters more here than it would in most frameworks'
+see AGENTS.md's Design stance for why that matters more here than it would in most frameworks'
 docs: a divergence from Flutter is only valid when it's deliberate and recorded, so this book
 cannot afford to describe a contract that doesn't match the code.

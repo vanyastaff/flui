@@ -253,8 +253,7 @@ where
 //
 // FR-007: accepts `impl IntoView` from authoring-side callers and
 // normalizes via `IntoView::into_view` inside the helper. The generic
-// `R` parameter (not `Box<dyn View>` on its own line) sidesteps
-// `port-check.sh` trigger 6's struct-field pattern.
+// `R` parameter keeps the child type static rather than a `Box<dyn View>`.
 #[must_use]
 pub(crate) fn single_child_views<V, A, R>(
     core: &mut ElementCore<V, A>,

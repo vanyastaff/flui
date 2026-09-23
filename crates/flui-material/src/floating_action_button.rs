@@ -289,7 +289,7 @@ impl StatefulView for FloatingActionButton {
 }
 
 impl ViewState<FloatingActionButton> for FloatingActionButtonState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
 
         self.states

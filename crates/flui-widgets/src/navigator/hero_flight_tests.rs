@@ -787,7 +787,7 @@ struct Mover {
 
 impl Mover {
     /// Grow, and schedule the rebuild that makes it visible. `RebuildHandle` is
-    /// acquired in `init_state` and fired from here — never from `build` (trigger #22).
+    /// acquired in `init_state` and fired from here — never from `build`.
     fn grow(&self) {
         self.tall.store(true, Ordering::SeqCst);
         if let Some(rebuild) = self.rebuild.lock().as_ref() {
@@ -819,7 +819,7 @@ struct MoverState {
 }
 
 impl ViewState<Mover> for MoverState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = self.rebuild.lock().replace(ctx.rebuild_handle());
     }
 
@@ -1148,7 +1148,7 @@ struct HeroGateState {
     tag_name: &'static str,
 }
 impl ViewState<HeroGate> for HeroGateState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = self.rebuild.lock().replace(ctx.rebuild_handle());
     }
     fn build(&self, _view: &HeroGate, _ctx: &dyn BuildContext) -> impl IntoView {

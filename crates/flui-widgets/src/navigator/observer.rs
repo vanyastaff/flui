@@ -111,7 +111,7 @@ pub trait NavigatorObserver {
     /// `Navigator` reads it to decide whether to auto-create its own default
     /// controller: a hand-attached controller suppresses the
     /// auto-default, so `add_observer` and automatic attach never double up. This is a
-    /// self-declaration, **not** a downcast — FR-033 is untouched.
+    /// self-declaration, **not** a downcast.
     fn observes_hero_flights(&self) -> bool {
         false
     }

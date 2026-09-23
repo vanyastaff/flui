@@ -162,7 +162,7 @@ impl TickerModeState {
 }
 
 impl ViewState<TickerMode> for TickerModeState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.renest(ctx);
     }
 
@@ -170,7 +170,7 @@ impl ViewState<TickerMode> for TickerModeState {
     /// subtree moved): move the nesting with it. Without this the registry-tree
     /// edge, fixed at mount, would outlive the widget-tree relationship it
     /// mirrors — ticked, or starved, by the wrong ancestor forever.
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.renest(ctx);
     }
 
@@ -256,9 +256,8 @@ mod tests {
     }
 
     impl ViewState<Probe> for ProbeState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             let ambient = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
-            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             *self.found_ambient.lock() = Some(ambient.is_some());
             if let Some(vsync) = ambient {
                 let _registration = vsync.register(self.controller.clone());

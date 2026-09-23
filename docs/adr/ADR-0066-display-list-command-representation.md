@@ -1,25 +1,17 @@
 # ADR-0066: Display-list command representation
 
+- **Status:** Accepted
+- **Date:** 2026-09-18
+- **Related:** follows [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
+
 *A recorded command is `{ transform, op }`: the absolute transform it was
 recorded under, and the operation. One state model, a two-cache-line op, a
 copy-on-write path, and gradients as shader paints rather than a second
 vocabulary.*
 
----
-
-- **Status:** Accepted (landed 2026-09-18)
-- **Date:** 2026-09-18
-- **Deciders:** @vanyastaff
-- **Scope:** `flui_painting::{DrawCommand, DrawOp, Canvas, DisplayList}`,
-  `flui_types::painting::Path`, `flui_engine`'s dispatch and its painter
-  surface. Follows [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md);
-  amends nothing.
-
----
-
 ## Context
 
-Four facts about the display list, each verified in the tree on 2026-09-18:
+Four facts about the display list before this decision:
 
 1. **Two state models at once.** Every variant carried a `transform: Matrix4`
    (absolute — the full CTM), *and* `Save`/`Restore` carried one too, so a
@@ -65,8 +57,8 @@ paths are `Arc`s).
 
 ### The op has a budget
 
-`size_of::<DrawOp>() ≤ 128` and `size_of::<DrawCommand>() ≤ 192`, pinned by
-`draw_command_fits_its_budget`. The fattest variant is `ImageFiltered`,
+`size_of::<DrawOp>() ≤ 128` and `size_of::<DrawCommand>() ≤ 192`, enforced by a
+size test. The fattest variant is `ImageFiltered`,
 whose inline `ColorFilter::Matrix` is 80 bytes; a variant that would exceed
 the budget boxes its payload. `Path` is `Arc<Vec<PathCommand>>` with
 `Arc::make_mut` on every mutator (32 bytes; a clone is a refcount bump;
@@ -99,8 +91,7 @@ ever needed, is a separate projection, not the recording.
   replayed op on the reference machine.
 - Gradient-filled rounded decorations now keep each corner's radius, honour
   the paint's blend mode and the painter's transform. That is a correctness
-  fix, not only a deletion — `gradient_rrect_keeps_per_corner_radii` is red
-  against a uniform radius (mutation-verified).
+  fix, not only a deletion.
 - `anti_alias` on a gradient background remains at `Paint`'s default, by
   choice rather than by capability limit: the reference's `isAntiAlias` is a
   `ColoredBox` parameter and a `ColoredBox` has no gradient (flui-painting
@@ -109,7 +100,7 @@ ever needed, is a separate projection, not the recording.
   print as before, and the `xf=[…]` suffix is appended once from
   `DrawCommand::transform`.
 - `DrawCommand::Save`/`Restore` still carry a transform (every command
-  does); nothing reads it, and the tests say so.
+  does); nothing reads it.
 
 ## Alternatives rejected
 
@@ -126,16 +117,8 @@ ever needed, is a separate projection, not the recording.
 - **A `Cow<'a, DisplayList>` for `draw_picture`.** A lifetime on the wire
   type for a call whose whole cost is one `Vec::extend`.
 
-## Replacement tests
+## Flutter reference
 
-`draw_command_fits_its_budget` (`display_list/command.rs`);
-`path_clone_shares_its_commands_until_mutated` (flui-types `path.rs`);
-`draw_picture_restamps_by_the_current_transform` and
-`save_and_restore_carry_no_state_but_the_clip_scope`
-(`crates/flui-painting/tests/display_list_unit.rs`);
-`box_decoration_gradient_records_a_shader_paint_rrect`
-(`tests/decoration_unit.rs`); `gradient_rrect_keeps_per_corner_radii`
-(engine readback, `gradient_blend_readback_tests.rs`). The reference has no
-oracle for a display-list representation; `drawPicture` composition
-(`canvas_test.dart`'s picture cases) is what the re-stamp test stands in
-for.
+The reference has no oracle for a display-list representation; `drawPicture`
+composition (`canvas_test.dart`'s picture cases) is what the re-stamp test
+stands in for.

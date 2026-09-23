@@ -127,7 +127,7 @@ pub mod bounds;
 /// module is absent from default builds until a consumer opts in (lands ahead
 /// of its Core.2 consumer by design).
 #[cfg(feature = "kurbo")]
-pub mod bridges; // PORT-CHECK-OK-SP4: kurbo bridge intentionally precedes its Core.2 consumer; feature-gated, not speculative.
+pub mod bridges;
 pub mod circle;
 pub mod corner;
 pub mod corners;
@@ -150,7 +150,7 @@ pub mod size;
 pub mod text_path;
 pub mod traits;
 pub mod transform;
-pub mod transform2d; // PORT-CHECK-OK-SP4: transform2d API surface; consumed via flui_types::geometry re-export chain
+pub mod transform2d;
 pub mod units;
 pub mod vector;
 

@@ -357,7 +357,7 @@ impl StatefulView for Checkbox {
 }
 
 impl ViewState<Checkbox> for CheckboxState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // ADR-0018: acquired here, fired only from the states-controller
         // listener below — never from `build`. Mirrors `InkWellState`. The
         // handle is consumed directly by the listener closure; nothing else

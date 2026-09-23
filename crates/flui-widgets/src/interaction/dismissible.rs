@@ -100,7 +100,7 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::Size;
 use flui_types::painting::Clip;
 use flui_types::typography::TextDirection;
-use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, RebuildHandle, ViewExt, ViewState};
 
 use crate::animated::VsyncScope;
@@ -586,7 +586,7 @@ impl StatefulView for Dismissible {
 }
 
 impl ViewState<Dismissible> for DismissibleState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
 
         let rebuild_for_value = rebuild.clone();
@@ -709,10 +709,10 @@ impl ViewState<Dismissible> for DismissibleState {
             //   (the same `build_scope` every other `StatefulView::build` runs
             //   through), just one sequenced *between* layout passes rather
             //   than at the top of the frame — not a restricted context with
-            //   different rules. Port-check trigger #22 (see
-            //   `scripts/check-frame-capability-scope.sh`) governs *acquiring*
-            //   `rebuild_handle()`/`post_frame_handle()` from `build`/`layout`/
-            //   `paint` (an unbounded-rebuild-loop hazard); it says nothing
+            //   different rules. The lifecycle-only rule governs *acquiring*
+            //   `rebuild_handle()`/`post_frame_handle()` (only `LifecycleContext`
+            //   offers them, so never from `build`/`layout`/`paint` — an
+            //   unbounded-rebuild-loop hazard); it says nothing
             //   about *calling* `.schedule(reason)` on a handle already acquired in
             //   `init_state` (this one), which is exactly what every listener
             //   callback in this file already does.
@@ -866,7 +866,6 @@ impl ViewState<Dismissible> for DismissibleState {
 
         let resize_controller = self.drag.resize_controller.borrow_mut().take();
         if let Some(resize_controller) = resize_controller {
-            // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
             if let Some(id) = self.drag.resize_listener_id.borrow_mut().take() {
                 resize_controller.remove_listener(id);
             }
@@ -1235,7 +1234,6 @@ fn start_resize_animation(
         }
         rebuild_for_resize.schedule(flui_view::RebuildReason::AnimationTick);
     }));
-    // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
     *drag.resize_listener_id.borrow_mut() = Some(listener_id);
 
     if let Some(vsync) = vsync {
@@ -1680,7 +1678,7 @@ mod tests {
     }
 
     impl ViewState<RebuildHandleCapture> for RebuildHandleCaptureState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             let _prev = self.captured.borrow_mut().replace(ctx.rebuild_handle());
         }
 

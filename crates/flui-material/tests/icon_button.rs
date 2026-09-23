@@ -42,7 +42,6 @@ struct IconThemeProbe {
 
 impl StatelessView for IconThemeProbe {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        // PORT-CHECK-OK-LOCK: plain data: IconThemeData, no Drop
         *self.captured.borrow_mut() = Some(IconTheme::of(ctx));
         SizedBox::new(10.0, 10.0)
     }

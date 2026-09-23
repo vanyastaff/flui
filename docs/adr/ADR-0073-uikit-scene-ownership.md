@@ -1,6 +1,7 @@
 # ADR-0073: UIKit scenes own native attachments, sessions retain UI state
 
-Status: accepted and implemented; scoped native protocol acceptance and independent reviews passed.
+- **Status:** Accepted
+- **Date:** 2026-09-20
 
 ## Context
 

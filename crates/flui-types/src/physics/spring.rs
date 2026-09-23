@@ -13,7 +13,6 @@ use super::{Simulation, Tolerance};
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SpringType {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Critical damping - returns to rest as quickly as possible without
     /// oscillating
     Critical,
@@ -34,7 +33,6 @@ pub enum SpringType {
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpringDescription {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The mass of the spring (must be positive)
     pub mass: f32,
 
@@ -221,7 +219,6 @@ impl SpringDescription {
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpringSimulation {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The spring description
     spring: SpringDescription,
 

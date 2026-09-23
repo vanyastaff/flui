@@ -11,7 +11,7 @@
 //! `RenderIntrinsicHeight` has no `step_width`/`step_height` knobs — those
 //! belong to `RenderIntrinsicWidth` only.
 //!
-//! # ADR-0011 fix
+//! # Dry intrinsics fix
 //!
 //! The old `compute_dry_layout` / `compute_dry_baseline` approximated the
 //! intrinsic height via a `child_dry_layout` probe at unconstrained width, which
@@ -188,7 +188,7 @@ impl RenderBox for RenderIntrinsicHeight {
         }
         // Structurally identical to perform_layout: child_constraints issues
         // the real intrinsic sub-query through DryLayoutChildRequest::Intrinsic
-        // (ADR-0011 Slice 1), routed by the driver to the memoized intrinsic_query.
+        // (flui-rendering ARCHITECTURE.md, dry intrinsics), routed by the driver to the memoized intrinsic_query.
         // The old `child_dry_layout`-based approximation is removed — dry ≡ committed.
         let child_constraints = Self::child_constraints(constraints, |dim, extent| {
             ctx.child_intrinsic(0, dim, extent)

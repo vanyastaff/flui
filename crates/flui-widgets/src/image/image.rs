@@ -10,7 +10,7 @@ use flui_types::{Pixels, Size, painting::Image as PixelImage};
 #[cfg(not(feature = "asset-images"))]
 use flui_view::prelude::StatelessView;
 #[cfg(feature = "asset-images")]
-use flui_view::prelude::{StatefulView, ViewState};
+use flui_view::prelude::{LifecycleContext, StatefulView, ViewState};
 use flui_view::{BoxedView, BuildContext, IntoView, RenderView, View, ViewExt, impl_render_view};
 
 use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, MemoryImage};
@@ -110,7 +110,6 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 #[cfg_attr(feature = "asset-images", derive(StatefulView))]
 #[cfg_attr(not(feature = "asset-images"), derive(StatelessView))]
 pub struct Image {
-    // PORT-CHECK-OK-SP3: widget view type; `flui_types::painting::Image` is the pixel-data handle — distinct concepts at different crate layers
     provider: Arc<dyn ImageProvider + Send + Sync>,
     fit: ImageFit,
     alignment: ImageAlignment,
@@ -322,7 +321,7 @@ pub struct ImageState {
 #[cfg(feature = "asset-images")]
 impl ViewState<Image> for ImageState {
     /// `_ImageState.initState`: resolve the provider the widget mounted with.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.resolver.init(ctx);
     }
 

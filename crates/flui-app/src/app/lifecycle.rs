@@ -1959,7 +1959,6 @@ mod tests {
                         drops: nested_drops,
                         on_drop: None,
                     });
-                    // PORT-CHECK-OK-LOCK: plain data: Result<(), PublishError>, no Drop
                     *nested_result_in_drop.lock().expect("result slot") = Some(result);
                 })),
             })

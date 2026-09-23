@@ -115,7 +115,7 @@ impl BackGestureController {
     /// inline, in which case the gesture is already fully closed out
     /// (`did_stop_user_gesture` already called).
     pub(crate) fn drag_end(&self, velocity: f32) -> bool {
-        let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::FastEaseInToSlowEaseOut); // PORT-CHECK-OK-DYN: see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+        let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::FastEaseInToSlowEaseOut); // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
         let is_current = self.navigator.current() == Some(self.route);
         let animate_forward = if !is_current {
             // https://github.com/flutter/flutter/issues/141268 — a route
@@ -472,7 +472,7 @@ impl std::fmt::Debug for BackGestureDetectorState {
 }
 
 impl ViewState<BackGestureDetector> for BackGestureDetectorState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.recognizer = Some(self.build_recognizer(ctx));
     }
 

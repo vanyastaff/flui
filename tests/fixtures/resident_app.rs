@@ -132,7 +132,7 @@ impl StatefulView for Counter {
     }
 }
 impl ViewState<Counter> for CounterState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.rebuild = Some(ctx.rebuild_handle());
         self.generation = INITIALIZED.fetch_add(1, Ordering::SeqCst) + 1;
         println!(

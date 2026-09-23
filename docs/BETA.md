@@ -817,20 +817,20 @@ Host: MacBook Air (M1), macOS 27.0 (26A428), main display 3440×1440 at
 
 **First run — a finding, not a pass.** With the swapchain at
 `desired_maximum_frame_latency: 1` (the value the engine had carried since
-ADR-0029) every phase presented at a rock-steady **20.0 ms p50 — exactly
+ADR-0058) every phase presented at a rock-steady **20.0 ms p50 — exactly
 two periods, 50 fps**: scroll 984 frames in 20 s (p90 20.3, p99 24.9, max
 131.7 ms), type 500 frames at p50 20.005 / p99 20.6 ms. The bare platform
 frame pump on the same display (`just macos-frame-pump`) ran 100.2 fps, so
 the halving was in the rendering path. Setting the latency to 2 and
 re-running: scroll p50 **9.998 ms**, type p50 9.998 ms — the full panel
-rate. The mechanism is the one ADR-0029's AppKit subsection had measured on
+rate. The mechanism is the one ADR-0058's per-backend facts had measured on
 a 3 % tail and judged tolerable: with two drawables, the acquire for the
 next frame waits for the previous drawable to leave scanout, so a frame
 whose own work does not fit in what remains of the period misses the next
 vsync — on every frame, once the frame does real work. The literal is now
 2 (wgpu's default); the reasoning, the earlier resize-axis measurement that
 made this a free choice there, and the numbers are in the literal's own
-comment and in ADR-0029's dated addendum.
+comment and in ADR-0058.
 
 The first run's RSS check also failed — 75.6 MiB at 1 s to 201 MiB at the
 end, +166 % — and that one was the script's: the series reaches 199.6 MiB

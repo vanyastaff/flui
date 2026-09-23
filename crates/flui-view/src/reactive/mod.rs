@@ -29,9 +29,7 @@
 //!
 //! # Refusals at run time
 //!
-//! The static half is refusal trigger 24 (`scripts/check-signal-write-scope.sh`;
-//! advisory, because a textual scanner cannot tell a synchronously invoked
-//! closure from a deferred one). The binding half is here: while an element's
+//! The guard lives in the binding: while an element's
 //! `build` runs (`build_or_recover`, the one choke point every element kind
 //! builds through, arms it), a **write** ([`SignalError::WrittenDuringBuild`])
 //! and a **slot creation** ([`SignalError::CreatedDuringBuild`]) are refused

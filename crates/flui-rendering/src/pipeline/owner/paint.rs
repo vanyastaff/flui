@@ -278,7 +278,7 @@ impl PipelineOwner<PaintPhase> {
                         });
                     }
 
-                    // ADR-0015: resolve each paint-phase-correlated
+                    // Follower hit-testing: resolve each paint-phase-correlated
                     // follower's composite-resolved offset against the SAME
                     // fully-built layer_tree the GPU path (flui-engine's
                     // `render_layer_recursive`) resolves against, reusing the
@@ -731,7 +731,7 @@ impl PipelineOwner<PaintPhase> {
             match op {
                 FragmentOp::Run(list) => composer.append_run(list),
                 FragmentOp::Push(scope) => {
-                    // ADR-0015: capture the RenderId -> LayerId
+                    // Follower hit-testing: capture the RenderId -> LayerId
                     // correlation as a near-free byproduct of pushing a
                     // Layer::Follower — `node_id` is already in scope from
                     // this fragment-op replay loop, and `push_layer` hands
@@ -1109,7 +1109,7 @@ struct FragmentComposer {
     stack: Vec<LayerId>,
     open: DisplayList,
     /// `(RenderId, LayerId)` correlation for each `Layer::Follower` pushed
-    /// this paint pass (ADR-0015) — the general `RenderId -> LayerId`
+    /// this paint pass (flui-rendering ARCHITECTURE.md, follower hit-testing) — the general `RenderId -> LayerId`
     /// primitive independently wanted by the snapshot/harness subtree-scoping
     /// TODOs (`testing/snapshot.rs`, `testing/harness.rs`), shipped narrowed
     /// to followers for now. `run_paint` resolves each entry post-paint via
@@ -1232,7 +1232,7 @@ impl FragmentComposer {
     /// Inserts `layer` under the current stack top, returning its freshly
     /// minted `LayerId` — the caller (`paint_subtree_impl`'s fragment-op
     /// replay loop) uses this to record the `RenderId -> LayerId`
-    /// correlation for `Layer::Follower` pushes (ADR-0015).
+    /// correlation for `Layer::Follower` pushes (flui-rendering ARCHITECTURE.md, follower hit-testing).
     fn push_layer(&mut self, layer: Layer) -> LayerId {
         self.push_layer_node(LayerNode::new(layer))
     }
@@ -1277,7 +1277,7 @@ impl FragmentComposer {
     }
 
     /// Records a `(RenderId, LayerId)` correlation for a pushed
-    /// `Layer::Follower` node (ADR-0015).
+    /// `Layer::Follower` node (flui-rendering ARCHITECTURE.md, follower hit-testing).
     fn record_follower_correlation(&mut self, render_id: RenderId, follower_layer_id: LayerId) {
         self.follower_correlations
             .push((render_id, follower_layer_id));
@@ -1614,7 +1614,7 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
 }
 
 // ============================================================================
-// Tests (ADR-0015 Slices A/B — the correlation byproduct + the resolution)
+// Tests (the correlation byproduct and the resolution)
 // ============================================================================
 
 #[cfg(test)]
@@ -1642,7 +1642,7 @@ mod tests {
     /// not depend on flui_objects). Always a repaint boundary so
     /// `paint.rs` wraps it in its own `Layer::Offset`, letting tests place
     /// two of these under DIFFERENT ancestor offsets — the
-    /// cross-repaint-boundary case ADR-0015 targets.
+    /// cross-repaint-boundary case follower hit-testing targets.
     #[derive(Debug)]
     struct LeaderStub {
         link: LayerLink,

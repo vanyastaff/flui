@@ -115,7 +115,6 @@ impl EagerGestureRecognizer {
 
     /// Replace the gesture settings in place.
     pub fn set_settings(&self, settings: GestureSettings) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.settings.lock() = settings;
     }
 }

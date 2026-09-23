@@ -54,7 +54,6 @@ impl Built {
         self.0.lock().contains(&name)
     }
     fn clear(&self) {
-        // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
         self.0.lock().clear();
     }
 }
@@ -432,7 +431,7 @@ fn navigator_of_self_check_finds_current_navigator() {
     );
 }
 
-/// `Overlay::of`/`maybe_of` (ADR-0036) from inside a route's content resolves
+/// `Overlay::of`/`maybe_of` (ADR-0076) from inside a route's content resolves
 /// to the `Overlay` `Navigator::build` mounts (`navigator.rs:1610`) — the
 /// only honest way to test it, same reasoning as `probing_page` above: the
 /// lookup must run from a `BuildContext` inside the navigator's own subtree,
@@ -1208,7 +1207,7 @@ fn public_no_internal_route_stack_exports() {
     super::export_guard::assert_not_exported("lib.rs", LIB, &INTERNAL);
 }
 
-/// The overlay's published contract: the lookup types (ADR-0036) plus the
+/// The overlay's published contract: the lookup types (ADR-0076) plus the
 /// mutation surface `flui-navigation` drives from outside this crate
 /// (ADR-0076), all re-exported from the crate root while the `overlay` module
 /// itself stays private, so nothing else in it is nameable. The view/state
@@ -1245,7 +1244,7 @@ fn overlay_publishes_the_lookup_and_mutation_contract() {
     ] {
         assert!(
             exported.contains(&published),
-            "{published} must be re-exported from lib.rs (ADR-0036 / ADR-0076)"
+            "{published} must be re-exported from lib.rs (ADR-0076)"
         );
     }
 
@@ -1634,7 +1633,7 @@ mod local_history {
     }
 
     impl ViewState<HandleProbe> for HandleProbeState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             let _prev =
                 std::mem::replace(&mut *self.sink.lock(), LocalHistoryHandle::maybe_of(ctx));
         }
@@ -2957,7 +2956,6 @@ fn a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it
                 .boxed()
         }));
         harness.tick();
-        // PORT-CHECK-OK-LOCK: plain data: recording log (Vec<&'static str>), no Drop
         spy.0.lock().clear();
 
         let popped = handle.pop();

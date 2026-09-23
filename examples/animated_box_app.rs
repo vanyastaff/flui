@@ -59,8 +59,8 @@ use flui_foundation::Listenable;
 use flui_objects::RenderColoredBox;
 use flui_types::{Color, Size, geometry::px};
 use flui_view::{
-    AnimatedView, BuildContext, BuildContextExt, IntoView, RenderView, StatefulView, StatelessView,
-    View, ViewExt, ViewState, impl_animated_view,
+    AnimatedView, BuildContext, BuildContextExt, IntoView, LifecycleContext, RenderView,
+    StatefulView, StatelessView, View, ViewExt, ViewState, impl_animated_view,
 };
 use flui_widgets::VsyncScope;
 
@@ -257,9 +257,9 @@ struct AnimatedBoxDemoState {
 }
 
 impl ViewState<AnimatedBoxDemo> for AnimatedBoxDemoState {
-    /// Lifecycle-only (ADR-0021, port-check trigger #22): registers with the
+    /// Lifecycle-only (ADR-0021): registers with the
     /// ambient `VsyncScope` and starts the bounce here, never from `build`.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
             let registration = vsync.register((*self.controller).clone());
             self.registration = Some((vsync, registration));

@@ -32,8 +32,8 @@ consumed by path (not published to crates.io).
 | `Rems` | Root-em, font-relative sizing |
 
 Conversions between unit spaces are explicit (`ScaleFactor`), and `From<f32>`
-escape hatches are deliberately absent — the unit barrier is enforced by the
-workspace's port-check CI gate.
+escape hatches are deliberately absent — `compile_fail` doctests in this crate
+keep the unit barrier from eroding.
 
 ```rust
 use flui_geometry::{Point, Size, Rect, px};

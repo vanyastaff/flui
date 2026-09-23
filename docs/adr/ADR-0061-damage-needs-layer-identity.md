@@ -1,19 +1,11 @@
 # ADR-0061: Partial repaint needs cross-frame layer identity, not paint-phase bookkeeping
 
+- **Status:** Accepted
+- **Date:** 2026-08-16
+
 *Damage cannot be derived from which render objects repainted, because the ones
 that always repaint cover the screen. It has to come from comparing consecutive
 layer trees, which needs layers to be identifiable across frames — they are not.*
-
----
-
-- **Status:** Accepted
-- **Date:** 2026-08-16
-- **Deciders:** @vanyastaff
-- **Scope:** `flui-layer`'s `DamageTracker` and `DamageRegion`; the scissor path
-  in `flui-engine`'s `Renderer::render_scene`; `PipelineOwner::run_paint`'s
-  retention bookkeeping; `LayerNode::element_id`.
-
----
 
 ## Context
 
@@ -51,7 +43,7 @@ per layer, not a forecast. The direction is not in doubt.
 
 **Damage is not derived from the paint phase.** It will come from comparing the
 layer tree a frame produces against the previous frame's, which requires giving
-layers an identity that survives a frame boundary. Until that lands, every frame
+layers an identity that survives a frame boundary. Until that exists, every frame
 stays a full repaint and `DamageRegion` keeps its single `Full` variant.
 
 ## Why the obvious approach does not work

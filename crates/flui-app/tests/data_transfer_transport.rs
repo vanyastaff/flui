@@ -185,7 +185,6 @@ fn completion_wakes_the_stored_waker() {
         Arc::new(Mutex::new(None));
     let outcome_for_task = Arc::clone(&outcome);
     let _token = driver.spawn_local(Box::pin(async move {
-        // PORT-CHECK-OK-LOCK: plain data: Result<TransferPayload, TransferError>, no Drop
         *outcome_for_task.lock() = Some(request.await);
     }));
 
@@ -395,7 +394,6 @@ fn mock_source_drives_all_seven_stages_through_the_async_driver() {
         Arc::new(Mutex::new(None));
     let outcome_for_task = Arc::clone(&outcome);
     let token = driver.spawn_local(Box::pin(async move {
-        // PORT-CHECK-OK-LOCK: plain data: Result<TransferPayload, TransferError>, no Drop
         *outcome_for_task.lock() = Some(request.await);
     }));
     assert_eq!(driver.poll_ready(), 1);
@@ -445,7 +443,6 @@ fn dropping_the_task_token_cancels_the_in_flight_delivery() {
         Arc::new(Mutex::new(None));
     let outcome_for_task = Arc::clone(&outcome);
     let token = driver.spawn_local(Box::pin(async move {
-        // PORT-CHECK-OK-LOCK: plain data: Result<TransferPayload, TransferError>, no Drop
         *outcome_for_task.lock() = Some(request.await);
     }));
     assert_eq!(driver.poll_ready(), 1);

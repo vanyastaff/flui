@@ -469,21 +469,17 @@ pub struct InteractiveViewerState {
     subtree_anchor: SubtreeAnchor,
     gesture: Rc<GestureTracking>,
     /// Acquired once in [`init_state`](ViewState::init_state), not `build`
-    /// (lifecycle-only capability, port-check trigger #22): `build` runs on
+    /// (lifecycle-only capability): `build` runs on
     /// every rebuild, and the gesture closures below only ever read this
     /// asynchronously, from a later `on_pan_update`/`on_pointer_signal`
     /// callback, never synchronously inside `build` itself — the same
     /// acquire-in-lifecycle-hook, use-from-callback shape
-    /// `FocusState::init_state` uses for its own pipeline handle. Named
-    /// `pipeline_cell`, not `pipeline_owner`: the latter is the guarded
-    /// capability-scope token (trigger #22's scanner is a textual scan, not
-    /// method-call-aware), and this field's own re-clones inside `build`
-    /// would otherwise trip it despite never re-acquiring anything.
+    /// `FocusState::init_state` uses for its own pipeline handle.
     pipeline_cell: Option<PipelineCell>,
 }
 
 impl ViewState<InteractiveViewer> for InteractiveViewerState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.pipeline_cell = ctx.pipeline_owner();
     }
 

@@ -448,7 +448,6 @@ fn animated_align_interpolates_child_position_over_frames() {
         "TOP_LEFT starts the child at x=0"
     );
 
-    // PORT-CHECK-OK-LOCK: plain data: Alignment is Copy
     *alignment.lock() = Alignment::BOTTOM_RIGHT;
     laid.pump();
     laid.pump_for(FRAME); // detection (~top-left)

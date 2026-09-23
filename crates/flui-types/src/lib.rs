@@ -107,8 +107,8 @@ pub mod layout;
 // visible; the module needs no public surface).
 mod lerp_impls;
 pub mod painting;
-pub mod physics; // PORT-CHECK-OK-SP4: physics types API surface; future consumer in flui-animation per ROADMAP
-pub mod platform; // PORT-CHECK-OK-SP4: platform types API surface; future consumer in flui-platform per ROADMAP
+pub mod physics;
+pub mod platform;
 pub mod styling;
 pub mod typography;
 

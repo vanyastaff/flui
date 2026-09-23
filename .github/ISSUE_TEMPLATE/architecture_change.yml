@@ -14,7 +14,7 @@ body:
     id: contract
     attributes:
       label: Contract impact
-      description: Which contracts in docs/FOUNDATIONS.md, docs/PORT.md, or docs/ROADMAP.md change?
+      description: Which contracts in docs/FOUNDATIONS.md or docs/ROADMAP.md change?
     validations:
       required: true
   - type: textarea

@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use super::*;
 
 /// Captures its own `RebuildHandle` in `init_state` (capabilities are
-/// installed then, per port-check trigger #22) and schedules through
+/// only reachable from lifecycle hooks) and schedules through
 /// it from `dispose`, exactly the shape a real widget's cleanup path
 /// takes (e.g. cancelling a subscription and requesting one final
 /// rebuild to reflect that).
@@ -32,7 +32,7 @@ impl StatefulView for DisposeProbeView {
 }
 
 impl ViewState<DisposeProbeView> for DisposeProbeState {
-    fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         let handle = ctx.rebuild_handle();
         let _prev = self.handle_slot.borrow_mut().replace(handle.clone());
         self.handle = Some(handle);

@@ -1,6 +1,7 @@
 # ADR-0072: Native execution is a presentation fact
 
-Status: accepted
+- **Status:** Accepted
+- **Date:** 2026-09-19
 
 ## Context
 

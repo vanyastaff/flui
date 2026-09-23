@@ -31,7 +31,7 @@ impl StatefulView for Root {
 }
 
 impl ViewState<Root> for RootState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.opened.bind(ctx);
     }
 

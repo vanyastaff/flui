@@ -236,7 +236,7 @@ impl Platform for HeadlessPlatform {
 
         // Default: no owner lane on this backend, every
         // `OwnerPlatform::open_window` call creates directly and is always
-        // `Ready` (ADR-0039 slice 2). "For the loop's life" means "until the
+        // `Ready` (ADR-0039 §1). "For the loop's life" means "until the
         // value is dropped" here, since `run` returns immediately (ADR-0039
         // §1) -- there is no later point on this thread to defer to. Test
         // mode (`enable_deferred_window_open`) opts into the `Pending` arm
@@ -1653,7 +1653,6 @@ impl Clipboard for MockClipboard {
     }
 
     fn write_text(&self, text: String) {
-        // PORT-CHECK-OK-LOCK: plain data: String
         *self.content.lock() = Some(text);
     }
 }
@@ -2134,7 +2133,6 @@ mod tests {
         let user = platform
             .open_window(WindowOptions::default())
             .expect("headless opens a second window");
-        // PORT-CHECK-OK-LOCK: plain data: WindowEvent carries only Copy ids
         seen.lock().clear(); // drop the two `Created` events
 
         programmatic.close();
@@ -2276,7 +2274,6 @@ mod tests {
         let window = platform
             .open_window(WindowOptions::default())
             .expect("headless opens a window");
-        // PORT-CHECK-OK-LOCK: plain data: WindowEvent carries only Copy ids
         seen.lock().clear();
 
         let window_id = window.id();

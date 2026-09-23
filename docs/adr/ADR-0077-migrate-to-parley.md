@@ -1,23 +1,22 @@
 # ADR-0077: Migrate from cosmic-text to parley
 
-Status: **Proposed** (2026-09-22). Backed by the B7 research spike:
-[`docs/research/text-stack-2026.md`](../research/text-stack-2026.md), code in `tools/text-spike/`
-(standalone crate, not a flui workspace member). Nothing in `crates/flui-*` has changed as part of
-this spike or this ADR -- migration is a separate follow-up.
+- **Status:** Proposed
+- **Date:** 2026-09-22
+- **Supersedes (on acceptance):** ADR-0016, ADR-0059
 
-**Challenges** [ADR-0059](ADR-0059-flui-stays-on-cosmic-text.md) (Accepted, "Stay on cosmic-text").
-Does not yet supersede it -- see "Reconciling with ADR-0059" below; the gap that keeps this ADR from
-simply superseding ADR-0059 is itself the biggest open precondition in the Decision section.
+Backed by a research spike: [`docs/research/text-stack-2026.md`](../research/text-stack-2026.md),
+code in `tools/text-spike/` (standalone crate, not a workspace member). Nothing in `crates/flui-*`
+has changed as part of this ADR; the migration is separate work. Until the rasterization
+precondition below is met, ADR-0016 and ADR-0059 stay in force.
 
 ## Context
 
 `flui-painting` depends on cosmic-text 0.19.0 for all text shaping and layout today
-(`crates/flui-painting/Cargo.toml:30`; the module's own doc comment: "Text shaping and layout
-over cosmic-text"). This decision affects three other in-flight tracks: B1 (FontSystem-per-realm),
-B3 (BiDi), and the B2 continuation (further editor text-editing work) — all three build on
+(`crates/flui-painting/Cargo.toml`; the module's own doc comment: "Text shaping and layout
+over cosmic-text"). Per-realm font ownership, BiDi, and further editor text work all build on
 whichever shaping stack FLUI settles on.
 
-The B7 spike ran the same six original corpora (Latin, pure-RTL Arabic, bidirectional
+The spike ran the same six original corpora (Latin, pure-RTL Arabic, bidirectional
 Arabic+Latin, CJK, ZWJ emoji, Devanagari) through both cosmic-text 0.19.0 and parley 0.11.1 (the
 real latest published version — confirmed via `cargo info parley`, not assumed) at both a single
 paragraph and a 10,000-line document, 5 reps each, in `--release` mode on an otherwise idle
@@ -105,7 +104,7 @@ a reader should be able to check the basis rather than take the headline number 
    has by default. The real memory advantage, once both backends retain the same amount of state,
    narrowed substantially from 30-38x -- see round 3 below for the figure that stood after both
    memory-fairness rounds landed together.
-3. **Font-selection and timing-boundary parity, round 3**: a Codex review caught two more
+3. **Font-selection and timing-boundary parity, round 3**: review caught two more
    asymmetries. Parley was requesting the CSS generic `"system-ui"` while cosmic-text requested
    `Family::SansSerif` -- different generics that can select different fonts, confounding font
    choice with the backend comparison. And cosmic-text's `shape()` dropped its `Buffer` (destroying
@@ -147,7 +146,8 @@ gets checked, before the corresponding piece of work is considered satisfied:
    prototype produces `GlyphImage`s the existing `flui-engine` atlas (`ADR-0067`) accepts
    unmodified, for at least one Latin and one complex-script (Devanagari or Arabic) test case, with
    a stable `GlyphKey` across repeated rasterization of the same glyph (a correctness property the
-   engine's atlas cache depends on). Until this exists, this ADR does not supersede ADR-0059.
+   engine's atlas cache depends on). Until this exists, this ADR supersedes neither ADR-0016 nor
+   ADR-0059.
 2. **`arabic_mixed` (0.25%) and `emoji_zwj` (3.19%) glyph-count differences.** Pass condition:
    either (a) a test asserting parley's cluster/selection boundaries match FLUI's expected
    grapheme-cluster boundaries for fixed ZWJ and bidi-mixed corpora (family, couple+heart,
@@ -179,6 +179,16 @@ Preconditions 2-6 can proceed in parallel with each other. Precondition 1 is the
 treats as blocking: without it, "migrate" is not a fully-costed decision, since ADR-0059's
 dominant cost concern was never really about shaping speed.
 
+**The font system becomes per-realm, not a process global.** ADR-0016's one shared font source
+for measuring and painting stays; what changes is its scope. Each `UiRealm` owns its font context
+(parley's `FontContext`/`LayoutContext`, plus the rasterizer's cache) as owner-local state,
+reached through the realm rather than through the `FONT_SYSTEM` static, so layout on one realm
+never observes another realm's in-flight `register_font`. Both stacks need only `&mut` access to
+their own context with no internal locking, so this is not blocked on the shaper choice, but it
+lands with the migration rather than as a second rewrite of the same surface. How fonts every
+realm should see (the bundled baseline, application-registered faces) reach each realm's context
+is settled with the implementation; sharing one mutable database across realms is not an option.
+
 ## Consequences
 
 - `crates/flui-painting/src/text_layout/layout.rs`, `font_resolve.rs`, and `glyphs.rs` get
@@ -197,9 +207,9 @@ dominant cost concern was never really about shaping speed.
 - `crates/flui-painting/Cargo.toml`'s single `cosmic-text = { version = "0.19" }` line is replaced
   by `parley` plus whichever rasterizer precondition 1 settles on; `crates/flui-engine`'s 5
   test-only occurrences (`paragraph_readback_tests.rs`) get updated to match.
-- B1 (FontSystem-per-realm) is unaffected either way: both backends require only `&mut` access to
-  their own font context, with no internal locking, so per-realm ownership is equally viable under
-  either stack -- this decision doesn't gate B1.
+- The `FONT_SYSTEM` static and `flui_painting::shared_font_system()` give way to a realm-owned
+  font context; `SharedEngineServices` stops constructing a process-wide instance, and the
+  cross-realm `register_font` staleness window ADR-0016 accepts disappears.
 - Every call site in `flui-painting/src/text_layout/` must shape at the paragraph granularity
   (one `Layout` per `RenderParagraph`), never hand parley a whole multi-paragraph buffer as one
   `Layout` -- the Context section's `Item`-boundary behavior makes that the one usage pattern to
@@ -207,8 +217,8 @@ dominant cost concern was never really about shaping speed.
   constraint fought against it, but is worth stating as an explicit implementation rule so a future
   contributor doesn't accidentally reintroduce the single-`Layout` pattern for, say, a
   virtualized-list-of-paragraphs optimization.
-- Once precondition 1 is satisfied, this ADR should either be updated to explicitly
-  `Supersedes: ADR-0059` (with ADR-0059 updated to `Superseded-by: ADR-0077`) if accepted, or moved
+- Once precondition 1 is satisfied, this ADR is either accepted — its header becomes
+  `Supersedes: ADR-0016, ADR-0059`, and both of those become `Superseded by ADR-0077` — or moved
   to Rejected with the rasterization findings recorded, if the prototype shows the atlas/cache-key
   bridge is not viable at acceptable cost.
 

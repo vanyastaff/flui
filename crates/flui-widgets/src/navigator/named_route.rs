@@ -35,7 +35,7 @@
 //!
 //! `Navigator.initialRoute` / `Navigator.defaultRouteName` /
 //! `Navigator.defaultGenerateInitialRoutes` — the initial-route back-stack
-//! synthesis. Deferred by decision (ADR-0024 U3, reaffirmed by its §7.1 gate);
+//! synthesis. Deferred by decision (ADR-0024);
 //! FLUI bootstraps with `NavigatorHandle::seed_initial` meanwhile.
 //!
 //! It is **not** a deep-link-only feature, though U3 originally said so:
@@ -44,7 +44,7 @@
 //! first, so `initialRoute: "/settings"` is `["/", "/settings"]` — an ordinary
 //! `MaterialApp` setting, and a two-deep stack whose back button returns home.
 //! A one-deep stack would make back exit the app. The correction is recorded in
-//! ADR-0024 §7.6.
+//! ADR-0024
 //!
 //! What the gap owes when it is built:
 //!
@@ -291,7 +291,7 @@ pub struct GeneratedRoute {
     /// than a bare box because this type has a [`Drop`] impl, which forbids
     /// moving the field out — the push takes it, and the drop that follows then
     /// finds nothing left to dispose.
-    push: Option<Box<dyn ErasedPush>>, // PORT-CHECK-OK-DYN: the named-route result-handle erasure (ADR-0024 §7.2) — one generator answers many names, so the route type cannot appear in the factory's signature; private to this module and reachable only through `GeneratedRoute`
+    push: Option<Box<dyn ErasedPush>>, // the named-route result-handle erasure (ADR-0024) — one generator answers many names, so the route type cannot appear in the factory's signature; private to this module and reachable only through `GeneratedRoute`
 }
 
 /// A generated route that never reached a navigator still owes
@@ -358,7 +358,7 @@ impl GeneratedRoute {
 
     /// Confirm this route delivers `T`, yielding the token that can push it.
     ///
-    /// This is the whole content of ADR-0024 §7.3's "with nothing pushed": the
+    /// This is the whole content of ADR-0024's "with nothing pushed": the
     /// comparison happens against a `TypeId` captured at construction, so a
     /// mismatched `T` is refused while the stack is still untouched. Flutter
     /// re-types through an unchecked `as Route<T?>?` and never notices.
@@ -417,7 +417,7 @@ impl<T: Send + 'static> TypedPush<T> {
     ) -> (RouteId, RouteResult<T>) {
         let (id, erased) = self.route.push(handle, mode);
         let typed = *erased
-            .downcast::<RouteResult<T>>() // PORT-CHECK-OK-DOWNCAST: the named-route result-handle erasure (ADR-0024 §7.2); `GeneratedRoute::checked` compared `TypeId::of::<T>()` against the route's own `Output` before this token could exist
+            .downcast::<RouteResult<T>>() // the named-route result-handle erasure (ADR-0024); `GeneratedRoute::checked` compared `TypeId::of::<T>()` against the route's own `Output` before this token could exist
             .expect(
                 "BUG: a TypedPush<T> exists only after TypeId::of::<T>() matched the route's \
                  Output, so the boxed result is a RouteResult<T>; reaching this means something \

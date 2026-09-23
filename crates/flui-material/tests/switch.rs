@@ -69,7 +69,6 @@ fn tap_fires_on_changed_with_the_flipped_value() {
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
         themed(Switch::new(false).on_changed(move |next| {
-            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             *recorder.borrow_mut() = Some(next);
         })),
         constraints(),
@@ -91,7 +90,6 @@ fn a_second_tap_after_rebuild_flips_back() {
 
     let build = |value: bool, sink: Rc<RefCell<bool>>| {
         themed(Switch::new(value).on_changed(move |next| {
-            // PORT-CHECK-OK-LOCK: plain data: bool, no Drop
             *sink.borrow_mut() = next;
         }))
     };

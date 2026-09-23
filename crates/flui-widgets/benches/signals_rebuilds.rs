@@ -73,7 +73,7 @@ impl StatefulView for ListA {
 }
 
 impl ViewState<ListA> for ListAState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.values.bind(ctx);
     }
     fn build(&self, _view: &ListA, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -108,7 +108,7 @@ impl StatefulView for FormA {
 }
 
 impl ViewState<FormA> for FormAState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.fields.bind(ctx);
     }
     fn build(&self, _view: &FormA, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -142,7 +142,7 @@ impl StatefulView for AppA {
 }
 
 impl ViewState<AppA> for AppAState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.unit.bind(ctx);
     }
     fn build(&self, _view: &AppA, _ctx: &dyn BuildContext) -> impl IntoView {

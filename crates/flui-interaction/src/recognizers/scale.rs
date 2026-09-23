@@ -246,14 +246,12 @@ impl ScaleGestureRecognizer {
         settings: GestureSettings,
     ) -> Arc<Self> {
         let recognizer = Self::new(arena);
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *recognizer.settings.lock() = settings;
         recognizer
     }
 
     /// Replace the gesture settings.
     pub fn set_settings(&self, settings: GestureSettings) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         *self.settings.lock() = settings;
     }
 
@@ -828,7 +826,6 @@ mod tests {
         let recognizer =
             ScaleGestureRecognizer::new(arena.clone()).with_on_scale_update(move |details| {
                 updates2.fetch_add(1, Ordering::SeqCst);
-                // PORT-CHECK-OK-LOCK: plain data, no significant drop
                 *last_scale2.lock() = details.scale;
             });
 

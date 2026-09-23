@@ -1,17 +1,12 @@
 # ADR-0050: GlobalKey identity, per-frame reservations, and the duplicate verdict
 
-*A `GlobalKey` is identified by the key, never by its hash — every registry that answers "which element holds this key?" buckets on `ViewKey::key_hash` and decides with `ViewKey::key_eq`. Resolving a key at attach time stays optimistic (the graft is unchanged), but each declaration is now recorded against its declaring parent for the frame — as is each parent a graft robs without its consent — and the frame boundary verifies those records: one key claimed twice is repaired and reported as a typed `DuplicateGlobalKey`, not silently resolved by whoever asked last.*
-
----
-
-- **Status:** Accepted (2026-08-24)
+- **Status:** Accepted
 - **Date:** 2026-08-24
-- **Deciders:** @vanyastaff
-- **Scope:** the identity model of the intra-tree `GlobalKey` registry, the `GlobalKeyScope` claim table, and the ambient resolution handle behind `GlobalKey::current_element`; the two per-frame ledgers (declarations, and parents robbed by a graft), where each is recorded and where they are verified; the repair performed before a duplicate is reported; the channel a duplicate is reported through
+- **Supersedes in part:** ADR-0043 §2 (hash-keyed `GlobalKey` authorities become key-identity-keyed)
 - **Related:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md) (the two `GlobalKey` authorities — this ADR corrects its "key hash → …" wording to "key → …" and adds the per-frame ledgers alongside them); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine realms)
 - **Issue:** #531 — verify GlobalKey reservations by identity at frame finalization
 
----
+*A `GlobalKey` is identified by the key, never by its hash — every registry that answers "which element holds this key?" buckets on `ViewKey::key_hash` and decides with `ViewKey::key_eq`. Resolving a key at attach time stays optimistic (the graft is unchanged), but each declaration is now recorded against its declaring parent for the frame — as is each parent a graft robs without its consent — and the frame boundary verifies those records: one key claimed twice is repaired and reported as a typed `DuplicateGlobalKey`, not silently resolved by whoever asked last.*
 
 ## Context
 
@@ -23,7 +18,7 @@ Two defects sat behind one symptom.
 
 The only shape FLUI did reject was the narrowest one — the same key twice under the *same* parent — and only in debug, because the check is a `debug_assert`-style panic. Every cross-parent case went unreported in every profile.
 
-Flutter reaches its verdict through **three** cooperating mechanisms, not one: the reservation ledger above; `_debugElementsThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans`, which catches a graft out of a parent that never rebuilds; and `_debugVerifyIllFatedPopulation`, which watches the key registry for an element displaced by a second registration. Porting only the first leaves two real holes — both of which a review of the first draft of this change found, and both of which are closed below (§2b and §3).
+Flutter reaches its verdict through **three** cooperating mechanisms, not one: the reservation ledger above; `_debugElementsThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans`, which catches a graft out of a parent that never rebuilds; and `_debugVerifyIllFatedPopulation`, which watches the key registry for an element displaced by a second registration. Porting only the first leaves two real holes, both closed below (§2b and §3).
 
 ## Decision
 

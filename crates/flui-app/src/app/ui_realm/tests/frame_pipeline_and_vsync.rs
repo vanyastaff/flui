@@ -406,7 +406,6 @@ fn production_post_frame_callback_observes_this_frames_committed_layout() {
     post_frame_handle
         .schedule_local(move |_timing| {
             calls_cb.fetch_add(1, Ordering::SeqCst);
-            // PORT-CHECK-OK-LOCK: plain data: Option<Size>, no Drop
             *observed_cb.write() = pipeline_cb.with(|owner| owner.box_size(root));
         })
         .expect("the realm's local post-frame lane outlives this call");
@@ -1284,7 +1283,7 @@ impl StatefulView for VsyncProbeView {
 }
 
 impl ViewState<VsyncProbeView> for VsyncProbeState {
-    fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         use flui_view::BuildContextExt as _;
         if let Some(vsync) = ctx.get::<flui_widgets::VsyncScope, _>(|scope| scope.vsync().clone()) {
             vsync.register(self.controller.clone());

@@ -416,7 +416,7 @@ impl Drop for PendingCapabilityTask {
     }
 }
 impl ViewState<CapabilityView> for CapabilityState {
-    fn init_state(&mut self, context: &dyn BuildContext) {
+    fn init_state(&mut self, context: &dyn LifecycleContext) {
         let driver: AsyncDriver = context.async_driver().expect("bound async driver");
         let post_frame: PostFrameHandle = context.post_frame_handle().expect("post-frame handle");
         let local: LocalPostFrameHandle = context.local_post_frame_handle().expect("local handle");
@@ -560,7 +560,7 @@ impl StatefulView for FocusCapabilityView {
     }
 }
 impl ViewState<FocusCapabilityView> for FocusCapabilityState {
-    fn init_state(&mut self, context: &dyn BuildContext) {
+    fn init_state(&mut self, context: &dyn LifecycleContext) {
         *self.0.handles.borrow_mut() = Some(InteractionCapabilities {
             focus: context.focus_manager(),
             hit_test: context.hit_test_handle(),
@@ -619,7 +619,7 @@ impl StatefulView for LifecycleProbe {
     }
 }
 impl ViewState<LifecycleProbe> for LifecycleProbeState {
-    fn init_state(&mut self, context: &dyn BuildContext) {
+    fn init_state(&mut self, context: &dyn LifecycleContext) {
         self.view.initialized.set(true);
         let handle = context.lifecycle_handle();
         assert_eq!(handle.is_some(), self.view.expected);

@@ -595,8 +595,7 @@ def _strip_line_comments(text: str) -> str:
 
 def _strip_top_level_test_modules(text: str) -> str:
     """Blank every `#[cfg(test)]`/`#[cfg(all(test, ...))]`-gated `mod { ... }`
-    block (brace-depth tracked, same technique as
-    check-frame-capability-scope.sh) so the ratchet judges production
+    block (brace-depth tracked) so the ratchet judges production
     reachability, not a test module that legitimately still calls a
     singleton as its own oracle.
     """
@@ -711,53 +710,6 @@ for grammar, files in ambient_reach_files.items():
             )
 
 # ---------------------------------------------------------------------------
-# Public lock-shaped surface net: every PORT-CHECK-OK-SP6 marker in the
-# runtime crates must come from a registered file. (Trigger #12 in
-# scripts/port-check.sh forces the marker onto any public lock surface its
-# grammar can see; this gate forces the marker's file into the registry.)
-# ---------------------------------------------------------------------------
-lock_exemptions: dict[Path, list[str]] = {}
-for index, entry in enumerate(table_array("lock_exemption")):
-    label = f"{registry_rel} lock_exemption[{index}] `{entry.get('file', '?')}`"
-    file_value = entry.get("file")
-    if not isinstance(file_value, str) or not (root / file_value).is_file():
-        fail(f"{label} names a missing file")
-        continue
-    if not str(entry.get("reason", "")).strip():
-        fail(f"{label} has no reason")
-    check_owner_issue(entry, label, required=True)
-    markers = entry.get("markers")
-    if not isinstance(markers, list) or not markers or not all(isinstance(marker, str) and marker for marker in markers):
-        fail(f"{label} must declare a non-empty string list `markers`")
-        continue
-    lock_exemptions.setdefault(Path(file_value), []).extend(markers)
-
-for crate in RUNTIME_CRATES:
-    crate_src = root / "crates" / crate / "src"
-    if not crate_src.is_dir():
-        continue
-    for rs_file in sorted(crate_src.rglob("*.rs")):
-        rel = rs_file.relative_to(root)
-        try:
-            text = rs_file.read_text()
-        except (OSError, UnicodeDecodeError):
-            continue
-        expected = lock_exemptions.get(rel, [])
-        for marker in expected:
-            count = text.count(marker)
-            if count != 1:
-                fail(f"{rel} must contain registered lock marker {marker!r} exactly once; found {count}")
-        for line_number, line in enumerate(text.splitlines(), start=1):
-            if "PORT-CHECK-OK-SP6" not in line:
-                continue
-            matches = [marker for marker in expected if marker in line]
-            if len(matches) != 1:
-                fail(
-                    f"{rel}:{line_number} carries a lock exemption but matches {len(matches)} registered markers — "
-                    "every public lock-shaped declaration needs its own exact entry"
-                )
-
-# ---------------------------------------------------------------------------
 # Process-global guards: existence-pinned so retirement updates the registry.
 # ---------------------------------------------------------------------------
 for index, entry in enumerate(table_array("process_global_guard")):
@@ -823,7 +775,6 @@ by_state = ", ".join(f"{state} {contracts_by_state[state]}" for state in sorted(
 print(
     f"runtime-conformance: {contract_count} contracts ({by_state}); "
     f"{surface_count} classified surfaces; {len(config_fields)} config fields; "
-    f"{sum(map(len, singleton_exemptions.values()))} singleton + "
-    f"{sum(map(len, lock_exemptions.values()))} lock declarations verified"
+    f"{sum(map(len, singleton_exemptions.values()))} singleton declarations verified"
 )
 PY

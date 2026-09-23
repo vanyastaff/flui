@@ -156,7 +156,7 @@ mod probe {
     }
 
     impl ViewState<ProbeRoot> for ProbeRootState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             if let Some(handle) = ctx.post_frame_handle() {
                 schedule_frame_observer(handle, Arc::clone(&self.witness));
             }
@@ -351,7 +351,8 @@ mod probe {
         let mut seen = None;
         let mut matched = false;
         while std::time::Instant::now() < deadline {
-            if let Some((w, h)) = *witness.constraints.lock() {
+            let constraints = *witness.constraints.lock();
+            if let Some((w, h)) = constraints {
                 let (w, h) = (f64::from(w), f64::from(h));
                 seen = Some((w, h));
                 if (w - expected.0).abs() <= 1.0 && (h - expected.1).abs() <= 1.0 {

@@ -273,7 +273,7 @@ mod tests {
     /// silently losing `Send` — fails this test, not just a hypothetical.
     #[test]
     fn raster_backend_is_dyn_safe_and_moves_across_threads() {
-        let backend: Box<dyn RasterBackend + Send> = Box::new(NoOpBackend::default()); // PORT-CHECK-OK-DYN: proves ADR-0045 decision 1's object-safety requirement (dyn RasterBackend + Send stays nameable/dyn-safe); test-only, no production dyn RasterBackend site exists today.
+        let backend: Box<dyn RasterBackend + Send> = Box::new(NoOpBackend::default()); // proves ADR-0045 decision 1's object-safety requirement (dyn RasterBackend + Send stays nameable/dyn-safe); test-only, no production dyn RasterBackend site exists today.
         let handle = std::thread::spawn(move || {
             let mut backend = backend;
             assert!(!backend.has_damage(), "fresh backend starts with no damage");

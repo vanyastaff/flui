@@ -5,7 +5,7 @@ use std::time::Duration;
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{Animatable, Animation};
 use flui_geometry::EdgeInsets;
-use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
 
 use crate::animated::implicitly_animated::{DEFAULT_DURATION, ImplicitAnimation, default_curve};
@@ -83,7 +83,7 @@ impl StatefulView for AnimatedPadding {
 }
 
 impl ViewState<AnimatedPadding> for AnimatedPaddingState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
             self.animation.register(vsync);
         }

@@ -29,7 +29,7 @@ declare -a changed_paths=()
 
 is_contract_gate_input() {
     case "$1" in
-        AGENTS.md|README.md|docs/crates.md|docs/PORT.md|docs/architecture.md) return 0 ;;
+        AGENTS.md|README.md|docs/crates.md|docs/architecture.md) return 0 ;;
         crates/flui-scheduler/README.md|crates/flui-scheduler/CHANGELOG.md) return 0 ;;
         crates/flui-platform/README.md) return 0 ;;
         docs/adr/ADR-[0-9][0-9][0-9][0-9]-*.md) return 0 ;;

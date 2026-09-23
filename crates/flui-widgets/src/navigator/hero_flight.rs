@@ -227,11 +227,11 @@ impl FlightInner {
         // `_heroOpacity = _proxyAnimation.drive(_reverseTween.chain(CurveTween(
         //  Interval(_proxyAnimation.value, 1.0))))` (`:689-691`): `_reverseTween` is
         // `1 -> 0`, so the opacity is `1 - interval(t)`.
-        let opacity = match *self.fade_from.lock() {
+        let fade_from = *self.fade_from.lock();
+        let opacity = match fade_from {
             Some(from) => 1.0 - Interval::linear(from, 1.0).transform(self.proxy.value()),
             None => 1.0,
         };
-        // PORT-CHECK-OK-LOCK: plain data: f32, no Drop
         *self.opacity.lock() = opacity;
     }
 
@@ -277,16 +277,16 @@ impl Drop for FlightInner {
     ///
     /// [`gesture_wake_subscription`]: FlightInner::gesture_wake_subscription
     fn drop(&mut self) {
-        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(status_id) = self.subscriptions.lock().take() {
+        let status_id = self.subscriptions.lock().take();
+        if let Some(status_id) = status_id {
             self.proxy.remove_status_listener(status_id);
         }
-        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(id) = self.proxy_wake_subscription.lock().take() {
+        let id = self.proxy_wake_subscription.lock().take();
+        if let Some(id) = id {
             self.proxy.remove_listener(id);
         }
-        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(id) = self.gesture_wake_subscription.lock().take() {
+        let id = self.gesture_wake_subscription.lock().take();
+        if let Some(id) = id {
             self.gesture_signal.notifier().remove_listener(id);
         }
     }
@@ -388,16 +388,16 @@ impl HeroFlight {
             return None;
         }
 
-        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(status_id) = self.inner.subscriptions.lock().take() {
+        let status_id = self.inner.subscriptions.lock().take();
+        if let Some(status_id) = status_id {
             self.inner.proxy.remove_status_listener(status_id);
         }
-        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(id) = self.inner.proxy_wake_subscription.lock().take() {
+        let id = self.inner.proxy_wake_subscription.lock().take();
+        if let Some(id) = id {
             self.inner.proxy.remove_listener(id);
         }
-        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
-        if let Some(id) = self.inner.gesture_wake_subscription.lock().take() {
+        let id = self.inner.gesture_wake_subscription.lock().take();
+        if let Some(id) = id {
             self.inner.gesture_signal.notifier().remove_listener(id);
         }
 
@@ -590,7 +590,6 @@ impl HeroFlight {
             rect.begin = new_begin;
             rect.end = new_end;
         }
-        // PORT-CHECK-OK-LOCK: plain data: Option<f32>, no Drop
         *self.inner.fade_from.lock() = None;
         self.inner.aborted.store(false, Ordering::Relaxed);
         // Re-read the new manifest's hooks (`manifest = newManifest`, `:815`): a divert
@@ -706,7 +705,6 @@ impl FlightManager {
     /// its own drain. Set from the controller's measurement pass, where the navigator
     /// still resolves it.
     pub(crate) fn set_post_frame(&self, handle: Option<LocalPostFrameHandle>) {
-        // PORT-CHECK-OK-LOCK: plain data: LocalPostFrameHandle (Weak+Weak), no Drop
         *self.post_frame.lock() = handle;
     }
 
@@ -784,7 +782,8 @@ impl FlightManager {
         // `if (existingFlight != null) existingFlight.divert(manifest)` (`:1051-1052`):
         // divert redirects the airborne flight in place, keeping its one overlay entry,
         // rather than an end-and-restart. The flight stays in the map under its tag.
-        if let Some(existing) = self.flights.lock().get(&manifest.tag).cloned() {
+        let existing = self.flights.lock().get(&manifest.tag).cloned();
+        if let Some(existing) = existing {
             existing.divert(manifest, plan);
             return;
         }
@@ -885,7 +884,6 @@ impl FlightManager {
         let proxy_wake_id = inner
             .proxy
             .add_listener(Arc::new(move || proxy_to_wake.notify_listeners()));
-        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         *inner.proxy_wake_subscription.lock() = Some(proxy_wake_id);
 
         // The status listener installed in the constructor (`:547`) must remain a
@@ -913,7 +911,6 @@ impl FlightManager {
                 _ => {}
             }
         }));
-        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         *inner.subscriptions.lock() = Some(status_id);
 
         // The deferred-replay half of `_handleAnimationUpdate` (`:639-649`): fires
@@ -941,7 +938,6 @@ impl FlightManager {
             }
             gesture_to_wake.notify_listeners();
         }));
-        // PORT-CHECK-OK-LOCK: plain data: ListenerId (u64), no Drop
         *inner.gesture_wake_subscription.lock() = Some(gesture_wake_id);
 
         let _prev = self.flights.lock().insert(manifest.tag.clone(), flight);

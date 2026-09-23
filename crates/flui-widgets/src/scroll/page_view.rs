@@ -50,7 +50,7 @@ use flui_rendering::view::{
 use flui_types::layout::Axis;
 use flui_view::prelude::StatefulView;
 use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, BuildContext, IntoView, ViewExt, ViewState};
+use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{
@@ -334,7 +334,7 @@ impl PageController {
         &self,
         page: usize,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+        curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     ) {
         let page_f = page as f32;
         let position = self.scroll.position();
@@ -374,7 +374,7 @@ impl PageController {
     pub fn next_page(
         &self,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+        curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     ) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() + 1.0).max(0.0) as usize, duration, curve);
@@ -391,7 +391,7 @@ impl PageController {
     pub fn previous_page(
         &self,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
+        curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     ) {
         let Some(page) = self.page() else { return };
         self.animate_to_page((page.round() - 1.0).max(0.0) as usize, duration, curve);
@@ -647,7 +647,7 @@ impl StatefulView for PageView {
 }
 
 impl ViewState<PageView> for PageViewState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.register_page_listener();
     }
 

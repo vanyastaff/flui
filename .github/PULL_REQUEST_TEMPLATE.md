@@ -4,7 +4,7 @@ Describe the change and why it belongs in FLUI.
 
 ## Verification
 
-- [ ] `just ci`
+- [ ] `just check-changed` (CI runs the rest)
 - [ ] Flutter reference checked for render/layout/paint/lifecycle/reconciliation changes, or not applicable
 - [ ] New or changed behavior has tests that would fail without this change
 - [ ] Public API changes are documented
@@ -13,7 +13,7 @@ Describe the change and why it belongs in FLUI.
 ## Architecture
 
 - [ ] Layering still follows `docs/FOUNDATIONS.md`
-- [ ] No new banned patterns from `docs/PORT.md`
+- [ ] No new lock on per-node render state, no capability acquired outside lifecycle hooks (AGENTS.md)
 - [ ] New dependencies are declared through workspace dependencies when shared
 
 ## Notes

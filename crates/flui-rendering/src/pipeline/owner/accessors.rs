@@ -555,7 +555,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return false;
         };
 
-        // ADR-0015: composite-resolved follower offsets. Gated behind
+        // Follower hit-testing: composite-resolved follower offsets. Gated behind
         // both side tables being empty — true for the overwhelming
         // majority of trees (followers are rare: tooltips, dropdowns,
         // overlays), so this whole branch is a single cheap `is_empty`
@@ -620,7 +620,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             result.push_transform(t.try_inverse().unwrap_or(t));
         }
         // A resolved follower offset rides the SAME transform-stack
-        // lifecycle as `hit_test_transform` (ADR-0015) — the same
+        // lifecycle as `hit_test_transform` (flui-rendering ARCHITECTURE.md, follower hit-testing) — the same
         // translation the paint/GPU path applies via
         // `backend.push_offset(resolved)` (renderer.rs:1586), lifted to a
         // `Matrix4` (exact and lossless — the composer only ever
@@ -634,7 +634,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // resolved offset — the SAME position-shift pattern `hit_child`
         // below already applies for ordinary child offsets, applied here
         // by the WALK rather than the object: `RenderFollowerLayer::hit_test`
-        // stays a plain structural forward (ADR-0015).
+        // stays a plain structural forward (flui-rendering ARCHITECTURE.md, follower hit-testing).
         let position = match follower_offset {
             Some(r) => position - r,
             None => position,
@@ -1543,7 +1543,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// A lazily-created owner publishes through the callback installed via
     /// [`Self::set_semantics_update_callback`] — the composition root's wire
-    /// to the platform accessibility bridge (ADR-0014). With none installed
+    /// to the platform accessibility bridge (flui-semantics ARCHITECTURE.md, semantics assembly). With none installed
     /// the owner falls back to the documented no-op placeholder: it still
     /// assembles a tree (inspectable via [`Self::semantics_owner`], the
     /// render harness, or `debug_dump_semantics_tree`) but publishes
@@ -1619,7 +1619,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// `None` until [`Self::set_semantics_enabled`]`(true)` lazily creates
     /// one; `None` again once the matching `false` transition disposes it.
-    /// Read-only by design (SP-6 / port-check: no lock, no `&mut` escape —
+    /// Read-only by design (no lock, no `&mut` escape —
     /// the owner's tree is written only by `Semantics::run_semantics`).
     #[inline]
     pub fn semantics_owner(&self) -> Option<&flui_semantics::SemanticsOwner> {

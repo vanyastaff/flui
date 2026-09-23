@@ -1,6 +1,6 @@
 # flui-rendering Architecture
 
-This document is the per-crate template instance for `flui-rendering` as defined by [`docs/PORT.md`](../../docs/PORT.md). It records the Flutter → Rust mapping for this crate, the divergence decisions taken so far, the current thread-safety surface, the known friction not yet refactored, and the planned cleanups that the methodology will pick up next.
+This document is the per-crate architecture record for `flui-rendering`. It records the Flutter → Rust mapping for this crate, the divergence decisions taken so far, the current thread-safety surface, the known friction not yet refactored, and the planned cleanups still to pick up.
 
 The deeper architectural write-ups for individual subsystems (protocol, layout, paint, hit-test) live alongside this file under [`docs/`](docs/) and migration plans under [`migration/`](migration/). The Flutter class hierarchy walk lives in [`flutter-rendering-hierarchy.md`](flutter-rendering-hierarchy.md) as a sibling appendix and is referenced from `## Flutter source mapping` below.
 
@@ -11,7 +11,7 @@ The deeper architectural write-ups for individual subsystems (protocol, layout, 
 | Flutter source | FLUI module | Notes |
 |---|---|---|
 | `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart` | [`src/storage/entry.rs`](src/storage/entry.rs), [`src/storage/state.rs`](src/storage/state.rs), [`src/storage/flags.rs`](src/storage/flags.rs), [`src/traits/render_object.rs`](src/traits/render_object.rs) | The `RenderObject` base class is split: trait surface in `traits/render_object.rs`, owned storage in `storage/entry.rs`, mutable per-frame state in `storage/state.rs`, atomic flags in `storage/flags.rs`. The Flutter `AbstractNode` parent-linkage role is in [`src/storage/links.rs`](src/storage/links.rs). |
-| `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart` `PipelineOwner` (line 1019+) | [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | Single-threaded phase serialisation. Flutter's `flushLayout` / `flushCompositingBits` / `flushPaint` / `flushSemantics` map to FLUI's `run_layout` / `run_compositing` / `run_paint` / `run_semantics`, each living on the matching `PipelineOwner<Phase>` impl block (typestate-enforced ordering, Mythos Step 7). Holds the root node and dirty lists. The `debug_doing_layout` / `debug_doing_paint` flags on the owner are the FLUI runtime analog of Flutter's `_debugActiveLayout` / `_debugDoingThisPaint` static asserts (kept as a debug-build cross-check; the type system is the load-bearing enforcement). |
+| `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart` `PipelineOwner` (line 1019+) | [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | Single-threaded phase serialisation. Flutter's `flushLayout` / `flushCompositingBits` / `flushPaint` / `flushSemantics` map to FLUI's `run_layout` / `run_compositing` / `run_paint` / `run_semantics`, each living on the matching `PipelineOwner<Phase>` impl block (typestate-enforced ordering). Holds the root node and dirty lists. The `debug_doing_layout` / `debug_doing_paint` flags on the owner are the FLUI runtime analog of Flutter's `_debugActiveLayout` / `_debugDoingThisPaint` static asserts (kept as a debug-build cross-check; the type system is the load-bearing enforcement). |
 | `.flutter/flutter-master/packages/flutter/lib/src/rendering/box.dart` | [`src/protocol/box_protocol.rs`](src/protocol/box_protocol.rs), [`src/parent_data/box_parent_data.rs`](src/parent_data/box_parent_data.rs) | `BoxConstraints`, `BoxParentData`, `Size`-based geometry. |
 | `.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver.dart` | [`src/protocol/sliver_protocol.rs`](src/protocol/sliver_protocol.rs), [`src/parent_data/sliver_parent_data.rs`](src/parent_data/sliver_parent_data.rs) | Sliver protocol for scrollable layout. |
 | `RenderObjectWithChildMixin`, `ContainerRenderObjectMixin` (`object.dart` lines 4160-4400+) | [`src/storage/links.rs`](src/storage/links.rs), [`src/parent_data/container_mixin.rs`](src/parent_data/container_mixin.rs) | Single-child + variable-children storage. Flutter uses Dart linked lists; FLUI stores `Vec<RenderId>` on the parent. |
@@ -222,7 +222,7 @@ first draft did. `FrameRun::run_frame_again` is added for it.
 
 ### A composited-layer update patches the enclosing capture; no node is promoted to a boundary
 
-**Rule:** Prime Directive rule 1 (behavior is the floor, design is ours) — this
+**Rule:** Design stance (behavior is the floor, design is ours) — this
 is a deliberate improvement over the reference and owes its accounting here.
 
 **Choice:** Flutter serves `markNeedsCompositedLayerUpdate` by giving the render
@@ -632,7 +632,7 @@ composited_layer_update_readback --locked --test-threads 1`).
 | `ClipSuperellipse` | no render object, widget, or variant (its layer debug-asserts against `Clip::None`, unlike rect/rrect/path, which only skip the push) | its port | a `PaintClip` variant; note the per-layer `Clip::None` difference |
 | `blend` on `PaintOpacity` | zero producers | the first advanced-blend producer | additive field on the `#[non_exhaustive]` struct |
 
-The market survey behind this shape (Prime Directive rule 2) covered
+The market survey behind this shape ([`AGENTS.md`](../../AGENTS.md) Design stance, "Look around before settling") covered
 Compose, SwiftUI, Slint, GPUI, and Masonry/Xilem; Compose's
 [`Modifier.graphicsLayer`](https://developer.android.com/reference/kotlin/androidx/compose/ui/graphics/graphicsLayer.modifier)
 is the closest market analogue — one declarative value per layer (`alpha`,
@@ -642,7 +642,7 @@ display list, the same contract `PaintEffects` gives FLUI.
 
 ### `RenderRotatedBox` reports a baseline only for an even turn
 
-**Rule:** Prime Directive rule 1 — a deliberate improvement over the reference,
+**Rule:** Design stance ("Flutter is a reference, not a spec") — a deliberate improvement over the reference,
 accounted for here.
 
 **Upstream:** `RenderRotatedBox` has no baseline override at all
@@ -805,7 +805,7 @@ passes with the change reverted, which the first draft did.
 
 ### The hit-test path is driver-owned; the protocol carries no result accumulator
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — a contract may be improved, and an
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a contract may be improved, and an
 improvement owes a record plus a replacement test. This is that record.
 
 **Choice:** `HitTestCapability::Result` and `::Entry` are vocabulary only. There is no
@@ -849,7 +849,7 @@ of how the dead path was found.
 
 ### Lazy-sliver scroll correction keeps the first visible item stationary
 
-**Rule:** Prime Directive rule 1 ("improve where a Flutter contract can be improved, record it, replace the oracle"); [ADR-0051](../../docs/adr/ADR-0051-anchor-stationary-scroll-correction.md).
+**Rule:** Design stance ("Flutter is a reference, not a spec": improve a Flutter contract where it can be improved, record it, replace the oracle); [ADR-0051](../../docs/adr/ADR-0051-anchor-stationary-scroll-correction.md).
 
 **Choice:** `Virtualizer::set_measured` / `adapt_default_estimate` report the offset delta of the anchor (the first visible item) whenever an extent above it changes; the consumer sliver accumulates the deltas and emits them as `SliverGeometry::scroll_offset_correction` at the end of the pass, in either scroll direction. The viewport applies the correction and re-runs layout in the same pass, so the anchor never moves on screen.
 
@@ -869,7 +869,7 @@ of how the dead path was found.
 
 ### `RenderEntry<P>` owns the render object by value (no lock, no interior mutability)
 
-**Rule:** strategy clause "sync hot path, async на краях" (lock contention on the hot path is functionally async-flavoured); [`docs/PORT.md`](../../docs/PORT.md) Refusal trigger 1 (`RwLock<Box<dyn RenderObject<P>>>` in `perform_layout` / `paint`).
+**Rule:** strategy clause "sync hot path, async на краях" (lock contention on the hot path is functionally async-flavoured); no lock on per-node render storage touched during `perform_layout` / `paint` (no `RwLock<Box<dyn RenderObject<P>>>`).
 
 **Choice:** `RenderEntry<P>::render_object` is a plain `Box<dyn RenderObject<P>>` (see [`src/storage/entry.rs`](src/storage/entry.rs)). Mutable access goes through `&mut self`, which the pipeline obtains via `PipelineOwner::render_tree_mut() -> &mut RenderTree` at phase boundaries. Re-entrant access from a parent to a child during layout uses disjoint-borrow primitives on `RenderTree` (`get_two_mut`, `get_many_mut`; the underlying `unsafe` is local and disjoint-keys-invariant — see [Thread safety](#thread-safety)). The Flutter `_debugDoingThisLayout` / `_debugDoingThisPaint` debug asserts are mirrored by `PipelineOwner::debug_doing_layout` / `debug_doing_paint` (see [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)).
 
@@ -883,7 +883,7 @@ of how the dead path was found.
 
 ### `set_was_repaint_boundary` removed from the trait surface; bit lives on `RenderState::flags`
 
-**Rule:** [`docs/PORT.md`](../../docs/PORT.md) Refusal trigger 1 (the previous shape required a write lock on the trait object during paint to flip a single bool); strategy clause "Compile-time over runtime" (state bits belong on the bookkeeping layer, not the user-implementable trait surface).
+**Rule:** no lock on per-node render storage touched during paint (the previous shape required a write lock on the trait object during paint to flip a single bool); strategy clause "Compile-time over runtime" (state bits belong on the bookkeeping layer, not the user-implementable trait surface).
 
 **Choice:** added `RenderFlags::WAS_REPAINT_BOUNDARY` (bit 10 — see [`src/storage/flags.rs`](src/storage/flags.rs)) with `RenderState<P>::set_was_repaint_boundary` / `was_repaint_boundary` accessors. The paint phase at [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) (`paint_subtree`) writes the bit through an atomic store on `state().flags()` rather than locking the trait object. The trait method `RenderObject::set_was_repaint_boundary` is deleted (see [`src/traits/render_object.rs`](src/traits/render_object.rs)).
 
@@ -903,7 +903,7 @@ of how the dead path was found.
 
 ### Third-party trait calls wrapped in `catch_unwind`; phases return `RenderResult<()>`
 
-**Rule:** design verdict Section 7 ("Partial failure recovery: A render object that panics inside `perform_layout` or `paint` poisons that node only. The pipeline catches via `std::panic::catch_unwind`, marks the node as `RenderError::Poisoned`, drops the in-flight frame, and lets the caller decide.") and Section 10 (the `Poisoned { render_object, phase }` error variant). Mythos Step 12.
+**Rule:** design verdict Section 7 ("Partial failure recovery: A render object that panics inside `perform_layout` or `paint` poisons that node only. The pipeline catches via `std::panic::catch_unwind`, marks the node as `RenderError::Poisoned`, drops the in-flight frame, and lets the caller decide.") and Section 10 (the `Poisoned { render_object, phase }` error variant).
 
 **Choice:** every third-party trait call site has its call wrapped in `std::panic::catch_unwind(AssertUnwindSafe(|| ...))`. A panicking render object surfaces as `RenderError::Poisoned { render_object, phase }` rather than aborting the process. Specifically:
 
@@ -925,7 +925,7 @@ FLUI diverges on both arms, in the stricter direction: a panic in `paint_effects
 
 - **Process-wide `panic::set_hook`** -- rejected, leaks pipeline concerns into global process state and can't differentiate phase-of-origin.
 - **Cache `debug_name` on `RenderEntry<P>` at insertion** -- considered. Would avoid one vtable dispatch per error case. Not adopted because the dispatch happens only on the failure path (cold by definition), and the cache adds a `&'static str` field that pollutes every `RenderEntry<P>` in the common case.
-- **Return `(PipelineOwner<Idle>, RenderError)` tuple on error** (shape (a) in the Mythos spec) -- rejected, awkward to compose; pattern-matching on `(_, Result<_>)` is cleaner than splitting the success and error tuples.
+- **Return `(PipelineOwner<Idle>, RenderError)` tuple on error** (shape (a) in the original design) -- rejected, awkward to compose; pattern-matching on `(_, Result<_>)` is cleaner than splitting the success and error tuples.
 
 **Accepted trade-off:** `AssertUnwindSafe` is documented inline at each wrapper. The render object's internal state may be torn after a panic; the pipeline treats the node as poisoned and lets the caller drop or replace it. Process-level safety is preserved; the render tree itself is not corrupted.
 
@@ -959,6 +959,84 @@ Strategy clause "Behavior as floor, everything else designed for Rust" treats Fl
 
 ---
 
+### Secondary child queries read parent data through an erased per-child accessor
+
+**Rule.** The three query contexts — `BoxDryLayoutCtx`, `BoxIntrinsicsCtx`,
+`BoxDryBaselineCtx` — expose `child_parent_data(i) -> Option<&dyn ParentData>` and
+`child_parent_data_as::<T>(i)`, backed by a per-node slice the query driver fills from each
+child's own parent data (with harness seeds overlaid in test builds). `perform_layout` keeps
+its typed `BoxLayoutContext<Arity, PD>::child_parent_data`. Multi-child containers keep sizing
+math in one ctx-free routine that takes a measuring closure (`RenderFlex::compute_sizes`), called
+by both `perform_layout` (with `layout_child`) and `compute_dry_layout` (with
+`child_dry_layout`), so dry and committed sizes cannot drift apart.
+
+**Alternatives.** Making the query contexts generic over `PD` would change ~120 `compute_*`
+override signatures and still downcast inside the driver, which holds `dyn` nodes.
+
+**Trade-off.** Typed parent data on the hot path, erased in the query contexts (touched only by
+multi-child containers); the container downcasts to the type it declared itself.
+
+### Dry contexts query child intrinsics through the safe take-out walk
+
+**Rule.** `BoxDryLayoutCtx` and `BoxDryBaselineCtx` expose the same `child_intrinsic` /
+`child_{min,max}_intrinsic_{width,height}` accessors as the layout context. Each context
+dispatches one `#[non_exhaustive]` request enum per context (`DryLayoutChildRequest`:
+`DryLayout`, `Intrinsic`, `Baseline`; `DryBaselineChildRequest`), because a context on the
+borrowed slot map can hold only one `&mut`-capturing child callback. The dry driver answers
+`Intrinsic` with the same take-out `intrinsic_query` it already uses (the queried child is a
+different node from the one taken out), sharing the per-node intrinsic cache with the layout
+path. `RenderIntrinsicWidth`/`RenderIntrinsicHeight` build child constraints in one helper
+parameterized by an intrinsic closure and call it from all three passes, matching
+`proxy_box.dart`'s `_childConstraints`: IntrinsicWidth forces width to the intrinsic whenever
+width is not tight, queries with the raw cross-axis maximum, and steps before clamping.
+
+**Why.** Approximating the intrinsic with a loose dry layout gives the wrong answer for exactly
+the width-filling children these proxies exist for, breaking dry == committed.
+
+**Alternatives.** One shared request enum for all contexts (dead arms per context); reaching
+into the borrowed-arena intrinsic path from the dry driver (imports its aliasing obligations
+for nothing).
+
+### Containers record their reported baseline during layout
+
+**Rule.** `compute_distance_to_actual_baseline(&self, baseline)` takes no child channel. A
+container computes its own baseline while positioning children in `perform_layout` — using the
+layout context's `child_distance_to_actual_baseline` and the offsets it just assigned — and
+serves it from a field. `RenderFlex` records both baseline kinds (`reported_baselines`):
+horizontal reports the highest child baseline plus its cross offset, vertical the first child
+with a baseline plus its main offset (Flutter's `defaultComputeDistanceToHighestActualBaseline`
+/ `…FirstActualBaseline`). Nesting composes because an inner container's recorded value is what
+the outer one reads. Dry baseline shares the positioning math through `compute_child_offsets`
+rather than duplicating it as Flutter does.
+
+**Divergence.** Flutter computes the baseline lazily on first query and memoizes it; FLUI pays
+an eager read of each child's baseline per layout. The observable value is identical.
+
+**Alternatives.** A child-query channel on `actual_baseline_raw` would change a widely
+implemented signature and need the driver to reconstruct child offsets that containers keep in
+their own fields; a lazy memoized port would import `&mut` aliasing into a read that is `&self`
+today.
+
+### A follower hit-tests at its last composited position
+
+**Rule.** `PipelineOwner` keeps `last_follower_offsets: FxHashMap<RenderId, Offset>` and
+`last_hidden_follower_ids`, per-frame byproducts like the retained layer tree and link registry.
+During paint the fragment composer records the `RenderId → LayerId` pair of each
+`Layer::Follower` it pushes. After paint, each follower's offset is resolved with the same
+`flui_layer::resolve_follower_offset` the GPU path uses; a follower that resolves to `None`
+(unlinked, `show_when_unlinked == false`) is recorded as hidden. The hit-test walk, gated on the
+tables being non-empty, pushes `Matrix4::translation(r)` on the result's transform stack and
+shifts the position by `-r` for a follower's subtree, and skips a hidden follower's subtree.
+`RenderFollowerLayer::hit_test` stays a plain structural forward; `hit_test_transform`'s
+signature is unchanged.
+
+**Divergence.** None in behavior: this is Flutter's `FollowerLayer.getLastTransform()` —
+hit-testing uses the last completed composite, with the same one-frame staleness. The offset is
+computed twice (engine for pixels, rendering for hit-test) because a single computation would
+need the downstream engine to write into the upstream owner; the logic lives once in
+`resolve_follower_offset`. Translation only, like the render path.
+
+
 ## Thread safety
 
 `flui-rendering` runs in the render pipeline; per strategy clause "sync hot path", the hot frame loop is single-threaded. Sync primitives in this crate are limited to shared-infrastructure objects and lock-free atomics on per-node state. No primitive sits inside `perform_layout` / `paint` on a per-node basis.
@@ -969,7 +1047,7 @@ Strategy clause "Behavior as floor, everything else designed for Rust" treats Fl
 | `RenderState<P>::flags` (`src/storage/state.rs`) | `AtomicRenderFlags` (wrapping `AtomicU32`) | Lock-free atomics | Bit-level dirty flags + boundary bits. `Acquire/Release` ordering. The new `WAS_REPAINT_BOUNDARY` bit lives here. |
 | `RenderState<P>::geometry`, `constraints` (`src/storage/state.rs`) | `Option<ProtocolGeometry<P>>` / `Option<ProtocolConstraints<P>>` | Mutable via `&mut self` | Set and cleared via `&mut RenderState` during layout; no lock required. |
 | `RenderState<P>::offset` (`src/storage/state.rs`) | `AtomicOffset` | Lock-free atomics | Paint position. |
-| `RenderTree::owner` (`src/storage/tree.rs:65`) | `Option<Arc<RwLock<PipelineOwner>>>` | Shared infrastructure | Allowed per [`docs/PORT.md`](../../docs/PORT.md) lock-decision table. Off the per-node hot path. |
+| `RenderTree::owner` (`src/storage/tree.rs:65`) | `Option<Arc<RwLock<PipelineOwner>>>` | Shared infrastructure | Allowed: locks may guard shared infrastructure. Off the per-node hot path. |
 | `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](../../docs/plans/2026-03-31-core-crates-hardening.md)). |
 | `RenderTree::nodes` (`src/storage/tree.rs:59`) | `Slab<RenderNode>` | Auto-derived Send+Sync | No `unsafe impl` needed after U2. |
 | Viewport listener list (`ScrollableViewportOffset::listeners`, `src/view/viewport_offset.rs`) | `RwLock<Vec<…>>` | Listener registry | Off layout/paint hot path. `FixedViewportOffset`'s former listener list was deleted as speculative API (a fixed offset never notifies). |
@@ -985,7 +1063,7 @@ owning crate.
 
 ## Friction log
 
-Known sites that do not yet match the methodology but are not violations of the current refusal triggers. Each entry names the site and the next planned step.
+Known sites that do not yet match the intended design but do not break a current rule. Each entry names the site and the next planned step.
 
 - **`PipelineOwner` paint-loop downcasts to `Box<dyn ContainerLayer>`** ([`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)) — the paint phase uses `Box<dyn ContainerLayer>` returned from `RenderObject::paint`. This is correct for compositing-layer heterogeneity but worth periodic audit to ensure the cost stays at the boundary, not in the per-frame inner loop.
 - **`docs/PROTOCOL_ARCHITECTURE.md` predates this template** ([`docs/PROTOCOL_ARCHITECTURE.md`](docs/PROTOCOL_ARCHITECTURE.md)) — a deeper design write-up that overlaps with `## Flutter source mapping` above for protocol-specific concerns. Not migrated under this template in U3; remains as a companion document.
@@ -1021,11 +1099,11 @@ The leaf-only layout method is implemented and exercised through the test harnes
 
 The forwarding wrappers left over from the previous lock-based API are deleted; every call site clears the flags through `entry.state().clear_needs_*()` directly, so the only API surface is `RenderState`.
 
-### Criterion benchmarks for Mythos Step 14 (deferred -- needs workload generator)
+### Criterion frame benchmarks (deferred -- needs workload generator)
 
 **Files:** new `crates/flui-rendering/benches/frame_throughput.rs`.
 
-**Goal:** Mythos Step 14 prescribed profiling a 1000-node and a 10,000-node frame to verify (a) no `Arc::clone` in the paint loop, (b) cache layout of `RenderEntry<P>`, (c) regressions vs pre-refactor numbers. Today the static memory-footprint assertions landed in `pipeline/dirty.rs` and `storage/state/tests.rs` (see Mythos Step 14 commit); the runtime benchmarks did not.
+**Goal:** profile a 1000-node and a 10,000-node frame to verify (a) no `Arc::clone` in the paint loop, (b) cache layout of `RenderEntry<P>`, (c) regressions vs pre-refactor numbers. Today the static memory-footprint assertions landed in `pipeline/dirty.rs` and `storage/state/tests.rs`; the runtime benchmarks did not.
 
 **Shape:** add a `benches/frame_throughput.rs` Criterion benchmark that:
 - Builds a synthetic render tree of N nodes (parametric, e.g. N ∈ {100, 1000, 10000}).
@@ -1060,4 +1138,4 @@ These deep-dives stay as companion documents (not under the per-crate template d
 
 ## Notes
 
-- **R12 lint promotion path is symbolic for Trigger 1.** [`docs/PORT.md`](../../docs/PORT.md) reactive-lint-promotion rule names `[workspace.lints.clippy]` as the first-promotion mechanism. The clippy lint vocabulary cannot today express "field of type `RwLock<X>` where `X` is a trait object locked in method `foo`". The grep regression in [`scripts/port-check.sh`](../../scripts/port-check.sh) is the durable enforcement layer; the clippy-promotion column waits for ecosystem expressivity (`dylint` plugin or a future clippy feature).
+- **No lint yet for a lock on per-node render storage.** The clippy lint vocabulary cannot today express "field of type `RwLock<X>` where `X` is a trait object locked in method `foo`", so the rule is held by the storage shape and review; promoting it to a lint waits for ecosystem expressivity (`dylint` plugin or a future clippy feature).

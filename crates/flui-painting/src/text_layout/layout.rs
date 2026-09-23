@@ -310,7 +310,7 @@ pub(super) fn metrics_from_shaped_buffer(
 /// font database plus shaping caches, so it cannot be snapshotted or handed
 /// out by value. This handle shares one instance behind a lock (per
 /// ADR-0016) and mediates access through a scoped callback, so the lock type
-/// never appears in a public signature (SP-6). `Clone` is an `Arc` bump —
+/// never appears in a public signature. `Clone` is an `Arc` bump —
 /// clone it to give another subsystem access to the *same* faces, so a font
 /// registered through
 /// [`SharedFontSystem::register_font`]

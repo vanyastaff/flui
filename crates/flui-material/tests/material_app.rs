@@ -71,7 +71,6 @@ struct ThemeCapture {
 
 impl StatelessView for ThemeCapture {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        // PORT-CHECK-OK-LOCK: plain data: ThemeData, no Drop
         *self.captured.lock().unwrap() = Some(Theme::of(ctx));
         SizedBox::shrink()
     }
@@ -251,7 +250,7 @@ impl flui_view::StatefulView for BrightnessRoot {
 }
 
 impl flui_view::ViewState<BrightnessRoot> for BrightnessRootState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.source.rebuild.set(Some(ctx.rebuild_handle()));
     }
 
@@ -338,7 +337,6 @@ fn the_builder_hook_resolves_the_published_theme() {
     let seen: Arc<Mutex<Option<Option<ThemeData>>>> = Arc::new(Mutex::new(None));
     let seen_in_builder = Arc::clone(&seen);
     let app = MaterialApp::with_builder(move |ctx, _child| {
-        // PORT-CHECK-OK-LOCK: plain data: Option<ThemeData>, no Drop
         *seen_in_builder.lock().unwrap() = Some(Theme::maybe_of(ctx));
         SizedBox::shrink().boxed()
     })

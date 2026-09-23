@@ -1,6 +1,6 @@
 # flui-layer Architecture
 
-The per-crate record for `flui-layer` as defined by [`docs/PORT.md`](../../docs/PORT.md): the
+The per-crate record for `flui-layer`: the
 Flutter → Rust mapping, every divergence from `layer.dart` with the reason and the test that
 replaces the Flutter one, the thread-safety surface, and what is deliberately not here.
 
@@ -93,7 +93,7 @@ Replacement coverage: `link.rs` tests, including `follower_nested_under_its_lead
 Flutter keeps `leaderAnchor`/`followerAnchor` on `RenderFollowerLayer` and stores only
 `linkedOffset` on the layer. FLUI moves both anchors and the follower's own `size` onto the layer so
 `FollowerLayer::calculate_offset` (`Alignment::along_size` on both rectangles, plus
-`target_offset`) runs from the layer tree alone — the same value the GPU walk and ADR-0015's
+`target_offset`) runs from the layer tree alone — the same value the GPU walk and the follower
 hit-test side table both read. Anchors outside `[-1, 1]` are legal off-rectangle pivots.
 
 ### 5. `SceneBuilder` is secondary; the composer builds the frame through the tree

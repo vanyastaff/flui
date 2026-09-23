@@ -150,7 +150,7 @@ impl Platform for WebPlatform {
         let platform = Arc::new(*self);
 
         // No owner lane on this backend: every `OwnerPlatform::open_window`
-        // call creates directly and is always `Ready` (ADR-0039 slice 2).
+        // call creates directly and is always `Ready` (ADR-0039 §1).
         // wasm is single-threaded, so `PlatformProxy` staying inert here is
         // moot rather than a real limitation (ADR-0039 "wasm posture").
         let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::new(

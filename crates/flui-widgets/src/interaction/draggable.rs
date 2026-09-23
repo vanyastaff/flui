@@ -8,7 +8,7 @@
 //! # Deliberate divergences from the oracle (framework-surface gaps)
 //!
 //! 1. **Feedback paints, but at a displacement, not a global position.**
-//!    `Overlay::maybe_of` (ADR-0036) closed the lookup gap this divergence
+//!    `Overlay::maybe_of` (ADR-0076) closed the lookup gap this divergence
 //!    used to name in full: `DraggableState` now resolves the ancestor
 //!    `Overlay` in `did_change_dependencies` and, on drag start, inserts
 //!    `feedback` as a real `OverlayEntry` — matching the oracle's
@@ -23,13 +23,13 @@
 //!    correct only for a `Draggable` sitting at the screen origin, honestly
 //!    wrong (by exactly that origin) everywhere else, same shape of divergence
 //!    as #4. `rootOverlay`, `ignoringFeedback*`, and scaled/rotated-ancestor
-//!    correctness are separate, still-open gaps (ADR-0036's deferrals).
+//!    correctness are separate, still-open gaps (ADR-0076's deferrals).
 //! 2. **Live drag-target discovery, reached through a private origin probe.**
 //!    The oracle's `_DragAvatar.updateDrag` hit-tests at the pointer's
 //!    *current* global position on every move, independent of wherever the
 //!    drag's own pointer went down, and walks the result for
 //!    `RenderMetaData`-tagged `DragTarget`s. FLUI does the same now:
-//!    `BuildContext::hit_test_handle()` (acquired in `init_state` /
+//!    `LifecycleContext::hit_test_handle()` (acquired in `init_state` /
 //!    `did_change_dependencies`, never from a frame phase) runs a fresh test
 //!    against the live render tree, and [`DragTarget`](crate::DragTarget)
 //!    publishes an `Arc<DragTargetSlot>` as its hit-test payload for the walk
@@ -265,7 +265,7 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
 
     /// The widget shown under the pointer during a drag, painted in an
     /// `OverlayEntry` if an ancestor `Overlay` is found (`Overlay::maybe_of`,
-    /// ADR-0036) — positioned at a **displacement**, not the oracle's true
+    /// ADR-0076) — positioned at a **displacement**, not the oracle's true
     /// global anchor; see the module divergence notes.
     #[must_use]
     pub fn feedback(mut self, builder: impl Fn() -> BoxedView + 'static) -> Self {
@@ -355,15 +355,15 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// time (data, callbacks, axis, max-drags). Refreshed each `build`.
     config: Arc<Mutex<DragConfig>>,
     /// The nearest ancestor `Overlay`'s handle, if any — resolved in
-    /// `did_change_dependencies` (a lifecycle hook, per port-check trigger
-    /// #22 and ADR-0018's pattern), not in `build` or from inside the
+    /// `did_change_dependencies` (a lifecycle hook, per
+    /// ADR-0018's pattern), not in `build` or from inside the
     /// `on_start` gesture callback, neither of which holds a `BuildContext`.
     /// `Arc<Mutex<_>>` so the `on_start` closure captured once in
     /// `init_state` always reads the latest resolution.
     overlay: Arc<Mutex<Option<OverlayHandle>>>,
     /// The fresh-hit-test capability, resolved in `init_state` /
     /// `did_change_dependencies` — a lifecycle hook, never `build` or a
-    /// gesture callback (port-check trigger #22), because a hit test taken
+    /// gesture callback, because a hit test taken
     /// mid-frame reads a tree that phase is still mutating.
     ///
     /// Owner-local (`Rc<RefCell<_>>`, not `Arc<Mutex<_>>`): `HitTestHandle`
@@ -376,8 +376,8 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// published by the [`DragOrigin`] mounted under the `Listener`.
     listener_node: Rc<Cell<Option<flui_foundation::RenderId>>>,
     /// The render tree, for converting those local positions to the root's
-    /// space. A lifecycle-acquired capability like the two above (port-check
-    /// trigger #22): only ever read from a gesture callback, never from a
+    /// space. A lifecycle-acquired capability like the two above:
+    /// only ever read from a gesture callback, never from a
     /// frame phase.
     pipeline: Rc<RefCell<Option<flui_rendering::pipeline::PipelineCell>>>,
     /// The currently-mounted feedback layer, if any is showing. Owner-local
@@ -519,8 +519,8 @@ struct FeedbackSignal {
     /// [`FeedbackAnchorState::build`].
     offset: Arc<Mutex<Offset<Pixels>>>,
     /// The mounted [`FeedbackAnchor`] element's own rebuild capability,
-    /// published by [`FeedbackAnchorState::init_state`] (never from `build` —
-    /// port-check trigger #22) so [`DragSession::update`] can reposition it
+    /// published by [`FeedbackAnchorState::init_state`] (never from `build`)
+    /// so [`DragSession::update`] can reposition it
     /// without reaching into any `Rc`-backed type.
     rebuild: Arc<Mutex<Option<RebuildHandle>>>,
 }
@@ -545,7 +545,6 @@ impl FeedbackSignal {
     }
 
     fn set_offset(&self, offset: Offset<Pixels>) {
-        // PORT-CHECK-OK-LOCK: plain data: Offset is Copy
         *self.offset.lock() = offset;
     }
 
@@ -608,7 +607,7 @@ struct FeedbackAnchorState {
 }
 
 impl ViewState<FeedbackAnchor> for FeedbackAnchorState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.signal.publish_rebuild(ctx.rebuild_handle());
     }
 
@@ -763,7 +762,7 @@ struct DragOriginState {
 }
 
 impl ViewState<DragOrigin> for DragOriginState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.node.set(ctx.find_render_object());
     }
 
@@ -812,7 +811,7 @@ fn drag_targets_on(
     path.iter()
         .filter_map(|entry| {
             let payload = Arc::clone(entry.metadata.as_ref()?);
-            let slot = payload.downcast::<DragTargetSlot>().ok()?; // PORT-CHECK-OK-DOWNCAST: the hit-test payload channel is `dyn Any` by construction (`HitTestEntry::metadata`); this is the `metaData is _DragTargetState` test of the oracle's `_getDragTargets`.
+            let slot = payload.downcast::<DragTargetSlot>().ok()?; // the hit-test payload channel is `dyn Any` by construction (`HitTestEntry::metadata`); this is the `metaData is _DragTargetState` test of the oracle's `_getDragTargets`.
             slot.accepts_data_type(data).then(|| EnteredTarget {
                 at: DragPosition {
                     global,
@@ -1220,7 +1219,7 @@ impl<T: Clone + Send + Sync + 'static> StatefulView for Draggable<T> {
 }
 
 impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableState<T> {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let arena = GestureArenaScope::of(ctx);
         let rebuild = ctx.rebuild_handle();
 
@@ -1254,7 +1253,8 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             }
             active_count.fetch_add(1, Ordering::AcqRel);
             rebuild.schedule(flui_view::RebuildReason::StateChange);
-            if let Some(callback) = config.lock().on_drag_started.clone() {
+            let callback = config.lock().on_drag_started.clone();
+            if let Some(callback) = callback {
                 callback();
             }
 
@@ -1303,7 +1303,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
                 active: RefCell::new(None),
                 offset: Mutex::new(Offset::ZERO),
                 feedback,
-            }) as Box<dyn MultiDragHandle>) // PORT-CHECK-OK-DYN: see flui-interaction's MultiDragStartCallback — the per-pointer handle `MultiDragGestureRecognizer::with_on_start` requires.
+            }) as Box<dyn MultiDragHandle>) // see flui-interaction's MultiDragStartCallback — the per-pointer handle `MultiDragGestureRecognizer::with_on_start` requires.
         });
 
         self.recognizer = Some(
@@ -1315,12 +1315,12 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     /// nearest ancestor `Overlay`, the fresh-hit-test capability, and the
     /// render tree.
     ///
-    /// A lifecycle hook, not `build` (port-check trigger #22) and not the
+    /// A lifecycle hook, not `build` and not the
     /// `on_start` gesture callback above, neither of which holds a
     /// `BuildContext`. Re-resolved on every dependency change, not just once:
-    /// `Overlay::maybe_of` depends (ADR-0036), so a *different* enclosing
+    /// `Overlay::maybe_of` depends (ADR-0076), so a *different* enclosing
     /// overlay later replacing this one is exactly what re-fires this hook.
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = std::mem::replace(&mut *self.overlay.lock(), Overlay::maybe_of(ctx));
         let _prev = std::mem::replace(&mut *self.hit_test.borrow_mut(), ctx.hit_test_handle());
         let _prev = std::mem::replace(&mut *self.pipeline.borrow_mut(), ctx.pipeline_owner());
@@ -1491,7 +1491,7 @@ mod tests {
     }
 
     impl ViewState<RebuildHandleCapture> for RebuildHandleCaptureState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             let _prev = self.captured.borrow_mut().replace(ctx.rebuild_handle());
         }
 

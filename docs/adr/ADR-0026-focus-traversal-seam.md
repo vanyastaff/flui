@@ -1,130 +1,119 @@
-# ADR-0026 — Focus traversal: groups, edge behavior, and Tab intents
+# ADR-0026: Focus widgets and focus traversal
 
-- **Status:** **Accepted — U-A + U-C landed 2026-07-11 (Tab works end to end); U-B gated on §3.4's scope-landing decision.** The first design (api-designer agent, 2026-07-11) **did not survive** the harsh-critic pass: two blockers, five majors, and a structural finding that the chosen primitive was inverted. This ADR records the reworked shape with the critique's requirements as binding constraints. U-A is implementable; U-B/U-C carry open decisions flagged for their deciders.
+- **Status:** Accepted
 - **Date:** 2026-07-11
-- **Deciders:** chief-architect (the ALT-1 primitive inversion, §3.1; scope-landing semantics, §3.4); api-design-lead (§3.6's `Action::invoke` signature — a deliberate breaking change while consumers are few, Prime Directive #2); qa-lead (§5's pinning tests, incl. the `allows_descendant_focus` guard).
-- **Relates to:** ADR-0022 (Focus widgets; §4 named this gap; the geometry fix that unblocked it), ADR-0023 (Shortcuts/Actions/Intent; O-1's resolve-at-own-position divergence is load-bearing here).
+- **Absorbs:** ADR-0026
 
----
+## Context
 
-## 1. Context (verified)
+`flui-interaction` owns the focus node layer: `FocusManager` (primary focus, active scope,
+key handlers), `FocusNode` (flags, key handler, request/unfocus) and `FocusScopeNode`
+(focused-child history, autofocus, a pluggable `FocusTraversalPolicy`). Two things sit on top
+of it: widgets that attach a node to an element and parent it correctly, and a traversal model
+that can express edge behavior and Tab. Without the widgets, `EditableText` attached to the
+root scope and `TextField`'s tap-to-focus had to guess which node was tapped. Without the
+traversal model, wraparound was baked into the policy, "stop at the edge" was inexpressible,
+and nothing bound Tab.
 
-Three gaps: `FocusScopeNode` holds exactly one policy — no subtree can opt into a different order without becoming a scope (`focus_scope.rs:756`); wraparound is baked into `ReadingOrderPolicy` via modulo (`:973`, `:980-984`) — "stop at the edge" and "leave the scope" are inexpressible; and **nothing binds Tab** — `FocusManager::focus_next`/`focus_previous` exist, route-scoped, with zero input-path callers.
+Reference: Flutter `widgets/focus_scope.dart` (`Focus`, `FocusScope`, `_FocusState`) and
+`widgets/focus_traversal.dart` (`FocusTraversalGroup`, `_sortAllDescendants`, `_moveFocus`,
+`TraversalEdgeBehavior`, `NextFocusAction`).
 
-## 2. Reference
+## Decision
 
-`.flutter/packages/flutter/lib/src/widgets/focus_traversal.dart`, master `3.33.0-0.0.pre-6280-g88e87cd963f`: `FocusTraversalGroup` is `Focus(focusNode: _FocusTraversalGroupNode(policy), canRequestFocus: false, skipTraversal: true, …)` — a **plain node subclass, not a scope** (`:2211-2219`, `:2254-2264`); lookup climbs the node tree (`:2115-2126`). Group-aware sort: `_findGroups` walks raw children stopping at nested scopes, **force-includes the current node even when non-traversable** (`:487-489`), buckets by nearest group node (`:461-482`); `_sortAllDescendants` sorts each bucket with its own policy and flattens groups as contiguous units, stripping group nodes at the end (`:503-573`). **The sorted list is the primitive**: `_moveFocus` works entirely off `sortedNodes` — membership assert (`:611`), positional next/previous, `findFirstFocus` fallback when nothing is focused (`:594-608`), edge behavior applied positionally (`:590-666`), ParentScope = `focusedChild.unfocus(); parentScope.nextFocus()` **then verify focus actually changed** (`:604-630`). `TraversalEdgeBehavior`: closedLoop / leaveFlutterView / parentScope (falls back to closedLoop with no parent, `:148-149`) / stop (`:113-156`). Tab: `WidgetsApp` binds `Tab → NextFocusIntent` (`app.dart:1275-1276`) with `NextFocusAction` whose **key result is `invoke`'s return** — `nextFocus()`'s bool (`focus_traversal.dart:2340-2348`).
+### 1. `Focus` and `FocusScope` widgets
 
-## 3. The reworked Rust shape
+- `Focus` (`flui-widgets`, `interaction/focus.rs`) is a stateful view owning an
+  `Rc<FocusNode>` or accepting an external one (`Focus::with_external_node`). `FocusScope` is
+  the same over `Rc<FocusScopeNode>`; `FocusScope::with_external_node` is what `ModalRoute`
+  uses for its per-route scope.
+- A private `FocusParentProvider` inherited view publishes the nearest focus **node**. Widget
+  nodes parent to that node rather than being flattened to the nearest scope: key bubbling
+  (ADR-0023) makes the node tree's shape observable, so a non-scope `Focus` above a field must
+  be the field's ancestor to see the keys it ignores.
+- Lifecycle: `init_state` resolves the parent, attaches, applies autofocus once and registers a
+  focus listener; `did_change_dependencies` reparents through `FocusScopeNode::adopt_node`,
+  which keeps primary focus across the move; `dispose` removes the listener and detaches (an
+  external node is left to its owner). The manager comes from the lifecycle context
+  (ADR-0078), one per realm.
+- The node layer gained two primitives for this: `remove_listener(ListenerId)` and
+  `adopt_node` (reparent without dropping focus).
+- `ModalRoute` creates a scope, wraps its page in `FocusScope::with_external_node`, makes the
+  scope the manager's active scope when the route becomes current, and on reveal
+  (`did_pop_next`) restores the scope's remembered focused child, or unfocuses a field left on
+  a covered route.
+- Traversal geometry is lazy: each `Focus` anchors its child and installs a `RectProvider` that
+  measures the anchor when traversal asks, cleared on dispose.
 
-### 3.1 The primitive inversion (ALT-1 — adopted)
+### 2. The sorted list is the traversal primitive
 
-The first design kept `find_next` as the trait's oracle and bolted `sort_descendants` beside it. The critique showed every blocker flowed from that: an O(n²) default, `None` ambiguously meaning both *true edge* and *cursor not in candidates*, and cursor-membership holes. **Adopted instead, Flutter's actual architecture:** `sort_descendants(&[Arc<FocusNode>]) -> Vec<Arc<FocusNode>>` becomes the trait's required method; `sorted_traversal_order(scope, cursor)` (group-aware bucketing, **cursor force-included** even when `skip_traversal`/disabled, `:487-489`) is the only traversal primitive. Next/previous are positional lookups into that list; *edge* is "cursor is last/first", a fact the mutating layer reads; the old `find_next`/`find_previous` leave the trait's required surface. The trait **shrinks**.
+`FocusTraversalPolicy` has one required method, `sort_descendants`.
+`FocusScopeNode::sorted_traversal_order(cursor)`, with the cursor force-included even when it
+is `skip_traversal` or disabled, is the only traversal primitive. Next and previous are
+positional lookups; "at the edge" means the cursor is last or first. One pure resolver,
+`resolve_traversal(current, forward) -> ResolvedStep`, serves `focus_next`/`focus_previous`,
+the scope-local variants and `set_first_focus`, so there is one edge switch. With nothing
+focused, Tab falls back to the policy-ordered first or last node.
 
-This dissolves outright: the edge-vs-missing-cursor ambiguity (critique #2 — a `skip_traversal` cursor no longer jumps to first-of-scope on Tab), the unspecified O(n²) default with its non-termination against wrapping impls (#6a), and the oracle/list duality.
+### 3. Edge behavior
 
-### 3.2 The group node (survived review)
+`TraversalEdgeBehavior { ClosedLoop (default), Stop, ParentScope, LeaveFlutterView }` lives on
+`FocusScopeNode`. `ParentScope` answers `RetryInParent`, and the caller re-resolves in the
+enclosing scope with the same cursor. That works because FLUI's candidate walk crosses scope
+boundaries, so the step lands on the first node outside the inner scope. `LeaveFlutterView`
+unfocuses and reports the key unconsumed; the embedder handoff has no channel yet.
 
-A **plain, non-scope** `FocusNode` carrying `Option<Arc<dyn FocusTraversalPolicy>>`, resolved by climbing the node ancestry — never a `FocusScopeNode`: a group masquerading as a scope corrupts `Focus::autofocus`'s gate (`interaction/focus.rs`'s `autofocus`) and ADR-0022 U3's route-restore, both keyed off `enclosing_scope()` treating any `as_scope()` node as authoritative. `Arc<dyn FocusTraversalPolicy>` is already trigger-9-sanctioned (`port-check.sh:1145`). Widget: `FocusTraversalGroup` = `Focus(can_request_focus(false), skip_traversal(true)).traversal_policy(…)`.
+### 4. Tab is an intent, and `Action::invoke` reports an outcome
 
-**Fragile invariant, pinned (#8):** a group's `can_request_focus(false)` does not blind its descendants *only* because `allows_descendant_focus` consults `own_can_request_focus` solely for scopes (`focus_scope.rs:636-638`). A well-meaning "fix" to that clause kills every group's subtree — a pinning test (group with `can_request_focus(false) + skip_traversal(true)`; descendants stay focusable and traversable) is part of U-B's definition of done.
+`NextFocusIntent`/`PreviousFocusIntent` are handled by `NextFocusAction`/`PreviousFocusAction`.
+`Action::invoke` returns `ActionOutcome` (`Performed`/`NotPerformed`), and `Action` has a
+defaulted `to_key_event_result(intent, outcome)`, so a Tab that moves nothing leaves the key
+unconsumed for an outer handler. `Actions` must wrap `Shortcuts`, because `Shortcuts` resolves
+its action chain from its own position (ADR-0023); the reverse nesting silently dead-keys Tab.
+`DefaultFocusTraversal` packages the Tab/Shift+Tab bindings in that order, and `FocusRoot`
+installs it for every standard presentation (Flutter's `WidgetsApp` does the same at the app
+root); custom embedders can install it themselves.
 
-**Bucketing eligibility is written out, not spec-by-reference (#6c):** the walk is over raw children (NOT `collect_focusable_nodes` — group nodes are `skip_traversal` and would be filtered before bucketing), stops at nested scopes while adding the scope node itself, force-adds group nodes to their parent's bucket for unit-placement, and strips them from the final list (`:461-482`, `:544-546`). Mid-walk `set_traversal_group_policy` may yield one mixed-policy hop — named, accepted (#9).
+## Flutter divergences
 
-### 3.3 Edge behavior
+- **Reparent point.** Flutter reparents on every `build`. FLUI reparents in
+  `did_change_dependencies`, the only time the parent can change without a remount. The
+  difference is only observable through `parentNode`, which is not ported.
+- **Focus changes apply synchronously.** Flutter batches them to the end of the frame.
+- **Nested scopes traverse flat.** Flutter treats each nested scope as a unit and implements
+  `ParentScope` as unfocus, retry, verify-changed. FLUI's walk crosses scopes, so a route's
+  subtree traverses flat and `ParentScope` needs no rule for landing on a scope node. Observable
+  only when a route nests scopes and expects Tab to enter and leave them as blocks; nothing in
+  the tree does.
+- **`Action::invoke` changed signature** instead of gaining a second defaulted method: two
+  methods that must agree is a permanent hazard, and the break cost two in-repo impls.
 
-`TraversalEdgeBehavior { ClosedLoop (default), LeaveFlutterView, ParentScope, Stop }` on `FocusScopeNode`. **One** shared resolution fn (#7) both `FocusScopeNode` and `FocusManager` call. `ParentScope` **is implemented** (2026-07-11): the edge answers `RetryInParent`, and the caller re-resolves in the enclosing scope **keeping the same cursor**. That works because the candidate walk crosses scope boundaries — the enclosing scope's order already contains the inner scope's nodes — so the step lands on the first node *outside* the inner scope, which is what leaving means. No landing on a scope's invisible backing node, and no geometry to invent for it: the scope-landing question the design flagged as a blocker **dissolves**, it does not need answering. (Flutter reaches the same observable behavior differently — unfocus, retry, verify-changed — because its walk stops at scopes.) — the first design's "retry with this scope's id as cursor" would sort a zero-rect backing node at (0,0) (`FocusScope` installs no rect provider, `interaction/focus.rs`'s `FocusScope`) and land arbitrarily. `LeaveFlutterView` = unfocus + report-unconsumed; the embedder half has no channel yet (named).
+## Not implemented
 
-### 3.4 Scope-landing semantics — **dissolved, not decided** (2026-07-11)
+- `FocusTraversalGroup`. When it lands it is a plain non-scope node carrying a policy, found by
+  climbing the node ancestry. It must not be a scope, which would corrupt autofocus and route
+  restore. Its `can_request_focus(false)` must not hide its descendants; that holds only
+  because `allows_descendant_focus` reads a node's own flag for scopes alone, so the group needs
+  a test pinning it.
+- Directional traversal, highlight modes, `includeSemantics`, legacy `onKey`.
+- `ModalRoute` defaulting to `ParentScope`.
+- Flutter's `deactivate`-parks-on-root. Focus surviving a `GlobalKey` move is not claimed until
+  a test pins it.
 
-The blocker asked: when traversal reaches a nested scope node, does focus land on it (an invisible zero-rect node — a keyboard black hole) or does the walk descend? The answer is *neither*: FLUI's candidate walk already **crosses** scope boundaries, so a nested scope's members are ordinary candidates in the enclosing order and the scope's backing node never needs to be a landing spot. `ParentScope` is therefore expressible today — re-resolve in the parent with the same cursor — and shipped. A future `FocusTraversalGroup` needs the group node in the *bucketing* walk, which is a different question from landing, and it never focuses the group node either (Flutter strips group nodes from the sorted list).
+## Consequences
 
-**What that costs, stated:** FLUI traverses a route's whole subtree flat, where Flutter treats each nested scope as a unit. Observable only when a route nests scopes and expects Tab to enter/exit them as blocks. No in-tree consumer does. Recorded as the divergence it is.
+- The node layer grew two small primitives; everything else is widget plumbing over the same
+  inherited-provider pattern `GestureArenaScope` and `HeroScope` use.
+- One resolver over one sorted list means edge behavior, first Tab and `set_first_focus` cannot
+  drift apart.
+- Losing focus on reparent is only observable when a focused widget moves between scopes;
+  `adopt_node` has a node-layer test that fails for the naive detach-then-attach.
 
-### 3.4a The original open decision (superseded)
+## Alternatives rejected
 
-Two verified facts collide: the group-aware walk adds nested **scope nodes** as candidates (`:443-446`), and FLUI's `request_focus(scope_id)` performs **no forwarding** into the scope's focused child (`focus.rs:261-290`) — Tab would land on an invisible zero-rect backing node, a keyboard black hole. Also: today's `collect_focusable_nodes` **crosses** scope boundaries, so a stop-at-scopes walk *removes reachability that exists now*. The ADR requires one of: (a) port Flutter's scope-forwarding (focusing a scope node redirects to its focused child / policy-first descendant) — the loyal shape, a node-layer change with its own tests; or (b) exclude scope nodes from candidates and define explicit descent. **Recommendation: (a).** U-B does not start until this is decided.
-
-### 3.5 First Tab must work (#5)
-
-`FocusManager::focus_next` with `primary_focus == None` currently returns `false` — Tab in a fresh app would no-op. Flutter falls back to `findFirstFocus` (`:594-608`). FLUI: the shared resolution fn falls back to policy-ordered first focus; `set_first_focus`'s attach-order bug (it takes `collect_focusable_nodes().first()`, a separate pre-existing divergence) is fixed by the same `sorted_traversal_order` call — in the same unit, not as a drive-by.
-
-### 3.6 Tab intents (U-C), and the `Action` signature (api-design-lead)
-
-`NextFocusIntent`/`PreviousFocusIntent` + actions. **The one user-facing snippet, corrected (#1):** `Actions` must be the **outer** widget — FLUI's `Shortcuts` resolves its chain from its own position (ADR-0023 O-1), so `Shortcuts::new(Actions::new(…))` silently dead-keys Tab with zero diagnostics:
-
-```rust
-Actions::new(
-    Shortcuts::new(app_root)
-        .shortcut(SingleActivator::named(NamedKey::Tab), NextFocusIntent)
-        .shortcut(SingleActivator::named(NamedKey::Tab).shift(), PreviousFocusIntent),
-)
-.action(NextFocusAction)
-.action(PreviousFocusAction)
-```
-
-The nesting constraint is part of the public docs. No auto-install: FLUI has no `WidgetsApp`-equivalent root to hang it on (named; revisit with one).
-
-`NextFocusAction`'s key result is whether focus moved — `invoke`'s return in Flutter. Choice for api-design-lead, **recommendation: the breaking change** (`fn invoke(&self, intent: &T) -> ActionOutcome`, unit-defaultable): two in-repo impls exist, Prime Directive #2 says break now before consumers ossify. The additive alternative (a defaulted `invoke_for_key_result`) buys a permanent two-methods-that-must-agree hazard (an override that skips `invoke` silently diverges the `maybe_invoke` and key paths) — if chosen anyway, that hazard gets a pinning test.
-
-## 3a. U-A as landed (2026-07-11)
-
-The primitive is inverted: `FocusTraversalPolicy` shrank to one required
-method, `sort_descendants` (the trait no longer carries `find_next`/
-`find_previous`/`find_first`/`find_last`), and `FocusScopeNode::
-sorted_traversal_order(cursor)` — cursor **force-included**, per
-`focus_traversal.dart:487-489` — is the only traversal primitive.
-`resolve_traversal(current, forward) -> ResolvedStep { Focus | Unfocus | None }`
-is the **one** shared step resolver every caller uses (the manager's
-`focus_next`/`focus_previous`, the scope's in-scope variants, and
-`set_first_focus`), so there is one edge switch, not four. It is pure — the
-caller performs the intent against whichever manager it owns, which is also
-what lets instance-scoped test managers stop touching the singleton.
-
-Landed with it: `TraversalEdgeBehavior` (`ClosedLoop` default, `Stop`,
-`LeaveFlutterView` = unfocus-and-report-unconsumed; `ParentScope` interim-maps
-to Flutter's own no-parent `ClosedLoop` fallback until U-B decides scope
-landing); the first-Tab fallback (nothing focused → policy-ordered first/last,
-`:594-608`); and `set_first_focus`'s attach-order divergence fixed by the same
-resolver. Red-checked: dropping the force-include kills the `skip_traversal`
-cursor step; restoring the nothing-focused guard no-ops the first Tab; ignoring
-the edge behavior makes `Stop` wrap. The three-state result closes the
-critique's blocker #2 — a foreign cursor now resolves to `None` without ever
-consulting the edge behavior.
-
-## 3b. U-C as landed (2026-07-11) — and the signature call
-
-**ALT-2 taken:** `Action::invoke` now returns [`ActionOutcome`]
-(`Performed`/`NotPerformed`) rather than growing a second, defaulted
-`invoke_for_key_result` beside it. The additive shape was a permanent
-two-methods-that-must-agree hazard (an override skipping `invoke` silently
-diverges the key and `maybe_invoke` paths); the break cost one afternoon and
-two in-repo impls, which is precisely the trade Prime Directive #2 names —
-breaking changes are cheap today and ossify once consumers exist. `Action`
-gains a defaulted `to_key_event_result(intent, outcome)` (Flutter's
-`actions.dart:312-314`), and `ErasedAction::invoke_for_key` is **one** call, so
-the key result cannot contradict what actually ran.
-
-`NextFocusIntent`/`PreviousFocusIntent` + `NextFocusAction`/`PreviousFocusAction`
-report `Handled` iff focus actually moved (`focus_traversal.dart:2340-2348`) —
-a Tab with nowhere to go (a `Stop` edge) runs, moves nothing, and leaves the
-key **unconsumed** for an outer handler. Red-checked both ways: reverting
-`to_key_event_result` to the trait default makes the dead Tab swallow the key;
-and writing the Flutter-habitual `Shortcuts(child: Actions(...))` nesting
-proves the review's blocker #1 — the chain resolves to `None` and Tab is dead
-with zero diagnostics. The correct nesting (§3.6) is in the public docs and the
-test's doc comment.
-
-## 4. Units (reordered per the critique's ALT-3)
-
-- **U-A** (implementable now): ALT-1 primitive — `sort_descendants` on the trait, `sorted_traversal_order` with force-included cursor + the §3.2 eligibility table, positional next/previous, `set_first_focus` fix, first-Tab fallback, the shared edge-resolution fn with `ClosedLoop`/`Stop`. `ClosedLoop` default keeps `tab_traversal_follows_geometry_not_attach_order` green — noting honestly that that test cannot catch the #2 ambiguity (its cursor is never `skip_traversal`); a dedicated skip-traversal-cursor test joins U-A.
-- **U-B** (gated on §3.4's decision): the group node + `FocusTraversalGroup` widget + `ParentScope` (needs scope-landing + verify-changed) + the #8 pinning test.
-- **U-C**: intents/actions per §3.6, gated on the api-design-lead signature call.
-
-## 5. Deliberately absent (named)
-
-Directional traversal (`focusInDirection` unported — `directionalTraversalEdgeBehavior` is meaningless without it); `Navigator.routeTraversalEdgeBehavior` wiring (`ModalRoute`'s scope should default `ParentScope` per `navigator.dart:1277` — a route-layer follow-up on `set_traversal_edge_behavior`); `leaveFlutterView`'s embedder handoff; `FocusTraversalGroup::of`/`maybe_of` (no consumer; matches ADR-0022's `Focus::of` deferral); multi-level nested-group oracle porting (depth-1 verified at U-B; depth-N when a widget nests groups); auto-installed Tab bindings (no root-app widget).
-
-## 6. What the review changed (for the record)
-
-The critique's verdict was *doesn't survive as specced*. Adopted wholesale: ALT-1 (primitive inversion), ALT-3 (unit reordering), the corrected snippet + nesting constraint, Flutter's parent-retry mechanism, the first-Tab fallback, the written-out eligibility table, the shared edge fn, and the #8/#2 pinning tests. Sent to its decider: ALT-2 (breaking `invoke` signature, recommended) vs the fourth-erased-closure shape. The one part that survived intact — the plain-node group with ancestry-resolved policy — is also the one part the first design got structurally right; its rejection of group-as-scope (autofocus gate + route-restore corruption) held under attack.
+- **`find_next`/`find_previous` as the policy's oracle**, with a sort beside it: an O(n²)
+  default, `None` meaning both "edge" and "cursor not a candidate", and two sources of order.
+- **A group as a `FocusScopeNode`**: breaks autofocus and route restore, which both key off
+  `enclosing_scope()`.
+- **Flattening widget nodes to the nearest scope**: key bubbling could no longer reach a
+  non-scope `Focus` above a field.

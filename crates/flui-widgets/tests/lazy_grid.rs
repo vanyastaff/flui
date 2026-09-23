@@ -461,7 +461,7 @@ impl StatefulView for KeyedTile {
 }
 
 impl ViewState<KeyedTile> for KeyedTileState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.log.lock().push(self.born_as);
     }
     fn build(&self, _view: &KeyedTile, _ctx: &dyn BuildContext) -> impl IntoView {

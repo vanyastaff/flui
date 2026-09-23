@@ -734,8 +734,8 @@ impl WidgetsBinding {
 
     /// Get the [`PipelineCell`] if set.
     ///
-    /// No SP-6 marker needed: `PipelineCell` is a lock-free, closure-scoped
-    /// handle, not a lock guard.
+    /// `PipelineCell` is a lock-free, closure-scoped handle, not a lock
+    /// guard.
     pub fn pipeline_owner(&self) -> Option<PipelineCell> {
         self.inner.read().pipeline_owner.clone()
     }

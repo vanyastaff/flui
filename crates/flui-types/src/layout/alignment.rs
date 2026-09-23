@@ -47,7 +47,6 @@ impl MainAxisSize {
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MainAxisAlignment {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Place children at the start of the main axis (the default).
     ///
     /// For Row: left side (in LTR)
@@ -159,7 +158,6 @@ impl MainAxisAlignment {
 #[derive(Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CrossAxisAlignment {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Place children at the start of the cross axis (the default).
     ///
     /// For Row: top side

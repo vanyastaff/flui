@@ -150,7 +150,7 @@ impl flui_view::StatefulView for MediaQueryRoot {
 }
 
 impl flui_view::ViewState<MediaQueryRoot> for MediaQueryRootState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let handle = ctx.rebuild_handle();
         self.registration = Some(self.source.install_rebuild_handle(handle.clone()));
         self.handle = Some(handle);

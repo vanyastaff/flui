@@ -385,7 +385,7 @@ impl HeadlessBinding {
     /// receive: the capability pairs realm identity (this binding's lane) with
     /// ONE presentation's tree, and a binding may bind a different tree later.
     ///
-    /// Without this, `BuildContext::hit_test_handle()` answers `None`
+    /// Without this, `LifecycleContext::hit_test_handle()` answers `None`
     /// headlessly while answering `Some` on screen — and a widget whose whole
     /// behavior rides on a fresh hit test (a `Draggable` discovering the
     /// `DragTarget` it has moved over) would be untestable in the tier that is

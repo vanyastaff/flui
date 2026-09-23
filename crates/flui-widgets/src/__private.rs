@@ -2,8 +2,7 @@
 //!
 //! **Only for crates in this workspace (`crates/flui-*`). No semver
 //! guarantees**: anything here may change or disappear in any release.
-//! Applications, examples and third-party crates must not import it;
-//! `scripts/port-check.sh` enforces that.
+//! Applications, examples and third-party crates must not import it.
 //!
 //! Each item is widget-crate plumbing that a sibling crate (scrolling,
 //! navigation, text editing) needs from this one but that is not author API:

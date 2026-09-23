@@ -5,7 +5,7 @@
 //! View-type update dispatch path by gating on the concrete
 //! runtime `TypeId` (via `Downcast::as_any().type_id()`) and
 //! routing through `Downcast::into_any` + `Box::downcast::<V>`
-//! — a different syntactic pattern from the FR-033 grep target.
+//! — no reference downcast smuggles a view type through this path.
 //! The `tracing::warn!` fall-through of the Phase 1 identity-shim
 //! is removed: after unwrapping any `BoxedView` (below), a genuine
 //! concrete-type mismatch returns `false`, the caller (`Phase 2
@@ -57,8 +57,8 @@ use crate::view::{BoxedView, View};
 /// discriminate the dispatch. On match, the underlying typed
 /// value is extracted through the `Downcast::into_any` →
 /// `Box::downcast::<V>` chain — distinct from the
-/// `downcast_ref::<V>()` pattern FR-033's port-check grep
-/// forbids. On mismatch — and on the defense-in-depth case
+/// `downcast_ref::<V>()` view-type smuggling this path avoids.
+/// On mismatch — and on the defense-in-depth case
 /// where the downcast still fails despite the TypeId check —
 /// the function returns `false`; the reconciler replaces the
 /// element via the type-mismatch path the keyed reconciler's
@@ -100,10 +100,9 @@ where
     // the inner concrete value and cannot panic.
     let mut effective: &dyn View = new_view;
     loop {
-        // Each hop strips one BoxedView layer. The FR-033 whitelist marker is
-        // co-located: this downcasts to the `BoxedView` *wrapper* to unwrap it,
-        // not the `downcast_ref::<V>()` view-type smuggling FR-033 bans.
-        let wrapper = effective.as_any().downcast_ref::<BoxedView>(); // PORT-CHECK-OK-DOWNCAST: unwrap BoxedView wrapper, not V-type smuggling
+        // Each hop strips one BoxedView layer: this downcasts to the
+        // `BoxedView` *wrapper* to unwrap it, not to the concrete view type.
+        let wrapper = effective.as_any().downcast_ref::<BoxedView>(); // unwrap BoxedView wrapper, not V-type smuggling
         match wrapper {
             Some(boxed) => effective = &*boxed.0,
             None => break,
@@ -122,9 +121,7 @@ where
     // every skip must pay zero clone cost. The downcast_ref here is
     // sanctioned: the `as_any().type_id() == TypeId::of::<V>()` guard
     // above means the ref is guaranteed to succeed.
-    // Bound to a short `let` so the FR-033 marker stays on the same line as
-    // `downcast_ref` and survives rustfmt (the marker must be co-located).
-    let nv = effective.as_any().downcast_ref::<V>(); // PORT-CHECK-OK-DOWNCAST: type-id guarded
+    let nv = effective.as_any().downcast_ref::<V>(); // type-id guarded
     if let Some(new_ref) = nv
         && new_ref.should_skip_rebuild(core.view())
     {
@@ -137,9 +134,8 @@ where
 
     // TypeId equality should guarantee the dynamic value is V.
     // `Downcast::into_any` + `Box::downcast::<V>` produces the
-    // typed inner without `downcast_ref::<V>()` — the syntactic
-    // pattern FR-033's port-check grep forbids in this dispatch
-    // path. The downcast is FALLIBLE on principle: if a future
+    // typed inner by value rather than through `downcast_ref::<V>()`.
+    // The downcast is FALLIBLE on principle: if a future
     // trait-method override violates the `as_any().type_id() ==
     // TypeId::of::<V>() ⇒ downcastable to V` invariant, the
     // dispatch degrades to "replace element" instead of

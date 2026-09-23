@@ -84,7 +84,8 @@ impl FirstReveal {
     /// consulted. `None` while waiting for the first report, and after the
     /// reveal.
     pub(super) fn next_deadline(&self) -> Option<Instant> {
-        match *self.state.lock() {
+        let state = *self.state.lock();
+        match state {
             State::FallbackArmed { reveal_by } => Some(reveal_by),
             State::Waiting | State::Revealed => None,
         }

@@ -30,7 +30,7 @@ use flui_foundation::ListenerId;
 use flui_objects::RenderAnimatedSize;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{Alignment, painting::Clip};
-use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BuildContextExt, Child, IntoView, RenderView, ViewState, impl_render_view};
 
 use crate::animated::vsync_scope::VsyncScope;
@@ -182,7 +182,7 @@ impl StatefulView for AnimatedSize {
 }
 
 impl ViewState<AnimatedSize> for AnimatedSizeState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let completed_runs = Arc::clone(&self.completed_runs);
         let rebuild = ctx.rebuild_handle();
         self.status_listener_id =

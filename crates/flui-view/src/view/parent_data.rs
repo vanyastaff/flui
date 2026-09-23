@@ -374,7 +374,7 @@ mod tests {
             .expect("ParentDataBehavior must surface a parent-data config");
         let data = config
             .as_any()
-            .downcast_ref::<TestParentData>() // PORT-CHECK-OK-DOWNCAST: test asserts the concrete config type round-trips
+            .downcast_ref::<TestParentData>() // test asserts the concrete config type round-trips
             .expect("the surfaced config is the view's concrete ParentData type");
         assert!((data.flex - 2.0).abs() < f64::EPSILON);
         assert!(data.fit);

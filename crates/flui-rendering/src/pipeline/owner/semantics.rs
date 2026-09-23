@@ -6,7 +6,7 @@
 //! semantics marks, grafting each re-assembled subtree into the persistent
 //! semantics arena under its **anchor** — the nearest unmarked ancestor
 //! that formed a semantics node last pass. Anything the graft preconditions
-//! cannot prove falls back to the classic whole-tree rebuild (ADR-0014),
+//! cannot prove falls back to the classic whole-tree rebuild (flui-semantics ARCHITECTURE.md, semantics assembly),
 //! so the fallback path IS the previous behavior and correctness never
 //! depends on the graft being possible.
 //!

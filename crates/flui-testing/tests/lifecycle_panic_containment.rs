@@ -19,8 +19,8 @@ use flui_testing::{
 };
 use flui_types::{Offset, Size, geometry::px};
 use flui_view::{
-    BoxedView, BuildContext, ErrorView, IntoView, LifecycleHook, RecoveredAt, RenderView,
-    StatefulView, View, ViewExt, ViewState,
+    BoxedView, BuildContext, ErrorView, IntoView, LifecycleContext, LifecycleHook, RecoveredAt,
+    RenderView, StatefulView, View, ViewExt, ViewState,
 };
 
 const CHILD_COUNT: usize = 10;
@@ -139,7 +139,7 @@ impl StatefulView for PanicsInInitState {
 }
 
 impl ViewState<PanicsInInitState> for PanickingState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.failed_id.set(Some(ctx.element_id()));
         self.init_calls.set(self.init_calls.get() + 1);
         panic!("induced headless init_state panic");

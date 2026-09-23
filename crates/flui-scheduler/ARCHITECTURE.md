@@ -1,8 +1,7 @@
 # flui-scheduler Architecture
 
 Per-crate ledger for architecture decisions that span more than one module in
-this crate, as required by [`docs/PORT.md`](../../docs/PORT.md) §Per-crate
-`ARCHITECTURE.md` template. Partial: this file exists for the `## Mapping
+this crate. Partial: this file exists for the `## Mapping
 decisions` entries below; a full crate architecture writeup is deferred.
 
 ---
@@ -224,8 +223,8 @@ what the source actually shows holding there; each `finally` covers whatever
 else could still escape past it — the source does not say what that is, and
 neither does this entry. FLUI does not isolate per callback — this issue
 does not change that, and does not attempt to (see
-`docs/PANIC-POLICY.md` and the port-check/doc note this crate already
-carries on the topic) — a panic here still poisons and propagates the
+`docs/PANIC-POLICY.md` and the doc note this crate already carries on the
+topic) — a panic here still poisons and propagates the
 whole frame. What this issue closes is narrower and Rust-specific: the
 scheduler's OWN bookkeeping must never be left half-closed by an unwind it
 did not choose to isolate.
@@ -349,7 +348,7 @@ plain removal-correctness regression instead of a deadlock reproduction.
 - Snapshot `FrameTiming` under the lock and release it before invoking the
   legacy callback, keeping the API. Rejected: it does not remove the
   question of why two registration paths exist with overlapping purpose,
-  and the active-dev policy in `docs/PORT.md`/`AGENTS.md` prefers reshaping
+  and the active-dev policy in `AGENTS.md` prefers reshaping
   a wrong-shaped API over patching around it when nothing depends on its
   distinct behavior.
 - Make `current_frame`'s mutex reentrant (e.g. `parking_lot::ReentrantMutex`).
@@ -1330,9 +1329,9 @@ an existing one is deleted outright, not patched in place, per this crate's
 active-development posture (no shims, no dead surface kept "just in case").
 
 **Conflict:** a lock-drop discipline sweep found `TaskQueue::clear` dropping
-its cleared tasks while `queue`'s lock was still held — the same
-statement-under-guard shape `LockDiscipline/StatementDrop` (`docs/PORT.md`)
-now catches. Re-tracing its callers first: the only ones were its own
+its cleared tasks while `queue`'s lock was still held — a
+statement-under-guard shape that runs arbitrary `Drop` code inside the
+critical section. Re-tracing its callers first: the only ones were its own
 definition and one test (`tests/integration_tests.rs`'s
 `test_task_queue_clear`) that existed solely to exercise the method itself,
 not any behavior a caller depended on.

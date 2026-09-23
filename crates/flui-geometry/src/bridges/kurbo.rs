@@ -11,8 +11,7 @@
 //!   [`KurboBridgeError::OutOfRange`].
 //!
 //! Only flui's typed primitives need an explicit boundary here; under Option D
-//! the engine's `glam` types bridge to kurbo for free via `mint`. Every scalar
-//! cast is marked `PORT-CHECK-OK-SP3` (sanctioned cross-representation cast).
+//! the engine's `glam` types bridge to kurbo for free via `mint`.
 
 use thiserror::Error;
 
@@ -31,7 +30,6 @@ pub enum KurboBridgeError {
 #[inline]
 fn narrow(value: f64) -> Result<f32, KurboBridgeError> {
     if value.is_finite() && value >= f64::from(f32::MIN) && value <= f64::from(f32::MAX) {
-        // PORT-CHECK-OK-SP3: range-checked f64 -> f32 boundary narrowing.
         Ok(value as f32)
     } else {
         Err(KurboBridgeError::OutOfRange(value))
@@ -41,7 +39,6 @@ fn narrow(value: f64) -> Result<f32, KurboBridgeError> {
 /// Lossless `f32 → f64` widening helper (the blessed flui → kurbo direction).
 #[inline]
 fn widen(value: f32) -> f64 {
-    // PORT-CHECK-OK-SP3: lossless f32 -> f64 widening.
     f64::from(value)
 }
 

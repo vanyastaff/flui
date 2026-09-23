@@ -149,8 +149,8 @@ struct NavigatorShared {
     vsync: RouteVsync,
 
     /// The binding's post-frame capability and render tree, both read **once** from
-    /// `NavigatorState::init_state` — a lifecycle hook, as port-check trigger #22
-    /// requires. `HeroController` reaches them through its `NavigatorHandle`, which
+    /// `NavigatorState::init_state` — a lifecycle hook, since only `LifecycleContext`
+    /// offers them. `HeroController` reaches them through its `NavigatorHandle`, which
     /// is how it schedules its measurement (`heroes.dart:968`) and then resolves the
     /// geometry that measurement was waiting for.
     ///
@@ -224,7 +224,7 @@ struct NavigatorShared {
     /// `Arc` (and a clone of the route-command queue), so it structurally
     /// cannot touch the history or anything else `NavigatorShared` owns.
     ///
-    /// Resolved from `BuildContext::rebuild_handle` in
+    /// Resolved from `LifecycleContext::rebuild_handle` in
     /// [`NavigatorState::init_state`](struct@NavigatorState), cleared in
     /// `dispose`, and — this is the part that matters — **read at the moment
     /// the continuation fires**, not captured when it is registered:
@@ -699,7 +699,7 @@ impl fmt::Debug for NavigatorCommandTarget {
 /// what first makes this vocabulary growable — a `PushNamed { target, name }`
 /// arm is now expressible where a `Push { route }` arm never was. Adding the
 /// attribute is a breaking change that is free today and is not free later
-/// (ADR-0024 §7.5).
+/// (ADR-0024).
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NavigatorCommand {
@@ -791,7 +791,7 @@ pub enum NavigatorCommandOutcome {
 
 /// Why a typed navigation command could not reach its owner-local navigator.
 ///
-/// `#[non_exhaustive]`, for ADR-0024 §7.5's argument — which cuts harder here than
+/// `#[non_exhaustive]`, for ADR-0024's argument — which cuts harder here than
 /// for the two enums that got the attribute first. [`NavigatorCommand`]'s own doc
 /// names `PushNamed { target, name }` as the arm this slice makes expressible, and
 /// a *named* command fails in ways neither variant below can express: the name may
@@ -1364,7 +1364,7 @@ impl NavigatorHandle {
         &self,
         route: RouteId,
         duration: Duration,
-        curve: Arc<dyn Curve + Send + Sync>, // PORT-CHECK-OK-DYN: see `PopPacing`'s marker (binding.rs) — same erased-easing-curve boundary
+        curve: Arc<dyn Curve + Send + Sync>, // see `PopPacing`'s marker (binding.rs) — same erased-easing-curve boundary
     ) -> bool {
         if self.current() != Some(route) {
             return false;
@@ -2190,7 +2190,7 @@ impl NavigatorHandle {
     /// Resolving first means a factory runs before the departing route is dealt
     /// with, and a factory that captured a handle can navigate — survivable
     /// rather than supported, since `RouteRequest::navigator()` was withdrawn
-    /// (ADR-0024 §7.10) but a capture still reaches one. So when a factory
+    /// (ADR-0024) but a capture still reaches one. So when a factory
     /// navigates, its `didPush` is observed
     /// **before** this operation's own dismissal — an ordering Flutter cannot
     /// produce here, because it has already popped. The departing route is then
@@ -2416,7 +2416,7 @@ impl NavigatorHandle {
     /// .addPostFrameCallback` (`heroes.dart:968`), as an owned handle.
     ///
     /// `None` before mount and after unmount, so a stale `HeroController` schedules
-    /// nothing. Acquired in `init_state`; never in `build`/layout/paint (trigger #22).
+    /// nothing. Acquired in `init_state`; never in `build`/layout/paint.
     pub(crate) fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
         self.shared.post_frame.lock().clone()
     }
@@ -2622,9 +2622,9 @@ impl ViewState<Navigator> for NavigatorState {
     ///
     /// Acquires the rebuild capability a push's entrance-transition
     /// continuation later schedules through (`settle_wake`, ADR-0064) —
-    /// lifecycle-only, per trigger #22 — alongside the other three
+    /// lifecycle-only — alongside the other three
     /// lifecycle-only captures below.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // The navigator owns the clock its route transitions
         // register with — the FLUI shape of Flutter's `vsync: navigator!`. Read
         // once, here, exactly as `AnimatedSize`/`Scrollable` read theirs.
@@ -2635,7 +2635,6 @@ impl ViewState<Navigator> for NavigatorState {
 
         // Both are *lifecycle-only* acquisitions: a `HeroController`
         // fires them from a post-frame callback, never from a frame phase.
-        // PORT-CHECK-OK-LOCK: plain data: LocalPostFrameHandle (Weak+Weak), no Drop
         *self.shared.post_frame.lock() = ctx.local_post_frame_handle();
         let _prev = std::mem::replace(&mut *self.shared.render_tree.lock(), ctx.pipeline_owner());
         let _prev = self.shared.settle_wake.lock().replace(ctx.rebuild_handle());
@@ -2727,7 +2726,6 @@ impl ViewState<Navigator> for NavigatorState {
         // The capabilities die with the tree they name, so a `HeroController` that
         // outlives its navigator schedules nothing and measures nothing, and a
         // push-completion continuation that outlives it finds no one to wake.
-        // PORT-CHECK-OK-LOCK: plain data: Option<LocalPostFrameHandle>, no Drop
         *self.shared.post_frame.lock() = None;
         let _prev = self.shared.render_tree.lock().take();
         let _prev = self.shared.settle_wake.lock().take();

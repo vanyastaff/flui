@@ -578,7 +578,7 @@ pub struct BuildOwner {
 
     /// The binding's frame-driven async task driver, installed by
     /// whichever binding owns this owner. `None` until then — a tree built with
-    /// no binding cannot spawn tasks, and `BuildContext::async_driver` reports
+    /// no binding cannot spawn tasks, and `LifecycleContext::async_driver` reports
     /// that honestly rather than silently spawning into a driver nobody polls.
     ///
     /// This must be the driver the binding's frame step actually polls:
@@ -589,18 +589,18 @@ pub struct BuildOwner {
     pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
 
     /// The binding's post-frame capability. `None` when no binding
-    /// installed one, which makes `BuildContext::post_frame_handle` report the
+    /// installed one, which makes `LifecycleContext::post_frame_handle` report the
     /// absence rather than silently scheduling onto a global.
     pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
 
     /// The binding's OWNER-LOCAL post-frame capability — see
-    /// `BuildContext::local_post_frame_handle`'s doc for why this is a
+    /// `LifecycleContext::local_post_frame_handle`'s doc for why this is a
     /// separate handle rather than a second field on `PostFrameHandle`
     /// itself. `None` under the same conditions as `post_frame_handle`.
     pub(crate) local_post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
 
     /// The binding's IME/text-input attach-detach capability. `None` when no
-    /// binding installed one, which makes `BuildContext::text_input_handle`
+    /// binding installed one, which makes `LifecycleContext::text_input_handle`
     /// report the absence rather than a widget silently having no way to
     /// attach an IME client.
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
@@ -772,7 +772,8 @@ impl BuildOwner {
     /// Acquire the manager from `ViewState::init_state` or
     /// `did_change_dependencies` and retain the returned `Rc` for later focus
     /// transitions. Imperative focus changes do not belong in `build`, layout,
-    /// paint, or compositing; port-check trigger #22 enforces that boundary.
+    /// paint, or compositing, which is why `LifecycleContext`, not
+    /// `BuildContext`, hands it out.
     #[must_use]
     pub fn focus_manager(&self) -> Rc<FocusManager> {
         Rc::clone(&self.focus_manager)
@@ -817,7 +818,7 @@ impl BuildOwner {
     ///
     /// Called during `UiRealm` construction with the weak handle minted by that
     /// presentation's `TextInputOwner`. `HeadlessBinding` installs none, so
-    /// headless-tree tests observe `BuildContext::text_input_handle() == None`
+    /// headless-tree tests observe `LifecycleContext::text_input_handle() == None`
     /// honestly rather than accepting attaches nobody delivers events to.
     pub fn set_text_input_handle(&mut self, handle: flui_interaction::TextInputHandle) {
         self.text_input_handle = Some(handle);
@@ -836,7 +837,7 @@ impl BuildOwner {
     /// Called during presentation assembly with a handle pairing the realm's
     /// dispatch ticket with a probe over THIS presentation's pipeline.
     /// `HeadlessBinding` installs none, so headless-tree tests observe
-    /// `BuildContext::hit_test_handle() == None` honestly rather than reading
+    /// `LifecycleContext::hit_test_handle() == None` honestly rather than reading
     /// some other tree.
     pub fn set_hit_test_handle(&mut self, handle: flui_interaction::HitTestHandle) {
         self.hit_test_handle = Some(handle);
@@ -1273,7 +1274,7 @@ impl BuildOwner {
     }
 
     /// The installed observer, if any. Clones the `Arc` out — no reference
-    /// into private state, no guard (SP-6).
+    /// into private state, no guard.
     #[must_use]
     pub fn tree_observer(&self) -> Option<Arc<dyn flui_foundation::observe::TreeObserver>> {
         self.tree_observer.clone()
@@ -1330,7 +1331,7 @@ impl BuildOwner {
     ///
     /// Observability for the `RebuildHandle` channel: a
     /// `schedule(reason)` from a worker thread is visible here before any frame runs.
-    /// Returns a count, never a guard — the lock stays private (SP-6).
+    /// Returns a count, never a guard — the lock stays private.
     #[must_use]
     pub fn pending_external_builds(&self) -> usize {
         self.external_inbox.lock().len()
@@ -1346,7 +1347,8 @@ impl BuildOwner {
     #[must_use]
     pub fn pending_rebuild_reasons(&self, element: ElementId) -> Option<RebuildReasons> {
         let mut pending = self.dirty_reasons.get(&element).copied();
-        if let Some(external) = self.external_inbox.lock().get(&element).copied() {
+        let external = self.external_inbox.lock().get(&element).copied();
+        if let Some(external) = external {
             match &mut pending {
                 Some(reasons) => reasons.merge(external),
                 None => pending = Some(external),
@@ -3414,7 +3416,7 @@ mod tests {
             TestView
         }
 
-        fn did_change_dependencies(&mut self, _ctx: &dyn crate::BuildContext) {
+        fn did_change_dependencies(&mut self, _ctx: &dyn crate::LifecycleContext) {
             self.dependency_calls.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -4321,7 +4323,7 @@ mod tests {
     }
 
     impl crate::ViewState<MidDrainLeaf> for MidDrainLeafState {
-        fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
             if let Some(slot) = &self.handle_slot {
                 let _prev = slot.lock().replace(ctx.rebuild_handle());
             }
@@ -4486,7 +4488,7 @@ mod tests {
     }
 
     impl crate::ViewState<MidDrainSelfRescheduler> for MidDrainSelfReschedulerState {
-        fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
             let _prev = self.handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
@@ -4548,7 +4550,7 @@ mod tests {
     }
 
     impl crate::ViewState<MidDrainCountedRescheduler> for MidDrainCountedReschedulerState {
-        fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
             let _prev = self.handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
@@ -4562,7 +4564,8 @@ mod tests {
                 && self.reschedules_left.load(Ordering::Relaxed) > 0
             {
                 self.reschedules_left.fetch_sub(1, Ordering::Relaxed);
-                if let Some(handle) = self.handle_slot.lock().clone() {
+                let handle = self.handle_slot.lock().clone();
+                if let Some(handle) = handle {
                     handle.schedule(RebuildReason::StateChange);
                 }
             }
@@ -4605,7 +4608,7 @@ mod tests {
     }
 
     impl crate::ViewState<MidDrainChainLink> for MidDrainChainLinkState {
-        fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
             let _prev = self.own_handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
@@ -4659,7 +4662,7 @@ mod tests {
     }
 
     impl crate::ViewState<MidDrainRootPanic> for MidDrainRootPanicState {
-        fn did_change_dependencies(&mut self, _ctx: &dyn crate::BuildContext) {
+        fn did_change_dependencies(&mut self, _ctx: &dyn crate::LifecycleContext) {
             assert!(
                 !self.trigger_panic.load(Ordering::Relaxed),
                 "MidDrainRootPanic: deliberate did_change_dependencies panic"
@@ -5050,7 +5053,6 @@ mod tests {
             "sanity: depths"
         );
 
-        // PORT-CHECK-OK-LOCK: plain data: Vec<&'static str>, no Drop
         order.lock().clear();
         should_notify.store(true, Ordering::Relaxed);
         tree.mark_needs_build(current);
@@ -5846,7 +5848,7 @@ mod tests {
     }
 
     impl crate::ViewState<StaleIdOldChild> for StaleIdOldChildState {
-        fn init_state(&mut self, ctx: &dyn crate::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn crate::LifecycleContext) {
             let _prev = self.handle_slot.lock().replace(ctx.rebuild_handle());
         }
 
@@ -5943,7 +5945,8 @@ mod tests {
             _ctx: &dyn crate::BuildContext,
         ) -> impl crate::IntoView {
             if self.swap_to_new.load(Ordering::Relaxed) {
-                if let Some(handle) = self.old_handle_slot.lock().clone() {
+                let handle = self.old_handle_slot.lock().clone();
+                if let Some(handle) = handle {
                     handle.schedule(self.stale_notify_reason);
                 }
                 StaleIdNewChild {

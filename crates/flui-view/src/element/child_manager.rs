@@ -25,10 +25,9 @@
 //! same frame, no reentrant build. A manager reports whether it did work so
 //! the loop knows to run another pass.
 //!
-//! # FR-036 / Port-check #9
+//! # Why `dyn ChildManager`
 //!
-//! `dyn ChildManager` is a sanctioned `dyn`-boundary — added to the
-//! `fr036_allowed` allowlist in `scripts/port-check.sh`. The erasure is
+//! `dyn ChildManager` is a deliberate `dyn` boundary. The erasure is
 //! required because the registry maps `RenderId → Arc<Mutex<dyn ChildManager>>`
 //! without knowing the concrete manager type at registry time (the registry lives
 //! on `BuildOwner`; the concrete type lives on the adaptor element). This is the

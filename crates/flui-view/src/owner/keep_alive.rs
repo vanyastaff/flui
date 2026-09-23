@@ -154,7 +154,7 @@ impl KeepAliveHolds {
 ///     lease: Option<KeepAliveLease>,
 /// }
 ///
-/// fn init_state(&mut self, ctx: &dyn BuildContext) {
+/// fn init_state(&mut self, ctx: &dyn LifecycleContext) {
 ///     self.keep_alive = ctx.keep_alive_handle();
 /// }
 ///
@@ -194,7 +194,7 @@ impl KeepAliveHandle {
 /// A live keep-alive hold. Dropping it releases the hold.
 ///
 /// Acquire one from
-/// [`BuildContext::keep_alive_lease`](crate::context::BuildContext::keep_alive_lease)
+/// [`LifecycleContext::keep_alive_lease`](crate::context::LifecycleContext::keep_alive_lease)
 /// in `init_state` (never during `build`, `perform_layout` or `paint` — see the
 /// frame-capability scope rule) and store it in your `ViewState`. While it
 /// lives, the lazy sliver child containing it survives scrolling out of the
@@ -218,7 +218,7 @@ impl KeepAliveHandle {
 /// }
 ///
 /// impl ViewState<Editor> for EditorState {
-///     fn init_state(&mut self, ctx: &dyn BuildContext) {
+///     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
 ///         self.keep_alive = ctx.keep_alive_lease();
 ///     }
 /// }

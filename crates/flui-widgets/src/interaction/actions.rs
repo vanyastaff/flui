@@ -27,7 +27,7 @@
 //!
 //! The erasure (`TypeId` key + `dyn Any` downcast inside the typed wrapper)
 //! is the same shape as the one sanctioned `Navigator` pop-result boundary
-//! (FR-033/widgets): the downcast can only be reached through the matching
+//! (ADR-0019): the downcast can only be reached through the matching
 //! `TypeId`, so it cannot fail.
 //!
 //! # Deferred, and named
@@ -175,7 +175,7 @@ pub(crate) struct ErasedAction {
 /// The typed view of an erased intent. Reached only through the matching
 /// `TypeId`, so the downcast cannot fail.
 fn typed<T: Intent>(intent: &dyn Any) -> &T {
-    let typed = intent.downcast_ref::<T>(); // PORT-CHECK-OK-DOWNCAST: ADR-0023 — keyed by this intent's TypeId, so only a `T` arrives; same shape as the sanctioned Navigator pop-result boundary.
+    let typed = intent.downcast_ref::<T>(); // ADR-0023 — keyed by this intent's TypeId, so only a `T` arrives; same shape as the sanctioned Navigator pop-result boundary.
     typed.expect(
         "BUG: an ErasedAction received an intent of a foreign type; \
          the Actions map must be keyed by the intent's TypeId",

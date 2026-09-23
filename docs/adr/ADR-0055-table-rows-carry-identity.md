@@ -1,13 +1,8 @@
 # ADR-0055: Table rows carry identity
 
-- **Status:** Accepted (2026-09-04)
+- **Status:** Accepted
 - **Date:** 2026-09-04
-- **Deciders:** @vanyastaff
-- **Scope:** `crates/flui-widgets/src/layout/table.rs` (`Table`, `TableRow`, the private
-  `KeyedCell`), `crates/flui-widgets/tests/parity/table_test.rs`.
-- **Related:** [ADR-0050](ADR-0050-global-key-identity-and-frame-reservations.md) (key identity),
-  [ADR-0052](ADR-0052-lazy-sliver-child-identity-and-recovery.md) (the salted-key precedent);
-  issue #544.
+- **Related:** [ADR-0050](ADR-0050-global-key-identity-and-frame-reservations.md) (key identity), [ADR-0052](ADR-0052-lazy-sliver-child-identity-and-recovery.md) (the salted-key precedent); issue #544
 
 ## Context
 
@@ -26,7 +21,7 @@ Porting that shape directly would need a component element with N children, whic
 does not have: every non-render `ElementKind` is `Element<V, Single, …>`
 (`crates/flui-view/src/element/kind.rs`), and `StatelessView::build` returns exactly one view. It
 would mean a new element kind, a new multi-child component trait, blanket impls across the
-behavior/dispatch surface, and an FR-036 `dyn`-allowlist entry.
+behavior/dispatch surface, and a new sanctioned `dyn` boundary.
 
 ## Decision
 
@@ -75,16 +70,14 @@ key would have nothing to address. Key the cell instead.
 
 ## Consequences
 
-- The `#[ignore]`d divergence pin
-  (`changing_row_and_column_count_reuses_and_discards_cells_by_flat_position`) is retired: the test
-  is un-ignored, renamed for what it now proves, and passes for the reference's own reason. The
-  `table` parity family drops to zero pins and zero diverged cases.
+- The former divergence (cells re-paired by flat position when the column count changes) is gone;
+  the `table` parity family has no diverged cases.
 - `TableRow`'s `Debug` no longer prints its cells (it prints their count and whether the row is
   keyed) because `BoxedView` has no `Debug`.
 - Still open, and tracked in #544: the baseline/`textBaseline` pairing as a type-level invariant
   rather than the recorded degradation it is today.
 
-## Amendment (2026-09-04): a ragged grid is repaired where it is supplied
+## Amendment: a ragged grid is repaired where it is supplied
 
 Row lengths that disagreed were two `debug_assert!`s and nothing else — one in
 `Table::update_render_object`, one in `RenderTable::perform_layout` — so a release build carried
@@ -102,7 +95,7 @@ grid its last layout positioned, so a direct consumer of the lower layer gets th
 self-consistency between what is drawn and what is touchable.
 
 **Why repair rather than reject.** Issue #544 asks for "a fallible constructor or validated builder
-for caller-controlled structural errors", and the spec designed one (D1/D4): a `TableRows`
+for caller-controlled structural errors", and a design for one existed: a `TableRows`
 collection with a fallible `push`, and a `RenderTable` owning `Vec<Option<RenderId>>` sized
 `columns * rows`. This is a deliberate override of that ask, not an oversight, and the reason is
 the issue's own next criterion.
@@ -129,14 +122,9 @@ Repair with a warning is the rule this codebase already follows for caller confi
 `RenderViewport::set_anchor` clamps an out-of-range anchor rather than asserting, and `RenderTable`
 already degrades a baseline alignment with no text baseline, both with a recorded rationale and a
 green test. Flutter asserts on all of these; the divergence is deliberate, and the warning is what
-keeps it from being silent.
+keeps it from being silent. A padded cell holds its slot instead of shifting the grid.
 
-Pinned by `table_pads_a_short_row_and_drops_a_long_rows_extra_cells` (the padded cell holds its
-slot instead of shifting the grid, and every row still contributes its height) and
-`data_table_squares_up_a_row_that_does_not_match_its_columns` (red with the repair removed: an
-index-out-of-bounds panic).
-
-## Amendment (2026-09-04): `TableCellVerticalAlignment::IntrinsicHeight`
+## Amendment: `TableCellVerticalAlignment::IntrinsicHeight`
 
 The variant Flutter has and FLUI did not. A cell with it is measured with `Top`/`Middle`/`Bottom`,
 so its own content contributes to how tall the row becomes, and is then re-laid-out tight to the
@@ -152,10 +140,4 @@ variant added to this enum is a compile error there instead of a silent default.
 
 `TableCellVerticalAlignment` is deliberately not `#[non_exhaustive]`, so adding a variant is a
 breaking change for an external matcher. That is accepted: the enum is small, closed in concept,
-and exhaustive matching on it is what just caught three of the four sites that needed updating.
-
-Pinned by the ported oracle case
-(`default_vertical_alignment_intrinsic_height_makes_each_row_as_tall_as_its_tallest_cell`, from
-`widgets/table_test.dart`'s "Set defaultVerticalAlignment to intrinsic height and check their
-heights", including its third assertion that rows differ from each other) and by two harness tests
-that put `IntrinsicHeight` and `Fill` side by side on the same two cells: 90 tall versus zero.
+and exhaustive matching on it is what caught three of the four sites that needed updating.

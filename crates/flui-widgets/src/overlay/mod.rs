@@ -1,10 +1,10 @@
 //! [`Overlay`] — an insertion-ordered stack of independently-managed layers.
 //!
 //! The first prerequisite for `Navigator`. [`Overlay`], [`OverlayEntry`],
-//! [`OverlayEntryId`] and [`OverlayHandle`] are published from the crate root
-//! (`docs/adr/ADR-0036-overlay-publication-and-per-entry-scope-marker.md`), and
-//! so is the mutation surface: [`OverlayHandle::insert`]/[`rearrange`],
-//! [`InsertPosition`], and the entry lifecycle (`docs/adr/ADR-0076-public-overlay-mutation-api.md`).
+//! [`OverlayEntryId`] and [`OverlayHandle`] are published from the crate root,
+//! and so is the mutation surface: [`OverlayHandle::insert`]/[`rearrange`],
+//! [`InsertPosition`], and the entry lifecycle
+//! (`docs/adr/ADR-0076-public-overlay-mutation-api.md`).
 //! `OverlayScope` and the `Theater`/`OverlayState`/`OverlayEntryView`
 //! machinery stay `pub(crate)`.
 //!
@@ -58,7 +58,7 @@
 //!
 //! [`RebuildHandle`]: flui_view::RebuildHandle
 
-// The types (ADR-0036) and the mutation surface the navigator needs
+// The types (ADR-0076) and the mutation surface the navigator needs
 // (ADR-0076) are public. The rest -- `insert_all`, `entry_ids`, the
 // builder-form constructors, `OverlayScope`, the `Theater` machinery -- stays
 // `pub(crate)`: `Navigator` and `Draggable`'s feedback layer are its only
@@ -116,7 +116,7 @@ pub(crate) struct OverlayShared {
     entries: Mutex<Vec<OverlayEntry>>,
 
     /// `Some` only while the `Overlay` is mounted; published in `init_state` and
-    /// cleared in `dispose`, per port-check trigger #22 (never acquired in
+    /// cleared in `dispose` (never acquired in
     /// `build`). A handle for an unmounted overlay is the reason a stale
     /// [`OverlayHandle`] is inert rather than a panic.
     rebuild: Mutex<Option<RebuildHandle>>,
@@ -637,9 +637,9 @@ impl ViewState<Overlay> for OverlayState {
     /// Publish the rebuild capability so [`OverlayHandle`] mutations, which run
     /// outside any frame phase, can schedule this element.
     ///
-    /// `init_state` is the correct hook and the only permitted one: port-check
-    /// trigger #22 rejects acquiring a `RebuildHandle` from `build`/layout/paint.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    /// `init_state` is the correct hook: only `LifecycleContext` offers
+    /// `rebuild_handle()`, so `build`/layout/paint cannot acquire one.
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
         self.serving = self.shared.claim_rebuild(&rebuild);
         self.rebuild = Some(rebuild);
@@ -776,7 +776,7 @@ pub(crate) struct OverlayEntryViewState {
 impl ViewState<OverlayEntryView> for OverlayEntryViewState {
     /// Hand this element's rebuild capability to the entry, so
     /// [`OverlayEntry::mark_needs_build`] rebuilds this layer alone.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
         self.element = rebuild.element_id();
         self.entry.publish_rebuild(rebuild);
@@ -788,7 +788,7 @@ impl ViewState<OverlayEntryView> for OverlayEntryViewState {
     ///
     /// Wraps the entry's built child in an [`OverlayScope`] marker — the
     /// per-entry mount point `Overlay::of`/`maybe_of` resolve against
-    /// (ADR-0036), matching the 3.44.0 oracle's `_OverlayEntryWidgetState`,
+    /// (ADR-0076), matching the 3.44.0 oracle's `_OverlayEntryWidgetState`,
     /// which wraps each entry's child in its own `_RenderTheaterMarker`.
     fn build(&self, view: &OverlayEntryView, ctx: &dyn BuildContext) -> impl IntoView {
         OverlayScope::new(view.overlay.clone(), (view.entry.builder())(ctx))

@@ -255,7 +255,7 @@ impl std::fmt::Debug for LocalHistoryRegistry {
 /// The capability a page uses to push local-history entries onto its route —
 /// `ModalRoute.of(context)` narrowed to `addLocalHistoryEntry`
 /// (ADR-0025). Acquire in `init_state`/`did_change_dependencies`, fire
-/// from event or animation callbacks (trigger #22 discipline: `add` is
+/// from event or animation callbacks (lifecycle-only discipline: `add` is
 /// rebuild-adjacent).
 #[derive(Clone)]
 pub(crate) struct LocalHistoryHandle {

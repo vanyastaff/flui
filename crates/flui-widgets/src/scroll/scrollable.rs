@@ -67,7 +67,9 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
 use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatefulView;
-use flui_view::{BoxedView, BuildContext, BuildContextExt, Child, IntoView, ViewExt, ViewState};
+use flui_view::{
+    BoxedView, BuildContext, BuildContextExt, Child, IntoView, LifecycleContext, ViewExt, ViewState,
+};
 
 use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
@@ -368,11 +370,11 @@ impl ScrollableState {
     /// `apply_content_dimensions`) can flush a coalesced notification after
     /// layout instead of never notifying at all.
     ///
-    /// Lifecycle-only (ADR-0021, port-check trigger #22): called from
+    /// Lifecycle-only (ADR-0021): called from
     /// `init_state`/`did_change_dependencies`, never from `build`. A no-op
     /// when no handle is available yet — `set_flush_handle` is idempotent, so
     /// a later call (e.g. from `did_change_dependencies`) still installs it.
-    fn install_flush_handle(&self, ctx: &dyn BuildContext) {
+    fn install_flush_handle(&self, ctx: &dyn LifecycleContext) {
         if let Some(handle) = ctx.post_frame_handle() {
             self.scroll_controller.position().set_flush_handle(handle);
         }
@@ -485,7 +487,7 @@ impl ScrollableState {
 }
 
 impl ViewState<Scrollable> for ScrollableState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.post_frame = ctx.post_frame_handle();
         self.install_flush_handle(ctx);
         self.install_stop_hook();
@@ -506,7 +508,7 @@ impl ViewState<Scrollable> for ScrollableState {
         // advances — there is no wall-clock fallback.
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.post_frame = ctx.post_frame_handle();
         self.install_flush_handle(ctx);
     }

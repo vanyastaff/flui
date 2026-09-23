@@ -4,7 +4,7 @@
 //! The state is held by the Element, not the View itself.
 
 use super::into_view::IntoView;
-use crate::context::BuildContext;
+use crate::context::{BuildContext, LifecycleContext};
 
 /// A View that has persistent mutable state.
 ///
@@ -106,8 +106,10 @@ pub trait StatefulView: Clone + 'static + Sized {
 pub trait ViewState<V: StatefulView>: 'static {
     /// Called once after the state is created.
     ///
-    /// Use this for one-time initialization that requires BuildContext.
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {}
+    /// Use this for one-time initialization, and to acquire the presentation
+    /// capabilities on [`LifecycleContext`] (rebuild, post-frame, focus, …) that
+    /// `build` cannot reach. Store them in the state and fire them from callbacks.
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {}
 
     /// Called when an already-registered `InheritedView` dependency changes.
     ///
@@ -123,7 +125,7 @@ pub trait ViewState<V: StatefulView>: 'static {
     /// which resolves `Overlay::maybe_of` in both hooks for exactly this
     /// reason) — relying on this hook alone for the initial value silently
     /// never fires.
-    fn did_change_dependencies(&mut self, _ctx: &dyn BuildContext) {}
+    fn did_change_dependencies(&mut self, _ctx: &dyn LifecycleContext) {}
 
     /// Build the child View tree.
     ///

@@ -65,7 +65,6 @@ use crate::text::editable_text::{EditableText, SubmitCallback};
 /// - Focus decoration changes (highlighted border on focus)
 #[derive(Clone)]
 pub struct RawTextField {
-    // PORT-CHECK-OK-SP3: deliberate theme-free stand-in for a widgets-only tree; the M3 field is flui_material::TextField — see this module's docs
     /// Controller that owns the text buffer and caret position.
     controller: TextEditingController,
     /// Optional caller-owned focus node. When absent, the state owns one for

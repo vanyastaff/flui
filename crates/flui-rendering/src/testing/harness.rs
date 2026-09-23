@@ -148,7 +148,7 @@ impl RenderTester {
     }
 
     /// Enables semantics on the built [`PipelineOwner`] before any phase
-    /// runs (lazily creates a `SemanticsOwner`, see ADR-0014).
+    /// runs (lazily creates a `SemanticsOwner`, see flui-semantics ARCHITECTURE.md, semantics assembly).
     ///
     /// Without this, `run_semantics` (and therefore [`Self::run_to_semantics`]
     /// / [`Self::run_frame`]'s semantics phase) is a no-op — semantics stays
@@ -964,7 +964,7 @@ impl SemanticsRun {
     /// (see [`RenderTester::with_semantics_enabled`]).
     ///
     /// `None` when semantics was never enabled — `run_semantics` is then a
-    /// no-op and no `SemanticsOwner` was ever lazily created (see ADR-0014).
+    /// no-op and no `SemanticsOwner` was ever lazily created (see flui-semantics ARCHITECTURE.md, semantics assembly).
     #[must_use]
     pub fn semantics_owner(&self) -> Option<&crate::semantics::SemanticsOwner> {
         self.owner.semantics_owner()

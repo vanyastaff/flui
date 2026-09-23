@@ -81,7 +81,8 @@ pub(crate) struct WakePump {
     /// A plain atomic rather than a `Mutex<Option<Instant>>`: the value is
     /// read on every redraw request and written on every schedule, and an
     /// atomic keeps both off the lock-discipline surface
-    /// (`LockDiscipline/StatementDrop`) for a value that carries no
+    /// (no guard whose drop ordering has to be gotten right) for a value
+    /// that carries no
     /// invariant beyond itself.
     pending_at: AtomicU64,
 }

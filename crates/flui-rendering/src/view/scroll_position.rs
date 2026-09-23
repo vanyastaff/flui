@@ -558,7 +558,7 @@ impl ScrollPosition {
     /// `apply_content_dimensions` flush a coalesced notification after
     /// layout instead of firing synchronously mid-frame. Acquire `handle`
     /// from `ViewState::init_state`/`did_change_dependencies` (ADR-0021) —
-    /// never from `build`/`perform_layout` (port-check trigger #22).
+    /// never from `build`/`perform_layout`.
     pub fn set_flush_handle(&self, handle: PostFrameHandle) {
         self.inner.flush.lock().flush_handle = Some(handle);
     }
@@ -958,7 +958,7 @@ mod tests {
         position.set_is_scrolling(true);
         position.set_user_scroll_direction(super::super::ScrollDirection::Reverse);
 
-        let through_trait: &dyn super::super::ViewportOffset = &position; // PORT-CHECK-OK-DYN: the test's whole point is the TRAIT-OBJECT view — RenderViewport holds exactly this erasure, and the bug being pinned was visible only through it
+        let through_trait: &dyn super::super::ViewportOffset = &position; // the test's whole point is the TRAIT-OBJECT view — RenderViewport holds exactly this erasure, and the bug being pinned was visible only through it
         assert_eq!(
             through_trait.user_scroll_direction(),
             super::super::ScrollDirection::Reverse,

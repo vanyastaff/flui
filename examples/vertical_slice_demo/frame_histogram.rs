@@ -26,7 +26,8 @@ use std::time::{Duration, Instant};
 use flui_animation::{AnimationController, Vsync, VsyncRegistration};
 use flui_foundation::Listenable;
 use flui_view::{
-    BuildContext, BuildContextExt, IntoView, StatefulView, StatelessView, View, ViewState,
+    BuildContext, BuildContextExt, IntoView, LifecycleContext, StatefulView, StatelessView, View,
+    ViewState,
 };
 use flui_widgets::VsyncScope;
 use parking_lot::Mutex;
@@ -120,7 +121,8 @@ impl<V: View + Clone + 'static> HistogramProbe<V> {
         let controller = AnimationController::with_detached_ticker(CONTROLLER_CYCLE);
         let window = Arc::new(Mutex::new(TickWindow::default()));
         controller.add_listener(Arc::new(move || {
-            if let Some(deltas) = window.lock().record(Instant::now()) {
+            let deltas = window.lock().record(Instant::now());
+            if let Some(deltas) = deltas {
                 log_window(deltas);
             }
         }));
@@ -189,10 +191,10 @@ struct HistogramProbeState {
 }
 
 impl<V: View + Clone + 'static> ViewState<HistogramProbeInner<V>> for HistogramProbeState {
-    /// Lifecycle-only (ADR-0021, port-check trigger #22): registers with the
+    /// Lifecycle-only (ADR-0021): registers with the
     /// ambient `VsyncScope` and starts the free-running cycle here, never
     /// from `build`.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let Some(controller) = self.controller.as_ref() else {
             return;
         };

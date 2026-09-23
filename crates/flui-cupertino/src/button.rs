@@ -522,7 +522,7 @@ impl StatefulView for CupertinoButton {
 }
 
 impl ViewState<CupertinoButton> for CupertinoButtonState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // ADR-0018: `rebuild_handle()` acquired here, fired later from
         // `start_press_fade` (called from the `on_tap` handler in `build`,
         // never from `build` itself).

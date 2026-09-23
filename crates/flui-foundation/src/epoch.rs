@@ -111,14 +111,14 @@ macro_rules! epoch_counters {
 /// direction — `flui-layer`'s `SceneSnapshot`, which carries a `FrameStamp`,
 /// cannot either (layer 3). `flui-engine` re-exports this type from its own
 /// root (`flui_engine::GpuResourceGeneration`) so its own call sites read
-/// unchanged; the definition here is the single one port-check trigger 10
-/// (SP-3) requires.
+/// unchanged; the definition here is the only one — no crate keeps a
+/// parallel copy.
 ///
 /// # Named `GpuResourceGeneration`, not `ResourceGeneration`
 ///
 /// [`ResourceGeneration`] already exists in this module for a different
-/// domain (worker-cache freshness); trigger 10 forbids a second `pub struct`
-/// under that identifier anywhere in the framework crates, and the two
+/// domain (worker-cache freshness); one identifier names one type across
+/// the framework crates, and the two
 /// concepts are genuinely different — see `flui-engine`'s
 /// `wgpu::gpu_services` module doc for the full reasoning this type's
 /// original home recorded.

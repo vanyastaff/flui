@@ -621,8 +621,8 @@ mod did_change_dependencies_on_inherited_update {
 
     use flui_view::{
         BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementTree, ErrorView,
-        InheritedView, IntoView, LifecycleHook, RebuildReason, RecoveredAt, RenderView,
-        StatefulView, StatelessView, View, ViewExt, ViewState,
+        InheritedView, IntoView, LifecycleContext, LifecycleHook, RebuildReason, RecoveredAt,
+        RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
     };
 
     use super::{DummyChild, LeafView, MyTheme};
@@ -659,7 +659,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl ViewState<ProbeDependent> for ProbeDependentState {
-        fn did_change_dependencies(&mut self, _ctx: &dyn BuildContext) {
+        fn did_change_dependencies(&mut self, _ctx: &dyn LifecycleContext) {
             self.dcd_calls += 1;
             self.probe
                 .lock()
@@ -777,7 +777,6 @@ mod did_change_dependencies_on_inherited_update {
         // Sanity: no events recorded yet — probe vec is empty because
         // mount runs init_state but not the build proper (perform_build
         // is only driven via build_scope or an explicit rebuild trigger).
-        // PORT-CHECK-OK-LOCK: plain data: Vec<String>, no Drop
         probe.lock().unwrap().clear();
 
         // Update the InheritedView with a new color so update_should_notify
@@ -901,7 +900,6 @@ mod did_change_dependencies_on_inherited_update {
             vec!["build".to_string()],
             "first build runs once (no dependency change pending yet, so no dcd)",
         );
-        // PORT-CHECK-OK-LOCK: plain data: Vec<String>, no Drop
         probe.lock().unwrap().clear();
 
         // Now change the inherited value. The dependent is clean (its dirty
@@ -948,7 +946,6 @@ mod did_change_dependencies_on_inherited_update {
             0x00AA_BBCC,
             &dependent_view,
         );
-        // PORT-CHECK-OK-LOCK: plain data: Vec<String>, no Drop
         probe.lock().unwrap().clear();
 
         // Update with the same MyTheme value — update_should_notify is
@@ -1056,7 +1053,7 @@ mod did_change_dependencies_on_inherited_update {
     }
 
     impl ViewState<PanicDcd> for PanicDcdState {
-        fn did_change_dependencies(&mut self, _ctx: &dyn BuildContext) {
+        fn did_change_dependencies(&mut self, _ctx: &dyn LifecycleContext) {
             panic!("induced did_change_dependencies panic (build-window panic-safety test)");
         }
 
@@ -1351,7 +1348,6 @@ mod live_inherited_during_build {
             // The crux: resolve `ThemeRoot` two hops up, against the live
             // tree, from inside the actual build.
             let color = ctx.depend_on::<ThemeRoot, u32>(|provider| provider.theme.color);
-            // PORT-CHECK-OK-LOCK: plain data: Option<u32> (Copy)
             *self.observed.lock().unwrap() = color;
             LeafView.boxed()
         }
@@ -1434,7 +1430,6 @@ mod live_inherited_during_build {
 
         // ── Phase 2: changing the inherited value must rebuild the recorded
         // dependent, which re-reads the NEW value live.
-        // PORT-CHECK-OK-LOCK: plain data: Option<u32> (Copy)
         observed.lock().unwrap().take();
         let root_v2 = ThemeRoot {
             theme: MyTheme { color: 0x00BA_DA55 },
@@ -1477,7 +1472,6 @@ mod live_inherited_during_build {
 
     impl StatelessView for OuterConsumer {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            // PORT-CHECK-OK-LOCK: plain data: u32 is Copy
             *self.own.lock().unwrap() = ctx.depend_on::<ThemeRoot, u32>(|p| p.theme.color);
             Consumer {
                 observed: self.inner.clone(),
@@ -1706,7 +1700,8 @@ mod build_window_panic_restores_slot {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use flui_view::{
-        BuildContext, BuildOwner, ElementTree, IntoView, StatefulView, View, ViewExt, ViewState,
+        BuildContext, BuildOwner, ElementTree, IntoView, LifecycleContext, StatefulView, View,
+        ViewExt, ViewState,
     };
 
     use super::LeafView;
@@ -1726,7 +1721,7 @@ mod build_window_panic_restores_slot {
     }
 
     impl ViewState<PanicOnInit> for PanicOnInitState {
-        fn init_state(&mut self, _ctx: &dyn BuildContext) {
+        fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
             panic!("induced init_state panic (build-window panic-safety test)");
         }
 

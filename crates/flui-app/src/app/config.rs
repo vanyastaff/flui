@@ -78,7 +78,6 @@ pub struct AppConfig {
     /// Diagnostics defaults for a managed application.
     pub diagnostics_profile: DiagnosticsProfile,
 
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// Window title.
     pub title: String,
 

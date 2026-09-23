@@ -40,7 +40,7 @@
 //! request's settings, name and arguments — a factory is a builder, and a
 //! redirect is expressed by returning a different route rather than by
 //! navigating. `RouteRequest::navigator()` existed briefly and was withdrawn
-//! (ADR-0024 §7.10); navigation from a factory now requires an explicitly
+//! (ADR-0024); navigation from a factory now requires an explicitly
 //! captured handle, is **survivable rather than supported**, and carries the
 //! consequences `ARCHITECTURE.md` §5 records.
 //! Still deferred: Navigator 2.0, restoration, `LocalHistoryRoute` (its module
@@ -63,10 +63,10 @@
 //! Deferred **by decision**, inside the feature that just landed: Flutter's
 //! `Navigator.initialRoute` / `Navigator.defaultRouteName` /
 //! `Navigator.defaultGenerateInitialRoutes` — the initial-route back-stack
-//! synthesis. It is ADR-0024 U3, whose §7.1 gate reaffirmed the deferral.
+//! synthesis. ADR-0024 defers it.
 //!
-//! The reason U3 originally gave for itself — "no consumer until deep links
-//! exist" — is **false**, and is corrected in ADR-0024 §7.6. Read
+//! The reason first given for the deferral — "no consumer until deep links
+//! exist" — is **false**, and is corrected in ADR-0024. Read
 //! `Navigator.defaultGenerateInitialRoutes`: **any** initial name other than
 //! `/` takes the expansion branch, and that branch seeds `/` *first*. So
 //! `initialRoute: "/settings"` yields `["/", "/settings"]` — a two-deep stack

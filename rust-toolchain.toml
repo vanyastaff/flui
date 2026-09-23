@@ -13,7 +13,7 @@
 # `rustup` will install this exact toolchain automatically on first `cargo`
 # invocation if it is not already available locally.
 #
-# MSRV policy (see docs/PORT.md §MSRV):
+# MSRV policy:
 #   - Pre-1.0: the MSRV tracks the latest stable release, bumped within a
 #     week of each new stable (Rust ships every 6 weeks). Don't bump ahead of
 #     an actual release.
@@ -30,7 +30,7 @@
 #      README badge and `llms.txt` against `channel` here directly; nothing
 #      else in this list is machine-checked.
 #   3. Update doc prose (AGENTS.md, README.md, crates/flui-cli/README.md,
-#      docs/getting-started.md, docs/testing.md, docs/PORT.md). NOT
+#      docs/getting-started.md, docs/testing.md). NOT
 #      docs/FOUNDATIONS.md: its one MSRV mention is a frozen historical
 #      snapshot ("pre-PR-C-2... Rust 1.96"), correctly describing what the
 #      MSRV *was* at that point in the repo's history, not current policy —

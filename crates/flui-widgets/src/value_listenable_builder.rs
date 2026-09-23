@@ -44,7 +44,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_foundation::{ListenerId, ValueListenable};
-use flui_view::context::BuildContext;
+use flui_view::context::{BuildContext, LifecycleContext};
 use flui_view::element::ElementKind;
 use flui_view::{BoxedView, IntoView, RebuildHandle, StatefulView, View, ViewExt, ViewState};
 
@@ -90,7 +90,7 @@ pub type ValueWidgetBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &T, Option<BoxedVi
 /// );
 /// ```
 pub struct ValueListenableBuilder<T> {
-    value_listenable: Arc<dyn ValueListenable<T>>, // PORT-CHECK-OK-DYN: erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
+    value_listenable: Arc<dyn ValueListenable<T>>, // erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
     builder: ValueWidgetBuilder<T>,
     child: Option<BoxedView>,
 }
@@ -99,7 +99,7 @@ impl<T> ValueListenableBuilder<T> {
     /// Rebuild from `value_listenable`'s current value, via `builder`.
     #[must_use]
     pub fn new(
-        value_listenable: Arc<dyn ValueListenable<T>>, // PORT-CHECK-OK-DYN: erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
+        value_listenable: Arc<dyn ValueListenable<T>>, // erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
         builder: ValueWidgetBuilder<T>,
     ) -> Self {
         Self {
@@ -168,7 +168,7 @@ pub struct ValueListenableBuilderState<T> {
     /// `dispose` and the unsubscribe half of `did_update_view` always
     /// remove the listener from the correct (old) instance — `init_state`
     /// and `did_update_view` receive no live `view` to re-read it from.
-    value_listenable: Arc<dyn ValueListenable<T>>, // PORT-CHECK-OK-DYN: erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
+    value_listenable: Arc<dyn ValueListenable<T>>, // erases the concrete notifier type, same shape as the already-sanctioned `Listenable`
     /// Captured in `init_state`, the only lifecycle hook handed a `BuildContext`.
     handle: Option<RebuildHandle>,
     /// The id of the listener registered against `value_listenable`, if any.
@@ -207,7 +207,7 @@ impl<T: 'static> ValueListenableBuilderState<T> {
 
 impl<T: 'static> ViewState<ValueListenableBuilder<T>> for ValueListenableBuilderState<T> {
     /// `_ValueListenableBuilderState.initState`: subscribe to the listenable.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.handle = Some(ctx.rebuild_handle());
         self.subscribe();
     }

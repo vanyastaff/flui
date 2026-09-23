@@ -944,8 +944,7 @@ impl RenderTree {
 // `unsafe impl` needed in either direction; Rust's auto-trait
 // non-derivation does the right thing.
 //
-// See `docs/PORT.md` Refusal trigger 1 and
-// `crates/flui-rendering/ARCHITECTURE.md` for the rationale.
+// See `crates/flui-rendering/ARCHITECTURE.md` for the rationale.
 
 // ============================================================================
 // flui-tree Trait Implementations

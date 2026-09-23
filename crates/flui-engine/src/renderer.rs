@@ -1012,7 +1012,7 @@ impl Renderer {
             // inside one call and `resize` reconfigures before it, so no
             // drawable is alive across a `Surface::configure`), leaving only
             // an unmeasurable compositor-side lag of ~one display period after
-            // a resize as the reason to stay at 1. ADR-0029's AppKit
+            // a resize as the reason to stay at 1. ADR-0058's AppKit
             // subsection had already measured the cost of 1 on the tail —
             // 3 % of frames stalling a full period in `get_current_texture()`
             // — and judged it tolerable.
@@ -1599,7 +1599,7 @@ impl Renderer {
     /// 2026-09-17 on the native AppKit backend, `queue.present()` returns in
     /// ~42 µs and the display cadence comes from AppKit's display-pass
     /// scheduling instead — same vsync-locked period, different mechanism
-    /// (ADR-0029's AppKit subsection; Windows' native backend is unmeasured).
+    /// (ADR-0058's per-backend facts; Windows' native backend is unmeasured).
     /// Mailbox (triple
     /// buffering, uncapped present, lower latency) is a documented future
     /// opt-in for latency-sensitive apps that accept trading pacing for
@@ -1969,7 +1969,7 @@ impl Renderer {
     /// present mode it blocks until the next vsync on the Vulkan/Wayland
     /// path, while the native AppKit backend returns from it in ~42 µs and
     /// takes its cadence from AppKit's display-pass scheduling instead
-    /// (ADR-0029's AppKit subsection).
+    /// (ADR-0058's per-backend facts).
     /// [`PresentDisposition::NoDamage`] and
     /// [`PresentDisposition::NotShown`] both skip presentation without error
     /// and so carry no vsync signal, but they are not interchangeable to the

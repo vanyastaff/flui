@@ -237,7 +237,7 @@ where
     // comes entirely from the GPU-side present path
     // (`flui_engine::Renderer::render_scene`) today — the blocking Fifo
     // present on the Vulkan/Wayland path, and the platform's display-pass
-    // cadence on the native AppKit backend (ADR-0029's AppKit subsection).
+    // cadence on the native AppKit backend (ADR-0058's per-backend facts).
     // The unwired `RasterOptions` DTO was deleted with no reader rather than
     // kept as a shape; a frame-pacing surface returns with the threaded lane
     // that can act on one — that wiring is #559's job, not a claim this

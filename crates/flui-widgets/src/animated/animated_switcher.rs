@@ -44,7 +44,7 @@ use flui_animation::{
 use flui_foundation::{ListenerId, ViewKey};
 use flui_types::Alignment;
 use flui_view::element::ElementKind;
-use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
     BoxedView, BuildContextExt, IntoView, RebuildHandle, StatelessView, ValueKey, View, ViewExt,
     ViewState,
@@ -529,7 +529,7 @@ impl AnimatedSwitcherState {
 }
 
 impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
         let vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
         if let Some(entry) = self.current_entry.as_mut() {

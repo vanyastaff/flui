@@ -688,7 +688,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// object's entire child subtree.
     ///
     /// Consulted by `flui-rendering`'s `run_semantics` assembly walk
-    /// (ADR-0014) before it recurses into children — the least-privilege
+    /// (flui-semantics ARCHITECTURE.md, semantics assembly) before it recurses into children — the least-privilege
     /// counterpart of Flutter's `visitChildrenForSemantics` override that
     /// `RenderExcludeSemantics` uses to visit no children while excluding.
     /// This node's own config is still built and merged/boundary-decided
@@ -865,7 +865,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     // Pipeline Integration
     // ========================================================================
     //
-    // Historical note (see docs/PORT.md): the trait
+    // Historical note: the trait
     // formerly carried a `set_was_repaint_boundary(&mut self, bool)` method.
     // It was a leaky abstraction -- framework bookkeeping that only existed
     // on the trait because Flutter's Dart classes are flat. The bit now lives

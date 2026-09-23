@@ -34,9 +34,10 @@
 //! `build`. Acquiring a handle inside `build` (or any layout/paint path) and
 //! scheduling from it is how you write an unbounded rebuild loop.
 //! [`FOUNDATIONS.md`](../../../../docs/FOUNDATIONS.md) permits an
-//! out-of-catalog `mark_needs_build` driver only when "gated by a refusal
-//! trigger barring signal subscriptions from `build`/`layout`/`paint`" — that
-//! gate is `scripts/port-check.sh` trigger **#22**.
+//! out-of-catalog `mark_needs_build` driver only when it cannot be reached
+//! from `build`/`layout`/`paint`. Here the type system is that gate: the
+//! handle comes from `LifecycleContext::rebuild_handle`, and `build`
+//! receives a `BuildContext`, which has no such method.
 //!
 //! # Stale handles are inert
 //!
@@ -65,7 +66,7 @@ struct Active {
 /// A `Clone + Send + Sync + 'static` capability to schedule one element's
 /// rebuild.
 ///
-/// Obtain one from [`BuildContext::rebuild_handle`](crate::context::BuildContext::rebuild_handle)
+/// Obtain one from [`LifecycleContext::rebuild_handle`](crate::context::LifecycleContext::rebuild_handle)
 /// inside `init_state`, store it in your `ViewState`, and call
 /// [`schedule`](Self::schedule) from a completion callback on any thread.
 ///
@@ -75,7 +76,7 @@ struct Active {
 /// # Example
 ///
 /// ```rust,ignore
-/// fn init_state(&mut self, ctx: &dyn BuildContext) {
+/// fn init_state(&mut self, ctx: &dyn LifecycleContext) {
 ///     let handle = ctx.rebuild_handle();
 ///     std::thread::spawn(move || {
 ///         let value = expensive();
@@ -181,7 +182,7 @@ mod tests {
     use flui_types::geometry::px;
 
     use crate::{
-        BuildOwner, RebuildHandle, RebuildReason,
+        BuildOwner, LifecycleContext, RebuildHandle, RebuildReason,
         context::BuildContext,
         tree::ElementTree,
         view::{IntoView, RenderView, RootRenderView, StatefulView, View, ViewState},
@@ -215,7 +216,7 @@ mod tests {
     }
 
     impl ViewState<Capturing> for CapturingState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             // The capability outlives the borrow of `ctx`.
             let _prev = self.captured.lock().replace(ctx.rebuild_handle());
         }

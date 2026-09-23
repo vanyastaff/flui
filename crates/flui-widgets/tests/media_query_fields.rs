@@ -156,14 +156,14 @@ impl StatefulView for LifecycleReader {
 }
 
 impl ViewState<LifecycleReader> for LifecycleReaderState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.width = MediaQuery::size_of(ctx)
             .expect("MediaQuery ancestor")
             .width
             .0;
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let dc = &self.view.dependency_changes;
         dc.set(dc.get() + 1);
         self.width = MediaQuery::size_of(ctx)

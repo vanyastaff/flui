@@ -62,7 +62,7 @@ AppRuntime (loop-scoped composition root)
 - **Frame loop** — on-demand rendering: a frame runs only when the tree is
   dirty or the scheduler has pending work; physical pacing between frames
   comes from the platform's present path — the blocking Fifo present on
-  Vulkan/Wayland, the display-pass cadence on native AppKit (ADR-0029) — not
+  Vulkan/Wayland, the display-pass cadence on native AppKit (ADR-0058) — not
   from the scheduler itself — `UpdateScheduler` makes no refresh-rate
   assumption of its own.
 - **Embedder** (`embedder`) — adapter types connecting the framework to

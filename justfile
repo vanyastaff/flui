@@ -27,8 +27,8 @@ commit  := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 #   and `just build-all-targets` link them.
 test_ci_scope := "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations"
 
-# Interpreters for scripts/, chosen by version rather than by name: port-check
-# and friends need bash >= 4 (`mapfile`), the TOML readers need Python >= 3.11
+# Interpreters for scripts/, chosen by version rather than by name: the shell
+# gates need bash >= 4 (`mapfile`), the TOML readers need Python >= 3.11
 # (`tomllib`), and a stock macOS has bash 3.2 and Python 3.9 under the plain
 # names. scripts/lib/interpreters.sh prints the newest suitable one on PATH,
 # or the plain name when there is none -- the script then stops with its own
@@ -744,23 +744,9 @@ panic-policy-check:
     {{flui_bash}} scripts/check-panic-policy.sh
 
 [group("quality")]
-[doc("Check every declared MSRV agrees with rust-toolchain.toml's channel (see docs/PORT.md §Version policy)")]
+[doc("Check every declared MSRV agrees with rust-toolchain.toml's channel")]
 toolchain-consistency-check:
     {{flui_bash}} scripts/check-toolchain-consistency.sh
-
-# =============================================================================
-# Port methodology
-# =============================================================================
-
-[group("port")]
-[doc("Run refusal-trigger grep regressions (24 triggers + named guards from docs/PORT.md)")]
-port-check:
-    {{flui_bash}} scripts/port-check.sh
-
-[group("port")]
-[doc("Run refusal-trigger checks with verbose pass/fail per trigger + marker totals")]
-port-check-verbose:
-    {{flui_bash}} scripts/port-check.sh -v
 
 # Advisory by design, and NOT part of `just ci`. It reports a LOWER BOUND on
 # citation rot: an out-of-range line or a vanished path is provably stale, but a
@@ -771,11 +757,6 @@ port-check-verbose:
 [doc("Measure provably-stale line-number citations in docs/adr/ (issue #993)")]
 adr-citations *args:
     {{flui_python}} scripts/check-adr-citations.py {{args}}
-
-[group("port")]
-[doc("Per-file breakdown of TODO(port) / PERF(port) / PORT NOTE markers across crates/")]
-port-markers:
-    {{flui_bash}} scripts/port-check.sh -b
 
 # =============================================================================
 # Benchmarks
@@ -1060,7 +1041,7 @@ workflow-lint:
 
 [group("ci")]
 [doc("The non-test half of `ci` — what the pre-push hook runs")]
-gate: fmt-check text-check font-assets-check inventory-check runtime-conformance-check panic-policy-check toolchain-consistency-check port-check wgsl-uniformity-check clippy doc-strict
+gate: fmt-check text-check font-assets-check inventory-check runtime-conformance-check panic-policy-check toolchain-consistency-check wgsl-uniformity-check clippy doc-strict
 
 [group("ci")]
 [doc("Run local CI gates (gate + test + doctests)")]

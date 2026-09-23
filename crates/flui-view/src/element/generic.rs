@@ -474,8 +474,8 @@ where
     /// `crate::element::dispatch::dispatch_view_update` (`pub(crate)`)
     /// which discriminates on `TypeId` and extracts the typed inner
     /// via `Downcast::into_any` + `Box::downcast::<V>` — the literal
-    /// `downcast_ref::<V>()` pattern FR-033's port-check grep
-    /// forbids is gone from this path entirely. On type mismatch
+    /// `downcast_ref::<V>()` view-type smuggling is gone from this
+    /// path entirely. On type mismatch
     /// the dispatch returns `false` without `tracing::warn!`; the
     /// caller (reconciler) replaces the element rather than
     /// continuing with stale state.
@@ -678,8 +678,8 @@ where
 
     /// Get the [`PipelineCell`], if set.
     ///
-    /// No SP-6 marker needed: `PipelineCell` is a lock-free, closure-scoped
-    /// handle, not a lock guard.
+    /// `PipelineCell` is a lock-free, closure-scoped handle, not a lock
+    /// guard.
     pub fn pipeline_owner(&self) -> Option<&PipelineCell> {
         self.state.pipeline_owner.as_ref()
     }

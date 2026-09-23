@@ -11,7 +11,7 @@
 //!
 //! [`OwnerAffinity`]: flui_foundation::OwnerAffinity
 //!
-//! Not [`Clone`] (ADR-0039 slice-2 decision record): the sanctioned way to
+//! Not [`Clone`] (ADR-0039 §1): the sanctioned way to
 //! hold this across owner-thread callbacks is `flui-app`'s loop-scoped
 //! `OWNER_PLATFORM_HOST` TLS slot, read through its `with_owner_platform`
 //! borrow-style accessor — never a durable owned copy squirreled away
@@ -154,7 +154,7 @@ impl OwnerPlatform {
     /// `std::thread::scope` worker can freely hold — see
     /// [`SharedPlatform`]'s own doc for why this can no longer be
     /// `&dyn Platform` (that type is still `Send + Sync` in full,
-    /// owner-affine methods included, until slice 3's trait split).
+    /// owner-affine methods included, until the owner-thread methods leave `Platform` (ADR-0039)).
     #[must_use]
     pub fn shared(&self) -> SharedPlatform {
         SharedPlatform::new(Arc::clone(&self.platform))
@@ -193,7 +193,7 @@ assert_not_impl_any!(OwnerPlatform: Send, Sync);
 /// The registry (`docs/runtime-contract.toml`) tracks this as the
 /// compile-time-checked half of the owner-platform-capability contract;
 /// `Platform` itself (the trait `dyn` object underneath) remains
-/// runtime-checked (`OwnerAffinity` debug-asserts) until slice 3 splits its
+/// runtime-checked (`OwnerAffinity` debug-asserts) until the owner-thread methods leave `Platform` and split its
 /// owner-affine methods off entirely.
 #[derive(Clone)]
 pub struct SharedPlatform {
@@ -410,7 +410,7 @@ impl WindowOpen {
 /// Failure to open a window through [`OwnerPlatform`], [`PlatformProxy`],
 /// or [`Platform::open_window`] itself — the trait method adopted this
 /// typed taxonomy when `anyhow` was retired from the crate's public API
-/// (the growth the ADR forecast for slice 3's moved methods).
+/// (the growth ADR-0039 forecast for the methods leaving `Platform`).
 ///
 /// `#[non_exhaustive]`: the taxonomy still grows as backends gain
 /// capabilities; additions are not breaks.
@@ -555,7 +555,7 @@ pub enum WakeRegistrationError {
 /// Failure to enqueue a cross-thread request through [`PlatformProxy`].
 ///
 /// Exhaustive: a deliberately closed cross-thread vocabulary (ADR-0027 §4,
-/// ADR-0037 §3) — `Unsupported` completes it (ADR-0039 slice-2 amendment b
+/// ADR-0037 §3) — `Unsupported` completes it (ADR-0039 §3
 /// revision). Support is operation-specific; absent window creation does not
 /// imply absent wake or quit transport.
 #[derive(Debug, thiserror::Error)]
@@ -588,7 +588,7 @@ pub enum ProxySendError<T: fmt::Debug> {
     /// This backend has no owner lane behind [`PlatformProxy`] at all —
     /// not "the queue is full", not "the loop died", but "cross-thread
     /// platform requests are not implemented here". **Permanent** on
-    /// windows/macos/web/android/headless until slice 3 lane adoption (ADR-
+    /// windows/macos/web/android/headless until those backends adopt the owner lane (ADR-
     /// 0039 slice-2 amendment b) — do not retry; this is not a transient
     /// condition. Treat it as a standing capability signal, the same way a
     /// missing OS feature would be reported, not a request to back off and
@@ -852,8 +852,8 @@ pub(crate) trait ProxyTransport: Send + Sync {
 }
 
 /// A transport with no lane behind it: every request is refused with
-/// [`ProxySendError::Unsupported`] (ADR-0039 slice-2 amendment b) until
-/// slice 3 gives the backend a real lane — permanently, not
+/// [`ProxySendError::Unsupported`] (ADR-0039 §3) until
+/// the backend gets a real owner lane — permanently, not
 /// `OwnerGone`: no lane ever existed here to die.
 pub(crate) struct ClosedTransport {
     owner_thread: ThreadId,
@@ -877,7 +877,7 @@ impl ProxyTransport for ClosedTransport {
         // attempt.
         tracing::debug!(
             "PlatformProxy::open_window on a lane-less backend: permanently \
-             unsupported until slice 3 (ADR-0039 amendment b) — do not retry"
+             unsupported until the owner-thread methods leave `Platform` (ADR-0039 §3) — do not retry"
         );
         Err(ProxySendError::Unsupported { rejected: options })
     }
@@ -886,7 +886,7 @@ impl ProxyTransport for ClosedTransport {
         // See `open_window`'s identical `debug!`-not-`warn!` rationale.
         tracing::debug!(
             "PlatformProxy::request_quit on a lane-less backend: permanently \
-             unsupported until slice 3 (ADR-0039 amendment b)"
+             unsupported until the owner-thread methods leave `Platform` (ADR-0039 §3)"
         );
         Err(ProxySendError::Unsupported { rejected: () })
     }

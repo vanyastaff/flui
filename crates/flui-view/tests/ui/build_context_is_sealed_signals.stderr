@@ -1,24 +1,15 @@
-error[E0046]: not all trait items implemented, missing: `element_id`, `depth`, `mounted`, `is_building`, `rebuild_handle`, `reactive`, `signal_read`, `async_driver`, `post_frame_handle`, `local_post_frame_handle`, `text_input_handle`, `hit_test_handle`, `keep_alive_lease`, `keep_alive_handle`, `focus_manager`, `depend_on_inherited`, `depend_on_inherited_fields`, `get_inherited`, `find_ancestor_element`, `find_ancestor_view`, `find_ancestor_state`, `find_root_ancestor_state`, `find_render_object`, `pipeline_owner`, `visit_ancestor_elements`, `visit_child_elements`, `mark_needs_build`, `dispatch_notification`
+error[E0046]: not all trait items implemented, missing: `element_id`, `depth`, `mounted`, `is_building`, `reactive`, `signal_read`, `depend_on_inherited`, `depend_on_inherited_fields`, `get_inherited`, `find_ancestor_element`, `find_ancestor_view`, `find_ancestor_state`, `find_root_ancestor_state`, `find_render_object`, `visit_ancestor_elements`, `visit_child_elements`, `mark_needs_build`, `dispatch_notification`
  --> tests/ui/build_context_is_sealed_signals.rs:9:1
   |
 9 | impl flui_view::BuildContext for Mine {}
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `element_id`, `depth`, `mounted`, `is_building`, `rebuild_handle`, `reactive`, `signal_read`, `async_driver`, `post_frame_handle`, `local_post_frame_handle`, `text_input_handle`, `hit_test_handle`, `keep_alive_lease`, `keep_alive_handle`, `focus_manager`, `depend_on_inherited`, `depend_on_inherited_fields`, `get_inherited`, `find_ancestor_element`, `find_ancestor_view`, `find_ancestor_state`, `find_root_ancestor_state`, `find_render_object`, `pipeline_owner`, `visit_ancestor_elements`, `visit_child_elements`, `mark_needs_build`, `dispatch_notification` in implementation
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `element_id`, `depth`, `mounted`, `is_building`, `reactive`, `signal_read`, `depend_on_inherited`, `depend_on_inherited_fields`, `get_inherited`, `find_ancestor_element`, `find_ancestor_view`, `find_ancestor_state`, `find_root_ancestor_state`, `find_render_object`, `visit_ancestor_elements`, `visit_child_elements`, `mark_needs_build`, `dispatch_notification` in implementation
   |
   = help: implement the missing item: `fn element_id(&self) -> ElementId { todo!() }`
   = help: implement the missing item: `fn depth(&self) -> usize { todo!() }`
   = help: implement the missing item: `fn mounted(&self) -> bool { todo!() }`
   = help: implement the missing item: `fn is_building(&self) -> bool { todo!() }`
-  = help: implement the missing item: `fn rebuild_handle(&self) -> RebuildHandle { todo!() }`
   = help: implement the missing item: `fn reactive(&self) -> Reactive { todo!() }`
   = help: implement the missing item: `fn signal_read(&self, _: SignalSlot) { todo!() }`
-  = help: implement the missing item: `fn async_driver(&self) -> Option<AsyncDriver> { todo!() }`
-  = help: implement the missing item: `fn post_frame_handle(&self) -> Option<PostFrameHandle> { todo!() }`
-  = help: implement the missing item: `fn local_post_frame_handle(&self) -> Option<LocalPostFrameHandle> { todo!() }`
-  = help: implement the missing item: `fn text_input_handle(&self) -> Option<flui_interaction::text_input::TextInputHandle> { todo!() }`
-  = help: implement the missing item: `fn hit_test_handle(&self) -> Option<flui_interaction::routing::interaction_lane::HitTestHandle> { todo!() }`
-  = help: implement the missing item: `fn keep_alive_lease(&self) -> KeepAliveLease { todo!() }`
-  = help: implement the missing item: `fn keep_alive_handle(&self) -> KeepAliveHandle { todo!() }`
-  = help: implement the missing item: `fn focus_manager(&self) -> Rc<flui_interaction::routing::focus::FocusManager> { todo!() }`
   = help: implement the missing item: `fn depend_on_inherited(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
   = help: implement the missing item: `fn depend_on_inherited_fields(&self, _: context::build_context::sealed::CrateToken, _: TypeId, _: FieldSet, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
   = help: implement the missing item: `fn get_inherited(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
@@ -27,7 +18,6 @@ error[E0046]: not all trait items implemented, missing: `element_id`, `depth`, `
   = help: implement the missing item: `fn find_ancestor_state(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
   = help: implement the missing item: `fn find_root_ancestor_state(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
   = help: implement the missing item: `fn find_render_object(&self) -> Option<flui_foundation::id::GenId<flui_foundation::id::markers::Render>> { todo!() }`
-  = help: implement the missing item: `fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::owner::cell::PipelineCell> { todo!() }`
   = help: implement the missing item: `fn visit_ancestor_elements(&self, _: &mut dyn FnMut(ElementId) -> bool) { todo!() }`
   = help: implement the missing item: `fn visit_child_elements(&self, _: &mut dyn FnMut(ElementId)) { todo!() }`
   = help: implement the missing item: `fn mark_needs_build(&self) { todo!() }`

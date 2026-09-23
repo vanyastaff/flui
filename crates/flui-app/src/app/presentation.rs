@@ -167,7 +167,7 @@ pub(crate) struct PresentationState {
     ///
     /// Dropping the presentation drops it, which is the point: nothing else
     /// reliably says "closed". The pipeline's own allocation does not —
-    /// `BuildContext::pipeline_owner()` hands out a strong `PipelineCell`, so
+    /// `LifecycleContext::pipeline_owner()` hands out a strong `PipelineCell`, so
     /// a widget that stores one keeps the tree alive past the close — and
     /// under `SharedRealm` the realm outlives any single presentation too.
     #[expect(
@@ -1184,7 +1184,6 @@ impl PresentationState {
     /// rolling window, so toggling it at runtime does not report frame times
     /// from before the toggle.
     pub(crate) fn set_performance_overlay(&self, enabled: bool) {
-        // PORT-CHECK-OK-LOCK: plain data: PerformanceStats (counters), no Drop
         *self.performance_overlay.borrow_mut() = enabled.then(PerformanceStats::default);
     }
 

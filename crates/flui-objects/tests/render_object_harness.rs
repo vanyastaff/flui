@@ -1587,7 +1587,7 @@ fn harness_editable_hit_tests_self() {
 }
 
 // ------------------------------------------------------------------------
-// Composing-region underline (ADR-0033)
+// Composing-region underline (ADR-0030)
 // ------------------------------------------------------------------------
 
 /// The composing-region underline paints at exactly the box
@@ -6038,7 +6038,6 @@ fn harness_shader_mask_callback_receives_local_not_offset_rect() {
         let captured_write = Rc::clone(&captured);
         let target = handle
             .register_shader_mask(move |bounds: Rect| {
-                // PORT-CHECK-OK-LOCK: plain data: Rect is Copy
                 *captured_write.borrow_mut() = Some(bounds);
                 Shader::solid(Color::WHITE)
             })
@@ -6471,7 +6470,7 @@ fn harness_follower_layer_self_describes() {
     );
 }
 
-/// ★ MILESTONE (ADR-0015): a leader+follower pair under two DIFFERENT
+/// a leader+follower pair under two DIFFERENT
 /// `Stack`-positioned `RenderRepaintBoundary` branches — the
 /// cross-repaint-boundary case that motivated the whole render-time
 /// resolution design — must hit-test the follower's child at the
@@ -6548,13 +6547,13 @@ fn harness_follower_layer_hit_tests_at_resolved_position_across_repaint_boundari
         run.hit_first(60.0, 70.0),
         Some(run.id("follower_child")),
         "a hit at the follower's RESOLVED on-screen position must reach \
-         its child — this is the whole point of ADR-0015"
+         its child — this is the whole point of follower hit-testing"
     );
 
     // (b) A hit at the follower's plain TREE-RELATIVE position (inside
     // `follower_child`'s NATURAL (0,0)-(30,30) rect, where `branch_b` and
     // the follower itself sit) does NOT reach the child — a naive
-    // structural-only forward (the pre-ADR-0015 behavior) would have hit
+    // structural-only forward (the older behavior) would have hit
     // it here instead, exactly backwards.
     assert_eq!(
         run.hit_first(10.0, 10.0),
@@ -6565,7 +6564,7 @@ fn harness_follower_layer_hit_tests_at_resolved_position_across_repaint_boundari
     );
 }
 
-/// ★ MILESTONE (ADR-0015): an unlinked follower with
+/// an unlinked follower with
 /// `show_when_unlinked = false` has NO hittable subtree at all — the
 /// hit-test walk must skip it entirely, mirroring
 /// `resolve_follower_offset -> None -> don't descend` on the render path,
@@ -7280,7 +7279,7 @@ fn harness_flex_column_reports_first_baseline() {
 }
 
 /// The flex's dry Alphabetic baseline equals the committed baseline (dry==committed
-/// invariant, ADR-0012 D-B3).
+/// invariant; flui-rendering ARCHITECTURE.md, reported baselines).
 ///
 /// Uses `RenderBaseline` over `RenderParagraph` children so both the live and dry
 /// paths have a real baseline to compute from: `RenderBaseline.compute_dry_baseline`
@@ -11209,7 +11208,7 @@ fn harness_intrinsic_height_forces_filling_child() {
 // ---- Slice-1 channel proof ------------------------------------------------
 
 /// Verify that `BoxDryLayoutCtx::child_max_intrinsic_width` (the new intrinsic
-/// channel added by ADR-0011 Slice 1) routes through the real memoized
+/// dry-intrinsics channel) routes through the real memoized
 /// `intrinsic_query` and returns the same value as a standalone
 /// `max_intrinsic_width` call on the child.
 ///
@@ -11272,7 +11271,6 @@ fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
         ) -> Size {
             // Read the child's max intrinsic width through the new channel.
             let via_channel = ctx.child_max_intrinsic_width(0, f32::INFINITY);
-            // PORT-CHECK-OK-LOCK: plain data: f32 is Copy
             *self.captured.lock().unwrap() = via_channel;
             // Return the child dry size so the tree is structurally valid.
             ctx.child_dry_layout(0, constraints)

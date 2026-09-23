@@ -1,12 +1,10 @@
 # flui-view Architecture
 
 Per-crate ledger for architecture decisions that span more than one module in
-this crate, as required by [`docs/PORT.md`](../../docs/PORT.md) §Per-crate
-`ARCHITECTURE.md` template. Partial: this file exists for the `## Mapping
+this crate. Partial: this file exists for the `## Mapping
 decisions` entries below; a full crate architecture writeup is deferred.
 [`UNIFIED_ELEMENT.md`](UNIFIED_ELEMENT.md) is the crate's existing element
-behaviour taxonomy and remains a sibling appendix, per `docs/PORT.md`'s graft
-note for this crate.
+behaviour taxonomy and remains a sibling appendix.
 
 ---
 
@@ -217,3 +215,53 @@ keyboard value vocabulary. The external fixture retains a focus node, mounts
 `Focus`, and observes focus and unfocus notifications. Its headless IME check
 only verifies typed capability access with no native owner; it does not claim
 platform IME behavior. Runtime owners and adapter constructors are not exported.
+
+### Build contexts are live during build; there is no detached fallback context
+
+**Rule.** During a `BuildOwner::build_scope` drain, the element being built is taken out of its
+slot and built against a borrowed, read-only view of the real tree (`BuildCtx`), then put back.
+Node fields that survive the take (parent, depth, inherited scope, children) stay readable; only
+the element itself is a hole. A component build outside a drain is a framework bug and panics
+with a `BUG:` message — there is no inert "minimal" context to fall back to.
+
+**Why.** An earlier shape built every context over a shared empty dummy tree, so
+`depend_on`/`find_ancestor_*` silently returned nothing in production. By-value extraction gives
+a live tree without re-locking the tree the drain already holds.
+
+**Divergence.** Flutter's `BuildContext` *is* the element and can be stashed and used after the
+element is defunct (caught only by a debug assert). FLUI's context is only reachable inside
+build/lifecycle calls. Capability acquisition is split out by type (ADR-0078:
+`LifecycleContext` in `init_state`/`did_change_dependencies`, `BuildContext` in `build`).
+
+### Inherited reads are O(1) and field-precise; reading is depending
+
+**Rule.** Each element node carries its resolved inherited scope — an `Arc<HashMap>` built at
+mount, shared by refcount down runs of non-providers, re-inserted by each provider so nested
+providers of the same type shadow nearest-first. `find_inherited_provider` is one map lookup.
+`#[derive(InheritedData)]` generates `FieldMask` constants per field; `InheritedView::changed_fields`
+diffs old and new data per field; `depend_on_field(mask, …)` records a masked dependency, and a
+provider update rebuilds only dependents whose mask intersects the change. The whole-type read
+is the all-bits mask; an empty mask is promoted to a whole-provider dependency rather than
+silently opting out. There is no read path that does not record a dependency.
+
+**Divergence.** Flutter's `InheritedModel` aspects are untyped objects and reading without
+depending (`getInheritedWidgetOfExactType`) is allowed; FLUI's aspects are compile-time field
+masks and every public read depends. There is no blanket `Data: PartialEq` bound — the diff
+comes from the opt-in derive. The dependent registry is the same reader registry signals use
+(ADR-0074 §5.5).
+
+### Reconciliation emits typed events on the live path
+
+**Rule.** `reconcile_children_by_id` emits one `ReconcileEvent` per child disposition (`Mount`,
+`Reuse`, `Reorder`, `Unmount`, `Reparent`) through the `flui::reconcile` tracing target, so the
+reconciliation stream observed by tools is the production one, not a test-only reconciler's.
+
+**Divergence.** Flutter exposes rebuild tracking only in debug mode through the devtools
+protocol; FLUI's stream is typed and zero-cost when nothing subscribes.
+
+### Not adopted
+
+A branded `Cx<'build>` token (its role is taken by the `BuildContext`/`LifecycleContext` split,
+ADR-0078); a `Mounted<'_>` re-entry token with RAII effect scopes (async and listener re-entry go
+through `RebuildHandle` and the realm inbox, ADR-0027 §3; derived state and effects are
+ADR-0075's subject); shrinking `ElementBase` into a capability-typed `Element<V, P>`.

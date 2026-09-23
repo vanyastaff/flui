@@ -16,12 +16,12 @@ Initial → Active ⇄ Inactive → Defunct
 
 This is the same four-state shape as Flutter's own `_ElementLifecycle` (`initial` / `active` /
 `inactive` / `defunct`) — a case where FLUI follows the Flutter contract directly rather than
-diverging from it, per AGENTS.md's Prime Directive: name the contract, and the behavior is proven
+diverging from it, per AGENTS.md's Design stance: name the contract, and the behavior is proven
 by test rather than assumed from the name alone.
 
-Platform/lifecycle-scoped `BuildContext` capabilities — `rebuild_handle()`, `post_frame_handle()`,
+Platform/lifecycle-scoped capabilities — `rebuild_handle()`, `post_frame_handle()`,
 `text_input_handle()`, `focus_manager()` — are acquired only while an `Element` is transitioning
-through `init_state`/`did_change_dependencies`, never from inside `build`/`perform_layout`/`paint`;
-see AGENTS.md's Architecture Constraints table (port-check trigger #22) for why, and
-[View, Element, RenderObject](view-element-render.md) for where those methods live on
-`BuildContext`.
+through `init_state`/`did_change_dependencies`, never from inside `build`/`perform_layout`/`paint`.
+They live on `LifecycleContext: BuildContext`, which only those two hooks receive, so acquiring
+one in `build` is a compile error (ADR-0078). See
+[View, Element, RenderObject](view-element-render.md) for `BuildContext` itself.

@@ -15,7 +15,6 @@ use super::{Simulation, Tolerance};
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GravitySimulation {
-    // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
     /// The acceleration due to gravity (in pixels per second squared)
     acceleration: f32,
 

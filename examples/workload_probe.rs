@@ -348,7 +348,8 @@ impl Probe {
                         let _ = self.controller.stop();
 
                         // Arm the independent, non-demanding idle observer.
-                        if let Some(handle) = self.post_frame.lock().clone() {
+                        let handle = self.post_frame.lock().clone();
+                        if let Some(handle) = handle {
                             schedule_idle_observer(handle, Arc::clone(&self.idle_frames));
                         }
 
@@ -446,7 +447,7 @@ impl StatelessView for WorkloadRoot {
 
 /// Owns the tick controller's lifecycle: registers it with the ambient
 /// [`VsyncScope`] and starts the free run in `init_state` (ADR-0021,
-/// port-check trigger #22 — lifecycle-only acquisition), never from `build`.
+/// lifecycle-only acquisition), never from `build`.
 #[derive(Clone, StatefulView)]
 struct WorkloadDriver {
     scroll_controller: ScrollController,
@@ -481,7 +482,7 @@ impl StatefulView for WorkloadDriver {
 }
 
 impl ViewState<WorkloadDriver> for WorkloadDriverState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         if let Some(handle) = ctx.post_frame_handle() {
             *self.probe.post_frame.lock() = Some(handle);
         }

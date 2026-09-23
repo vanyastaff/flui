@@ -104,7 +104,7 @@ impl Protocol for BoxProtocol {
     type HitTest = BoxHitTest;
     type DefaultParentData = BoxParentData;
 
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
+    // Protocol-layout-erasure — sanctioned erased layout-context boundary
     type LayoutCtxErased<'ctx> = dyn BoxLayoutCtxErased + 'ctx;
 
     type LayoutCache = crate::storage::BoxLayoutCache;
@@ -207,7 +207,7 @@ impl Protocol for BoxProtocol {
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
         let mut typed = BoxLayoutCtx::<flui_tree::Leaf, BoxParentData>::new(constraints);
-        // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
+        // Protocol-layout-erasure — sanctioned erased layout-context boundary
         let erased: &mut dyn BoxLayoutCtxErased = &mut typed;
         f(erased)
     }
@@ -476,7 +476,7 @@ enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
         child_sizes: ProxyChildSizeCache,
         /// The underlying erased context (typically a pipeline-side
         /// `BoxLayoutCtx` in Direct mode).
-        // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
+        // Protocol-layout-erasure — sanctioned erased layout-context boundary
         erased: &'ctx mut dyn BoxLayoutCtxErased,
     },
 }
@@ -557,7 +557,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// code from constructing Proxy contexts (a sharp tool that requires
     /// the parent_data-downcast invariants and Direct↔Proxy semantic
     /// awareness documented on [`BoxLayoutCtxErased`]).
-    // PORT-CHECK-OK-DYN: protocol-layout-erasure — sanctioned erased layout-context boundary
+    // Protocol-layout-erasure — sanctioned erased layout-context boundary
     pub(crate) fn from_erased(erased: &'ctx mut dyn BoxLayoutCtxErased) -> Self {
         let constraints = erased.constraints();
         // Review fix #2: assert at construction time that the typed

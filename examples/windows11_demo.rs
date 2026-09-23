@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create platform (Box<dyn Platform> - run() takes ownership)
     let platform: Box<dyn Platform> = Box::new(WindowsPlatform::new()?);
 
-    // Window creation moves inside `on_ready` (ADR-0039 slice 2): `Ready` is
+    // Window creation moves inside `on_ready` (ADR-0039 §1): `Ready` is
     // guaranteed there, matching every other backend's contract.
     platform.run(Box::new(|owner| {
         let options = WindowOptions {

@@ -1,17 +1,11 @@
 # ADR-0042: Theming ownership — appearance is per-presentation, selection belongs to the design system
 
-*OS appearance is a per-window signal carried by `MediaQueryData::platform_brightness`; theme *selection* (`ThemeMode`) belongs to the design system that defines the tokens, not to the application framework; the resolved theme is published through an in-tree inherited widget, separately in each window. There is no universal `ThemeData` abstraction over Material and Cupertino, and `WidgetsApp` works with neither. `flui-app` owns no design tokens — the parked `AppTheme`/`AppColorScheme` surface is removed rather than moved.*
-
----
-
-- **Status:** Accepted (2026-08-02)
+- **Status:** Accepted
 - **Date:** 2026-08-02
-- **Deciders:** @vanyastaff
-- **Scope:** removal of `crates/flui-app/src/theme/` (`AppTheme`, `AppThemeBuilder`, `AppColorScheme`, `ThemeMode`); the ownership rule this ADR records; the target app-shell split (`WidgetsApp` / `MaterialApp` / `CupertinoApp`) that implements it
 - **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (design-system decoupling — Material and Cupertino are independent siblings above the widget catalog); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (one realm per window — why appearance is per-presentation, and why package/ownership topology is a sanctioned leapfrog zone); [ADR-0037](ADR-0037-presentation-ownership-domains.md) (per-presentation owner state); [ADR-0041](ADR-0041-workspace-topology-contract.md) (layer policy — `flui-app` is L9, the design systems are L7)
-- **Issue:** [#569](https://github.com/vanyastaff/flui/issues/569) — public package surface cleanup, the third Runtime.1 pre-sprint structural task
+- **Issue:** [#569](https://github.com/vanyastaff/flui/issues/569) — public package surface cleanup
 
----
+*OS appearance is a per-window signal carried by `MediaQueryData::platform_brightness`; theme *selection* (`ThemeMode`) belongs to the design system that defines the tokens, not to the application framework; the resolved theme is published through an in-tree inherited widget, separately in each window. There is no universal `ThemeData` abstraction over Material and Cupertino, and `WidgetsApp` works with neither. `flui-app` owns no design tokens — the parked `AppTheme`/`AppColorScheme` surface is removed rather than moved.*
 
 ## Context
 

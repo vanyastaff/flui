@@ -148,7 +148,7 @@ pub trait SliverPersistentHeaderDelegate {
     /// for the obligation this carries.
     fn should_rebuild(
         &self,
-        old: &dyn SliverPersistentHeaderDelegate, // PORT-CHECK-OK-DYN: the old delegate is inherently type-erased on the view (see SharedHeaderDelegate); a generic parameter here would make the trait non-object-safe and the view un-erasable
+        old: &dyn SliverPersistentHeaderDelegate, // the old delegate is inherently type-erased on the view (see SharedHeaderDelegate); a generic parameter here would make the trait non-object-safe and the view un-erasable
     ) -> bool {
         let _ = old;
         true
@@ -160,7 +160,7 @@ pub trait SliverPersistentHeaderDelegate {
 /// `Rc` (not a generic parameter) for the same reason as
 /// `LayoutWidgetBuilder`: the view stays cheaply cloneable and object-safe as
 /// a `dyn View`, and the delegate stays UI-owner-local under ADR-0027.
-pub type SharedHeaderDelegate = Rc<dyn SliverPersistentHeaderDelegate>; // PORT-CHECK-OK-DYN: same erasure and ownership shape as LayoutWidgetBuilder — the view must stay cheaply cloneable and object-safe as a dyn View, and the delegate stays UI-owner-local under ADR-0027
+pub type SharedHeaderDelegate = Rc<dyn SliverPersistentHeaderDelegate>; // same erasure and ownership shape as LayoutWidgetBuilder — the view must stay cheaply cloneable and object-safe as a dyn View, and the delegate stays UI-owner-local under ADR-0027
 
 // ============================================================================
 // RENDER-OBJECT ABSTRACTION (one behavior, four variants)

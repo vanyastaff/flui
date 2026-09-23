@@ -1,132 +1,232 @@
 # AGENTS.md
 
-> The single agent guide for FLUI — shared by every runtime, no per-crate shims. If a rule is
-> enforced by tooling, this file says by what; if it's judgment, it says who decides. Pipeline:
-> `View` (config) → `Element` (lifecycle) → `RenderObject` (layout/paint) → `Layer` (retained) →
-> `flui-engine` → `wgpu`.
+The one guide for every agent runtime and human contributor (`CLAUDE.md` just imports it). It
+records what isn't derivable from the code: the project's design stance, the rules the compiler
+and gates enforce, and the conventions they can't check.
 
 ---
 
-## Prime Directive
+## What FLUI is
 
-1. **Flutter is a reference, not a spec.** Start from its three-tree model, lifecycle, and
-   layout/paint/hit-test protocol where good — structure and style target Rust as it is now
-   (Arity system, `NonZeroUsize` IDs, Slab arenas, `thiserror`/`Result`). Following a Flutter
-   contract: name it, prove it with a test. Improving on it: the test asserts the improvement,
-   recorded as an ADR (protocol-level) or a `## Mapping decisions` entry in the crate's
-   `ARCHITECTURE.md` (local). Losing a behavior by accident is never acceptable; dropping one on
-   purpose is a recorded decision. **Leapfrog zones (ADR-0027):** multi-window ownership,
-   runtime/scheduling topology, concurrency, presentation architecture aren't bound by Flutter's
-   widget-tree semantics. `.flutter/`/`.gpui/` are gitignored optional-reading clones — cite the
-   revision you actually read.
-2. **Check the market before settling.** Before adopting a design — Flutter's or your own — check
-   Compose, SwiftUI, and the Rust field (egui, Iced, Xilem/Masonry, Bevy UI, GPUI, Dioxus, Slint),
-   for functionality, architecture, and style alike. Breaking changes are cheap now, expensive
-   once consumers exist — don't defer a better shape. Where Flutter has no strong contract
-   (animation curves, velocity prediction, color interpolation, input smoothing) it isn't even
-   the baseline — propose the market-best shape directly.
-3. **Done = verified and recorded.** A test fails without the change; a chosen Flutter divergence
-   has an ADR or `## Mapping decisions` entry. "Better than Flutter" with no accounting is as
-   unverified as "same as Flutter". See [Definition of Done](#definition-of-done-anti-cheating).
+A declarative UI framework for Rust: Flutter-shaped at the protocol level, Rust-shaped
+everywhere else. Five trees — `View` (immutable config) → `Element` (lifecycle, reconciliation)
+→ `RenderObject` (layout / paint / hit-test) → `Layer` (retained compositing), with `Semantics`
+alongside for accessibility — then `flui-engine` → `wgpu`. Pre-1.0: breaking changes are cheap
+now and expensive once consumers exist, so fix a bad shape instead of working around it.
 
----
+## Design stance
 
-## How to Work
+- **Flutter is a reference, not a spec.** Its three-tree model, lifecycle ordering and
+  layout/paint/hit-test protocol are a good starting point, and its tests are a useful floor for
+  behavior. Structure, API and style are idiomatic Rust (compile-time child arity, `NonZeroUsize`
+  IDs, slab arenas, `thiserror`/`Result`). Diverge whenever the result is better; record why —
+  an ADR for a cross-crate contract, a `## Mapping decisions` entry in the crate's
+  `ARCHITECTURE.md` for a local one — and let a test pin the behavior you ship. Multi-window
+  ownership, runtime/scheduling topology, concurrency and presentation architecture aren't bound
+  by Flutter at all (ADR-0027). `.flutter/` and `.gpui/` are optional gitignored reference clones.
+- **Look around before settling.** Compose, SwiftUI and the Rust UI crates (egui, Iced,
+  Xilem/Masonry, Bevy UI, GPUI, Dioxus, Slint) often have the better shape; where Flutter has no
+  strong contract (animation curves, velocity prediction, color interpolation, input smoothing)
+  it isn't the baseline at all. Prefer a mature crate over a hand-rolled one.
+- **Make rules types, not reviews.** If the compiler can reject a mistake, encode it (arity
+  types, sealed traits, `LifecycleContext`); if clippy can, turn the lint on; a comment or a
+  grep is the last resort.
+- **Frame path is synchronous.** No `async` in build/layout/paint; async lives at IO, scheduler
+  and tooling edges, and delivers results to the next frame. Locks guard shared infrastructure
+  only: a lock on per-node state touched inside `perform_layout`/`paint` puts contention (and a
+  deadlock risk) on every frame, and a lock in a public signature makes callers part of the
+  locking protocol.
+- **Layers, not micro-crates.** A crate is a layer with one-way dependencies; a feature inside a
+  layer is a module (`flui-widgets` stays one crate). Shared code moves down a layer, not
+  sideways into a copy.
 
-- **One git worktree per task, never the shared checkout:** `git worktree add -b <area>/<slug>
-  ../flui-wt-<slug> origin/main` (e.g. `platform/win32-ime`). Reviewing another PR: `gh pr
-  diff`/`checkout` in your own directory, never `checkout`/`branch` in their worktree.
-- **A task is:** goal, crates/files in scope, acceptance criterion, what counts as proof — missing
-  one, ask before guessing scope.
-- **A report is:** actual command output behind each claim, plus what you could *not* verify and
-  why. "Should work" isn't a report.
-- **Commits:** `area: what changed`, one logical change per commit. **PRs:** one task, one PR,
-  `just check-changed` green first (the changed crates + their dependents: CI's fast lane);
-  the full `just ci` is optional — CI is the proof. A risky PR gets the `full-ci` label.
-  `Refs #N` by default; `Closes #N`/`Fixes #N` only when the merge should close it (GitHub's
-  linker ignores surrounding negation).
-- **Red main:** fix forward within the hour, or revert. A red heavy run on main or nightly opens
-  the "CI is red on main" issue; close it when main is green again.
-- **Don't touch without an explicit task saying so:** `.github/workflows/`,
-  `docs/runtime-contract.toml`, `docs/workspace-layers.toml`, `Cargo.lock` by hand, `docs/archive/`.
-- **No internal process-ID markers** (`Cycle N`, `PR #NNN review`, `Phase B`) in code or docs.
-  `U##`/`SC-NNN` are documented repo exceptions; `FR-NNN`/`ADR-NNNN` are fine (checker-grepped).
-  Archival roots excluded (`docs/{audits,brainstorms,ideation,plans,research,superpowers}`,
-  `.rust-studio/specs`, `specs`, `openspec`); residue tracked in issue #644.
-- **A new gate is a justfile recipe + a `checks`-job step** — a recipe alone isn't on the merge
-  path. A doc pulled in via `include_str!` is source, not docs: keep it out of `DOCS_ONLY` in `scripts/lib/change_scope.py` (`check-paths-filter-allowlist.py` enforces it).
+## Codebase map
+
+27 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. The checked
+authority is `docs/workspace-layers.toml` (enforced by `inventory-check`); `docs/crates.md` is
+the readable version. Bottom to top:
+
+- **Values & primitives** — `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`
+  (View derives).
+- **Substrate** — `flui-tree` (tree traits), `flui-platform` (windows, input, IME, clipboard;
+  every `windows::*`/`objc2::*` type stays inside it), `flui-scheduler` (frame phases),
+  `flui-painting` (records into a `DisplayList`), `flui-interaction` (event routing, gestures),
+  `flui-assets`, `flui-log`.
+- **Compositing** — `flui-layer`, `flui-semantics`, `flui-animation`.
+- **Render machine** — `flui-rendering` (the `RenderBox`/`RenderSliver` protocols),
+  `flui-objects` (the concrete render-object catalog), `flui-engine` (layers → `wgpu`).
+- **Spine & catalog** — `flui-view` (View/Element, `BuildContext`/`LifecycleContext`,
+  reconciliation, signals), `flui-widgets`, `flui-testing` (deterministic headless frame driver
+  on a virtual clock), `flui-material`, `flui-cupertino`, `flui-localizations`.
+- **Composition roots** — `flui-app` (per-window `UiRealm`s, the run loop), `flui-cli`,
+  `flui-devtools`, `flui-hot-reload`, and the facade.
+
+The non-obvious invariants live in the per-crate `ARCHITECTURE.md` files — read the one for the
+crate you're changing before changing it.
+
+## Working here
+
+- **Isolate each task in its own worktree**; the shared checkout stays on `main`:
+  `git worktree add -b <area>/<slug> ../flui-wt-<slug> origin/main`. Review someone else's PR
+  from your own directory (`gh pr diff`/`checkout`), not inside their worktree.
+- **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
+  `just check-changed` green first; CI is the proof. Before asking for review, review the branch
+  against `main` yourself and list only what would block the merge: file and line, why it is
+  wrong, how to show it fails. Risky PRs get the `full-ci` label. Use
+  `Refs #N`; `Closes`/`Fixes #N` only when merging should close it (GitHub's linker ignores
+  negation around it).
+- **Red main:** fix forward within the hour, or revert. A red heavy run on main or nightly opens a
+  "CI is red on main" issue; close it once main is green.
+- **Leave these alone unless the task is about them:** `.github/workflows/` (it is the merge
+  path, and a change there decides what every other PR must pass); `docs/runtime-contract.toml`
+  and `docs/workspace-layers.toml` (checked registries — editing them changes what the gates
+  accept, so an edit is a contract change, not a fix); `docs/archive/` (a historical record);
+  `Cargo.lock` by hand (cargo regenerates it, a hand edit drifts from the manifests).
+- **No internal process-ID markers** (`Cycle N`, `PR #NNN review`, `Phase B`, slice/wave labels)
+  in code or docs — state the invariant, not the history that produced it. `ADR-NNNN` citations
+  are fine. Archival roots are exempt (`docs/{audits,brainstorms,ideation,plans,research,superpowers}`,
+  `.rust-studio/specs`, `specs`, `openspec`).
+- **A new gate** is a justfile recipe *and* a step in CI's `checks` job — a recipe alone never
+  reaches the merge path. Prefer a lint or a type over a new script. A doc pulled in with
+  `include_str!` is source: keep it out of `DOCS_ONLY` in `scripts/lib/change_scope.py`.
+
+## Long runs
+
+The maintainer usually hands over a whole task and comes back later.
+
+- If a step doesn't need the maintainer's decision, keep going; put the status in the same
+  message as the next action.
+- Stop and ask only when you can't proceed without them, or before something irreversible or
+  outward-facing: deleting data, force-pushing, merging, publishing, or changes outside your
+  worktree.
+- For a task of more than a few steps, keep a checklist in `TASKS.md` at the worktree root
+  (git-ignored): tick what's done, append what you find. It survives context compaction and
+  shows where the run is.
+- Split large sweeps (an audit, a migration across many crates) between subagents with
+  disjoint files; check each one's evidence before accepting it.
+- End every run with three sections: **Waiting on you**, **Changed**, **Found** — with the
+  command output behind each claim, and what you could not verify.
 
 ## Commands
 
 | Need | Run |
 |------|-----|
-| Pre-PR check | `just check-changed` — fmt + clippy + nextest over the changed crates and their dependents (same scope script as CI's fast lane) |
-| Full local gate | `just ci` (fmt, text-check, inventory/runtime-conformance/panic-policy/port checks, clippy, doc-strict, tests, doctests) — optional before a PR |
-| CI parity | A PR runs CI's fast lane (checks, deny, clippy + nextest over affected crates); main, nightly and `full-ci` PRs run everything. `just ci-full` mirrors the heavy jobs this host can run; `just doctor full` names any tool it needs; the job table: `docs/testing.md` |
-| One crate | `cargo nextest run -p <crate>`, or `just test-crate <crate>` / `test-name <crate> <test>` |
-| One target (no link/exec) | `just cross-typecheck` — clippies Win32/AppKit/Android/iOS |
-| Run an example | `just example-hello` / `example <name>` / `example-list` |
-| Render-object catalog guard | `cargo test -p flui-objects --test render_object_harness` |
-| Port-check detail | `just port-check-verbose` (per-trigger pass/fail) |
-| MSRV check | `bash scripts/check-toolchain-consistency.sh` (in `just gate`) — pre-1.0 tracks latest stable, bumped within a week of release; post-1.0, N-2. Verifies `Cargo.toml`, `clippy.toml`, the `msrv` CI job, all five `flui-cli` templates, the README badge, and `llms.txt` against `rust-toolchain.toml`'s `channel` (source of truth) |
-| Flaky test that isn't yours | a genuinely process-global resource (`Registry::global`, `FONT_SYSTEM`) is mutated, not a realm/scheduler — scope a lock to that test module |
-| This machine (shared, memory-limited) | one compiling worker, shared `CARGO_TARGET_DIR`, `CARGO_BUILD_JOBS` by RAM; docs-only PR = script gates |
+| Before a PR | `just check-changed` — fmt + clippy + nextest over changed crates and their dependents (the same scope script as CI's fast lane) |
+| Full local gate | `just ci` = `just gate` (fmt, text, inventory, runtime-conformance, panic-policy, toolchain, wgsl, clippy, doc-strict) + tests + doctests; the pre-push hook runs `just gate` |
+| CI heavy jobs locally | `just ci-full`; `just doctor full` names any missing tool; job table in `docs/testing.md` |
+| One crate / one test | `cargo nextest run -p <crate>`, `just test-crate <crate>`, `just test-name <crate> <test>` |
+| Other targets (no link) | `just cross-typecheck` — clippy for Win32 / AppKit / Android / iOS |
+| Examples | `just example-hello`, `just example <name>`, `just example-list` |
+| Render-object catalog | `cargo test -p flui-objects --test render_object_harness` |
+| Toolchain | `rust-toolchain.toml` is the source of truth; pre-1.0 the MSRV tracks latest stable. `scripts/check-toolchain-consistency.sh` keeps every copy in sync |
 
-## Architecture Constraints (port methodology)
+Gotchas: nextest doesn't run doctests (`cargo test --doc`). A flaky test that isn't yours usually
+mutates a genuinely process-global resource (`Registry::global`, `FONT_SYSTEM`) — scope a lock
+to that test module rather than serializing the suite. The dev host is shared and
+memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only change needs only
+the script gates.
 
-Enforced by `just port-check`/CI; 24 refusal triggers + FR-033 in [`docs/PORT.md`](docs/PORT.md).
+## What the compiler and gates enforce
 
-| Rule | Checked by |
-|------|------------|
-| **ID offset** — slab indices 0-based; public IDs (`ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`: insert `slab_index + 1`, lookup `id.get() - 1` | `port-check` |
-| No `RwLock<Box<dyn RenderObject>>`; no `async fn` in build/layout/paint/composite/render | `port-check` |
-| No `unimplemented!()`/`todo!()` in prod code (except linux/ios/android init stubs); no `Box<dyn View>` child fields | `port-check` #8 |
-| No `From<f32>` for flui-geometry unit wrappers; `dyn` only at sanctioned boundaries (allowlist #9) | `port-check` #9 |
-| No locks in public API (`pub fn -> MutexGuard`); no `println!`/`eprintln!`/`dbg!` in foundation/tree/macros | `port-check` |
-| No dependency on `flui-log` outside `flui-app`, `flui-cli`, the facade | `inventory-check` (`workspace-layers.toml`) |
-| No presentation capability (`rebuild_handle`, `post_frame_handle`, `text_input_handle`, `focus_manager`) acquired inside `build`/`perform_layout`/`paint`, only `init_state`/`did_change_dependencies` | `port-check` #22, `check-frame-capability-scope.sh` |
-| `thiserror` (libs), `anyhow` (apps); `expect("BUG: <invariant>")` for internal invariants, never bare `unwrap()` in production | `clippy::unwrap_used`, `PANIC-POLICY.md` |
+| Rule | Enforced by |
+|------|-------------|
+| Presentation capabilities (`rebuild_handle`, `post_frame_handle`, `focus_manager`, `text_input_handle`, `keep_alive_*`, `pipeline_owner`, `async_driver`, …) are acquired only in `init_state`/`did_change_dependencies` | type system: they live on `LifecycleContext`, which only those hooks receive (ADR-0078) |
+| Signals are read in `build`, never written or created there | run-time guard in `flui-view::reactive` (ADR-0074) |
+| **ID offset** — slab indices are 0-based; public IDs (`ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`: insert `slab_index + 1`, look up `id.get() - 1` | `NonZeroUsize` + ID newtypes |
+| No lock guard held across an `if let`/`match` arm | `clippy::significant_drop_in_scrutinee` |
+| No `todo!`/`unimplemented!`/`dbg!` in production (linux/ios/android init stubs carry an `#[expect]`) | clippy `todo`/`unimplemented`/`dbg_macro` |
+| No `println!`/`eprintln!` in `flui-foundation`/`flui-tree`/`flui-macros` | clippy `print_stdout`/`print_stderr` |
+| No `From<f32>` for `flui-geometry` unit wrappers | `compile_fail` doctests in `flui-geometry` |
+| `thiserror` in libraries, `anyhow` in apps; `expect("BUG: <invariant>")` for internal invariants, no bare `unwrap()` in production | `clippy::unwrap_used`, `check-panic-policy.sh` ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) |
+| Crate layering; `flui-log` only in `flui-app`, `flui-cli` and the facade; unique ADR numbers | `inventory-check` (`docs/workspace-layers.toml`) |
+| No new process-global singletons in the runtime crates | `runtime-conformance-check` (`docs/runtime-contract.toml`) |
 
 ## ADR Policy
 
-Existing ADRs are revised freely, but **only explicitly**: open a new ADR with
-`Supersedes: ADR-XXXX`, add `Superseded-by: ADR-YYYY` to the old one. A silent mismatch between
-shipped code and an accepted ADR is a defect — the code is wrong, or the ADR needs a superseding
-entry; never an implicit gap.
+ADRs (`docs/adr/`) record cross-crate decisions the code still follows. Revise them freely but
+explicitly: a new ADR with `Supersedes: ADR-XXXX`, and `Superseded-by: ADR-YYYY` added to the old
+one. Code that silently disagrees with an accepted ADR is a defect — either the code is wrong or
+the ADR needs superseding. Delete an ADR whose decision no longer exists in the code; git keeps
+the history.
 
 ## Extending FLUI
 
-| Add | Steps |
-|-----|-------|
-| **Render object** (`RenderBox`/`RenderSliver`) | Implement the trait (`flui-rendering`/`flui-objects`) → register in `RENDER_OBJECT_TYPES` → `harness_*` test (`render_object_harness`) → no `RwLock<Box<dyn>>`/`async` in `perform_layout`/`paint` → Flutter equivalent (or absence) in `## Mapping decisions` |
-| **Widget** | `View`/`ViewState` (facade or `flui-widgets`) → back with a render object (row above) → wire `SemanticsConfiguration` for AT → test that fails without the change → `## Mapping decisions` for any divergence |
-| **Platform capability** (new `BuildContext` handle) | Lifecycle-acquired (ADR-0018/0021/0030/0037), never usable inside `build`/`perform_layout`/`paint` → backend under `flui-platform`, no `windows::*`/`cocoa::*`/`objc2::*` leaking out → token in `check-frame-capability-scope.sh` → test that fails without it → ADR if protocol-level |
-| **Example using `material`/`cupertino`** | `[[example]] required-features = [...]` (`just facade-combos` needs it) |
+| Adding | What it takes |
+|--------|---------------|
+| **Render object** (`RenderBox`/`RenderSliver`) | Implement in `flui-objects` (protocol in `flui-rendering`) → register in `RENDER_OBJECT_TYPES` → `harness_*` tests in `render_object_harness` → note a Flutter divergence in `## Mapping decisions` |
+| **Widget** | `View`/`ViewState` in `flui-widgets` or the facade, backed by a render object → `SemanticsConfiguration` for assistive tech → a test that fails without it |
+| **Platform capability** (a new handle) | Backend in `flui-platform` with no platform types leaking out → a method on `LifecycleContext`, not `BuildContext`, so `build` cannot reach it → a test that fails without it → ADR if it changes a cross-crate contract |
+| **Crate** | `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
+| **Example using `material`/`cupertino`** | `[[example]] required-features = [...]` (`just facade-combos` relies on it) |
 
-## Definition of Done (anti-cheating)
+## Definition of Done
 
-A green gate is **necessary, not sufficient** — it can pass without the behavior existing. The
-recurring failure, **"MVP reported as done"**: harness and port-check pass, but a behavior on an
-uncovered path silently regressed. Its mirror, **"MVP reported as an improvement"**, calls an
-accidental divergence "better" with no ADR and no test for it.
+A green gate proves the gates pass, not that the behavior exists. So a change is done when:
 
-1. **Verified and recorded.** Every case is matched or *deliberately* different, the difference
-   recorded (ADR / `## Mapping decisions`) and covered by a test asserting the shipped contract.
-   An unrecorded divergence is a regression until proven otherwise.
-2. **Every concrete `RenderBox`/`RenderSliver` carries harness tests**; new behavior needs a test
-   that would *fail* without the change.
-3. **Scope reported honestly.** "X done" from a prior session isn't done — re-verify. State
-   implemented vs. deferred and why; never imply completeness you didn't check.
+- new behavior has a test that fails without the change, and every concrete
+  `RenderBox`/`RenderSliver` has harness tests;
+- each Flutter divergence is deliberate, recorded (ADR or `## Mapping decisions`), and asserted
+  by a test — an unrecorded divergence counts as a regression.
 
-## Documentation Map
+## Where to read next
 
-| Need | Read |
-|------|------|
-| Feature planned? Recent changes? | `docs/ROADMAP.md`; `CHANGELOG.md` |
-| Render/layout/paint change | `docs/PORT.md` (rules, triggers, type map), then `.flutter/` |
-| Cross-crate dep, new crate, logging backend | `docs/workspace-layers.toml`, root `Cargo.toml` `[workspace.dependencies]`; new crate: `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
-| Writing a frame-driving test | `docs/testing.md` (shallowest tier that can fail), `crates/flui-rendering/docs/TESTING.md` |
-| Foundations, contracts C1–C9, pipeline, panic policy | `docs/FOUNDATIONS.md`, `docs/architecture.md`, `docs/PANIC-POLICY.md` |
+| Question | Read |
+|----------|------|
+| Is it planned? What changed recently? | `docs/ROADMAP.md`, `CHANGELOG.md` |
+| Dependencies, layering, a new crate | `docs/workspace-layers.toml`, root `Cargo.toml` `[workspace.dependencies]`, `docs/crates.md` |
+| Writing a frame-driving test | `docs/testing.md` (use the shallowest tier that can fail), `crates/flui-rendering/docs/TESTING.md` |
+| Contracts, pipeline, panics | `docs/FOUNDATIONS.md`, `docs/architecture.md`, `docs/PANIC-POLICY.md` |
 | Public runtime-contract surface | `docs/runtime-contract.toml` (`runtime-conformance-check`) |
-| Per-crate deep architecture (GPU rendering: flui-engine) | `crates/flui-{engine,foundation,layer,painting,platform,rendering,scheduler,widgets}/ARCHITECTURE.md` |
-| Contributor workflow, commit/PR conventions | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+| Planning a large change, git hygiene | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+
+## Review guidelines
+
+Pull requests are reviewed by Codex, which reads this section; a human reviewer can use it the
+same way. fmt, clippy (pedantic, `unwrap_used`, the lints in the table above), rustdoc and the
+script gates already run in CI, so style and anything they catch is not worth a comment.
+
+- **What to report:** defects that would make a maintainer block the merge. Each finding names
+  the defect and a concrete failure scenario — the input or sequence that produces the wrong
+  result. If you can't construct one, label it a hypothesis. No praise, no restating the diff.
+- **Tests:** for each behavior change, find the test that covers it and ask whether it would fail
+  with the production hunk reverted. Tests here have passed both ways by reimplementing the
+  predicate they pin, asserting that a widget exists rather than that it was laid out or
+  painted, pinning a `Send` bound with a type that already satisfies it, counting rebuilds
+  through a harness helper that dirties the root itself, or narrowing an assertion to what a
+  partial implementation handles. A regenerated `*.snap` is a claim the new output is correct —
+  the PR must say what changed and why. A test that mutates genuinely process-global state
+  (`Registry::global`, `FONT_SYSTEM`) needs a module-scoped lock, because nextest runs one
+  process per test in parallel.
+- **Unwired surface:** a new `pub` item that no production path reaches (test, example and
+  bench callers don't count) is this repository's most common defect. Flag it unless the PR
+  names the follow-up that wires it.
+- **Flutter behavior:** a change to render, layout, paint, hit-test, semantics, scheduling or
+  reconciliation either keeps Flutter's observable contract (output, edge cases, ordering) or
+  records the divergence (ADR or `## Mapping decisions`) with a test for the new behavior. A
+  Dart-shaped design is not an improvement by itself.
+- **Rendering specifics:** `SliverGeometry { ..SliverGeometry::ZERO }` drops the constructor's
+  derived defaults (`layout_extent`, `visible`) and has caused real header bugs; a layout that
+  publishes geometry from a stand-in value (ADR-0054); intrinsics, baselines or hit-testing left
+  returning defaults while the PR calls the object done; a concrete render object missing from
+  `RENDER_OBJECT_TYPES` or its `harness_*` test.
+- **Engine:** a `wgpu::Instance` and the surface it must be compatible with are created
+  together. A pixel claim needs a readback whose sample points distinguish the fixed code from
+  the broken code — rotation about the centre, SSAA area gates and framebuffer rebases have each
+  produced tests that passed both ways.
+- **Runtime and platform:** state belongs to a realm (scheduler, focus, GlobalKeys), never to the
+  process. Only the Linux/headless platform path executes in CI; Win32, AppKit, Android and iOS
+  are clippy-only, so a change there is unverified unless the PR shows a run. Event-translation
+  changes need the live smoke path, not a synthetic gesture test.
+- **`unsafe`:** each block's `SAFETY:` comment names an invariant this code establishes, not a
+  restatement of the operation; say so if a safe API would do.
+- **Manifests and workflows:** shared dependencies go through `[workspace.dependencies]`;
+  features stay additive; a new crate is registered in `docs/workspace-layers.toml` and one
+  `FM_GROUP_*` in `ci.yml`. In workflows: actions pinned to a full SHA, `--locked` on every cargo
+  call, caches saved only on `main`, a job's name equals its key, and a new job is listed in the
+  `ci` aggregator's `needs` (a heavy one also in `HEAVY_JOBS`).
+- **Registries** (`docs/runtime-contract.toml`, `docs/workspace-layers.toml`,
+  `docs/panic-policy-allowlist.txt`, `docs/ROADMAP.md`): check only that each entry matches the
+  code in the same PR and that a new exemption states its reason.
+- **Docs:** no process markers (see "Working here"); no hand-maintained completeness claims ("all
+  call sites now use X") without the command that showed it; no Flutter-parity claim without the
+  reference it was checked against.

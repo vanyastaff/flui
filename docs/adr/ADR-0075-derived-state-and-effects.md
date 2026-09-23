@@ -1,11 +1,14 @@
 # ADR-0075: Derived state and effects on the realm-scoped signal graph
 
-Status: **Proposed** (2026-09-22). Split out of ADR-0074 by its adversarial review:
-`Computed<T>` and `Effect` shipped in the first prototype (PR #1242, reverted from that PR)
-and are designed here separately, because the prototype was wrong in four ways that a
-"derived value" layer must get right before it is a contract. Nothing in this ADR is
-implemented; the prototype's code is in the PR history (`git show 5c3922b4 --
-crates/flui-view/src/reactive/mod.rs`) as a reference for what *not* to keep.
+- **Status:** Proposed
+- **Date:** 2026-09-22
+- **Split from:** ADR-0074
+
+`Computed<T>` and `Effect` shipped in the first signals prototype (PR #1242, reverted there) and
+were split out of ADR-0074 because that prototype was wrong in four ways a derived-value layer
+must get right before it is a contract. Nothing here is implemented; the prototype's code
+(`git show 5c3922b4 -- crates/flui-view/src/reactive/mod.rs`) is a reference for what *not* to
+keep.
 
 ## Context
 
@@ -20,7 +23,7 @@ The 3-screen app in ADR-0074 §1.2 also needs two things a plain signal does not
 
 The prototype implemented both as extra node kinds in the same arena and measured well
 (ADR-0074 §8.1: the "validity flips" form scenario rebuilt 4 elements instead of 44). The
-review found the implementation unsound in ways the tests did not reach.
+implementation was unsound in ways the tests did not reach.
 
 ## What the prototype got wrong (requirements for this design)
 
@@ -50,7 +53,7 @@ review found the implementation unsound in ways the tests did not reach.
    the next read only); a write to a source from inside a computation is a typed error
    (`SignalError::WrittenDuringCompute`), not recursion.
 
-Two more from the correctness review:
+Two more:
 
 5. A write whose only readers are effects must still **wake the frame** (under
    `ControlFlow::Wait` nothing else would), through a wake-only path on the external
@@ -61,8 +64,7 @@ Two more from the correctness review:
 
 ## Decision (proposed)
 
-Design `Computed<T>` and `Effect` as ADR-0074's §5.1 sketched them — `Copy` handles into
-the same realm arena, `PartialEq` on a computed output by construction, effects owned by
+Design `Computed<T>` and `Effect` as `Copy` handles into ADR-0074's realm arena, `PartialEq` on a computed output by construction, effects owned by
 their creating element or the realm — with the six requirements above as acceptance
 criteria, each backed by a test that fails against the reverted prototype:
 
@@ -70,7 +72,7 @@ criteria, each backed by a test that fails against the reverted prototype:
 |---|---|
 | effects run in the product frame | a `flui-view` binding test drives `draw_frame` and observes the effect; grep-guard that every runner's frame closure calls the effects phase |
 | panic containment | an effect that panics leaves the graph reading normally and the other pending effects run |
-| glitch freedom | diamond `S → A, B → C` asserts `C` never sees mixed generations; the `items[clamp]` case from the review |
+| glitch freedom | diamond `S → A, B → C` asserts `C` never sees mixed generations; the `items[clamp]` case above |
 | lazy with no readers | a computed value with no readers is not recomputed on source writes (counter) |
 | write-in-compute | typed error, no recursion |
 | wake on effect-only write | scheduler counter shows one frame request |
@@ -96,5 +98,5 @@ reverted design, not as a promise.
 
 ## References
 
-ADR-0074 §5, §8.1; PR #1242 review threads (correctness, adversarial); `docs/research/state-model-2026.md`
+ADR-0074 §5, §8.1; PR #1242; `docs/research/state-model-2026.md`
 §2 (Leptos three-state), §6 (Compose `derivedStateOf`), §7 (Solid memos).

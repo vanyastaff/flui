@@ -1,17 +1,11 @@
 # ADR-0047: Unified execution services under `AppRuntime`
 
-*Background execution is one loop-scoped service owned by `AppRuntime`, not a per-platform possession: work is classified by deadline and behavior (frame-required compute, asynchronous compute, IO), admission is bounded, shutdown cancels-then-joins under a deadline, and an embedded host can inject its own pools — in which case FLUI never constructs its default ones. The per-platform full-core `BackgroundExecutor` is defanged (lazy, small) ahead of its removal.*
-
----
-
-- **Status:** Accepted (2026-08-18)
+- **Status:** Accepted
 - **Date:** 2026-08-18
-- **Deciders:** @vanyastaff
-- **Scope:** background execution topology — `crates/flui-app/src/app/execution.rs`, `AppRuntime`'s ownership/teardown wiring, `AppConfig::with_executors`, `crates/flui-platform/src/executor.rs`
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime/scheduling topology is a sanctioned leapfrog zone — Flutter is not the reference here); [Runtime Architecture Execution Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) ("Unify worker, I/O, and service execution with host injection"); [Runtime Dependency Adoption Guide](../research/2026-08-01-runtime-dependency-adoption-guide.md) (`tokio-util` adoption, "another async runtime: do not add"); `docs/runtime-contract.toml` (`execution-services-owned-by-app-runtime`)
-- **Issue:** [#557](https://github.com/vanyastaff/flui/issues/557) — on the Runtime.1 critical path between singleton retirement (#553) and the task/worker/service lifecycles (#558) / threaded raster lane (#559)
+- **Issue:** [#557](https://github.com/vanyastaff/flui/issues/557) — between singleton retirement (#553) and the task/worker/service lifecycles (#558) / threaded raster lane (#559)
 
----
+*Background execution is one loop-scoped service owned by `AppRuntime`, not a per-platform possession: work is classified by deadline and behavior (frame-required compute, asynchronous compute, IO), admission is bounded, shutdown cancels-then-joins under a deadline, and an embedded host can inject its own pools — in which case FLUI never constructs its default ones. The per-platform full-core `BackgroundExecutor` is defanged (lazy, small) ahead of its removal.*
 
 ## Context
 
@@ -39,15 +33,15 @@ The runtime architecture study's target is explicit: *"Work is classified by dea
 | IO | Small fixed async runtime, 2 `flui-io` workers, lazily started | `spawn_io(IoFuture)` |
 | Durable services | **Not this ADR** — issue #558's lifecycle work | — |
 
-"Background work cannot starve frame-required compute" therefore has two halves, each pinned by a test: *structural* (the frame lane never runs on these pools, so pool saturation cannot block it — `frame_lane_makes_progress_while_background_lanes_are_saturated`) and *sizing* (the background lanes together leave the owner thread a hardware thread — `compute_pool_sizing_leaves_owner_thread_headroom`). There is no user-facing priority parameter; scheduling policy derives from the class chosen at the call site.
+"Background work cannot starve frame-required compute" therefore has two halves: *structural* (the frame lane never runs on these pools, so pool saturation cannot block it) and *sizing* (the background lanes together leave the owner thread a hardware thread). There is no user-facing priority parameter; scheduling policy derives from the class chosen at the call site.
 
 ### Bounded admission, cancellation, deadline-bounded shutdown
 
-Both lanes count in-flight work against a cap; a full lane refuses with `SpawnError::Saturated` (backpressure, not queue growth). Shutdown is staged, per the adoption guide's shape: **stop admission** (later spawns get `SpawnError::ShuttingDown`) → **cancel** (a `tokio_util::sync::CancellationToken` wrapper travels with every unit of work: queued compute jobs skip, IO futures resolve early and drop at their await point) → **join** running work, bounded by a per-pool grace deadline (`shutdown_timeout`; 5s at loop exit). The cancellation wrapper is load-bearing precisely for *host-injected* pools, whose tasks FLUI cannot drop any other way (`shutdown_cancels_work_handed_to_host_pools` fails without it). `ExecutionServices::drop` is the non-blocking last resort (`shutdown_background`), mirroring flui-assets' bridge-runtime discipline.
+Both lanes count in-flight work against a cap; a full lane refuses with `SpawnError::Saturated` (backpressure, not queue growth). Shutdown is staged, per the adoption guide's shape: **stop admission** (later spawns get `SpawnError::ShuttingDown`) → **cancel** (a `tokio_util::sync::CancellationToken` wrapper travels with every unit of work: queued compute jobs skip, IO futures resolve early and drop at their await point) → **join** running work, bounded by a per-pool grace deadline (`shutdown_timeout`; 5s at loop exit). The cancellation wrapper is load-bearing precisely for *host-injected* pools, whose tasks FLUI cannot drop any other way. `ExecutionServices::drop` is the non-blocking last resort (`shutdown_background`), mirroring flui-assets' bridge-runtime discipline.
 
 ### Host injection avoids duplicate pools
 
-`AppConfig::with_executors(HostExecutors)` carries two runtime-neutral trait objects (`HostComputePool`, `HostIoPool` — boxed-closure and boxed-future contracts, deliberately not Tokio types, per the adoption guide's "the contract is an injected executor and must remain runtime-neutral"). The bootstrap stashes them into `AppRuntime` *before* realm install resolves the services; with a host present the default pools are **never constructed** — pinned by `host_injection_routes_work_and_never_starts_default_pools`. FLUI's admission and cancellation wrappers apply identically on top of host pools, so the observable contract does not depend on who owns the threads.
+`AppConfig::with_executors(HostExecutors)` carries two runtime-neutral trait objects (`HostComputePool`, `HostIoPool` — boxed-closure and boxed-future contracts, deliberately not Tokio types, per the adoption guide's "the contract is an injected executor and must remain runtime-neutral"). The bootstrap stashes them into `AppRuntime` *before* realm install resolves the services; with a host present the default pools are **never constructed**. FLUI's admission and cancellation wrappers apply identically on top of host pools, so the observable contract does not depend on who owns the threads.
 
 ### Determinism and wasm
 

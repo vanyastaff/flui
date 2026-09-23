@@ -82,7 +82,7 @@ printf '  %-5s %-34s %-8s %s\n' scope name status detail
 if b="$(flui_find_bash4)"; then
     row ci "bash >= 4" ok "$b ($("$b" -c 'echo "$BASH_VERSION"'))"
 else
-    row ci "bash >= 4" MISSING "only bash ${BASH_VERSION} (port-check needs mapfile)" "$(brew_or bash 'apt-get install bash')"
+    row ci "bash >= 4" MISSING "only bash ${BASH_VERSION} (the shell gates need mapfile)" "$(brew_or bash 'apt-get install bash')"
 fi
 if p="$(flui_find_python311)"; then
     row ci "python >= 3.11" ok "$p ($("$p" --version 2>&1))"

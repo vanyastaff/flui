@@ -27,7 +27,7 @@ flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 # Owner-routed interaction targets/dispatch handles (ADR-0027).
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
-# Concrete render-object catalog (moved out of flui-rendering per ADR-0008).
+# Concrete render-object catalog (moved out of flui-rendering into flui-objects).
 # Snap/expand controller plumb-through for the floating persistent headers:
 # the WIDGET layer owns the controller lifecycle (vsync lives there); this
 # crate only carries the already-built controller into the render object.

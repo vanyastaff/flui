@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Checks that every place the workspace declares an MSRV agrees with
 # rust-toolchain.toml's channel minor — the single source of truth under the
-# pre-1.0 policy (MSRV tracks latest stable; see AGENTS.md / docs/PORT.md
-# §Version policy). Run via `just gate` / `just toolchain-consistency-check`.
+# pre-1.0 policy (MSRV tracks latest stable; see AGENTS.md). Run via `just gate` / `just toolchain-consistency-check`.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

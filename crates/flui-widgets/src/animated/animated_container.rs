@@ -6,7 +6,7 @@ use flui_animation::Animation;
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_geometry::EdgeInsets;
 use flui_types::{Alignment, Color};
-use flui_view::prelude::{BuildContext, StatefulView};
+use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
 
 use crate::animated::implicitly_animated::{
@@ -155,7 +155,7 @@ impl StatefulView for AnimatedContainer {
 }
 
 impl ViewState<AnimatedContainer> for AnimatedContainerState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         if let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) {
             self.controller.register(vsync);
         }

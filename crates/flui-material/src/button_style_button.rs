@@ -254,7 +254,7 @@ impl StatefulView for ButtonStyleButtonCore {
 }
 
 impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let rebuild = ctx.rebuild_handle();
 
         // Sync BEFORE listening — see `InkWellState::init_state`'s module-doc

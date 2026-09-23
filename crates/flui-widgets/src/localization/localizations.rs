@@ -342,7 +342,7 @@ impl Localizations {
         // requested resource type — the sole sanctioned resource-map
         // downcast site for the localizations substrate, mirroring
         // ADR-0019's `RouteRecord::did_complete` boundary.
-        erased.downcast::<R>().ok() // PORT-CHECK-OK-DOWNCAST: localizations resource-map lookup by caller-requested type, see this fn's doc
+        erased.downcast::<R>().ok() // localizations resource-map lookup by caller-requested type, see this fn's doc
     }
 
     /// Retrieve the resource of type `R` produced by some delegate on the
@@ -388,7 +388,7 @@ impl StatelessView for Localizations {
         let widgets_localizations = resources
             .get(&TypeId::of::<BoxedWidgetsLocalizations>())
             .cloned()
-            .and_then(|erased| erased.downcast::<BoxedWidgetsLocalizations>().ok()) // PORT-CHECK-OK-DOWNCAST: localizations resource-map lookup, see Localizations::maybe_of's doc
+            .and_then(|erased| erased.downcast::<BoxedWidgetsLocalizations>().ok()) // localizations resource-map lookup, see Localizations::maybe_of's doc
             .expect(
                 "BUG: Localizations::new's debug_assert should have caught a missing \
                  BoxedWidgetsLocalizations delegate before this build ran",
@@ -538,7 +538,6 @@ mod tests {
 
     impl<T: Clone + Send + Sync + 'static> StatelessView for Capture<T> {
         fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            // PORT-CHECK-OK-LOCK: plain data: captured Locale, no Drop
             *self.captured.lock().expect("test mutex poisoned") = Some((self.read)(ctx));
             SizedBox::shrink()
         }
@@ -650,7 +649,7 @@ mod tests {
     }
 
     impl ViewState<InitStatePanicProbe> for InitStatePanicProbeState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             (self.run)(ctx);
         }
 

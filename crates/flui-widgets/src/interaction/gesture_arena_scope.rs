@@ -157,7 +157,7 @@ mod tests {
     }
 
     impl ViewState<ArenaCapture> for ArenaCaptureState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             let _prev = self
                 .captured
                 .borrow_mut()

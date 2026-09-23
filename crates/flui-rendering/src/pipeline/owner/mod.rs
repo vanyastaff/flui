@@ -164,8 +164,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Whether semantics are enabled.
     semantics_enabled: AtomicBool,
 
-    /// The semantics tree owner (ADR-0014; Flutter `PipelineOwner
-    /// ._semanticsOwner` parity). `None` until semantics is enabled via
+    /// The semantics tree owner (flui-semantics ARCHITECTURE.md, semantics assembly). `None` until semantics is enabled via
     /// [`Self::set_semantics_enabled`]`(true)`, which lazily creates it and
     /// fires `fire_semantics_owner_created`; disposed (firing
     /// `fire_semantics_owner_disposed`) on the next `false` transition.
@@ -181,14 +180,14 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// lazy [`SemanticsOwner`] creation in [`Self::set_semantics_enabled`],
     /// and swapped onto a live owner immediately. `None` keeps the
     /// documented placeholder behaviour: an owner that assembles a tree and
-    /// publishes nowhere (ADR-0014's pre-bridge state).
+    /// publishes nowhere (the state before a bridge is installed).
     semantics_update_callback: Option<flui_semantics::SemanticsUpdateCallback>,
 
     /// The layer tree produced by the last paint phase.
     last_layer_tree: Option<LayerTree>,
 
     /// Composite-resolved offsets for `Layer::Follower` render nodes,
-    /// keyed by `RenderId` (ADR-0015) — a per-frame byproduct mirroring
+    /// keyed by `RenderId` (flui-rendering ARCHITECTURE.md, follower hit-testing) — a per-frame byproduct mirroring
     /// `last_layer_tree`. Populated post-paint
     /// (`paint.rs::run_paint`) by resolving each `FragmentComposer`-recorded
     /// follower correlation via the SAME `flui_layer::resolve_follower_offset`
@@ -219,7 +218,7 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// `RenderId`s of `Layer::Follower` nodes correlated during the last
     /// paint phase that resolved to `None` (unlinked with
-    /// `show_when_unlinked == false`) — ADR-0015's companion to
+    /// `show_when_unlinked == false`) — the follower hit-test side table's companion to
     /// `last_follower_offsets`. The hit-test walk must distinguish "not a
     /// follower" (fall through to normal traversal) from "a follower that
     /// is currently hidden" (skip the subtree entirely, mirroring
@@ -850,7 +849,7 @@ mod tests {
     }
 
     /// The pipeline-level idle contract: `run_semantics` reassembles the
-    /// whole arena whenever anything is marked (ADR-0014), but a pass whose
+    /// whole arena whenever anything is marked (flui-semantics ARCHITECTURE.md, semantics assembly), but a pass whose
     /// assembly reproduces the same tree must deliver NOTHING to the
     /// platform — the owner's flush diffs per-node payloads against the
     /// last delivered update. Before that diff, every marked-but-unchanged

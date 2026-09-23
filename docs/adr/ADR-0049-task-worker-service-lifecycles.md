@@ -1,17 +1,11 @@
 # ADR-0049: Task, worker, and service lifecycles
 
-*Background work is classified by lifetime, and every unit has a named owner and an explicit end: one-shot **tasks** and recurring **workers** are owned by `#[must_use]`, cancel-on-drop handles with deadline-bounded join evidence; application-lifetime **services** are owned by the runtime's registry, declare whether the last window closing stops the app, and are shut down by a staged cancel → bounded-join → evidence pass that runs before the execution pools close. There is no fire-and-forget spawn and no `detach()`.*
-
----
-
-- **Status:** Accepted (2026-08-18)
+- **Status:** Accepted
 - **Date:** 2026-08-18
-- **Deciders:** @vanyastaff
-- **Scope:** background-work lifecycles — `crates/flui-app/src/app/lifecycle.rs`, `AppRuntime`'s service registry and exit consult, `AppConfig::with_service`, the loop-exit teardown staging in `app/runner.rs`
 - **Related:** [ADR-0047](ADR-0047-unified-execution-services.md) (the execution lanes these lifecycles run on); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (concurrency topology is a sanctioned leapfrog zone — Flutter is not the reference); [Runtime Architecture Execution Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) ("Define durable service lifecycle and graceful application shutdown"); `docs/runtime-contract.toml` (`task-worker-service-lifecycles`)
-- **Issue:** [#558](https://github.com/vanyastaff/flui/issues/558) — on the Runtime.1 critical path after unified execution services (#557)
+- **Issue:** [#558](https://github.com/vanyastaff/flui/issues/558) — follows unified execution services (#557)
 
----
+*Background work is classified by lifetime, and every unit has a named owner and an explicit end: one-shot **tasks** and recurring **workers** are owned by `#[must_use]`, cancel-on-drop handles with deadline-bounded join evidence; application-lifetime **services** are owned by the runtime's registry, declare whether the last window closing stops the app, and are shut down by a staged cancel → bounded-join → evidence pass that runs before the execution pools close. There is no fire-and-forget spawn and no `detach()`.*
 
 ## Context
 
@@ -104,7 +98,7 @@ service can never wake, mutate, or re-enter UI state. When the receiving side di
 later publish is `PublishError::OwnerGone`: a late service result after teardown is
 structurally inert — nothing exists for it to revive.
 
-Tasks and workers reach application code in this slice through `ServiceContext::spawner()`
+Tasks and workers reach application code through `ServiceContext::spawner()`
 only — a `TaskSpawner` holding the execution services *weakly*, so a spawner outliving its
 loop refuses with `ShuttingDown` instead of keeping dead pools alive. Never ambient: no
 global, no thread-local.
@@ -121,8 +115,7 @@ Loop-exit teardown (`teardown_platform_realm`) now runs two stages in a load-bea
    bounded per pool.
 
 The order is the whole point: the pool stage hard-drops any still-running future at its next
-await point, so the cooperative pass must come first or no service ever gets its flush window
-— pinned by a teardown test that fails when the two stages are swapped. A service that
+await point, so the cooperative pass must come first or no service ever gets its flush window. A service that
 ignores cancellation costs at most the shared deadline and is reported, never waited on
 unboundedly; shutdown never blocks on any optional-work queue (completion channels are
 dedicated and capacity-one; event rings drop rather than block). Every lifecycle signal is a
@@ -153,8 +146,8 @@ execution slot's reset.
   and it recreates a shared delivery path with head-of-line concerns; capacity-one channels
   per unit are cheap and independently reliable.
 - **Widget-tier spawning capability now.** Deferred, not rejected: a `BuildContext`-acquired
-  handle must follow the ADR-0018/0021 acquisition discipline and add its token to the
-  frame-capability-scope checker; it deserves its own slice rather than riding this one.
+  handle must follow the capability-acquisition rule (lifecycle hooks only, never
+  `build`/`perform_layout`/`paint`; see ADR-0078); it deserves its own decision.
 
 ## Consequences
 
@@ -164,9 +157,9 @@ execution slot's reset.
   not exist yet.
 - `ExecutionServices` is now held in an `Arc` by `AppRuntime` so lifecycle handles can hold
   it weakly; shutdown semantics are unchanged.
-- **Deliberately not in this slice, tracked under #558:** ProcessWorker (FLUI has no process
+- **Deliberately deferred, tracked under #558:** ProcessWorker (FLUI has no process
   plumbing to build on); close-request veto/defer for unsaved work (needs a
   `CloseRequested` interception seam in the platform close path); journaled recoverable
   state; the widget-tier capability above; wasm32 lifecycles.
-- A breaking reshape of these surfaces when the deferred slices land is expected and
+- A breaking reshape of these surfaces when the deferred pieces land is expected and
   preferred over shims (`experimental` classification in `docs/runtime-contract.toml`).

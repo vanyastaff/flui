@@ -242,7 +242,7 @@ impl StatelessView for CallbackShortcuts {
 /// match, or no enabled action: the key keeps bubbling.
 #[derive(Clone)]
 pub struct Shortcuts {
-    shortcuts: Vec<(SingleActivator, Rc<dyn Intent>)>, // PORT-CHECK-OK-DYN: ADR-0023 — Flutter's `Map<ShortcutActivator, Intent>`; read back only through its own TypeId.
+    shortcuts: Vec<(SingleActivator, Rc<dyn Intent>)>, // ADR-0023 — Flutter's `Map<ShortcutActivator, Intent>`; read back only through its own TypeId.
     child: BoxedView,
 }
 
@@ -324,7 +324,7 @@ impl StatelessView for Shortcuts {
 /// [`FocusRoot`](super::focus::FocusRoot) installs this widget automatically
 /// for every standard FLUI presentation. It remains public for custom
 /// embedders and deliberately isolated subtrees. Each instance binds actions
-/// to its own [`BuildContext::focus_manager`], with no ambient process
+/// to its own [`LifecycleContext::focus_manager`], with no ambient process
 /// singleton.
 #[derive(Clone, Debug, StatefulView)]
 pub struct DefaultFocusTraversal {
@@ -363,11 +363,11 @@ impl StatefulView for DefaultFocusTraversal {
 }
 
 impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.focus_owner = Some(ctx.focus_manager());
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.focus_owner = Some(ctx.focus_manager());
     }
 

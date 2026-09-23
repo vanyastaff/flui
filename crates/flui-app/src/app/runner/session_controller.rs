@@ -117,7 +117,7 @@ mod tests {
         }
     }
     impl ViewState<Probe> for State {
-        fn init_state(&mut self, ctx: &dyn flui_view::BuildContext) {
+        fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
             let history = self.history.clone();
             let (_, subscription) = ctx
                 .lifecycle_handle()

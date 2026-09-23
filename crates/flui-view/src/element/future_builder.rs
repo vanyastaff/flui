@@ -12,7 +12,7 @@
 //!
 //! - `RebuildHandle` — captured in `init_state`, called from the task's
 //!   completion to schedule a rebuild. Never acquired in `build`.
-//! - `AsyncDriver` — reached through [`BuildContext::async_driver`], which
+//! - `AsyncDriver` — reached through [`LifecycleContext::async_driver`], which
 //!   yields the driver *this binding's frame step polls*. The task is spawned
 //!   with `spawn_local_eager`, so an immediately-ready future completes inline.
 //! - [`AsyncSnapshot`] / [`ConnectionState`] — the state machine.
@@ -53,7 +53,7 @@ use parking_lot::Mutex;
 use super::async_slot::{InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, apply_fold};
 use crate::{
     RebuildHandle,
-    context::BuildContext,
+    context::{BuildContext, LifecycleContext},
     view::{IntoView, StatefulView, View, ViewState},
 };
 
@@ -296,7 +296,7 @@ where
     E: Send + Sync + 'static,
 {
     /// `_FutureBuilderState.initState`: seed from `initialData`, then subscribe.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // Capture the capabilities here — the ONLY lifecycle hook handed a
         // context. `did_update_view` and `dispose` receive none.
         self.handle = Some(ctx.rebuild_handle());
@@ -388,8 +388,8 @@ mod tests {
         type Output = Result<Payload, Boom>;
 
         fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-            // PORT-CHECK-OK-LOCK: plain data: Result<Payload, Boom> holds only i32/&'static str
-            if let Some(result) = self.result.lock().take() {
+            let result = self.result.lock().take();
+            if let Some(result) = result {
                 Poll::Ready(result)
             } else {
                 let _prev = self.waker.lock().replace(cx.waker().clone());
@@ -417,7 +417,6 @@ mod tests {
         /// the Rust analogue of Dart's `SynchronousFuture`.
         fn ready(result: Result<Payload, Boom>) -> Self {
             let completer = Self::new();
-            // PORT-CHECK-OK-LOCK: plain data: Result<Payload, Boom> holds only i32/&'static str
             *completer.result.lock() = Some(result);
             completer
         }
@@ -435,7 +434,6 @@ mod tests {
 
         /// Complete from outside a frame, as a real async completion would.
         fn complete(&self, result: Result<Payload, Boom>) {
-            // PORT-CHECK-OK-LOCK: plain data: Result<Payload, Boom> holds only i32/&'static str
             *self.result.lock() = Some(result);
             if let Some(waker) = self.waker.lock().as_ref() {
                 waker.wake_by_ref();

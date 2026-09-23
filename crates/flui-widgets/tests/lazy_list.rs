@@ -687,7 +687,7 @@ impl StatefulView for ProbeItem {
 }
 
 impl ViewState<ProbeItem> for ProbeItemState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.log.lock().push((self.index, "init"));
     }
     fn build(&self, _view: &ProbeItem, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1244,7 +1244,7 @@ impl StatefulView for KeyedRow {
 }
 
 impl ViewState<KeyedRow> for KeyedRowState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         // One entry per STATE created: a preserved element never adds a
         // second entry for its id, a remounted one does.
         self.log.lock().push(self.born_as);
@@ -1325,7 +1325,6 @@ fn lazy_list_view_builder_keyed_insert_at_head_preserves_resident_state() {
     assert_eq!(born_ids(&laid, &[10, 11, 12, 13]), vec![10, 11, 12, 13]);
     let nodes_before = laid.render_node_count();
 
-    // PORT-CHECK-OK-LOCK: plain data: Vec<i32>, no Drop
     data.lock().insert(0, 99);
     laid.pump_widget(keyed_list(&data, &inits, true));
     assert_eq!(
@@ -1400,7 +1399,6 @@ fn lazy_list_view_builder_keyed_swap_within_the_band_preserves_state_without_a_c
     };
     let (y11, y13) = (top_of(&laid, 11), top_of(&laid, 13));
 
-    // PORT-CHECK-OK-LOCK: plain data: Vec<i32>, no Drop
     data.lock().swap(1, 3);
     laid.pump_widget(keyed_list(&data, &inits, false));
     assert_eq!(born_ids(&laid, &[10, 13, 12, 11]), vec![10, 13, 12, 11]);
@@ -1498,7 +1496,7 @@ impl StatefulView for CountingItem {
 }
 
 impl ViewState<CountingItem> for CountingItemState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.log.lock().push("init");
     }
     fn build(&self, _view: &CountingItem, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1665,7 +1663,7 @@ impl StatefulView for KeptItem {
 }
 
 impl ViewState<KeptItem> for KeptItemState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.log.lock().push((self.index, "init"));
         if self.keep {
             self.lease = Some(ctx.keep_alive_lease());
@@ -1839,7 +1837,7 @@ impl StatefulView for ReleasableItem {
 }
 
 impl ViewState<ReleasableItem> for ReleasableItemState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.log.lock().push((self.index, "init"));
         self.lease = Some(ctx.keep_alive_lease());
     }
@@ -2029,7 +2027,7 @@ impl StatefulView for BecomesKeepWorthy {
 }
 
 impl ViewState<BecomesKeepWorthy> for BecomesKeepWorthyState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.log.lock().push((self.index, "init"));
         // The capability, not a hold: nothing is keep-worthy yet.
         self.handle = Some(ctx.keep_alive_handle());

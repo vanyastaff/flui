@@ -1,23 +1,15 @@
 # ADR-0054: The viewport commits one result
 
-- **Status:** Accepted (2026-09-04), landing in steps — the "Status of the decisions" section says
-  which are in the tree.
+- **Status:** Accepted
 - **Date:** 2026-09-04
-- **Deciders:** @vanyastaff
-- **Scope:** `crates/flui-objects/src/sliver/viewport.rs` (`RenderViewport`,
-  `RenderShrinkWrappingViewport`), the layout contexts in `crates/flui-rendering/src/context/`,
-  the semantics assembler (`crates/flui-rendering/src/pipeline/owner/semantics.rs`),
-  `crates/flui-widgets/src/scroll/{viewport,custom_scroll_view}.rs`.
-- **Related:** [ADR-0017](ADR-0017-build-during-layout-callback-seam.md) (+ amendment),
-  [ADR-0053](ADR-0053-one-lazy-child-lifecycle-for-multi-box-slivers.md); issue #537; follow-ups
-  #833 (the per-pixel rebuild) and #834 (the pipeline's positioned-this-pass stamp).
+- **Related:** [ADR-0017](ADR-0017-build-during-layout-callback-seam.md) (+ amendment), [ADR-0053](ADR-0053-one-lazy-child-lifecycle-for-multi-box-slivers.md); issue #537; #833 (the per-pixel rebuild) and #834 (the pipeline's positioned-this-pass stamp)
 
 ## Context
 
 A viewport's layout is a loop: attempt a pass, apply a sliver's scroll correction, attempt again,
 and accept once the scroll position takes the resulting dimensions. Three things about how FLUI
 committed that loop's result were inconsistent with each other and with Flutter
-(`rendering/viewport.dart`, read 2026-09-04):
+(`rendering/viewport.dart`):
 
 - **Positions were committed by the pass, not by the loop.** Each attempt positioned children as it
   walked, against a size the shrink-wrapping viewport did not yet know (an unbounded main axis
@@ -39,8 +31,8 @@ committed that loop's result were inconsistent with each other and with Flutter
 1. **Positions are resolved once, at commit.** `layout_child_sequence` stages
    `(slot, layout offset, growth direction, paint extent)`; after the loop accepts, `commit_positions`
    resolves physical offsets against the final size. The shrink-wrapping viewport's second layout
-   pass is deleted. Every child is laid out exactly once per accepted pass (pinned by a counting
-   sliver: one pass, one layout), and a reverse axis positions from the final extent (pinned).
+   pass is deleted. Every child is laid out exactly once per accepted pass, and a reverse axis positions from
+   the final extent.
    Improvement over Flutter's model: the offsets are committed with the layout, so paint and
    hit-test read state instead of resolving it.
 2. **A degraded pass publishes no dimensions.** The layout context reports whether a descendant's
@@ -57,7 +49,7 @@ committed that loop's result were inconsistent with each other and with Flutter
    terms; a `center` past the last child is invalid. The name changes (`center_sliver_index` →
    `center`) so every caller of the old semantics is found by the compiler. The sliver hook
    `center_offset_adjustment` — unwired, with zero overrides anywhere in the codebase or in
-   Flutter's own sliver family — is deleted rather than wired; see "Status of the decisions" for
+   Flutter's own sliver family — is deleted rather than wired; see "Implementation notes" for
    the reasoning.
 4. **`clip_behavior`** on both viewports (default `HardEdge`, `None` clips nothing); the paint clip
    a child sees is the viewport's bounds shrunk by the previous sliver's overlap (Flutter's
@@ -71,23 +63,30 @@ committed that loop's result were inconsistent with each other and with Flutter
 
 ## Recorded divergences and gaps
 
-- The wgpu backend ignores a clip layer's `Clip` mode: `None` versus clipped is observable, the
-  clipped modes are not distinguishable on screen. Pixel evidence stays per primitive in the
-  engine's readback suite.
+- The wgpu backend originally ignored a clip layer's `Clip` mode; since #848 only `AntiAlias` on a
+  rect still renders as `HardEdge` (see "Implementation notes"). Pixel evidence stays per
+  primitive in the engine's readback suite.
 - `center` is an index, not a key; a key-based center is a follow-up.
-- The hit-test child-count snapshot the slivers keep (committed only when a pass validates) is
-  retired by #834's pipeline stamp, not here.
-- The per-pixel rebuild of the viewport subtree on scroll is #833; every setter added here returns
-  no impact on equality so that rebuild stays cheap until then.
+- Every setter added here returns no impact on equality. The per-pixel rebuild of the viewport
+  subtree on scroll (#833) and the slivers' hit-test child-count snapshot (replaced by #834's
+  placed-generation stamp) are closed separately.
 
 ## Status of the decisions
 
-Decision 1 landed first, with the reverse-axis and one-layout-per-pass pins. Decision 2 landed
-next: the walk counts every degradation event (a layout that failed and handed its caller a
-stand-in, or a poisoned node that served one), a layout context reports whether that count moved
-during its node's pass, and both viewports publish no scroll dimensions from such a pass — pinned
-at one level and at two levels below the viewport, each reading a clamped offset without the
-guard. Decision 3 landed third:
+All five decisions are implemented (`commit_positions`, the degradation count with
+`RenderFlags::GEOMETRY_DEGRADED`, `center`/`anchor`, `clip_behavior` and the two clip hooks on both
+viewports); decision 5 needed no code. The follow-ups this record named are closed: #833, #834,
+and #850 (layout now marks semantics dirty, see below). One clip-mode gap remains (rect
+`AntiAlias`, below).
+
+## Implementation notes
+
+**Decisions 1 and 2.** The walk counts every degradation event (a layout that failed and handed
+its caller a stand-in, or a poisoned node that served one), a layout context reports whether that
+count moved during its node's pass, and both viewports publish no scroll dimensions from such a
+pass, at any depth below the viewport.
+
+**Decision 3.**
 
 - `RenderViewport`'s `center_sliver_index: Option<usize>` (forward prefix, reverse suffix) is
   renamed `center: Option<usize>` and re-meant to Flutter's model: the first FORWARD child: the
@@ -112,10 +111,8 @@ guard. Decision 3 landed third:
   is re-keyed from layout-visit order (a push per child, in the order `layout_child_sequence`
   happened to walk them) to absolute child-slot order (an index-sized `Vec` written by index),
   and the query is direction-aware: a forward child sums `[center, child_index)`, a reverse child
-  sums `(child_index, center)` — the slivers closer to `center` than it. A pin
-  (`viewport_max_scroll_obstruction_extent_before_is_keyed_by_slot_not_layout_order`) exercises a
-  3-child, `center: Some(2)` tree where visit order and index order actually disagree and shows
-  the push-order/`.take(child_index)` reading swaps what indices 0 and 1 report.
+  sums `(child_index, center)` — the slivers closer to `center` than it. Where visit order and
+  index order disagree, the old push-order reading reported the wrong slivers.
 - `RenderSliver::center_offset_adjustment` — the sliver hook `viewport.dart`'s loop reads once per
   frame (`offset.pixels + centerOffsetAdjustment`) — is DELETED rather than wired. It had exactly
   one implementation in the whole codebase (the trait's own `0.0` default) and zero overrides
@@ -129,29 +126,16 @@ guard. Decision 3 landed third:
   genuinely grows in both directions from one scroll offset, the hook is cheap to re-add with a
   real caller at that point.
 
-Decision 4 landed in two parts. The first is `clip_behavior` itself: both viewports carry it
+**Decision 4** has two parts. The first is `clip_behavior` itself: both viewports carry it
 (default `HardEdge`), and each clips only when its content overflows **and** the behaviour is not
-`Clip::None`, which produces no clip layer at all — pinned structurally by
-`viewport_clip_behavior_controls_the_clip_layer`, which reads the composited layer kinds for the
-overflowing-clipped, overflowing-unclipped and fitting cases. `Viewport`, `ShrinkWrappingViewport`
-and `CustomScrollView` all expose the knob.
-
-Pixel evidence comes in two halves, because no single crate can see both ends: the widget test
-above pins that `Clip::None` pushes NO clip layer and any other behaviour pushes one, and
-`a_clip_rect_layer_clips_its_content_and_its_absence_does_not` (flui-engine, the WARP readback
-suite) rasterizes a clip layer and its absence over identical content and reads the pixel 16 px
-past the clip's edge. Its oracle samples the RED channel on purpose: the content is blue and the
-cleared surface is white, so the two agree on blue and an assertion there would pass either way.
+`Clip::None`, which produces no clip layer at all. `Viewport`, `ShrinkWrappingViewport` and
+`CustomScrollView` all expose the knob.
 
 The gap this recorded — the wgpu backend discarding a clip layer's `Clip` mode, leaving all three
-clipped modes pixel-identical — is **mostly closed** (issue #848). A **rounded** clip now honours
-`HardEdge` against `AntiAlias`, pinned by
-`a_rounded_clip_honours_hard_edge_and_anti_alias_differently`, and
-**`AntiAliasWithSaveLayer`** renders the clipped subtree into an offscreen so the clip's coverage
-multiplies the finished group once, pinned by
-`the_save_layer_mode_composites_the_clipped_group_once` against the value a single composed draw
-produces. One case remains deferred, pinned by a test asserting the known-wrong equality so the
-divergence cannot go quiet:
+clipped modes pixel-identical — is **mostly closed** (issue #848). A **rounded** clip honours
+`HardEdge` against `AntiAlias`, and **`AntiAliasWithSaveLayer`** renders the clipped subtree into
+an offscreen so the clip's coverage multiplies the finished group once. One case remains deferred,
+with a test asserting the known-wrong equality so the divergence cannot go quiet:
 
 - **`AntiAlias` on a rect** renders as `HardEdge`. A rect clip is the hardware scissor, and
   routing it to the SDF to feather it was tried and reverted: the SDF is a per-instance uniform,
@@ -164,8 +148,7 @@ offscreen is declined where no clip was actually installed (a **path** clip inst
 inside a bounds-growing image-filter layer (which discards nested layers), and its compositing
 bounds are the clip's own scissor rather than the whole viewport.
 
-The second part is the clips a child sees, and it landed with its consumer rather than ahead of
-it. Two hooks join the render-object trait family beside `excludes_semantics_subtree`:
+The second part is the clips a child sees. Two hooks join the render-object trait family beside `excludes_semantics_subtree`:
 `describe_approximate_paint_clip(child_slot)` and `describe_semantics_clip(child_slot)`, both
 defaulting to `None` and both answering in the node's own coordinates. The semantics walk folds
 them down the tree in root coordinates and applies Flutter's `_SemanticsGeometry` rules: a node's
@@ -204,21 +187,17 @@ Three departures from Flutter, all deliberate:
   it has nothing wider than its paint clip to grant. Content a clip cuts away is gone, not merely
   off-screen.
 
-The clips are applied when semantics is ASSEMBLED, and FLUI does not re-assemble after a
-layout-only change: nothing marks a node's semantics dirty when it lays out, where Flutter calls
-`markNeedsSemanticsUpdate()` immediately after every `performLayout()` (`rendering/object.dart`,
-both layout entry points). So a scroll leaves the tree describing where the content was. The
-defect is older than these clips and is not introduced here, but the clip is what makes it
-describable, so it is named rather than left implicit: issue #850.
-
-Decision 5 needs no code.
+The clips are applied when semantics is ASSEMBLED, so they are only as fresh as the last
+re-assembly. Flutter calls `markNeedsSemanticsUpdate()` after every `performLayout()`; FLUI marks
+the dirty root of each layout walk for semantics (issue #850), so a scroll — a layout-only frame —
+re-publishes the clipped geometry.
 
 The degradation query is deliberately a count-since-context-creation rather than a failure flag:
 the pipeline catches a failure in the failing node's own walk frame and hands the parent a
 stand-in, so a flag on the direct child sees nothing when the failure is deeper, and a poisoned
-node's stand-in is served on later frames with no failure recorded at all. Both arms are pinned.
+node's stand-in is served on later frames with no failure recorded at all.
 
-Two consequences of the same shape, each pinned by a test that reads a wrong number without it:
+Two consequences of the same shape:
 
 - **A cache hit inherits the degradation.** Geometry committed by a degraded pass is marked on the
   node (`RenderFlags::GEOMETRY_DEGRADED`, sticky until the node completes a pass in which nothing

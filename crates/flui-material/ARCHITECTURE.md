@@ -1,7 +1,6 @@
 # flui-material Architecture
 
-Per-crate ledger for Material widgets and theming, as required by
-[`docs/PORT.md`](../../docs/PORT.md) §Per-crate `ARCHITECTURE.md` template.
+Per-crate ledger for Material widgets and theming.
 Mapping decisions that span more than one module in this crate land here so
 later parity work does not treat a deliberate divergence as accidental drift.
 Module-level docs may repeat a local note and should cite this file when the
@@ -128,7 +127,7 @@ is stricter than Flutter's post-frame debug tab-count check.
 
 ### `Radio` publishes its group membership, and the role cascade has to prefer it
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Prime Directive #1 — a behavior the
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a behavior the
 reference handles is dropped only by decision, recorded where a reader will find
 it.
 

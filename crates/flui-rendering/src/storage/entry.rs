@@ -10,9 +10,8 @@
 //! The render object is owned by plain value (`Box<dyn RenderObject<P>>`),
 //! not wrapped in a lock. Mutable access goes through `&mut self`, which the
 //! pipeline obtains via `&mut RenderTree` at phase boundaries (Build / Layout
-//! / Paint). The previous shape `RwLock<Box<dyn RenderObject<P>>>` is the
-//! canonical refusal-trigger violation documented in `docs/PORT.md` (Trigger 1
-//! and Trigger 2). Single-writer-per-frame discipline is enforced by Rust's
+//! / Paint). The previous shape `RwLock<Box<dyn RenderObject<P>>>` is
+//! deliberately gone. Single-writer-per-frame discipline is enforced by Rust's
 //! borrow checker on `&mut RenderTree`, matching Flutter's single-threaded
 //! pipeline invariant (`_debugDoingThisLayout` / `_debugDoingThisPaint`
 //! debug asserts in `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart`).

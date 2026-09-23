@@ -811,7 +811,8 @@ mod tests {
         let id_b_cell_clone = Arc::clone(&id_b_cell);
 
         let id_a = notifier.add_listener(Arc::new(move || {
-            if let Some(id) = *id_b_cell_clone.lock() {
+            let id = *id_b_cell_clone.lock();
+            if let Some(id) = id {
                 notifier_clone.remove_listener(id);
             }
         }));

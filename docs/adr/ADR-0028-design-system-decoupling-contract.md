@@ -1,58 +1,79 @@
 # ADR-0028: Design-system decoupling contract
 
-*Core (`flui-view`/`flui-widgets`/`flui-rendering`/`flui-objects`/`flui-animation`/`flui-interaction`/`flui-foundation`/`flui-types`/`flui-painting`/`flui-geometry`, and every other crate that is not a design system, the global localization implementation, the app crate, or an example) never depends on `flui-material` or `flui-cupertino` — enforced by `scripts/check-workspace-inventory.sh`, not left as a convention.*
-
----
-
-- **Status:** Accepted (owner directive, 2026-07-16)
+- **Status:** Accepted
 - **Date:** 2026-07-16
-- **Deciders:** @vanyastaff
-- **Scope:** workspace-wide dependency topology — `crates/*/Cargo.toml`, `scripts/check-workspace-inventory.sh`, `docs/FOUNDATIONS.md`
-- **Related:** ADR-0027 (sanctioned leapfrog zones: multi-window ownership, runtime/scheduling topology, concurrency architecture, presentation architecture — this ADR adds **package/dependency topology** as one more); ADR-0022/ADR-0026 (Focus seam — an example of a design-agnostic mechanism already correctly homed in `flui-widgets`); ADR-0009 (flui-widgets as the configuration-object catalog design systems are built on); [ADR-0041](ADR-0041-workspace-topology-contract.md) (generalizes this one dependency-graph rule into a checked whole-workspace layer policy)
-
-> **Note (2026-08-01, [ADR-0041](ADR-0041-workspace-topology-contract.md)):** the layer numbers this ADR cites — design systems at L7, the widget catalog at L6 — are unchanged by the topology-contract corrections. This ADR's guard still spans **every** dependency kind (normal, dev, build), but now exempts `flui-localizations` as the implementation package for global Material/Cupertino resources. ADR-0041's broader layer rule covers normal edges and explicitly forbids the reverse direction (`flui-material`/`flui-cupertino → flui-localizations`).
-
----
+- **Related:** ADR-0041 (the whole-workspace layer policy this rule is one part of)
 
 ## Context
 
-Flutter announced decoupling `material`/`cupertino` from the framework core (`widgets`/`rendering`/`painting` stop assuming a design system exists). FLUI's own layer table (`docs/FOUNDATIONS.md`, Part IV) already draws design systems as **L7**, strictly above the **L6** widget catalog — `material --> widgets`, `cupertino --> widgets`, never the reverse. That direction has held so far, but only as a convention nobody has broken yet, not as something CI would catch if someone did. Two concrete near-misses motivate closing that gap now rather than after the fact:
-
-1. **`WidgetState`/`WidgetStateProperty`/`WidgetStatesController`** (the interactive-state vocabulary `InkWell` and every future button style resolve against) was ported to `flui-widgets`, matching Flutter 3.44's own move of `widget_state.dart` out of `material` and into `widgets` — precisely the decoupling Flutter announced, already landed on the FLUI side before this ADR existed to name it.
-2. `flui-material`'s `Material`/`InkWell` substrate depends downward on `flui-widgets` (`Focus`, `MouseRegion`, `GestureDetector`, `WidgetStateProperty`) with zero edges the other way — the correct shape happened by construction, not by a rule that would have caught it going wrong.
-
-Without an enforced rule, the failure mode is gradual: a widget author reaches for a Material color constant "just this once," a core crate's dev-dependencies pull in `flui-material` for a convenience test fixture, and five PRs later `flui-cupertino` cannot exist without dragging Material along — the exact coupling Flutter spent years unwinding.
-
-**Where Flutter's own decoupling actually stands.** Flutter froze its in-SDK `material`/`cupertino` packages at the `3.44` stable cutoff ([flutter/flutter#184093](https://github.com/flutter/flutter/issues/184093)) — the pinned oracle tag this whole port already targets is therefore the *final complete* in-tree snapshot of those packages, not a mid-migration one. Upstream design-system work continues in `flutter/packages` (`material_ui`/`cupertino_ui`), outside `flutter/flutter`. This ADR's contract does not track that ongoing migration move-for-move (FLUI is not attempting to mirror Flutter's package split mechanically); it takes the *shape* Flutter is heading toward — core has no opinion about material/cupertino — and enforces it from FLUI's side now, at the same oracle tag, rather than waiting to re-derive it from packages that don't exist yet at `3.44.0`. Parity tracking follows `flutter/packages` if and when this port's own roadmap reaches that work.
+Flutter spent years unwinding `material`/`cupertino` assumptions out of its framework core, and
+froze its in-SDK design-system packages at 3.44 to continue them in `flutter/packages`. FLUI's
+layer table already puts the design systems (L7) above the widget catalog (L6). Without an
+enforced rule the failure mode is gradual: a widget author reaches for a Material constant
+"just this once", a core crate pulls `flui-material` in as a test fixture, and a few changes
+later `flui-cupertino` cannot exist without dragging Material along.
 
 ## Decision
 
-**Core never depends on a design system. This is a Cargo-manifest contract, enforced in CI, not a documentation convention.**
+**Core never depends on a design system.** No workspace crate other than `flui-material`,
+`flui-cupertino`, `flui-localizations`, `flui-app` and the `flui` facade may declare a
+dependency — normal, dev or build — on `flui-material` or `flui-cupertino`.
+`check-workspace-inventory.sh` enforces it from `cargo metadata`. The `flui-localizations`
+exception is one-way: ADR-0041 forbids either design system from depending back on it.
+Material and Cupertino do not depend on each other.
 
-- **The guard.** `scripts/check-workspace-inventory.sh` (run by `just inventory-check`, part of `just ci`) parses `cargo metadata`'s per-package `dependencies` list (normal + dev + build — the same source of truth the script already uses for its path/version-consistency check) and fails if any active workspace crate other than `flui-material`, `flui-cupertino`, `flui-localizations`, `flui-app`, or `flui` (the facade) declares a dependency named `flui-material` or `flui-cupertino`. The `flui-localizations` exception is one-way and implementation-specific: ADR-0041 forbids either design system from depending back on it.
-- **Why `check-workspace-inventory.sh`, not `port-check.sh`.** `port-check.sh`'s triggers (the sanctioned-`dyn`-boundary allowlist, N-geom.U16's `glam` confinement, Cross.H2/H3/H7) audit **usage** — they `rg` over `.rs` source for patterns. This contract is a **declared-dependency-graph** fact, checkable straight from `Cargo.toml`/`cargo metadata`, with no source pattern to grep. `check-workspace-inventory.sh` is the one script already parsing `cargo metadata`'s package dependency lists (for the path/version-requirement check), so the new rule extends existing, proven parsing rather than teaching `port-check.sh` a second way to read dependency graphs.
-- **Where design-agnostic mechanism lives.** Anything a design system needs but that carries no design opinion belongs in `flui-widgets` (or lower), matching Flutter 3.44's own downward migration:
-  - `WidgetState`/`WidgetStates`/`WidgetStateProperty`/`WidgetStatesController` — already landed in `flui-widgets` (this ADR ratifies the placement, doesn't newly decide it).
-  - `InheritedTheme` (the trait a theme widget implements to publish itself, e.g. `flui_material::Theme`) — already in `flui-widgets::app`.
-  - `Localizations`/`LocalizationsDelegate`/`Directionality` — already in `flui-widgets::localization` (see the `l10n --> widgets` FOUNDATIONS note, 2026-07-16).
-- **Where design opinion lives.** M3 token defaults, color/typography constants, and any Material-specific numeric table (elevation-to-shadow, state-overlay opacities, `ColorScheme`/`TextTheme` literals) stay a **separate data module inside `flui-material`**, never inlined into a core widget. A future `flui-cupertino` gets its own, unrelated token module — the two design systems never share defaults, only the mechanism (`WidgetStateProperty` et al.) they resolve against.
-- **Platform-adaptive behavior is a capability seam, not a branch.** Where a widget's behavior must vary by platform convention (scroll physics, text-selection handles, a default `MouseCursor` shape), the seam is a trait/capability a design system or platform layer implements and injects — never `if cfg!(target_os = ...)` or `if theme.platform == ...` inside a core widget. This is the same shape ADR-0027 already sanctions for runtime/presentation topology; this ADR extends the **leapfrog-zone list** (ADR-0027, "sanctioned leapfrog zones") to include **package/dependency topology and platform-adaptive capability seams** — Flutter's *package* structure and its *if-platform* idioms are not the behavioral reference here, only its widget-tree semantics are.
-- **Raw-primitives seam.** When a component's behavior core is design-agnostic but Flutter itself only ships it fused to a design system's paint, the split is not "wait for the design system to need it" — it is: the behavior core lands in `flui-widgets` as an unstyled/"raw" primitive (no opinionated paint), and the design crate supplies the chrome. This mirrors Flutter's own direction for exactly this problem — the `RawMenuAnchor`/`RawRadio` family under the umbrella tracking issue [flutter/flutter#101479](https://github.com/flutter/flutter/issues/101479), which extracts a widget's interaction/state machinery into a design-agnostic "Raw" widget that `material`'s (and, eventually, `cupertino`'s) styled version wraps, rather than duplicating the state machine per design system. `InkWell`'s own split (state tracking + resolution in `WidgetStatesController`/`WidgetStateProperty`, painting in `flui-material`) already follows this shape; this bullet makes it the general rule for the next raw-primitive candidate (a menu, a radio group, a selection handle — see the next bullet), not a one-off `InkWell` decision.
-- **Text-selection chrome is an injection point, not a hardcoded default.** Selection handles, the selection context menu, and default text styling are exactly where Flutter itself found the material/cupertino boundary hardest to hold — resolving it needed a dedicated design document ([flutter/flutter#179591](https://github.com/flutter/flutter/issues/179591)) rather than a mechanical extraction, because the "raw" text-editing core (`EditableText` et al.) had accumulated Material-flavored assumptions about what a selection handle or menu looks like. When FLUI builds selection UI, `flui-widgets`' text-editing core exposes an injection seam (a trait/builder a caller supplies) for the handle/menu/toolbar visuals instead of a hardcoded shape — core provides no default appearance for these, a design crate (or the app) always supplies one. This is called out explicitly, ahead of the code existing, specifically because Flutter's own experience shows this is where the contract is hardest to hold under real feature pressure, not the easy 90% (`WidgetState`, `InheritedTheme`) already landed above.
-- **No god-widget entry point.** The `WidgetsApp`-equivalent composition root stays fully usable standalone, with no dependency on any design system — an app that wants raw widgets, its own design system, or no chrome at all never pulls in `flui-material`/`flui-cupertino` transitively through the app-bootstrap widget. A `MaterialApp`-equivalent (when one exists) is a thin layer *on top* — it supplies a `Theme`, default text styles, and M3 token defaults, and composes the `WidgetsApp`-equivalent underneath; it does not become the only supported way to bootstrap an app, and no core widget ever assumes it is present (e.g. reaching for `Navigator`/`MediaQuery` ambient data must not implicitly require a `MaterialApp`-shaped ancestor).
+**Shared substrate lives below both design systems.** Material and Cupertino share more than
+the interaction mechanism: ink/splash, surface tint, elevation and shadow, and the
+localizations interface are one substrate both resolve against. That substrate lives below
+both (in `flui-widgets` or a lower crate) and has no opinion about which design system draws on
+it. Design *opinion* — M3 token tables, `ColorScheme`/`TextTheme` literals, Cupertino's dynamic
+colors — stays in the design crate that owns it.
+
+**Design-agnostic mechanism goes down, not sideways.** `WidgetState`/`WidgetStateProperty`/
+`WidgetStatesController`, `InheritedTheme`, and `Localizations`/`LocalizationsDelegate`/
+`Directionality` live in `flui-widgets`, matching Flutter 3.44's own downward moves.
+
+**Platform-adaptive behavior is a capability seam, not a branch.** Where behavior varies by
+platform convention (scroll physics, selection handles, default cursor), a design system or
+platform layer implements and injects a trait; a core widget never branches on
+`cfg!(target_os)` or `theme.platform`.
+
+**Raw primitives.** When a component's behavior is design-agnostic but Flutter only ships it
+fused to a design system's paint, the behavior lands in `flui-widgets` as an unstyled "raw"
+primitive and the design crate supplies the chrome — Flutter's own `RawMenuAnchor`/`RawRadio`
+direction (flutter/flutter#101479). `InkWell` already follows it.
+
+**Text-selection chrome is injected.** Selection handles, the selection menu and the toolbar
+are where Flutter found the boundary hardest to hold (flutter/flutter#179591). `flui-widgets`'
+text-editing core exposes a seam for those visuals and ships no default appearance; a design
+crate or the app supplies one.
+
+**No god-widget entry point.** The `WidgetsApp`-equivalent composition root works standalone.
+A `MaterialApp`-equivalent is a thin layer on top that supplies theme and token defaults; no
+core widget assumes it is present.
+
+## Flutter divergence
+
+Package topology is a leapfrog zone (ADR-0027): FLUI takes the shape Flutter is heading toward
+— core has no opinion about Material or Cupertino — and enforces it now, instead of mirroring
+Flutter's package split move for move. Widget behavior (`WidgetState` semantics, `Material`'s
+clip/elevation/shadow, `InkWell`'s overlay resolution) stays Flutter's.
 
 ## Consequences
 
-- **Positive.** A design-system-coupling regression fails `just inventory-check` immediately, with the offending crate/dependency named in the error — the same fail-fast guarantee port-check gives source-pattern violations, now covering the dependency graph too. `flui-cupertino` can be scaffolded later with zero risk of inheriting an accidental Material dependency, because the guard already exists.
-- **Negative / accepted cost.** The exemption list (`flui-material`, `flui-cupertino`, `flui-app`, `flui`) is a hardcoded set in the script; adding a second application-tier crate (an embedder, say) that legitimately needs `flui-material` requires a script edit, not just a `Cargo.toml` change — an intentional friction point, not an oversight.
-- **Neutral.** No crate's actual dependencies changed — the guard formalizes a shape the workspace already has (see Context: the `Material`/`InkWell` substrate already depends only downward). This ADR is a contract for the *next* change, not a migration of the current one.
-
-## What is untouched
-
-**Prime Directive #1 (behavior loyalty) is not amended.** The three-tree model, lifecycle, layout/paint/hit-test protocol, and reconciliation stay ported 1:1 from `.flutter/`; `WidgetState`'s semantics, `Material`'s clip/elevation/shadow behavior, and `InkWell`'s state-overlay resolution all remain loyal to the oracle (see `crates/flui-widgets/src/widget_state.rs` and `crates/flui-material/src/{material,ink_well}.rs` module docs for the per-behavior citations). **Only package topology leapfrogs** — same category as ADR-0027's threading/runtime topology, not a new category of "improve on Flutter's actual UI behavior." Flutter announcing a `material`/`cupertino` decoupling it had not yet shipped is exactly the kind of "no strong contract" edge ADR's Prime Directive #2 already invites FLUI to get ahead of, by making the target shape a compile-time-adjacent guard from the start instead of retrofitting it after the coupling exists.
+- A design-system coupling regression fails the inventory check with the offending crate
+  named.
+- The exemption set is hard-coded; a second application-tier crate that legitimately needs
+  `flui-material` needs a script edit — intended friction.
+- Shared substrate has to be designed as substrate: a feature one design system wants from the
+  other moves down; it is never imported across.
 
 ## Alternatives rejected
 
-- **Leave it as a documented convention (FOUNDATIONS.md's DAG + prose).** Rejected: a DAG diagram does not fail a build. The whole point of "contract, not convention" is that violating it produces a red CI check, not a hoped-for code-review catch.
-- **A `port-check.sh` regex trigger grepping `.rs` files for `use flui_material`/`use flui_cupertino`.** Rejected: source-import greps miss a dependency declared but unused (still a coupling smell Cargo would resolve and lock), and duplicate the dependency-graph parsing `check-workspace-inventory.sh` already does correctly via `cargo metadata` — two mechanisms reading the same fact two different, driftable ways.
-- **`cargo-deny` bans list.** Considered: `deny.toml` already gates advisories/licenses/sources workspace-wide, and a `[bans]` deny-list keyed on crate name pairs could express this. Rejected for now because `cargo-deny`'s ban graph is workspace-global (crate A cannot depend on crate B), not *directional-with-exceptions* (core cannot depend on material, but `flui-app` can) without per-crate `skip`/`wrappers` configuration that is harder to read at a glance than the exemption set in one Python block. Revisit if `cargo-deny`'s directional-ban support matures.
+- **A documented convention only.** A diagram does not fail a build.
+- **A source-import grep for `use flui_material`.** Misses a declared-but-unused dependency and
+  reads the dependency graph a second, driftable way.
+- **`cargo-deny` bans.** They express "A must not depend on B", not a directional rule with
+  exemptions; revisit if directional bans mature.
+- **Design systems never share defaults.** Forces ink, tint, elevation and localizations to be
+  implemented twice, and the two copies drift.

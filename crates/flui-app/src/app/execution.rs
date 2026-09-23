@@ -1414,7 +1414,8 @@ mod tests {
             "once the environment recovers, the same slot must start normally"
         );
         // Tear the started runtime down non-blockingly.
-        if let Some(runtime) = slot.lock().take_runtime() {
+        let runtime = slot.lock().take_runtime();
+        if let Some(runtime) = runtime {
             runtime.shutdown_background();
         }
     }

@@ -28,9 +28,9 @@
 //!
 //! **This does not authorize the public shape.** A later API sign-off gate still
 //! owns that decision, and the erasure is confined to this private module until then.
-//! Note also that `flui-widgets` is outside port-check's FR-036 (`dyn`-boundary
-//! registry, trigger 9) and FR-033 (downcast) scopes, so **no gate would have
-//! caught this** — which is a reason to keep it private, not a licence to export.
+//! Note also that no gate checks `dyn` boundaries or downcasts in
+//! `flui-widgets`, so **nothing would have caught this** — which is a reason
+//! to keep it private, not a licence to export.
 //!
 //! On a type mismatch FLUI logs and completes with `None`, where Flutter throws a
 //! cast error. A wrong `pop` type is caller error, and
@@ -75,10 +75,7 @@ impl AnyResult {
     /// Recover the concrete value, or hand this back unchanged — so a failed
     /// downcast does not lose the provenance the failure report needs.
     pub(crate) fn downcast<T: 'static>(self) -> Result<T, Self> {
-        // The marker has to sit on the calling line: port-check's FR-033/widgets
-        // filter is line-scoped, and rustfmt relocates a trailing comment off a
-        // `match` scrutinee, so the call gets its own `let`.
-        let recovered = self.value.downcast::<T>(); // PORT-CHECK-OK-DOWNCAST: the reverse of `AnyResult::new`'s own erasure, at the signed-off pop-result boundary (ADR-0019); hands the value back on failure rather than losing its provenance
+        let recovered = self.value.downcast::<T>(); // the reverse of `AnyResult::new`'s own erasure, at the signed-off pop-result boundary (ADR-0019); hands the value back on failure rather than losing its provenance
         match recovered {
             Ok(value) => Ok(*value),
             Err(value) => Err(Self {
@@ -171,7 +168,7 @@ impl RouteId {
 /// `MetaDataPayload` (`interaction/meta_data.rs`): cloning a route's
 /// settings must not deep-copy the payload, and that boundary is the
 /// established precedent for a type-erased user value crossing FLUI's
-/// public surface. This is exactly the shape ADR-0024 §4.1 named for this
+/// public surface. This is exactly the shape ADR-0024 named for this
 /// field.
 pub type RouteArguments = Arc<dyn Any + Send + Sync>;
 
@@ -246,12 +243,12 @@ impl RouteSettings {
     /// Attempts to downcast the arguments payload to the requested concrete
     /// type. Returns `None` if there is no payload or its type doesn't match.
     ///
-    /// Named `argument`, singular, per ADR-0024 §4.1's `settings.argument::<T>()`.
+    /// Named `argument`, singular, per ADR-0024's `settings.argument::<T>()`.
     /// The typed counterpart to [`arguments`](Self::arguments) — the same role
     /// `RenderMetaData::metadata_as` plays for its own erased payload.
     #[must_use]
     pub fn argument<T: Any + Send + Sync + 'static>(&self) -> Option<&T> {
-        self.arguments.as_ref()?.downcast_ref::<T>() // PORT-CHECK-OK-DOWNCAST: RouteSettings.arguments erasure per ADR-0024 §4.1; Gate sign-off still outstanding, see ADR-0024 §6
+        self.arguments.as_ref()?.downcast_ref::<T>() // RouteSettings.arguments erasure per ADR-0024
     }
 }
 
@@ -623,8 +620,8 @@ impl<R: Route> ErasedRoute for RouteRecord<R> {
                 // The pop-result type-erasure boundary. A heterogeneous route stack
                 // cannot carry each route's `Output`, so `pop` erases and the owning
                 // record downcasts back. Signed off as the only downcast in
-                // `flui-widgets`, and port-check's FR-033/widgets grep keeps it that way.
-                let typed = erased.downcast::<R::Output>(); // PORT-CHECK-OK-DOWNCAST: the pop-result erasure boundary itself — a heterogeneous route stack cannot carry each route's `Output`, so `pop` erases and the owning `RouteRecord` recovers its own type here; signed off in ADR-0019's *Public API and sign-off* section
+                // `flui-widgets`.
+                let typed = erased.downcast::<R::Output>(); // the pop-result erasure boundary itself — a heterogeneous route stack cannot carry each route's `Output`, so `pop` erases and the owning `RouteRecord` recovers its own type here; signed off in ADR-0019's *Public API and sign-off* section
                 match typed {
                     Ok(value) => Some(value),
                     Err(mismatched) => {

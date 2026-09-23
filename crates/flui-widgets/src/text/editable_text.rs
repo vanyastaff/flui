@@ -151,7 +151,7 @@ fn source_offset_at_global(
                 .get(editable_id)?
                 .as_box()?
                 .render_object()
-                .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: the pointer handlers reach the one concrete render object type this widget mounts under `inner_anchor`, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — the same sanctioned boundary as `CursorAreaLoop::global_caret_rect`; see docs/PORT.md FR-033/widgets.
+                .downcast_ref::<RenderEditable>()?; // the pointer handlers reach the one concrete render object type this widget mounts under `inner_anchor`, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — the same sanctioned boundary as `CursorAreaLoop::global_caret_rect`.
             let to_root = owner.transform_to(editable_id, root_id)?;
             let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
             let masked = editable.byte_offset_for_local_offset(Offset::new(x, y))?;
@@ -208,7 +208,7 @@ fn source_word_range_at_global(
                 .get(editable_id)?
                 .as_box()?
                 .render_object()
-                .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: same sanctioned boundary as `source_offset_at_global` above; see docs/PORT.md FR-033/widgets.
+                .downcast_ref::<RenderEditable>()?; // same sanctioned boundary as `source_offset_at_global` above.
             let to_root = owner.transform_to(editable_id, root_id)?;
             let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
             let masked = editable.word_range_at_local_offset(Offset::new(x, y))?;
@@ -268,7 +268,7 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 /// # IME composition
 ///
 /// On focus gain, `EditableTextState` attaches an IME client through
-/// [`BuildContext::text_input_handle`] (acquired in `init_state`, per the
+/// [`LifecycleContext::text_input_handle`] (acquired in `init_state`, per the
 /// frame-capability rule that method's doc states) — its callback routes
 /// each [`ImeEvent`] to the matching [`TextEditingController`] composing
 /// operation (`Preedit` → `set_composing_text`, `Commit` → `commit_text`,
@@ -286,7 +286,7 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 /// # IME cursor-area tracking
 ///
 /// While an IME client is attached (focus gain to blur/dispose),
-/// `EditableTextState` also runs a self-rescheduling post-frame loop (ADR-0032)
+/// `EditableTextState` also runs a self-rescheduling post-frame loop (ADR-0030)
 /// that reads the composing region's current global rect when one is
 /// active, falling back to the collapsed caret's rect otherwise — through
 /// the second, inner [`SubtreeAnchor`](flui_objects::SubtreeAnchor) wrapping
@@ -298,10 +298,10 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 /// composition ends). This is a winit single-rect reduction of Flutter's
 /// transform+local-rect protocol (`editable_text.dart`'s
 /// `_updateSizeAndTransform`/`_updateComposingRectIfNeeded`/
-/// `_schedulePeriodicPostFrameCallbacks`, tag `3.44.0`) — see ADR-0032 for
+/// `_schedulePeriodicPostFrameCallbacks`, tag `3.44.0`) — see ADR-0030 for
 /// the loop mechanics (why it is per-attach: a fresh alive-flag and a fresh
 /// last-sent cache each attach, rather than shared across the field's
-/// lifetime) and ADR-0033 for the composing-rect-over-caret-rect fallback
+/// lifetime) and ADR-0030 for the composing-rect-over-caret-rect fallback
 /// order this loop now applies.
 ///
 /// # DEFERRED (v1)
@@ -552,7 +552,7 @@ pub struct EditableTextState {
     /// provider can measure it for reading-order traversal.
     anchor: flui_objects::SubtreeAnchor,
     /// Publishes the `RenderId` of exactly the `EditableTextRenderView` —
-    /// the inner anchor (ADR-0032), wrapped directly around it in
+    /// the inner anchor (ADR-0030), wrapped directly around it in
     /// `build_field_view`, so the IME cursor-area loop's `transform_to`
     /// starts right at the editable instead of walking through `anchor`'s
     /// wider subtree (which also covers the `AnimatedBuilder` in between).
@@ -560,7 +560,7 @@ pub struct EditableTextState {
     /// Acquired in `init_state`, never in `build` — the pointer handlers need
     /// it to reach the anchored `RenderEditable` and to map a global point
     /// into that object's local space, and a frame phase is not where a
-    /// presentation capability may be taken (port-check trigger 22).
+    /// presentation capability may be taken.
     pipeline_owner: Option<PipelineCell>,
     /// The node this field's node hangs under — the nearest enclosing focus
     /// parent at mount, or the root scope's backing node. Detached from in
@@ -599,7 +599,7 @@ pub struct EditableTextState {
     ime_focus_transition: Option<ImeFocusTransition>,
     /// The IME attach/detach capability, acquired once in `init_state` (the
     /// frame-capability rule `post_frame_handle` follows —
-    /// `BuildContext::text_input_handle`'s doc). `None` when no binding
+    /// `LifecycleContext::text_input_handle`'s doc). `None` when no binding
     /// installed one (a bare `ElementTree` in a unit test): the field then
     /// simply never attaches, rather than panicking or silently no-opping
     /// through a stub.
@@ -622,7 +622,7 @@ pub struct EditableTextState {
     /// currently running. `None` when no loop is running (never attached,
     /// or already blurred/disposed).
     ///
-    /// A *fresh* `Rc<Cell<bool>>` is minted per attach (ADR-0032): sharing
+    /// A *fresh* `Rc<Cell<bool>>` is minted per attach (ADR-0030): sharing
     /// one flag across attaches would let a stale queued firing from a
     /// PREVIOUS attach flip it back to `true` behavior on a blur→refocus,
     /// resurrecting a loop that should have died, or running two loops at
@@ -883,7 +883,7 @@ impl EditableTextState {
 }
 
 impl ViewState<EditableText> for EditableTextState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.focus_manager = Some(ctx.focus_manager());
 
         // Resolve the focus parent first, but attach only after every
@@ -941,11 +941,11 @@ impl ViewState<EditableText> for EditableTextState {
         // 5. Attach/detach the IME client on this field's own focus
         //    transitions. `text_input_handle()` is a frame capability —
         //    acquired here, in `init_state`, never in `build` (see
-        //    `BuildContext::text_input_handle`'s doc) — and stored so the
+        //    `LifecycleContext::text_input_handle`'s doc) — and stored so the
         //    focus-listener closure below (which cannot borrow `&mut self`)
         //    and `dispose` can both reach it. `local_post_frame_handle()` and
         //    `pipeline_owner()` are acquired alongside it for the same
-        //    reason — the IME cursor-area loop (ADR-0032) they drive is
+        //    reason — the IME cursor-area loop (ADR-0030) they drive is
         //    started/stopped by that same closure.
         self.ime_handle = ctx.text_input_handle();
         self.local_post_frame_handle = ctx.local_post_frame_handle();
@@ -962,7 +962,7 @@ impl ViewState<EditableText> for EditableTextState {
                 return;
             };
             if now_focused {
-                // Fresh per-attach state (ADR-0032): `last_sent` resets
+                // Fresh per-attach state (ADR-0030): `last_sent` resets
                 // so a brand-new IME session always gets its first rect
                 // even at an unchanged caret position, and `alive` is a
                 // NEW flag so a stale queued firing from a previous
@@ -995,7 +995,6 @@ impl ViewState<EditableText> for EditableTextState {
                         return;
                     }
                 };
-                // PORT-CHECK-OK-LOCK: plain data: ClientToken(NonZeroU64), no Drop
                 *ime_token_for_focus.borrow_mut() = Some(token);
 
                 if let Some(post_frame) = post_frame_handle_for_focus.clone() {
@@ -1158,7 +1157,7 @@ impl ViewState<EditableText> for EditableTextState {
         self.focus_node.set_can_request_focus(new_view.enabled);
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let parent = crate::__private::enclosing_focus_parent(ctx);
         if self
             .parent
@@ -1256,7 +1255,7 @@ impl ViewState<EditableText> for EditableTextState {
             );
         }
 
-        // Stop the IME cursor-area loop (ADR-0032) if one is running — the
+        // Stop the IME cursor-area loop (ADR-0030) if one is running — the
         // same unconditional-on-unmount contract as the IME token detach
         // just above, and independent of it: a field unmounted while
         // focused is not guaranteed a blur notification, so this is the one
@@ -1325,7 +1324,7 @@ fn apply_ime_event(controller: &TextEditingController, event: &ImeEvent) {
     }
 }
 
-/// The self-rescheduling IME cursor-area tracking loop (ADR-0032).
+/// The self-rescheduling IME cursor-area tracking loop (ADR-0030).
 ///
 /// One instance is created per IME attach (focus gain). Each firing reads the
 /// caret's current global rect and forwards it through
@@ -1341,7 +1340,7 @@ fn apply_ime_event(controller: &TextEditingController, event: &ImeEvent) {
 struct CursorAreaLoop {
     post_frame: flui_scheduler::LocalPostFrameHandle,
     pipeline_owner: Option<PipelineCell>,
-    /// The `EditableTextRenderView`'s own inner anchor (ADR-0032) — see
+    /// The `EditableTextRenderView`'s own inner anchor (ADR-0030) — see
     /// `EditableTextState::inner_anchor`'s doc.
     inner_anchor: flui_objects::SubtreeAnchor,
     text_input: TextInputHandle,
@@ -1432,8 +1431,8 @@ impl CursorAreaLoop {
     /// region rect when one is active, falling back to its collapsed caret
     /// rect otherwise — Flutter's own `_updateComposingRectIfNeeded` order
     /// (`editable_text.dart`, tag `3.44.0`: prefer the composing rect,
-    /// fall back to the caret rect when none is available). ADR-0033
-    /// upgrades this loop from the caret-rect-only reduction ADR-0032
+    /// fall back to the caret rect when none is available). ADR-0030
+    /// upgrades this loop from the caret-rect-only reduction ADR-0030
     /// originally landed.
     fn global_caret_rect(&self) -> Option<Bounds<Pixels>> {
         let anchor_id = self.inner_anchor.get()?;
@@ -1446,7 +1445,7 @@ impl CursorAreaLoop {
                 .get(editable_id)?
                 .as_box()?
                 .render_object()
-                .downcast_ref::<RenderEditable>()?; // PORT-CHECK-OK-DOWNCAST: ADR-0032 IME cursor-area loop reaches the one concrete render object type it knows sits under `inner_anchor` (an `EditableTextRenderView`'s `RenderEditable`) through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — see docs/PORT.md FR-033/widgets.
+                .downcast_ref::<RenderEditable>()?; // ADR-0030 IME cursor-area loop reaches the one concrete render object type it knows sits under `inner_anchor` (an `EditableTextRenderView`'s `RenderEditable`) through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure.
             let local_rect = editable
                 .rect_for_composing_range()
                 .unwrap_or_else(|| editable.caret_local_rect());
@@ -1727,10 +1726,8 @@ fn build_key_handler(
                 // `EditableText` (`examples/todo.rs`'s `add_item` calls
                 // `TextEditingController::clear()` from inside its
                 // `on_submitted` callback). Calling it while either guard
-                // is still held is exactly the hazard
-                // `LockDiscipline/StatementDrop` (`docs/PORT.md`) guards
-                // against for a `Mutex`/`RwLock`, applied here to a
-                // `RefCell` the grep doesn't reach.
+                // is still held is the same drop-under-guard hazard as for a
+                // `Mutex`/`RwLock`, applied here to a `RefCell`.
                 let Some(callback) = on_submitted.borrow().clone() else {
                     return KeyEventResult::Ignored;
                 };
@@ -1826,7 +1823,7 @@ impl_render_view!(EditableTextRenderView);
 /// Assemble the visual render view for the text field interior.
 ///
 /// Wraps `EditableTextRenderView` directly in `inner_anchor` (the inner
-/// anchor, ADR-0032): a second, inner `SubtreeAnchor` whose only job is to publish
+/// anchor, ADR-0030): a second, inner `SubtreeAnchor` whose only job is to publish
 /// exactly the editable's own `RenderId`, so the IME cursor-area loop's
 /// `transform_to` starts right at the editable — not at the outer `anchor`
 /// wrapping this whole field (which also spans the `AnimatedBuilder` between
@@ -3382,7 +3379,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // IME cursor-area tracking (ADR-0032)
+    // IME cursor-area tracking (ADR-0030)
     //
     // `CursorAreaLoop`'s `LocalPostFrameHandle::schedule_local` call
     // addresses the harness's lane directly (a `Weak` pointer, minted once
@@ -3754,7 +3751,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Composing-region underline + hidden caret (ADR-0033)
+    // Composing-region underline + hidden caret (ADR-0030)
     // ------------------------------------------------------------------
 
     /// Runs `f` against the mounted field's single `RenderEditable`, found
@@ -3770,7 +3767,7 @@ mod tests {
             for (_, node) in tree.iter() {
                 let editable = node
                     .as_box()
-                    .and_then(|b| b.render_object().downcast_ref::<RenderEditable>()); // PORT-CHECK-OK-DOWNCAST: test-only reach to the one concrete render object type this widget mounts, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — same sanctioned boundary as `CursorAreaLoop::global_caret_rect` above; see docs/PORT.md FR-033/widgets.
+                    .and_then(|b| b.render_object().downcast_ref::<RenderEditable>()); // test-only reach to the one concrete render object type this widget mounts, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — same sanctioned boundary as `CursorAreaLoop::global_caret_rect` above.
                 if let Some(editable) = editable {
                     return f.take().map(|f| f(editable));
                 }
@@ -4346,7 +4343,7 @@ mod tests {
     /// `Preedit { cursor: None }` while focused hides the caret and starts
     /// painting the composing underline — the FLUI expression of Flutter's
     /// `buildTextSpan`'s composing-underline three-way split plus its
-    /// hidden-caret case, both now implemented (ADR-0033).
+    /// hidden-caret case, both now implemented (ADR-0030).
     ///
     /// Oracle: `'Composing text is underlined and underline is cleared when
     /// losing focus'` (`editable_text_test.dart`, tag `3.44.0`) — ported
@@ -4665,7 +4662,7 @@ mod tests {
         );
     }
 
-    /// The cursor-area loop (ADR-0032, upgraded by ADR-0033) prefers the
+    /// The cursor-area loop (ADR-0030) prefers the
     /// composing rect while composing, and falls back to the caret rect
     /// once composition is cancelled.
     #[test]

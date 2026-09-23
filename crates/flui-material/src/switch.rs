@@ -250,7 +250,7 @@ impl StatefulView for Switch {
 }
 
 impl ViewState<Switch> for SwitchState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // The handle is consumed directly by the listener closure; nothing
         // else needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();

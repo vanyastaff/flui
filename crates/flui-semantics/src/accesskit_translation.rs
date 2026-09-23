@@ -20,7 +20,7 @@
 //! # Full updates, not diffs
 //!
 //! `TreeUpdate` documents that an update "should only include nodes that are new
-//! or changed". FLUI's assembly is a classic full rebuild (ADR-0014), so every
+//! or changed". FLUI's assembly is a classic full rebuild (flui-semantics ARCHITECTURE.md, semantics assembly), so every
 //! pass yields every node and this emits all of them. Platform adapters suppress
 //! extraneous events, so that is correct but not free. Incremental diffing is a
 //! later optimisation and needs its own oracle; it is not smuggled in here.

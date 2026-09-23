@@ -531,7 +531,6 @@ mod tests {
     /// Runs `body` with a fresh registration session, returning what it
     /// registered — the same bracket `WorkerPlugin::init` uses.
     fn with_session<R>(body: impl FnOnce() -> R) -> (R, Vec<(u64, BuildPtr)>) {
-        // PORT-CHECK-OK-LOCK: plain data: Vec<(u64, BuildPtr)> — BuildPtr is a raw pointer, no Drop
         *REGISTRATION_SESSION.lock().unwrap() = Some(Vec::new());
         let out = body();
         let session = REGISTRATION_SESSION
@@ -597,7 +596,6 @@ mod tests {
         );
 
         // Cleanup so other tests see an empty registry.
-        // PORT-CHECK-OK-LOCK: plain data: BuildPtr is a raw pointer, no Drop
         worker_builds().lock().unwrap().remove(&fp);
     }
 

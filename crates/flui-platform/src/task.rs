@@ -57,7 +57,7 @@ impl std::fmt::Display for TaskLabel {
 /// executor.spawn(async { log_analytics() }).detach();
 /// ```
 #[must_use = "tasks are cancelled when dropped; use `.detach()` to run in background"]
-pub struct Task<T>(TaskState<T>); // PORT-CHECK-OK-SP3: pre-existing parallel definition; consolidation tracked
+pub struct Task<T>(TaskState<T>);
 
 enum TaskState<T> {
     /// Task completed synchronously — value available immediately

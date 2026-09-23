@@ -233,8 +233,7 @@ impl<P: Protocol> RenderState<P> {
     /// Hoisted off the `RenderObject<P>` trait surface (Flutter stores
     /// this as `_wasRepaintBoundary` on the render object; in FLUI it
     /// lives on `RenderState` so the paint phase flips a single atomic
-    /// bit rather than acquiring a write lock on the trait object). See
-    /// `docs/PORT.md` Refusal trigger 1.
+    /// bit rather than acquiring a write lock on the trait object).
     ///
     /// Flutter equivalent: `_wasRepaintBoundary` (field read).
     #[inline]

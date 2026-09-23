@@ -308,7 +308,7 @@ impl MaterialTextFieldState {
 }
 
 impl ViewState<TextField> for MaterialTextFieldState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // ADR-0018: `rebuild_handle()` is acquired here, fired later from
         // the listeners below — never called from `build`.
         let rebuild = ctx.rebuild_handle();

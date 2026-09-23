@@ -94,7 +94,7 @@ impl StatefulView for TodoView {
 }
 
 impl ViewState<TodoView> for TodoState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.items.bind(ctx);
     }
 

@@ -14,7 +14,7 @@ use flui_view::element::{
     ScrollingPersistentHeaderView, SharedHeaderDelegate, SliverPersistentHeaderDelegate,
 };
 use flui_view::prelude::{StatefulView, StatelessView, ViewState};
-use flui_view::{BuildContext, IntoView, RebuildHandle, ViewExt};
+use flui_view::{BuildContext, IntoView, LifecycleContext, RebuildHandle, ViewExt};
 
 use crate::VsyncScope;
 use crate::scroll::scroll_position_scope::ScrollPositionScope;
@@ -50,7 +50,7 @@ use crate::scroll::scroll_position_scope::ScrollPositionScope;
 /// `SliverPersistentHeader`.
 #[derive(Clone, StatelessView)]
 pub struct SliverPersistentHeader {
-    delegate: Rc<dyn SliverPersistentHeaderDelegate>, // PORT-CHECK-OK-DYN: carries flui-view's SharedHeaderDelegate erasure (justified at its declaration) through the facade
+    delegate: Rc<dyn SliverPersistentHeaderDelegate>, // carries flui-view's SharedHeaderDelegate erasure (justified at its declaration) through the facade
     pinned: bool,
     floating: bool,
 }
@@ -214,7 +214,7 @@ impl StatefulView for FloatingHeaderHost {
 impl FloatingHeaderHostState {
     /// (Re)subscribe the activity listener to `position`, detaching from any
     /// previous one first — the swap path a controller replacement takes.
-    fn subscribe_to(&mut self, position: Option<ScrollPosition>, ctx: &dyn BuildContext) {
+    fn subscribe_to(&mut self, position: Option<ScrollPosition>, ctx: &dyn LifecycleContext) {
         if let (Some(old_position), Some(id)) =
             (self.position.take(), self.activity_listener.take())
         {
@@ -238,7 +238,7 @@ impl FloatingHeaderHostState {
 }
 
 impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // Everything below is lifecycle-only capability acquisition
         // (ADR-0018 / ADR-0021 discipline): the handles are taken HERE and
         // used later, from the listener.
@@ -265,7 +265,7 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
         self.subscribe_to(position, ctx);
     }
 
-    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let position = ctx.depend_on::<ScrollPositionScope, _>(|scope| scope.position().clone());
         let unchanged = match (&self.position, &position) {
             (Some(current), Some(new)) => current.ptr_eq(new),

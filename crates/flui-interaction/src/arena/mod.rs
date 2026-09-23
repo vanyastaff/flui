@@ -339,7 +339,6 @@ impl DeadlineRegistry {
     }
 
     fn unregister(&self, id: u64) {
-        // PORT-CHECK-OK-LOCK: plain data, no significant drop
         self.watchers.lock().retain(|watcher| watcher.id != id);
     }
 

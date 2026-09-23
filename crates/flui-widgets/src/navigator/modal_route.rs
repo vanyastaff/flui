@@ -46,7 +46,7 @@
 //!
 //! # Divergences — none of this is parity
 //!
-//! * **Per-route `FocusScope` — landed (ADR-0022).** The page is wrapped in
+//! * **Per-route `FocusScope` — landed (ADR-0026).** The page is wrapped in
 //!   `FocusScope::with_external_node` (`routes.dart:1201-1202`) and the current
 //!   route's scope is installed through the enclosing scope's
 //!   `setFirstFocus` history chain. Still absent: `traversalEdgeBehavior` (no
@@ -222,7 +222,8 @@ impl ModalInner {
         }
 
         let mut barrier = AbsorbPointer::new().absorbing(true);
-        if let Some(color) = *self.barrier_color.lock() {
+        let color = *self.barrier_color.lock();
+        if let Some(color) = color {
             barrier = barrier.child(ColoredBox::new(color));
         }
 
@@ -253,7 +254,7 @@ impl ModalInner {
     /// [`focus_scope`](Self::focus_scope) is Flutter's
     /// `FocusScope.withExternalFocusNode` (`routes.dart:1201-1202`): heroes,
     /// text fields and `Focus` widgets in the page attach under the route's own
-    /// scope, so traversal stays within the route (ADR-0022).
+    /// scope, so traversal stays within the route (ADR-0026).
     fn build_scope(self: &Arc<Self>) -> BoxedView {
         let scope = match self.transition.get() {
             Some(transition) => ModalScope {
@@ -613,7 +614,6 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
 
     /// `barrierColor` (`routes.dart:1774`).
     pub(crate) fn barrier_color(self, color: Color) -> Self {
-        // PORT-CHECK-OK-LOCK: plain data: Color is Copy
         *self.inner.barrier_color.lock() = Some(color);
         self
     }

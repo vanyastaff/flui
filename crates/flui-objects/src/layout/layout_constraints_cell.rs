@@ -90,7 +90,7 @@ pub trait BuildDuringLayoutCell: std::fmt::Debug + Send + Sync + std::any::Any {
 /// `layout_builder_registry` entry hold the same cell.
 ///
 /// The `Mutex` is private and no guard is ever returned across the API
-/// boundary (SP-6 / port-check "no locks in public API").
+/// boundary.
 #[derive(Debug, Default)]
 pub struct LayoutConstraintsCell {
     inner: Mutex<CellState>,

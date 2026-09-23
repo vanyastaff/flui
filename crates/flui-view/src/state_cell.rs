@@ -14,7 +14,7 @@
 //! }
 //!
 //! impl ViewState<CounterView> for CounterState {
-//!     fn init_state(&mut self, ctx: &dyn BuildContext) {
+//!     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
 //!         self.rebuild = Some(ctx.rebuild_handle());
 //!     }
 //!
@@ -49,7 +49,7 @@
 //! `Cell`/`RefCell`, and mutating it schedules nothing. Call
 //! [`StateCell::bind`] / [`StateHandle::bind`] exactly once, from
 //! `ViewState::init_state`, to store the element's [`RebuildHandle`] —
-//! obtained from [`BuildContext::rebuild_handle`], which documents that it
+//! obtained from [`LifecycleContext::rebuild_handle`], which documents that it
 //! must **not** be called during build, layout, or paint. `bind` inherits
 //! that same restriction: call it only from `init_state` (or
 //! `did_change_dependencies`), never from `build`.
@@ -84,7 +84,7 @@ use std::rc::Rc;
 
 use flui_foundation::RebuildReason;
 
-use crate::context::BuildContext;
+use crate::context::LifecycleContext;
 use crate::owner::RebuildHandle;
 
 /// `Rc`-backed, `Copy`-typed local state bound to one element's rebuild
@@ -169,13 +169,13 @@ impl<T: Copy> StateCell<T> {
     /// Call this exactly once, from `ViewState::init_state` (or
     /// `did_change_dependencies`) — never from `build`, `perform_layout`, or
     /// `paint`, the same restriction
-    /// [`BuildContext::rebuild_handle`]
+    /// [`LifecycleContext::rebuild_handle`]
     /// documents. Every clone of this cell observes the binding (the slot is
     /// shared), so binding one clone binds them all.
     ///
     /// ```rust,ignore
     /// impl ViewState<Counter> for CounterState {
-    ///     fn init_state(&mut self, ctx: &dyn BuildContext) {
+    ///     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
     ///         self.count.bind(ctx);
     ///     }
     ///
@@ -186,11 +186,11 @@ impl<T: Copy> StateCell<T> {
     ///     }
     /// }
     /// ```
-    pub fn bind(&self, ctx: &dyn BuildContext) {
+    pub fn bind(&self, ctx: &dyn LifecycleContext) {
         // Mint the handle before taking the borrow, and let a previously
         // stored handle drop only after the borrow has fallen: a
         // `RebuildHandle` carries `Arc`s whose destructors must never run
-        // under this slot's `RefMut` (LockDiscipline/StatementDrop).
+        // under this slot's `RefMut`.
         let handle = ctx.rebuild_handle();
         let previous = self.rebuild.borrow_mut().replace(handle);
         drop(previous);
@@ -342,7 +342,7 @@ impl<T> StateHandle<T> {
     ///
     /// ```rust,ignore
     /// impl ViewState<Notes> for NotesState {
-    ///     fn init_state(&mut self, ctx: &dyn BuildContext) {
+    ///     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
     ///         self.text.bind(ctx);
     ///     }
     ///
@@ -354,11 +354,11 @@ impl<T> StateHandle<T> {
     ///     }
     /// }
     /// ```
-    pub fn bind(&self, ctx: &dyn BuildContext) {
+    pub fn bind(&self, ctx: &dyn LifecycleContext) {
         // Mint the handle before taking the borrow, and let a previously
         // stored handle drop only after the borrow has fallen: a
         // `RebuildHandle` carries `Arc`s whose destructors must never run
-        // under this slot's `RefMut` (LockDiscipline/StatementDrop).
+        // under this slot's `RefMut`.
         let handle = ctx.rebuild_handle();
         let previous = self.rebuild.borrow_mut().replace(handle);
         drop(previous);
@@ -462,7 +462,7 @@ mod tests {
     use super::{StateCell, StateHandle};
     use crate::{
         BuildOwner, RebuildReason,
-        context::BuildContext,
+        context::{BuildContext, LifecycleContext},
         tree::ElementTree,
         view::{IntoView, RenderView, RootRenderView, StatefulView, View, ViewState},
     };
@@ -500,7 +500,7 @@ mod tests {
     }
 
     impl ViewState<Bound> for BoundState {
-        fn init_state(&mut self, ctx: &dyn BuildContext) {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
             self.count.bind(ctx);
             self.text.bind(ctx);
         }

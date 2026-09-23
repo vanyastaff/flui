@@ -1,5 +1,10 @@
 # ADR-0051: Anchor-stationary scroll correction for lazy slivers
 
+- **Status:** Accepted
+- **Date:** 2026-09-03
+- **Amends:** [ADR-0003](ADR-0003-virtualization-core-and-reentrant-build.md) (its consumer note on backward suppression is retired)
+- **Related:** [ADR-0017](ADR-0017-build-during-layout-callback-seam.md) (the in-frame fixpoint that services lazy requests); issue #530
+
 *When something above the first visible item of a lazy sliver changes extent —
 a child is remeasured, an unmeasured item is re-hinted — the sliver corrects
 the viewport's scroll offset by exactly that growth, in the same layout pass,
@@ -9,20 +14,6 @@ Flutter's `RenderSliverList` instead retains each resident child's stale
 of retained-but-invisible children shift the visible content. FLUI keeps the
 divergence, records it here, and replaces the affected oracle case with a FLUI
 oracle.*
-
----
-
-- **Status:** Accepted (2026-09-03)
-- **Date:** 2026-09-03
-- **Deciders:** @vanyastaff
-- **Scope:** `RenderSliverList` and the shared band
-  walk (`crates/flui-objects/src/sliver/virtualized_band.rs`), the
-  `Virtualizer`'s `AnchorCorrection` (`crates/flui-rendering/src/virtualization/mod.rs`),
-  the viewport's correction loop (`crates/flui-objects/src/sliver/viewport.rs`).
-- **Related:** [ADR-0003](ADR-0003-virtualization-core-and-reentrant-build.md)
-  (the agnostic windowing core; its consumer note on backward suppression is
-  amended by this record), [ADR-0017](ADR-0017-build-during-layout-callback-seam.md)
-  (the in-frame fixpoint that services lazy requests), issue #530.
 
 ## Context
 
@@ -80,8 +71,7 @@ Two things were unsettled when #530 opened:
 
 1. Whether the two-item difference between FLUI's windows and the oracle's in
    `slivers_test.dart` 'SliverList can handle inaccurate scroll offset due to
-   changes in children list' was a bug. It is not: traced pass by pass on
-   2026-09-03, the swap-time correction is +192 (two odd items above the anchor
+   changes in children list' was a bug. It is not: traced pass by pass, the swap-time correction is +192 (two odd items above the anchor
    grew 0 → 96), Flutter expresses the same 192 px as a visual shift, and from
    there both models accumulate the same growth and clamp at zero. FLUI is
    exactly 192 px further from the top at every later checkpoint — one more

@@ -19,9 +19,9 @@ use std::{
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, StatefulBehavior,
-    StatefulElement, StatefulView, StatelessBehavior, StatelessElement, StatelessView, View,
-    ViewExt, ViewState,
+    BuildContext, BuildOwner, ElementBase, ElementTree, IntoView, Lifecycle, LifecycleContext,
+    StatefulBehavior, StatefulElement, StatefulView, StatelessBehavior, StatelessElement,
+    StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -362,7 +362,7 @@ impl StatefulView for LifecycleCallbackView {
 }
 
 impl ViewState<LifecycleCallbackView> for LifecycleCallbackState {
-    fn init_state(&mut self, _ctx: &dyn BuildContext) {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
         self.init_called.fetch_add(1, Ordering::SeqCst);
     }
 

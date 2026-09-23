@@ -22,7 +22,7 @@
 //!
 //! # Why an in-crate harness
 //!
-//! [`Overlay`]/[`OverlayEntry`]/[`OverlayHandle`] are `pub` since ADR-0036, but
+//! [`Overlay`]/[`OverlayEntry`]/[`OverlayHandle`] are `pub` since ADR-0076, but
 //! the mutation surface these tests exercise directly (`insert`/`rearrange`/
 //! `InsertPosition`/`entry_ids`/…), plus [`OverlayScope`] and the
 //! `Theater`/`OverlayState` view machinery, stay `pub(crate)` — so an
@@ -1341,7 +1341,7 @@ fn positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack() {
 }
 
 // ============================================================================
-// ADR-0036 — `Overlay::of` / `Overlay::maybe_of`
+// ADR-0076 — `Overlay::of` / `Overlay::maybe_of`
 // ============================================================================
 
 /// A stateless leaf that runs `on_build` every time it builds — a generic
@@ -1402,7 +1402,6 @@ fn overlay_of_panics_with_a_helpful_message_without_an_overlay_ancestor() {
             let text = payload_text(payload.as_ref())
                 .unwrap_or_default()
                 .to_owned();
-            // PORT-CHECK-OK-LOCK: plain data: String, no Drop
             *message_for_probe.lock() = Some(text);
         }
     });

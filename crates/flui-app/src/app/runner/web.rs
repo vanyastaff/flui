@@ -47,7 +47,7 @@ where
     /// The actual web bootstrap: canvas window, renderer, realm, and
     /// callback wiring. Runs once, synchronously, inside `on_ready` —
     /// `WebPlatform::run` invokes it before starting the RAF loop
-    /// (ADR-0039 slice 2 migration; behavior-preserving, since `on_ready`
+    /// (ADR-0039 §1; behavior-preserving, since `on_ready`
     /// already runs synchronously on this thread before `run` returns).
     ///
     /// Returns `Err` on bootstrap failure — `on_ready` itself is fallible
@@ -62,7 +62,7 @@ where
                 .expect("BUG: bootstrap_web runs only after install_owner_platform")
         }
 
-        // 0. Wire the platform clipboard (ADR-0034).
+        // 0. Wire the platform clipboard (ADR-0038 §9).
         let clipboard = owner_platform_installed(|owner| owner.shared().clipboard());
         APP_RUNTIME.with(|slot| slot.borrow().set_platform_clipboard(clipboard));
 

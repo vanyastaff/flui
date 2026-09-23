@@ -15,7 +15,7 @@
 //!   and no semantics — every frame is a full repaint of a caller-built scene.
 //!
 //! Window creation, GPU renderer init, and callback wiring all run inside
-//! `on_ready` (ADR-0039 slice 2), the same reorder `run_desktop` already
+//! `on_ready` (ADR-0039 §1), the same reorder `run_desktop` already
 //! received — this function used to open its window *before* starting the
 //! event loop, which failed fast on the winit backend (Linux) instead of
 //! opening anything (winit cannot create a window outside a running loop).
@@ -82,7 +82,7 @@ use super::AppConfig;
 /// # Platform Support
 ///
 /// Runs on every backend, including winit (Linux) — bootstrap moved inside
-/// `on_ready` (ADR-0039 slice 2), so the winit backend's requirement of a
+/// `on_ready` (ADR-0039 §1), so the winit backend's requirement of a
 /// running event loop before window creation is satisfied on every target.
 /// Uses `flui_platform::current_platform()` for platform selection.
 ///
@@ -107,8 +107,8 @@ pub fn run_direct(
     let platform = flui_platform::current_platform()?;
 
     /// The actual direct-mode bootstrap: window, GPU renderer, and callback
-    /// wiring. Runs once, synchronously, inside `on_ready` (ADR-0039 slice
-    /// 2) — the winit backend can only create a window from inside a
+    /// wiring. Runs once, synchronously, inside `on_ready` (ADR-0039
+    /// §1) — the winit backend can only create a window from inside a
     /// running event loop, so this can no longer run before `run()` starts
     /// it (which is what made this function fail fast on that backend
     /// before this migration).

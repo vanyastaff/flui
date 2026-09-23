@@ -32,8 +32,8 @@ use std::{
 
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, ErrorView, FlutterError, IntoView, Lifecycle,
-    RenderView, StatefulView, StatelessView, View, ViewExt, ViewState, clear_error_view_builder,
-    set_error_view_builder,
+    LifecycleContext, RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
+    clear_error_view_builder, set_error_view_builder,
 };
 
 /// Serializes the tests in this file.
@@ -170,7 +170,7 @@ impl StatefulView for InitPanicView {
 }
 
 impl ViewState<InitPanicView> for InitPanicState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.failed_ids.lock().unwrap().push(ctx.element_id());
         panic!("child init_state panic before recovery factory");
     }

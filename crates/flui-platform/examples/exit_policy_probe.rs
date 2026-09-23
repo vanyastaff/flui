@@ -279,7 +279,8 @@ mod native {
                         } else {
                             let once = std::sync::Mutex::new(Some(reopen));
                             shared.set_exit_policy_hook(Box::new(move || {
-                                if let Some(reopen) = once.lock().expect("reopen lock").take() {
+                                let reopen = once.lock().expect("reopen lock").take();
+                                if let Some(reopen) = reopen {
                                     reopen();
                                 }
                                 true

@@ -87,7 +87,8 @@ impl PopEntryRegistry {
         // Clone out so a callback may mount/unmount scopes without deadlock.
         let entries = self.entries.lock().clone();
         for entry in &entries {
-            if let Some(callback) = entry.on_pop_invoked.lock().clone() {
+            let callback = entry.on_pop_invoked.lock().clone();
+            if let Some(callback) = callback {
                 callback(did_pop);
             }
         }
@@ -254,7 +255,7 @@ impl ViewState<PopScope> for PopScopeState {
     /// `ModalRoute.registerPopEntry` (`routes.dart:2117`), through the route's
     /// ambient registry. A `PopScope` outside any route finds none and stays
     /// inert.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         if let Some(registry) = ctx.get::<PopEntryScope, _>(|scope| scope.registry.clone()) {
             registry.register(Arc::clone(&self.entry));
             self.registry = Some(registry);

@@ -29,6 +29,9 @@
 #![expect(clippy::module_name_repetitions)]
 // Ship bar (wave 1): every public item is documented; keep it that way.
 #![deny(missing_docs)]
+// A library that prints owns a terminal it was never given; report through
+// `tracing` or a returned error instead.
+#![warn(clippy::print_stdout, clippy::print_stderr)]
 
 // ============================================================================
 // MODULES

@@ -31,7 +31,7 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("OS: {}", std::env::consts::OS);
 
     // Display enumeration and window creation both move inside `on_ready`
-    // (ADR-0039 slice 2): the winit backend can only enumerate real
+    // (ADR-0039 §1): the winit backend can only enumerate real
     // displays and create windows once its event loop is pumping.
     platform.run(Box::new(move |owner| {
         let displays = owner.displays();

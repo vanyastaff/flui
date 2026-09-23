@@ -246,7 +246,7 @@ pub struct FrameSnapshot {
     /// what their names say. How much of the span that accounts for varies by
     /// backend: under the default Fifo mode the call blocks until the next
     /// vsync on the Vulkan/Wayland path, whereas the native AppKit backend
-    /// returns from it in ~42 µs (ADR-0029's AppKit subsection) — there the
+    /// returns from it in ~42 µs (ADR-0058's per-backend facts) — there the
     /// span is nearly all produce, which is what the name already implies.
     /// Sampled once, after the call returns, for every outcome including the
     /// error arms.

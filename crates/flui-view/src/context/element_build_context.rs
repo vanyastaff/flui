@@ -13,7 +13,7 @@ use flui_foundation::{ElementId, RenderId};
 use flui_interaction::FocusManager;
 use parking_lot::RwLock;
 
-use super::build_context::BuildContext;
+use super::build_context::{BuildContext, LifecycleContext};
 use crate::{element::Notification, owner::BuildOwner, tree::ElementTree};
 
 /// Concrete BuildContext implementation for Elements.
@@ -126,13 +126,11 @@ impl ElementBuildContext {
 
     /// Get a reference to the tree.
     pub fn tree(&self) -> &Arc<RwLock<ElementTree>> {
-        // PORT-CHECK-OK-SP6: ElementBuildContext tree accessor; pre-existing SP-6
         &self.tree
     }
 
     /// Get a reference to the owner.
     pub fn build_owner(&self) -> &Arc<RwLock<BuildOwner>> {
-        // PORT-CHECK-OK-SP6: ElementBuildContext build_owner accessor; pre-existing SP-6
         &self.owner
     }
 
@@ -223,13 +221,6 @@ impl BuildContext for ElementBuildContext {
         }
     }
 
-    fn rebuild_handle(&self) -> crate::RebuildHandle {
-        // A real handle: the owner Arc is right here. The read lock is held only
-        // to clone the shared inbox + frame-request Arcs out; nothing is held
-        // across the returned handle's lifetime.
-        self.owner.read().rebuild_handle(self.element_id)
-    }
-
     #[cfg(feature = "signals")]
     fn reactive(&self) -> crate::reactive::Reactive {
         self.owner.read().reactive().clone()
@@ -243,42 +234,6 @@ impl BuildContext for ElementBuildContext {
                 .reactive()
                 .register_element_reader(slot, self.element_id);
         }
-    }
-
-    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
-        self.owner.read().async_driver().cloned()
-    }
-
-    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
-        self.owner.read().post_frame_handle().cloned()
-    }
-
-    fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
-        self.owner.read().local_post_frame_handle().cloned()
-    }
-
-    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
-        self.keep_alive_handle().hold()
-    }
-
-    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
-        self.owner.read().keep_alive.handle(self.element_id)
-    }
-
-    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
-        self.owner.read().text_input_handle().cloned()
-    }
-
-    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
-        self.owner.read().hit_test_handle().cloned()
-    }
-
-    fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
-        self.owner.read().lifecycle_handle()
-    }
-
-    fn focus_manager(&self) -> Rc<FocusManager> {
-        self.owner.read().focus_manager()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -555,13 +510,6 @@ impl BuildContext for ElementBuildContext {
         })
     }
 
-    /// See [`BuildContext::pipeline_owner`]. The owner is on this element's own
-    /// node — no ancestor walk.
-    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
-        let tree = self.tree.read();
-        tree.get(self.element_id)?.element().pipeline_owner()
-    }
-
     fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
         let tree = self.tree.read();
 
@@ -642,6 +590,48 @@ impl BuildContext for ElementBuildContext {
                 std::ops::ControlFlow::Continue(())
             }
         });
+    }
+}
+
+impl LifecycleContext for ElementBuildContext {
+    fn rebuild_handle(&self) -> crate::RebuildHandle {
+        // A real handle: the owner Arc is right here. The read lock is held only
+        // to clone the shared inbox + frame-request Arcs out; nothing is held
+        // across the returned handle's lifetime.
+        self.owner.read().rebuild_handle(self.element_id)
+    }
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
+        self.owner.read().async_driver().cloned()
+    }
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
+        self.owner.read().post_frame_handle().cloned()
+    }
+    fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
+        self.owner.read().local_post_frame_handle().cloned()
+    }
+    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
+        self.keep_alive_handle().hold()
+    }
+    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
+        self.owner.read().keep_alive.handle(self.element_id)
+    }
+    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
+        self.owner.read().text_input_handle().cloned()
+    }
+    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
+        self.owner.read().hit_test_handle().cloned()
+    }
+    fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
+        self.owner.read().lifecycle_handle()
+    }
+    fn focus_manager(&self) -> Rc<FocusManager> {
+        self.owner.read().focus_manager()
+    }
+    /// See [`LifecycleContext::pipeline_owner`]. The owner is on this element's own
+    /// node — no ancestor walk.
+    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
+        let tree = self.tree.read();
+        tree.get(self.element_id)?.element().pipeline_owner()
     }
 }
 
@@ -729,8 +719,8 @@ pub(crate) struct BuildCtx<'b> {
     dep_sink: &'b parking_lot::Mutex<Vec<DependentRecord>>,
     /// Owned rebuild capability for `element_id`, minted by `make_build_ctx`
     /// from the element's own core. Cloned out by
-    /// [`BuildContext::rebuild_handle`]; the build itself never schedules —
-    /// port-check trigger #22 forbids even acquiring it here.
+    /// [`LifecycleContext::rebuild_handle`]; the build itself never schedules —
+    /// `build` sees this context as a `BuildContext`, which cannot hand it out.
     rebuild: crate::RebuildHandle,
     /// What the binding and the element's core handed this context.
     capabilities: BuildCapabilities,
@@ -810,10 +800,6 @@ impl BuildContext for BuildCtx<'_> {
         true
     }
 
-    fn rebuild_handle(&self) -> crate::RebuildHandle {
-        self.rebuild.clone()
-    }
-
     #[cfg(feature = "signals")]
     fn reactive(&self) -> crate::reactive::Reactive {
         self.capabilities.reactive.clone()
@@ -824,49 +810,6 @@ impl BuildContext for BuildCtx<'_> {
         self.capabilities
             .reactive
             .register_element_reader(slot, self.element_id);
-    }
-
-    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
-        self.capabilities.async_driver.clone()
-    }
-
-    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
-        self.capabilities.post_frame_handle.clone()
-    }
-
-    fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
-        self.capabilities.local_post_frame_handle.clone()
-    }
-
-    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
-        self.capabilities.text_input_handle.clone()
-    }
-
-    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
-        self.capabilities.hit_test_handle.clone()
-    }
-
-    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
-        // `init_state` runs with a `BuildCtx` — the same context type `build`
-        // gets — so this must serve a real lease rather than refuse one. The
-        // "never from a frame phase" half is a STATIC rule, enforced by
-        // `scripts/check-frame-capability-scope.sh` scanning for the token
-        // inside `build`/`perform_layout`/`paint`, exactly as it is for
-        // `text_input_handle` and `focus_manager`, which are acquired from
-        // `init_state` through this same context.
-        self.keep_alive_handle().hold()
-    }
-
-    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
-        self.capabilities.keep_alive.handle(self.element_id)
-    }
-
-    fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
-        self.capabilities.lifecycle_handle.clone()
-    }
-
-    fn focus_manager(&self) -> Rc<FocusManager> {
-        Rc::clone(&self.capabilities.focus_manager)
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -1022,14 +965,6 @@ impl BuildContext for BuildCtx<'_> {
         })
     }
 
-    /// Cloned at construction from the element's own `ElementCore`: during
-    /// `build_scope` the element is *extracted* from its tree node, so a
-    /// `BuildContext` cannot look itself up (`ElementNode::element` panics in that
-    /// window). See `make_build_ctx`.
-    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
-        self.capabilities.pipeline_owner.clone()
-    }
-
     fn visit_ancestor_elements(&self, visitor: &mut dyn FnMut(ElementId) -> bool) {
         let mut current = self.element_id;
         while let Some(node) = self.tree.get(current) {
@@ -1078,6 +1013,52 @@ impl BuildContext for BuildCtx<'_> {
                 std::ops::ControlFlow::Continue(())
             }
         });
+    }
+}
+
+impl LifecycleContext for BuildCtx<'_> {
+    fn rebuild_handle(&self) -> crate::RebuildHandle {
+        self.rebuild.clone()
+    }
+    fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
+        self.capabilities.async_driver.clone()
+    }
+    fn post_frame_handle(&self) -> Option<flui_scheduler::PostFrameHandle> {
+        self.capabilities.post_frame_handle.clone()
+    }
+    fn local_post_frame_handle(&self) -> Option<flui_scheduler::LocalPostFrameHandle> {
+        self.capabilities.local_post_frame_handle.clone()
+    }
+    fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
+        self.capabilities.text_input_handle.clone()
+    }
+    fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
+        self.capabilities.hit_test_handle.clone()
+    }
+    fn keep_alive_lease(&self) -> crate::owner::KeepAliveLease {
+        // `init_state` runs with a `BuildCtx` — the same context type `build`
+        // gets — so this must serve a real lease rather than refuse one. The
+        // "never from a frame phase" half is a TYPE rule: `build` sees this
+        // context only as `&dyn BuildContext`, which has no `keep_alive_lease`,
+        // exactly as for `text_input_handle` and `focus_manager`, which are
+        // acquired from `init_state` through this same context.
+        self.keep_alive_handle().hold()
+    }
+    fn keep_alive_handle(&self) -> crate::owner::KeepAliveHandle {
+        self.capabilities.keep_alive.handle(self.element_id)
+    }
+    fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
+        self.capabilities.lifecycle_handle.clone()
+    }
+    fn focus_manager(&self) -> Rc<FocusManager> {
+        Rc::clone(&self.capabilities.focus_manager)
+    }
+    /// Cloned at construction from the element's own `ElementCore`: during
+    /// `build_scope` the element is *extracted* from its tree node, so a
+    /// `BuildContext` cannot look itself up (`ElementNode::element` panics in that
+    /// window). See `make_build_ctx`.
+    fn pipeline_owner(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
+        self.capabilities.pipeline_owner.clone()
     }
 }
 

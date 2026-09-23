@@ -16,7 +16,7 @@
 //!
 //! `_allHeroesFor` walks a route's element subtree, tests `widget is Hero`, and reads
 //! `hero.state as _HeroState` (`:317-321`). FLUI cannot: a downcast from `&dyn View`
-//! is exactly what FR-033 forbids, and an element walk from an observer callback is
+//! is exactly the view-type smuggling FLUI rules out, and an element walk from an observer callback is
 //! exactly what a previous change deliberately removed.
 //!
 //! So the direction is inverted. Each `Hero` **registers itself** with the nearest
@@ -120,8 +120,7 @@ pub(crate) type PlaceholderBuilder = Rc<dyn Fn(Size) -> BoxedView>;
 /// Backed by [`ViewKey`], the framework's existing reconciliation-key trait: it
 /// already provides value equality (`key_eq`) and hashing (`key_hash`) across erased
 /// key types, which is precisely what a tag is. **No `dyn Any`, no downcast** — this
-/// type never calls `ViewKey::as_any`, so FR-033 is untouched. The `Arc<dyn ViewKey>`
-/// boundary is registered with port-check trigger #9 (FR-036).
+/// type never calls `ViewKey::as_any`, so no view type is ever downcast.
 #[derive(Clone)]
 pub(crate) struct HeroTag(Arc<dyn ViewKey>);
 
@@ -427,7 +426,7 @@ struct HeroInner {
     /// `_HeroState.startFlight` reads `box.size` (`:384-387`).
     owner: Mutex<Option<PipelineCell>>,
     /// `setState`. Acquired in `init_state`, fired from a post-frame callback —
-    /// never from `build`/layout/paint (port-check trigger #22).
+    /// never from `build`/layout/paint.
     rebuild: Mutex<Option<RebuildHandle>>,
     /// The hero's current child, for the flight shuttle to inflate afresh.
     ///
@@ -613,7 +612,6 @@ impl HeroHandle {
         self.inner
             .include_child
             .store(include_child_in_placeholder, Ordering::Relaxed);
-        // PORT-CHECK-OK-LOCK: plain data: Size is Copy
         *self.inner.placeholder.lock() = Some(size);
         self.request_rebuild();
         Some(size)
@@ -874,9 +872,9 @@ impl ViewState<Hero> for HeroState {
     }
 
     /// Everything a hero needs from outside itself is acquired **here**, in the one
-    /// lifecycle hook that has a `BuildContext` and is not a frame phase: the route's
-    /// registry, the render tree, and the rebuild capability (port-check trigger #22).
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    /// lifecycle hook that has a `LifecycleContext` and is not a frame phase: the route's
+    /// registry, the render tree, and the rebuild capability.
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let _prev = std::mem::replace(&mut *self.handle.inner.owner.lock(), ctx.pipeline_owner());
         let _prev = self
             .handle

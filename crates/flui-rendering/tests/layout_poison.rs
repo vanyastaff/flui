@@ -1100,7 +1100,6 @@ fn a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero() {
     // parent's child-layout callback, which hands the parent `Size::ZERO`
     // and records the failure against the leaf's retry budget.
     panic.store(true, Ordering::Relaxed);
-    // PORT-CHECK-OK-LOCK: plain data: Size is Copy
     *size_on_success.lock().expect("size_on_success mutex") = s2;
     run.owner_mut().mark_needs_layout(leaf);
     run.pump();

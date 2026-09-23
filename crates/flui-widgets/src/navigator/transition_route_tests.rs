@@ -995,7 +995,7 @@ fn pop_paced_drives_the_controller_with_the_given_duration_and_curve() {
         .expect("pushed");
     let controller = animation.controller().expect("installed");
 
-    let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::EaseInQuint); // PORT-CHECK-OK-DYN: see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+    let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::EaseInQuint); // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
     assert!(navigator_handle.pop_paced(route_id, Duration::from_millis(100), curve));
     assert_eq!(controller.status(), AnimationStatus::Reverse);
 
@@ -1034,7 +1034,7 @@ fn pop_paced_no_ops_when_the_route_is_no_longer_current() {
     complete(&top_animation);
     harness.tick();
 
-    let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::EaseInQuint); // PORT-CHECK-OK-DYN: see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+    let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::EaseInQuint); // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
     let popped = navigator_handle.pop_paced(bottom_id, Duration::from_millis(100), curve);
     assert!(
         !popped,
@@ -1076,7 +1076,7 @@ fn a_refused_pop_paced_does_not_leak_pacing_into_a_later_unrelated_pop() {
     complete(&top_animation);
     harness.tick();
 
-    let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::EaseInQuint); // PORT-CHECK-OK-DYN: see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
+    let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::EaseInQuint); // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
     assert!(!navigator_handle.pop_paced(bottom_id, Duration::from_millis(999), curve));
 
     // A plain pop of the real current route ("top") must use ITS OWN linear

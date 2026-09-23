@@ -38,7 +38,7 @@ pub trait PlatformCapabilities: Send + Sync {
     /// reason). Steady-state frame pacing on desktop does not depend on
     /// this value either — it comes from the GPU's present path: the blocking
     /// Fifo present on Vulkan/Wayland, the display-pass cadence on native
-    /// AppKit (ADR-0029's AppKit subsection).
+    /// AppKit (ADR-0058's per-backend facts).
     fn default_target_fps(&self) -> u32;
 
     /// Should rendering be suspended when in background?

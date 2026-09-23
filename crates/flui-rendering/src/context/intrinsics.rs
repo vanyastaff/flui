@@ -48,7 +48,7 @@ pub enum DryBaselineChildResponse {
 }
 
 // ============================================================================
-// DryLayoutChildRequest / DryLayoutChildResponse  (new for ADR-0011)
+// DryLayoutChildRequest / DryLayoutChildResponse  (the dry-intrinsics channel)
 // ============================================================================
 
 /// Child probe kinds issued during a dry-layout computation.

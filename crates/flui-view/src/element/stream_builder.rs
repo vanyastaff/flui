@@ -59,7 +59,7 @@ use parking_lot::Mutex;
 use super::async_slot::{InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, apply_fold};
 use crate::{
     RebuildHandle,
-    context::BuildContext,
+    context::{BuildContext, LifecycleContext},
     view::{IntoView, StatefulView, View, ViewState},
 };
 
@@ -310,7 +310,7 @@ where
     E: Send + Sync + 'static,
 {
     /// `_StreamBuilderBaseState.initState`: seed from `initial()`, then subscribe.
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         // Capture the capabilities here — the ONLY lifecycle hook handed a
         // context. `did_update_view` and `dispose` receive none.
         self.handle = Some(ctx.rebuild_handle());
@@ -413,8 +413,8 @@ mod tests {
         type Item = Result<Payload, Boom>;
 
         fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-            // PORT-CHECK-OK-LOCK: plain data: Event holds only i32/&'static str
-            if let Some(event) = self.channel.events.lock().pop_front() {
+            let event = self.channel.events.lock().pop_front();
+            if let Some(event) = event {
                 return Poll::Ready(event);
             }
             let _prev = self.channel.waker.lock().replace(cx.waker().clone());

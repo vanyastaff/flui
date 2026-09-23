@@ -61,8 +61,7 @@
 //!   the same embedder-facing route
 //!   [`FrameFailureHandler`](crate::FrameFailureHandler) and
 //!   [`ExitPolicy`](crate::ExitPolicy) take. There is deliberately no
-//!   `BuildContext`-acquired handle yet, so no token joins
-//!   `scripts/check-frame-capability-scope.sh` in this change — the widget
+//!   `LifecycleContext`-acquired handle yet — the widget
 //!   that would consume one (a `PopScope`-shaped "this subtree has unsaved
 //!   work" declaration) does not exist either, and shipping half of that
 //!   pair is how a seam ends up unreachable. Same deliberate remainder
@@ -310,7 +309,7 @@ struct PresentationCloseEntry {
 /// key — the address is the only identity this module knows.
 #[derive(Default)]
 pub(crate) struct CloseRequestRouter {
-    /// Private, and no guard ever escapes this type's own methods (SP-6):
+    /// Private, and no guard ever escapes this type's own methods:
     /// every caller gets a value out, never a lock.
     entries: Mutex<Vec<PresentationCloseEntry>>,
 }

@@ -12,7 +12,7 @@ This page covers prerequisites, the first build, and how to run the bundled exam
 | Cargo | bundled with Rust | Workspace uses `resolver = "3"` (MSRV-aware) and edition 2024. |
 | Git | any recent | Required to clone the repo. |
 | Python | 3.11+ | Required for repository verification scripts (`just ci`), which import `tomllib`. The justfile picks a Python >= 3.11 by version (`python3.12` counts), so `python3` may stay the system one; not required to run an application. |
-| Bash | 4+ | Required by `port-check` and a few other scripts (`mapfile`). macOS ships 3.2 as `/bin/bash`: `brew install bash`; the justfile finds the newer one. |
+| Bash | 4+ | Required by a few gate scripts (`mapfile`). macOS ships 3.2 as `/bin/bash`: `brew install bash`; the justfile finds the newer one. |
 | `cargo-ndk` | 3.x | Required only for Android targets. |
 | `wasm-pack` | 0.13+ | Required only for `examples/web_demo` and `examples/painting_demo`. |
 | Native toolchain | platform-specific | MSVC on Windows, Xcode CLT on macOS, NDK on Android. |

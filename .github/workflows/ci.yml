@@ -10,7 +10,7 @@ name: CI
 #              (`notify-main-red`).
 #
 # Job graph:
-#   checks         — fmt + taplo + typos + inventory + runtime-conformance + toolchain-consistency + panic-policy + port-check + actionlint + zizmor (seconds, no compile)
+#   checks         — fmt + taplo + typos + inventory + runtime-conformance + toolchain-consistency + panic-policy + actionlint + zizmor (seconds, no compile)
 #   plan           — heavy or fast lane; on a PR, which packages changed (scripts/affected-crates.sh)
 #   fast-lane      — fast lane only: clippy + nextest over the affected packages
 #   clippy         — workspace lint with -D warnings
@@ -112,7 +112,7 @@ env:
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # checks — fast source gate. fmt + inventory + runtime-conformance +
-  # toolchain-consistency + panic-policy + port-check + typos + Taplo +
+  # toolchain-consistency + panic-policy + typos + Taplo +
   # nextest-partition + the
   # workflow linters (actionlint semantics, zizmor security audit). No
   # compile. Every
@@ -139,19 +139,17 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Install CI tools (typos, taplo, ripgrep, zizmor)
+      - name: Install CI tools (typos, taplo, zizmor)
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           # Pin versions — unpinned tools surface unrelated breakage on
-          # release day. Bump deliberately. `ripgrep` is required by
-          # scripts/port-check.sh (the 24 refusal triggers + FR-033 all
-          # run through `rg`).
+          # release day. Bump deliberately.
           #
           # actionlint is NOT here: install-action has no recipe for it and
           # falls back to cargo-binstall, which cannot resolve a Go tool that
           # is not on crates.io ("actionlint is not found", exit 76). It is
           # fetched from its own release below.
-          tool: typos-cli@1.48,taplo-cli@0.10,ripgrep@15,zizmor@1
+          tool: typos-cli@1.48,taplo-cli@0.10,zizmor@1
 
       # actionlint is a Go release binary, not a crates.io package: it has no
       # taiki-e/install-action recipe (falls back to cargo-binstall, which
@@ -210,9 +208,6 @@ jobs:
 
       - name: 'panic-policy expect-message convention gate'
         run: bash scripts/check-panic-policy.sh
-
-      - name: scripts/port-check.sh (24 refusal triggers + FR-033)
-        run: bash scripts/port-check.sh -v
 
       # Browsers' WGSL uniformity analysis rejects a derivative taken inside a
       # branch; native naga does not, so nothing else in CI can see the class.

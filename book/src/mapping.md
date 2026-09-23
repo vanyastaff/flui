@@ -1,7 +1,7 @@
 # Flutter → FLUI mapping
 
 A vocabulary table for readers coming from Flutter. Every row is checked against the real trait or
-struct in `crates/` — see AGENTS.md's Prime Directive on why an unverified mapping isn't
+struct in `crates/` — see AGENTS.md's Design stance on why an unverified mapping isn't
 acceptable here: a wrong row would misrepresent either what FLUI follows from Flutter or what it
 deliberately changed.
 

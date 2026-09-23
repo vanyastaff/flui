@@ -573,7 +573,7 @@ impl GestureDetectorState {
 }
 
 impl ViewState<GestureDetector> for GestureDetectorState {
-    fn init_state(&mut self, ctx: &dyn BuildContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let arena = GestureArenaScope::of(ctx);
         self.rebuild = Some(ctx.rebuild_handle());
         self.local_post_frame = ctx.local_post_frame_handle();
