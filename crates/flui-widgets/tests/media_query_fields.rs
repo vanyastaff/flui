@@ -132,6 +132,52 @@ impl StatelessView for DroppingReader {
     }
 }
 
+/// Reads `size` only in `init_state` / `did_change_dependencies` (the
+/// `FocusState` / `DraggableState` pattern) and never in `build`.
+#[derive(Clone, StatefulView)]
+struct LifecycleReader {
+    dependency_changes: Count,
+    builds: Count,
+}
+
+struct LifecycleReaderState {
+    view: LifecycleReader,
+    width: f32,
+}
+
+impl StatefulView for LifecycleReader {
+    type State = LifecycleReaderState;
+    fn create_state(&self) -> Self::State {
+        LifecycleReaderState {
+            view: self.clone(),
+            width: 0.0,
+        }
+    }
+}
+
+impl ViewState<LifecycleReader> for LifecycleReaderState {
+    fn init_state(&mut self, ctx: &dyn BuildContext) {
+        self.width = MediaQuery::size_of(ctx)
+            .expect("MediaQuery ancestor")
+            .width
+            .0;
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn BuildContext) {
+        let dc = &self.view.dependency_changes;
+        dc.set(dc.get() + 1);
+        self.width = MediaQuery::size_of(ctx)
+            .expect("MediaQuery ancestor")
+            .width
+            .0;
+    }
+
+    fn build(&self, _view: &LifecycleReader, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.view.builds.set(self.view.builds.get() + 1);
+        SizedBox::new(self.width / 100.0, 1.0)
+    }
+}
+
 /// Stops parent-driven rebuilds so only dependency notifications reach the
 /// leaves.
 #[derive(Clone)]
@@ -446,4 +492,49 @@ fn a_build_that_stops_reading_the_provider_is_pruned_from_its_dependents() {
     // Neither field rebuilds it now.
     laid.pump_widget(MediaQuery::new(data(1000.0, 1.5), wrap(&reader)));
     assert_eq!(builds.get(), 2, "a pruned element is not notified");
+}
+
+#[test]
+fn a_dependency_acquired_in_a_lifecycle_hook_survives_a_rebuild_that_does_not_reread_it() {
+    // Reset-on-build re-derives only what `build` reads. A state that reads a
+    // provider in `init_state` / `did_change_dependencies` and not in `build`
+    // (FocusState, DraggableState) must stay subscribed across a rebuild from
+    // another cause, or it silently stops receiving `did_change_dependencies`.
+    let dependency_changes = count();
+    let builds = count();
+    let reader = LifecycleReader {
+        dependency_changes: Rc::clone(&dependency_changes),
+        builds: Rc::clone(&builds),
+    };
+    // No StaticChild boundary: an equal-data provider swap rebuilds the
+    // reader through the parent path (a rebuild that reads nothing).
+    let mut laid = lay_out(
+        MediaQuery::new(data(800.0, 1.0), reader.clone()),
+        loose(4000.0),
+    );
+    let mounted_builds = builds.get();
+    let mounted_changes = dependency_changes.get();
+
+    laid.pump_widget(MediaQuery::new(data(800.0, 1.0), reader.clone()));
+    assert!(
+        builds.get() > mounted_builds,
+        "test setup: the parent swap must rebuild the reader"
+    );
+    assert_eq!(
+        laid.inherited_dependent_count::<MediaQuery>(),
+        1,
+        "the lifecycle read survives a build that did not re-read it"
+    );
+
+    laid.pump_widget(MediaQuery::new(data(900.0, 1.0), reader));
+    assert_eq!(
+        dependency_changes.get(),
+        mounted_changes + 1,
+        "a size change still reaches did_change_dependencies"
+    );
+    assert_eq!(
+        laid.size(laid.current_root()).width,
+        px(9.0),
+        "the reader rendered the width it re-read"
+    );
 }

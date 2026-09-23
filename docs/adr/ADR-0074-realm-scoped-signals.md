@@ -293,6 +293,12 @@ drain goes through the same function, so it does the same for the elements it bu
 `media_query_fields.rs` pins it (read `size` in the first build, `text_scale_factor` in the
 second → a later size-only change rebuilds nothing). Cost: one hash lookup per previous
 provider per build; benefit: no stale rebuilds from reads a conditional branch stopped making.
+Reset-on-build covers reads made in **`build` only**. A read in `init_state` or
+`did_change_dependencies` is recorded in a separate `lifecycle_mask` that accumulates until
+unmount, as in Flutter: framework states such as `FocusState` and `DraggableState` acquire an
+inherited value in a lifecycle hook and do not re-read it in `build`, and a rebuild from any
+other cause must not unsubscribe them
+(`a_dependency_acquired_in_a_lifecycle_hook_survives_a_rebuild_that_does_not_reread_it`).
 A build that panics is not evidence of what the element reads: when this element's build is
 recovered with an `ErrorView` (a flag `build_or_recover` sets on the drain's owner, not a
 scan of the diagnostic panic queue), its previous masks are kept and the

@@ -48,8 +48,8 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `Theme::color_scheme_of`, `text_theme_of`, `depend_on_fields`; `MediaQueryData` and
   `ThemeData` derive `InheritedData`. `InheritedElementAccess::record_dependent` takes the
   mask; `InheritedBehavior::dependents` values are `DependentEntry { depth, mask }`
-  (`#[non_exhaustive]`). Reset-on-build: an element's recorded fields are those of its
-  latest build (a deliberate divergence from Flutter's accumulate-until-unmount
+  (`#[non_exhaustive]`). Reset-on-build: an element's recorded `build` fields are those of its
+  latest build (reads in `init_state`/`did_change_dependencies` are kept until unmount) (a deliberate divergence from Flutter's accumulate-until-unmount
   `_dependencies`; ADR-0074 §5.5 mapping decision).
 - **Rebuild and relayout telemetry**: `BuildOwner::last_frame_build_report()` (elements
   rebuilt by the last `build_scope`, split by `RebuildReason`) and

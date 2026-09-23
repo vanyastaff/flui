@@ -82,7 +82,18 @@ pub trait InheritedElementAccess {
         mask: crate::view::FieldMask,
     );
 
-    /// Reset the fields `dependent` is recorded as reading to `FieldMask::NONE`
+    /// Like [`record_dependent`](Self::record_dependent), for a read made in a
+    /// lifecycle hook (`init_state`, `did_change_dependencies`) or outside a
+    /// build drain: the fields are kept until the dependent unmounts, and
+    /// [`reset_dependent_mask`](Self::reset_dependent_mask) does not clear them.
+    fn record_lifecycle_dependent(
+        &mut self,
+        dependent: ElementId,
+        depth: usize,
+        mask: crate::view::FieldMask,
+    );
+
+    /// Reset the fields `dependent` read in `build` to `FieldMask::NONE`
     /// (keeping its depth), right before the build drain re-applies the reads
     /// of its latest build. A no-op when the id is not registered.
     fn reset_dependent_mask(&mut self, dependent: ElementId);

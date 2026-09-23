@@ -53,6 +53,25 @@ impl BuildCtxChoice<'_> {
     }
 }
 
+/// Length of the drain's dependency sink before a lifecycle hook runs (`None`
+/// outside a drain, where reads are recorded directly as lifecycle reads).
+fn lifecycle_sink_len(owner: &crate::ElementOwner<'_>) -> Option<usize> {
+    owner.build_view.map(|handle| handle.dep_sink.lock().len())
+}
+
+/// Tag every dependency record a lifecycle hook pushed since `start` so the
+/// drain keeps it across rebuilds (ADR-0074 §5.5: reset-on-build re-derives
+/// only what `build` reads).
+fn mark_lifecycle_records(owner: &crate::ElementOwner<'_>, start: Option<usize>) {
+    let (Some(handle), Some(start)) = (owner.build_view, start) else {
+        return;
+    };
+    let mut sink = handle.dep_sink.lock();
+    for record in sink.iter_mut().skip(start) {
+        record.lifecycle = true;
+    }
+}
+
 /// Pick the build context for `core`'s `build()` from `owner`.
 ///
 /// `BuildHandle` is `Copy`, so reading `owner.build_view` lifts the borrowed
@@ -716,9 +735,10 @@ where
         // `should_build` guard so a freshly-mounted `StatefulView` calls
         // `init_state` exactly once even if the element is clean.
         if !self.initialized {
-            if let Err(payload) =
-                std::panic::catch_unwind(AssertUnwindSafe(|| self.state.init_state(ctx)))
-            {
+            let sink_start = lifecycle_sink_len(owner);
+            let init = std::panic::catch_unwind(AssertUnwindSafe(|| self.state.init_state(ctx)));
+            mark_lifecycle_records(owner, sink_start);
+            if let Err(payload) = init {
                 owner.record_armed_lifecycle_panic(
                     core.self_id(),
                     TypeId::of::<V>(),
@@ -933,9 +953,12 @@ where
         // ancestor chain, matching Flutter (`framework.dart:5977-5982` runs
         // the hook with the element's live `BuildContext`).
         let ctx_choice = make_build_ctx(core, owner);
-        if let Err(payload) = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let sink_start = lifecycle_sink_len(owner);
+        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
             self.state.did_change_dependencies(ctx_choice.as_ctx());
-        })) {
+        }));
+        mark_lifecycle_records(owner, sink_start);
+        if let Err(payload) = outcome {
             owner.record_armed_lifecycle_panic(
                 core.self_id(),
                 TypeId::of::<V>(),
@@ -1269,8 +1292,22 @@ where
 pub struct DependentEntry {
     /// Depth captured at `depend_on_inherited` time.
     pub depth: usize,
-    /// Union of every field mask this dependent registered with.
+    /// Fields read in the dependent's latest `build` (re-derived per build,
+    /// ADR-0074 §5.5 reset-on-build).
     pub mask: crate::view::FieldMask,
+    /// Fields read in `init_state` / `did_change_dependencies`: kept until
+    /// unmount, never reset by a rebuild (a state that acquires a value in a
+    /// lifecycle hook and does not re-read it in `build` stays subscribed).
+    pub lifecycle_mask: crate::view::FieldMask,
+}
+
+impl DependentEntry {
+    /// Every field this dependent is notified for: build reads plus
+    /// lifecycle reads.
+    #[must_use]
+    pub fn fields(&self) -> crate::view::FieldMask {
+        self.mask | self.lifecycle_mask
+    }
 }
 
 /// Behavior for InheritedView elements.
@@ -1350,9 +1387,27 @@ impl<V: InheritedView> InheritedBehavior<V> {
         let entry = self.dependents.entry(element).or_insert(DependentEntry {
             depth,
             mask: crate::view::FieldMask::NONE,
+            lifecycle_mask: crate::view::FieldMask::NONE,
         });
         entry.depth = depth;
         entry.mask |= mask;
+    }
+
+    /// Register a dependent read made in a lifecycle hook: unions into the
+    /// kept-until-unmount `lifecycle_mask`.
+    pub(crate) fn add_lifecycle_dependent(
+        &mut self,
+        element: ElementId,
+        depth: usize,
+        mask: crate::view::FieldMask,
+    ) {
+        let entry = self.dependents.entry(element).or_insert(DependentEntry {
+            depth,
+            mask: crate::view::FieldMask::NONE,
+            lifecycle_mask: crate::view::FieldMask::NONE,
+        });
+        entry.depth = depth;
+        entry.lifecycle_mask |= mask;
     }
 
     /// Remove a dependent element.
@@ -1390,6 +1445,15 @@ where
         self.add_dependent(dependent, depth, mask);
     }
 
+    fn record_lifecycle_dependent(
+        &mut self,
+        dependent: ElementId,
+        depth: usize,
+        mask: crate::view::FieldMask,
+    ) {
+        self.add_lifecycle_dependent(dependent, depth, mask);
+    }
+
     fn reset_dependent_mask(&mut self, dependent: ElementId) {
         if let Some(entry) = self.dependents.get_mut(&dependent) {
             entry.mask = crate::view::FieldMask::NONE;
@@ -1398,7 +1462,7 @@ where
 
     fn prune_unread_dependent(&mut self, dependent: ElementId) -> bool {
         match self.dependents.get(&dependent) {
-            Some(entry) if entry.mask.is_empty() => {
+            Some(entry) if entry.fields().is_empty() => {
                 self.dependents.remove(&dependent);
                 true
             }
@@ -1473,7 +1537,7 @@ where
                 self.dependents.len()
             );
             for (&dep_id, entry) in &self.dependents {
-                if !entry.mask.intersects(changed) {
+                if !entry.fields().intersects(changed) {
                     continue;
                 }
                 let dep_depth = entry.depth;

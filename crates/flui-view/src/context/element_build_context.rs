@@ -339,7 +339,9 @@ impl BuildContext for ElementBuildContext {
         };
 
         // Register dependency (id + depth).
-        accessor.record_dependent(self_id, self_depth, mask);
+        // Outside a build drain there is no build whose reads could
+        // re-derive this one, so it is kept like a lifecycle read.
+        accessor.record_lifecycle_dependent(self_id, self_depth, mask);
         owner.register_inherited_dependency(self_id, ancestor_id);
         drop(owner);
 
@@ -652,6 +654,11 @@ pub(crate) struct DependentRecord {
     pub(crate) depth: usize,
     /// The provider fields the dependent read (#1090).
     pub(crate) mask: crate::view::FieldMask,
+    /// Recorded from `init_state` / `did_change_dependencies` rather than
+    /// `build`: such reads are kept until unmount (Flutter's accumulate
+    /// semantics), not re-derived per build (ADR-0074 §5.5). Set by the
+    /// stateful behavior after the hook returns.
+    pub(crate) lifecycle: bool,
 }
 
 /// Build-time [`BuildContext`] backed by a live, borrowed read view of the
@@ -884,6 +891,7 @@ impl BuildContext for BuildCtx<'_> {
             dependent: self.element_id,
             depth: self.depth,
             mask,
+            lifecycle: false,
         });
         callback(accessor.view_as_any());
         true

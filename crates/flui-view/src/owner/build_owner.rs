@@ -1918,7 +1918,15 @@ impl BuildOwner {
                 let Some(accessor) = node.element_mut().as_inherited_mut() else {
                     continue;
                 };
-                accessor.record_dependent(record.dependent, record.depth, record.mask);
+                if record.lifecycle {
+                    accessor.record_lifecycle_dependent(
+                        record.dependent,
+                        record.depth,
+                        record.mask,
+                    );
+                } else {
+                    accessor.record_dependent(record.dependent, record.depth, record.mask);
+                }
                 self.inherited_dependencies
                     .register(record.dependent, record.provider);
             }
