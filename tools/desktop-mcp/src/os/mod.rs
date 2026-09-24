@@ -3,8 +3,12 @@
 //! answers "unknown", which the callers treat as a refusal where safety
 //! depends on the answer.
 
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "macos")]
+pub use macos::window_owners as macos_window_owners;
 
 #[cfg(target_os = "windows")]
 pub use windows::{

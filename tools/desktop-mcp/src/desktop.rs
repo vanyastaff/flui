@@ -392,25 +392,46 @@ impl Registry {
     /// Marks every issued window whose native window is gone, or now
     /// another process's: seen once, its handle is never reused, whatever
     /// the OS later puts under the same native id.
-    fn sweep(&mut self) {
-        // Only where the OS answers who owns a native id directly: elsewhere
-        // no answer is not "gone".
-        if !cfg!(target_os = "windows") {
-            return;
+    fn sweep(&mut self) -> ToolResult<()> {
+        #[cfg(target_os = "macos")]
+        {
+            self.sweep_owners(os::macos_window_owners())
         }
-        let gone: Vec<u64> = self
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Only where the OS answers who owns a native id directly:
+            // elsewhere no answer is not "gone".
+            if !cfg!(target_os = "windows") {
+                return Ok(());
+            }
+            let owners = self
+                .by_hwnd
+                .keys()
+                .filter_map(|&hwnd| os::window_pid(hwnd).map(|pid| (hwnd, pid)))
+                .collect();
+            self.sweep_owners(Ok(owners))
+        }
+    }
+
+    /// A complete native owner snapshot includes windows hidden or on other
+    /// Spaces; the capture list does not. A failed snapshot proves nothing
+    /// about disappearance and must leave the handles intact.
+    fn sweep_owners(&mut self, owners: ToolResult<HashMap<u32, u32>>) -> ToolResult<()> {
+        let owners = owners?;
+        let gone: Vec<_> = self
             .by_hwnd
             .iter()
-            .filter(|&(&hwnd, n)| {
+            .filter_map(|(&hwnd, &handle)| {
                 self.windows
-                    .get(n)
-                    .is_some_and(|w| os::window_pid(hwnd) != Some(w.pid))
+                    .get(&handle)
+                    .filter(|issued| owners.get(&hwnd) != Some(&issued.pid))
+                    .map(|_| handle)
             })
-            .map(|(_, &n)| n)
             .collect();
-        for n in gone {
-            self.close(n);
+        for handle in gone {
+            self.close(handle);
         }
+        Ok(())
     }
 
     /// Retires window handle `n` for good.
@@ -574,7 +595,7 @@ impl Registry {
                     ));
                 }
                 if let Some(pid) = bound.window_pid {
-                    match Self::owner_now(hwnd) {
+                    match Self::owner_now(hwnd)? {
                         None => return Err(gone("it has closed")),
                         Some(now) if now != pid => {
                             return Err(gone(
@@ -603,16 +624,23 @@ impl Registry {
     }
 
     /// The process that owns native window `hwnd` now: from the OS where it
-    /// answers directly, else from the window list (macOS), so an owner
-    /// check never passes just because the fast lookup is missing.
-    fn owner_now(hwnd: u32) -> Option<u32> {
-        os::window_pid(hwnd).or_else(|| {
-            capture::windows()
-                .ok()?
+    /// answers directly, including hidden windows on macOS. A failed query
+    /// is not evidence of a closed window.
+    fn owner_now(hwnd: u32) -> ToolResult<Option<u32>> {
+        #[cfg(target_os = "macos")]
+        {
+            Ok(os::macos_window_owners()?.get(&hwnd).copied())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Some(pid) = os::window_pid(hwnd) {
+                return Ok(Some(pid));
+            }
+            Ok(capture::windows()?
                 .into_iter()
                 .find(|w| w.id == hwnd)
-                .map(|w| w.pid)
-        })
+                .map(|w| w.pid))
+        }
     }
 
     fn remember_shot(&mut self, meta: ShotMeta) -> String {
@@ -745,7 +773,7 @@ impl Desktop {
         title_contains: Option<&str>,
         pid: Option<u32>,
     ) -> ToolResult<Vec<Window>> {
-        self.registry.sweep();
+        self.registry.sweep()?;
         let needle = title_contains.map(a11y::fold);
         let windows: Vec<NativeWindow> = capture::windows()?
             .into_iter()
@@ -778,6 +806,13 @@ impl Desktop {
             Target::Pid(pid) => all.into_iter().filter(|w| w.pid == pid).collect(),
         };
         if found.is_empty() {
+            if let Target::Window(hwnd, n) = target
+                && Registry::owner_now(hwnd)?.is_some()
+            {
+                return Err(ToolError::NotFound(format!(
+                    "window w{n} still exists but is not available in the capture list"
+                )));
+            }
             return Err(no_window(target));
         }
         Ok(found)
@@ -817,6 +852,7 @@ impl Desktop {
                     .or_else(|| windows.iter().find(|w| !w.is_minimized))
                     .unwrap_or(&windows[0]);
                 let Some((n, _)) = self.registry.adopt(pick) else {
+                    self.registry.revalidate(Target::Pid(pid), bound)?;
                     return Err(ToolError::Busy(format!(
                         "the window of process {pid} closed while it was picked"
                     )));
@@ -1383,6 +1419,7 @@ impl Desktop {
             .or_else(|| windows.first())
             .ok_or_else(|| no_window(target))?;
         let Some(window) = self.registry.window(native) else {
+            self.registry.revalidate(target, bound)?;
             return Err(ToolError::Busy(
                 "the window closed while it was picked".into(),
             ));
@@ -1408,17 +1445,19 @@ impl Desktop {
             self.registry
                 .revalidate(Target::Window(native.id, n), chosen)
         };
-        recheck()?;
-        os::bring_to_front(native.id)?;
-        let mut fg = Self::foreground(&self.registry)?;
-        if fg.as_ref().map(|f| f.id) != Some(native.id) {
-            recheck()?;
-            if let Err(e) = self.a11y.focus_window(native.id) {
-                tracing::debug!("UIA focus fallback failed: {e}");
+        let fg = activate_while_current(recheck, || {
+            os::bring_to_front(native.id)?;
+            let mut fg = Self::foreground(&self.registry)?;
+            if fg.as_ref().map(|f| f.id) != Some(native.id) {
+                recheck()?;
+                if let Err(e) = self.a11y.focus_window(native.id) {
+                    tracing::debug!("UIA focus fallback failed: {e}");
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                fg = Self::foreground(&self.registry)?;
             }
-            std::thread::sleep(Duration::from_millis(100));
-            fg = Self::foreground(&self.registry)?;
-        }
+            Ok(fg)
+        })?;
         let became = fg.as_ref().map(|f| f.id) == Some(native.id);
         Ok(Activated {
             window,
@@ -1470,9 +1509,134 @@ fn read_while_current<T>(
     result
 }
 
+/// Activation may restore or focus a window before either the backend or
+/// the final identity check fails. Preserve the final handle diagnosis and
+/// tell the caller that part of that action may already have happened.
+fn activate_while_current<T>(
+    check: impl FnMut() -> ToolResult<()>,
+    activate: impl FnOnce() -> ToolResult<T>,
+) -> ToolResult<T> {
+    let began = std::cell::Cell::new(false);
+    read_while_current(check, || {
+        began.set(true);
+        activate()
+    })
+    .map_err(|error| {
+        if began.get() {
+            error.after(
+                Effect::MayHaveRun,
+                "activation may have restored or focused the window before it failed",
+            )
+        } else {
+            error
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_owner_snapshots_retire_only_confirmed_missing_windows() {
+        let mut registry = Registry::default();
+        let identity = Issued {
+            hwnd: 7,
+            pid: 100,
+            started: None,
+            class: None,
+        };
+        let handle = registry.register_window(identity);
+        // The full native list still includes a hidden window even though
+        // it is absent from the capture backend's on-screen-only list.
+        registry
+            .sweep_owners(Ok(HashMap::from([(7, 100)])))
+            .expect("BUG: complete snapshot is accepted");
+        assert_eq!(registry.register_window(identity), handle);
+        let failed = registry.sweep_owners(Err(ToolError::platform(
+            "listing window owners",
+            "injected native query failure",
+        )));
+        assert!(failed.is_err());
+        assert_eq!(registry.register_window(identity), handle);
+        registry
+            .sweep_owners(Ok(HashMap::new()))
+            .expect("BUG: empty complete snapshot is accepted");
+        let replacement = registry.register_window(identity);
+        assert_ne!(replacement, handle);
+        assert!(
+            registry
+                .observe(Target::Window(identity.hwnd, handle), || Ok(()))
+                .is_err()
+        );
+        registry
+            .sweep_owners(Ok(HashMap::from([(7, 200)])))
+            .expect("BUG: a changed owner is observed");
+        assert!(
+            registry
+                .observe(Target::Window(identity.hwnd, replacement), || Ok(()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn activation_refused_before_start_has_no_effect() {
+        let began = std::cell::Cell::new(false);
+        let outcome = activate_while_current(
+            || Err(no_window(Target::Window(7, 1))),
+            || {
+                began.set(true);
+                Ok(())
+            },
+        );
+        let error = outcome.expect_err("BUG: the target is already gone");
+        assert!(!began.get());
+        assert_eq!(error.payload()["error"]["code"], "gone");
+        assert!(error.payload()["error"].get("effect").is_none());
+    }
+
+    #[test]
+    fn activation_rechecks_identity_on_success_and_failure() {
+        for backend_succeeds in [false, true] {
+            let mut registry = Registry::default();
+            let issued = Issued {
+                hwnd: 7,
+                pid: 100,
+                started: Some(123),
+                class: Some(1),
+            };
+            let handle = registry.register_window(issued);
+            let target = Target::Window(issued.hwnd, handle);
+            let alive = std::cell::Cell::new(true);
+            let outcome = activate_while_current(
+                || {
+                    registry.observe(target, || {
+                        if alive.get() {
+                            Ok(())
+                        } else {
+                            Err(no_window(target))
+                        }
+                    })
+                },
+                || {
+                    alive.set(false);
+                    if backend_succeeds {
+                        Ok(())
+                    } else {
+                        Err(ToolError::NotFound(
+                            "window vanished before it could be raised".into(),
+                        ))
+                    }
+                },
+            );
+            let error = outcome.expect_err("BUG: closed window cannot be activated");
+            assert_eq!(error.payload()["error"]["code"], "gone");
+            assert_eq!(error.payload()["error"]["kind"], "window");
+            assert_eq!(error.payload()["error"]["effect"]["kind"], "may_have_run");
+            alive.set(true);
+            assert!(registry.observe(target, || Ok(())).is_err());
+        }
+    }
 
     #[test]
     fn a_replaced_window_handle_stays_gone_when_its_identity_returns() {

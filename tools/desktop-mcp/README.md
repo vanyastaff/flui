@@ -180,6 +180,11 @@ rest, apart from what must go out regardless: the release of what was already he
 inert masking key before modifiers come up on their own. Otherwise it refuses and sends
 nothing.
 
+Physical key and button state is checked again after potentially slow target lookups,
+before a press or wheel event. A new physical input refuses the event; this final check
+does not wait for the input to clear, which could make the target lookup stale again.
+OS state checks and event delivery are still separate operations.
+
 - A window handle is bound to the window it was issued for: its native id, its owner, the
   owner's start time and the window's class; a pid to the start time of the process it named
   when listed or launched. OSes recycle native ids and pids, and a target that now names

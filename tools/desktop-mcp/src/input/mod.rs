@@ -143,17 +143,18 @@ pub fn partial(
 }
 
 /// Checks the keyboard on both sides of a potentially slow target lookup.
-/// Used for every drag movement, recovery movement and drop validation: a key
-/// pressed while the guard is running must prevent the next synthetic event.
+/// Shared by pointer and keyboard input as well as drag recovery. A physical
+/// key or button pressed during a slow guard must prevent the next event.
+/// `state` is a non-blocking snapshot; any settling wait belongs before this.
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
-fn guarded_drag_event(
-    mut keyboard: impl FnMut() -> crate::error::ToolResult<()>,
+fn guarded_input_event(
+    mut state: impl FnMut() -> crate::error::ToolResult<()>,
     guard: impl FnOnce() -> crate::error::ToolResult<()>,
     event: impl FnOnce() -> crate::error::ToolResult<()>,
 ) -> crate::error::ToolResult<()> {
-    keyboard()?;
+    state()?;
     guard()?;
-    keyboard()?;
+    state()?;
     event()
 }
 
@@ -196,7 +197,7 @@ mod tests {
         use std::cell::Cell;
         let key_down = Cell::new(false);
         let moved = Cell::new(false);
-        let result = guarded_drag_event(
+        let result = guarded_input_event(
             || {
                 if key_down.get() {
                     Err(crate::error::ToolError::Busy("Ctrl held".into()))
@@ -216,7 +217,7 @@ mod tests {
         assert!(result.is_err());
         assert!(!moved.get(), "no modified movement may follow the guard");
         assert!(key_down.get(), "the user's key must not be released");
-        let recovery = guarded_drag_event(
+        let recovery = guarded_input_event(
             || {
                 if key_down.get() {
                     Err(crate::error::ToolError::Busy("Ctrl still held".into()))
@@ -241,7 +242,7 @@ mod tests {
     fn drag_checks_keyboard_again_after_a_successful_target_lookup() {
         use std::cell::RefCell;
         let events = RefCell::new(Vec::new());
-        guarded_drag_event(
+        guarded_input_event(
             || {
                 events.borrow_mut().push("keyboard");
                 Ok(())
@@ -257,6 +258,39 @@ mod tests {
         )
         .expect("BUG: a clear keyboard and valid target allow the drag step");
         assert_eq!(*events.borrow(), ["keyboard", "target", "keyboard", "move"]);
+    }
+
+    #[test]
+    fn a_physical_button_pressed_during_a_guard_blocks_the_pending_event() {
+        use std::cell::Cell;
+        let button_down = Cell::new(false);
+        let emitted = Cell::new(false);
+        let result = guarded_input_event(
+            || {
+                if button_down.get() {
+                    Err(crate::error::ToolError::Busy("button held".into()))
+                } else {
+                    Ok(())
+                }
+            },
+            || {
+                button_down.set(true);
+                Ok(())
+            },
+            || {
+                emitted.set(true);
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(crate::error::ToolError::Busy(_))));
+        assert!(
+            !emitted.get(),
+            "a press or wheel event must not join the user's gesture"
+        );
+        assert!(
+            button_down.get(),
+            "the physical button is not ours to release"
+        );
     }
 
     #[test]

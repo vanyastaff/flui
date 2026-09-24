@@ -1989,6 +1989,8 @@ dependencies = [
  "anyhow",
  "base64 0.23.1",
  "caseless",
+ "core-foundation 0.10.1",
+ "core-graphics 0.25.0",
  "enigo",
  "image",
  "rmcp",

@@ -74,9 +74,31 @@ The initial shared target was refused by `check-changed`; final validation uses 
 checkout's own target. The default gate against `origin/main` selected the entire
 workspace because of the original PR's changes and was stopped in favour of the pinned
 PR head above: this gate validates the audit fixes, not a fresh full-workspace CI run.
-The FLUI probe executable was prebuilt; the framework itself was not rebuilt for this audit.
+The FLUI probe executable was prebuilt; that live run did not rebuild the framework.
 
 ## Remaining limits
+
+The later native-boundary changes passed the full workspace scope selected by
+`cargo xtask check-changed --base 84d074534866584b68244fda778d3d6a12d07f63`:
+10,115 tests passed, five were skipped, and workspace clippy, strict rustdoc, doctests,
+Windows and macOS target checks passed. Android, iOS and wasm checks unavailable on this
+host, and the Linux-only platform suite, remain CI coverage. `cargo xtask checks` also
+passed. This rebuilt the workspace in the audit worktree's local target with one Cargo
+build job; it does not substitute for executing the macOS backend.
+
+Native input checks now bracket potentially slow target guards for clicks, initial drag
+presses, scroll axes, text strokes, modifier presses and the main chord key. The final
+snapshot never waits for physical input to clear. The ignored Windows tests
+`native_controls_through_mcp` and `physical_state_change_inside_guard_blocks_event` both
+passed: the latter sends a temporary Ctrl during the guard, observes it through Windows
+key state, and proves the following event is refused. It does not emulate a slow UIA
+provider or send a click while Ctrl is held.
+
+Activation checks target identity after both success and failure. macOS identity checks
+use a complete Quartz owner snapshot instead of xcap's screen-only list, preserving
+hidden windows and propagating failed snapshots without retiring handles. The macOS
+code and parser tests passed `cargo clippy -p flui-desktop-mcp --locked --all-targets
+--target aarch64-apple-darwin -- -D warnings`; the native Quartz path has not been run.
 
 Additional boundary checks were validated with
 `cargo xtask check-changed --base f77de34d58fa8533e38b89753722525f9ed4052c`:

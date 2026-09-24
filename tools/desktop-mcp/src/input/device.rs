@@ -268,10 +268,13 @@ impl Input {
             // Refused before the press: nothing of this click went out.
             // The button wait first: it can take a moment, and the target
             // and position are checked after it, right before the press.
-            if let Err(cause) = nothing_held()
-                .and_then(|()| guard(None))
-                .and_then(|()| self.ensure_at(x, y))
-            {
+            if let Err(cause) = nothing_held().and_then(|()| {
+                super::guarded_input_event(
+                    nothing_held_now,
+                    || guard(None),
+                    || self.ensure_at(x, y),
+                )
+            }) {
                 return Err(partial(cause, sent, clicks, "clicks"));
             }
             self.held_button = Some(button);
@@ -347,8 +350,11 @@ impl Input {
         self.move_verified(from.0, from.1)?;
         thread::sleep(STEP);
         nothing_held()?;
-        guard(None)?;
-        self.ensure_at(from.0, from.1)?;
+        super::guarded_input_event(
+            nothing_held_now,
+            || guard(None),
+            || self.ensure_at(from.0, from.1),
+        )?;
         // The primary button, as the user set it: with swapped buttons a
         // physical left press is a secondary one.
         let primary = enigo_button(MouseButton::Left);
@@ -386,7 +392,7 @@ impl Input {
         let mut moved = Ok(());
         for point in path {
             thread::sleep(interval);
-            moved = super::guarded_drag_event(
+            moved = super::guarded_input_event(
                 no_keyboard_input,
                 || guard(Some(point)),
                 || self.move_verified(point.0, point.1),
@@ -398,7 +404,7 @@ impl Input {
             done += 1;
         }
         if moved.is_ok() {
-            moved = super::guarded_drag_event(
+            moved = super::guarded_input_event(
                 no_keyboard_input,
                 || guard(Some(to)),
                 || self.ensure_at(to.0, to.1),
@@ -459,7 +465,7 @@ impl Input {
         // Never move during a modified drag, even for recovery. If already
         // at the last point, no move is needed (another mouse button can be
         // down), but both the keyboard and target must still be checked.
-        let back = super::guarded_drag_event(
+        let back = super::guarded_input_event(
             no_keyboard_input,
             || guard(Some(last)),
             || {
@@ -471,7 +477,7 @@ impl Input {
             },
         )
         .and_then(|()| {
-            super::guarded_drag_event(
+            super::guarded_input_event(
                 no_keyboard_input,
                 || guard(Some(last)),
                 || self.ensure_at(last.0, last.1),
@@ -519,14 +525,18 @@ impl Input {
         let axes = [(dy, Axis::Vertical), (dx, Axis::Horizontal)];
         let total = axes.iter().filter(|(n, _)| *n != 0).count();
         for (sent, (notches, axis)) in axes.into_iter().filter(|(n, _)| *n != 0).enumerate() {
-            let scrolled = nothing_held()
-                .and_then(|()| guard(None))
-                .and_then(|()| self.ensure_at(x, y))
-                .and_then(|()| {
-                    self.enigo
-                        .scroll(notches, axis)
-                        .map_err(failed("scrolling"))
-                });
+            let scrolled = nothing_held().and_then(|()| {
+                super::guarded_input_event(
+                    nothing_held_now,
+                    || guard(None),
+                    || {
+                        self.ensure_at(x, y)?;
+                        self.enigo
+                            .scroll(notches, axis)
+                            .map_err(failed("scrolling"))
+                    },
+                )
+            });
             if let Err(cause) = scrolled {
                 return Err(partial(cause, sent, total, "scroll axes"));
             }
@@ -548,45 +558,46 @@ impl Input {
             // Enter still carries may_have_run, so it must not be retried blindly.
             let mut tapped = false;
             // A held Ctrl would turn a typed Enter into Ctrl+Enter.
-            #[cfg(target_os = "windows")]
-            let clear = || only_modifiers(&[]);
-            #[cfg(not(target_os = "windows"))]
-            let clear = || Ok(());
+            let clear = nothing_held;
             // The key-state wait first: it can take a moment, in which the
             // foreground can change, so the target is checked after it,
             // right before the keystroke.
-            let sent = clear()
-                .and_then(|()| guard(None))
-                .and_then(|()| match stroke {
-                    Stroke::Key(key) => {
-                        let key = enigo_key(key)?;
-                        let (result, pressed) = self.tap(key);
-                        tapped = pressed;
-                        result
-                    }
-                    // On Windows every character goes out through our own
-                    // `SendInput`, which knows how much of it went in: enigo's
-                    // reports only failure (and releases a surrogate pair's low
-                    // unit with the high one).
-                    #[cfg(target_os = "windows")]
-                    Stroke::Char(c) => {
-                        crate::os::send_unicode(c).map_err(|(e, stuck, typed)| {
-                            // Not in enigo's held set: kept here, released first
-                            // by the next input and at shutdown.
-                            if stuck.is_some() {
-                                self.stuck_unit = stuck;
-                            }
-                            // Its last unit's key-down went in: that typed it.
-                            tapped = typed;
-                            e
-                        })
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    Stroke::Char(c) => self
-                        .enigo
-                        .text(c.encode_utf8(&mut buffer))
-                        .map_err(failed("typing text")),
-                });
+            let sent = clear().and_then(|()| {
+                super::guarded_input_event(
+                    nothing_held_now,
+                    || guard(None),
+                    || match stroke {
+                        Stroke::Key(key) => {
+                            let key = enigo_key(key)?;
+                            let (result, pressed) = self.tap(key);
+                            tapped = pressed;
+                            result
+                        }
+                        // On Windows every character goes out through our own
+                        // `SendInput`, which knows how much of it went in: enigo's
+                        // reports only failure (and releases a surrogate pair's low
+                        // unit with the high one).
+                        #[cfg(target_os = "windows")]
+                        Stroke::Char(c) => {
+                            crate::os::send_unicode(c).map_err(|(e, stuck, typed)| {
+                                // Not in enigo's held set: kept here, released first
+                                // by the next input and at shutdown.
+                                if stuck.is_some() {
+                                    self.stuck_unit = stuck;
+                                }
+                                // Its last unit's key-down went in: that typed it.
+                                tapped = typed;
+                                e
+                            })
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        Stroke::Char(c) => self
+                            .enigo
+                            .text(c.encode_utf8(&mut buffer))
+                            .map_err(failed("typing text")),
+                    },
+                )
+            });
             if let Err(cause) = sent {
                 let typed = typed + if tapped { chars } else { 0 };
                 return Err(partial(cause, typed, total, "characters"));
@@ -691,7 +702,19 @@ impl Input {
         let mut result = Ok(());
         for &m in modifiers {
             let k = modifier_key(m);
-            result = guard(None);
+            // Our preceding modifier may still be reaching async key state.
+            // Wait before the target lookup, then only snapshot afterwards.
+            #[cfg(target_os = "windows")]
+            {
+                result = only_modifiers(&held);
+            }
+            if result.is_ok() {
+                result = super::guarded_input_event(
+                    || only_our_keys_now(&held),
+                    || guard(None),
+                    || Ok(()),
+                );
+            }
             if result.is_err() {
                 break;
             }
@@ -723,7 +746,20 @@ impl Input {
             result = Err(changed);
         }
         if result.is_ok() {
-            result = guard(None);
+            result = super::guarded_input_event(
+                || only_our_keys_now(&held),
+                || {
+                    guard(None)?;
+                    // A provider lookup can also outlive the keyboard layout
+                    // used to resolve this character. Recheck after it.
+                    #[cfg(target_os = "windows")]
+                    if let Some(changed) = layout_of.and_then(owner_changed) {
+                        return Err(changed);
+                    }
+                    Ok(())
+                },
+                || Ok(()),
+            );
         }
         let mut sent = false;
         let attempted = result.is_ok();
@@ -813,6 +849,34 @@ fn no_keyboard_input() -> ToolResult<()> {
     Ok(())
 }
 
+/// Snapshot immediately after a target lookup, without sleeping after the
+/// lookup. Unlike `nothing_held`, this cannot stale the target while polling.
+fn nothing_held_now() -> ToolResult<()> {
+    only_our_keys_now(&[])
+}
+
+#[cfg_attr(
+    not(target_os = "windows"),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "native input state is Windows-only; other backends refuse targeted input"
+    )
+)]
+fn only_our_keys_now(ours: &[Key]) -> ToolResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        if crate::os::mouse_button_down() {
+            return Err(ToolError::Busy(
+                "a mouse button is held down and would join the input sent".into(),
+            ));
+        }
+        only_modifiers_now(ours)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = ours;
+    Ok(())
+}
+
 /// Refuses right before a synthetic press or wheel turn while the person at
 /// the desk holds a mouse button or a key: a held Ctrl turns a click into
 /// Ctrl+click and a wheel turn into zoom, a held button completes or drops
@@ -865,8 +929,24 @@ fn no_button_down() -> ToolResult<()> {
 /// are sent, so it is polled briefly before concluding.
 #[cfg(target_os = "windows")]
 fn only_modifiers(ours: &[Key]) -> ToolResult<()> {
-    let expect = ours.iter().fold(0_u8, |bits, k| {
-        bits | match k {
+    let mut result = Ok(());
+    for attempt in 0..10 {
+        result = only_modifiers_now(ours);
+        if result.is_ok() {
+            return result;
+        }
+        if attempt < 9 {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    result
+}
+
+/// The non-blocking half of `only_modifiers`, also used after slow guards.
+#[cfg(target_os = "windows")]
+fn only_modifiers_now(ours: &[Key]) -> ToolResult<()> {
+    let expected = ours.iter().fold(0_u8, |bits, key| {
+        bits | match key {
             Key::Shift => 1,
             Key::Control => 2,
             Key::Alt => 4,
@@ -874,21 +954,18 @@ fn only_modifiers(ours: &[Key]) -> ToolResult<()> {
             _ => 0,
         }
     });
-    let mut other = None;
-    for attempt in 0..10 {
-        other = crate::os::other_key_down();
-        if crate::os::modifiers_down() == expect && other.is_none() {
-            return Ok(());
-        }
-        if attempt < 9 {
-            thread::sleep(Duration::from_millis(5));
-        }
+    let other = crate::os::other_key_down();
+    if crate::os::modifiers_down() == expected && other.is_none() {
+        return Ok(());
     }
     Err(ToolError::Busy(match other {
         Some(vk) => format!(
             "a key (virtual key 0x{vk:02X}) is held down on the keyboard and would join the keys sent"
         ),
-        None => "a modifier key (Shift, Ctrl, Alt or Windows) is held down on the keyboard and would join the keys sent".into(),
+        None => {
+            "the modifier keys down differ from this chord's own keys; further input is refused"
+                .into()
+        }
     }))
 }
 
@@ -1055,4 +1132,45 @@ fn function_key(n: u8) -> ToolResult<Key> {
         24 => Key::F24,
         _ => return Err(unavailable(&format!("F{n}"))),
     })
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod live_state_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// No pointer move or click is sent. A temporary Ctrl goes through the
+    /// real OS state reader inside the guard, then is released explicitly
+    /// (and by Enigo's drop cleanup if an assertion unwinds).
+    #[test]
+    #[ignore = "temporarily presses Ctrl; requires an idle interactive Windows desktop"]
+    fn physical_state_change_inside_guard_blocks_event() {
+        let mut input = Input::new().expect("BUG: native input device opens");
+        nothing_held().expect("BUG: the live test needs an idle keyboard and mouse");
+        let event_sent = Cell::new(false);
+        let result = super::super::guarded_input_event(
+            nothing_held_now,
+            || {
+                input
+                    .enigo
+                    .key(Key::Control, Direction::Press)
+                    .map_err(failed("test Ctrl press"))?;
+                only_modifiers(&[Key::Control])
+            },
+            || {
+                event_sent.set(true);
+                Ok(())
+            },
+        );
+        input
+            .enigo
+            .key(Key::Control, Direction::Release)
+            .expect("BUG: temporary Ctrl releases");
+        only_modifiers(&[]).expect("BUG: temporary Ctrl is no longer held");
+        assert!(matches!(result, Err(ToolError::Busy(_))));
+        assert!(
+            !event_sent.get(),
+            "the post-guard snapshot must block the event"
+        );
+    }
 }
