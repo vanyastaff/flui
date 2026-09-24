@@ -3,7 +3,10 @@
 //! Agents address elements by short handles instead of OS objects. A handle
 //! is keyed by the backend's stable identity for the element (UIA's runtime
 //! id), so reading the same element twice returns the same handle, and the
-//! handle always resolves to the most recently read OS object for it.
+//! handle always resolves to the most recently read OS object for it. An
+//! identity the OS reuses for a new element after the old one is gone is
+//! retired first ([`ElementCache::retire`]), so the old handle never follows
+//! it to the new element.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
@@ -68,6 +71,7 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
                     .get(&oldest)
                     .is_some_and(|(_, _, t)| *t == seen)
                     && let Some((old_key, _, _)) = self.by_handle.remove(&oldest)
+                    && self.by_key.get(&old_key) == Some(&oldest)
                 {
                     self.by_key.remove(&old_key);
                 }
@@ -87,6 +91,19 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
                 .retain(|(handle, seen)| live.get(handle).is_some_and(|(_, _, t)| t == seen));
         }
         format!("e{n}")
+    }
+
+    /// The object last recorded under identity `key`.
+    pub fn by_identity(&self, key: &K) -> Option<&T> {
+        let n = self.by_key.get(key)?;
+        self.by_handle.get(n).map(|(_, value, _)| value)
+    }
+
+    /// Forgets which handle identity `key` has: that handle keeps resolving
+    /// to the object it held (gone, so it answers stale), and the next
+    /// [`Self::insert`] of `key` issues a fresh handle.
+    pub fn retire(&mut self, key: &K) {
+        self.by_key.remove(key);
     }
 
     /// Resolves a handle issued by [`Self::insert`].
@@ -168,6 +185,30 @@ mod tests {
             cache.insert("a", 10),
             a,
             "a dropped identity gets a new one"
+        );
+    }
+
+    /// An identity reused for a new element after its old one went is
+    /// retired: the old handle keeps its old object (and answers stale),
+    /// the new element gets its own handle, and evicting the old handle
+    /// later does not unmap the new one.
+    #[test]
+    fn a_retired_identity_gets_a_fresh_handle() {
+        let mut cache = ElementCache::with_capacity(3);
+        let old = cache.insert("id", "removed button");
+        assert_eq!(cache.by_identity(&"id").copied(), Some("removed button"));
+        cache.retire(&"id");
+        let new = cache.insert("id", "new control");
+        assert_ne!(old, new);
+        assert_eq!(cache.get(&old).copied().ok(), Some("removed button"));
+        assert_eq!(cache.get(&new).copied().ok(), Some("new control"));
+        cache.insert("x", "x");
+        cache.insert("y", "y");
+        assert!(cache.get(&old).is_err(), "the old handle was evicted");
+        assert_eq!(
+            cache.insert("id", "new control"),
+            new,
+            "the new mapping survived"
         );
     }
 

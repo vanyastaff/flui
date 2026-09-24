@@ -78,17 +78,15 @@ pub enum ToolError {
         foreground: String,
     },
 
-    /// A coordinate input lies outside the target window.
-    #[error(
-        "refused: point ({x}, {y}) is outside the target window's rect {rect}; the input would reach another window"
-    )]
+    /// A coordinate input would not land on the target.
+    #[error("refused: point ({x}, {y}) is not on the target: {reason}; nothing was sent there")]
     OutsideTarget {
         /// Point x in physical screen pixels.
         x: i32,
         /// Point y in physical screen pixels.
         y: i32,
-        /// The target window's rect, formatted.
-        rect: String,
+        /// What is there instead.
+        reason: String,
     },
 
     /// A wait ran out before the condition held.

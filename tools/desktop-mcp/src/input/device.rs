@@ -82,8 +82,8 @@ impl Input {
             Some((ax, ay)) => Err(ToolError::OutsideTarget {
                 x,
                 y,
-                rect: format!(
-                    "the pointer is at ({ax}, {ay}) instead (clamped to a screen edge or a cursor clip, or moved by someone else); nothing was pressed there"
+                reason: format!(
+                    "the pointer is at ({ax}, {ay}) instead (clamped to a screen edge or a cursor clip, or moved by someone else)"
                 ),
             }),
             None => Err(ToolError::NotSupported(

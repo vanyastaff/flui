@@ -39,10 +39,15 @@ pub struct Shot {
     pub width: u32,
     /// Encoded height in pixels.
     pub height: u32,
-    /// Captured area's origin and size in physical screen pixels.
+    /// Captured area's origin and size in screen coordinates.
     pub source: Rect,
-    /// Encoded pixels per physical pixel (1.0 unless downscaled).
-    pub scale: f64,
+    /// Encoded pixels per screen-coordinate unit, horizontally: from the
+    /// image itself, so a HiDPI backing store (2.0 on a Retina display) and
+    /// a downscale both show. A point `px` in the image is at
+    /// `source.x + px / scale_x` on the screen.
+    pub scale_x: f64,
+    /// The same, vertically.
+    pub scale_y: f64,
 }
 
 /// What `screenshot` captures.
@@ -104,6 +109,14 @@ mod backend {
                 let image = window
                     .capture_image()
                     .map_err(|e| ToolError::platform(format!("capturing window {id}"), e))?;
+                // Bounds read before the capture describe these pixels only
+                // if the window stayed put meanwhile.
+                let after = describe(window).map(|w| w.rect);
+                if after != Some(info.rect) {
+                    return Err(ToolError::NotFound(format!(
+                        "window {id} moved or resized while it was captured; capture it again"
+                    )));
+                }
                 (image, info.rect)
             }
             ShotTarget::Monitor(_) | ShotTarget::Primary => {
@@ -172,28 +185,33 @@ fn encode(image: RgbaImage, source: Rect, max_side: Option<u32>) -> ToolResult<S
 
     let (w, h) = image.dimensions();
     let longest = w.max(h).max(1);
-    let (image, scale) = match max_side {
+    let image = match max_side {
         Some(max) if max > 0 && longest > max => {
-            let scale = f64::from(max) / f64::from(longest);
-            let nw = ((f64::from(w) * scale).round() as u32).max(1);
-            let nh = ((f64::from(h) * scale).round() as u32).max(1);
-            (
-                DynamicImage::ImageRgba8(image).resize_exact(nw, nh, FilterType::Triangle),
-                scale,
-            )
+            let shrink = f64::from(max) / f64::from(longest);
+            let nw = ((f64::from(w) * shrink).round() as u32).max(1);
+            let nh = ((f64::from(h) * shrink).round() as u32).max(1);
+            DynamicImage::ImageRgba8(image).resize_exact(nw, nh, FilterType::Triangle)
         }
-        _ => (DynamicImage::ImageRgba8(image), 1.0),
+        _ => DynamicImage::ImageRgba8(image),
     };
     let mut png = Vec::new();
     image
         .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
         .map_err(|e| ToolError::platform("encoding PNG", e))?;
+    let per_unit = |pixels: u32, units: u32| {
+        if units == 0 {
+            1.0
+        } else {
+            f64::from(pixels) / f64::from(units)
+        }
+    };
     Ok(Shot {
         png,
         width: image.width(),
         height: image.height(),
         source,
-        scale,
+        scale_x: per_unit(image.width(), source.width),
+        scale_y: per_unit(image.height(), source.height),
     })
 }
 
@@ -215,7 +233,8 @@ mod tests {
         let shot = encode(RgbaImage::new(400, 100), source(), Some(200))
             .expect("BUG: encoding a blank image succeeds");
         assert_eq!((shot.width, shot.height), (200, 50));
-        assert!((shot.scale - 0.5).abs() < 1e-9);
+        assert!((shot.scale_x - 0.5).abs() < 1e-9);
+        assert!((shot.scale_y - 0.5).abs() < 1e-9);
         assert_eq!(&shot.png[..8], b"\x89PNG\r\n\x1a\n");
     }
 
@@ -223,6 +242,21 @@ mod tests {
     fn small_images_are_not_upscaled() {
         let shot = encode(RgbaImage::new(400, 100), source(), Some(1000))
             .expect("BUG: encoding a blank image succeeds");
-        assert_eq!((shot.width, shot.height, shot.scale), (400, 100, 1.0));
+        assert_eq!(
+            (shot.width, shot.height, shot.scale_x, shot.scale_y),
+            (400, 100, 1.0, 1.0)
+        );
+    }
+
+    /// A HiDPI capture has more pixels than screen units; the reply says
+    /// so instead of claiming a 1:1 mapping.
+    #[test]
+    fn a_backing_scale_is_reported_from_the_pixels() {
+        let shot = encode(RgbaImage::new(800, 200), source(), None)
+            .expect("BUG: encoding a blank image succeeds");
+        assert_eq!((shot.scale_x, shot.scale_y), (2.0, 2.0));
+        let shot = encode(RgbaImage::new(800, 200), source(), Some(400))
+            .expect("BUG: encoding a blank image succeeds");
+        assert_eq!((shot.scale_x, shot.scale_y), (1.0, 1.0));
     }
 }

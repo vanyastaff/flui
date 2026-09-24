@@ -66,10 +66,18 @@ window rects, element rects, screenshots (at `scale` 1) and input all share one 
 
 Element ids (`e12`) are session handles issued by `accessibility_tree`, `find` and `wait_for`.
 They are keyed by the element's UI Automation runtime id, so the same element keeps its id
-across reads. A handle whose element the application has removed reports that it is stale.
+across reads. A handle whose element the application has removed reports that it is stale,
+even when UI Automation later gives its runtime id to a new element (which gets a new
+handle).
+
+`screenshot` reports the captured screen rect (`source`) and `scale_x`/`scale_y`, image
+pixels per screen unit measured from the image itself (2 on a Retina display, below 1 when
+`max_side` shrank it): screen x = `source.x` + image x / `scale_x`. A window that moves
+while it is captured is refused rather than returned with bounds that no longer match.
 
 A read (`accessibility_tree`, `find`, one `wait_for` poll) fetches at most 5000 elements and
-stops after 10 s (a `wait_for` at its own timeout), so a huge or hung tree cannot hold the
+16 MiB of strings, cuts any one string at 4096 characters (ending in `…`), and stops after
+10 s (a `wait_for` at its own timeout), so a huge, hostile or hung tree cannot hold the
 server; a reply that stopped early says `truncated: true`, and an empty `find` is then no proof
 the element is absent. A process's reads include its popup menus and drop-downs, which are
 windows of their own; an element that shows up under two windows (an owned dialog) is reported
@@ -101,8 +109,9 @@ never land in another application.
   target that now names another process is refused. `activate_window` never re-binds an id.
 - A drag that stops partway releases the button (the drop) only at a point verified inside the
   target; if none verifies, it cancels the drag with Esc first.
-- An element click requires the element's own top-level window to be under the point and its
-  application in front, target or not. A popup menu is a window of its own, never the
+- An element click requires the element's own top-level window to be under the point, its
+  application in front, and, before every click, the element itself (or a descendant) to be
+  what UI Automation hit-tests there, target or not. A popup menu is a window of its own, never the
   foreground one, so target it with `pid`.
 - Shell hotkeys (the Windows key, `alt+tab`, `ctrl+esc`, `ctrl+shift+esc`; `cmd+tab`,
   `cmd+space` on macOS) reach the shell, not the window in front, so `key` refuses them when a
@@ -159,10 +168,10 @@ errors.
 
 `tests/live_windows.rs` is an ignored test for an interactive Windows desktop. It launches the
 repository's `a11y_probe` counter, lists and captures its window, reads the tree, finds and
-invokes the Increment button, and checks that refused input is refused for the reason given.
-When Windows lets the probe take the foreground, it also clicks the button and checks the
-count changed, then presses Tab, types, scrolls and drags; when Windows refuses, it says those
-steps were not exercised:
+invokes the Increment button, clicks it, and checks each press changed the count; then it
+presses Tab and `ctrl+plus`, types, scrolls and drags, and checks that refused input is refused
+for the reason given. Real input is the point, so when Windows will not give the probe the
+foreground it fails as inconclusive instead of passing without it:
 
 ```bash
 cargo build --release --example a11y_probe --features material,a11y

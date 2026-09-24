@@ -52,6 +52,16 @@ const PATTERNS: &[(UIProperty, &str)] = &[
 /// so every handle a response carries stays resolvable.
 pub const NODE_BUDGET: usize = 5_000;
 
+/// The longest a string property (name, value, automation id, class name)
+/// is reported, in characters; a longer one is cut and ends in `…`. A
+/// provider's strings are otherwise unbounded (a text control's value is the
+/// whole document).
+const MAX_PROPERTY_CHARS: usize = 4_096;
+
+/// How many bytes of strings one read reports at most, across all its
+/// elements; past it the read stops, marked truncated.
+const READ_BYTES: usize = 16 << 20;
+
 /// How many parents a walk up to the desktop takes at most: a hostile
 /// provider can report an endless or cyclic chain, and the walk runs on the
 /// one worker every tool shares.
@@ -129,7 +139,11 @@ impl Uia {
         })
     }
 
-    /// Issues (or re-issues) the handle for `element`.
+    /// Issues (or re-issues) the handle for `element`. UI Automation may
+    /// hand a removed element's runtime id to a new one; the handle already
+    /// issued for the id is kept only while its own object still answers to
+    /// that id, else the id is retired and the new element gets a fresh
+    /// handle, so a held handle never retargets to another control.
     fn register(&mut self, element: &UIElement) -> String {
         let key = match element.get_runtime_id() {
             Ok(id) if !id.is_empty() => id,
@@ -139,6 +153,11 @@ impl Uia {
                 vec![i32::MIN, self.anonymous]
             }
         };
+        if let Some(held) = self.elements.by_identity(&key)
+            && !held.get_runtime_id().is_ok_and(|id| id == key)
+        {
+            self.elements.retire(&key);
+        }
         self.elements.insert(key, element.clone())
     }
 
@@ -159,6 +178,7 @@ impl Uia {
             return None;
         }
         walk.budget = walk.budget.saturating_sub(1);
+        walk.bytes = walk.bytes.saturating_sub(node.text_bytes());
         let mut omitted = 0;
         let mut child = self
             .walker
@@ -204,6 +224,7 @@ impl Uia {
                 .get_cached_property_value(UIProperty::ValueValue)
                 .ok()
                 .and_then(|v| TryInto::<String>::try_into(v).ok())
+                .map(clip)
         } else if patterns.contains(&"RangeValue") {
             element
                 .get_cached_property_value(UIProperty::RangeValueValue)
@@ -434,6 +455,7 @@ impl AccessibilityBackend for Uia {
         let mut walk = Walk {
             max_depth,
             budget: 0,
+            bytes: READ_BYTES,
             deadline,
             seen: HashSet::new(),
             truncated: false,
@@ -530,6 +552,11 @@ impl AccessibilityBackend for Uia {
         })
     }
 
+    fn hits(&mut self, handle: &str, x: i32, y: i32) -> ToolResult<bool> {
+        let element = self.element(handle)?;
+        Ok(self.hits_element(x, y, &element))
+    }
+
     fn focus_window(&mut self, window: u32) -> ToolResult<()> {
         self.automation
             .element_from_handle(hwnd(window))
@@ -542,6 +569,8 @@ impl AccessibilityBackend for Uia {
 struct Walk {
     max_depth: usize,
     budget: usize,
+    /// String bytes it may still report.
+    bytes: usize,
     deadline: Instant,
     seen: HashSet<String>,
     truncated: bool,
@@ -551,7 +580,7 @@ impl Walk {
     /// Whether the read must stop fetching; once it has, the read is
     /// marked truncated.
     fn exhausted(&mut self) -> bool {
-        let out = self.budget == 0 || Instant::now() >= self.deadline;
+        let out = self.budget == 0 || self.bytes == 0 || Instant::now() >= self.deadline;
         self.truncated |= out;
         out
     }
@@ -587,7 +616,20 @@ fn cached_bool(element: &UIElement, prop: UIProperty) -> bool {
 }
 
 fn non_empty(value: uiautomation::Result<String>) -> Option<String> {
-    value.ok().filter(|s| !s.is_empty())
+    value.ok().filter(|s| !s.is_empty()).map(clip)
+}
+
+/// `s` cut to [`MAX_PROPERTY_CHARS`], ending in `…` when it was longer.
+fn clip(s: String) -> String {
+    match s.char_indices().nth(MAX_PROPERTY_CHARS) {
+        None => s,
+        Some((at, _)) => {
+            let mut cut = s;
+            cut.truncate(at);
+            cut.push('…');
+            cut
+        }
+    }
 }
 
 fn toggle_name(state: i32) -> &'static str {
@@ -620,5 +662,22 @@ fn classify(handle: &str, what: &str, e: &uiautomation::Error) -> ToolError {
             "element `{handle}` is disabled; {what} was not performed"
         )),
         _ => ToolError::platform(format!("{what} on element `{handle}`"), e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A provider's string is cut at a character boundary, marked, and
+    /// left alone when it fits.
+    #[test]
+    fn long_properties_are_cut_on_a_character_boundary() {
+        assert_eq!(clip("short".into()), "short");
+        let fits = "я".repeat(MAX_PROPERTY_CHARS);
+        assert_eq!(clip(fits.clone()), fits);
+        let cut = clip("я".repeat(MAX_PROPERTY_CHARS + 10));
+        assert_eq!(cut.chars().count(), MAX_PROPERTY_CHARS + 1);
+        assert!(cut.ends_with('…'));
     }
 }

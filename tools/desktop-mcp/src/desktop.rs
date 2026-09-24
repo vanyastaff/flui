@@ -71,7 +71,7 @@ fn covered((x, y): (i32, i32), what: &str, under: Under) -> ToolError {
     ToolError::OutsideTarget {
         x,
         y,
-        rect: format!("{what}; the point is covered by {by}"),
+        reason: format!("{what}, and the point is covered by {by}"),
     }
 }
 
@@ -415,19 +415,37 @@ impl Desktop {
                 })?;
                 let pid = os::window_pid(window)
                     .ok_or_else(|| ToolError::StaleElement(handle.clone()))?;
-                (p.x, p.y, Some((window, pid)))
+                (p.x, p.y, Some((handle.as_str(), window, pid)))
             }
         };
+        let Self { a11y, input, .. } = self;
+        let input = input
+            .as_mut()
+            .map_err(|e| ToolError::NotSupported(e.clone()))?;
         let mut guard = |_: Option<(i32, i32)>| {
             Self::check(target, bound, &[(x, y)])?;
             // An element click always lands on the element: the point must
-            // be in its window, with its application in front.
-            element_window.map_or(Ok(()), |(window, pid)| {
-                Self::check_element(window, pid, (x, y))
-            })
+            // be in its window, with its application in front, and hit the
+            // element itself — not a sibling or overlay that appeared over
+            // it inside the same window.
+            let Some((handle, window, pid)) = element_window else {
+                return Ok(());
+            };
+            Self::check_element(window, pid, (x, y))?;
+            if a11y.hits(handle, x, y)? {
+                Ok(())
+            } else {
+                Err(ToolError::OutsideTarget {
+                    x,
+                    y,
+                    reason: format!(
+                        "element `{handle}` is no longer what is under it (something inside its window covers it); use invoke, or read the tree again"
+                    ),
+                })
+            }
         };
         guard(None)?;
-        self.input()?.click(x, y, button, double, &mut guard)?;
+        input.click(x, y, button, double, &mut guard)?;
         Ok(
             json!({ "clicked": { "x": x, "y": y }, "button": format!("{button:?}").to_lowercase(), "double": double }),
         )

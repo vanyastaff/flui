@@ -151,6 +151,29 @@ impl Query {
 }
 
 impl Node {
+    /// The bytes of the strings this node reports.
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(
+            dead_code,
+            reason = "charged by the UIA backend, the only accessibility backend built yet"
+        )
+    )]
+    pub fn text_bytes(&self) -> usize {
+        self.id.len()
+            + self.role.len()
+            + [
+                &self.name,
+                &self.value,
+                &self.automation_id,
+                &self.class_name,
+            ]
+            .into_iter()
+            .flatten()
+            .map(String::len)
+            .sum::<usize>()
+    }
+
     /// This node without its children, copying nothing below it.
     #[must_use]
     pub fn shallow(&self) -> Self {
@@ -244,6 +267,12 @@ pub trait AccessibilityBackend {
     /// The point a click on `element` should target.
     fn click_point(&mut self, element: &str) -> ToolResult<ClickPoint>;
 
+    /// Whether the element at `(x, y)` is `element` or one of its
+    /// descendants: checked before every click on an element, since a
+    /// sibling or an overlay inside the same window can appear over it after
+    /// its clickable point was read.
+    fn hits(&mut self, element: &str, x: i32, y: i32) -> ToolResult<bool>;
+
     /// Asks the accessibility API to focus a top-level window.
     fn focus_window(&mut self, window: u32) -> ToolResult<()>;
 }
@@ -275,6 +304,9 @@ impl AccessibilityBackend for Unsupported {
         self.err()
     }
     fn click_point(&mut self, _: &str) -> ToolResult<ClickPoint> {
+        self.err()
+    }
+    fn hits(&mut self, _: &str, _: i32, _: i32) -> ToolResult<bool> {
         self.err()
     }
     fn focus_window(&mut self, _: u32) -> ToolResult<()> {

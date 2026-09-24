@@ -104,11 +104,25 @@ fn a11y_probe_counter_through_mcp() {
     show("list_windows", &listed);
     assert_eq!(listed["windows"][0]["title"], "FLUI Accessibility Probe");
 
-    let activated = ok(
-        "activate_window",
-        &client.call("activate_window", json!({ "window_id": window_id })),
-    );
+    // Real input is what this test is for: without the foreground it
+    // proves nothing, so it retries and then fails rather than skipping.
+    let mut activated = Value::Null;
+    for _ in 0..5 {
+        activated = ok(
+            "activate_window",
+            &client.call("activate_window", json!({ "window_id": window_id })),
+        );
+        if activated["became_foreground"] == true {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
     show("activate_window", &activated);
+    assert_eq!(
+        activated["became_foreground"], true,
+        "inconclusive: Windows kept another window in front of the probe, so no real input \
+         could be tested; run it with the desktop unlocked and idle"
+    );
 
     let shot = client.call("screenshot", json!({ "window_id": window_id }));
     assert_ne!(shot["isError"], true, "screenshot failed: {shot}");
@@ -204,8 +218,8 @@ fn a11y_probe_counter_through_mcp() {
         "refused for that reason: {text}"
     );
 
-    // A real pointer click on the same button, gated on the probe being in front.
-    if activated["became_foreground"] == true {
+    // A real pointer click on the same button.
+    {
         let clicked = ok(
             "click",
             &client.call(
@@ -231,11 +245,6 @@ fn a11y_probe_counter_through_mcp() {
             );
             show("wait_for count text 2", &after_click);
         }
-    } else {
-        println!(
-            "-- NOT EXERCISED: the real click, keys, text, scroll and drag; Windows kept \
-             another window in front of the probe"
-        );
     }
 
     // Pattern actions the button does not support name what it does support.
@@ -265,8 +274,8 @@ fn a11y_probe_counter_through_mcp() {
     show("move_mouse", &moved);
     assert_eq!(moved["pointer"], json!({ "x": cx, "y": cy }));
 
-    // Harmless input inside the probe, each gated on it being in front.
-    if activated["became_foreground"] == true {
+    // Harmless input inside the probe.
+    {
         for (tool, args) in [
             ("key", json!({ "combo": "tab", "window_id": window_id })),
             // A character that needs Shift on the layout goes out with it.
@@ -297,12 +306,10 @@ fn a11y_probe_counter_through_mcp() {
     show("click outside (refused)", &outside["content"][0]);
     assert_eq!(outside["isError"], true, "{outside}");
     let text = outside["content"][0]["text"].as_str().unwrap_or_default();
-    let reason = if activated["became_foreground"] == true {
-        "no input is sent there"
-    } else {
-        "not the foreground window"
-    };
-    assert!(text.contains(reason), "refused for that reason: {text}");
+    assert!(
+        text.contains("no input is sent there"),
+        "refused for that reason: {text}"
+    );
 
     // The shell takes the Windows key before any window sees it: refused
     // with a target, whoever is in front.

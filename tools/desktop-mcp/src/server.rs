@@ -48,7 +48,9 @@ menus and drop-downs are windows of their own: target them with pid, not window_
 hotkeys (the Windows key, alt+tab, ctrl+esc) are refused with a safety target.
 
 Element ids (e12) are session handles from accessibility_tree, find and wait_for; the same \
-element keeps its id across reads. A read visits at most 5000 elements and stops after 10 s; \
+element keeps its id across reads (an id whose element is gone answers stale, even if UI \
+Automation reuses its identity). A read visits at most 5000 elements and stops after 10 s; \
+strings longer than 4096 characters end in an ellipsis; \
 a reply with truncated: true did not see the whole tree, so an empty find result then does \
 not mean the element is absent. Accessibility tools use UI Automation and are Windows-only \
 for now. Window listing, screenshots and input work on Windows and macOS (on macOS, \
@@ -197,7 +199,7 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Capture a window (window_id or pid; covered windows are captured where the OS allows), a monitor (0-based index), or the primary monitor (no target). Returns a PNG plus, as structured content, its size, the captured screen rect (source) and scale (image px per screen px).",
+        description = "Capture a window (window_id or pid; covered windows are captured where the OS allows), a monitor (0-based index), or the primary monitor (no target). Returns a PNG plus, as structured content, its size, the captured screen rect (source) and scale_x/scale_y (image px per screen px, from the pixels: 2 on a Retina display, below 1 when downscaled): screen x = source.x + image x / scale_x. Refused if the window moved during the capture.",
         annotations(read_only_hint = true)
     )]
     async fn screenshot(
@@ -216,7 +218,8 @@ impl DesktopServer {
             "width": shot.width,
             "height": shot.height,
             "source": shot.source,
-            "scale": shot.scale,
+            "scale_x": shot.scale_x,
+            "scale_y": shot.scale_y,
         });
         let mut result = CallToolResult::success(vec![
             ContentBlock::image(
