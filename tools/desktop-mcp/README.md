@@ -194,9 +194,12 @@ nothing.
   reach it with a safety target. Where the OS cannot say which window has focus (macOS, for
   now), keys and text are refused.
 - A drag's start, end and every point between are checked before the button goes down, and
-  each step again before it is reached. A drag that stops partway releases the button (the
-  drop) at the last point verified inside the target; if none verifies, the release still
-  has to go out (a held button would drag on), and the error says where it happened.
+  each step again before it is reached. Physical keyboard state is checked around each
+  target lookup; a held key stops further movement, including recovery. A stopped drag
+  releases the button at the last verified point only if recovery remains valid. Otherwise
+  it releases at the current pointer position so the button cannot remain stuck. That
+  release may drop there, and a physical modifier still held may change the drop. The error
+  reports this uncertainty; the tool never releases the user's keys or promises rollback.
 - A button or key still held from a release that failed is released before the next input,
   or that input is refused (`input_held`); a call that panics mid-action releases everything
   it held.

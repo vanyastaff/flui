@@ -82,17 +82,19 @@ impl Worker {
         let job_ct = ct.clone();
         self.jobs
             .try_send(Box::new(move |desktop| {
-                // Cancellation must be observed here too: the async runtime
-                // may not have polled its cancellation branch before this
-                // thread reaches the queued job.
-                if job_ct.is_cancelled() {
-                    let _ = reply.send(Err(ToolError::Cancelled));
-                    return;
-                }
                 let claimed = job_state
                     .compare_exchange(QUEUED, RUNNING, Ordering::SeqCst, Ordering::SeqCst)
                     .is_ok();
                 if !claimed || reply.is_closed() {
+                    return;
+                }
+                // Read cancellation after claiming: the runtime may not
+                // have polled its cancellation branch yet, and cancellation
+                // between a pre-claim read and the CAS must still withdraw
+                // this action. This read is the start boundary; subsequent
+                // cancellation belongs to an already running call.
+                if job_ct.is_cancelled() {
+                    let _ = reply.send(Err(ToolError::Cancelled));
                     return;
                 }
                 // The client is gone: a queued `set_value` or `invoke` must

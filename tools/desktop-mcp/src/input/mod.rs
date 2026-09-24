@@ -142,6 +142,21 @@ pub fn partial(
     cause.counted(sent, total, unit)
 }
 
+/// Checks the keyboard on both sides of a potentially slow target lookup.
+/// Used for every drag movement, recovery movement and drop validation: a key
+/// pressed while the guard is running must prevent the next synthetic event.
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+fn guarded_drag_event(
+    mut keyboard: impl FnMut() -> crate::error::ToolResult<()>,
+    guard: impl FnOnce() -> crate::error::ToolResult<()>,
+    event: impl FnOnce() -> crate::error::ToolResult<()>,
+) -> crate::error::ToolResult<()> {
+    keyboard()?;
+    guard()?;
+    keyboard()?;
+    event()
+}
+
 /// Sends one key down and always attempts its release, even when the down
 /// failed ambiguously. The boolean counts only a confirmed down; the error
 /// retains uncertainty separately from progress through a larger request.
@@ -175,6 +190,74 @@ fn press_and_release(
 mod tests {
     use super::*;
     use crate::keys::{KeyName, Modifier};
+
+    #[test]
+    fn drag_refuses_movement_when_a_key_is_pressed_during_the_target_guard() {
+        use std::cell::Cell;
+        let key_down = Cell::new(false);
+        let moved = Cell::new(false);
+        let result = guarded_drag_event(
+            || {
+                if key_down.get() {
+                    Err(crate::error::ToolError::Busy("Ctrl held".into()))
+                } else {
+                    Ok(())
+                }
+            },
+            || {
+                key_down.set(true);
+                Ok(())
+            },
+            || {
+                moved.set(true);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(!moved.get(), "no modified movement may follow the guard");
+        assert!(key_down.get(), "the user's key must not be released");
+        let recovery = guarded_drag_event(
+            || {
+                if key_down.get() {
+                    Err(crate::error::ToolError::Busy("Ctrl still held".into()))
+                } else {
+                    Ok(())
+                }
+            },
+            || Ok(()),
+            || {
+                moved.set(true);
+                Ok(())
+            },
+        );
+        assert!(recovery.is_err());
+        assert!(
+            !moved.get(),
+            "recovery must not move under the physical modifier either"
+        );
+    }
+
+    #[test]
+    fn drag_checks_keyboard_again_after_a_successful_target_lookup() {
+        use std::cell::RefCell;
+        let events = RefCell::new(Vec::new());
+        guarded_drag_event(
+            || {
+                events.borrow_mut().push("keyboard");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("target");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("move");
+                Ok(())
+            },
+        )
+        .expect("BUG: a clear keyboard and valid target allow the drag step");
+        assert_eq!(*events.borrow(), ["keyboard", "target", "keyboard", "move"]);
+    }
 
     #[test]
     fn failed_presses_are_released_but_not_counted_as_confirmed() {

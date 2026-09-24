@@ -328,11 +328,13 @@ impl Input {
     /// `guard` runs before the press, before every step and before the
     /// release, with the point about to be reached.
     ///
-    /// The release is the drop, so it happens only at a verified point: when
-    /// a check fails partway, the pointer goes back to the last point that
-    /// passed and the button is released there once it passes again. If even
-    /// that fails, the release still goes out (a held button would drag on)
-    /// and the error says where; nothing else is sent unverified.
+    /// Keyboard state is checked around every target guard: a physical key
+    /// must not turn later movement into a modified drag. Recovery moves to
+    /// the last verified point only with a clear keyboard and verified target.
+    /// The mouse button is always released, even if recovery is refused: a
+    /// generic drag has no guaranteed cancellation, and keeping our button
+    /// down would modify the user's next movement. Physical keys are never
+    /// released on the user's behalf; an unavoidable modified drop is reported.
     pub fn drag(
         &mut self,
         from: (i32, i32),
@@ -384,7 +386,11 @@ impl Input {
         let mut moved = Ok(());
         for point in path {
             thread::sleep(interval);
-            moved = guard(Some(point)).and_then(|()| self.move_verified(point.0, point.1));
+            moved = super::guarded_drag_event(
+                no_keyboard_input,
+                || guard(Some(point)),
+                || self.move_verified(point.0, point.1),
+            );
             if moved.is_err() {
                 break;
             }
@@ -392,15 +398,11 @@ impl Input {
             done += 1;
         }
         if moved.is_ok() {
-            // A key held at the drop changes it (Ctrl copies, Esc cancels):
-            // the keyboard is checked first, the target last.
-            #[cfg(target_os = "windows")]
-            {
-                moved = only_modifiers(&[]);
-            }
-            moved = moved
-                .and_then(|()| guard(Some(to)))
-                .and_then(|()| self.ensure_at(to.0, to.1));
+            moved = super::guarded_drag_event(
+                no_keyboard_input,
+                || guard(Some(to)),
+                || self.ensure_at(to.0, to.1),
+            );
         }
         match moved {
             Ok(()) => self.release_held().map_err(|cause| {
@@ -454,19 +456,27 @@ impl Input {
         went: Effect,
         guard: &mut Guard<'_>,
     ) -> ToolError {
-        // Checked before the move: with the button held, a move is itself a
-        // drag, and it must not reach a window that took the foreground.
-        let back = guard(Some(last))
-            .and_then(|()| self.move_verified(last.0, last.1))
-            // Refused only because the pointer is there already (a move
-            // is refused while another button is down): still verified.
-            .or_else(|e| {
+        // Never move during a modified drag, even for recovery. If already
+        // at the last point, no move is needed (another mouse button can be
+        // down), but both the keyboard and target must still be checked.
+        let back = super::guarded_drag_event(
+            no_keyboard_input,
+            || guard(Some(last)),
+            || {
                 if self.position() == Some(last) {
-                    guard(Some(last))
+                    Ok(())
                 } else {
-                    Err(e)
+                    self.move_verified(last.0, last.1)
                 }
-            });
+            },
+        )
+        .and_then(|()| {
+            super::guarded_drag_event(
+                no_keyboard_input,
+                || guard(Some(last)),
+                || self.ensure_at(last.0, last.1),
+            )
+        });
         // No key goes out unverified: an Esc after the target lost the
         // foreground would reach whatever took it. The release is the one
         // event that must go out regardless, or the button stays held.
@@ -481,7 +491,7 @@ impl Input {
                 |(x, y)| format!("({x}, {y})"),
             );
             format!(
-                "the drag stopped where no point could be verified inside the target; the button had to be released where the pointer was, at {at}, which may have dropped there"
+                "the drag stopped and recovery was refused; the button had to be released where the pointer was, at {at}, which may have dropped there; any physical keys still held may modify that drop and were not released by this tool"
             )
         };
         if let Err(e) = self.release_held() {
@@ -782,6 +792,25 @@ impl Input {
         }
         result.map_err(|e| (e, sent))
     }
+}
+
+/// A non-blocking keyboard preflight for an in-progress drag. Waiting for
+/// a key to clear could miss a modified gesture; stop as soon as one is seen.
+#[cfg_attr(
+    not(target_os = "windows"),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "physical key state is available only on Windows; other input backends refuse pointer movement"
+    )
+)]
+fn no_keyboard_input() -> ToolResult<()> {
+    #[cfg(target_os = "windows")]
+    if crate::os::modifiers_down() != 0 || crate::os::other_key_down().is_some() {
+        return Err(ToolError::Busy(
+            "a physical key is held during the drag; further movement is refused because it could modify the gesture".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Refuses right before a synthetic press or wheel turn while the person at

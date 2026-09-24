@@ -351,34 +351,42 @@ impl Registry {
         {
             self.started.entry(w.pid).or_insert(started);
         }
-        // The same window as before keeps its handle; a native id the OS
-        // reused for another window or process gets a new one, and so does
-        // one whose earlier window this session saw close.
-        let same = self.by_hwnd.get(&w.id).copied().filter(|n| {
-            !self.closed.borrow().contains(n)
-                && self.windows.get(n).is_some_and(|issued| {
-                    issued.pid == w.pid
-                        && issued.started == started
-                        && (issued.class.is_none() || class.is_none() || issued.class == class)
-                })
-        });
-        let n = same.unwrap_or_else(|| {
-            self.next_window += 1;
-            let n = self.next_window;
-            self.windows.insert(
-                n,
-                Issued {
-                    hwnd: w.id,
-                    pid: w.pid,
-                    started,
-                    class,
-                },
-            );
-            self.by_hwnd.insert(w.id, n);
-            n
+        let n = self.register_window(Issued {
+            hwnd: w.id,
+            pid: w.pid,
+            started,
+            class,
         });
         let reason = unidentified.then_some(Untargetable::UnidentifiedProcess);
         Some((n, reason))
+    }
+
+    /// Records an observed window identity. A displaced handle stays gone
+    /// even if the OS later reuses the native id with its original fields.
+    fn register_window(&mut self, observed: Issued) -> u64 {
+        // The same window as before keeps its handle; a native id the OS
+        // reused for another window or process gets a new one, and so does
+        // one whose earlier window this session saw close.
+        let same = self.by_hwnd.get(&observed.hwnd).copied().filter(|n| {
+            !self.closed.borrow().contains(n)
+                && self.windows.get(n).is_some_and(|issued| {
+                    issued.pid == observed.pid
+                        && issued.started == observed.started
+                        && (issued.class.is_none()
+                            || observed.class.is_none()
+                            || issued.class == observed.class)
+                })
+        });
+        same.unwrap_or_else(|| {
+            if let Some(displaced) = self.by_hwnd.get(&observed.hwnd).copied() {
+                self.close(displaced);
+            }
+            self.next_window += 1;
+            let n = self.next_window;
+            self.windows.insert(n, observed);
+            self.by_hwnd.insert(observed.hwnd, n);
+            n
+        })
     }
 
     /// Marks every issued window whose native window is gone, or now
@@ -1465,6 +1473,42 @@ fn read_while_current<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_replaced_window_handle_stays_gone_when_its_identity_returns() {
+        let mut registry = Registry::default();
+        let original = Issued {
+            hwnd: 7,
+            pid: 100,
+            started: Some(123),
+            class: Some(1),
+        };
+        let first = registry.register_window(original);
+        assert_eq!(registry.register_window(original), first);
+        let replacement = registry.register_window(Issued {
+            class: Some(2),
+            ..original
+        });
+        assert_ne!(replacement, first);
+        let returned = registry.register_window(original);
+        assert_ne!(returned, first);
+        assert_ne!(returned, replacement);
+        assert_eq!(registry.register_window(original), returned);
+        for stale in [first, replacement] {
+            assert!(
+                registry
+                    .observe(Target::Window(original.hwnd, stale), || Ok(()))
+                    .is_err(),
+                "even a matching current identity cannot revive a displaced handle"
+            );
+            let error = registry
+                .bound(TargetArg::Window(stale))
+                .expect_err("BUG: a displaced handle never revives");
+            assert_eq!(error.payload()["error"]["code"], "gone");
+            assert_eq!(error.payload()["error"]["handle"], format!("w{stale}"));
+        }
+        assert_eq!(registry.by_hwnd.get(&original.hwnd), Some(&returned));
+    }
 
     #[test]
     fn a_failed_capture_rechecks_identity_and_never_revives_a_closed_handle() {

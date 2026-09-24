@@ -78,6 +78,20 @@ The FLUI probe executable was prebuilt; the framework itself was not rebuilt for
 
 ## Remaining limits
 
+Additional boundary checks were validated with
+`cargo xtask check-changed --base f77de34d58fa8533e38b89753722525f9ed4052c`:
+121 tests passed, four ignored fixtures were skipped; Windows and macOS target clippy,
+formatting and strict rustdoc passed. Regression tests cover permanently retiring a
+displaced HWND handle across X/Y/X class reuse, partial UIA expansion matching neither
+completed boolean state, and refusing drag movement when a physical key appears during
+the target guard. Worker cancellation is read after claiming the job, retaining the
+existing queued-cancellation tests. No live physical-key interleaving was run; drag
+cleanup must release its own button and cannot guarantee rollback or an unmodified drop.
+
+The reported empty-window screenshot panic is not reachable through the current call
+path: `Desktop::resolve` returns `no_window` for an empty result, and screenshot propagates
+that error before selecting from the immutable returned vector.
+
 - **Native allocation and execution isolation is not implemented.** UI Automation can
   allocate full BSTRs, runtime-ID arrays and cached native properties before Rust's
   truncation/budgets run. A huge or malicious provider can still exhaust this process;

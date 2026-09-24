@@ -1370,7 +1370,7 @@ fn describe(element: &UIElement, id: String) -> Node {
             // Which of expand and collapse applies is the element's state
             // (a partly expanded one takes both); a leaf offers neither.
             let applies = match action {
-                ActionName::Expand => expanded == Some(false),
+                ActionName::Expand => expanded == Some(false) || partly,
                 ActionName::Collapse => expanded == Some(true) || partly,
                 _ => true,
             };
@@ -1498,16 +1498,13 @@ fn role_of(control: ControlType) -> Role {
     }
 }
 
-/// An expand/collapse state as a flag; a leaf (nothing to expand) is
-/// neither, and an unreadable state is not "collapsed".
+/// The boolean reports only completed expansion states: `true` is fully
+/// expanded and `false` fully collapsed. Partial expansion, a leaf, and an
+/// unreadable state are neither, so they cannot satisfy either boolean wait.
 fn expanded_state(state: i32) -> Option<bool> {
     match state {
         s if s == ExpandCollapseState::Expanded as i32 => Some(true),
-        s if s == ExpandCollapseState::Collapsed as i32
-            || s == ExpandCollapseState::PartiallyExpanded as i32 =>
-        {
-            Some(false)
-        }
+        s if s == ExpandCollapseState::Collapsed as i32 => Some(false),
         _ => None,
     }
 }
@@ -1910,8 +1907,28 @@ mod tests {
         assert_eq!(expanded_state(ExpandCollapseState::LeafNode as i32), None);
         assert_eq!(
             expanded_state(ExpandCollapseState::PartiallyExpanded as i32),
-            Some(false)
+            None
         );
+    }
+
+    #[test]
+    fn partial_expansion_satisfies_neither_completed_state_wait() {
+        let mut node = crate::a11y::tests_node();
+        for (native, expected) in [
+            (ExpandCollapseState::Collapsed, Some(false)),
+            (ExpandCollapseState::Expanded, Some(true)),
+            (ExpandCollapseState::PartiallyExpanded, None),
+            (ExpandCollapseState::LeafNode, None),
+        ] {
+            node.expanded = expanded_state(native as i32);
+            for wanted in [false, true] {
+                let state = crate::params::StateArg {
+                    expanded: Some(wanted),
+                    ..crate::params::StateArg::default()
+                };
+                assert_eq!(state.holds(&node), expected == Some(wanted), "{native:?}");
+            }
+        }
     }
 
     /// A clipped string keeps no provider-sized buffer behind it.
