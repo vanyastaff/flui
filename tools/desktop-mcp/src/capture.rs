@@ -65,7 +65,9 @@ pub enum ShotTarget {
 mod backend {
     use xcap::{Monitor, Window};
 
-    use super::{Rect, Shot, ShotTarget, ToolError, ToolResult, WindowInfo, encode};
+    use super::{
+        Rect, Shot, ShotTarget, ToolError, ToolResult, WindowInfo, encode, within_pixel_limit,
+    };
 
     fn describe(w: &Window) -> Option<WindowInfo> {
         Some(WindowInfo {
@@ -106,6 +108,7 @@ mod backend {
                         "window {id} is minimized and has nothing to capture; activate_window first"
                     )));
                 }
+                within_pixel_limit(info.rect)?;
                 let image = window
                     .capture_image()
                     .map_err(|e| ToolError::platform(format!("capturing window {id}"), e))?;
@@ -144,6 +147,7 @@ mod backend {
                     width: monitor.width().map_err(meta)?,
                     height: monitor.height().map_err(meta)?,
                 };
+                within_pixel_limit(source)?;
                 let image = monitor
                     .capture_image()
                     .map_err(|e| ToolError::platform("capturing the monitor", e))?;
@@ -194,6 +198,26 @@ pub fn available() -> ToolResult<()> {
     {
         Err(backend::unsupported())
     }
+}
+
+/// The most pixels one capture reads (8K by 8K, about 256 MB as RGBA): the
+/// bitmap is allocated at full size before `max_side` shrinks it, so an
+/// enormous window would otherwise take the server down first.
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+const MAX_CAPTURE_PIXELS: u64 = 8192 * 8192;
+
+/// Refuses a capture larger than [`MAX_CAPTURE_PIXELS`] before anything is
+/// allocated.
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+fn within_pixel_limit(source: Rect) -> ToolResult<()> {
+    let pixels = u64::from(source.width) * u64::from(source.height);
+    if pixels > MAX_CAPTURE_PIXELS {
+        return Err(ToolError::InvalidArgument(format!(
+            "the capture would be {}x{} pixels, above the {MAX_CAPTURE_PIXELS}-pixel limit; capture a monitor or a smaller window",
+            source.width, source.height
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
@@ -266,6 +290,20 @@ mod tests {
             (shot.width, shot.height, shot.scale_x, shot.scale_y),
             (400, 100, 1.0, 1.0)
         );
+    }
+
+    /// A capture larger than the pixel limit is refused before anything is
+    /// allocated; one at the limit is not.
+    #[test]
+    fn an_enormous_capture_is_refused_first() {
+        let rect = |width, height| Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+        assert!(within_pixel_limit(rect(30_000, 30_000)).is_err());
+        assert!(within_pixel_limit(rect(8192, 8192)).is_ok());
     }
 
     /// A HiDPI capture has more pixels than screen units; the reply says

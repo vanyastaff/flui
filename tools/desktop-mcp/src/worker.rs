@@ -93,6 +93,30 @@ impl Worker {
     }
 }
 
+impl Worker {
+    /// Runs `f` after everything already queued, waiting for room in the
+    /// queue rather than refusing when it is full: the release of held input
+    /// at shutdown must not be the call a busy queue turns away.
+    pub async fn run_at_shutdown<R, F>(&self, f: F) -> ToolResult<R>
+    where
+        R: Send + 'static,
+        F: FnOnce(&mut Desktop) -> ToolResult<R> + Send + 'static,
+    {
+        let (reply, result) = oneshot::channel();
+        let jobs = self.jobs.clone();
+        let job: Job = Box::new(move |desktop| {
+            let _ = reply.send(f(desktop));
+        });
+        tokio::task::spawn_blocking(move || jobs.send(job))
+            .await
+            .map_err(|e| ToolError::platform("desktop thread", e))?
+            .map_err(|_| ToolError::platform("desktop thread", "it has stopped"))?;
+        result
+            .await
+            .map_err(|_| ToolError::platform("desktop thread", "the call panicked"))?
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

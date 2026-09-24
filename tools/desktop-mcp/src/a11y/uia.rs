@@ -112,6 +112,8 @@ const E_ELEMENT_NOT_ENABLED: i32 = 0x8004_0200_u32 as i32;
 #[derive(Debug, Clone)]
 struct Held {
     element: UIElement,
+    /// The runtime id it was issued under, `None` for an anonymous one.
+    runtime: Option<Vec<i32>>,
     pid: u32,
     started: Option<u64>,
 }
@@ -196,10 +198,15 @@ impl Uia {
             .starts
             .entry(pid)
             .or_insert_with(|| crate::os::process_started(pid));
+        let runtime = match &key {
+            Identity::Runtime(id) => Some(id.clone()),
+            Identity::Anonymous(_) => None,
+        };
         self.elements.insert(
             key,
             Held {
                 element: element.clone(),
+                runtime,
                 pid,
                 started,
             },
@@ -219,6 +226,16 @@ impl Uia {
             )));
         };
         if crate::os::process_started(held.pid) != Some(started) {
+            return Err(ToolError::StaleElement(handle.to_owned()));
+        }
+        // The object itself must still answer to the id it was issued
+        // under: a control destroyed and replaced inside the same running
+        // process (a recycled native window behind a UIA proxy) would
+        // otherwise take the action.
+        if let Some(id) = &held.runtime
+            && !crate::os::runtime_id(held.element.as_ref())
+                .is_ok_and(|now| now.as_deref() == Some(id.as_slice()))
+        {
             return Err(ToolError::StaleElement(handle.to_owned()));
         }
         Ok(held.element.clone())
@@ -577,10 +594,17 @@ impl AccessibilityBackend for Uia {
                 Ok(root) => root,
                 // Closed between listing and reading (a splash screen, a
                 // popup): the rest of the target is still worth reading.
-                Err(e) if is_gone(e.code()) => continue,
+                // A root fetch that fails still spent a cross-process call,
+                // so it is charged like one: a process with thousands of
+                // failing windows cannot outrun the budget.
+                Err(e) if is_gone(e.code()) => {
+                    spare -= 1;
+                    continue;
+                }
                 // Failing (hung, timed out): the rest is still read, and the
                 // read says it is incomplete.
                 Err(e) => {
+                    spare -= 1;
                     walk.truncated = true;
                     failed.get_or_insert((window, e));
                     continue;
@@ -758,15 +782,8 @@ fn role(element: &UIElement) -> String {
 /// value or `false` — a control that reads as disabled because the read
 /// failed would be skipped — so it marks the read incomplete.
 fn searchable(element: &UIElement) -> bool {
-    let states = [
-        UIProperty::IsEnabled,
-        UIProperty::HasKeyboardFocus,
-        UIProperty::IsKeyboardFocusable,
-    ];
-    element.get_cached_name().is_ok()
-        && cached_i32(element, UIProperty::ControlType).is_some()
-        && element.get_cached_automation_id().is_ok()
-        && states
+    cached_i32(element, UIProperty::ControlType).is_some()
+        && NODE_PROPERTIES
             .iter()
             .chain(PATTERNS.iter().map(|(prop, _)| prop))
             .all(|&prop| element.get_cached_property_value(prop).is_ok())

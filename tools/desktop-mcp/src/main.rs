@@ -27,7 +27,6 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use rmcp::ServiceExt as _;
-use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use crate::process::Children;
@@ -72,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     // button or a modifier down would leave it down for the whole desktop.
     let released = tokio::time::timeout(
         SHUTDOWN_WAIT,
-        worker.run(&CancellationToken::new(), |d| {
+        worker.run_at_shutdown(|d| {
             d.release_input();
             Ok(())
         }),

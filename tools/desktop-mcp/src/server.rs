@@ -263,9 +263,15 @@ impl DesktopServer {
                         "note": "no window for this pid yet; it may hand off to another process, see list_windows",
                     })));
                 }
+                // The process runs whatever happens to this request, so a
+                // cancelled wait still hands back its pid.
                 Ok(Some(_)) => {
                     if pause(&ct, POLL).await {
-                        return respond::<Value>(Err(ToolError::Cancelled));
+                        return respond(Ok(json!({
+                            "pid": pid,
+                            "window": null,
+                            "note": "the wait for a window was cancelled; the process is running, kill it by pid if needed",
+                        })));
                     }
                 }
             }

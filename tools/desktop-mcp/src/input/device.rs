@@ -211,12 +211,27 @@ impl Input {
         thread::sleep(STEP);
         guard(None)?;
         self.ensure_at(from.0, from.1)?;
+        // The primary button, as the user set it: with swapped buttons a
+        // physical left press is a secondary one.
+        let primary = enigo_button(MouseButton::Left);
         // Marked held before the press: a press that went out but reported
-        // failure is released by the next call rather than forgotten.
-        self.held_button = Some(Button::Left);
-        self.enigo
-            .button(Button::Left, Direction::Press)
-            .map_err(failed("pressing for a drag"))?;
+        // failure is released at once, and by the next call if that fails.
+        self.held_button = Some(primary);
+        if let Err(cause) = self
+            .enigo
+            .button(primary, Direction::Press)
+            .map_err(failed("pressing for a drag"))
+        {
+            return Err(match self.release_held() {
+                Ok(()) => cause,
+                Err(e) => ToolError::Interrupted {
+                    cause: Box::new(cause),
+                    what: format!(
+                        "the press may have gone out and releasing it failed ({e}); the button may still be held"
+                    ),
+                },
+            });
+        }
         let steps = (duration.as_millis() / STEP.as_millis()).clamp(2, 200) as i32;
         // The steps are bounded; their interval is not, so a long drag lasts
         // as long as it was asked to.
@@ -417,11 +432,20 @@ impl Input {
         }
         let mut sent = false;
         if result.is_ok() {
+            // Press and release apart: once the press is in, the key counts
+            // as sent even if its release fails (enigo then still tracks it
+            // as held, and the next input releases it).
             result = self
                 .enigo
-                .key(key, Direction::Click)
+                .key(key, Direction::Press)
                 .map_err(failed("pressing the key"));
             sent = result.is_ok();
+            if sent {
+                result = self
+                    .enigo
+                    .key(key, Direction::Release)
+                    .map_err(failed("releasing the key (it may still be held)"));
+            }
         }
         // Alt (or the Windows key) released on its own, with nothing pressed
         // while it was down, opens the menu bar (the Start menu) of whatever

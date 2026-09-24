@@ -249,6 +249,10 @@ impl KeyCombo {
         if self.has(Modifier::Meta) {
             return Some("the Windows shell (the Windows key)");
         }
+        // Caps Lock changes a state every window shares, not the target's.
+        if self.key == KeyName::CapsLock {
+            return Some("the keyboard's lock state, shared by every window");
+        }
         match self.key {
             KeyName::Tab | KeyName::Escape if self.has(Modifier::Alt) => {
                 Some("the Windows task switcher")
@@ -491,6 +495,10 @@ mod tests {
         assert!(parse("shift").shell_hotkey(true, 5).is_some());
         assert_eq!(parse("shift").shell_hotkey(false, 4), None);
         assert!(parse("alt").shell_hotkey(true, 5).is_some(), "Mouse Keys");
+        assert!(
+            parse("capslock").shell_hotkey(false, 1).is_some(),
+            "Caps Lock"
+        );
     }
 
     /// A control character is not a key of its own: a raw ESC would
