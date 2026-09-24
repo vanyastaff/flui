@@ -275,7 +275,11 @@ mod tests {
     /// its source; two separately built images are not), so a test that wants
     /// to name a specific frame keeps the handle it published.
     fn solid(width: u32, height: u32) -> PixelImage {
-        PixelImage::from_rgba8(width, height, vec![0u8; (width * height * 4) as usize])
+        PixelImage::from_rgba8(
+            width,
+            height,
+            vec![0u8; width as usize * height as usize * 4],
+        )
     }
 
     #[test]

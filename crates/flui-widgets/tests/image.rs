@@ -26,7 +26,11 @@ use flui_widgets::{Image, ImageAlignment, ImageFit};
 /// white. PixelImage::from_rgba8 panics if the byte count is wrong, so a
 /// compile-time-unsatisfied length would be caught immediately.
 fn solid_image(width: u32, height: u32) -> PixelImage {
-    PixelImage::from_rgba8(width, height, vec![255u8; (width * height * 4) as usize])
+    PixelImage::from_rgba8(
+        width,
+        height,
+        vec![255u8; width as usize * height as usize * 4],
+    )
 }
 
 // ---------------------------------------------------------------------------
