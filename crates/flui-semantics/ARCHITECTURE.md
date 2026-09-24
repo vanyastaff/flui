@@ -295,3 +295,26 @@ value.
 
 **Not implemented.** `RenderBlockSemantics` / blocking of previously painted siblings; sibling
 merge groups beyond configuration-conflict marking.
+
+### 4. Static text carries its text as its AccessKit value, and a value it also has joins it
+
+**Rule.** A node that resolves to `Role::Label` (mapping decision 1's static text) publishes
+its label as the AccessKit label *and* as the value; a node that also carries a FLUI value
+publishes `"{label}\n{value}"` as the value. Every other role publishes label and value as
+they are.
+
+**Why.** AccessKit's contract for `Label` is that its text is its value
+(`accesskit_consumer::Node::label_comes_from_value`): the UI Automation and AT-SPI adapters
+take a label node's name from the value alone, so a text published only as a label had an
+empty name for Narrator and Orca. The AppKit adapter falls back to the label, which is why
+VoiceOver read it and the macOS check passed. Keeping the label as well leaves queries by
+label (`flui::testing::a11y`, the harnesses) unchanged.
+
+**Divergence.** Flutter's platform bridges expose a static text's label as its name and its
+value separately. AccessKit's `Label` has one text slot on UIA and AT-SPI, so the two are
+joined with the separator the reference uses to join merged labels (`_concatAttributedString`
+in `packages/flutter/lib/src/semantics/semantics.dart`, tag `3.44.0`, `'\n'`).
+
+**Test.** `static_text_is_named_by_its_text` reads each node's name through
+`accesskit_consumer` the way the adapters do; `cargo xtask device windows-a11y` is the live
+check that found the defect.

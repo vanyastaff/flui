@@ -142,6 +142,14 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Fixed
 
+- **Static text was nameless to Narrator and Orca** (`flui-semantics`): a `Text` reached
+  AccessKit as a `Role::Label` carrying its text only as a label, and the UI Automation and
+  AT-SPI adapters read a label node's name from its value, so every plain text in a FLUI app
+  had an empty name on Windows and Linux (VoiceOver read it, because the AppKit adapter falls
+  back to the label). Static text now also publishes its text as its value. Found by the first
+  run of `cargo xtask device windows-a11y`, which now drives the generated counter through UI
+  Automation on a real Windows window: texts read by name, the button pressed through
+  `IUIAutomationInvokePattern`, the count read back as "1".
 - **Win32 clipboard use-after-free** (`flui-platform`): `OpenClipboard(NULL)` does not exclude
   other threads of the same process, so a clipboard write on one thread could free the text a
   read on another thread was scanning, aborting the process with `STATUS_HEAP_CORRUPTION`. All

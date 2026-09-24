@@ -2173,6 +2173,7 @@ name = "flui-semantics"
 version = "0.2.0-dev"
 dependencies = [
  "accesskit",
+ "accesskit_consumer",
  "criterion",
  "flui-foundation",
  "flui-tree",
@@ -7024,6 +7025,7 @@ dependencies = [
  "serde_json",
  "toml",
  "walkdir",
+ "windows",
 ]
 
 [[package]]
