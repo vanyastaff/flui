@@ -161,7 +161,9 @@ pub fn same_process(pid: u32, then: Option<u64>, now: Option<u64>) -> ToolResult
         None => Err(ToolError::NotSupported(format!(
             "process {pid} cannot be told apart from a later process reusing its pid (no start time on this OS, or it has exited), so it is not a safety target; pass window_id"
         ))),
-        Some(then) if now != Some(then) => Err(ToolError::NotFound(format!(
+        // Not `NotFound`: a `wait_for` keeps polling on that, and a reused
+        // pid never turns back into the process it named.
+        Some(then) if now != Some(then) => Err(ToolError::InvalidArgument(format!(
             "process {pid} has exited since this session saw it{}; this session does not re-bind a pid it handed out, so target the new process by window_id",
             if now.is_some() {
                 " (the pid now belongs to another process)"
@@ -316,12 +318,26 @@ impl Desktop {
     /// The element trees of a target's windows. A process's popups (menus,
     /// drop-downs) are windows of their own and are read too where the OS
     /// lists them.
+    ///
+    /// The target is held to the identity it was issued with, as for input:
+    /// a recycled window id or pid would otherwise hand out element handles
+    /// in an unrelated application, which a later `set_value` or `invoke`
+    /// (which take no target) would then act on.
     pub fn tree(
         &mut self,
         target: Target,
         max_depth: usize,
         deadline: Instant,
     ) -> ToolResult<Read> {
+        let bound = self.bound(Some(target))?;
+        if let (Target::Window(id), Some(pid)) = (target, bound)
+            && let Some(now) = os::window_pid(id)
+            && now != pid
+        {
+            return Err(ToolError::InvalidArgument(format!(
+                "window {id} belonged to process {pid} when listed and now belongs to process {now}; this session does not re-bind it"
+            )));
+        }
         let ids: Vec<u32> = match target {
             Target::Pid(pid) => match os::process_windows(pid) {
                 Some(ids) if !ids.is_empty() => ids,
