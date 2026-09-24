@@ -462,7 +462,9 @@ impl Uia {
     }
 
     /// Fills in a text control's value with a read of its own, clipped, so
-    /// only the clipped string outlives the call. Whether it could be read.
+    /// only the clipped string outlives the call. Whether it could be read:
+    /// a property the provider does not return, or returns as something
+    /// other than a string, is a failed read, not an empty value.
     fn read_value(&self, element: &UIElement, node: &mut Node) -> bool {
         if !node.patterns.contains(&"Value") {
             return true;
@@ -470,11 +472,14 @@ impl Uia {
         let Ok(fresh) = element.build_updated_cache(&self.value) else {
             return false;
         };
-        node.value = fresh
+        let Some(value) = fresh
             .get_cached_property_value(UIProperty::ValueValue)
             .ok()
             .and_then(|v| TryInto::<String>::try_into(v).ok())
-            .map(clip);
+        else {
+            return false;
+        };
+        node.value = Some(clip(value));
         true
     }
 
@@ -802,7 +807,17 @@ impl AccessibilityBackend for Uia {
         match element.build_updated_cache(&self.single) {
             Ok(fresh) => {
                 let mut node = describe(&fresh, handle.to_owned());
-                self.read_value(&fresh, &mut node);
+                // A value that cannot be read back is not a control without
+                // one: the action ran, and what it left is unknown.
+                if !self.read_value(&fresh, &mut node) {
+                    return Err(ToolError::Interrupted {
+                        cause: Box::new(ToolError::platform(
+                            "reading back",
+                            "the element's value could not be read",
+                        )),
+                        what: "the action itself succeeded; only reading the element's value afterwards failed, so do not repeat it".into(),
+                    });
+                }
                 Ok(node)
             }
             // The action succeeded and took its own element away (a Close or

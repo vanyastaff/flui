@@ -110,6 +110,11 @@ fn element_reply(result: ToolResult<a11y::Node>) -> CallToolResult {
 /// runtime's thread, which also carries the stdio transport. Work whose
 /// request was cancelled before it started does nothing, as on the desktop
 /// thread.
+///
+/// On a plain thread, not the runtime's blocking pool: a spawn stuck on an
+/// unreachable network executable cannot be aborted, and the runtime's
+/// teardown would wait for a pool task, keeping the server alive after the
+/// client left. A plain thread ends with the process.
 async fn blocking<T: Send + 'static>(
     ct: &CancellationToken,
     work: impl FnOnce() -> ToolResult<T> + Send + 'static,
@@ -119,18 +124,21 @@ async fn blocking<T: Send + 'static>(
     }
     let (reply, result) = tokio::sync::oneshot::channel();
     let job_ct = ct.clone();
-    tokio::task::spawn_blocking(move || {
-        // Cancelled before it started: say so, rather than drop the reply
-        // and have it read as a panic.
-        if job_ct.is_cancelled() {
-            let _ = reply.send(Err(ToolError::Cancelled));
-            return;
-        }
-        if reply.is_closed() {
-            return;
-        }
-        let _ = reply.send(work());
-    });
+    std::thread::Builder::new()
+        .name("desktop-process".into())
+        .spawn(move || {
+            // Cancelled before it started: say so, rather than drop the reply
+            // and have it read as a panic.
+            if job_ct.is_cancelled() {
+                let _ = reply.send(Err(ToolError::Cancelled));
+                return;
+            }
+            if reply.is_closed() {
+                return;
+            }
+            let _ = reply.send(work());
+        })
+        .map_err(|e| ToolError::platform("starting process work", e))?;
     result
         .await
         .map_err(|_| ToolError::platform("running process work", "it panicked"))?
