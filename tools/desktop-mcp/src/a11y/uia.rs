@@ -1,0 +1,390 @@
+//! Windows UI Automation backend.
+//!
+//! Lives on the worker thread: [`uiautomation::UIAutomation::new`] joins that
+//! thread to the COM multithreaded apartment, and every `UIElement` this
+//! backend holds stays on it.
+//!
+//! A tree read is one cross-process round trip: a cache request with
+//! `TreeScope::Subtree` over the control view prefetches every property the
+//! [`Node`] shape reports, and the walk reads the cached copies. Only the
+//! runtime id (the handle's identity) is read live per element.
+
+use uiautomation::core::UICacheRequest;
+use uiautomation::patterns::{
+    UIInvokePattern, UIRangeValuePattern, UISelectionItemPattern, UITogglePattern, UIValuePattern,
+};
+use uiautomation::types::{Handle, ToggleState, TreeScope, UIProperty};
+use uiautomation::{UIAutomation, UIElement};
+
+use super::{AccessibilityBackend, Action, ClickPoint, Node};
+use crate::cache::ElementCache;
+use crate::error::{ToolError, ToolResult};
+use crate::geometry::Rect;
+
+/// Pattern-availability properties, and the names the tools report.
+const PATTERNS: &[(UIProperty, &str)] = &[
+    (UIProperty::IsInvokePatternAvailable, "Invoke"),
+    (UIProperty::IsTogglePatternAvailable, "Toggle"),
+    (UIProperty::IsValuePatternAvailable, "Value"),
+    (UIProperty::IsRangeValuePatternAvailable, "RangeValue"),
+    (UIProperty::IsSelectionItemPatternAvailable, "SelectionItem"),
+    (UIProperty::IsSelectionPatternAvailable, "Selection"),
+    (
+        UIProperty::IsExpandCollapsePatternAvailable,
+        "ExpandCollapse",
+    ),
+    (UIProperty::IsScrollPatternAvailable, "Scroll"),
+    (UIProperty::IsScrollItemPatternAvailable, "ScrollItem"),
+    (UIProperty::IsTextPatternAvailable, "Text"),
+    (UIProperty::IsGridPatternAvailable, "Grid"),
+    (UIProperty::IsTablePatternAvailable, "Table"),
+    (UIProperty::IsWindowPatternAvailable, "Window"),
+];
+
+/// Properties every [`Node`] reads from the cache.
+const NODE_PROPERTIES: &[UIProperty] = &[
+    UIProperty::Name,
+    UIProperty::ControlType,
+    UIProperty::AutomationId,
+    UIProperty::ClassName,
+    UIProperty::BoundingRectangle,
+    UIProperty::IsEnabled,
+    UIProperty::HasKeyboardFocus,
+    UIProperty::IsKeyboardFocusable,
+    UIProperty::ValueValue,
+    UIProperty::ToggleToggleState,
+];
+
+/// `UIA_E_ELEMENTNOTAVAILABLE`: the provider removed the element.
+const E_ELEMENT_NOT_AVAILABLE: i32 = 0x8004_0201_u32 as i32;
+/// `RPC_E_DISCONNECTED`: the providing process went away.
+const E_DISCONNECTED: i32 = 0x8001_0108_u32 as i32;
+/// `UIA_E_ELEMENTNOTENABLED`: the element is disabled.
+const E_ELEMENT_NOT_ENABLED: i32 = 0x8004_0200_u32 as i32;
+
+/// UI Automation client state for the session.
+#[derive(Debug)]
+pub struct Uia {
+    automation: UIAutomation,
+    subtree: UICacheRequest,
+    single: UICacheRequest,
+    elements: ElementCache<Vec<i32>, UIElement>,
+    anonymous: i32,
+}
+
+fn platform(context: &str) -> impl FnOnce(uiautomation::Error) -> ToolError + '_ {
+    move |e| ToolError::platform(context, e)
+}
+
+impl Uia {
+    /// Joins this thread to the COM MTA and prepares the cache requests.
+    pub fn new() -> Result<Self, uiautomation::Error> {
+        let automation = UIAutomation::new()?;
+        let subtree = node_request(&automation, TreeScope::Subtree)?;
+        let single = node_request(&automation, TreeScope::Element)?;
+        Ok(Self {
+            automation,
+            subtree,
+            single,
+            elements: ElementCache::default(),
+            anonymous: 0,
+        })
+    }
+
+    /// Issues (or re-issues) the handle for `element`.
+    fn register(&mut self, element: &UIElement) -> String {
+        let key = match element.get_runtime_id() {
+            Ok(id) if !id.is_empty() => id,
+            // No runtime id: a handle that is never shared with another read.
+            _ => {
+                self.anonymous += 1;
+                vec![i32::MIN, self.anonymous]
+            }
+        };
+        self.elements.insert(key, element.clone())
+    }
+
+    fn element(&self, handle: &str) -> ToolResult<UIElement> {
+        self.elements.get(handle).cloned()
+    }
+
+    fn build(&mut self, element: &UIElement, depth: usize, max_depth: usize) -> Node {
+        let mut node = self.describe(element);
+        let children = element.get_cached_children().unwrap_or_default();
+        if depth >= max_depth {
+            if !children.is_empty() {
+                node.omitted_children = Some(children.len());
+            }
+        } else {
+            node.children = children
+                .iter()
+                .map(|child| self.build(child, depth + 1, max_depth))
+                .collect();
+        }
+        node
+    }
+
+    /// A [`Node`] from `element`'s cached properties, children empty.
+    fn describe(&mut self, element: &UIElement) -> Node {
+        let id = self.register(element);
+        let patterns: Vec<&'static str> = PATTERNS
+            .iter()
+            .filter(|(prop, _)| cached_bool(element, *prop))
+            .map(|&(_, name)| name)
+            .collect();
+        let value = patterns
+            .contains(&"Value")
+            .then(|| {
+                element
+                    .get_cached_property_value(UIProperty::ValueValue)
+                    .ok()
+                    .and_then(|v| TryInto::<String>::try_into(v).ok())
+            })
+            .flatten();
+        let toggle_state = patterns
+            .contains(&"Toggle")
+            .then(|| {
+                element
+                    .get_cached_property_value(UIProperty::ToggleToggleState)
+                    .ok()
+                    .and_then(|v| TryInto::<i32>::try_into(v).ok())
+                    .map(toggle_name)
+            })
+            .flatten();
+        Node {
+            id,
+            role: element
+                .get_cached_control_type()
+                .map_or_else(|_| "Unknown".to_owned(), |t| format!("{t:?}")),
+            name: non_empty(element.get_cached_name()),
+            value,
+            automation_id: non_empty(element.get_cached_automation_id()),
+            class_name: non_empty(element.get_cached_classname()),
+            rect: element
+                .get_cached_bounding_rectangle()
+                .ok()
+                .map(|r| Rect::from_ltrb(r.get_left(), r.get_top(), r.get_right(), r.get_bottom())),
+            enabled: element.is_cached_enabled().unwrap_or(false),
+            has_keyboard_focus: element.has_cached_keyboard_focus().unwrap_or(false),
+            is_keyboard_focusable: element.is_cached_keyboard_focusable().unwrap_or(false),
+            toggle_state,
+            patterns,
+            children: Vec::new(),
+            omitted_children: None,
+        }
+    }
+
+    /// The element's patterns, read live, for error messages.
+    fn live_patterns(element: &UIElement) -> String {
+        PATTERNS
+            .iter()
+            .filter(|(prop, _)| {
+                element
+                    .get_property_value(*prop)
+                    .ok()
+                    .and_then(|v| TryInto::<bool>::try_into(v).ok())
+                    .unwrap_or(false)
+            })
+            .map(|&(_, name)| name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn has_pattern(element: &UIElement, prop: UIProperty) -> bool {
+        element
+            .get_property_value(prop)
+            .ok()
+            .and_then(|v| TryInto::<bool>::try_into(v).ok())
+            .unwrap_or(false)
+    }
+
+    fn require(
+        handle: &str,
+        element: &UIElement,
+        prop: UIProperty,
+        pattern: &'static str,
+    ) -> ToolResult<()> {
+        if Self::has_pattern(element, prop) {
+            Ok(())
+        } else {
+            Err(ToolError::PatternUnsupported {
+                element: handle.to_owned(),
+                pattern,
+                supported: Self::live_patterns(element),
+            })
+        }
+    }
+
+    fn perform(handle: &str, element: &UIElement, action: &Action) -> ToolResult<()> {
+        let fail = |what: &'static str| move |e: uiautomation::Error| classify(handle, what, &e);
+        match action {
+            Action::Invoke => {
+                Self::require(
+                    handle,
+                    element,
+                    UIProperty::IsInvokePatternAvailable,
+                    "Invoke",
+                )?;
+                element
+                    .get_pattern::<UIInvokePattern>()
+                    .and_then(|p| p.invoke())
+                    .map_err(fail("invoke"))
+            }
+            Action::Toggle => {
+                Self::require(
+                    handle,
+                    element,
+                    UIProperty::IsTogglePatternAvailable,
+                    "Toggle",
+                )?;
+                element
+                    .get_pattern::<UITogglePattern>()
+                    .and_then(|p| p.toggle())
+                    .map_err(fail("toggle"))
+            }
+            Action::SetValue(value) => {
+                if Self::has_pattern(element, UIProperty::IsValuePatternAvailable) {
+                    return element
+                        .get_pattern::<UIValuePattern>()
+                        .and_then(|p| p.set_value(value))
+                        .map_err(fail("set_value"));
+                }
+                if Self::has_pattern(element, UIProperty::IsRangeValuePatternAvailable) {
+                    let number: f64 = value.trim().parse().map_err(|_| {
+                        ToolError::InvalidArgument(format!(
+                            "element `{handle}` takes a number (RangeValue pattern); `{value}` is not one"
+                        ))
+                    })?;
+                    return element
+                        .get_pattern::<UIRangeValuePattern>()
+                        .and_then(|p| p.set_value(number))
+                        .map_err(fail("set_value"));
+                }
+                Err(ToolError::PatternUnsupported {
+                    element: handle.to_owned(),
+                    pattern: "Value (or RangeValue)",
+                    supported: Self::live_patterns(element),
+                })
+            }
+            Action::Focus => element.set_focus().map_err(fail("focus")),
+            Action::Select => {
+                Self::require(
+                    handle,
+                    element,
+                    UIProperty::IsSelectionItemPatternAvailable,
+                    "SelectionItem",
+                )?;
+                element
+                    .get_pattern::<UISelectionItemPattern>()
+                    .and_then(|p| p.select())
+                    .map_err(fail("select"))
+            }
+        }
+    }
+}
+
+impl AccessibilityBackend for Uia {
+    fn tree(&mut self, windows: &[u32], max_depth: usize) -> ToolResult<Vec<Node>> {
+        let mut roots = Vec::with_capacity(windows.len());
+        for &window in windows {
+            let root = self
+                .automation
+                .element_from_handle_build_cache(hwnd(window), &self.subtree)
+                .map_err(|e| {
+                    ToolError::platform(format!("reading the tree of window {window}"), e)
+                })?;
+            roots.push(self.build(&root, 0, max_depth));
+        }
+        Ok(roots)
+    }
+
+    fn act(&mut self, handle: &str, action: &Action) -> ToolResult<Node> {
+        let element = self.element(handle)?;
+        Self::perform(handle, &element, action)?;
+        let fresh = element
+            .build_updated_cache(&self.single)
+            .map_err(|e| classify(handle, "reading back", &e))?;
+        Ok(self.describe(&fresh))
+    }
+
+    fn click_point(&mut self, handle: &str) -> ToolResult<ClickPoint> {
+        let element = self.element(handle)?;
+        let pid = element
+            .get_process_id()
+            .map_err(|e| classify(handle, "reading its process", &e))?;
+        let (x, y) = if let Ok(Some(p)) = element.get_clickable_point() {
+            (p.get_x(), p.get_y())
+        } else {
+            let r = element
+                .get_bounding_rectangle()
+                .map_err(|e| classify(handle, "reading its bounds", &e))?;
+            let rect = Rect::from_ltrb(r.get_left(), r.get_top(), r.get_right(), r.get_bottom());
+            if rect.width == 0 || rect.height == 0 {
+                return Err(ToolError::NotFound(format!(
+                    "element `{handle}` has no on-screen area to click (offscreen or collapsed)"
+                )));
+            }
+            rect.center()
+        };
+        Ok(ClickPoint { x, y, pid })
+    }
+
+    fn focus_window(&mut self, window: u32) -> ToolResult<()> {
+        self.automation
+            .element_from_handle(hwnd(window))
+            .and_then(|e| e.set_focus())
+            .map_err(platform("focusing the window through UI Automation"))
+    }
+}
+
+fn node_request(
+    automation: &UIAutomation,
+    scope: TreeScope,
+) -> Result<UICacheRequest, uiautomation::Error> {
+    let request = automation.create_cache_request()?;
+    for &prop in NODE_PROPERTIES {
+        request.add_property(prop)?;
+    }
+    for &(prop, _) in PATTERNS {
+        request.add_property(prop)?;
+    }
+    request.set_tree_scope(scope)?;
+    request.set_tree_filter(automation.get_control_view_condition()?)?;
+    Ok(request)
+}
+
+/// xcap's window id on Windows is the `HWND` value.
+fn hwnd(window: u32) -> Handle {
+    Handle::from(window as isize)
+}
+
+fn cached_bool(element: &UIElement, prop: UIProperty) -> bool {
+    element
+        .get_cached_property_value(prop)
+        .ok()
+        .and_then(|v| TryInto::<bool>::try_into(v).ok())
+        .unwrap_or(false)
+}
+
+fn non_empty(value: uiautomation::Result<String>) -> Option<String> {
+    value.ok().filter(|s| !s.is_empty())
+}
+
+fn toggle_name(state: i32) -> &'static str {
+    match state {
+        s if s == ToggleState::On as i32 => "on",
+        s if s == ToggleState::Off as i32 => "off",
+        _ => "indeterminate",
+    }
+}
+
+/// Maps a UIA failure on `handle` to the error the agent can act on.
+fn classify(handle: &str, what: &str, e: &uiautomation::Error) -> ToolError {
+    match e.code() {
+        E_ELEMENT_NOT_AVAILABLE | E_DISCONNECTED => ToolError::StaleElement(handle.to_owned()),
+        E_ELEMENT_NOT_ENABLED => ToolError::InvalidArgument(format!(
+            "element `{handle}` is disabled; {what} was not performed"
+        )),
+        _ => ToolError::platform(format!("{what} on element `{handle}`"), e),
+    }
+}

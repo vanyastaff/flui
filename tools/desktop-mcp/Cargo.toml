@@ -1,0 +1,54 @@
+# Desktop-automation MCP server: lets an agent see, read and drive any desktop
+# application the way a person with a screen reader does. It observes and
+# drives apps strictly from the outside (OS accessibility API, OS input,
+# OS capture), so it has no workspace dependencies.
+[package]
+name = "flui-desktop-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "MCP server that drives desktop applications: windows, screenshots, the accessibility tree, and real input"
+
+[[bin]]
+name = "flui-desktop-mcp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[package.metadata.flui]
+# A host tool: stdio MCP server over the OS accessibility and input APIs.
+wasm = false
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = "0.23"
+image = { workspace = true }
+rmcp = { version = "3.4", features = ["server", "macros", "transport-io"] }
+schemars = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "io-std", "sync", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Capture and input. Not on Linux yet: there xcap links PipeWire/XCB and
+# enigo links libxkbcommon, system libraries the workspace's Linux builds (CI
+# included) do not install.
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+enigo = "0.6"
+xcap = "0.9"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+uiautomation = { version = "0.25", default-features = false, features = ["input", "pattern"] }
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }

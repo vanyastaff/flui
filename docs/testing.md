@@ -784,6 +784,12 @@ window-close teardown — each of which has shipped broken while every synthetic
 gesture test stayed green. It also verifies hidden-surface gating against a real
 occlusion signal. Both variants run in CI.
 
+For driving a real app by hand, [`tools/desktop-mcp`](../tools/desktop-mcp/README.md) is an MCP
+server an agent uses to list and capture windows, read the Windows UI Automation tree, invoke
+element actions and send real input, on any application. Its ignored
+`tests/live_windows.rs` drives `a11y_probe` through it; the scripted Windows gates are
+`cargo xtask device windows-a11y` and `windows-input`.
+
 ## CI Expectations
 
 CI runs the same local gates plus repository-wide source checks. Every job is

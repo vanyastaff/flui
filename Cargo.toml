@@ -58,9 +58,10 @@ members = [
     "examples/web_counter",   # The counter template through `flui::run_app` on the web (cdylib)
 
     # === Tools ===
-    "tools/web-server", # Built-in web dev server (wasm-pack + HTTP serve)
-    "tools/live-smoke", # Live E2E harness: real window, real X11 input, real teardown
-    "tools/xtask",      # `cargo xtask`: CI gates, change scoping, release and weekly tooling
+    "tools/web-server",  # Built-in web dev server (wasm-pack + HTTP serve)
+    "tools/live-smoke",  # Live E2E harness: real window, real X11 input, real teardown
+    "tools/desktop-mcp", # MCP server that drives desktop apps: windows, screenshots, accessibility tree, input
+    "tools/xtask",       # `cargo xtask`: CI gates, change scoping, release and weekly tooling
 
     # === Animation Layer ===
     "crates/flui-animation", # Animation system (ACTIVE)
