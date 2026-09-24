@@ -75,6 +75,12 @@ fn capture(client: &mut Client, window: &str) -> (Value, image::RgbaImage) {
     let image = image::load_from_memory(&png)
         .expect("BUG: the screenshot is a PNG")
         .to_rgba8();
+    // The small probe is below max_side: Windows returns physical pixels,
+    // with no implicit border crop misreported as a scale transformation.
+    assert_eq!(meta["width"], meta["source"]["width"], "{meta}");
+    assert_eq!(meta["height"], meta["source"]["height"], "{meta}");
+    assert_eq!(meta["scale_x"], 1.0, "{meta}");
+    assert_eq!(meta["scale_y"], 1.0, "{meta}");
     (meta, image)
 }
 

@@ -12,8 +12,6 @@ use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 use super::{Guard, MouseButton, STEP, Stroke, drag_path, partial, strokes};
 use crate::error::{Effect, ToolError, ToolResult};
 use crate::keys::{KeyCombo, KeyName, Modifier};
-#[cfg(not(target_os = "windows"))]
-use enigo::Coordinate;
 
 /// A virtual key Windows assigns to nothing (0xE8), tapped to keep a lone
 /// Alt or Windows-key release from opening a menu.
@@ -187,9 +185,10 @@ impl Input {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            self.enigo
-                .move_mouse(x, y, Coordinate::Abs)
-                .map_err(failed("moving the pointer"))
+            let _ = (x, y);
+            Err(ToolError::NotSupported(
+                "pointer movement is refused until the OS can verify that no physical mouse button is held".into(),
+            ))
         }
     }
 
@@ -528,8 +527,8 @@ impl Input {
         #[cfg(not(target_os = "windows"))]
         let mut buffer = [0_u8; 4];
         for (stroke, chars) in strokes(text) {
-            // A tap that fails may still have gone in (an Enter can submit):
-            // counted as typed, so resuming from the count does not repeat it.
+            // Only a confirmed press contributes to progress. An uncertain
+            // Enter still carries may_have_run, so it must not be retried blindly.
             let mut tapped = false;
             // A held Ctrl would turn a typed Enter into Ctrl+Enter.
             #[cfg(target_os = "windows")]
@@ -544,8 +543,9 @@ impl Input {
                 .and_then(|()| match stroke {
                     Stroke::Key(key) => {
                         let key = enigo_key(key)?;
-                        tapped = true;
-                        self.tap(key)
+                        let (result, pressed) = self.tap(key);
+                        tapped = pressed;
+                        result
                     }
                     // On Windows every character goes out through our own
                     // `SendInput`, which knows how much of it went in: enigo's
@@ -586,30 +586,23 @@ impl Input {
     /// A press that reports failure may still have gone out (an Enter can
     /// submit a form), so it is released regardless and reported as having
     /// possibly gone in.
-    fn tap(&mut self, key: Key) -> ToolResult<()> {
-        let pressed = self.enigo.key(key, Direction::Press);
-        let released = self.enigo.key(key, Direction::Release);
-        match (pressed, released) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Ok(()), Err(e)) => Err(ToolError::platform("releasing a key", e).after(
-                Effect::Ran,
-                format!(
-                    "{key:?} went in but its release failed; it may still be held until the next input releases it"
-                ),
-            )),
-            (Err(e), released) => Err(ToolError::platform("pressing a key", e).after(
-                Effect::MayHaveRun,
-                if released.is_ok() {
-                    format!(
-                        "{key:?} may have gone in before its press reported failure, and it was released; look before retrying"
-                    )
+    fn tap(&mut self, key: Key) -> (ToolResult<()>, bool) {
+        super::press_and_release(|down| {
+            self.enigo
+                .key(
+                    key,
+                    if down {
+                        Direction::Press
+                    } else {
+                        Direction::Release
+                    },
+                )
+                .map_err(failed(if down {
+                    "pressing the key"
                 } else {
-                    format!(
-                        "{key:?} may have gone in and could not be released; it may still be held"
-                    )
-                },
-            )),
-        }
+                    "releasing the key"
+                }))
+        })
     }
 
     /// Taps the unassigned key that turns modifiers released on their own
@@ -716,42 +709,19 @@ impl Input {
             result = guard(None);
         }
         let mut sent = false;
+        let attempted = result.is_ok();
         // Whether the key surely went down: only then is the chord a real
         // shortcut rather than modifiers on their own, which get masked.
         #[cfg(target_os = "windows")]
         let mut emitted = false;
         if result.is_ok() {
-            // Press and release apart: once the press is in, the key counts
-            // as sent even if its release fails (enigo then still tracks it
-            // as held, and the next input releases it).
-            result = self
-                .enigo
-                .key(key, Direction::Press)
-                .map_err(failed("pressing the key"));
-            // A press reported failed may still have gone out: it is
-            // released regardless, and counted as possibly sent, so a retry
-            // does not repeat a shortcut that ran.
-            sent = true;
+            let (pressed, confirmed) = self.tap(key);
+            sent = confirmed;
             #[cfg(target_os = "windows")]
             {
-                emitted = result.is_ok();
+                emitted = confirmed;
             }
-            let released = self.enigo.key(key, Direction::Release);
-            result = match (result, released) {
-                (Ok(()), Ok(())) => Ok(()),
-                (Ok(()), Err(e)) => Err(ToolError::platform("releasing the key", e).after(
-                    Effect::Ran,
-                    "the key went out but its release failed; it may still be held until the next input releases it",
-                )),
-                (Err(cause), released) => Err(cause.after(
-                    Effect::MayHaveRun,
-                    if released.is_ok() {
-                        "the key may have gone out before its press reported failure, and it was released; look before retrying"
-                    } else {
-                        "the key may have gone out and could not be released; it may still be held"
-                    },
-                )),
-            };
+            result = pressed;
         }
         // Modifiers released with nothing pressed while they were down are a
         // gesture of their own: a lone Alt opens the menu bar, the Windows
@@ -762,7 +732,7 @@ impl Input {
         #[cfg(target_os = "windows")]
         if !emitted && !held.is_empty() && !self.mask() {
             let what = format!(
-                "{held:?} were pressed without the key and could not be masked, so releasing them may act as a shortcut of their own (menu bar, Start, language switch); look before retrying"
+                "{held:?} may have been pressed without a confirmed main key and could not be masked, so releasing them may act as a shortcut of their own (menu bar, Start, language switch); look before retrying"
             );
             result = Err(match result {
                 Ok(()) => ToolError::platform("masking released modifiers", &what),
@@ -792,14 +762,14 @@ impl Input {
         // Stopped with modifiers already down: they reached the target and
         // came back up (masked), which the caller is told rather than
         // "nothing was sent".
-        if !sent
+        if !attempted
             && !went_down.is_empty()
             && let Err(cause) = result
         {
             result = Err(cause.after(
                 Effect::Incidental,
                 format!(
-                    "{went_down:?} went down and were released again without the key; nothing else was sent"
+                    "pressing {went_down:?} was attempted and their releases were attempted without sending the main key"
                 ),
             ));
         }

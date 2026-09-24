@@ -6,6 +6,7 @@
 //! before sending the input: the target must own the foreground window, and a
 //! coordinate must be where the OS says the target's window is, uncovered.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -298,7 +299,7 @@ pub struct Registry {
     /// native id taken by another process or class): never handed out
     /// again, so a later window that happens to match every recorded field
     /// under the same native id still gets a handle of its own.
-    closed: HashSet<u64>,
+    closed: RefCell<HashSet<u64>>,
     shots: VecDeque<(u64, ShotMeta)>,
     next_shot: u64,
 }
@@ -313,7 +314,10 @@ impl Registry {
         let window = self
             .by_hwnd
             .get(&hwnd)
-            .filter(|&&n| self.windows.get(&n).is_some_and(|w| w.pid == pid))
+            .filter(|&&n| {
+                !self.closed.borrow().contains(&n)
+                    && self.windows.get(&n).is_some_and(|w| w.pid == pid)
+            })
             .map(|&n| Self::handle(n));
         WindowRef {
             window,
@@ -337,7 +341,7 @@ impl Registry {
         if cfg!(target_os = "windows") && (os::window_pid(w.id) != Some(w.pid) || class.is_none()) {
             return None;
         }
-        let unidentified = started.is_none() && cfg!(target_os = "windows");
+        let unidentified = started.is_none();
         if unidentified {
             self.unidentified.insert(w.pid);
         }
@@ -351,7 +355,7 @@ impl Registry {
         // reused for another window or process gets a new one, and so does
         // one whose earlier window this session saw close.
         let same = self.by_hwnd.get(&w.id).copied().filter(|n| {
-            !self.closed.contains(n)
+            !self.closed.borrow().contains(n)
                 && self.windows.get(n).is_some_and(|issued| {
                     issued.pid == w.pid
                         && issued.started == started
@@ -408,7 +412,7 @@ impl Registry {
         {
             self.by_hwnd.remove(&issued.hwnd);
         }
-        self.closed.insert(n);
+        self.closed.borrow_mut().insert(n);
     }
 
     /// `w` as the tools report it, or `None` for one that closed meanwhile.
@@ -461,7 +465,7 @@ impl Registry {
                         handle: Self::handle(n),
                         kind: HandleKind::Window,
                     })?;
-                if self.closed.contains(&n) {
+                if self.closed.borrow().contains(&n) {
                     return Err(ToolError::Gone {
                         handle: Self::handle(n),
                         kind: HandleKind::Window,
@@ -477,7 +481,7 @@ impl Registry {
                     )));
                 }
                 let target = Target::Window(issued.hwnd, n);
-                if let Err(e) = Self::revalidate(target, issued.binding()) {
+                if let Err(e) = self.revalidate(target, issued.binding()) {
                     if matches!(e, ToolError::Gone { .. }) {
                         self.close(n);
                     }
@@ -519,7 +523,33 @@ impl Registry {
     /// window that closed or changed owner or class, or a process (the
     /// pid's, or the window owner's) whose start time changed — the OS can
     /// recycle both the native id and the pid of an application that exited.
-    fn revalidate(target: Target, bound: Binding) -> ToolResult<()> {
+    fn revalidate(&self, target: Target, bound: Binding) -> ToolResult<()> {
+        self.observe(target, || Self::current_identity(target, bound))
+    }
+
+    /// Remember disappearance from every path, including a guard in the
+    /// middle of an action. Otherwise a later matching native id can revive
+    /// a handle that the session already reported gone.
+    fn observe<T>(
+        &self,
+        target: Target,
+        operation: impl FnOnce() -> ToolResult<T>,
+    ) -> ToolResult<T> {
+        if let Target::Window(_, n) = target
+            && self.closed.borrow().contains(&n)
+        {
+            return Err(no_window(target));
+        }
+        let result = operation();
+        if matches!(&result, Err(ToolError::Gone { .. }))
+            && let Target::Window(_, n) = target
+        {
+            self.closed.borrow_mut().insert(n);
+        }
+        result
+    }
+
+    fn current_identity(target: Target, bound: Binding) -> ToolResult<()> {
         let pid = match target {
             Target::Pid(pid) => Some(pid),
             Target::Window(hwnd, n) => {
@@ -550,7 +580,16 @@ impl Registry {
             }
         };
         if let (Some(pid), Some(then)) = (pid, bound.started) {
-            same_process(pid, Some(then), os::process_started(pid))?;
+            same_process(pid, Some(then), os::process_started(pid)).map_err(|error| {
+                match (target, error) {
+                    (Target::Window(_, n), ToolError::Gone { why, .. }) => ToolError::Gone {
+                        handle: Self::handle(n),
+                        kind: HandleKind::Window,
+                        why,
+                    },
+                    (_, error) => error,
+                }
+            })?;
         }
         Ok(())
     }
@@ -794,12 +833,19 @@ impl Desktop {
             (_, e) => e,
         };
         let recheck = || {
-            held.map_or(Ok(()), |(t, b)| Registry::revalidate(t, b))
+            // A chosen window closing is transient for a pid; the process
+            // itself exiting is final and must retain its process handle.
+            if let ScreenshotTarget::Pid(pid) = target
+                && let Some((_, bound)) = held
+            {
+                self.registry.revalidate(Target::Pid(pid), bound)?;
+            }
+            held.map_or(Ok(()), |(t, b)| self.registry.revalidate(t, b))
                 .map_err(passing)
         };
-        recheck()?;
-        let shot = capture::screenshot(direct, max_side).map_err(passing)?;
-        recheck()?;
+        let shot = read_while_current(recheck, || {
+            capture::screenshot(direct, max_side).map_err(passing)
+        })?;
         let id = self.registry.remember_shot(ShotMeta {
             source: shot.source,
             scale_x: shot.scale_x,
@@ -819,14 +865,16 @@ impl Desktop {
     /// The native windows a scope's target names, held to their identity.
     fn scoped_windows(&mut self, target: TargetArg) -> ToolResult<(Target, Binding, Vec<u32>)> {
         let (target, bound) = self.registry.bound(target)?;
-        let ids: Vec<u32> = match target {
-            Target::Pid(pid) => match os::process_windows(pid)? {
-                Some(ids) if !ids.is_empty() => ids,
-                Some(_) => return Err(no_window(target)),
-                None => Self::resolve(target)?.iter().map(|w| w.id).collect(),
-            },
-            Target::Window(_, _) => Self::resolve(target)?.iter().map(|w| w.id).collect(),
-        };
+        let ids: Vec<u32> = self.registry.observe(target, || {
+            Ok(match target {
+                Target::Pid(pid) => match os::process_windows(pid)? {
+                    Some(ids) if !ids.is_empty() => ids,
+                    Some(_) => return Err(no_window(target)),
+                    None => Self::resolve(target)?.iter().map(|w| w.id).collect(),
+                },
+                Target::Window(_, _) => Self::resolve(target)?.iter().map(|w| w.id).collect(),
+            })
+        })?;
         Ok((target, bound, ids))
     }
 
@@ -852,21 +900,10 @@ impl Desktop {
             Scope::Target(target) => *target,
         };
         let (target, bound, ids) = self.scoped_windows(target)?;
-        let mut read = self
-            .a11y
-            .tree(&ids, max_depth, max_nodes, deadline)
-            .map_err(|e| match (target, e) {
-                (Target::Window(_, n), ToolError::NotFound(_)) => ToolError::Gone {
-                    handle: Registry::handle(n),
-                    kind: HandleKind::Window,
-                    why: "it closed while it was being read".into(),
-                },
-                (_, e) => e,
-            })?;
-        // Checked again after the read: a window or process recycled while
-        // it was read would otherwise hand out handles in another
-        // application, which `invoke` and `set_value` (no target) act on.
-        Registry::revalidate(target, bound)?;
+        let mut read = read_while_current(
+            || self.registry.revalidate(target, bound),
+            || self.a11y.tree(&ids, max_depth, max_nodes, deadline),
+        )?;
         let owner = match target {
             Target::Pid(pid) => Some(pid),
             Target::Window(_, _) => bound.window_pid,
@@ -880,13 +917,15 @@ impl Desktop {
         {
             let changed =
                 format!("a window of the target changed owner to process {now} while it was read");
-            return Err(match target {
-                Target::Pid(_) => ToolError::Busy(changed),
-                Target::Window(_, n) => ToolError::Gone {
-                    handle: Registry::handle(n),
-                    kind: HandleKind::Window,
-                    why: format!("the OS reused native window {id}: {changed}"),
-                },
+            return self.registry.observe(target, || {
+                Err(match target {
+                    Target::Pid(_) => ToolError::Busy(changed),
+                    Target::Window(_, n) => ToolError::Gone {
+                        handle: Registry::handle(n),
+                        kind: HandleKind::Window,
+                        why: format!("the OS reused native window {id}: {changed}"),
+                    },
+                })
             });
         }
         // Each root is named after its window, so a popup or dialog read
@@ -920,6 +959,9 @@ impl Desktop {
         query: &Query,
         deadline: Instant,
     ) -> ToolResult<(Vec<Node>, Read)> {
+        if let Some(element) = &query.element {
+            self.a11y.validate_handle(element)?;
+        }
         // Bounded like `accessibility_tree`: an unbounded walk of a deeply
         // nested tree (a browser's, a document's) recurses until the worker's
         // stack runs out.
@@ -997,7 +1039,7 @@ impl Desktop {
         if STOPPING.load(Ordering::SeqCst) {
             return Err(ToolError::ShuttingDown);
         }
-        Registry::revalidate(target, bound)?;
+        registry.revalidate(target, bound)?;
         let fg = Self::foreground(registry)?;
         let name = |hwnd, pid| registry.name(hwnd, pid);
         if points.is_empty() {
@@ -1046,7 +1088,7 @@ impl Desktop {
                 // is still where it was.
                 // Unreadable counts as changed: stale pixels must not aim.
                 if let Some((hwnd, n, bound)) = meta.window {
-                    Registry::revalidate(Target::Window(hwnd, n), bound)?;
+                    self.registry.revalidate(Target::Window(hwnd, n), bound)?;
                     let now = os::window_rect(hwnd).or_else(|| {
                         capture::windows()
                             .ok()?
@@ -1095,8 +1137,10 @@ impl Desktop {
                         "cannot tell which window element `{handle}` belongs to, so it is not clicked; use invoke"
                     ))
                 })?;
-                let pid = os::window_pid(window)
-                    .ok_or_else(|| ToolError::gone_element(handle, "its window has closed"))?;
+                let Some(pid) = os::window_pid(window) else {
+                    self.a11y.invalidate_handle(handle);
+                    return Err(ToolError::gone_element(handle, "its window has closed"));
+                };
                 Ok((p.x, p.y, Some((handle.clone(), window, pid))))
             }
         }
@@ -1322,7 +1366,7 @@ impl Desktop {
             )));
         }
         let (target, bound) = self.registry.bound(target)?;
-        let windows = Self::resolve(target)?;
+        let windows = self.registry.observe(target, || Self::resolve(target))?;
         // A window that closed meanwhile is dropped; one whose own id cannot
         // be targeted still belongs to the target (a pid reaches it).
         let native = windows
@@ -1352,8 +1396,9 @@ impl Desktop {
             class: os::window_class(native.id),
         };
         let recheck = || {
-            Registry::revalidate(target, bound)?;
-            Registry::revalidate(Target::Window(native.id, n), chosen)
+            self.registry.revalidate(target, bound)?;
+            self.registry
+                .revalidate(Target::Window(native.id, n), chosen)
         };
         recheck()?;
         os::bring_to_front(native.id)?;
@@ -1403,9 +1448,73 @@ fn no_window(target: Target) -> ToolError {
     }
 }
 
+/// Reads are held to an identity on both success and failure. A backend's
+/// `not_found` or generic capture failure is not the final diagnosis when
+/// the issued target closed meanwhile. A still-live target keeps the
+/// backend error (for example, a popup xcap does not capture).
+fn read_while_current<T>(
+    mut check: impl FnMut() -> ToolResult<()>,
+    read: impl FnOnce() -> ToolResult<T>,
+) -> ToolResult<T> {
+    check()?;
+    let result = read();
+    check()?;
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_capture_rechecks_identity_and_never_revives_a_closed_handle() {
+        let registry = Registry::default();
+        let alive = std::cell::Cell::new(true);
+        let target = Target::Window(7, 1);
+        let result = read_while_current(
+            || {
+                registry.observe(target, || {
+                    if alive.get() {
+                        Ok(())
+                    } else {
+                        Err(no_window(target))
+                    }
+                })
+            },
+            || {
+                alive.set(false);
+                Err::<(), _>(ToolError::NotFound("capture lost its window".into()))
+            },
+        );
+        let error = result.expect_err("BUG: the window closed during capture");
+        assert_eq!(error.payload()["error"]["code"], "gone");
+        assert_eq!(error.payload()["error"]["kind"], "window");
+        alive.set(true);
+        assert!(
+            registry.observe(target, || Ok(())).is_err(),
+            "a matching native id cannot revive w1"
+        );
+        assert!(
+            registry.observe(Target::Window(7, 2), || Ok(())).is_ok(),
+            "a replacement has its own handle"
+        );
+    }
+
+    #[test]
+    fn a_capture_error_does_not_retire_a_live_window() {
+        let registry = Registry::default();
+        let target = Target::Window(7, 1);
+        let result = read_while_current(
+            || registry.observe(target, || Ok(())),
+            || {
+                Err::<(), _>(ToolError::NotFound(
+                    "popup is absent from capture list".into(),
+                ))
+            },
+        );
+        assert!(matches!(result, Err(ToolError::NotFound(_))));
+        assert!(registry.observe(target, || Ok(())).is_ok());
+    }
 
     fn fg() -> Foreground {
         Foreground {

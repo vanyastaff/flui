@@ -257,6 +257,8 @@ mod backend {
                 (image, source)
             }
         };
+        #[cfg(target_os = "windows")]
+        super::physical_size_matches(image.dimensions(), source)?;
         encode(image, source, max_side)
     }
 }
@@ -286,6 +288,19 @@ mod backend {
 }
 
 pub use backend::{monitor_geometry, screenshot, windows};
+
+/// Windows capture is in physical pixels before our explicit downscale.
+/// Cropped pixels cannot be mapped by stretching them over the original rect.
+#[cfg(any(target_os = "windows", test))]
+fn physical_size_matches(size: (u32, u32), source: Rect) -> ToolResult<()> {
+    if size != (source.width, source.height) {
+        return Err(ToolError::Busy(format!(
+            "the capture returned {}x{} pixels for a {}x{} physical-pixel source; its coordinates cannot be verified",
+            size.0, size.1, source.width, source.height
+        )));
+    }
+    Ok(())
+}
 
 /// Whether capture works on this OS; checked first, so an unsupported OS
 /// says so rather than failing on a target's binding.
@@ -392,6 +407,21 @@ fn encode(image: RgbaImage, source: Rect, max_side: Option<u32>) -> ToolResult<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cropped_pixels_are_not_mistaken_for_a_scaled_physical_capture() {
+        let source = Rect {
+            x: 59,
+            y: 52,
+            width: 466,
+            height: 313,
+        };
+        assert!(physical_size_matches((466, 313), source).is_ok());
+        assert!(matches!(
+            physical_size_matches((459, 311), source),
+            Err(ToolError::Busy(_))
+        ));
+    }
 
     fn source() -> Rect {
         Rect {

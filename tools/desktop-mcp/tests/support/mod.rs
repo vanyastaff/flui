@@ -2,10 +2,10 @@
 //! as the stdio transport specifies.
 
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -15,7 +15,7 @@ pub const PROTOCOL: &str = "2025-11-25";
 /// A running server and the client end of its pipes.
 pub struct Client {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     lines: Receiver<String>,
     next_id: u64,
 }
@@ -44,7 +44,7 @@ impl Client {
         });
         let mut client = Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             lines,
             next_id: 1,
         };
@@ -63,9 +63,10 @@ impl Client {
     fn send(&mut self, message: &Value) {
         let mut text = message.to_string();
         text.push('\n');
-        self.stdin
+        let stdin = self.stdin.as_mut().expect("BUG: the session is open");
+        stdin
             .write_all(text.as_bytes())
-            .and_then(|()| self.stdin.flush())
+            .and_then(|()| stdin.flush())
             .expect("BUG: the server reads its stdin");
     }
 
@@ -101,6 +102,41 @@ impl Client {
             "tools/call",
             json!({ "name": tool, "arguments": arguments }),
         )
+    }
+
+    /// Closes the transport normally, exercising the server's EOF cleanup.
+    #[allow(dead_code, reason = "shared support; used by process cleanup tests")]
+    pub fn close_stdin(&mut self) {
+        self.stdin.take();
+    }
+
+    /// Waits for the server without letting a broken shutdown hang a test.
+    #[allow(dead_code, reason = "shared support; used by process cleanup tests")]
+    pub fn wait_for_exit(&mut self, timeout: Duration) -> ExitStatus {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self
+                .child
+                .try_wait()
+                .expect("BUG: the server can be polled")
+            {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the server did not exit within {timeout:?}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Ends the server without running its clean-shutdown code.
+    #[allow(
+        dead_code,
+        reason = "shared support; used by Windows job cleanup tests"
+    )]
+    pub fn hard_kill(&mut self) {
+        self.child.kill().expect("BUG: the server can be killed");
     }
 }
 

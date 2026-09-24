@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::desktop::Desktop;
-use crate::error::{ToolError, ToolResult};
+use crate::error::{Effect, ToolError, ToolResult};
 
 type Job = Box<dyn FnOnce(&mut Desktop) + Send>;
 
@@ -79,8 +79,16 @@ impl Worker {
         // would, nor be reported unstarted while it runs.
         let state = Arc::new(AtomicU8::new(QUEUED));
         let job_state = Arc::clone(&state);
+        let job_ct = ct.clone();
         self.jobs
             .try_send(Box::new(move |desktop| {
+                // Cancellation must be observed here too: the async runtime
+                // may not have polled its cancellation branch before this
+                // thread reaches the queued job.
+                if job_ct.is_cancelled() {
+                    let _ = reply.send(Err(ToolError::Cancelled));
+                    return;
+                }
                 let claimed = job_state
                     .compare_exchange(QUEUED, RUNNING, Ordering::SeqCst, Ordering::SeqCst)
                     .is_ok();
@@ -108,7 +116,12 @@ impl Worker {
                     ToolError::platform("desktop thread", "it has stopped")
                 }
             })?;
-        let panicked = |_| ToolError::platform("desktop thread", "the call panicked");
+        let panicked = |_| {
+            ToolError::platform("desktop thread", "the call panicked").after(
+                Effect::MayHaveRun,
+                "the desktop call may have performed its action before panicking; inspect the target before retrying",
+            )
+        };
         tokio::select! {
             reply = &mut result => reply.map_err(panicked)?,
             () = ct.cancelled() => {
@@ -166,6 +179,80 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use super::*;
+
+    /// Cancellation is authoritative even before the async runtime gets a
+    /// chance to poll the waiting request again.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_queued_call_observes_cancellation_without_runtime_polling() {
+        let worker = Worker::spawn().expect("BUG: the thread starts");
+        let (release, hold) = mpsc::channel();
+        worker
+            .jobs
+            .try_send(Box::new(move |_| {
+                let _ = hold.recv();
+            }))
+            .expect("BUG: the blocker fits in the empty queue");
+        let ran = Arc::new(AtomicBool::new(false));
+        let ct = CancellationToken::new();
+        let action = Arc::clone(&ran);
+        let mut call = std::pin::pin!(worker.run(&ct, move |_| {
+            action.store(true, Ordering::SeqCst);
+            Ok(())
+        }));
+        // Poll exactly once to enqueue it, then do not poll the request
+        // again until the desktop thread has drained the queue.
+        assert!(
+            std::future::Future::poll(
+                call.as_mut(),
+                &mut std::task::Context::from_waker(std::task::Waker::noop()),
+            )
+            .is_pending()
+        );
+        let (observed, processed) = mpsc::channel();
+        worker
+            .jobs
+            .try_send(Box::new(move |_| {
+                let _ = observed.send(());
+            }))
+            .expect("BUG: the barrier fits in the queue");
+        ct.cancel();
+        release.send(()).expect("BUG: the blocker waits");
+        // Deliberately occupy the runtime until the worker has passed the
+        // cancelled call: its select branch cannot withdraw it for us.
+        processed
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("BUG: the desktop thread reaches the barrier");
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "a cancelled queued action did not run"
+        );
+        assert!(matches!(call.await, Err(ToolError::Cancelled)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_panicking_call_reports_possible_effects_and_keeps_serving() {
+        let worker = Worker::spawn().expect("BUG: the thread starts");
+        let ran = Arc::new(AtomicBool::new(false));
+        let action = Arc::clone(&ran);
+        let outcome = worker
+            .run::<(), _>(&CancellationToken::new(), move |_| {
+                action.store(true, Ordering::SeqCst);
+                panic!("simulated failure after a side effect");
+            })
+            .await;
+        assert!(ran.load(Ordering::SeqCst));
+        assert!(matches!(
+            outcome,
+            Err(ToolError::Interrupted {
+                effect: Effect::MayHaveRun,
+                ..
+            })
+        ));
+        worker
+            .run(&CancellationToken::new(), |_| Ok(()))
+            .await
+            .expect("BUG: the worker recovers after the panic");
+    }
 
     /// A call cancelled after it started is not reported as never run: its
     /// real result comes back, since it runs to the end regardless.

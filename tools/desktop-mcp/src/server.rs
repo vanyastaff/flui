@@ -431,7 +431,12 @@ async fn blocking<T: Send + 'static>(
             }
         })
         .map_err(|e| ToolError::platform("starting process work", e))?;
-    let panicked = |_| ToolError::platform("running process work", "it panicked");
+    let panicked = |_| {
+        ToolError::platform("running process work", "it panicked").after(
+            crate::error::Effect::MayHaveRun,
+            "process work may have changed the process before panicking; inspect it before retrying",
+        )
+    };
     let Some(limit) = give_up else {
         return result.await.map_err(panicked)?;
     };
@@ -516,6 +521,32 @@ async fn pause(ct: &CancellationToken, duration: Duration) -> bool {
     tokio::select! {
         () = tokio::time::sleep(duration) => false,
         () = ct.cancelled() => true,
+    }
+}
+
+/// Withdraw queued reads at their deadline. The worker checks the deadline
+/// too, because its thread may claim the job before the async timer is polled.
+/// A read already running finishes and reports its actual outcome.
+async fn before_deadline<T: Send + 'static>(
+    worker: &Worker,
+    ct: &CancellationToken,
+    deadline: Instant,
+    read: impl FnOnce(&mut crate::desktop::Desktop) -> ToolResult<T> + Send + 'static,
+) -> ToolResult<T> {
+    let lookup = ct.child_token();
+    let run = worker.run(&lookup, move |desktop| {
+        if Instant::now() >= deadline {
+            return Err(ToolError::Cancelled);
+        }
+        read(desktop)
+    });
+    tokio::pin!(run);
+    tokio::select! {
+        result = &mut run => result,
+        () = tokio::time::sleep(deadline.saturating_duration_since(Instant::now())) => {
+            lookup.cancel();
+            run.await
+        }
     }
 }
 
@@ -724,26 +755,13 @@ impl DesktopServer {
             // desktop thread was busy) is bound now, from the start time
             // read at the spawn.
             let started = self.children.launched_start(pid);
-            let lookup = ct.child_token();
-            let run = self.worker.run(&lookup, move |d| {
+            let windows = before_deadline(&self.worker, &ct, deadline, move |d| {
                 if started.is_some() {
                     d.bind_launched(pid, started);
                 }
                 d.windows_of(pid)
-            });
-            tokio::pin!(run);
-            // At least a moment even at the deadline, so an idle desktop
-            // thread gets to the lookup before it is withdrawn.
-            let left = deadline
-                .saturating_duration_since(Instant::now())
-                .max(Duration::from_millis(50));
-            let windows = tokio::select! {
-                windows = &mut run => windows,
-                () = tokio::time::sleep(left) => {
-                    lookup.cancel();
-                    run.await
-                }
-            };
+            })
+            .await;
             // Withdrawn at the deadline, not by the client: the wait is over.
             if matches!(windows, Err(ToolError::Cancelled)) && !ct.is_cancelled() {
                 return failure(&ToolError::Timeout {
@@ -1342,6 +1360,64 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn expired_window_lookup_never_starts() {
+        use std::future::Future;
+        use std::sync::mpsc;
+        use std::task::{Context, Waker};
+
+        let worker = Worker::spawn().expect("BUG: worker starts");
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = Arc::clone(&ran);
+        let ct = CancellationToken::new();
+        let (release, hold) = mpsc::channel();
+        let mut blocker = std::pin::pin!(worker.run(&ct, move |_| {
+            let _ = hold.recv();
+            Ok(())
+        }));
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(blocker.as_mut().poll(&mut context).is_pending());
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut call = std::pin::pin!(before_deadline(&worker, &ct, deadline, move |_| {
+            observed.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }));
+        assert!(call.as_mut().poll(&mut context).is_pending());
+        let (done, processed) = mpsc::channel();
+        let mut barrier = std::pin::pin!(worker.run(&ct, move |_| {
+            let _ = done.send(());
+            Ok(())
+        }));
+        assert!(barrier.as_mut().poll(&mut context).is_pending());
+        // Keep the runtime from polling the timer until the worker has
+        // passed the expired job: its own deadline check must reject it.
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        release.send(()).expect("BUG: blocker waits");
+        processed
+            .recv_timeout(Duration::from_secs(5))
+            .expect("BUG: barrier runs");
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(matches!(call.await, Err(ToolError::Cancelled)));
+        blocker.await.expect("BUG: blocker completes");
+        barrier.await.expect("BUG: barrier completes");
+        assert!(!ct.is_cancelled(), "the deadline belongs to the lookup");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn panicking_process_work_reports_uncertain_effects() {
+        let result = blocking::<()>(
+            &CancellationToken::new(),
+            None,
+            None,
+            || panic!("injected failure after process work started"),
+            |()| {},
+        )
+        .await;
+        let error = result.expect_err("BUG: injected panic must fail");
+        assert_eq!(error.payload()["error"]["effect"]["kind"], "may_have_run");
+    }
 
     #[test]
     fn process_threads_are_admitted_up_to_the_bound() {

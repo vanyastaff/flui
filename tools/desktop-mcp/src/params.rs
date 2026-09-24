@@ -582,6 +582,23 @@ pub struct StateArg {
 impl StateArg {
     /// Whether every given field holds for `node`.
     pub fn holds(&self, node: &Node) -> bool {
+        // A default bool is not evidence that a failed property read was
+        // false. Each requested state needs its own successful observation.
+        for (field, requested) in [
+            ("checked", self.checked.is_some()),
+            ("expanded", self.expanded.is_some()),
+            ("selected", self.selected.is_some()),
+            ("focused", self.focused.is_some()),
+            ("disabled", self.disabled.is_some()),
+            (
+                "value",
+                self.value.is_some() || self.value_contains.is_some(),
+            ),
+        ] {
+            if requested && node.unread_states.contains(&field) {
+                return false;
+            }
+        }
         // A value predicate needs a value that was read: an element with
         // none, or whose value could not be read, matches neither
         // `value: ""` nor any substring. `value_contains` is folded already
@@ -1420,6 +1437,40 @@ mod tests {
             )
             .validate()
             .is_err()
+        );
+    }
+
+    #[test]
+    fn state_predicates_require_the_requested_observation() {
+        let mut node = crate::a11y::tests_node();
+        node.focused = false;
+        node.disabled = false;
+        node.unread_states = vec!["focused"];
+        let unfocused = StateArg {
+            focused: Some(false),
+            ..StateArg::default()
+        };
+        let enabled = StateArg {
+            disabled: Some(false),
+            ..StateArg::default()
+        };
+        assert!(!unfocused.holds(&node), "an unread focus flag is not false");
+        assert!(
+            enabled.holds(&node),
+            "the independent enabled observation is known"
+        );
+        node.unread_states = vec!["disabled"];
+        assert!(unfocused.holds(&node));
+        assert!(!enabled.holds(&node));
+        node.value = Some("clipped…".into());
+        node.unread_states = vec!["value"];
+        let substring = StateArg {
+            value_contains: Some("…".into()),
+            ..StateArg::default()
+        };
+        assert!(
+            !substring.holds(&node),
+            "a clipping marker is not the control's value"
         );
     }
 

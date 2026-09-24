@@ -122,12 +122,24 @@ A read (`accessibility_tree`, `find`, one `wait_for` poll) fetches at most 5000 
 (500 reported by `accessibility_tree` unless `max_nodes` says more; read a subtree with
 `root`) and 16 MiB of strings, cuts any one string at 4096 characters (ending in `…`), and
 starts no provider call more than 10 s after it began (a call in flight can take up to 5 s
-more), so a huge, hostile or hung tree cannot hold the server. A reply that left anything
+more under the configured UI Automation timeout). These are traversal and reply
+budgets, not a hard memory or wall-clock limit: UI Automation marshals native property
+values before Rust can clip them, and a provider call cannot be forcibly interrupted on
+the desktop thread. An oversized native property can exhaust the server
+([tracked isolation work](https://github.com/vanyastaff/flui/issues/1289)). A reply that left anything
 out (a budget, the depth, a provider failing partway, a clipped or unreadable property)
 says `truncated: true`, and an empty `find` is then no proof the element is absent. A
 process's reads include its popup menus and drop-downs, which are windows of their own,
 each root marked with its window handle; an element that shows up under two windows (an
-owned dialog) is reported once.
+owned dialog) is reported once. `wait_for` does not treat an unreadable requested state
+property as its default, or a clipped value as a complete value.
+
+`wait_for_window` withdraws queued lookups at its deadline; zero milliseconds leaves no
+time to start a lookup. A lookup already running must finish before the worker is free.
+Capture checks the source size before allocating, but a concurrent resize can race that
+check because xcap allocates the full bitmap internally. Windows uses xcap's Windows
+Graphics Capture backend (requiring a usable D3D device) and refuses raw bitmaps whose
+dimensions disagree with the physical source rect; it never treats a border crop as scaling.
 
 ### Errors
 
@@ -202,14 +214,20 @@ nothing.
 - The pointer position is read back before every press: a move the OS clamped, or a pointer
   someone else moved, refuses the press (`busy`: a retry can succeed).
 
+`move_mouse` also refuses to move while a physical mouse button is held: a move would
+otherwise become a drag with no safety target. It is unavailable on macOS until the OS
+backend can verify this condition.
+
 The check fails closed: where the OS cannot say which window is under a point or holds
 keyboard focus (macOS, for now), input with a target is refused rather than sent unverified.
 What it cannot close is the gap between the last check and the event itself, a few
 milliseconds, and the person at the desk typing or moving the mouse at the same time.
 
 The element actions (`invoke`, `toggle`, `set_value`, `select`, `focus`, `expand`,
-`collapse`, `scroll_into_view`) send no input at all and work on covered windows; prefer
-them where the element offers the action.
+`collapse`, `scroll_into_view`) use accessibility patterns and can work on covered windows;
+prefer them where the element offers the action. The provider decides how to implement
+the request and may move focus or activate a window. Recheck foreground before following
+one with physical input.
 
 Windows restricts which process may take the foreground. `activate_window` restores and
 raises the window and falls back to UI Automation focus; check `became_foreground` before
@@ -229,7 +247,7 @@ process, since the pid is never delivered.
 | | Windows | macOS | Linux |
 |---|---|---|---|
 | `list_windows`, `screenshot` | yes (xcap) | built (xcap); type-checked in CI (clippy), never run | not yet |
-| Input (`click`, `key`, …) | yes (enigo; pointer moves via `SetCursorPos`) | built (enigo); refused for now with a target, which every input tool requires; type-checked in CI, never run | not yet |
+| Input (`click`, `key`, …) | yes (enigo; pointer moves via `SetCursorPos`) | refused for now: target checks and the physical-button check for `move_mouse` are unavailable; type-checked in CI, never run | not yet |
 | Accessibility tools | yes (UI Automation) | "not supported on this OS yet (UIA only)" | same |
 | `activate_window`, `wait_for_window` | yes | not supported yet | not supported yet |
 
@@ -256,7 +274,8 @@ cargo nextest run -p flui-desktop-mcp
 runs on any host without a desktop: key-combo parsing and shell-hotkey detection, the
 keystrokes text becomes, the element-handle cache, argument validation, the input safety
 checks, the binding refusals of a whole `Desktop`, the error envelope and output schemas,
-cancellation on the desktop thread, process bookkeeping, and `tests/protocol.rs`, which
+cancellation on the desktop thread, process bookkeeping and cleanup on server EOF
+(and Windows hard termination), and `tests/protocol.rs`, which
 spawns the binary and speaks MCP over stdio: every tool is listed with its schemas, title
 and annotations, and refusals come back as tool errors with a code.
 
@@ -275,6 +294,15 @@ cargo nextest run -p flui-desktop-mcp --test live_windows --run-ignored only --n
 
 It moves the real pointer and sends real input to the probe window only, each step only after
 the probe is confirmed in front.
+
+`tests/native_windows.rs` adds a native Win32 fixture with writable and read-only edits,
+a checkbox, and wheel/drag observations. Its ignored `native_controls_through_mcp` test
+asserts actual text, focus, toggle, wheel direction and drag displacement through MCP; it
+requires an interactive desktop with no concurrent pointer or keyboard use:
+
+```bash
+cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only native_controls_through_mcp --no-capture
+```
 
 ## Relation to the other live checks
 

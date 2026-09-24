@@ -142,10 +142,104 @@ pub fn partial(
     cause.counted(sent, total, unit)
 }
 
+/// Sends one key down and always attempts its release, even when the down
+/// failed ambiguously. The boolean counts only a confirmed down; the error
+/// retains uncertainty separately from progress through a larger request.
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+fn press_and_release(
+    mut send: impl FnMut(bool) -> crate::error::ToolResult<()>,
+) -> (crate::error::ToolResult<()>, bool) {
+    use crate::error::Effect;
+    let pressed = send(true);
+    let confirmed = pressed.is_ok();
+    let released = send(false);
+    let result = match (pressed, released) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(cause)) => Err(cause.after(
+            Effect::Ran,
+            "the key went out but its release failed; it may still be held until the next input releases it",
+        )),
+        (Err(cause), released) => Err(cause.after(
+            Effect::MayHaveRun,
+            if released.is_ok() {
+                "the key may have gone out before its press reported failure, and it was released; look before retrying"
+            } else {
+                "the key may have gone out and could not be released; it may still be held"
+            },
+        )),
+    };
+    (result, confirmed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::keys::{KeyName, Modifier};
+
+    #[test]
+    fn failed_presses_are_released_but_not_counted_as_confirmed() {
+        use crate::error::{Effect, ToolError};
+        for release_fails in [false, true] {
+            let mut events = Vec::new();
+            let (result, confirmed) = press_and_release(|down| {
+                events.push(down);
+                if down || release_fails {
+                    Err(ToolError::Busy("injected failure".into()))
+                } else {
+                    Ok(())
+                }
+            });
+            assert_eq!(events, [true, false]);
+            assert!(!confirmed);
+            let error = result.expect_err("press failed");
+            assert!(matches!(
+                &error,
+                ToolError::Interrupted {
+                    effect: Effect::MayHaveRun,
+                    ..
+                }
+            ));
+            let counted = partial(error, 2 + usize::from(confirmed), 4, "presses");
+            assert!(matches!(counted, ToolError::Interrupted {
+                effect: Effect::Partial { sent: 2, total: 4, .. }, detail, ..
+            } if detail.contains("may_have_run")));
+        }
+    }
+
+    #[test]
+    fn failed_release_counts_the_confirmed_control_stroke() {
+        use crate::error::{Effect, ToolError};
+        let (result, confirmed) = press_and_release(|down| {
+            if down {
+                Ok(())
+            } else {
+                Err(ToolError::Busy("release failed".into()))
+            }
+        });
+        assert!(confirmed);
+        let error = result.expect_err("release failed");
+        assert!(matches!(
+            &error,
+            ToolError::Interrupted {
+                effect: Effect::Ran,
+                ..
+            }
+        ));
+        // CRLF is a single Enter but accounts for two input characters.
+        let (_, chars) = strokes("\r\n")[0];
+        let counted = partial(error, usize::from(confirmed) * chars, 3, "characters");
+        assert!(matches!(
+            counted,
+            ToolError::Interrupted {
+                effect: Effect::Partial {
+                    sent: 2,
+                    total: 3,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
 
     /// Control characters become the keys a person presses, once each:
     /// sent as characters they arrive doubled or as raw control codes.

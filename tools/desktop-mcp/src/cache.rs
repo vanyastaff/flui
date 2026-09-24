@@ -116,11 +116,22 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
         self.by_key.get(key).map(|n| format!("e{n}"))
     }
 
-    /// Forgets which handle identity `key` has: that handle keeps resolving
-    /// to the object it held (gone, so it answers stale), and the next
-    /// [`Self::insert`] of `key` issues a fresh handle.
+    /// Retires the current handle for `key` permanently. Keeping its OS
+    /// object would let a proxy follow a replacement after it was seen gone.
     pub fn retire(&mut self, key: &K) {
-        self.by_key.remove(key);
+        if let Some(handle) = self.by_key.remove(key) {
+            self.by_handle.remove(&handle);
+        }
+    }
+
+    /// Permanently forgets an issued handle after observing its element gone.
+    pub fn invalidate(&mut self, handle: &str) {
+        if let Ok(n) = parse_handle(handle, HandleKind::Element)
+            && let Some((key, _, _)) = self.by_handle.remove(&n)
+            && self.by_key.get(&key) == Some(&n)
+        {
+            self.by_key.remove(&key);
+        }
     }
 
     /// Resolves a handle issued by [`Self::insert`]. One issued and since
@@ -141,7 +152,7 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
                 handle: handle.to_owned(),
                 kind: HandleKind::Element,
                 why: format!(
-                    "it was dropped to make room for newer handles (at most {} stay resolvable)",
+                    "it was retired or dropped to make room for newer handles (at most {} stay resolvable)",
                     self.capacity
                 ),
             }
@@ -256,9 +267,9 @@ mod tests {
     }
 
     /// An identity reused for a new element after its old one went is
-    /// retired: the old handle keeps its old object (and answers stale),
-    /// the new element gets its own handle, and evicting the old handle
-    /// later does not unmap the new one.
+    /// retired: the old handle permanently answers gone,
+    /// the new element gets its own handle, and its old queue entry
+    /// does not unmap the new one.
     #[test]
     fn a_retired_identity_gets_a_fresh_handle() {
         let mut cache = ElementCache::with_capacity(3);
@@ -269,7 +280,7 @@ mod tests {
         assert_eq!(cache.handle_of(&"id"), None);
         let new = cache.insert("id", "new control");
         assert_ne!(old, new);
-        assert_eq!(cache.get(&old).copied().ok(), Some("removed button"));
+        assert!(matches!(cache.get(&old), Err(ToolError::Gone { .. })));
         assert_eq!(cache.get(&new).copied().ok(), Some("new control"));
         cache.insert("x", "x");
         cache.insert("y", "y");
@@ -279,6 +290,19 @@ mod tests {
             new,
             "the new mapping survived"
         );
+    }
+
+    #[test]
+    fn an_observed_gone_handle_never_revives_when_its_identity_returns() {
+        let mut cache = ElementCache::with_capacity(2);
+        let old = cache.insert("runtime-id", "old object");
+        cache.invalidate(&old);
+        let new = cache.insert("runtime-id", "replacement proxy");
+        assert_ne!(new, old);
+        assert!(matches!(cache.get(&old), Err(ToolError::Gone { .. })));
+        cache.invalidate(&old);
+        assert_eq!(cache.get(&new).copied().ok(), Some("replacement proxy"));
+        assert_eq!(cache.handle_of(&"runtime-id"), Some(new));
     }
 
     /// A handle read again is the newest, so eviction takes one not seen

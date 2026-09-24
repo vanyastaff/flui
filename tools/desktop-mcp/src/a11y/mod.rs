@@ -90,6 +90,10 @@ pub struct Node {
     /// node matches no query rather than a wrong one.
     #[serde(skip)]
     pub unmatchable: bool,
+    /// State properties that were unreadable or clipped, so predicates must
+    /// not treat their serialized defaults as observations.
+    #[serde(skip)]
+    pub unread_states: Vec<&'static str>,
     /// Whether the element holds a text value (the Value pattern), read
     /// with a call of its own.
     #[serde(skip)]
@@ -209,6 +213,10 @@ impl Query {
                     "`{field}` is longer than {CLIPPED_CHARS} characters, longer than any string a read reports"
                 )));
             }
+        }
+        if let Some(element) = &self.element {
+            let id = crate::cache::parse_handle(element, crate::error::HandleKind::Element)?;
+            self.element = Some(format!("e{id}"));
         }
         self.name_contains = self.name_contains.as_deref().map(fold);
         Ok(self)
@@ -343,6 +351,7 @@ impl Node {
             children_unread: false,
             gone: false,
             unmatchable: self.unmatchable,
+            unread_states: self.unread_states.clone(),
             has_text_value: self.has_text_value,
             native_window: self.native_window,
         }
@@ -485,6 +494,13 @@ pub trait AccessibilityBackend {
     /// unsupported OS says so rather than failing on a target's binding.
     fn available(&self) -> ToolResult<()>;
 
+    /// Checks session issuance without querying the provider. An unknown
+    /// handle is not evidence of an element having disappeared.
+    fn validate_handle(&mut self, element: &str) -> ToolResult<()>;
+
+    /// Retires a handle after another desktop API confirms its owner is gone.
+    fn invalidate_handle(&mut self, element: &str);
+
     /// The element trees of the given top-level windows, `max_depth` levels
     /// below each window and `max_nodes` elements in all, read until
     /// `deadline` at most. A window that closes while it is read is left
@@ -547,6 +563,10 @@ impl AccessibilityBackend for Unsupported {
     fn available(&self) -> ToolResult<()> {
         self.err()
     }
+    fn validate_handle(&mut self, _: &str) -> ToolResult<()> {
+        self.err()
+    }
+    fn invalidate_handle(&mut self, _: &str) {}
     fn tree(&mut self, _: &[u32], _: usize, _: usize, _: Instant) -> ToolResult<Read> {
         self.err()
     }
@@ -620,6 +640,7 @@ mod tests {
             children_unread: false,
             gone: false,
             unmatchable: false,
+            unread_states: Vec::new(),
             has_text_value: false,
             native_window: None,
         }
@@ -700,6 +721,27 @@ mod tests {
         assert!(!query.matches(&unread));
         unread.unmatchable = false;
         assert!(query.matches(&unread));
+    }
+
+    #[test]
+    fn prepared_element_queries_use_the_same_canonical_handle_as_the_cache() {
+        let query = Query {
+            element: Some(" e4 ".into()),
+            ..Query::default()
+        }
+        .prepared()
+        .expect("BUG: handle padding is accepted");
+        assert_eq!(search(&sample(), &query).len(), 1);
+        for element in ["e04", "e+4", "e-4", "e18446744073709551616"] {
+            assert!(
+                Query {
+                    element: Some(element.into()),
+                    ..Query::default()
+                }
+                .prepared()
+                .is_err()
+            );
+        }
     }
 
     #[test]

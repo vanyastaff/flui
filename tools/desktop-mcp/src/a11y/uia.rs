@@ -350,7 +350,37 @@ impl Uia {
     /// acted on at all: nothing would tell its replacement from it.
     ///
     /// Returns the element as read just now, its cache current.
-    fn alive(&self, handle: &str) -> ToolResult<UIElement> {
+    fn alive(&mut self, handle: &str) -> ToolResult<UIElement> {
+        self.alive_until(handle, None)
+    }
+
+    fn alive_until(&mut self, handle: &str, deadline: Option<Instant>) -> ToolResult<UIElement> {
+        let result = self.check_alive(handle, deadline);
+        if matches!(&result, Err(ToolError::Gone { .. })) {
+            self.elements.invalidate(handle);
+        }
+        result
+    }
+
+    fn remember_error(&mut self, handle: &str, error: ToolError) -> ToolError {
+        if error.code() == "gone" {
+            self.elements.invalidate(handle);
+        }
+        error
+    }
+
+    fn check_alive(&self, handle: &str, deadline: Option<Instant>) -> ToolResult<UIElement> {
+        let before_call = || {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                Err(ToolError::Timeout {
+                    timeout_ms: 0,
+                    what: format!("revalidating element `{handle}` before reading its subtree"),
+                    summary: String::new(),
+                })
+            } else {
+                Ok(())
+            }
+        };
         let held = self.elements.get(handle)?;
         let Some(started) = held.started else {
             return Err(ToolError::NotSupported(format!(
@@ -373,6 +403,7 @@ impl Uia {
         };
         // Unreadable is not "gone" (a provider that timed out still holds
         // it); a different id is.
+        before_call()?;
         match crate::os::runtime_id(held.element.as_ref()) {
             Ok(now) if now.as_deref() == Some(id.as_slice()) => {}
             Ok(_) => {
@@ -401,11 +432,13 @@ impl Uia {
                 "element `{handle}` could not be told apart when it was read (its control type was unreadable), so it is not acted on; read the tree again"
             )));
         }
+        before_call()?;
         let fresh = held
             .element
             .build_updated_cache(&self.single)
             .map_err(|e| classify(handle, "re-reading it", &e, Some(held.pid)))?;
         // Unreadable is not "gone": the element may be there and fine.
+        before_call()?;
         match held.same_as(&fresh, Some(started)) {
             Some(true) => Ok(fresh),
             None => Err(ToolError::platform(
@@ -622,6 +655,9 @@ impl Uia {
         let Some(value) = cached_str(&fresh, UIProperty::ValueValue) else {
             return false;
         };
+        if value.chars().count() <= MAX_PROPERTY_CHARS {
+            node.unread_states.retain(|state| *state != "value");
+        }
         node.value = Some(clip(value));
         true
     }
@@ -711,6 +747,7 @@ impl Uia {
             ));
         }
         if same == Some(false) {
+            self.elements.invalidate(handle);
             return Err(ToolError::platform(
                 "reading back",
                 "another element now answers for this one (its window was reused)",
@@ -968,37 +1005,24 @@ impl Uia {
                     .scroll_into_view()
                     .map_err(fail("scroll_into_view"))
             }
-            Action::SetValue(value) => {
-                if Self::has_pattern(handle, element, UIProperty::IsValuePatternAvailable)? {
-                    return element
+            Action::SetValue(value) => perform_set_value(
+                handle,
+                value,
+                |prop| Self::has_pattern(handle, element, prop),
+                |value| match value {
+                    ValueWrite::Text(value) => element
                         .get_pattern::<UIValuePattern>()
                         .map_err(lookup("set_value"))?
                         .set_value(value)
-                        .map_err(fail("set_value"));
-                }
-                if Self::has_pattern(handle, element, UIProperty::IsRangeValuePatternAvailable)? {
-                    // Finite only: Rust parses `NaN` and `inf`, which are
-                    // no slider position.
-                    let number: f64 = value
-                        .trim()
-                        .parse()
-                        .ok()
-                        .filter(|n: &f64| n.is_finite())
-                        .ok_or_else(|| {
-                            let shown: String = value.chars().take(40).collect();
-                            let more = if value.chars().nth(40).is_some() { "…" } else { "" };
-                            ToolError::InvalidArgument(format!(
-                                "element `{handle}` takes a finite number (RangeValue pattern); `{shown}{more}` is not one"
-                            ))
-                        })?;
-                    return element
+                        .map_err(fail("set_value")),
+                    ValueWrite::Range(number) => element
                         .get_pattern::<UIRangeValuePattern>()
                         .map_err(lookup("set_value"))?
                         .set_value(number)
-                        .map_err(fail("set_value"));
-                }
-                Err(self.unsupported(handle, element, ActionName::SetValue))
-            }
+                        .map_err(fail("set_value")),
+                },
+                || self.unsupported(handle, element, ActionName::SetValue),
+            ),
             Action::Focus => element.set_focus().map_err(fail("focus")),
             Action::Select => {
                 self.require(handle, element, ActionName::Select)?;
@@ -1012,9 +1036,52 @@ impl Uia {
     }
 }
 
+/// A write dispatched only after its pattern is known to be writable.
+#[derive(Debug, PartialEq)]
+enum ValueWrite<'a> {
+    Text(&'a str),
+    Range(f64),
+}
+
+fn perform_set_value<'a>(
+    handle: &str,
+    value: &'a str,
+    mut flag: impl FnMut(UIProperty) -> ToolResult<bool>,
+    write: impl FnOnce(ValueWrite<'a>) -> ToolResult<()>,
+    unsupported: impl FnOnce() -> ToolError,
+) -> ToolResult<()> {
+    if flag(UIProperty::IsValuePatternAvailable)? && !flag(UIProperty::ValueIsReadOnly)? {
+        return write(ValueWrite::Text(value));
+    }
+    if flag(UIProperty::IsRangeValuePatternAvailable)? && !flag(UIProperty::RangeValueIsReadOnly)? {
+        let number = value
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|n| n.is_finite())
+            .ok_or_else(|| {
+                let shown: String = value.chars().take(40).collect();
+                let more = if value.chars().nth(40).is_some() { "…" } else { "" };
+                ToolError::InvalidArgument(format!(
+                    "element `{handle}` takes a finite number (RangeValue pattern); `{shown}{more}` is not one"
+                ))
+            })?;
+        return write(ValueWrite::Range(number));
+    }
+    Err(unsupported())
+}
+
 impl AccessibilityBackend for Uia {
     fn available(&self) -> ToolResult<()> {
         Ok(())
+    }
+
+    fn validate_handle(&mut self, element: &str) -> ToolResult<()> {
+        self.elements.get(element).map(|_| ())
+    }
+
+    fn invalidate_handle(&mut self, element: &str) {
+        self.elements.invalidate(element);
     }
 
     fn tree(
@@ -1119,7 +1186,7 @@ impl AccessibilityBackend for Uia {
         }
         // Read fresh (`alive` returns the element as read just now): the
         // held object's cache is from the read that issued it.
-        let root = self.alive(element)?;
+        let root = self.alive_until(element, Some(deadline))?;
         if Instant::now() >= deadline {
             return Err(past());
         }
@@ -1133,6 +1200,7 @@ impl AccessibilityBackend for Uia {
         };
         let roots: Vec<Node> = self.build(&root, 0, &mut walk).into_iter().collect();
         if roots.is_empty() && !walk.truncated {
+            self.elements.invalidate(element);
             return Err(ToolError::gone_element(
                 element,
                 "it could not be read as a root any more",
@@ -1146,13 +1214,20 @@ impl AccessibilityBackend for Uia {
 
     fn act(&mut self, handle: &str, action: &Action) -> ToolResult<Node> {
         let element = self.alive(handle)?;
-        self.perform(handle, &element, action)?;
+        if let Err(error) = self.perform(handle, &element, action) {
+            if error.code() == "gone" {
+                self.elements.invalidate(handle);
+            }
+            return Err(error);
+        }
         if matches!(action, Action::Focus) {
-            return self.focused(handle, &element);
+            return self
+                .focused(handle, &element)
+                .map_err(|error| self.remember_error(handle, error));
         }
         // The reply keeps the caller's handle either way: a readback that
         // minted another one would hide which element this was.
-        match element.build_updated_cache(&self.single) {
+        let result = match element.build_updated_cache(&self.single) {
             Ok(fresh) => {
                 let mut node = describe(&fresh, handle.to_owned());
                 // A value that cannot be read back is not a control without
@@ -1173,6 +1248,7 @@ impl AccessibilityBackend for Uia {
             // evidence it went; a disconnect or a failed call (a provider
             // restarting) leaves the outcome unknown, reported below.
             Err(e) if e.code() == E_ELEMENT_NOT_AVAILABLE => {
+                self.elements.invalidate(handle);
                 // Its identity only: the value and toggle state cached
                 // before the action are not what the action left behind.
                 Ok(Node {
@@ -1190,21 +1266,25 @@ impl AccessibilityBackend for Uia {
                 Effect::Ran,
                 "the action itself succeeded; only reading the element afterwards failed, so do not repeat it",
             )),
-        }
+        };
+        result.map_err(|error| self.remember_error(handle, error))
     }
 
     fn click_point(&mut self, handle: &str) -> ToolResult<ClickPoint> {
         let element = self.alive(handle)?;
         let pid = cached_pid(&element);
-        let point = element
-            .get_clickable_point()
-            .map_err(|e| classify(handle, "reading its clickable point", &e, pid))?;
+        let point = element.get_clickable_point().map_err(|e| {
+            self.remember_error(
+                handle,
+                classify(handle, "reading its clickable point", &e, pid),
+            )
+        })?;
         let (x, y) = if let Some(p) = point {
             (p.get_x(), p.get_y())
         } else {
-            let r = element
-                .get_bounding_rectangle()
-                .map_err(|e| classify(handle, "reading its bounds", &e, pid))?;
+            let r = element.get_bounding_rectangle().map_err(|e| {
+                self.remember_error(handle, classify(handle, "reading its bounds", &e, pid))
+            })?;
             let rect = Rect::from_ltrb(r.get_left(), r.get_top(), r.get_right(), r.get_bottom());
             if rect.width == 0 || rect.height == 0 {
                 return Err(ToolError::NotFound(format!(
@@ -1269,9 +1349,11 @@ fn describe(element: &UIElement, id: String) -> Node {
     let partly = expansion == Some(ExpandCollapseState::PartiallyExpanded as i32);
     // A value the provider marks read-only is shown, not offered to set.
     let read_only = |prop: UIProperty| match prop {
-        UIProperty::IsValuePatternAvailable => cached_bool(element, UIProperty::ValueIsReadOnly),
+        UIProperty::IsValuePatternAvailable => {
+            cached_flag(element, UIProperty::ValueIsReadOnly) != Some(false)
+        }
         UIProperty::IsRangeValuePatternAvailable => {
-            cached_bool(element, UIProperty::RangeValueIsReadOnly)
+            cached_flag(element, UIProperty::RangeValueIsReadOnly) != Some(false)
         }
         _ => false,
     };
@@ -1299,6 +1381,25 @@ fn describe(element: &UIElement, id: String) -> Node {
     }
     if focusable {
         actions.push(ActionName::Focus);
+    }
+    let mut unread_states = Vec::new();
+    for (state, property) in [
+        ("disabled", UIProperty::IsEnabled),
+        ("focused", UIProperty::HasKeyboardFocus),
+    ] {
+        if cached_flag(element, property).is_none() {
+            unread_states.push(state);
+        }
+    }
+    for (state, unread) in [
+        ("checked", checked.is_none()),
+        ("expanded", expanded.is_none()),
+        ("selected", selected.is_none()),
+        ("value", value.is_none()),
+    ] {
+        if unread {
+            unread_states.push(state);
+        }
     }
     let (role, native_role) = role(element);
     let role = match role {
@@ -1331,6 +1432,7 @@ fn describe(element: &UIElement, id: String) -> Node {
         children_unread: false,
         gone: false,
         unmatchable: !searchable(element),
+        unread_states,
         has_text_value,
         native_window: None,
     }
@@ -1433,6 +1535,10 @@ fn searchable(element: &UIElement) -> bool {
         && PATTERNS
             .iter()
             .all(|&(prop, _)| cached_flag(element, prop).is_some())
+        && (!offered(UIProperty::IsValuePatternAvailable)
+            || cached_flag(element, UIProperty::ValueIsReadOnly).is_some())
+        && (!offered(UIProperty::IsRangeValuePatternAvailable)
+            || cached_flag(element, UIProperty::RangeValueIsReadOnly).is_some())
         && (!offered(UIProperty::IsTogglePatternAvailable)
             || cached_i32(element, UIProperty::ToggleToggleState)
                 .and_then(checked_state)
@@ -1684,6 +1790,111 @@ fn classify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unsupported_value() -> ToolError {
+        ToolError::ActionUnsupported {
+            element: "e1".into(),
+            action: "set_value",
+            supported: Vec::new(),
+            unread: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn read_only_values_never_reach_the_provider_write() {
+        for pattern in [
+            UIProperty::IsValuePatternAvailable,
+            UIProperty::IsRangeValuePatternAvailable,
+        ] {
+            let result = perform_set_value(
+                "e1",
+                "42",
+                |prop| {
+                    Ok(prop == pattern
+                        || matches!(
+                            prop,
+                            UIProperty::ValueIsReadOnly | UIProperty::RangeValueIsReadOnly
+                        ))
+                },
+                |_| panic!("a read-only provider must not receive a write"),
+                unsupported_value,
+            );
+            assert!(matches!(result, Err(ToolError::ActionUnsupported { .. })));
+        }
+    }
+
+    #[test]
+    fn unreadable_read_only_flags_never_reach_the_provider_write() {
+        for pattern in [
+            UIProperty::IsValuePatternAvailable,
+            UIProperty::IsRangeValuePatternAvailable,
+        ] {
+            let result = perform_set_value(
+                "e1",
+                "42",
+                |prop| {
+                    if matches!(
+                        prop,
+                        UIProperty::ValueIsReadOnly | UIProperty::RangeValueIsReadOnly
+                    ) {
+                        Err(ToolError::platform(
+                            "reading properties",
+                            "unreadable boolean",
+                        ))
+                    } else {
+                        Ok(prop == pattern)
+                    }
+                },
+                |_| panic!("an unreadable property must not authorize a write"),
+                unsupported_value,
+            );
+            assert!(matches!(result, Err(ToolError::Platform { .. })));
+        }
+    }
+
+    #[test]
+    fn a_writable_range_is_used_when_the_text_pattern_is_read_only() {
+        let mut written = None;
+        perform_set_value(
+            "e1",
+            "42",
+            |prop| Ok(prop != UIProperty::RangeValueIsReadOnly),
+            |value| {
+                written = Some(value);
+                Ok(())
+            },
+            unsupported_value,
+        )
+        .expect("BUG: the range is writable");
+        assert_eq!(written, Some(ValueWrite::Range(42.0)));
+    }
+
+    #[test]
+    fn writable_text_preserves_its_value_and_invalid_ranges_are_not_sent() {
+        let mut written = None;
+        perform_set_value(
+            "e1",
+            " text ",
+            |prop| Ok(prop == UIProperty::IsValuePatternAvailable),
+            |value| {
+                written = Some(value);
+                Ok(())
+            },
+            unsupported_value,
+        )
+        .expect("BUG: the text is writable");
+        assert_eq!(written, Some(ValueWrite::Text(" text ")));
+        for invalid in ["NaN", "inf", "-inf", "words"] {
+            let result = perform_set_value(
+                "e1",
+                invalid,
+                |prop| Ok(prop == UIProperty::IsRangeValuePatternAvailable),
+                |_| panic!("an invalid range must not reach the provider"),
+                unsupported_value,
+            );
+            assert!(matches!(result, Err(ToolError::InvalidArgument(_))));
+        }
+    }
 
     /// Only the three real toggle states have names; any other value is
     /// unreadable, not "indeterminate".

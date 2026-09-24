@@ -341,13 +341,6 @@ impl ToolError {
     /// carries an effect keeps it (what happened first is what a retry must
     /// know) and gains the new detail.
     #[must_use]
-    #[cfg_attr(
-        not(any(target_os = "windows", target_os = "macos", test)),
-        expect(
-            dead_code,
-            reason = "used by the input device and the UIA backend, not built on this OS"
-        )
-    )]
     pub fn after(self, effect: Effect, detail: impl Into<String>) -> Self {
         match self {
             Self::Interrupted {
