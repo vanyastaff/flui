@@ -25,6 +25,8 @@ wasm = false
 [dependencies]
 anyhow = { workspace = true }
 base64 = "0.23"
+# Unicode full case folding for `name_contains` (Straße matches STRASSE).
+caseless = "0.2"
 image = { workspace = true }
 rmcp = { version = "3.4", features = ["server", "macros", "transport-io"] }
 schemars = "1.0"

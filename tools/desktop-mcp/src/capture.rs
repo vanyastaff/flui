@@ -108,7 +108,14 @@ mod backend {
                         "window {id} is minimized and has nothing to capture; activate_window first"
                     )));
                 }
-                within_pixel_limit(info.rect)?;
+                within_pixel_limit(
+                    info.rect,
+                    window
+                        .current_monitor()
+                        .ok()
+                        .and_then(|m| m.scale_factor().ok())
+                        .unwrap_or(1.0),
+                )?;
                 let image = window
                     .capture_image()
                     .map_err(|e| ToolError::platform(format!("capturing window {id}"), e))?;
@@ -147,7 +154,7 @@ mod backend {
                     width: monitor.width().map_err(meta)?,
                     height: monitor.height().map_err(meta)?,
                 };
-                within_pixel_limit(source)?;
+                within_pixel_limit(source, monitor.scale_factor().unwrap_or(1.0))?;
                 let image = monitor
                     .capture_image()
                     .map_err(|e| ToolError::platform("capturing the monitor", e))?;
@@ -207,13 +214,27 @@ pub fn available() -> ToolResult<()> {
 const MAX_CAPTURE_PIXELS: u64 = 8192 * 8192;
 
 /// Refuses a capture larger than [`MAX_CAPTURE_PIXELS`] before anything is
-/// allocated.
+/// allocated. `scale` is the display's backing pixels per screen unit, which
+/// the bitmap is allocated in: 1 on Windows (the server works in physical
+/// pixels there), 2 for a Retina display on macOS, where screen units are
+/// points.
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
-fn within_pixel_limit(source: Rect) -> ToolResult<()> {
-    let pixels = u64::from(source.width) * u64::from(source.height);
-    if pixels > MAX_CAPTURE_PIXELS {
+fn within_pixel_limit(source: Rect, scale: f32) -> ToolResult<()> {
+    let scale = if cfg!(target_os = "macos") {
+        f64::from(scale).max(1.0)
+    } else {
+        1.0
+    };
+    let backing = |units: u32| (f64::from(units) * scale).ceil();
+    let pixels = backing(source.width) * backing(source.height);
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the limit is far below where f64 stops being exact"
+    )]
+    let limit = MAX_CAPTURE_PIXELS as f64;
+    if pixels > limit {
         return Err(ToolError::InvalidArgument(format!(
-            "the capture would be {}x{} pixels, above the {MAX_CAPTURE_PIXELS}-pixel limit; capture a monitor or a smaller window",
+            "the capture would be about {pixels} pixels ({}x{} screen units at {scale}x), above the {MAX_CAPTURE_PIXELS}-pixel limit; capture a monitor or a smaller window",
             source.width, source.height
         )));
     }
@@ -302,8 +323,8 @@ mod tests {
             width,
             height,
         };
-        assert!(within_pixel_limit(rect(30_000, 30_000)).is_err());
-        assert!(within_pixel_limit(rect(8192, 8192)).is_ok());
+        assert!(within_pixel_limit(rect(30_000, 30_000), 1.0).is_err());
+        assert!(within_pixel_limit(rect(8192, 8192), 1.0).is_ok());
     }
 
     /// A HiDPI capture has more pixels than screen units; the reply says

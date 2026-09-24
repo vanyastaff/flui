@@ -70,6 +70,10 @@ const READ_BYTES: usize = 16 << 20;
 /// one worker every tool shares.
 const ANCESTOR_LIMIT: usize = 256;
 
+/// How long one such walk may take at most, whatever the count: a provider
+/// can answer every parent at the edge of the call timeout.
+const ANCESTOR_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// How far past the budget or the depth a node's remaining children are
 /// counted before the count stops being exact.
 const OMITTED_COUNT_CAP: usize = 256;
@@ -184,13 +188,6 @@ impl Uia {
     /// gets a fresh handle, so a held handle never retargets to another
     /// control.
     fn register(&mut self, key: Identity, element: &UIElement) -> String {
-        if let Identity::Runtime(id) = &key
-            && let Some(held) = self.elements.by_identity(&key)
-            && !crate::os::runtime_id(held.element.as_ref())
-                .is_ok_and(|now| now.as_deref() == Some(id.as_slice()))
-        {
-            self.elements.retire(&key);
-        }
         let pid = cached_i32(element, UIProperty::ProcessId)
             .and_then(|pid| u32::try_from(pid).ok())
             .unwrap_or(0);
@@ -198,6 +195,19 @@ impl Uia {
             .starts
             .entry(pid)
             .or_insert_with(|| crate::os::process_started(pid));
+        // The handle is kept only for the same element: its object still
+        // answers to the id, and the new element comes from the same process.
+        // A provider elsewhere claiming a trusted application's runtime id
+        // gets a handle of its own instead of taking over that one.
+        if let Identity::Runtime(id) = &key
+            && let Some(held) = self.elements.by_identity(&key)
+            && (held.pid != pid
+                || held.started != started
+                || !crate::os::runtime_id(held.element.as_ref())
+                    .is_ok_and(|now| now.as_deref() == Some(id.as_slice())))
+        {
+            self.elements.retire(&key);
+        }
         let runtime = match &key {
             Identity::Runtime(id) => Some(id.clone()),
             Identity::Anonymous(_) => None,
@@ -325,7 +335,11 @@ impl Uia {
             return false;
         };
         let mut current = candidate;
+        let until = Instant::now() + ANCESTOR_DEADLINE;
         for _ in 0..ANCESTOR_LIMIT {
+            if Instant::now() >= until {
+                return false;
+            }
             if self
                 .automation
                 .compare_elements(&current, element)
@@ -364,7 +378,11 @@ impl Uia {
     fn top_level_window(&self, element: &UIElement) -> Option<u32> {
         let walker = self.automation.get_raw_view_walker().ok()?;
         let mut current = element.clone();
+        let until = Instant::now() + ANCESTOR_DEADLINE;
         for _ in 0..ANCESTOR_LIMIT {
+            if Instant::now() >= until {
+                return None;
+            }
             let handle: isize = current.get_native_window_handle().map_or(0, Into::into);
             if let Some(id) = u32::try_from(handle).ok().filter(|&id| id != 0) {
                 return crate::os::root_window(id);

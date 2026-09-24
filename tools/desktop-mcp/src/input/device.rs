@@ -361,10 +361,7 @@ impl Input {
         let mut buffer = [0_u8; 4];
         for (stroke, chars) in strokes(text) {
             let sent = guard(None).and_then(|()| match stroke {
-                Stroke::Key(key) => self
-                    .enigo
-                    .key(enigo_key(key)?, Direction::Click)
-                    .map_err(failed("typing a key")),
+                Stroke::Key(key) => self.tap(enigo_key(key)?),
                 // enigo releases a surrogate pair's low unit with the high
                 // one, so a character past the BMP goes out on its own.
                 #[cfg(target_os = "windows")]
@@ -380,6 +377,21 @@ impl Input {
             typed += chars;
         }
         Ok(())
+    }
+
+    /// Presses and releases `key` apart: once the press is in, a failed
+    /// release leaves it tracked as held (enigo keeps it in its held set), so
+    /// the next input releases it first, and the error says it went in.
+    fn tap(&mut self, key: Key) -> ToolResult<()> {
+        self.enigo
+            .key(key, Direction::Press)
+            .map_err(failed("pressing a key"))?;
+        self.enigo
+            .key(key, Direction::Release)
+            .map_err(|e| ToolError::Interrupted {
+                cause: Box::new(ToolError::platform("releasing a key", e)),
+                what: format!("{key:?} went in but its release failed; it may still be held until the next input releases it"),
+            })
     }
 
     /// Presses the combo `repeat` times: modifiers down in order, key

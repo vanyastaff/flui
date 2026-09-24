@@ -62,11 +62,12 @@ pub struct Node {
     pub gone: bool,
 }
 
-/// `s` lower-cased one character at a time, so a substring folds the same
-/// way on its own as inside a longer name (whole-string lower-casing turns a
-/// final Greek sigma into `ς` only at the end of a word).
+/// `s` under Unicode full case folding, so a case-insensitive substring
+/// matches the way Unicode defines it: `Straße` contains `STRASSE`, and a
+/// final sigma folds like any other. Folding is per character, so a
+/// substring folds the same on its own as inside a longer name.
 pub fn fold(s: &str) -> String {
-    s.chars().flat_map(char::to_lowercase).collect()
+    caseless::default_case_fold_str(s)
 }
 
 /// The longest a string property is reported, in characters; a longer one
@@ -465,6 +466,24 @@ mod tests {
         let found = search(&sample(), &q);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, "e3");
+    }
+
+    /// `name_contains` uses full case folding: a German sharp s matches its
+    /// capital spelling, a final sigma matches a capital one.
+    #[test]
+    fn name_contains_folds_unicode_case() {
+        let named = |name: &str| node("e1", "Text", name, vec![]);
+        let query = |needle: &str| {
+            Query {
+                name_contains: Some(needle.into()),
+                ..Query::default()
+            }
+            .prepared()
+            .expect("BUG: a short criterion is valid")
+        };
+        assert!(query("STRASSE").matches(&named("Hauptstraße 1")));
+        assert!(query("ΟΣ").matches(&named("λόγος και")));
+        assert!(!query("strasse").matches(&named("Hauptstrase")));
     }
 
     #[test]

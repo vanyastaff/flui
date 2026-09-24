@@ -166,6 +166,15 @@ impl KeyCombo {
                 ))
             })?
         };
+        // `shift+shift` is Shift pressed as a key while held: one modifier,
+        // which would slip past checks that look at modifiers and key apart.
+        if let KeyName::Modifier(m) = key_name
+            && parts.iter().any(|&part| modifier(part) == Some(m))
+        {
+            return Err(ToolError::InvalidArgument(format!(
+                "`{text}` names the same modifier as a modifier and as the key"
+            )));
+        }
         let mut modifiers = Vec::with_capacity(parts.len());
         for part in parts {
             let m = modifier(part).ok_or_else(|| {
@@ -395,6 +404,8 @@ mod tests {
             "+s",
             "ctrl++s",
             "ctrl+ctrl+s",
+            "shift+shift",
+            "cmd+meta",
             "s+ctrl",
             "hyper+s",
             "enterr",
