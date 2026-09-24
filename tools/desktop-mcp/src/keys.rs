@@ -261,7 +261,10 @@ impl KeyCombo {
                 {
                     Some("Mission Control")
                 }
-                KeyName::Char('3' | '4' | '5') if only(&[Modifier::Meta, Modifier::Shift]) => {
+                // 6: the Touch Bar screenshot.
+                KeyName::Char('3' | '4' | '5' | '6')
+                    if only(&[Modifier::Meta, Modifier::Shift]) =>
+                {
                     Some("the macOS screenshot tool")
                 }
                 _ => None,

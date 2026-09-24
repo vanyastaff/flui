@@ -219,6 +219,30 @@ struct Issued {
     class: Option<u64>,
 }
 
+/// What listing a window made of it.
+#[derive(Debug)]
+enum Adopted {
+    /// Its id is bound to it: a target any call accepts.
+    Bound,
+    /// It closed or changed owner while listed: gone, not merely untargetable.
+    Closed,
+    /// Its id cannot be targeted, for the reason given; its pid may be.
+    IdOnly(String),
+}
+
+impl Adopted {
+    /// The `not_targetable` note a listing shows for it.
+    fn note(self) -> Option<String> {
+        match self {
+            Self::Bound => None,
+            Self::Closed => {
+                Some("it closed or changed owner while it was listed; list again".into())
+            }
+            Self::IdOnly(why) => Some(why),
+        }
+    }
+}
+
 /// Set once the server is shutting down: every input action checks it
 /// before each event (it runs its checks even without a safety target) and
 /// stops, so the release of held input that follows is never raced by a
@@ -322,15 +346,16 @@ impl Desktop {
     ///
     /// Why the window cannot be targeted, if it cannot: the listing says so
     /// next to it, rather than handing out an id every call then refuses.
-    fn adopt_window(&mut self, w: &WindowInfo) -> Option<String> {
+    fn adopt_window(&mut self, w: &WindowInfo) -> Adopted {
         let started = os::process_started(w.pid);
-        if cfg!(target_os = "windows") && os::window_pid(w.id) != Some(w.pid) {
-            return Some("it closed or changed owner while it was listed; list again".into());
+        let class = os::window_class(w.id);
+        // A window with no class any more is being destroyed.
+        if cfg!(target_os = "windows") && (os::window_pid(w.id) != Some(w.pid) || class.is_none()) {
+            return Adopted::Closed;
         }
         if started.is_none() && cfg!(target_os = "windows") {
             self.unidentified.insert(w.pid);
         }
-        let class = os::window_class(w.id);
         let issued = *self.issued.entry(w.id).or_insert(Issued {
             pid: w.pid,
             started,
@@ -341,26 +366,26 @@ impl Desktop {
         }
         // The same checks `revalidate` makes, so a window listed as
         // targetable is one a call accepts.
-        let class_changed = issued.class.is_some() && class != issued.class;
+        let class_changed = issued.class.is_some() && class.is_some() && class != issued.class;
         if issued.pid != w.pid || issued.started != started || class_changed {
             // The pid is a way in only while it still names the process it
             // was handed out for.
             let pid_bound = started.is_some() && self.started.get(&w.pid).copied() == started;
-            return Some(if issued.pid != w.pid && pid_bound {
+            return Adopted::IdOnly(if pid_bound {
                 format!(
-                    "this id was handed out earlier for process {}, and an id is never re-bound; target this window by pid {}",
-                    issued.pid, w.pid
+                    "this id was handed out earlier for another window, and an id is never re-bound; target this window by pid {}",
+                    w.pid
                 )
             } else {
                 "this id (and its pid) were handed out earlier for another window or process, and neither is re-bound, so this window cannot be targeted in this session".into()
             });
         }
         if started.is_none() && cfg!(target_os = "windows") {
-            return Some(
+            return Adopted::IdOnly(
                 "its process cannot be identified (its start time cannot be read), so it is not a safety target".into(),
             );
         }
-        None
+        Adopted::Bound
     }
 
     /// The windows of the process `launch` started as `pid` (at `started`),
@@ -387,10 +412,16 @@ impl Desktop {
         if !same() {
             return Ok(None);
         }
+        // Closed ones are not this launch's windows any more; one whose id
+        // cannot be targeted is still its window, reachable by the pid.
         let mut windows = windows;
-        for w in &mut windows {
-            w.not_targetable = self.adopt_window(w);
-        }
+        windows.retain_mut(|w| match self.adopt_window(w) {
+            Adopted::Closed => false,
+            adopted => {
+                w.not_targetable = adopted.note();
+                true
+            }
+        });
         Ok(Some(windows))
     }
 
@@ -417,7 +448,7 @@ impl Desktop {
         // not make that old target name the new process.
         let mut windows = windows;
         for w in &mut windows {
-            w.not_targetable = self.adopt_window(w);
+            w.not_targetable = self.adopt_window(w).note();
         }
         Ok(windows)
     }
@@ -535,7 +566,12 @@ impl Desktop {
         };
         let recheck = || held.map_or(Ok(()), |(t, b)| Self::revalidate(t, b));
         recheck()?;
-        let shot = capture::screenshot(direct, max_side)?;
+        let shot = capture::screenshot(direct, max_side).map_err(|e| match (target, e) {
+            // For a pid, the window it picked closing is passing: the same
+            // call picks another of its windows.
+            (ScreenshotTarget::Pid(_), ToolError::NotFound(why)) => ToolError::Busy(why),
+            (_, e) => e,
+        })?;
         recheck()?;
         Ok(shot)
     }
@@ -886,24 +922,21 @@ impl Desktop {
         let bound = self.bound(Some(target))?;
         Self::revalidate(target, bound)?;
         let mut windows = Self::resolve(target)?;
-        for w in &mut windows {
-            w.not_targetable = self.adopt_window(w);
-        }
-        // Only a window later calls accept is worth raising and reporting.
-        windows.retain(|w| w.not_targetable.is_none());
+        // A window that closed meanwhile is dropped; one whose own id cannot
+        // be targeted still belongs to the target (a pid reaches it), so it
+        // stays, marked.
+        windows.retain_mut(|w| match self.adopt_window(w) {
+            Adopted::Closed => false,
+            adopted => {
+                w.not_targetable = adopted.note();
+                true
+            }
+        });
         let window = windows
             .iter()
             .find(|w| !w.is_minimized)
             .or_else(|| windows.first())
-            .ok_or_else(|| {
-                let what = match target {
-                    Target::Window(id) => format!("window {id}"),
-                    Target::Pid(pid) => format!("process {pid}"),
-                };
-                ToolError::NotSupported(format!(
-                    "{what} has no window this session can target (see not_targetable in list_windows)"
-                ))
-            })?
+            .ok_or_else(|| no_window(target))?
             .clone();
         let mut attempts = Vec::new();
         // The chosen window itself, not only its process, is what gets

@@ -110,9 +110,14 @@ async fn main() -> anyhow::Result<()> {
             children.kill_all();
         }
     }
+    // The second try `Children`'s drop would make: exiting skips drops, and
+    // a kill the OS refused the first time is kept for one more attempt.
+    children.kill_all();
     // Everything is released and ended. Exiting here rather than returning:
     // after a signal, stdin is still open, and the runtime's teardown would
-    // wait on its blocked read for good.
+    // wait on its blocked read for good. (On Windows, a logoff or shutdown
+    // ends this process without a signal; the kill-on-exit job ends its
+    // children then.)
     std::process::exit(0)
 }
 

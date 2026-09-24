@@ -178,13 +178,17 @@ impl Input {
     }
 
     /// Moves the pointer to a physical screen point.
-    #[cfg_attr(
-        target_os = "windows",
-        expect(clippy::unused_self, reason = "the Windows path bypasses enigo")
-    )]
     pub fn move_to(&mut self, x: i32, y: i32) -> ToolResult<()> {
         #[cfg(target_os = "windows")]
         {
+            // With a button the user holds, a move is a drag (or its drop)
+            // in whatever has the mouse: refused. Our own held button (a
+            // drag in progress) is the one exception.
+            if self.held_button.is_none() && crate::os::mouse_button_down() {
+                return Err(ToolError::Busy(
+                    "a mouse button is held down, so moving the pointer would drag".into(),
+                ));
+            }
             crate::os::move_pointer(x, y)
         }
         #[cfg(not(target_os = "windows"))]
@@ -475,35 +479,42 @@ impl Input {
             // A tap that fails may still have gone in (an Enter can submit):
             // counted as typed, so resuming from the count does not repeat it.
             let mut tapped = false;
-            let sent = guard(None).and_then(|()| match stroke {
-                Stroke::Key(key) => {
-                    let key = enigo_key(key)?;
-                    tapped = true;
-                    self.tap(key)
-                }
-                // On Windows every character goes out through our own
-                // `SendInput`, which knows how much of it went in: enigo's
-                // reports only failure (and releases a surrogate pair's low
-                // unit with the high one).
-                #[cfg(target_os = "windows")]
-                Stroke::Char(c) => {
-                    crate::os::send_unicode(c).map_err(|(e, stuck, typed)| {
-                        // Not in enigo's held set: kept here, released first
-                        // by the next input and at shutdown.
-                        if stuck.is_some() {
-                            self.stuck_unit = stuck;
-                        }
-                        // Its last unit's key-down went in: that typed it.
-                        tapped = typed;
-                        e
-                    })
-                }
-                #[cfg(not(target_os = "windows"))]
-                Stroke::Char(c) => self
-                    .enigo
-                    .text(c.encode_utf8(&mut buffer))
-                    .map_err(failed("typing text")),
-            });
+            // A held Ctrl would turn a typed Enter into Ctrl+Enter.
+            #[cfg(target_os = "windows")]
+            let clear = || only_modifiers(&[]);
+            #[cfg(not(target_os = "windows"))]
+            let clear = || Ok(());
+            let sent = guard(None)
+                .and_then(|()| clear())
+                .and_then(|()| match stroke {
+                    Stroke::Key(key) => {
+                        let key = enigo_key(key)?;
+                        tapped = true;
+                        self.tap(key)
+                    }
+                    // On Windows every character goes out through our own
+                    // `SendInput`, which knows how much of it went in: enigo's
+                    // reports only failure (and releases a surrogate pair's low
+                    // unit with the high one).
+                    #[cfg(target_os = "windows")]
+                    Stroke::Char(c) => {
+                        crate::os::send_unicode(c).map_err(|(e, stuck, typed)| {
+                            // Not in enigo's held set: kept here, released first
+                            // by the next input and at shutdown.
+                            if stuck.is_some() {
+                                self.stuck_unit = stuck;
+                            }
+                            // Its last unit's key-down went in: that typed it.
+                            tapped = typed;
+                            e
+                        })
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    Stroke::Char(c) => self
+                        .enigo
+                        .text(c.encode_utf8(&mut buffer))
+                        .map_err(failed("typing text")),
+                });
             if let Err(cause) = sent {
                 let typed = typed + if tapped { chars } else { 0 };
                 return Err(partial(cause, typed, total, "characters"));
@@ -606,6 +617,10 @@ impl Input {
         }
         #[cfg(not(target_os = "windows"))]
         let _ = layout_of;
+        // A modifier the user holds would join the chord (Shift turning
+        // ctrl+z into Redo), and releasing ours would lift theirs.
+        #[cfg(target_os = "windows")]
+        only_modifiers(&[]).map_err(|e| (e, false))?;
         let modifiers = modifiers.as_slice();
         let mut held: Vec<Key> = Vec::with_capacity(modifiers.len());
         let mut result = Ok(());
@@ -636,6 +651,11 @@ impl Input {
             && let Some(changed) = layout_of.and_then(owner_changed)
         {
             result = Err(changed);
+        }
+        // And exactly ours are down right before the key.
+        #[cfg(target_os = "windows")]
+        if result.is_ok() {
+            result = only_modifiers(&held);
         }
         let mut sent = false;
         // Whether the key surely went down: only then is the chord a real
@@ -736,6 +756,34 @@ impl Input {
         }
         result.map_err(|e| (e, sent))
     }
+}
+
+/// Refuses unless the modifiers down on the keyboard are exactly `ours`: one
+/// the user holds would join the keys sent. Our own presses reach the OS's
+/// key state a moment after they are sent, so it is polled briefly before
+/// concluding.
+#[cfg(target_os = "windows")]
+fn only_modifiers(ours: &[Key]) -> ToolResult<()> {
+    let expect = ours.iter().fold(0_u8, |bits, k| {
+        bits | match k {
+            Key::Shift => 1,
+            Key::Control => 2,
+            Key::Alt => 4,
+            Key::Meta => 8,
+            _ => 0,
+        }
+    });
+    for attempt in 0..10 {
+        if crate::os::modifiers_down() == expect {
+            return Ok(());
+        }
+        if attempt < 9 {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    Err(ToolError::Busy(
+        "a modifier key (Shift, Ctrl, Alt or Windows) is held down on the keyboard and would join the keys sent".into(),
+    ))
 }
 
 /// Why a key chosen for `owner` must not go out now, if it must not: other

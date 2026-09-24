@@ -55,6 +55,10 @@ struct Tracked {
     shared: std::collections::HashSet<u32>,
     /// Pids a `kill` is ending right now.
     ending: std::collections::HashSet<u32>,
+    /// How many launches were recorded, and which one each pid's child in
+    /// `running` came from: a pid a later launch reused names that one.
+    launches: u64,
+    launch_of: HashMap<u32, u64>,
     /// Launches between their spawn and their entry in `running`.
     launching: usize,
     /// Set by shutdown's `kill_all`: nothing is launched after it.
@@ -163,8 +167,9 @@ impl Children {
     /// Starts the program with null stdio and records it.
     ///
     /// Returns the pid and the process's start time, read while this set
-    /// still holds the child, so no later process can have taken the pid.
-    pub fn launch(&self, spec: &LaunchSpec) -> ToolResult<(u32, Option<u64>)> {
+    /// still holds the child, so no later process can have taken the pid;
+    /// and the launch's number, which [`Self::abandon`] takes.
+    pub fn launch(&self, spec: &LaunchSpec) -> ToolResult<(u32, Option<u64>, u64)> {
         if spec.program.trim().is_empty() {
             return Err(ToolError::InvalidArgument("program is empty".into()));
         }
@@ -235,7 +240,10 @@ impl Children {
             tracked.shared.insert(pid);
         }
         tracked.running.insert(pid, child);
-        Ok((pid, started))
+        tracked.launches += 1;
+        let launch = tracked.launches;
+        tracked.launch_of.insert(pid, launch);
+        Ok((pid, started, launch))
     }
 
     /// Kills a child this session launched; one that already exited on its
@@ -249,11 +257,19 @@ impl Children {
         self.end_tracked(pid)
     }
 
-    /// Ends the process a launch just started, for a launch whose caller
-    /// will never be told its pid. Unlike [`Self::kill`] it holds for a pid
-    /// two launches shared: the child tracked under it is the newest, the one
-    /// this launch started, since a launch replaces the entry for its pid.
-    pub fn abandon(&self, pid: u32) -> ToolResult<Killed> {
+    /// Ends the process launch number `launch` started, for a launch whose
+    /// caller will never be told its pid. Unlike [`Self::kill`] it holds for a
+    /// pid two launches shared, since it names the launch: once a later
+    /// launch took the pid over, this one's process is gone and the later
+    /// one's is left alone.
+    pub fn abandon(&self, pid: u32, launch: u64) -> ToolResult<Killed> {
+        if self.lock().launch_of.get(&pid) != Some(&launch) {
+            return Ok(Killed {
+                pid,
+                already_exited: true,
+                exit_code: None,
+            });
+        }
         self.end_tracked(pid)
     }
 
@@ -547,6 +563,35 @@ mod tests {
             .expect("BUG: a second kill says it exited");
         assert!(again.already_exited);
         let _ = children.kill(second);
+    }
+
+    /// Abandoning names the launch, not only the pid: a launch whose pid a
+    /// later launch took over leaves that later process running.
+    #[test]
+    fn abandon_ends_only_its_own_launch() {
+        let children = Children::new();
+        let (program, args) = if cfg!(windows) {
+            ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
+        } else {
+            ("sleep", vec!["60".into()])
+        };
+        let (pid, _, launch) = children
+            .launch(&LaunchSpec {
+                program: program.into(),
+                args,
+                ..LaunchSpec::default()
+            })
+            .expect("BUG: a long-running system program starts");
+        let other = children
+            .abandon(pid, launch + 1)
+            .expect("BUG: another launch's number is answered");
+        assert!(other.already_exited, "another launch's process is gone");
+        assert!(children.contains(pid), "and this one was left running");
+        let own = children
+            .abandon(pid, launch)
+            .expect("BUG: its own launch is ended");
+        assert!(!own.already_exited);
+        assert!(!children.contains(pid));
     }
 
     #[test]

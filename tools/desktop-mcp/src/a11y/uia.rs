@@ -599,14 +599,31 @@ impl Uia {
         toggled: bool,
     ) -> ToolResult<()> {
         let held = self.elements.get(handle)?;
-        let same = held.kind.is_some()
-            && self.kind(fresh) == held.kind
-            && cached_pid(fresh) == Some(held.pid);
+        // What identifies the element across an action: its control type,
+        // process and runtime id. Not its class name or automation id, which
+        // an action can change on the same control (a web toggle's CSS
+        // classes, a re-keyed DOM id).
+        let same = held
+            .kind
+            .as_ref()
+            .is_some_and(|kind| cached_i32(fresh, UIProperty::ControlType) == kind.control_type)
+            && cached_pid(fresh) == Some(held.pid)
+            && held.runtime.as_deref().is_some_and(|id| {
+                crate::os::runtime_id(fresh.as_ref()).is_ok_and(|now| now.as_deref() == Some(id))
+            });
         let range_unread = node.patterns.contains(&"RangeValue")
             && !node.patterns.contains(&"Value")
             && node.value.is_none();
-        if !same
-            || !self.read_value(fresh, node)
+        if !same {
+            return Err(ToolError::Interrupted {
+                cause: Box::new(ToolError::platform(
+                    "reading back",
+                    "another element now answers for this one (its window was reused)",
+                )),
+                what: "the action itself succeeded; the element it acted on is gone, so do not repeat it".into(),
+            });
+        }
+        if !self.read_value(fresh, node)
             || node.unmatchable
             || range_unread
             || (toggled && node.toggle_state.is_none())
@@ -652,7 +669,20 @@ impl Uia {
             let mut node = describe(&fresh, handle.to_owned());
             // Checked between the provider calls as well: each can take the
             // whole call timeout.
+            let late = || {
+                (Instant::now() >= until).then(|| ToolError::Interrupted {
+                    cause: Box::new(ToolError::platform(
+                        "reading back focus",
+                        "the readback ran out of time",
+                    )),
+                    what: "focus was requested and may have landed; only reading it back failed"
+                        .into(),
+                })
+            };
             if node.has_keyboard_focus {
+                if let Some(e) = late() {
+                    return Err(e);
+                }
                 self.complete_readback(handle, &fresh, &mut node, false)?;
                 return Ok(node);
             }
@@ -666,6 +696,9 @@ impl Uia {
                 None
             };
             if inside == Some(true) {
+                if let Some(e) = late() {
+                    return Err(e);
+                }
                 self.complete_readback(handle, &fresh, &mut node, false)?;
                 return Ok(node);
             }
@@ -823,13 +856,20 @@ impl Uia {
                         .map_err(fail("set_value"));
                 }
                 if Self::has_pattern(handle, element, UIProperty::IsRangeValuePatternAvailable)? {
-                    let number: f64 = value.trim().parse().map_err(|_| {
-                        let shown: String = value.chars().take(40).collect();
-                        let more = if value.chars().nth(40).is_some() { "…" } else { "" };
-                        ToolError::InvalidArgument(format!(
-                            "element `{handle}` takes a number (RangeValue pattern); `{shown}{more}` is not one"
-                        ))
-                    })?;
+                    // Finite only: Rust parses `NaN` and `inf`, which are
+                    // no slider position.
+                    let number: f64 = value
+                        .trim()
+                        .parse()
+                        .ok()
+                        .filter(|n: &f64| n.is_finite())
+                        .ok_or_else(|| {
+                            let shown: String = value.chars().take(40).collect();
+                            let more = if value.chars().nth(40).is_some() { "…" } else { "" };
+                            ToolError::InvalidArgument(format!(
+                                "element `{handle}` takes a finite number (RangeValue pattern); `{shown}{more}` is not one"
+                            ))
+                        })?;
                     return element
                         .get_pattern::<UIRangeValuePattern>()
                         .map_err(lookup("set_value"))?
@@ -1238,8 +1278,18 @@ fn cached_pid(element: &UIElement) -> Option<u32> {
         .filter(|&pid| pid != 0)
 }
 
+/// A cached string: a `VT_BSTR`, or `VT_EMPTY` as the empty string. The
+/// cache read used here substitutes a property's default for one a provider
+/// does not supply, so empty never means "unsupported"; some proxies pass
+/// `VT_EMPTY` through where the default (an empty string) would be.
 fn cached_str(element: &UIElement, prop: UIProperty) -> Option<String> {
-    cached_of(element, prop, VT_BSTR).and_then(|v| TryInto::<String>::try_into(v).ok())
+    const VT_EMPTY: u16 = 0;
+    let v = element.get_cached_property_value(prop).ok()?;
+    match v.get_type().0 {
+        VT_EMPTY => Some(String::new()),
+        VT_BSTR => TryInto::<String>::try_into(v).ok(),
+        _ => None,
+    }
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {

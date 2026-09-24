@@ -90,6 +90,19 @@ pub fn focus(fg: u32) -> ToolResult<Focus> {
     }
 }
 
+/// Modifier keys down on the keyboard now, the user's included (1 Shift,
+/// 2 Ctrl, 4 Alt, 8 Windows).
+#[cfg(target_os = "windows")]
+pub fn modifiers_down() -> u8 {
+    windows::modifiers_down()
+}
+
+/// Whether any mouse button is down now, the user's included.
+#[cfg(target_os = "windows")]
+pub fn mouse_button_down() -> bool {
+    windows::mouse_button_down()
+}
+
 /// Whether the primary and secondary mouse buttons are swapped.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub fn buttons_swapped() -> bool {

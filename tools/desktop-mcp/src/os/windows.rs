@@ -23,7 +23,8 @@ use windows::Win32::System::Ole::{
     SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayGetVartype,
 };
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    AttachThreadInput, GetCurrentProcess, GetCurrentThreadId, GetProcessTimes, OpenProcess,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::Accessibility::{
     CUIAutomation8, IUIAutomation, IUIAutomation2, IUIAutomationElement,
@@ -34,10 +35,11 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetKeyboardLayout, HKL, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
-    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MOUSEEVENTF_MOVE, MOUSEINPUT,
-    MapVirtualKeyExW, SendInput, ToUnicodeEx, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_MENU,
-    VK_SHIFT, VkKeyScanExW,
+    GetAsyncKeyState, GetKeyState, GetKeyboardLayout, HKL, INPUT, INPUT_0, INPUT_KEYBOARD,
+    INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MOUSEEVENTF_MOVE,
+    MOUSEINPUT, MapVirtualKeyExW, SendInput, ToUnicodeEx, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL,
+    VK_LBUTTON, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RWIN, VK_SHIFT, VK_XBUTTON1,
+    VK_XBUTTON2, VkKeyScanExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GA_ROOT, GUITHREADINFO, GetAncestor, GetClassNameW, GetCursorPos,
@@ -216,6 +218,53 @@ pub fn runtime_id(
         ids?
     };
     Ok((!ids.is_empty()).then_some(ids))
+}
+
+/// Caps Lock as the thread that receives the keys sees it. A thread's own
+/// key state only moves with the keyboard messages it takes, which this
+/// server's never does, so it is read attached to that thread's input queue
+/// for the one call. A thread it cannot attach to (an elevated one) reads
+/// as this thread's state.
+fn caps_lock(focus_thread: u32) -> bool {
+    // SAFETY: no arguments.
+    let me = unsafe { GetCurrentThreadId() };
+    // SAFETY: two thread ids; attaching changes only which input state the
+    // calls below read, and is undone right after.
+    let attached = focus_thread != 0
+        && focus_thread != me
+        && unsafe { AttachThreadInput(me, focus_thread, true) }.as_bool();
+    // SAFETY: plain value argument.
+    let caps = unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0;
+    if attached {
+        // SAFETY: the same two ids, detached.
+        let _ = unsafe { AttachThreadInput(me, focus_thread, false) };
+    }
+    caps
+}
+
+/// Modifier keys down on the keyboard right now, the user's included, as
+/// bits: 1 Shift, 2 Ctrl, 4 Alt, 8 Windows.
+pub fn modifiers_down() -> u8 {
+    let down = |vk: VIRTUAL_KEY| {
+        // SAFETY: plain value argument.
+        let state = unsafe { GetAsyncKeyState(i32::from(vk.0)) };
+        state < 0
+    };
+    u8::from(down(VK_SHIFT))
+        | u8::from(down(VK_CONTROL)) << 1
+        | u8::from(down(VK_MENU)) << 2
+        | u8::from(down(VK_LWIN) || down(VK_RWIN)) << 3
+}
+
+/// Whether any mouse button is down right now, the user's included.
+pub fn mouse_button_down() -> bool {
+    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
+        .into_iter()
+        .any(|vk| {
+            // SAFETY: plain value argument.
+            let state = unsafe { GetAsyncKeyState(i32::from(vk.0)) };
+            state < 0
+        })
 }
 
 /// Whether the primary and secondary mouse buttons are swapped: injected
@@ -559,8 +608,7 @@ fn owner_now() -> (KeyboardOwner, HKL) {
     let focus_thread = unsafe { GetWindowThreadProcessId(focus, None) };
     // SAFETY: plain value argument.
     let layout = unsafe { GetKeyboardLayout(focus_thread) };
-    // SAFETY: plain value argument.
-    let caps = unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0;
+    let caps = caps_lock(focus_thread);
     (
         KeyboardOwner {
             foreground: foreground.0 as usize as u32,
