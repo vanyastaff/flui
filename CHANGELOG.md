@@ -142,6 +142,13 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Fixed
 
+- **`Image::from_rgba8` length check could wrap** (`flui-types`): the expected length
+  `width * height * 4` was computed in `u32`, so it panicked on overflow in debug builds and
+  wrapped in release — a 65536×65536 image matched an empty buffer. The length is now computed
+  in `usize` with checked arithmetic. The new fallible `Image::try_from_rgba8` returns an
+  `ImageDataError` and is what the decoders in `flui-assets` and `flui-widgets` now call.
+  `Image::from_rgba8_unchecked` is removed: it had no callers, and its `# Safety` section
+  described a safe function.
 - **No control was usable from the keyboard, and Narrator could not follow the focus**
   (`flui-widgets`, `flui-material`, `flui-interaction`, `flui-semantics`; ADR-0079). Found by
   the first run of real input on a Windows window (`cargo xtask device windows-input`). Enter,

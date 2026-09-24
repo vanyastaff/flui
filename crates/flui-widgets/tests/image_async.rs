@@ -842,7 +842,11 @@ impl ImageProvider for ControlledProvider {
 /// layout size is the sole externally observable consequence of publishing a
 /// frame.
 fn opaque(width: u32, height: u32) -> PixelImage {
-    PixelImage::from_rgba8(width, height, vec![255u8; (width * height * 4) as usize])
+    PixelImage::from_rgba8(
+        width,
+        height,
+        vec![255u8; width as usize * height as usize * 4],
+    )
 }
 
 /// Miss-to-miss: both providers start cold, and the OLD one settles LAST.

@@ -103,7 +103,12 @@ impl Asset for ImageAsset {
             let (width, height) = rgba.dimensions();
             let data = rgba.into_raw();
 
-            Ok(flui_types::painting::Image::from_rgba8(width, height, data))
+            flui_types::painting::Image::try_from_rgba8(width, height, data).map_err(|e| {
+                AssetError::LoadFailed {
+                    path: self.path.clone(),
+                    reason: format!("Decoded image is malformed: {e}"),
+                }
+            })
         }
 
         #[cfg(not(feature = "images"))]

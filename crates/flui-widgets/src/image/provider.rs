@@ -378,7 +378,11 @@ fn decode_bytes(bytes: &[u8]) -> Result<PixelImage, ImageProviderError> {
             })?;
         let rgba = dynamic.to_rgba8();
         let (width, height) = rgba.dimensions();
-        Ok(PixelImage::from_rgba8(width, height, rgba.into_raw()))
+        PixelImage::try_from_rgba8(width, height, rgba.into_raw()).map_err(|e| {
+            ImageProviderError::DecodeFailed {
+                reason: e.to_string(),
+            }
+        })
     }
 
     #[cfg(not(feature = "images"))]

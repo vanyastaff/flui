@@ -38,6 +38,39 @@ pub struct Image {
     data: Arc<Vec<u8>>,
 }
 
+/// Why RGBA8 pixel data was rejected by [`Image::try_from_rgba8`].
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ImageDataError {
+    /// `width * height * 4` doesn't fit in `usize`.
+    #[error("{width}x{height} RGBA8 byte count overflows usize")]
+    SizeOverflow {
+        /// Requested width in pixels.
+        width: u32,
+        /// Requested height in pixels.
+        height: u32,
+    },
+    /// The buffer length isn't `width * height * 4`.
+    #[error("{width}x{height} RGBA8 needs {expected} bytes, got {actual}")]
+    LengthMismatch {
+        /// Requested width in pixels.
+        width: u32,
+        /// Requested height in pixels.
+        height: u32,
+        /// `width * height * 4`.
+        expected: usize,
+        /// `data.len()`.
+        actual: usize,
+    },
+}
+
+/// `width * height * 4` in `usize`, or `None` on overflow.
+fn rgba8_byte_len(width: u32, height: u32) -> Option<usize> {
+    usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(4)
+}
+
 impl Default for Image {
     #[inline]
     fn default() -> Self {
@@ -60,37 +93,47 @@ impl Image {
     ///
     /// # Panics
     ///
-    /// Panics if the data length doesn't match `width * height * 4`.
+    /// Panics if `width * height * 4` overflows `usize` or doesn't equal
+    /// `data.len()`. Use [`try_from_rgba8`](Self::try_from_rgba8) when the
+    /// dimensions or the buffer come from outside the program (a decoder, a
+    /// file, the network).
     #[must_use]
     #[inline]
     pub fn from_rgba8(width: u32, height: u32, data: Vec<u8>) -> Self {
-        assert_eq!(
-            data.len(),
-            (width * height * 4) as usize,
-            "Image data length must be width * height * 4"
-        );
-
-        Self {
-            width,
-            height,
-            data: Arc::new(data),
+        match Self::try_from_rgba8(width, height, data) {
+            Ok(image) => image,
+            Err(error) => panic!("Image::from_rgba8: {error}"),
         }
     }
 
-    /// Creates a new image from RGBA8 pixel data without validation.
+    /// Creates a new image from RGBA8 pixel data, rejecting a buffer whose
+    /// length isn't `width * height * 4`.
     ///
-    /// # Safety
+    /// The expected length is computed in `usize` with checked arithmetic, so
+    /// dimensions whose byte count overflows are rejected rather than wrapped
+    /// into a length a short buffer could match.
     ///
-    /// The caller must ensure that the data length matches `width * height *
-    /// 4`.
-    #[must_use]
-    #[inline]
-    pub fn from_rgba8_unchecked(width: u32, height: u32, data: Vec<u8>) -> Self {
-        Self {
+    /// # Errors
+    ///
+    /// [`ImageDataError::SizeOverflow`] if `width * height * 4` doesn't fit in
+    /// `usize`; [`ImageDataError::LengthMismatch`] if it does but differs from
+    /// `data.len()`.
+    pub fn try_from_rgba8(width: u32, height: u32, data: Vec<u8>) -> Result<Self, ImageDataError> {
+        let expected =
+            rgba8_byte_len(width, height).ok_or(ImageDataError::SizeOverflow { width, height })?;
+        if data.len() != expected {
+            return Err(ImageDataError::LengthMismatch {
+                width,
+                height,
+                expected,
+                actual: data.len(),
+            });
+        }
+        Ok(Self {
             width,
             height,
             data: Arc::new(data),
-        }
+        })
     }
 
     /// Returns the width of the image in pixels.
@@ -495,6 +538,72 @@ impl ColorFilter {
 mod tests {
     use super::*;
     use crate::geometry::units::px;
+
+    #[test]
+    fn try_from_rgba8_accepts_exact_length() {
+        let image = Image::try_from_rgba8(3, 2, vec![0; 3 * 2 * 4]).expect("exact length");
+        assert_eq!(
+            (image.width(), image.height(), image.byte_count()),
+            (3, 2, 24)
+        );
+    }
+
+    #[test]
+    fn try_from_rgba8_rejects_length_mismatch() {
+        assert_eq!(
+            Image::try_from_rgba8(3, 2, vec![0; 23]).map(|_| ()),
+            Err(ImageDataError::LengthMismatch {
+                width: 3,
+                height: 2,
+                expected: 24,
+                actual: 23,
+            })
+        );
+    }
+
+    /// `65536 * 65536 * 4` wraps to 0 in `u32`, so an empty buffer matched the
+    /// old length check in release builds.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn try_from_rgba8_rejects_dimensions_that_wrap_u32() {
+        assert_eq!(
+            Image::try_from_rgba8(65_536, 65_536, Vec::new()).map(|_| ()),
+            Err(ImageDataError::LengthMismatch {
+                width: 65_536,
+                height: 65_536,
+                expected: 1 << 34,
+                actual: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn try_from_rgba8_rejects_usize_overflow() {
+        // 2^34 bytes overflows a 32-bit usize; (2^32 - 1)^2 * 4 overflows a
+        // 64-bit one.
+        let (width, height) = if cfg!(target_pointer_width = "64") {
+            (u32::MAX, u32::MAX)
+        } else {
+            (65_536, 65_536)
+        };
+        assert_eq!(
+            Image::try_from_rgba8(width, height, Vec::new()).map(|_| ()),
+            Err(ImageDataError::SizeOverflow { width, height })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "RGBA8 byte count overflows usize")]
+    fn from_rgba8_panics_on_overflowing_dimensions() {
+        let _ = Image::from_rgba8(u32::MAX, u32::MAX, Vec::new());
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    #[should_panic(expected = "65536x65536 RGBA8 needs 17179869184 bytes, got 0")]
+    fn from_rgba8_panics_on_dimensions_that_wrap_u32() {
+        let _ = Image::from_rgba8(65_536, 65_536, Vec::new());
+    }
 
     #[test]
     fn test_box_fit_default() {

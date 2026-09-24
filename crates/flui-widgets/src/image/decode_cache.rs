@@ -212,7 +212,11 @@ mod tests {
     }
 
     fn solid(width: u32, height: u32) -> PixelImage {
-        PixelImage::from_rgba8(width, height, vec![0u8; (width * height * 4) as usize])
+        PixelImage::from_rgba8(
+            width,
+            height,
+            vec![0u8; width as usize * height as usize * 4],
+        )
     }
 
     /// A cold key (never inserted by any test) is a guaranteed miss.

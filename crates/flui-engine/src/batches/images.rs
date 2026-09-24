@@ -570,31 +570,15 @@ impl DrawBatcher {
         // using the existing draw_image, which stretches the whole image.
         //
         // For correct 9-slice, we create sub-images from the pixel data.
-        let data = image.data();
-        let stride = (img_w as u32) * 4;
-
         // Extract a sub-region of the image as a new Image.
         let extract = |sx: f32, sy: f32, sw: f32, sh: f32| -> Option<Image> {
-            let sx = sx.max(0.0) as u32;
-            let sy = sy.max(0.0) as u32;
-            let sw = sw.max(0.0) as u32;
-            let sh = sh.max(0.0) as u32;
-            if sw == 0 || sh == 0 {
-                return None;
-            }
-            let mut sub = Vec::with_capacity((sw * sh * 4) as usize);
-            for row in sy..(sy + sh) {
-                let start = (row * stride + sx * 4) as usize;
-                let end = start + (sw * 4) as usize;
-                if end <= data.len() {
-                    sub.extend_from_slice(&data[start..end]);
-                }
-            }
-            if sub.len() == (sw * sh * 4) as usize {
-                Some(Image::from_rgba8(sw, sh, sub))
-            } else {
-                None
-            }
+            extract_rgba8_region(
+                image,
+                sx.max(0.0) as u32,
+                sy.max(0.0) as u32,
+                sw.max(0.0) as u32,
+                sh.max(0.0) as u32,
+            )
         };
 
         // 9 slices: (src_x, src_y, src_w, src_h) -> dst rect.
@@ -1371,5 +1355,67 @@ impl DrawBatcher {
         segment
             .external_images
             .push((texture_id, instance, state.current_scissor()));
+    }
+}
+
+/// Copies the `sw`×`sh` region at (`sx`, `sy`) out of `image`'s RGBA8 rows.
+///
+/// Row offsets are computed in `usize` with checked arithmetic, so a region
+/// that doesn't fit the pixel buffer yields `None` rather than a wrapped offset
+/// into the wrong rows. A region wider than the image reads on into the next
+/// row, as long as every byte lies inside the buffer.
+fn extract_rgba8_region(image: &Image, sx: u32, sy: u32, sw: u32, sh: u32) -> Option<Image> {
+    if sw == 0 || sh == 0 {
+        return None;
+    }
+    let data = image.data();
+    let stride = (image.width() as usize).checked_mul(4)?;
+    let row_len = (sw as usize).checked_mul(4)?;
+    let x_offset = (sx as usize).checked_mul(4)?;
+    let sy = sy as usize;
+    let mut sub = Vec::with_capacity(row_len.checked_mul(sh as usize)?.min(data.len()));
+    for row in sy..sy.checked_add(sh as usize)? {
+        let start = row.checked_mul(stride)?.checked_add(x_offset)?;
+        sub.extend_from_slice(data.get(start..start.checked_add(row_len)?)?);
+    }
+    Image::try_from_rgba8(sw, sh, sub).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 3×2 image whose pixel at (x, y) is `[x, y, 0, 255]`.
+    fn indexed_image() -> Image {
+        let pixels = (0..2u8)
+            .flat_map(|y| (0..3u8).flat_map(move |x| [x, y, 0, 255]))
+            .collect();
+        Image::from_rgba8(3, 2, pixels)
+    }
+
+    #[test]
+    fn extract_rgba8_region_copies_the_requested_rows() {
+        let sub = extract_rgba8_region(&indexed_image(), 1, 0, 2, 2).expect("region fits");
+        assert_eq!((sub.width(), sub.height()), (2, 2));
+        assert_eq!(
+            sub.data(),
+            &[1, 0, 0, 255, 2, 0, 0, 255, 1, 1, 0, 255, 2, 1, 0, 255]
+        );
+    }
+
+    #[test]
+    fn extract_rgba8_region_rejects_a_region_past_the_buffer() {
+        assert!(extract_rgba8_region(&indexed_image(), 0, 1, 3, 2).is_none());
+        assert!(extract_rgba8_region(&indexed_image(), 0, 0, 0, 1).is_none());
+    }
+
+    /// The offsets used to be `u32`: a huge one panicked in debug builds and
+    /// wrapped in release.
+    #[test]
+    fn extract_rgba8_region_rejects_offsets_that_wrap_u32() {
+        // 2^30 * 4 wraps to 0 in u32, which read the pixel at x = 0.
+        assert!(extract_rgba8_region(&indexed_image(), 1 << 30, 0, 1, 1).is_none());
+        // `sy + sh` overflows u32.
+        assert!(extract_rgba8_region(&indexed_image(), 0, u32::MAX, 1, 2).is_none());
     }
 }
