@@ -1160,6 +1160,11 @@ impl Desktop {
         let input = self.input()?;
         // A move with a button still held from a failed release is a drag.
         input.ready()?;
+        // Again right before the move: resolving an element's point can take
+        // a provider's whole call timeout, and shutdown may have begun.
+        if STOPPING.load(Ordering::SeqCst) {
+            return Err(ToolError::ShuttingDown);
+        }
         input.move_to(x, y)?;
         std::thread::sleep(Duration::from_millis(10));
         Ok(((x, y), input.position()))

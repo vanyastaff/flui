@@ -701,7 +701,29 @@ impl DesktopServer {
                     ),
                 });
             }
-            let windows = self.worker.run(&ct, move |d| d.windows_of(pid)).await;
+            // Bounded by what is left of the wait: a lookup still queued
+            // behind other desktop work when the time is up is withdrawn
+            // (one already running finishes; it cannot be stopped halfway).
+            let lookup = ct.child_token();
+            let run = self.worker.run(&lookup, move |d| d.windows_of(pid));
+            tokio::pin!(run);
+            let windows = tokio::select! {
+                windows = &mut run => windows,
+                () = tokio::time::sleep(deadline.saturating_duration_since(Instant::now())) => {
+                    lookup.cancel();
+                    run.await
+                }
+            };
+            // Withdrawn at the deadline, not by the client: the wait is over.
+            if matches!(windows, Err(ToolError::Cancelled)) && !ct.is_cancelled() {
+                return failure(&ToolError::Timeout {
+                    timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+                    what: format!(
+                        "a window of process {pid} (the desktop was busy with other calls)"
+                    ),
+                    summary: "(the process is running; list_windows shows what it has)".into(),
+                });
+            }
             match windows {
                 Ok(None) => {
                     return failure(&ToolError::Gone {
