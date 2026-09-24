@@ -731,6 +731,10 @@ impl Desktop {
 
     /// Moves the pointer.
     pub fn move_mouse(&mut self, x: i32, y: i32) -> ToolResult<Value> {
+        // Shutting down: no pointer moves once the session has ended.
+        if STOPPING.load(Ordering::SeqCst) {
+            return Err(ToolError::Cancelled);
+        }
         let input = self.input()?;
         // A move with a button still held from a failed release is a drag.
         input.ready()?;

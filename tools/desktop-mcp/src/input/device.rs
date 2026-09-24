@@ -407,14 +407,17 @@ impl Input {
         self.ready()?;
         let total = text.chars().count();
         let mut typed = 0;
+        #[cfg(not(target_os = "windows"))]
         let mut buffer = [0_u8; 4];
         for (stroke, chars) in strokes(text) {
             let sent = guard(None).and_then(|()| match stroke {
                 Stroke::Key(key) => self.tap(enigo_key(key)?),
-                // enigo releases a surrogate pair's low unit with the high
-                // one, so a character past the BMP goes out on its own.
+                // On Windows every character goes out through our own
+                // `SendInput`, which knows how much of it went in: enigo's
+                // reports only failure (and releases a surrogate pair's low
+                // unit with the high one).
                 #[cfg(target_os = "windows")]
-                Stroke::Char(c) if u32::from(c) > 0xFFFF => {
+                Stroke::Char(c) => {
                     crate::os::send_unicode(c).map_err(|(e, stuck)| {
                         // Not in enigo's held set: kept here, released first
                         // by the next input and at shutdown.
@@ -424,6 +427,7 @@ impl Input {
                         e
                     })
                 }
+                #[cfg(not(target_os = "windows"))]
                 Stroke::Char(c) => self
                     .enigo
                     .text(c.encode_utf8(&mut buffer))

@@ -460,6 +460,10 @@ impl Uia {
             if let Some(id) = u32::try_from(handle).ok().filter(|&id| id != 0) {
                 return crate::os::root_window(id);
             }
+            // Checked again between the two provider calls.
+            if Instant::now() >= until {
+                return None;
+            }
             current = walker.get_parent(&current).ok()?;
         }
         None
