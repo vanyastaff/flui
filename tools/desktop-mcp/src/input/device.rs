@@ -255,7 +255,10 @@ impl Input {
             // its release is retried, and a failure counts the click as sent
             // with the button possibly still down.
             // Refused before the press: nothing of this click went out.
-            if let Err(cause) = guard(None).and_then(|()| self.ensure_at(x, y)) {
+            if let Err(cause) = guard(None)
+                .and_then(|()| self.ensure_at(x, y))
+                .and_then(|()| no_button_down())
+            {
                 return Err(partial(cause, sent, clicks, "clicks"));
             }
             self.held_button = Some(button);
@@ -317,6 +320,7 @@ impl Input {
         thread::sleep(STEP);
         guard(None)?;
         self.ensure_at(from.0, from.1)?;
+        no_button_down()?;
         // The primary button, as the user set it: with swapped buttons a
         // physical left press is a secondary one.
         let primary = enigo_button(MouseButton::Left);
@@ -755,6 +759,32 @@ impl Input {
             });
         }
         result.map_err(|e| (e, sent))
+    }
+}
+
+/// Refuses right before a synthetic press while a mouse button the user
+/// holds is down: the press and its release would complete or drop their
+/// gesture. Polled briefly, since this session's own last release (the first
+/// click of a double click) reaches the OS's state a moment late.
+fn no_button_down() -> ToolResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        for attempt in 0..10 {
+            if !crate::os::mouse_button_down() {
+                return Ok(());
+            }
+            if attempt < 9 {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        Err(ToolError::Busy(
+            "a mouse button is held down, and a click now would complete or drop its gesture"
+                .into(),
+        ))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(())
     }
 }
 
