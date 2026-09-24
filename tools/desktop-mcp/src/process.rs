@@ -387,13 +387,28 @@ fn end(pid: u32, child: &mut Child) -> ToolResult<Killed> {
         }
         return Err(ToolError::platform(format!("ending process {pid}"), e));
     }
-    let status = child.wait().ok();
+    // Polled, bounded: a killed process stuck in uninterruptible IO stays
+    // until that IO returns, and waiting on it would hold a process slot,
+    // or shutdown, for as long.
+    let until = std::time::Instant::now() + REAP_WAIT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if std::time::Instant::now() < until => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => break None,
+        }
+    };
     Ok(Killed {
         pid,
         already_exited: false,
         exit_code: status.and_then(|s| s.code()),
     })
 }
+
+/// How long `end` waits for a killed process to be reaped.
+const REAP_WAIT: Duration = Duration::from_secs(2);
 
 #[cfg(test)]
 mod tests {

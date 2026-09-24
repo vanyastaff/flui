@@ -339,6 +339,11 @@ impl Uia {
             walk.truncated = true;
             return None;
         };
+        // That call can have run out the time: no further one starts.
+        if Instant::now() >= walk.deadline {
+            walk.truncated = true;
+            return None;
+        }
         if let Some(handle) = self.elements.handle_of(&key)
             && walk.seen.contains(&handle)
         {
@@ -514,7 +519,15 @@ impl Uia {
                 return None;
             }
             let handle: isize = current.get_native_window_handle().map_or(0, Into::into);
-            if let Some(id) = u32::try_from(handle).ok().filter(|&id| id != 0) {
+            // An HWND is 32 significant bits, sign-extended by UIA: the low
+            // ones are the handle, as `os::windows` reads them.
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "an HWND's low 32 bits are the handle"
+            )]
+            let id = handle as usize as u32;
+            if id != 0 {
                 return crate::os::root_window(id);
             }
             // Checked again between the two provider calls.
@@ -840,6 +853,7 @@ impl AccessibilityBackend for Uia {
                     && !node.patterns.contains(&"Value")
                     && node.value.is_none();
                 if !self.read_value(&fresh, &mut node)
+                    || node.unmatchable
                     || range_unread
                     || (matches!(action, Action::Toggle) && node.toggle_state.is_none())
                 {
@@ -951,7 +965,7 @@ fn describe(element: &UIElement, id: String) -> Node {
     };
     let toggle_state = patterns
         .contains(&"Toggle")
-        .then(|| cached_i32(element, UIProperty::ToggleToggleState).map(toggle_name))
+        .then(|| cached_i32(element, UIProperty::ToggleToggleState).and_then(toggle_name))
         .flatten();
     Node {
         id,
@@ -1014,7 +1028,9 @@ fn searchable(element: &UIElement) -> bool {
         && typed(UIProperty::IsKeyboardFocusable, is_bool)
         && PATTERNS.iter().all(|&(prop, _)| typed(prop, is_bool))
         && (!offered(UIProperty::IsTogglePatternAvailable)
-            || cached_i32(element, UIProperty::ToggleToggleState).is_some())
+            || cached_i32(element, UIProperty::ToggleToggleState)
+                .and_then(toggle_name)
+                .is_some())
         && (!offered(UIProperty::IsRangeValuePatternAvailable)
             || typed(UIProperty::RangeValueValue, |v| {
                 TryInto::<f64>::try_into(v).is_ok()
@@ -1122,11 +1138,14 @@ fn clip(s: String) -> String {
     }
 }
 
-fn toggle_name(state: i32) -> &'static str {
+/// `None` for a value that is no toggle state: an unreadable state, not
+/// "indeterminate".
+fn toggle_name(state: i32) -> Option<&'static str> {
     match state {
-        s if s == ToggleState::On as i32 => "on",
-        s if s == ToggleState::Off as i32 => "off",
-        _ => "indeterminate",
+        s if s == ToggleState::On as i32 => Some("on"),
+        s if s == ToggleState::Off as i32 => Some("off"),
+        s if s == ToggleState::Indeterminate as i32 => Some("indeterminate"),
+        _ => None,
     }
 }
 
@@ -1158,6 +1177,19 @@ fn classify(handle: &str, what: &str, e: &uiautomation::Error) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the three real toggle states have names; any other value is
+    /// unreadable, not "indeterminate".
+    #[test]
+    fn only_real_toggle_states_are_named() {
+        assert_eq!(toggle_name(ToggleState::On as i32), Some("on"));
+        assert_eq!(toggle_name(ToggleState::Off as i32), Some("off"));
+        assert_eq!(
+            toggle_name(ToggleState::Indeterminate as i32),
+            Some("indeterminate")
+        );
+        assert_eq!(toggle_name(99), None);
+    }
 
     /// A clipped string keeps no provider-sized buffer behind it.
     #[test]

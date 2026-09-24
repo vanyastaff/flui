@@ -448,8 +448,15 @@ impl Input {
         #[cfg(not(target_os = "windows"))]
         let mut buffer = [0_u8; 4];
         for (stroke, chars) in strokes(text) {
+            // A tap that fails may still have gone in (an Enter can submit):
+            // counted as typed, so resuming from the count does not repeat it.
+            let mut tapped = false;
             let sent = guard(None).and_then(|()| match stroke {
-                Stroke::Key(key) => self.tap(enigo_key(key)?),
+                Stroke::Key(key) => {
+                    let key = enigo_key(key)?;
+                    tapped = true;
+                    self.tap(key)
+                }
                 // On Windows every character goes out through our own
                 // `SendInput`, which knows how much of it went in: enigo's
                 // reports only failure (and releases a surrogate pair's low
@@ -472,6 +479,7 @@ impl Input {
                     .map_err(failed("typing text")),
             });
             if let Err(cause) = sent {
+                let typed = typed + if tapped { chars } else { 0 };
                 return Err(partial(cause, typed, total, "characters"));
             }
             typed += chars;
@@ -582,6 +590,18 @@ impl Input {
         }
         if result.is_ok() {
             result = guard(None);
+        }
+        // Again after the modifiers: pressing one can move focus to a control
+        // with another layout, where the key chosen would be another one.
+        #[cfg(target_os = "windows")]
+        if result.is_ok()
+            && let Some(owner) = layout_of
+            && crate::os::keyboard_owner() != owner
+        {
+            result = Err(ToolError::NotForeground {
+                target: format!("window {}", owner.0),
+                foreground: "the focused control changed while the modifiers went down".into(),
+            });
         }
         let mut sent = false;
         // Whether the key surely went down: only then is the chord a real
