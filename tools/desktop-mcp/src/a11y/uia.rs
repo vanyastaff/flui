@@ -120,8 +120,9 @@ struct Held {
     /// What kind of element it was when issued: control type, automation id
     /// and class name. A runtime id derived from a recycled native window can
     /// repeat for a replacement in the same process; one of another kind is
-    /// told apart by these.
-    kind: Kind,
+    /// told apart by these. `None` when it could not be read: such a
+    /// handle is not acted on.
+    kind: Option<Kind>,
     pid: u32,
     started: Option<u64>,
 }
@@ -232,10 +233,11 @@ impl Uia {
     /// still answers to that id, else the id is retired and the new element
     /// gets a fresh handle, so a held handle never retargets to another
     /// control.
-    fn register(&mut self, key: Identity, element: &UIElement) -> String {
-        let pid = cached_i32(element, UIProperty::ProcessId)
-            .and_then(|pid| u32::try_from(pid).ok())
-            .unwrap_or(0);
+    ///
+    /// Past `deadline` the held object is not asked again: the id is retired
+    /// instead, which only costs the old handle.
+    fn register(&mut self, key: Identity, element: &UIElement, deadline: Instant) -> String {
+        let pid = cached_pid(element).unwrap_or(0);
         let started = *self
             .starts
             .entry(pid)
@@ -252,6 +254,8 @@ impl Uia {
             && (held.pid != pid
                 || held.started != started
                 || held.kind != kind
+                || kind.is_none()
+                || Instant::now() >= deadline
                 || !crate::os::runtime_id(held.element.as_ref())
                     .is_ok_and(|now| now.as_deref() == Some(id.as_slice())))
         {
@@ -307,12 +311,18 @@ impl Uia {
         // Read live: an object that now reports another kind of element is a
         // replacement, whatever its runtime id says.
         // One cross-process call for all three, bounded by the call timeout.
+        let Some(kind) = &held.kind else {
+            return Err(ToolError::NotSupported(format!(
+                "element `{handle}` could not be told apart when it was read (its kind was unreadable), so it is not acted on; read the tree again"
+            )));
+        };
         let fresh = held
             .element
             .build_updated_cache(&self.single)
-            .map_err(|_| ToolError::StaleElement(handle.to_owned()))?;
-        let live = self.kind(&fresh);
-        if live != held.kind {
+            .map_err(|e| classify(handle, "re-reading it", &e))?;
+        // The process too: a runtime id derived from a recycled native
+        // window can come back in another process while the first still runs.
+        if self.kind(&fresh).as_ref() != Some(kind) || cached_pid(&fresh) != Some(held.pid) {
             return Err(ToolError::StaleElement(handle.to_owned()));
         }
         Ok(held.element.clone())
@@ -353,6 +363,10 @@ impl Uia {
             // its own instead of taking over the first one's.
             // It is the same one only if both have the same native window;
             // otherwise the collision gets its own handle, never hidden.
+            if Instant::now() >= walk.deadline {
+                walk.truncated = true;
+                return None;
+            }
             let same_window = role(element) == "Window"
                 && self.elements.by_identity(&key).is_some_and(|held| {
                     let native = |e: &UIElement| {
@@ -368,14 +382,21 @@ impl Uia {
             }
             key = self.fresh_identity();
         }
-        let id = self.register(key, element);
+        if Instant::now() >= walk.deadline {
+            walk.truncated = true;
+            return None;
+        }
+        let id = self.register(key, element, walk.deadline);
         walk.seen.insert(id.clone());
         let mut node = describe(element, id);
         // One more call for a text control's value, charged like any other.
         if node.patterns.contains(&"Value") {
-            walk.budget = walk.budget.saturating_sub(1);
-            walk.truncated |=
-                Instant::now() >= walk.deadline || !self.read_value(element, &mut node);
+            if walk.budget == 0 || Instant::now() >= walk.deadline {
+                walk.truncated = true;
+            } else {
+                walk.budget -= 1;
+                walk.truncated |= !self.read_value(element, &mut node);
+            }
         }
         // A cut string is not what a search for the whole one would match,
         // and a property the provider failed to report matches nothing.
@@ -430,13 +451,9 @@ impl Uia {
     }
 
     /// Whether `candidate` is `element` or one of its descendants.
-    fn is_within(&self, candidate: UIElement, element: &UIElement) -> bool {
-        self.within(candidate, element).unwrap_or(false)
-    }
-
-    /// [`Self::is_within`], `None` when it cannot be told: a provider call
-    /// failed or the walk ran out of time or steps.
-    fn within(&self, candidate: UIElement, element: &UIElement) -> Option<bool> {
+    /// `None` when it cannot be told: a provider call failed or the walk ran
+    /// out of time (`until`) or steps.
+    fn within(&self, candidate: UIElement, element: &UIElement, until: Instant) -> Option<bool> {
         let (Ok(walker), Ok(root)) = (
             self.automation.get_raw_view_walker(),
             self.automation.get_root_element(),
@@ -444,7 +461,6 @@ impl Uia {
             return None;
         };
         let mut current = candidate;
-        let until = Instant::now() + ANCESTOR_DEADLINE;
         // Checked before every provider call, each of which can take the
         // whole call timeout, so the walk as a whole keeps to the deadline.
         let late = || Instant::now() >= until;
@@ -463,16 +479,17 @@ impl Uia {
         None
     }
 
-    /// `element`'s kind from its cached properties.
-    fn kind(&self, element: &UIElement) -> Kind {
+    /// `element`'s kind from its cached properties, `None` when any part of
+    /// it could not be read: two unreadable kinds must not compare equal.
+    fn kind(&self, element: &UIElement) -> Option<Kind> {
         use std::hash::BuildHasher;
-        Kind {
-            control_type: cached_i32(element, UIProperty::ControlType),
+        Some(Kind {
+            control_type: Some(cached_i32(element, UIProperty::ControlType)?),
             names: self.names.hash_one((
-                element.get_cached_automation_id().ok(),
-                element.get_cached_classname().ok(),
+                element.get_cached_automation_id().ok()?,
+                element.get_cached_classname().ok()?,
             )),
-        }
+        })
     }
 
     /// Fills in a text control's value with a read of its own, clipped, so
@@ -486,9 +503,7 @@ impl Uia {
         let Ok(fresh) = element.build_updated_cache(&self.value) else {
             return false;
         };
-        let Some(value) = fresh
-            .get_cached_property_value(UIProperty::ValueValue)
-            .ok()
+        let Some(value) = cached_of(&fresh, UIProperty::ValueValue, VT_BSTR)
             .and_then(|v| TryInto::<String>::try_into(v).ok())
         else {
             return false;
@@ -498,11 +513,21 @@ impl Uia {
     }
 
     /// Whether the element UIA hit-tests at `(x, y)` is `element` or one of
-    /// its descendants.
-    fn hits_element(&self, x: i32, y: i32, element: &UIElement) -> bool {
-        self.automation
+    /// its descendants; an error when that cannot be told, which is not a
+    /// miss ("covered") either.
+    fn hits_element(&self, x: i32, y: i32, element: &UIElement) -> ToolResult<bool> {
+        let unknown = || {
+            ToolError::platform(
+                "hit-testing the element",
+                "UI Automation could not tell in time what is at the point",
+            )
+        };
+        let hit = self
+            .automation
             .element_from_point(uiautomation::types::Point::new(x, y))
-            .is_ok_and(|hit| self.is_within(hit, element))
+            .map_err(|_| unknown())?;
+        self.within(hit, element, Instant::now() + ANCESTOR_DEADLINE)
+            .ok_or_else(unknown)
     }
 
     /// The top-level window `element` belongs to, by the definition the
@@ -518,7 +543,9 @@ impl Uia {
             if Instant::now() >= until {
                 return None;
             }
-            let handle: isize = current.get_native_window_handle().map_or(0, Into::into);
+            // Unreadable is not "none": the UIA parent chain would then lead
+            // to an owner window instead of an owned dialog's own.
+            let handle: isize = current.get_native_window_handle().ok()?.into();
             // An HWND is 32 significant bits, sign-extended by UIA: the low
             // ones are the handle, as `os::windows` reads them.
             #[expect(
@@ -537,6 +564,34 @@ impl Uia {
             current = walker.get_parent(&current).ok()?;
         }
         None
+    }
+
+    /// Completes `node` from `fresh` and refuses a readback whose state could
+    /// not all be read: the action ran, so the answer is `Interrupted`, not
+    /// a node with defaulted fields.
+    fn complete_readback(
+        &self,
+        fresh: &UIElement,
+        node: &mut Node,
+        toggled: bool,
+    ) -> ToolResult<()> {
+        let range_unread = node.patterns.contains(&"RangeValue")
+            && !node.patterns.contains(&"Value")
+            && node.value.is_none();
+        if !self.read_value(fresh, node)
+            || node.unmatchable
+            || range_unread
+            || (toggled && node.toggle_state.is_none())
+        {
+            return Err(ToolError::Interrupted {
+                cause: Box::new(ToolError::platform(
+                    "reading back",
+                    "the element's state could not all be read",
+                )),
+                what: "the action itself succeeded; only reading the element's state afterwards failed, so do not repeat it".into(),
+            });
+        }
+        Ok(())
     }
 
     /// `element` once keyboard focus is on it or inside it (a combo box
@@ -565,10 +620,11 @@ impl Uia {
                         what: "focus was requested; only reading back where it landed failed"
                             .into(),
                     })?;
-            let node = describe(&fresh, handle.to_owned());
+            let mut node = describe(&fresh, handle.to_owned());
             // Checked between the provider calls as well: each can take the
             // whole call timeout.
             if node.has_keyboard_focus {
+                self.complete_readback(&fresh, &mut node, false)?;
                 return Ok(node);
             }
             // `None`: where focus is could not be read in time.
@@ -576,11 +632,12 @@ impl Uia {
                 self.automation
                     .get_focused_element()
                     .ok()
-                    .and_then(|focused| self.within(focused, element))
+                    .and_then(|focused| self.within(focused, element, until))
             } else {
                 None
             };
             if inside == Some(true) {
+                self.complete_readback(&fresh, &mut node, false)?;
                 return Ok(node);
             }
             unknown = inside.is_none();
@@ -612,21 +669,29 @@ impl Uia {
     fn live_patterns(element: &UIElement) -> String {
         let until = Instant::now() + ANCESTOR_DEADLINE;
         let mut names = Vec::new();
+        let mut unread = Vec::new();
         for &(prop, name) in PATTERNS {
             if Instant::now() >= until {
                 names.push("… (not all read)");
                 break;
             }
-            let offered = element
+            match element
                 .get_property_value(prop)
                 .ok()
+                .and_then(|v| of_type(v, VT_BOOL))
                 .and_then(|v| TryInto::<bool>::try_into(v).ok())
-                .unwrap_or(false);
-            if offered {
-                names.push(name);
+            {
+                Some(true) => names.push(name),
+                Some(false) => {}
+                None => unread.push(name),
             }
         }
-        names.join(", ")
+        let list = names.join(", ");
+        if unread.is_empty() {
+            list
+        } else {
+            format!("{list} (could not read: {})", unread.join(", "))
+        }
     }
 
     /// Whether `element` offers the pattern `prop` names, read live. A failed
@@ -637,7 +702,16 @@ impl Uia {
         let value = element
             .get_property_value(prop)
             .map_err(|e| classify(handle, "reading its patterns", &e))?;
-        Ok(TryInto::<bool>::try_into(value).unwrap_or(false))
+        // Anything but a boolean is an unreadable answer, not "no": taken
+        // for "no", a `set_value` would go to the other pattern.
+        of_type(value, VT_BOOL)
+            .and_then(|v| TryInto::<bool>::try_into(v).ok())
+            .ok_or_else(|| {
+                ToolError::platform(
+                    "reading its patterns",
+                    "the provider answered with something other than a boolean",
+                )
+            })
     }
 
     fn require(
@@ -849,22 +923,7 @@ impl AccessibilityBackend for Uia {
                 let mut node = describe(&fresh, handle.to_owned());
                 // A value that cannot be read back is not a control without
                 // one: the action ran, and what it left is unknown.
-                let range_unread = node.patterns.contains(&"RangeValue")
-                    && !node.patterns.contains(&"Value")
-                    && node.value.is_none();
-                if !self.read_value(&fresh, &mut node)
-                    || node.unmatchable
-                    || range_unread
-                    || (matches!(action, Action::Toggle) && node.toggle_state.is_none())
-                {
-                    return Err(ToolError::Interrupted {
-                        cause: Box::new(ToolError::platform(
-                            "reading back",
-                            "the element's value or toggle state could not be read",
-                        )),
-                        what: "the action itself succeeded; only reading the element's state afterwards failed, so do not repeat it".into(),
-                    });
-                }
+                self.complete_readback(&fresh, &mut node, matches!(action, Action::Toggle))?;
                 Ok(node)
             }
             // The action succeeded and took its own element away (a Close or
@@ -913,7 +972,7 @@ impl AccessibilityBackend for Uia {
             // must hit the element itself (or a descendant) — a sibling
             // covering it would otherwise take the click.
             let (x, y) = rect.center();
-            if !self.hits_element(x, y, &element) {
+            if !self.hits_element(x, y, &element)? {
                 return Err(ToolError::NotFound(format!(
                     "element `{handle}` reports no clickable point and its centre ({x}, {y}) is covered by another element; use invoke, or click a point you have verified"
                 )));
@@ -929,7 +988,7 @@ impl AccessibilityBackend for Uia {
 
     fn hits(&mut self, handle: &str, x: i32, y: i32) -> ToolResult<bool> {
         let element = self.alive(handle)?;
-        Ok(self.hits_element(x, y, &element))
+        self.hits_element(x, y, &element)
     }
 
     fn focus_window(&mut self, window: u32) -> ToolResult<()> {
@@ -955,11 +1014,7 @@ fn describe(element: &UIElement, id: String) -> Node {
     let value = if patterns.contains(&"Value") {
         None
     } else if patterns.contains(&"RangeValue") {
-        element
-            .get_cached_property_value(UIProperty::RangeValueValue)
-            .ok()
-            .and_then(|v| TryInto::<f64>::try_into(v).ok())
-            .map(|number| number.to_string())
+        cached_f64(element, UIProperty::RangeValueValue).map(|number| number.to_string())
     } else {
         None
     };
@@ -978,9 +1033,9 @@ fn describe(element: &UIElement, id: String) -> Node {
             .get_cached_bounding_rectangle()
             .ok()
             .map(|r| Rect::from_ltrb(r.get_left(), r.get_top(), r.get_right(), r.get_bottom())),
-        enabled: element.is_cached_enabled().unwrap_or(false),
-        has_keyboard_focus: element.has_cached_keyboard_focus().unwrap_or(false),
-        is_keyboard_focusable: element.is_cached_keyboard_focusable().unwrap_or(false),
+        enabled: cached_bool(element, UIProperty::IsEnabled),
+        has_keyboard_focus: cached_bool(element, UIProperty::HasKeyboardFocus),
+        is_keyboard_focusable: cached_bool(element, UIProperty::IsKeyboardFocusable),
         toggle_state,
         patterns,
         children: Vec::new(),
@@ -1011,30 +1066,25 @@ fn searchable(element: &UIElement) -> bool {
     // type is there but reads as missing or false, so a missing name would
     // match `name: ""` and a missing pid would issue a handle every action
     // refuses.
-    let typed = |prop, check: fn(uiautomation::variants::Variant) -> bool| {
-        element.get_cached_property_value(prop).is_ok_and(check)
-    };
-    let is_bool: fn(uiautomation::variants::Variant) -> bool =
-        |v| TryInto::<bool>::try_into(v).is_ok();
     let offered = |prop| cached_bool(element, prop);
     cached_i32(element, UIProperty::ControlType).is_some()
-        && cached_i32(element, UIProperty::ProcessId).is_some()
+        && cached_pid(element).is_some()
         && element.get_cached_name().is_ok()
         && element.get_cached_automation_id().is_ok()
         && element.get_cached_classname().is_ok()
         && element.get_cached_bounding_rectangle().is_ok()
-        && typed(UIProperty::IsEnabled, is_bool)
-        && typed(UIProperty::HasKeyboardFocus, is_bool)
-        && typed(UIProperty::IsKeyboardFocusable, is_bool)
-        && PATTERNS.iter().all(|&(prop, _)| typed(prop, is_bool))
+        && cached_flag(element, UIProperty::IsEnabled).is_some()
+        && cached_flag(element, UIProperty::HasKeyboardFocus).is_some()
+        && cached_flag(element, UIProperty::IsKeyboardFocusable).is_some()
+        && PATTERNS
+            .iter()
+            .all(|&(prop, _)| cached_flag(element, prop).is_some())
         && (!offered(UIProperty::IsTogglePatternAvailable)
             || cached_i32(element, UIProperty::ToggleToggleState)
                 .and_then(toggle_name)
                 .is_some())
         && (!offered(UIProperty::IsRangeValuePatternAvailable)
-            || typed(UIProperty::RangeValueValue, |v| {
-                TryInto::<f64>::try_into(v).is_ok()
-            }))
+            || cached_f64(element, UIProperty::RangeValueValue).is_some())
 }
 
 /// The element a walker step reached: `None` at the end of the children,
@@ -1104,19 +1154,53 @@ fn hwnd(window: u32) -> Handle {
     Handle::from(window as isize)
 }
 
-fn cached_bool(element: &UIElement, prop: UIProperty) -> bool {
+/// Variant type codes of the properties read here. A value is taken only as
+/// the type UI Automation defines for its property: the `uiautomation`
+/// conversions coerce any number, bool or numeric string, so a provider's
+/// `VT_R8` 0.6 would read as a toggle that is on.
+const VT_I4: u16 = 3;
+const VT_R8: u16 = 5;
+const VT_BSTR: u16 = 8;
+const VT_BOOL: u16 = 11;
+
+/// `v` if it has the variant type `vt`.
+fn of_type(v: uiautomation::variants::Variant, vt: u16) -> Option<uiautomation::variants::Variant> {
+    (v.get_type().0 == vt).then_some(v)
+}
+
+fn cached_of(
+    element: &UIElement,
+    prop: UIProperty,
+    vt: u16,
+) -> Option<uiautomation::variants::Variant> {
     element
         .get_cached_property_value(prop)
         .ok()
-        .and_then(|v| TryInto::<bool>::try_into(v).ok())
-        .unwrap_or(false)
+        .and_then(|v| of_type(v, vt))
+}
+
+/// A cached boolean, `None` when unreadable or of another type.
+fn cached_flag(element: &UIElement, prop: UIProperty) -> Option<bool> {
+    cached_of(element, prop, VT_BOOL).and_then(|v| TryInto::<bool>::try_into(v).ok())
+}
+
+fn cached_bool(element: &UIElement, prop: UIProperty) -> bool {
+    cached_flag(element, prop).unwrap_or(false)
 }
 
 fn cached_i32(element: &UIElement, prop: UIProperty) -> Option<i32> {
-    element
-        .get_cached_property_value(prop)
-        .ok()
-        .and_then(|v| TryInto::<i32>::try_into(v).ok())
+    cached_of(element, prop, VT_I4).and_then(|v| TryInto::<i32>::try_into(v).ok())
+}
+
+fn cached_f64(element: &UIElement, prop: UIProperty) -> Option<f64> {
+    cached_of(element, prop, VT_R8).and_then(|v| TryInto::<f64>::try_into(v).ok())
+}
+
+/// The process id an element reports, `None` unless it is a real one.
+fn cached_pid(element: &UIElement) -> Option<u32> {
+    cached_i32(element, UIProperty::ProcessId)
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|&pid| pid != 0)
 }
 
 fn non_empty(value: uiautomation::Result<String>) -> Option<String> {

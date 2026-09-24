@@ -19,7 +19,8 @@ use windows::Win32::System::JobObjects::{
     SetInformationJobObject,
 };
 use windows::Win32::System::Ole::{
-    SafeArrayDestroy, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
+    SafeArrayDestroy, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetElemsize,
+    SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayGetVartype,
 };
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -176,10 +177,21 @@ pub fn runtime_id(
     if array.is_null() {
         return Ok(None);
     }
-    // SAFETY: `array` is the one-dimensional `VT_I4` array `GetRuntimeId`
-    // returns, read by index within its bounds, then destroyed exactly once.
+    // SAFETY: `array` is the array `GetRuntimeId` returns; its element type
+    // and size are checked to be a 4-byte `VT_I4` before any element is
+    // copied into an `i32`, it is read by index within its bounds, then
+    // destroyed exactly once.
     let ids = unsafe {
         let read = || -> Result<Vec<i32>, windows::core::Error> {
+            // The provider shapes the array: anything but 4-byte integers
+            // would be copied past the `i32` each element is read into.
+            if SafeArrayGetVartype(array)? != windows::Win32::System::Variant::VT_I4
+                || SafeArrayGetElemsize(array) != 4
+            {
+                return Err(windows::core::Error::from(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                ));
+            }
             // The bounds come from the provider: anything but a short
             // one-dimensional array is refused before a single element is
             // read, so a hostile provider cannot make the read allocate or
