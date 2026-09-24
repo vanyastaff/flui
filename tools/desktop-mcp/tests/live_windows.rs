@@ -46,10 +46,12 @@ fn show(step: &str, value: &Value) {
     );
 }
 
-/// The RGBA pixels of a screen rect, from a primary-monitor screenshot.
-fn region(client: &mut Client, rect: &Value) -> Vec<u8> {
+/// The RGBA pixels of a screen rect, from a capture of the probe window
+/// (whatever monitor it is on), mapped through the reply's `source` and
+/// scale.
+fn region(client: &mut Client, window_id: u64, rect: &Value) -> Vec<u8> {
     use base64::Engine as _;
-    let shot = client.call("screenshot", json!({}));
+    let shot = client.call("screenshot", json!({ "window_id": window_id }));
     assert_ne!(shot["isError"], true, "screenshot failed: {shot}");
     let meta: Value = serde_json::from_str(shot["content"][1]["text"].as_str().unwrap_or("{}"))
         .expect("BUG: screenshot metadata is JSON");
@@ -60,12 +62,15 @@ fn region(client: &mut Client, rect: &Value) -> Vec<u8> {
         .expect("BUG: the screenshot is a PNG")
         .to_rgba8();
     let at = |v: &Value, k: &str| v[k].as_i64().expect("BUG: rect fields are integers");
-    let x = at(rect, "x") - at(&meta["source"], "x");
-    let y = at(rect, "y") - at(&meta["source"], "y");
-    let (w, h) = (at(rect, "width"), at(rect, "height"));
+    let scale = |k: &str| meta[k].as_f64().expect("BUG: the scale is a number");
+    let px = |screen: i64, origin: i64, s: f64| ((screen - origin) as f64 * s).round() as i64;
+    let x = px(at(rect, "x"), at(&meta["source"], "x"), scale("scale_x"));
+    let y = px(at(rect, "y"), at(&meta["source"], "y"), scale("scale_y"));
+    let w = (at(rect, "width") as f64 * scale("scale_x")).round() as i64;
+    let h = (at(rect, "height") as f64 * scale("scale_y")).round() as i64;
     assert!(
         x >= 0 && y >= 0 && x + w <= i64::from(image.width()) && y + h <= i64::from(image.height()),
-        "the count lies on the primary monitor"
+        "the count lies inside the probe window's capture"
     );
     image::imageops::crop_imm(&image, x as u32, y as u32, w as u32, h as u32)
         .to_image()
@@ -163,7 +168,7 @@ fn a11y_probe_counter_through_mcp() {
     if named {
         assert_eq!(count["name"], "0", "count starts at 0");
     }
-    let pixels_before = region(&mut client, &count_rect);
+    let pixels_before = region(&mut client, window_id, &count_rect);
 
     let found = ok(
         "find",
@@ -201,7 +206,7 @@ fn a11y_probe_counter_through_mcp() {
         );
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    let pixels_after = region(&mut client, &count_rect);
+    let pixels_after = region(&mut client, window_id, &count_rect);
     assert_ne!(
         pixels_before, pixels_after,
         "the count's pixels change after invoke"
@@ -229,7 +234,7 @@ fn a11y_probe_counter_through_mcp() {
         );
         show("click", &clicked);
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let pixels_clicked = region(&mut client, &count_rect);
+        let pixels_clicked = region(&mut client, window_id, &count_rect);
         assert_ne!(
             pixels_after, pixels_clicked,
             "the count's pixels change after the click"

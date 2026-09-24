@@ -178,16 +178,23 @@ impl Uia {
         if !walk.seen.insert(node.id.clone()) {
             return None;
         }
-        // A cut string is not what a search for the whole one would match.
-        walk.truncated |= node.is_clipped();
+        // A cut string is not what a search for the whole one would match,
+        // and a property the provider failed to report matches nothing.
+        walk.truncated |= node.is_clipped() || !Self::searchable(element);
         walk.budget = walk.budget.saturating_sub(1);
         walk.bytes = walk.bytes.saturating_sub(node.text_bytes());
         let mut omitted = 0;
-        let mut child = walked(
-            self.walker
-                .get_first_child_build_cache(element, &self.single),
-            walk,
-        );
+        // Past the budget no child is fetched at all, not even the first:
+        // `exhausted` marks what is left unread.
+        let mut child = if walk.exhausted() {
+            None
+        } else {
+            walked(
+                self.walker
+                    .get_first_child_build_cache(element, &self.single),
+                walk,
+            )
+        };
         while let Some(current) = child {
             let exhausted = walk.exhausted();
             if depth < walk.max_depth && !exhausted {
@@ -359,6 +366,15 @@ impl Uia {
                 " (it reports is_keyboard_focusable: false)"
             }
         )))
+    }
+
+    /// Whether the provider reported the properties a search matches on
+    /// (name, control type, automation id): a failure there is not the same
+    /// as an empty value.
+    fn searchable(element: &UIElement) -> bool {
+        element.get_cached_name().is_ok()
+            && element.get_cached_control_type().is_ok()
+            && element.get_cached_automation_id().is_ok()
     }
 
     /// The element's patterns, read live, for error messages.
@@ -562,7 +578,12 @@ impl AccessibilityBackend for Uia {
             {
                 Ok(self.describe(&element))
             }
-            Err(e) => Err(classify(handle, "reading back", &e)),
+            // The action itself succeeded; only reading the result failed.
+            // Say so, or a retry repeats a destructive action.
+            Err(e) => Err(ToolError::Interrupted {
+                cause: Box::new(classify(handle, "reading back", &e)),
+                what: "the action itself succeeded; only reading the element afterwards failed, so do not repeat it".into(),
+            }),
         }
     }
 

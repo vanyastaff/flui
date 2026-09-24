@@ -13,7 +13,6 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::a11y::{self, Action};
-use crate::desktop::Desktop;
 use crate::error::{ToolError, ToolResult};
 use crate::params::{
     ActivateParams, Args, ClickParams, DragParams, ElementParams, FindParams, KeyParams,
@@ -211,7 +210,7 @@ impl DesktopServer {
         let max_side = p.max_side;
         let shot = valid!(
             self.worker
-                .run(move |_| Desktop::screenshot(target, max_side))
+                .run(move |d| d.screenshot(target, max_side))
                 .await
         );
         let meta = json!({

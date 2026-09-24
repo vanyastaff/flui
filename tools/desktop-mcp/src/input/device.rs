@@ -168,12 +168,34 @@ impl Input {
             moved = guard(Some(to)).and_then(|()| self.ensure_at(to.0, to.1));
         }
         match moved {
-            Ok(()) => self
-                .enigo
-                .button(Button::Left, Direction::Release)
-                .map_err(failed("releasing at the end of a drag")),
+            Ok(()) => self.release_left().map_err(|cause| ToolError::Interrupted {
+                cause: Box::new(cause),
+                what: format!(
+                    "the drag reached ({}, {}) but the button could not be released; it may still be held, so move nothing until it is released",
+                    to.0, to.1
+                ),
+            }),
             Err(cause) => Err(self.abort_drag(last, cause, guard)),
         }
+    }
+
+    /// Releases the left button, retrying: a button left held turns the
+    /// next pointer move, the user's included, into a drag.
+    fn release_left(&mut self) -> ToolResult<()> {
+        let mut result = Ok(());
+        for attempt in 0..3 {
+            if attempt > 0 {
+                thread::sleep(STEP);
+            }
+            result = self
+                .enigo
+                .button(Button::Left, Direction::Release)
+                .map_err(failed("releasing the mouse button"));
+            if result.is_ok() {
+                break;
+            }
+        }
+        result
     }
 
     /// Ends a drag that stopped partway (see [`Self::drag`]) and says how.
@@ -203,8 +225,8 @@ impl Input {
                 "the drag stopped where no point could be verified inside the target; the button had to be released where the pointer was, at {at}, which may have dropped there"
             )
         };
-        if let Err(e) = self.enigo.button(Button::Left, Direction::Release) {
-            what = format!("{what}; releasing the button failed: {e}");
+        if let Err(e) = self.release_left() {
+            what = format!("{what}; releasing the button failed ({e}), so it may still be held");
         }
         ToolError::Interrupted {
             cause: Box::new(cause),

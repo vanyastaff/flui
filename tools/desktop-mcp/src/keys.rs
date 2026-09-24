@@ -196,6 +196,12 @@ impl KeyCombo {
             return match self.key {
                 KeyName::Tab if self.has(Modifier::Meta) => Some("the macOS app switcher"),
                 KeyName::Space if self.has(Modifier::Meta) => Some("Spotlight"),
+                KeyName::Char('q') if only(&[Modifier::Meta, Modifier::Ctrl]) => {
+                    Some("macOS (Lock Screen)")
+                }
+                KeyName::Char('q') if only(&[Modifier::Meta, Modifier::Shift]) => {
+                    Some("macOS (Log Out)")
+                }
                 KeyName::Escape if only(&[Modifier::Meta, Modifier::Alt]) => Some("Force Quit"),
                 KeyName::Up | KeyName::Down | KeyName::Left | KeyName::Right
                     if self.has(Modifier::Ctrl) =>
@@ -407,6 +413,9 @@ mod tests {
             "cmd+alt+esc",
             "ctrl+left",
             "cmd+shift+4",
+            "ctrl+cmd+q",
+            "cmd+shift+q",
+            "cmd+alt+shift+q",
         ] {
             assert!(
                 parse(shell).shell_hotkey(true).is_some(),

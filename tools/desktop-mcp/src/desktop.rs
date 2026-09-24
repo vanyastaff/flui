@@ -191,6 +191,16 @@ pub fn same_process(pid: u32, then: Option<u64>, now: Option<u64>) -> ToolResult
     }
 }
 
+/// What a target is held to for one call: the process a window id was
+/// issued for, or the start time of the process a pid was issued for. Every
+/// event's check compares against it again, so a target that exits and has
+/// its number reused mid-action (a long drag, typed text) stops receiving.
+#[derive(Debug, Clone, Copy, Default)]
+struct Binding {
+    window_pid: Option<u32>,
+    started: Option<u64>,
+}
+
 /// Session state on the worker thread.
 pub struct Desktop {
     a11y: Box<dyn AccessibilityBackend>,
@@ -283,20 +293,29 @@ impl Desktop {
     /// session handed the id out. An id never handed out is refused — it
     /// cannot be told apart from a recycled one. A pid target is held to the
     /// process first seen under it.
-    fn bound(&mut self, target: Option<Target>) -> ToolResult<Option<u32>> {
+    fn bound(&mut self, target: Option<Target>) -> ToolResult<Binding> {
         match target {
-            Some(Target::Window(id)) => self.issued.get(&id).copied().map(Some).ok_or_else(|| {
-                ToolError::NotFound(format!(
-                    "window {id} was not listed in this session; take window ids from list_windows or launch"
-                ))
-            }),
+            Some(Target::Window(id)) => {
+                let pid = self.issued.get(&id).copied().ok_or_else(|| {
+                    ToolError::NotFound(format!(
+                        "window {id} was not listed in this session; take window ids from list_windows or launch"
+                    ))
+                })?;
+                Ok(Binding {
+                    window_pid: Some(pid),
+                    started: None,
+                })
+            }
             Some(Target::Pid(pid)) => {
                 let now = os::process_started(pid);
                 let then = *self.started.entry(pid).or_insert(now);
                 same_process(pid, then, now)?;
-                Ok(None)
+                Ok(Binding {
+                    window_pid: None,
+                    started: then,
+                })
             }
-            None => Ok(None),
+            None => Ok(Binding::default()),
         }
     }
 
@@ -315,20 +334,46 @@ impl Desktop {
     }
 
     /// Captures a window, a process's frontmost window, or a monitor.
-    pub fn screenshot(target: ScreenshotTarget, max_side: Option<u32>) -> ToolResult<Shot> {
-        let direct = match target {
-            ScreenshotTarget::Direct(t) => t,
+    ///
+    /// A window or pid is held to the identity it was issued with, and the
+    /// window's owner is checked again after the capture: pixels of an
+    /// application that took over a recycled id are refused, not returned.
+    pub fn screenshot(
+        &mut self,
+        target: ScreenshotTarget,
+        max_side: Option<u32>,
+    ) -> ToolResult<Shot> {
+        let (direct, owner) = match target {
+            ScreenshotTarget::Direct(ShotTarget::Window(id)) => {
+                let bound = self.bound(Some(Target::Window(id)))?;
+                (ShotTarget::Window(id), bound.window_pid)
+            }
+            ScreenshotTarget::Direct(t) => (t, None),
             ScreenshotTarget::Pid(pid) => {
+                self.bound(Some(Target::Pid(pid)))?;
                 let windows = Self::resolve(Target::Pid(pid))?;
                 let pick = windows
                     .iter()
                     .find(|w| w.is_focused)
                     .or_else(|| windows.iter().find(|w| !w.is_minimized))
                     .unwrap_or(&windows[0]);
-                ShotTarget::Window(pick.id)
+                (ShotTarget::Window(pick.id), Some(pid))
             }
         };
-        capture::screenshot(direct, max_side)
+        let still_owned = |when: &str| match (direct, owner) {
+            (ShotTarget::Window(id), Some(pid))
+                if os::window_pid(id).is_some_and(|now| now != pid) =>
+            {
+                Err(ToolError::InvalidArgument(format!(
+                    "window {id} no longer belongs to process {pid} {when}; this session does not re-bind it"
+                )))
+            }
+            _ => Ok(()),
+        };
+        still_owned("")?;
+        let shot = capture::screenshot(direct, max_side)?;
+        still_owned("after the capture")?;
+        Ok(shot)
     }
 
     /// The element trees of a target's windows. A process's popups (menus,
@@ -346,7 +391,7 @@ impl Desktop {
         deadline: Instant,
     ) -> ToolResult<Read> {
         let bound = self.bound(Some(target))?;
-        if let (Target::Window(id), Some(pid)) = (target, bound)
+        if let (Target::Window(id), Some(pid)) = (target, bound.window_pid)
             && let Some(now) = os::window_pid(id)
             && now != pid
         {
@@ -418,12 +463,15 @@ impl Desktop {
         })
     }
 
-    fn check(target: Option<Target>, bound: Option<u32>, points: &[(i32, i32)]) -> ToolResult<()> {
+    fn check(target: Option<Target>, bound: Binding, points: &[(i32, i32)]) -> ToolResult<()> {
         let Some(target) = target else {
             return Ok(());
         };
+        if let (Target::Pid(pid), Some(then)) = (target, bound.started) {
+            same_process(pid, Some(then), os::process_started(pid))?;
+        }
         let fg = Self::foreground()?;
-        still_bound(target, bound, fg.as_ref())?;
+        still_bound(target, bound.window_pid, fg.as_ref())?;
         if points.is_empty() {
             // Keys and text: they go to the focused window, which must be
             // the target's process too.
@@ -583,7 +631,7 @@ impl Desktop {
     pub fn activate(&mut self, target: Target) -> ToolResult<Value> {
         let bound = self.bound(Some(target))?;
         let windows = Self::resolve(target)?;
-        if let (Some(pid), Some(w)) = (bound, windows.first())
+        if let (Some(pid), Some(w)) = (bound.window_pid, windows.first())
             && w.pid != pid
         {
             return Err(ToolError::NotFound(format!(
