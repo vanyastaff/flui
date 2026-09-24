@@ -40,6 +40,7 @@ use std::{
 };
 
 use crate::anchored_box::AnchoredBox;
+use crate::semantics::Semantics;
 use flui_foundation::ListenerId;
 use flui_geometry::Rect;
 use flui_interaction::routing::{
@@ -52,6 +53,7 @@ use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
 
+use super::actions::{ActionChain, ActionChainProvider, as_node_context};
 use super::shortcuts::DefaultFocusTraversal;
 
 /// Reports whether this widget's node gained or lost the primary focus.
@@ -158,9 +160,11 @@ fn nearest_focus_node(ctx: &dyn BuildContext) -> Option<Rc<FocusNode>> {
 ///
 /// Embedders install exactly one `FocusRoot` around each element-tree root.
 /// It publishes that build owner's root scope as the first
-/// `FocusParentProvider` and installs Tab/Shift+Tab traversal against the
-/// same owner-local [`FocusManager`]. Descendant widgets therefore never need
-/// a process-global manager or a build-phase capability fallback.
+/// `FocusParentProvider` and installs the default keyboard bindings
+/// ([`DefaultFocusTraversal`]) against the same owner-local
+/// [`FocusManager`]. Descendant widgets therefore never need a
+/// process-global manager or a build-phase capability fallback.
+
 #[derive(Clone, Debug, StatefulView)]
 pub struct FocusRoot {
     child: BoxedView,
@@ -256,6 +260,7 @@ pub struct Focus {
     on_focus_change: Option<FocusChangeHandler>,
     on_key_event: Option<KeyEventHandler>,
     debug_label: Option<&'static str>,
+    include_semantics: bool,
 }
 
 impl Focus {
@@ -271,7 +276,19 @@ impl Focus {
             on_focus_change: None,
             on_key_event: None,
             debug_label: None,
+            include_semantics: true,
         }
+    }
+
+    /// Whether the subtree tells assistive technology it is focusable and
+    /// when it holds the focus — `true` by default, as Flutter's
+    /// `Focus.includeSemantics` (`focus_scope.dart:715-729`, tag `3.44.0`).
+    /// Without it a screen reader cannot follow keyboard focus: Narrator
+    /// read nothing when Tab moved to the counter's button on a live window.
+    #[must_use]
+    pub fn include_semantics(mut self, include: bool) -> Self {
+        self.include_semantics = include;
+        self
     }
 
     /// Host `node` and let this widget manage the attributes explicitly set
@@ -503,6 +520,8 @@ impl StatefulView for Focus {
             anchor: SubtreeAnchor::new(),
             rect_provider: None,
             rect_provider_registration: None,
+            action_chain: None,
+            context_registration: None,
             rebuild_handle: None,
             focus_listener_id: None,
             autofocus: self.autofocus,
@@ -550,6 +569,11 @@ pub struct FocusState {
     /// Generation-checked ownership of the geometry source installed on the
     /// current node.
     rect_provider_registration: Option<FocusNodeRegistration>,
+    /// The `Actions` chain visible at this widget, recorded on the node so a
+    /// `Shortcuts` above resolves intents from here (ADR-0079).
+    action_chain: Option<ActionChain>,
+    /// Generation-checked ownership of that record on the current node.
+    context_registration: Option<FocusNodeRegistration>,
     /// Lifecycle-acquired rebuild capability used by the node subscription.
     rebuild_handle: Option<RebuildHandle>,
     /// Listener installed on the current node. It drives both inherited
@@ -622,6 +646,15 @@ impl FocusState {
         }))
     }
 
+    fn record_action_chain(&mut self, ctx: &dyn BuildContext) {
+        record_action_chain(
+            ctx,
+            &self.node,
+            &mut self.action_chain,
+            &mut self.context_registration,
+        );
+    }
+
     fn install_focus_listener(&mut self) {
         if self.focus_listener_id.is_some() {
             return;
@@ -665,6 +698,37 @@ impl FocusState {
     }
 }
 
+/// Record the `Actions` chain visible at a widget on its focus `node`, and
+/// depend on it, so a changed chain is recorded again (ADR-0079). Shared by
+/// `Focus` and `FocusScope`: either widget's node can hold the primary focus,
+/// and a `Shortcuts` above resolves its intent from that node's record.
+fn record_action_chain(
+    ctx: &dyn BuildContext,
+    node: &Rc<FocusNode>,
+    held: &mut Option<ActionChain>,
+    registration: &mut Option<FocusNodeRegistration>,
+) {
+    let chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+    let unchanged = match (&chain, &*held) {
+        (Some(new), Some(held)) => Rc::ptr_eq(new, held),
+        (None, None) => true,
+        _ => false,
+    };
+    if unchanged
+        && registration
+            .as_ref()
+            .is_none_or(FocusNodeRegistration::is_current)
+    {
+        return;
+    }
+    // Register the new record before the old token drops: the old one is no
+    // longer current then, so dropping it leaves the new one in place.
+    *registration = chain
+        .as_ref()
+        .map(|chain| node.register_context(as_node_context(chain)));
+    *held = chain;
+}
+
 impl ViewState<Focus> for FocusState {
     /// Listen, attach, autofocus — in that order, so a focus request queued on
     /// an external node before mount is observed when attach fulfills it
@@ -685,6 +749,7 @@ impl ViewState<Focus> for FocusState {
                 .expect("BUG: Focus could not attach its node to the enclosing focus tree"),
         );
         self.parent = Some(parent);
+        self.record_action_chain(ctx);
 
         self.try_autofocus();
     }
@@ -706,6 +771,7 @@ impl ViewState<Focus> for FocusState {
                 .expect("BUG: Focus could not reparent within its presentation focus tree");
             self.parent = Some(parent);
         }
+        self.record_action_chain(ctx);
     }
 
     fn did_update_view(&mut self, old_view: &Focus, new_view: &Focus) {
@@ -731,6 +797,10 @@ impl ViewState<Focus> for FocusState {
                 .rect_provider
                 .as_ref()
                 .map(|provider| replacement.register_rect_provider(Rc::clone(provider)));
+            let replacement_context_registration = self
+                .action_chain
+                .as_ref()
+                .map(|chain| replacement.register_context(as_node_context(chain)));
             let replacement_focus_listener_id = self.add_focus_listener(&replacement);
 
             // Observe the replacement before the core transaction delivers
@@ -754,6 +824,7 @@ impl ViewState<Focus> for FocusState {
             // touching a newer host.
             self.key_handler_registration.take();
             self.rect_provider_registration.take();
+            self.context_registration.take();
             if let Some(listener_id) = self
                 .focus_listener_id
                 .replace(replacement_focus_listener_id)
@@ -763,6 +834,7 @@ impl ViewState<Focus> for FocusState {
             self.node = replacement;
             self.key_handler_registration = replacement_key_handler_registration;
             self.rect_provider_registration = replacement_rect_provider_registration;
+            self.context_registration = replacement_context_registration;
             self.attachment = Some(replacement_attachment);
         } else {
             // Re-sync flags and handlers from the latest configuration
@@ -792,11 +864,15 @@ impl ViewState<Focus> for FocusState {
         if owns_attachment {
             self.key_handler_registration.take();
             self.rect_provider_registration.take();
+            self.context_registration.take();
         } else if let Some(registration) = self.key_handler_registration.take() {
             // A superseded attachment has no authority to mutate this node.
             registration.relinquish();
         }
         if !owns_attachment && let Some(registration) = self.rect_provider_registration.take() {
+            registration.relinquish();
+        }
+        if !owns_attachment && let Some(registration) = self.context_registration.take() {
             registration.relinquish();
         }
         self.remove_focus_listener();
@@ -814,12 +890,35 @@ impl ViewState<Focus> for FocusState {
     /// Flutter's `_FocusInheritedScope` in `_FocusState.build`
     /// (`focus_scope.dart:714-741`) — and anchors the child so the node's
     /// rect provider has a render node to measure.
+    ///
+    /// The subtree publishes whether its node can take focus (`focusable`)
+    /// and, while it holds the primary focus, `focused` — `_FocusState.build`'s
+    /// `Semantics(focusable: _couldRequestFocus, focused: _hadPrimaryFocus)`
+    /// (`focus_scope.dart:715-729`). The node listener rebuilds this widget on
+    /// every focus edge, so the flag follows the focus. The semantics
+    /// `onFocus` action (focus requested by an assistive technology) is not
+    /// wired yet.
     fn build(&self, view: &Focus, _ctx: &dyn BuildContext) -> impl IntoView {
+        // Only a node that can take focus is annotated. A node that cannot —
+        // the one a `Shortcuts` hosts its key handler on — gets no render
+        // object of its own, so the default bindings above every tree add
+        // nothing to hit testing or to the semantics tree; and an annotation
+        // setting even a false flag would gather its subtree into one node.
+        let child = if view.include_semantics && self.node.can_request_focus() {
+            Semantics::new()
+                .focusable(true)
+                .focused(self.node.has_primary_focus())
+                .child(view.child.clone())
+                .into_view()
+                .boxed()
+        } else {
+            view.child.clone()
+        };
         FocusParentProvider {
             parent: Rc::clone(&self.node),
             revision: self.node_revision.get(),
             child: BoxedView(Box::new(
-                AnchoredBox::new(self.anchor.clone(), view.child.clone()).into_view(),
+                AnchoredBox::new(self.anchor.clone(), child).into_view(),
             )),
         }
     }
@@ -944,6 +1043,8 @@ impl StatefulView for FocusScope {
             node_revision: Rc::new(Cell::new(0)),
             rebuild_handle: None,
             focus_listener_id: None,
+            action_chain: None,
+            context_registration: None,
         }
     }
 }
@@ -962,6 +1063,11 @@ pub struct FocusScopeState {
     node_revision: Rc<Cell<u64>>,
     rebuild_handle: Option<RebuildHandle>,
     focus_listener_id: Option<ListenerId>,
+    /// The `Actions` chain visible at this scope, recorded on its backing
+    /// node: the node itself can hold the primary focus (ADR-0079).
+    action_chain: Option<ActionChain>,
+    /// Generation-checked ownership of that record.
+    context_registration: Option<FocusNodeRegistration>,
 }
 
 impl std::fmt::Debug for FocusScopeState {
@@ -1003,6 +1109,12 @@ impl ViewState<FocusScope> for FocusScopeState {
                 .expect("BUG: FocusScope could not attach to the enclosing focus tree"),
         );
         self.parent = Some(parent);
+        record_action_chain(
+            ctx,
+            self.scope.as_focus_node(),
+            &mut self.action_chain,
+            &mut self.context_registration,
+        );
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
@@ -1021,6 +1133,12 @@ impl ViewState<FocusScope> for FocusScopeState {
                 .expect("BUG: FocusScope could not reparent within its presentation focus tree");
             self.parent = Some(parent);
         }
+        record_action_chain(
+            ctx,
+            self.scope.as_focus_node(),
+            &mut self.action_chain,
+            &mut self.context_registration,
+        );
     }
 
     fn did_update_view(&mut self, old_view: &FocusScope, new_view: &FocusScope) {
@@ -1041,6 +1159,11 @@ impl ViewState<FocusScope> for FocusScopeState {
             .clone()
             .unwrap_or_else(|| FocusScopeNode::with_debug_label("FocusScope"));
         let replacement_listener_id = self.add_focus_listener(replacement.as_focus_node());
+        let replacement_context_registration = self.action_chain.as_ref().map(|chain| {
+            replacement
+                .as_focus_node()
+                .register_context(as_node_context(chain))
+        });
         let attachment = self
             .attachment
             .take()
@@ -1053,12 +1176,26 @@ impl ViewState<FocusScope> for FocusScopeState {
         if let Some(listener_id) = self.focus_listener_id.replace(replacement_listener_id) {
             self.scope.as_focus_node().remove_listener(listener_id);
         }
+        // The replaced scope's record goes with it; the replacement carries
+        // the same chain.
+        self.context_registration = replacement_context_registration;
         self.scope = replacement;
     }
 
     fn dispose(&mut self) {
         if let Some(listener_id) = self.focus_listener_id.take() {
             self.scope.as_focus_node().remove_listener(listener_id);
+        }
+        // Only the current attachment may clear the record on an external
+        // scope node a newer host may already have adopted.
+        let owns_attachment = self
+            .attachment
+            .as_ref()
+            .is_some_and(FocusAttachment::is_attached);
+        if let Some(registration) = self.context_registration.take()
+            && !owns_attachment
+        {
+            registration.relinquish();
         }
         if let Some(attachment) = self.attachment.take() {
             let _ = attachment.detach();

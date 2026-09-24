@@ -62,7 +62,7 @@ transitions) and asserts a `*_RESULT=PASS`/`FAIL` marker; macOS-only unless note
 |---|---|---|
 | **lifecycle_probe** | `cargo xtask device macos-lifecycle` | Frame production survives minimize/restore, hide/unhide, resize |
 | **workload_probe** | `cargo xtask device macos-workload` | Scroll/type p99 latency and RSS growth budgets under a representative workload |
-| **a11y_probe** — the generated counter, run for an assistive technology | `cargo xtask device macos-a11y`, `cargo xtask device windows-a11y` (`cargo run --example a11y_probe --features material,a11y`) | An AXUIElement (macOS) or UI Automation (Windows) client can read the texts by name and press the button through the accessibility tree |
+| **a11y_probe** — the generated counter, run for an assistive technology | `cargo xtask device macos-a11y`, `cargo xtask device windows-a11y`, `cargo xtask device windows-input` (`cargo run --example a11y_probe --features material,a11y`) | An AXUIElement (macOS) or UI Automation (Windows) client can read the texts by name and press the button; on Windows, real clicks and Tab + Enter press it too |
 | **resize_jitter_probe** | `cargo xtask device macos-resize-jitter` | Swapchain/surface size stays consistent through a live-resize burst |
 
 ## Hot reload

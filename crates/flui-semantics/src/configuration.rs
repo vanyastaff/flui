@@ -241,6 +241,27 @@ impl SemanticsConfiguration {
             && self.tooltip.is_none()
     }
 
+    /// Whether everything this configuration says is that its node can take
+    /// the keyboard focus and whether it has it: only the focusable and
+    /// focused flags, no actions, role, label, value, hint or tooltip.
+    ///
+    /// The shape of the annotation a `Focus` widget mounts, which merges into
+    /// the control's own node above it; the counterpart of
+    /// [`Self::is_actions_only`] for diagnostics and widget tests.
+    pub fn is_focus_state_only(&self) -> bool {
+        let focus_flags = SemanticsFlag::IsFocusable as u64 | SemanticsFlag::IsFocused as u64;
+        let flags = self.flags.bits();
+        self.has_been_annotated
+            && flags != 0
+            && flags & !focus_flags == 0
+            && self.actions.is_empty()
+            && self.role == SemanticsRole::None
+            && self.label.is_none()
+            && self.value.is_none()
+            && self.hint.is_none()
+            && self.tooltip.is_none()
+    }
+
     #[inline]
     fn mark_annotated(&mut self) {
         self.has_been_annotated = true;
@@ -2099,5 +2120,40 @@ mod actions_only_tests {
         button.add_action(SemanticsAction::Tap, std::sync::Arc::new(|_, _| {}));
         button.set_button(true);
         assert!(!button.is_actions_only(), "a flag makes it a control's own");
+    }
+}
+
+#[cfg(test)]
+mod focus_state_only_tests {
+    use super::*;
+
+    #[test]
+    fn is_focus_state_only_names_the_focus_widgets_annotation_shape() {
+        let mut focusable = SemanticsConfiguration::new();
+        focusable.set_focusable(true);
+        assert!(focusable.is_focus_state_only());
+
+        let mut focused = SemanticsConfiguration::new();
+        focused.set_focusable(true);
+        focused.set_focused(true);
+        assert!(focused.is_focus_state_only());
+
+        assert!(
+            !SemanticsConfiguration::new().is_focus_state_only(),
+            "nothing at all"
+        );
+
+        let mut button = SemanticsConfiguration::new();
+        button.set_focusable(true);
+        button.set_button(true);
+        assert!(
+            !button.is_focus_state_only(),
+            "a role flag makes it a control's own"
+        );
+
+        let mut labelled = SemanticsConfiguration::new();
+        labelled.set_focusable(true);
+        labelled.set_label("Increment");
+        assert!(!labelled.is_focus_state_only(), "so does a label");
     }
 }

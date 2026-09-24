@@ -461,6 +461,28 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     node
 }
 
+/// A node as the adapter is handed it: [`to_node`], except that the root of a
+/// window's tree is a [`Role::Window`] when nothing gave it a role — no
+/// explicit role, and no flag or label that resolves one.
+///
+/// AccessKit's filter keeps a `GenericContainer` only while it holds the
+/// focus (`accesskit_consumer::common_filter`), and the window's own UI
+/// Automation element is the root node. With a container root, the first Tab
+/// that moved the focus off the root took the root out of the tree a screen
+/// reader walks, and navigation from the window stopped at its first child —
+/// found through `cargo xtask device windows-input`. The AppKit adapter reads
+/// a `Window` root the same way (`accesskit_macos`, `NodeWrapper::title`).
+#[must_use]
+pub(crate) fn to_published_node(data: &SemanticsNodeData, is_root: bool) -> Node {
+    let mut node = to_node(data);
+    // Only a root no role reached: an explicit role AccessKit can only
+    // express as a container (`DragHandle`, `HotKey`) keeps that container.
+    if is_root && data.role == SemanticsRole::None && node.role() == Role::GenericContainer {
+        node.set_role(Role::Window);
+    }
+    node
+}
+
 /// The node claiming [`SemanticsFlag::IsFocused`], if exactly one does.
 ///
 /// Two nodes claiming focus is a malformed tree, and guessing between them
@@ -549,7 +571,7 @@ pub fn tree_to_update(
             // hand — no second arena lookup per node on the publish path.
             let data = tree.node_data_of(node)?;
             let node_id = NodeId(data.id?.as_u64());
-            Some((node_id, to_node(&data)))
+            Some((node_id, to_published_node(&data, node_id == root_node_id)))
         })
         .collect();
 
@@ -1176,6 +1198,70 @@ mod tests {
             update.focus,
             NodeId(AccessibilityNodeId::from(child_render).as_u64())
         );
+    }
+
+    /// The window's root stays in the tree a screen reader walks after the
+    /// focus moves into it. Found on a live window: the root went out as a
+    /// `GenericContainer`, which AccessKit keeps only while it is focused, so
+    /// the first Tab to a button took the root out and UI Automation stopped
+    /// walking the window after its first child.
+    ///
+    /// Red-check: publish the root through `to_node` instead of
+    /// `to_published_node` — the root is filtered out once the button holds
+    /// the focus.
+    #[test]
+    fn the_root_stays_visible_when_the_focus_moves_into_the_tree() {
+        let mut tree = SemanticsTree::new();
+        let mut children = Vec::new();
+        for (index, label) in [(40, "prompt"), (41, "0"), (42, "Increment")] {
+            let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
+            node.config_mut().set_label(label);
+            if label == "Increment" {
+                node.config_mut().set_button(true);
+            }
+            children.push(tree.insert(node));
+        }
+        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(2));
+        for &child in &children {
+            root_node.add_child(child);
+        }
+        let root = tree.insert(root_node);
+        tree.set_root(Some(root));
+
+        let update = tree_to_update(&tree, Some(children[2])).expect("rooted");
+        let consumer = accesskit_consumer::Tree::new(update, true);
+        let state = consumer.state();
+        let root = state.root();
+
+        assert_eq!(root.role(), Role::Window);
+        assert_eq!(
+            accesskit_consumer::common_filter(&root),
+            accesskit_consumer::FilterResult::Include,
+            "the root is part of the walked tree with the focus on the button"
+        );
+        let reachable: Vec<_> = root
+            .filtered_children(accesskit_consumer::common_filter)
+            .map(|node| node.role())
+            .collect();
+        assert_eq!(reachable, vec![Role::Label, Role::Label, Role::Button]);
+    }
+
+    /// A root with an explicit role AccessKit can only express as a container
+    /// keeps that container: only a root no role reached becomes a `Window`.
+    ///
+    /// Red-check: gate the promotion on the translated role alone — the
+    /// drag-handle root is published as a window.
+    #[test]
+    fn an_explicit_container_role_on_the_root_is_not_promoted_to_a_window() {
+        let mut tree = SemanticsTree::new();
+        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(2));
+        root_node.config_mut().set_role(SemanticsRole::DragHandle);
+        let root = tree.insert(root_node);
+        tree.set_root(Some(root));
+
+        let update = tree_to_update(&tree, None).expect("rooted");
+        let (_, published) = &update.nodes[0];
+        assert_eq!(published.role(), Role::GenericContainer);
     }
 
     /// AccessKit requires a valid focus target, so a node the adapter has never

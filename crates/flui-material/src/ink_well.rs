@@ -112,7 +112,8 @@ use flui_view::RebuildHandle;
 use flui_view::prelude::*;
 use flui_widgets::animated::VsyncScope;
 use flui_widgets::{
-    Focus, GestureDetector, MouseRegion, WidgetState, WidgetStateProperty, WidgetStatesController,
+    Actions, ActivateIntent, ButtonActivateIntent, CallbackAction, Focus, GestureDetector,
+    MouseRegion, WidgetState, WidgetStateProperty, WidgetStatesController,
 };
 
 use crate::material::Material;
@@ -387,12 +388,16 @@ impl ViewState<InkWell> for InkWellState {
             .expect("init_state runs before the first build");
 
         let mut gesture_detector = GestureDetector::new();
-        if enabled {
+        // One activation for a tap and for the keyboard: the oracle's
+        // `activateOnIntent` (`ink_well.dart` `:883-900`) is both what its
+        // `ActivateIntent`/`ButtonActivateIntent` actions run and the shape
+        // this substrate's single `on_tap` callback already has.
+        let activate: Option<Rc<dyn Fn()>> = enabled.then(|| {
             let tap_slot = Rc::clone(&self.tap_slot);
             let press_states = self.states.clone();
             let vsync = self.vsync.clone();
             let pending_deactivation = Rc::clone(&self.pending_deactivation);
-            gesture_detector = gesture_detector.on_tap(move || {
+            Rc::new(move || {
                 // Oracle order (`ink_well.dart` `activateOnIntent`, `:864-900`
                 // — the synthetic/no-real-down-up activation path this
                 // substrate's single `on_tap` callback architecturally
@@ -415,7 +420,11 @@ impl ViewState<InkWell> for InkWellState {
                     vsync.clone(),
                     &rebuild,
                 );
-            });
+            }) as Rc<dyn Fn()>
+        });
+        if let Some(activate) = &activate {
+            let activate = Rc::clone(activate);
+            gesture_detector = gesture_detector.on_tap(move || activate());
         }
 
         let hover_states_enter = self.states.clone();
@@ -444,6 +453,20 @@ impl ViewState<InkWell> for InkWellState {
         if let Some(node) = &view.focus_node {
             focus = focus.focus_node(Rc::clone(node));
         }
+        // `_actionMap` around the `Focus` (`ink_well.dart` `:852-855`,
+        // `:1386-1389`): Enter, Space and Select on the focused well reach
+        // these through the root shortcuts (ADR-0079). A disabled well
+        // declares neither, so the keys keep bubbling.
+        let mut actions = Actions::new(focus);
+        if let Some(activate) = &activate {
+            let on_activate = Rc::clone(activate);
+            let on_button_activate = Rc::clone(activate);
+            actions = actions
+                .action(CallbackAction::new(move |_: &ActivateIntent| on_activate()))
+                .action(CallbackAction::new(move |_: &ButtonActivateIntent| {
+                    on_button_activate();
+                }));
+        }
 
         // GestureDetector wraps MouseRegion wraps Focus wraps the content —
         // outermost to innermost. `GestureDetector` must be OUTERMOST: with
@@ -459,7 +482,7 @@ impl ViewState<InkWell> for InkWellState {
         // GestureDetector > CustomPaint` layering (there, the raw gesture
         // listener is innermost) — driven by this render pipeline's
         // hit-test contract, not a stylistic choice.
-        gesture_detector.child(mouse_region.child(focus))
+        gesture_detector.child(mouse_region.child(actions))
     }
 
     fn dispose(&mut self) {

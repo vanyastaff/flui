@@ -373,3 +373,59 @@ fn focused_state_tracks_the_exact_external_focus_node() {
     laid.tick();
     assert!(!states.value().contains_state(WidgetState::Focused));
 }
+
+fn enter() -> flui_interaction::events::KeyEvent {
+    flui_interaction::events::KeyEvent {
+        state: flui_interaction::events::KeyState::Down,
+        key: flui_interaction::events::Key::Named(flui_interaction::events::NamedKey::Enter),
+        ..flui_interaction::events::KeyEvent::default()
+    }
+}
+
+/// Enter on a focused `InkWell` activates it, exactly as a tap does — the
+/// oracle's `activateOnIntent` behind `ActivateIntent` (`ink_well.dart`
+/// `:852-855`, `:883-900`). Found on a live Windows window, where Tab reached
+/// the counter's button and Enter did nothing: no FLUI button was operable
+/// from the keyboard.
+///
+/// Red-check: drop the `Actions` around the `Focus` in `InkWell::build` —
+/// Enter is ignored and `on_tap` never runs.
+#[test]
+fn enter_on_a_focused_ink_well_fires_on_tap() {
+    let taps = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&taps);
+    let focus_node = FocusNode::with_debug_label("ink-well");
+    let laid = lay_out(
+        InkWell::new(SizedBox::new(80.0, 40.0))
+            .on_tap(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            })
+            .focus_node(Rc::clone(&focus_node)),
+        tight(80.0, 40.0),
+    );
+    focus_node.request_focus();
+
+    assert!(
+        laid.focus_manager().dispatch_key_event(&enter()),
+        "Enter is consumed"
+    );
+    assert_eq!(
+        taps.load(Ordering::SeqCst),
+        1,
+        "Enter activated the well once"
+    );
+}
+
+/// A disabled `InkWell` declares no activation, so Enter on it keeps
+/// bubbling instead of being swallowed by a control that cannot act.
+#[test]
+fn enter_on_a_disabled_ink_well_is_not_consumed() {
+    let focus_node = FocusNode::with_debug_label("disabled-ink-well");
+    let laid = lay_out(
+        InkWell::new(SizedBox::new(80.0, 40.0)).focus_node(Rc::clone(&focus_node)),
+        tight(80.0, 40.0),
+    );
+    focus_node.request_focus();
+
+    assert!(!laid.focus_manager().dispatch_key_event(&enter()));
+}

@@ -799,7 +799,8 @@ impl SemanticsOwner {
             let Some(data) = self.tree.node_data_of(node) else {
                 continue;
             };
-            let translated = crate::accesskit_translation::to_node(&data);
+            let translated =
+                crate::accesskit_translation::to_published_node(&data, id == state.root);
             if state.nodes.get(&id) != Some(&translated) {
                 changed.push((id, translated));
             }
