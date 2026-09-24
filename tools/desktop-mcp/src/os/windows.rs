@@ -12,13 +12,20 @@ use std::os::windows::io::AsRawHandle;
 
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject,
 };
+use windows::Win32::System::Ole::{
+    SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
+};
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation8, IUIAutomation, IUIAutomation2, IUIAutomationElement,
 };
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, DPI_AWARENESS_PER_MONITOR_AWARE,
@@ -26,15 +33,19 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardLayout, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
-    VkKeyScanExW,
+    GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
+    KEYEVENTF_UNICODE, MAPVK_VK_TO_CHAR, MOUSEEVENTF_MOVE, MOUSEINPUT, MapVirtualKeyExW, SendInput,
+    VIRTUAL_KEY, VkKeyScanExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GA_ROOT, GUITHREADINFO, GetAncestor, GetCursorPos, GetForegroundWindow,
-    GetGUIThreadInfo, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, SW_RESTORE, SetCursorPos, SetForegroundWindow, ShowWindow, WindowFromPoint,
+    GetGUIThreadInfo, GetSystemMetrics, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    IsIconic, IsWindow, IsWindowVisible, SM_SWAPBUTTON, SW_RESTORE, SetCursorPos,
+    SetForegroundWindow, ShowWindow, WindowFromPoint,
 };
-use windows::core::BOOL;
+use windows::core::{BOOL, Interface};
+
+use super::Focus;
 
 use crate::error::{ToolError, ToolResult};
 
@@ -86,19 +97,23 @@ pub fn window_at(x: i32, y: i32) -> Option<super::Under> {
     Some(super::Under { id, pid, inner_pid })
 }
 
-/// The process owning the window that has keyboard focus in the foreground
-/// window's thread: a child window of another process (an embedded browser,
-/// a preview pane) can hold it inside a top-level window of the target.
-/// `None` when no window there has focus (keys then reach the foreground
-/// window itself).
-pub fn focused_pid() -> ToolResult<Option<u32>> {
+/// Where keyboard input goes inside foreground window `fg` (the one the
+/// caller just checked): the process of the window holding keyboard focus
+/// in its thread. A child window of another process (an embedded browser, a
+/// preview pane) can hold it inside a top-level window of the target. An
+/// error when the foreground is no longer `fg`, so the answer is never about
+/// a window nobody checked.
+pub fn focus(fg: u32) -> ToolResult<Focus> {
     // SAFETY: no arguments.
-    let fg = unsafe { GetForegroundWindow() };
-    if fg.is_invalid() {
-        return Ok(None);
+    let now = unsafe { GetForegroundWindow() };
+    if id_and_pid(now).map(|(id, _)| id) != Some(fg) {
+        return Err(ToolError::NotForeground {
+            target: format!("window {fg}"),
+            foreground: "another window took the foreground during the check".into(),
+        });
     }
     // SAFETY: a window handle; a null pid pointer is allowed.
-    let thread = unsafe { GetWindowThreadProcessId(fg, None) };
+    let thread = unsafe { GetWindowThreadProcessId(now, None) };
     let mut info = GUITHREADINFO {
         cbSize: size_of::<GUITHREADINFO>() as u32,
         ..GUITHREADINFO::default()
@@ -106,7 +121,110 @@ pub fn focused_pid() -> ToolResult<Option<u32>> {
     // SAFETY: `info` is a local with its size set, as the call requires.
     unsafe { GetGUIThreadInfo(thread, &raw mut info) }
         .map_err(|e| ToolError::platform("reading which window has keyboard focus", e))?;
-    Ok(id_and_pid(info.hwndFocus).map(|(_, pid)| pid))
+    // No focus window: keys reach the foreground window itself.
+    Ok(id_and_pid(info.hwndFocus).map_or(Focus::Foreground, |(_, pid)| Focus::Pid(pid)))
+}
+
+/// How long UI Automation waits for a provider to answer one call, and to
+/// finish connecting to one: a hung application fails the call instead of
+/// holding the one desktop thread every tool shares.
+const UIA_TRANSACTION_TIMEOUT_MS: u32 = 5_000;
+const UIA_CONNECTION_TIMEOUT_MS: u32 = 2_000;
+
+/// A UI Automation client with call timeouts (`CUIAutomation8`, through
+/// `IUIAutomation2`), for a thread already in COM. `None` where that object
+/// is unavailable; the caller then keeps the one without timeouts.
+pub fn uia_with_timeouts() -> Option<IUIAutomation> {
+    // SAFETY: the calling thread has initialized COM (the caller created a
+    // UI Automation client on it first); no outer object.
+    let automation: IUIAutomation2 =
+        unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }.ok()?;
+    // SAFETY: plain value arguments on a live interface.
+    unsafe {
+        automation
+            .SetTransactionTimeout(UIA_TRANSACTION_TIMEOUT_MS)
+            .ok()?;
+        automation
+            .SetConnectionTimeout(UIA_CONNECTION_TIMEOUT_MS)
+            .ok()?;
+    }
+    automation.cast().ok()
+}
+
+/// `element`'s runtime id, read live, with the array freed (the
+/// `uiautomation` crate's reader leaks every array it reads). `Ok(None)` for
+/// an element without one.
+pub fn runtime_id(
+    element: &IUIAutomationElement,
+) -> Result<Option<Vec<i32>>, windows::core::Error> {
+    // SAFETY: a live interface; the returned array is ours to destroy.
+    let array = unsafe { element.GetRuntimeId() }?;
+    if array.is_null() {
+        return Ok(None);
+    }
+    // SAFETY: `array` is the one-dimensional `VT_I4` array `GetRuntimeId`
+    // returns, read by index within its bounds, then destroyed exactly once.
+    let ids = unsafe {
+        let read = || -> Result<Vec<i32>, windows::core::Error> {
+            let (low, high) = (SafeArrayGetLBound(array, 1)?, SafeArrayGetUBound(array, 1)?);
+            let mut ids = Vec::with_capacity(usize::try_from(high - low + 1).unwrap_or(0));
+            for index in low..=high {
+                let mut value = 0_i32;
+                SafeArrayGetElement(array, &raw const index, (&raw mut value).cast())?;
+                ids.push(value);
+            }
+            Ok(ids)
+        };
+        let ids = read();
+        let _ = SafeArrayDestroy(array);
+        ids?
+    };
+    Ok((!ids.is_empty()).then_some(ids))
+}
+
+/// Whether the primary and secondary mouse buttons are swapped: injected
+/// button events are physical, so a logical left click is then a physical
+/// right one.
+pub fn buttons_swapped() -> bool {
+    // SAFETY: a plain metric index.
+    unsafe { GetSystemMetrics(SM_SWAPBUTTON) != 0 }
+}
+
+/// Types `c` as Unicode input, each UTF-16 unit pressed and released with
+/// itself (enigo releases a surrogate pair's low unit with the high one).
+pub fn send_unicode(c: char) -> ToolResult<()> {
+    let mut units = [0_u16; 2];
+    let key = |unit: u16, up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(0),
+                wScan: unit,
+                dwFlags: if up {
+                    KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+                } else {
+                    KEYEVENTF_UNICODE
+                },
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let inputs: Vec<INPUT> = c
+        .encode_utf16(&mut units)
+        .iter()
+        .flat_map(|&unit| [key(unit, false), key(unit, true)])
+        .collect();
+    // SAFETY: fully initialized `INPUT` values and the size of one.
+    let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+    if sent as usize == inputs.len() {
+        Ok(())
+    } else {
+        Err(ToolError::platform(
+            "typing a character",
+            "SendInput was blocked (UIPI: the target may run elevated)",
+        ))
+    }
 }
 
 /// The top-level window `id` belongs to (itself when it is one), by the
@@ -221,18 +339,29 @@ pub fn process_windows(pid: u32) -> ToolResult<Vec<u32>> {
 
 /// The virtual key that types `c` on the foreground window's keyboard
 /// layout, and the modifiers it needs (bit 1 Shift, 2 Ctrl, 4 Alt), as
-/// `VkKeyScanExW` reports them. `None` when no key on that layout types it.
+/// `VkKeyScanExW` reports them. `None` when no key on that layout types it
+/// as a plain key press: none does, it needs a state this server cannot
+/// hold (Kana, Hankaku), or it is a dead key, which types nothing itself
+/// and changes the key after it.
 pub fn char_key(c: char) -> Option<(u16, u8)> {
     let mut units = [0_u16; 2];
     let [unit] = c.encode_utf16(&mut units) else {
         return None;
     };
     // SAFETY: a null window yields thread 0, whose layout is the caller's.
-    let thread = unsafe { GetWindowThreadProcessId(GetForegroundWindow(), None) };
+    let layout =
+        unsafe { GetKeyboardLayout(GetWindowThreadProcessId(GetForegroundWindow(), None)) };
     // SAFETY: plain value arguments.
-    let scan = unsafe { VkKeyScanExW(*unit, GetKeyboardLayout(thread)) };
+    let scan = unsafe { VkKeyScanExW(*unit, layout) };
     let [vk, shift] = scan.to_le_bytes();
-    (scan != -1).then_some((u16::from(vk), shift))
+    if scan == -1 || shift & !0b111 != 0 {
+        return None;
+    }
+    // SAFETY: plain value arguments.
+    let dead = unsafe { MapVirtualKeyExW(u32::from(vk), MAPVK_VK_TO_CHAR, Some(layout)) }
+        & 0x8000_0000
+        != 0;
+    (!dead).then_some((u16::from(vk), shift))
 }
 
 /// Restores `id` if minimized and asks Windows to put it in front. Windows

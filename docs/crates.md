@@ -113,7 +113,7 @@ Neither design system may depend on `flui-localizations` — that direction is a
 | `examples/android_scene` | ⛔ Excluded from workspace | Hot-reloadable Android scene plugin (requires NDK) |
 | `tools/web-server` | ✅ ACTIVE | Built-in web dev server (wasm-pack + HTTP serve) |
 | `tools/desktop-mcp` | ✅ ACTIVE | MCP server that drives desktop apps from the outside (windows, screenshots, UI Automation, real input) for agent testing |
-| `tools/device-checks` | ✅ ACTIVE | Pass/fail device gates behind `cargo xtask device` (UI Automation, `SendInput`, the macOS checks) |
+| `tools/device-checks` | ✅ ACTIVE (scripts, not a crate) | The macOS and iOS device-check scripts `cargo xtask device` runs; the Windows gates live in `tools/xtask/src/device/` |
 | `tools/live-smoke` | ✅ ACTIVE | Real X11/Wayland input smoke behind `cargo xtask live-smoke` |
 
 ## Build Order

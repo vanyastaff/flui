@@ -17,7 +17,7 @@ use crate::error::{ToolError, ToolResult};
 use crate::geometry::Rect;
 use crate::input::{Input, MouseButton};
 use crate::keys::KeyCombo;
-use crate::os::{self, Under};
+use crate::os::{self, Focus, Under};
 use crate::params::{ClickAt, ScreenshotTarget, Target};
 
 /// The foreground window as the safety check sees it.
@@ -107,19 +107,27 @@ pub fn verify(
     Ok(())
 }
 
-/// Refuses keyboard input when the window holding keyboard focus inside the
-/// foreground window (`focused`, its process) belongs to another process
-/// than the foreground window: keystrokes go to that window, an embedded
-/// browser or a preview pane, not to the target that passed [`verify`].
-pub fn verify_focus(foreground: Option<&Foreground>, focused: Option<u32>) -> ToolResult<()> {
-    match (foreground, focused) {
-        (Some(fg), Some(pid)) if pid != fg.pid => Err(ToolError::NotForeground {
+/// Refuses keyboard input unless it reaches the foreground window's own
+/// process: keystrokes go to the window holding keyboard focus, which can be
+/// another process's child window inside it (an embedded browser, a preview
+/// pane), and where the OS cannot say which window that is, nothing that
+/// passed [`verify`] can be trusted to receive them.
+pub fn verify_focus(foreground: Option<&Foreground>, focus: Focus) -> ToolResult<()> {
+    let Some(fg) = foreground else {
+        return Err(not_foreground("the target", None));
+    };
+    match focus {
+        Focus::Foreground => Ok(()),
+        Focus::Pid(pid) if pid == fg.pid => Ok(()),
+        Focus::Pid(pid) => Err(ToolError::NotForeground {
             target: format!("window {} of process {}", fg.id, fg.pid),
             foreground: format!(
                 "{fg}, but keyboard focus is inside it in a window of process {pid}"
             ),
         }),
-        _ => Ok(()),
+        Focus::Unknown => Err(ToolError::NotSupported(format!(
+            "this OS does not report which window has keyboard focus ({fg} could hold it inside another process's panel), so keys and text with a safety target are refused"
+        ))),
     }
 }
 
@@ -175,7 +183,7 @@ pub fn still_bound(target: Target, bound: Option<u32>, fg: Option<&Foreground>) 
 pub fn same_process(pid: u32, then: Option<u64>, now: Option<u64>) -> ToolResult<()> {
     match then {
         None => Err(ToolError::NotSupported(format!(
-            "process {pid} cannot be told apart from a later process reusing its pid (no start time on this OS, or it has exited), so it is not a safety target; pass window_id"
+            "process {pid} cannot be told apart from a later process reusing its pid (this OS reports no start time), so it is not a safety target; pass window_id"
         ))),
         // Not `NotFound`: a `wait_for` keeps polling on that, and a reused
         // pid never turns back into the process it named.
@@ -192,9 +200,10 @@ pub fn same_process(pid: u32, then: Option<u64>, now: Option<u64>) -> ToolResult
 }
 
 /// What a target is held to for one call: the process a window id was
-/// issued for, or the start time of the process a pid was issued for. Every
-/// event's check compares against it again, so a target that exits and has
-/// its number reused mid-action (a long drag, typed text) stops receiving.
+/// issued for, and the start time of the process the window's owner or the
+/// pid named when issued. Every event's check compares against it again, so
+/// a target that exits and has its number reused mid-action (a long drag,
+/// typed text) stops receiving.
 #[derive(Debug, Clone, Copy, Default)]
 struct Binding {
     window_pid: Option<u32>,
@@ -206,13 +215,15 @@ pub struct Desktop {
     a11y: Box<dyn AccessibilityBackend>,
     input: Result<Input, String>,
     /// Every window id this session handed out, with the process that owned
-    /// it then. Windows recycles an `HWND` for an unrelated window, so a
-    /// window target is accepted only while the same process still owns it.
-    issued: HashMap<u32, u32>,
-    /// Every pid this session saw, with that process's start time (`None`
-    /// where the OS does not report it): a pid target is accepted only while
-    /// the same process holds the pid.
-    started: HashMap<u32, Option<u64>>,
+    /// it then and that process's start time (`None` where the OS reports
+    /// none). Windows recycles an `HWND`, and a pid, for an unrelated window,
+    /// so a window target is accepted only while that same process owns it.
+    issued: HashMap<u32, (u32, Option<u64>)>,
+    /// Every pid this session handed out (listed or launched), with its
+    /// process's start time: a pid target is accepted only while that
+    /// process holds the pid. A pid whose start time the OS cannot report is
+    /// never recorded, so it is never accepted as a target.
+    started: HashMap<u32, u64>,
 }
 
 impl std::fmt::Debug for Desktop {
@@ -241,26 +252,42 @@ impl Desktop {
             .map_err(|e| ToolError::NotSupported(e.clone()))
     }
 
+    /// Releases every button and key this session's input may hold: after a
+    /// job panicked mid-action, and before the server exits.
+    pub fn release_input(&mut self) {
+        if let Ok(input) = &mut self.input {
+            input.release_all();
+        }
+    }
+
     /// Records the process holding `pid` now, unless the pid is already
     /// bound: the first sighting is the one later targets are held to.
-    pub fn adopt_pid(&mut self, pid: u32) {
-        self.started
-            .entry(pid)
-            .or_insert_with(|| os::process_started(pid));
+    fn adopt_pid(&mut self, pid: u32) {
+        if !self.started.contains_key(&pid)
+            && let Some(started) = os::process_started(pid)
+        {
+            self.started.insert(pid, started);
+        }
     }
 
     /// Binds `pid` to the process `launch` just started under it. The one
     /// re-binding there is: this session created that process and hands the
-    /// pid out now, so it is the sighting the caller holds.
+    /// pid out now, so it is the sighting the caller holds. Window ids stay
+    /// bound to the start time recorded with each, so none of them follows.
     /// `started` is read at the spawn, while the launcher still holds the
     /// child, so it cannot belong to a later process reusing the pid.
     pub fn bind_launched(&mut self, pid: u32, started: Option<u64>) {
-        self.started.insert(pid, started);
+        if let Some(started) = started {
+            self.started.insert(pid, started);
+        }
     }
 
-    /// Records a window id with its owner, unless the id is already bound.
+    /// Records a window id with its owner and the owner's start time, unless
+    /// the id is already bound.
     fn adopt_window(&mut self, w: &WindowInfo) {
-        self.issued.entry(w.id).or_insert(w.pid);
+        self.issued
+            .entry(w.id)
+            .or_insert_with(|| (w.pid, os::process_started(w.pid)));
         self.adopt_pid(w.pid);
     }
 
@@ -291,30 +318,38 @@ impl Desktop {
         Ok(windows)
     }
 
-    /// The process a window target is bound to: the owner recorded when this
-    /// session handed the id out. An id never handed out is refused — it
-    /// cannot be told apart from a recycled one. A pid target is held to the
-    /// process first seen under it.
+    /// What a target is bound to: for a window id, the owner and start time
+    /// recorded when this session handed it out; for a pid, the start time
+    /// of the process it named then. A number never handed out is refused —
+    /// it cannot be told apart from a recycled one.
     fn bound(&mut self, target: Option<Target>) -> ToolResult<Binding> {
         match target {
             Some(Target::Window(id)) => {
-                let pid = self.issued.get(&id).copied().ok_or_else(|| {
+                let &(pid, started) = self.issued.get(&id).ok_or_else(|| {
                     ToolError::NotFound(format!(
                         "window {id} was not listed in this session; take window ids from list_windows or launch"
                     ))
                 })?;
                 Ok(Binding {
                     window_pid: Some(pid),
-                    started: self.started.get(&pid).copied().flatten(),
+                    started,
                 })
             }
             Some(Target::Pid(pid)) => {
                 let now = os::process_started(pid);
-                let then = *self.started.entry(pid).or_insert(now);
-                same_process(pid, then, now)?;
+                let Some(&then) = self.started.get(&pid) else {
+                    if now.is_none() && !cfg!(target_os = "windows") {
+                        // The OS has no start times: the reason to report.
+                        same_process(pid, None, None)?;
+                    }
+                    return Err(ToolError::NotFound(format!(
+                        "process {pid} was not listed or launched in this session; take pids from list_windows or launch"
+                    )));
+                };
+                same_process(pid, Some(then), now)?;
                 Ok(Binding {
                     window_pid: None,
-                    started: then,
+                    started: Some(then),
                 })
             }
             None => Ok(Binding::default()),
@@ -337,50 +372,50 @@ impl Desktop {
 
     /// Captures a window, a process's frontmost window, or a monitor.
     ///
-    /// A window or pid is held to the identity it was issued with, and the
-    /// window's owner is checked again after the capture: pixels of an
-    /// application that took over a recycled id are refused, not returned.
+    /// A window or pid is held to the identity it was issued with, before the
+    /// capture and again after it: pixels of an application that took over a
+    /// recycled id are refused, not returned.
     pub fn screenshot(
         &mut self,
         target: ScreenshotTarget,
         max_side: Option<u32>,
     ) -> ToolResult<Shot> {
-        let (direct, owner) = match target {
+        capture::available()?;
+        let (direct, held) = match target {
             ScreenshotTarget::Direct(ShotTarget::Window(id)) => {
                 let bound = self.bound(Some(Target::Window(id)))?;
-                (ShotTarget::Window(id), bound.window_pid)
+                (ShotTarget::Window(id), Some((Target::Window(id), bound)))
             }
             ScreenshotTarget::Direct(t) => (t, None),
             ScreenshotTarget::Pid(pid) => {
-                // A capture sends nothing; where the OS gives no process
-                // identity (macOS) the pid is used as it is, and the owner
-                // check around the capture still applies.
-                match self.bound(Some(Target::Pid(pid))) {
-                    Ok(_) | Err(ToolError::NotSupported(_)) => {}
+                // A capture sends nothing, so on an OS with no process
+                // identity (macOS) the pid is used as listed; on Windows it
+                // is held to its identity like any other target.
+                let started = match self.bound(Some(Target::Pid(pid))) {
+                    Ok(bound) => bound.started,
+                    Err(ToolError::NotSupported(_)) if !cfg!(target_os = "windows") => None,
                     Err(e) => return Err(e),
-                }
+                };
                 let windows = Self::resolve(Target::Pid(pid))?;
                 let pick = windows
                     .iter()
                     .find(|w| w.is_focused)
                     .or_else(|| windows.iter().find(|w| !w.is_minimized))
                     .unwrap_or(&windows[0]);
-                (ShotTarget::Window(pick.id), Some(pid))
+                let bound = Binding {
+                    window_pid: Some(pid),
+                    started,
+                };
+                (
+                    ShotTarget::Window(pick.id),
+                    Some((Target::Window(pick.id), bound)),
+                )
             }
         };
-        let still_owned = |when: &str| match (direct, owner) {
-            (ShotTarget::Window(id), Some(pid))
-                if os::window_pid(id).is_some_and(|now| now != pid) =>
-            {
-                Err(ToolError::InvalidArgument(format!(
-                    "window {id} no longer belongs to process {pid} {when}; this session does not re-bind it"
-                )))
-            }
-            _ => Ok(()),
-        };
-        still_owned("")?;
+        let recheck = || held.map_or(Ok(()), |(t, b)| Self::revalidate(t, b));
+        recheck()?;
         let shot = capture::screenshot(direct, max_side)?;
-        still_owned("after the capture")?;
+        recheck()?;
         Ok(shot)
     }
 
@@ -398,6 +433,7 @@ impl Desktop {
         max_depth: usize,
         deadline: Instant,
     ) -> ToolResult<Read> {
+        self.a11y.available()?;
         let bound = self.bound(Some(target))?;
         Self::revalidate(target, bound)?;
         let ids: Vec<u32> = match target {
@@ -496,7 +532,7 @@ impl Desktop {
                     && now != pid
                 {
                     return Err(ToolError::InvalidArgument(format!(
-                        "window {id} belonged to process {pid} when listed and now belongs to process {now}; this session does not re-bind it"
+                        "window {id} belonged to process {pid} when listed and now belongs to process {now}; this session does not re-bind it, so target the new window's process by pid"
                     )));
                 }
                 bound.window_pid
@@ -517,9 +553,14 @@ impl Desktop {
         still_bound(target, bound.window_pid, fg.as_ref())?;
         if points.is_empty() {
             // Keys and text: they go to the focused window, which must be
-            // the target's process too.
+            // the target's process too; the focus is read on the very
+            // window just checked.
             verify(target, fg.as_ref(), &[])?;
-            return verify_focus(fg.as_ref(), os::focused_pid()?);
+            let focus = match &fg {
+                Some(fg) => os::focus(fg.id)?,
+                None => Focus::Unknown,
+            };
+            return verify_focus(fg.as_ref(), focus);
         }
         let points: Vec<_> = points
             .iter()
@@ -541,6 +582,7 @@ impl Desktop {
         double: bool,
         target: Option<Target>,
     ) -> ToolResult<Value> {
+        self.input()?;
         let bound = self.bound(target)?;
         let (x, y, element_window) = match at {
             ClickAt::Point(x, y) => (*x, *y, None),
@@ -564,26 +606,23 @@ impl Desktop {
             .as_mut()
             .map_err(|e| ToolError::NotSupported(e.clone()))?;
         let mut guard = |_: Option<(i32, i32)>| {
-            Self::check(target, bound, &[(x, y)])?;
-            // An element click always lands on the element: the point must
-            // be in its window, with its application in front, and hit the
-            // element itself — not a sibling or overlay that appeared over
-            // it inside the same window.
-            let Some((handle, window, pid)) = element_window else {
-                return Ok(());
-            };
-            Self::check_element(window, pid, (x, y))?;
-            if a11y.hits(handle, x, y)? {
-                Ok(())
-            } else {
-                Err(ToolError::OutsideTarget {
-                    x,
-                    y,
-                    reason: format!(
-                        "element `{handle}` is no longer what is under it (something inside its window covers it); use invoke, or read the tree again"
-                    ),
-                })
+            // An element click always lands on the element. The slow check
+            // (a UI Automation hit-test, a cross-process call) runs first and
+            // the fast OS checks last, right before the event, so what they
+            // saw is as fresh as it can be.
+            if let Some((handle, window, pid)) = element_window {
+                if !a11y.hits(handle, x, y)? {
+                    return Err(ToolError::OutsideTarget {
+                        x,
+                        y,
+                        reason: format!(
+                            "element `{handle}` is no longer what is under it (something inside its window covers it); use invoke, or read the tree again"
+                        ),
+                    });
+                }
+                Self::check_element(window, pid, (x, y))?;
             }
+            Self::check(target, bound, &[(x, y)])
         };
         guard(None)?;
         input.click(x, y, button, double, &mut guard)?;
@@ -595,6 +634,8 @@ impl Desktop {
     /// Moves the pointer.
     pub fn move_mouse(&mut self, x: i32, y: i32) -> ToolResult<Value> {
         let input = self.input()?;
+        // A move with a button still held from a failed release is a drag.
+        input.ready()?;
         input.move_to(x, y)?;
         std::thread::sleep(Duration::from_millis(10));
         let at = input.position();
@@ -603,7 +644,8 @@ impl Desktop {
         )
     }
 
-    /// Drags with the left button.
+    /// Drags with the left button. Each step checks the point it is about to
+    /// reach; the start and end are checked before the press.
     pub fn drag(
         &mut self,
         from: (i32, i32),
@@ -611,12 +653,12 @@ impl Desktop {
         duration: Duration,
         target: Option<Target>,
     ) -> ToolResult<Value> {
+        self.input()?;
         let bound = self.bound(target)?;
         Self::check(target, bound, &[from, to])?;
-        let mut guard = |at: Option<(i32, i32)>| {
-            let mut points = vec![from, to];
-            points.extend(at);
-            Self::check(target, bound, &points)
+        let mut guard = |at: Option<(i32, i32)>| match at {
+            Some(point) => Self::check(target, bound, &[point]),
+            None => Self::check(target, bound, &[from, to]),
         };
         self.input()?.drag(from, to, duration, &mut guard)?;
         Ok(json!({ "from": { "x": from.0, "y": from.1 }, "to": { "x": to.0, "y": to.1 } }))
@@ -631,6 +673,7 @@ impl Desktop {
         dy: i32,
         target: Option<Target>,
     ) -> ToolResult<Value> {
+        self.input()?;
         let bound = self.bound(target)?;
         Self::check(target, bound, &[(x, y)])?;
         let mut guard = |_: Option<(i32, i32)>| Self::check(target, bound, &[(x, y)]);
@@ -640,6 +683,7 @@ impl Desktop {
 
     /// Types text into whatever has keyboard focus.
     pub fn type_text(&mut self, text: &str, target: Option<Target>) -> ToolResult<Value> {
+        self.input()?;
         let bound = self.bound(target)?;
         Self::check(target, bound, &[])?;
         let mut guard = |_: Option<(i32, i32)>| Self::check(target, bound, &[]);
@@ -654,8 +698,9 @@ impl Desktop {
         repeat: u32,
         target: Option<Target>,
     ) -> ToolResult<Value> {
+        self.input()?;
         if target.is_some()
-            && let Some(handler) = combo.shell_hotkey(cfg!(target_os = "macos"))
+            && let Some(handler) = combo.shell_hotkey(cfg!(target_os = "macos"), repeat)
         {
             return Err(ToolError::InvalidArgument(format!(
                 "`{combo}` is handled by {handler}, not by the target window, so no safety target can hold for it; it is refused"
@@ -672,16 +717,15 @@ impl Desktop {
     /// window id must be one this session listed, still owned by the same
     /// process; activating never re-binds an id.
     pub fn activate(&mut self, target: Target) -> ToolResult<Value> {
-        let bound = self.bound(Some(target))?;
-        let windows = Self::resolve(target)?;
-        if let (Some(pid), Some(w)) = (bound.window_pid, windows.first())
-            && w.pid != pid
-        {
-            return Err(ToolError::NotFound(format!(
-                "window {} belonged to process {pid} when listed and now belongs to process {}; list_windows again",
-                w.id, w.pid
+        if !cfg!(target_os = "windows") {
+            return Err(ToolError::NotSupported(format!(
+                "activate_window is not supported on {} yet",
+                std::env::consts::OS
             )));
         }
+        let bound = self.bound(Some(target))?;
+        Self::revalidate(target, bound)?;
+        let windows = Self::resolve(target)?;
         for w in &windows {
             self.adopt_window(w);
         }
@@ -691,10 +735,12 @@ impl Desktop {
             .unwrap_or(&windows[0])
             .clone();
         let mut attempts = Vec::new();
+        Self::revalidate(target, bound)?;
         os::bring_to_front(window.id)?;
         attempts.push("SetForegroundWindow");
         let mut fg = Self::foreground()?;
         if fg.as_ref().map(|f| f.id) != Some(window.id) {
+            Self::revalidate(target, bound)?;
             if let Err(e) = self.a11y.focus_window(window.id) {
                 tracing::debug!("UIA focus fallback failed: {e}");
             }
@@ -854,10 +900,48 @@ mod tests {
     /// admits them.
     #[test]
     fn keyboard_focus_in_another_process_is_refused() {
-        let err = verify_focus(Some(&fg()), Some(555)).expect_err("BUG: focus is elsewhere");
+        let err = verify_focus(Some(&fg()), Focus::Pid(555)).expect_err("BUG: focus is elsewhere");
         assert!(err.to_string().contains("process 555"), "{err}");
-        assert!(verify_focus(Some(&fg()), Some(100)).is_ok());
-        assert!(verify_focus(Some(&fg()), None).is_ok());
+        assert!(verify_focus(Some(&fg()), Focus::Pid(100)).is_ok());
+        assert!(verify_focus(Some(&fg()), Focus::Foreground).is_ok());
+    }
+
+    /// Where the OS cannot say which window has keyboard focus (macOS), keys
+    /// and text with a target are refused: a panel of another process can
+    /// hold the focus while the target is in front.
+    #[test]
+    fn an_unknown_keyboard_focus_fails_closed() {
+        assert!(matches!(
+            verify_focus(Some(&fg()), Focus::Unknown),
+            Err(ToolError::NotSupported(_))
+        ));
+        assert!(verify_focus(None, Focus::Foreground).is_err());
+    }
+
+    /// The safety wiring end to end, on any host: a shell hotkey with a
+    /// target is refused before anything else is looked at, and window ids
+    /// and pids this session never handed out are refused.
+    #[test]
+    fn a_desktop_refuses_what_it_cannot_bind() {
+        let mut desktop = Desktop::new();
+        let refused = |r: ToolResult<Value>| r.expect_err("BUG: must be refused").to_string();
+        if desktop.input().is_ok() {
+            let combo = KeyCombo::parse("win+r").expect("BUG: parses");
+            let err = refused(desktop.key(&combo, 1, Some(Target::Window(1))));
+            assert!(err.contains("meta+r"), "{err}");
+            let err = refused(desktop.type_text("x", Some(Target::Window(123_456_789))));
+            assert!(err.contains("not listed"), "{err}");
+            let err = refused(desktop.type_text("x", Some(Target::Pid(u32::MAX - 7))));
+            assert!(
+                err.contains("not listed") || err.contains("start time"),
+                "{err}"
+            );
+        } else {
+            // No input device on this OS: that is the reason reported, not
+            // a binding error about ids that could never have been listed.
+            let err = refused(desktop.type_text("x", Some(Target::Window(1))));
+            assert!(err.contains("not supported"), "{err}");
+        }
     }
 
     /// An element in a popup (a menu, a drop-down) is clicked while its

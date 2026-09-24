@@ -22,14 +22,15 @@ pub const CAPACITY: usize = 20_000;
 /// Maps stable element identities to handles and handles to OS objects.
 #[derive(Debug)]
 pub struct ElementCache<K, T> {
-    by_handle: HashMap<u32, (K, T, u64)>,
-    by_key: HashMap<K, u32>,
+    by_handle: HashMap<u64, (K, T, u64)>,
+    by_key: HashMap<K, u64>,
     /// `(handle, touch)` in the order handles were last touched, oldest
     /// first. An entry is current only while its touch matches the handle's;
     /// a re-touched handle leaves a stale entry behind, skipped on eviction.
-    order: VecDeque<(u32, u64)>,
+    order: VecDeque<(u64, u64)>,
     capacity: usize,
-    next: u32,
+    /// The next handle number; 64 bits never wrap into a live one.
+    next: u64,
     touches: u64,
 }
 
@@ -99,6 +100,11 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
         self.by_handle.get(n).map(|(_, value, _)| value)
     }
 
+    /// The handle identity `key` has now, if any.
+    pub fn handle_of(&self, key: &K) -> Option<String> {
+        self.by_key.get(key).map(|n| format!("e{n}"))
+    }
+
     /// Forgets which handle identity `key` has: that handle keeps resolving
     /// to the object it held (gone, so it answers stale), and the next
     /// [`Self::insert`] of `key` issues a fresh handle.
@@ -121,7 +127,14 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
     }
 }
 
-fn parse_handle(handle: &str) -> ToolResult<u32> {
+fn parse_handle(handle: &str) -> ToolResult<u64> {
+    // An id is `e` and at most 20 digits; anything longer is not one, and is
+    // not echoed back in full.
+    if handle.trim().len() > 21 {
+        return Err(ToolError::InvalidArgument(
+            "that is not an element id; ids look like `e12`".into(),
+        ));
+    }
     handle
         .trim()
         .strip_prefix('e')
@@ -197,7 +210,9 @@ mod tests {
         let mut cache = ElementCache::with_capacity(3);
         let old = cache.insert("id", "removed button");
         assert_eq!(cache.by_identity(&"id").copied(), Some("removed button"));
+        assert_eq!(cache.handle_of(&"id"), Some(old.clone()));
         cache.retire(&"id");
+        assert_eq!(cache.handle_of(&"id"), None);
         let new = cache.insert("id", "new control");
         assert_ne!(old, new);
         assert_eq!(cache.get(&old).copied().ok(), Some("removed button"));

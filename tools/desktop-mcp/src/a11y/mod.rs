@@ -56,6 +56,17 @@ pub struct Node {
     /// reached (a lower bound past a few hundred).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub omitted_children: Option<usize>,
+    /// The element is gone: an action removed it (a Close or Delete
+    /// button), and the other fields are its state from just before.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub gone: bool,
+}
+
+/// `s` lower-cased one character at a time, so a substring folds the same
+/// way on its own as inside a longer name (whole-string lower-casing turns a
+/// final Greek sigma into `ς` only at the end of a word).
+pub fn fold(s: &str) -> String {
+    s.chars().flat_map(char::to_lowercase).collect()
 }
 
 /// The longest a string property is reported, in characters; a longer one
@@ -119,9 +130,22 @@ impl Query {
     }
 
     /// The query ready to run: each criterion at most [`CLIPPED_CHARS`]
-    /// characters (no reported string is longer), and `name_contains`
-    /// lower-cased once here rather than for every node visited.
+    /// characters (no reported string is longer) and none empty but `name`
+    /// (an element without a name has the empty one; nothing has an empty
+    /// role or automation id, and every name contains ""), and
+    /// `name_contains` folded once here rather than for every node visited.
     pub fn prepared(mut self) -> ToolResult<Self> {
+        for (field, value) in [
+            ("name_contains", &self.name_contains),
+            ("role", &self.role),
+            ("automation_id", &self.automation_id),
+        ] {
+            if value.as_deref() == Some("") {
+                return Err(ToolError::InvalidArgument(format!(
+                    "`{field}` must not be empty; it would match nothing or everything"
+                )));
+            }
+        }
         for (field, value) in [
             ("name", &self.name),
             ("name_contains", &self.name_contains),
@@ -137,7 +161,7 @@ impl Query {
                 )));
             }
         }
-        self.name_contains = self.name_contains.map(|n| n.to_lowercase());
+        self.name_contains = self.name_contains.as_deref().map(fold);
         Ok(self)
     }
 
@@ -149,7 +173,7 @@ impl Query {
             && self
                 .name_contains
                 .as_deref()
-                .is_none_or(|n| name.to_lowercase().contains(n))
+                .is_none_or(|n| fold(name).contains(n))
             && self
                 .role
                 .as_deref()
@@ -242,6 +266,7 @@ impl Node {
             patterns: self.patterns.clone(),
             children: Vec::new(),
             omitted_children: None,
+            gone: false,
         }
     }
 }
@@ -305,6 +330,10 @@ pub struct ClickPoint {
 
 /// An OS accessibility API, reached from the one worker thread.
 pub trait AccessibilityBackend {
+    /// Whether this backend works on this OS; checked first, so an
+    /// unsupported OS says so rather than failing on a target's binding.
+    fn available(&self) -> ToolResult<()>;
+
     /// The element trees of the given top-level windows, `max_depth` levels
     /// below each window, read until `deadline` at most. A window that closes
     /// while it is read is left out; none left is `NotFound`.
@@ -347,6 +376,9 @@ impl Unsupported {
 }
 
 impl AccessibilityBackend for Unsupported {
+    fn available(&self) -> ToolResult<()> {
+        self.err()
+    }
     fn tree(&mut self, _: &[u32], _: usize, _: Instant) -> ToolResult<Read> {
         self.err()
     }
@@ -404,6 +436,7 @@ mod tests {
             patterns: Vec::new(),
             children,
             omitted_children: None,
+            gone: false,
         }
     }
 

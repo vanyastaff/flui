@@ -126,16 +126,47 @@ pub struct LaunchParams {
 /// The longest `launch` waits for a window.
 pub const MAX_LAUNCH_WAIT_MS: u64 = 120_000;
 
+/// The most bytes a `launch` command line and environment may carry, all
+/// strings together: about what Windows accepts for one command line.
+pub const MAX_LAUNCH_BYTES: usize = 32 * 1024;
+
 impl LaunchParams {
-    /// Rejects a window wait above [`MAX_LAUNCH_WAIT_MS`] before anything is
-    /// started, rather than shortening it silently.
+    /// Rejects, before anything is started rather than by shortening it
+    /// silently: a window wait above [`MAX_LAUNCH_WAIT_MS`], a command line
+    /// and environment above [`MAX_LAUNCH_BYTES`], and an environment name
+    /// the OS would read as something else (`=` ends a name, NUL a string).
     pub fn validate(&self) -> ToolResult<()> {
-        match self.wait_for_window_ms {
-            Some(ms) if ms > MAX_LAUNCH_WAIT_MS => Err(ToolError::InvalidArgument(format!(
+        if let Some(ms) = self.wait_for_window_ms
+            && ms > MAX_LAUNCH_WAIT_MS
+        {
+            return Err(ToolError::InvalidArgument(format!(
                 "wait_for_window_ms {ms} is above {MAX_LAUNCH_WAIT_MS}"
-            ))),
-            _ => Ok(()),
+            )));
         }
+        let strings = std::iter::once(&self.program)
+            .chain(&self.args)
+            .chain(&self.cwd)
+            .chain(self.env.iter().flat_map(|(k, v)| [k, v]));
+        let mut bytes = 0_usize;
+        for s in strings {
+            if s.contains('\0') {
+                return Err(ToolError::InvalidArgument(
+                    "launch arguments must not contain NUL characters".into(),
+                ));
+            }
+            bytes = bytes.saturating_add(s.len());
+        }
+        if bytes > MAX_LAUNCH_BYTES {
+            return Err(ToolError::InvalidArgument(format!(
+                "program, args, cwd and env take {bytes} bytes; at most {MAX_LAUNCH_BYTES}"
+            )));
+        }
+        if let Some(bad) = self.env.keys().find(|k| k.is_empty() || k.contains('=')) {
+            return Err(ToolError::InvalidArgument(format!(
+                "environment name {bad:?} is empty or contains `=`"
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -159,8 +190,8 @@ pub struct ScreenshotParams {
     /// Capture this monitor (0-based index). With no target at all, the
     /// primary monitor is captured.
     pub monitor: Option<u32>,
-    /// Downscale so neither side exceeds this many pixels; the reply's
-    /// `scale` maps image pixels back to screen pixels.
+    /// Downscale so neither side exceeds this many pixels (default 1920);
+    /// the reply's `scale_x`/`scale_y` map image pixels back to the screen.
     pub max_side: Option<u32>,
 }
 
@@ -173,7 +204,17 @@ pub enum ScreenshotTarget {
     Pid(u32),
 }
 
+/// The longer side a screenshot is downscaled to when `max_side` is not
+/// given: a full 4K or 8K capture as one base64 message is tens of MB, more
+/// than MCP clients and models take for an image.
+pub const DEFAULT_MAX_SIDE: u32 = 1920;
+
 impl ScreenshotParams {
+    /// The longer side to downscale to.
+    pub fn max_side(&self) -> u32 {
+        self.max_side.unwrap_or(DEFAULT_MAX_SIDE)
+    }
+
     /// At most one target.
     pub fn target(&self) -> ToolResult<ScreenshotTarget> {
         if self.max_side == Some(0) {
@@ -201,12 +242,12 @@ pub struct TreeParams {
     pub window_id: Option<u32>,
     /// Read the trees of all this process's top-level windows.
     pub pid: Option<u32>,
-    /// Levels below each window to include (default 30); deeper children are
-    /// counted in `omitted_children`.
+    /// Levels below each window to include (default 30, at most 200); deeper
+    /// children are counted in `omitted_children`.
     pub max_depth: Option<u32>,
 }
 
-/// Default and ceiling for `max_depth`.
+/// Default for `max_depth` ([`MAX_DEPTH`] is its ceiling).
 pub const DEFAULT_DEPTH: usize = 30;
 /// The deepest tree any tool reads: `max_depth`'s ceiling, and `find`'s bound.
 pub const MAX_DEPTH: u32 = 200;
@@ -259,12 +300,6 @@ impl FindParams {
         if query.is_empty() {
             return Err(ToolError::InvalidArgument(
                 "pass at least one of `name`, `name_contains`, `role`, `automation_id`".into(),
-            ));
-        }
-        // Every name contains the empty string: it would match everything.
-        if query.name_contains.as_deref() == Some("") {
-            return Err(ToolError::InvalidArgument(
-                "`name_contains` must not be empty".into(),
             ));
         }
         Ok((target, query.prepared()?))
@@ -330,8 +365,27 @@ pub struct ElementParams {
 pub struct SetValueParams {
     /// Element id (`e12`).
     pub element: String,
-    /// The new value; a number for range controls (sliders).
+    /// The new value (at most 100000 characters); a number for range
+    /// controls (sliders).
     pub value: String,
+}
+
+/// The most characters one `set_value` writes: the provider copies it
+/// across processes, and the target application stores it, on the one
+/// desktop thread.
+pub const MAX_VALUE_CHARS: usize = 100_000;
+
+impl SetValueParams {
+    /// Refuses a value above [`MAX_VALUE_CHARS`] before anything is sent.
+    pub fn validate(&self) -> ToolResult<()> {
+        let count = self.value.chars().count();
+        if count > MAX_VALUE_CHARS {
+            return Err(ToolError::InvalidArgument(format!(
+                "value has {count} characters; at most {MAX_VALUE_CHARS}"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Mouse button names.
@@ -468,10 +522,10 @@ pub struct ScrollParams {
     pub x: i32,
     /// Screen y to scroll at.
     pub y: i32,
-    /// Horizontal wheel notches; positive scrolls right.
+    /// Horizontal wheel notches (at most 100); positive scrolls right.
     #[serde(default)]
     pub dx: i32,
-    /// Vertical wheel notches; positive scrolls down.
+    /// Vertical wheel notches (at most 100); positive scrolls down.
     #[serde(default)]
     pub dy: i32,
     /// Safety target: refuse unless this window is in front and holds the point.

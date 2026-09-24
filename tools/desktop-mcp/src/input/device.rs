@@ -19,9 +19,17 @@ use enigo::Coordinate;
 /// loop sees distinct events rather than one coalesced burst.
 const STEP: Duration = Duration::from_millis(15);
 
+/// A virtual key Windows assigns to nothing (0xE8), tapped to keep a lone
+/// Alt or Windows-key release from opening a menu.
+#[cfg(target_os = "windows")]
+const UNASSIGNED_VK: u32 = 0xE8;
+
 /// The session's input device.
 pub struct Input {
     enigo: Enigo,
+    /// Whether the left button is down: pressed by a drag whose release has
+    /// not gone through yet. Every input call releases it first, or refuses.
+    left_held: bool,
 }
 
 impl std::fmt::Debug for Input {
@@ -42,8 +50,47 @@ impl Input {
             ..Settings::default()
         };
         Enigo::new(&settings)
-            .map(|enigo| Self { enigo })
+            .map(|enigo| Self {
+                enigo,
+                left_held: false,
+            })
             .map_err(|e| format!("opening the input device failed: {e}"))
+    }
+
+    /// Refuses to send anything while a button or a key from an earlier
+    /// call is still down, after trying once more to release it: with the
+    /// left button held a move is a drag, and with Ctrl held a typed `x` is
+    /// Ctrl+X.
+    pub fn ready(&mut self) -> ToolResult<()> {
+        if self.left_held {
+            self.release_left().map_err(|e| {
+                ToolError::NotSupported(format!(
+                    "the left mouse button is still held from an earlier failed release ({e}); no input is sent until it is released"
+                ))
+            })?;
+        }
+        for key in self.enigo.held().0 {
+            self.enigo.key(key, Direction::Release).map_err(|e| {
+                ToolError::NotSupported(format!(
+                    "{key:?} is still held from an earlier failed release ({e}); no input is sent until it is released"
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Releases every button and key this device holds, as far as the OS
+    /// lets it: after a call panicked mid-action, and before the server
+    /// exits.
+    pub fn release_all(&mut self) {
+        if self.left_held && self.release_left().is_err() {
+            tracing::warn!("the left mouse button could not be released");
+        }
+        for key in self.enigo.held().0 {
+            if let Err(e) = self.enigo.key(key, Direction::Release) {
+                tracing::warn!("{key:?} could not be released: {e}");
+            }
+        }
     }
 
     /// Moves the pointer to a physical screen point.
@@ -107,6 +154,7 @@ impl Input {
         double: bool,
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
+        self.ready()?;
         self.move_verified(x, y)?;
         thread::sleep(STEP);
         let button = enigo_button(button);
@@ -142,10 +190,14 @@ impl Input {
         duration: Duration,
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
+        self.ready()?;
         self.move_verified(from.0, from.1)?;
         thread::sleep(STEP);
         guard(None)?;
         self.ensure_at(from.0, from.1)?;
+        // Marked held before the press: a press that went out but reported
+        // failure is released by the next call rather than forgotten.
+        self.left_held = true;
         self.enigo
             .button(Button::Left, Direction::Press)
             .map_err(failed("pressing for a drag"))?;
@@ -192,6 +244,7 @@ impl Input {
                 .button(Button::Left, Direction::Release)
                 .map_err(failed("releasing the mouse button"));
             if result.is_ok() {
+                self.left_held = false;
                 break;
             }
         }
@@ -244,6 +297,7 @@ impl Input {
         dy: i32,
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
+        self.ready()?;
         self.move_verified(x, y)?;
         thread::sleep(STEP);
         let axes = [(dy, Axis::Vertical), (dx, Axis::Horizontal)];
@@ -267,6 +321,7 @@ impl Input {
     /// before each, so a target that lost the foreground receives none of
     /// the rest; the error then says how much was typed.
     pub fn type_text(&mut self, text: &str, guard: &mut Guard<'_>) -> ToolResult<()> {
+        self.ready()?;
         let total = text.chars().count();
         let mut typed = 0;
         let mut buffer = [0_u8; 4];
@@ -276,6 +331,10 @@ impl Input {
                     .enigo
                     .key(enigo_key(key)?, Direction::Click)
                     .map_err(failed("typing a key")),
+                // enigo releases a surrogate pair's low unit with the high
+                // one, so a character past the BMP goes out on its own.
+                #[cfg(target_os = "windows")]
+                Stroke::Char(c) if u32::from(c) > 0xFFFF => crate::os::send_unicode(c),
                 Stroke::Char(c) => self
                     .enigo
                     .text(c.encode_utf8(&mut buffer))
@@ -297,6 +356,7 @@ impl Input {
     /// again before the key itself; a failed guard sends nothing more,
     /// releases the modifiers already held and stops.
     pub fn key(&mut self, combo: &KeyCombo, repeat: u32, guard: &mut Guard<'_>) -> ToolResult<()> {
+        self.ready()?;
         let (key, modifiers) = resolve(combo)?;
         for done in 0..repeat {
             let pressed = self.press_once(key, &modifiers, guard);
@@ -344,6 +404,14 @@ impl Input {
                 .map_err(failed("pressing the key"));
             sent = result.is_ok();
         }
+        // Alt (or the Windows key) released on its own, with nothing pressed
+        // while it was down, opens the menu bar (the Start menu) of whatever
+        // window is in front now. An unassigned key tapped in between makes
+        // it an ordinary chord that does nothing.
+        #[cfg(target_os = "windows")]
+        if !sent && held.iter().any(|k| matches!(k, Key::Alt | Key::Meta)) {
+            let _ = self.enigo.key(Key::Other(UNASSIGNED_VK), Direction::Click);
+        }
         for k in held.into_iter().rev() {
             let released = self
                 .enigo
@@ -382,8 +450,14 @@ fn lerp(a: i32, b: i32, i: i32, steps: i32) -> i32 {
     i32::try_from(at).expect("BUG: an interpolated point lies between two i32 endpoints")
 }
 
+/// The physical button for a logical one: injected button events are
+/// physical, so with the buttons swapped a logical left click is a physical
+/// right one.
 fn enigo_button(button: MouseButton) -> Button {
+    let swapped = crate::os::buttons_swapped();
     match button {
+        MouseButton::Left if swapped => Button::Right,
+        MouseButton::Right if swapped => Button::Left,
         MouseButton::Left => Button::Left,
         MouseButton::Right => Button::Right,
         MouseButton::Middle => Button::Middle,

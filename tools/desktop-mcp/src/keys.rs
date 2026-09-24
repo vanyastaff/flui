@@ -112,6 +112,10 @@ fn key(name: &str) -> Option<KeyName> {
         _ => {
             let mut chars = name.chars();
             return match (chars.next(), chars.next()) {
+                // A control character (a raw ESC, a raw CR) is a named key
+                // under another spelling: taken as a character it would slip
+                // past the checks that know the key by its name.
+                (Some(c), None) if c.is_control() => None,
                 (Some(c), None) => Some(KeyName::Char(c)),
                 _ => function_key(name),
             };
@@ -187,15 +191,37 @@ impl KeyCombo {
     }
 
     /// What handles this combo instead of the foreground window, if the OS
-    /// shell does: the Windows key, the task switcher, Spotlight. No
-    /// foreground check can hold for such a combo, since the window in front
-    /// never receives it. `macos` picks the platform's set.
-    pub fn shell_hotkey(&self, macos: bool) -> Option<&'static str> {
+    /// does: the Windows key, the task switcher, Spotlight, the input-language
+    /// switch. No foreground check can hold for such a combo, since the window
+    /// in front never receives it. `macos` picks the platform's set; `repeat`
+    /// matters for Shift, which pressed five times opens the Sticky Keys
+    /// prompt.
+    pub fn shell_hotkey(&self, macos: bool, repeat: u32) -> Option<&'static str> {
         let only = |mods: &[Modifier]| mods.iter().all(|&m| self.modifiers.contains(&m));
+        if self.key == KeyName::Modifier(Modifier::Shift)
+            && self.modifiers.is_empty()
+            && repeat >= 5
+        {
+            return Some("the accessibility shortcut (Sticky Keys)");
+        }
         if macos {
             return match self.key {
                 KeyName::Tab if self.has(Modifier::Meta) => Some("the macOS app switcher"),
-                KeyName::Space if self.has(Modifier::Meta) => Some("Spotlight"),
+                KeyName::Space if self.has(Modifier::Meta) || self.has(Modifier::Ctrl) => {
+                    Some("Spotlight, the Character Viewer or the input-source switch")
+                }
+                KeyName::Char('d') if only(&[Modifier::Meta, Modifier::Alt]) => {
+                    Some("the Dock (show or hide)")
+                }
+                KeyName::F(2 | 3) if self.has(Modifier::Ctrl) => {
+                    Some("macOS keyboard navigation (the menu bar or the Dock)")
+                }
+                KeyName::F(3 | 4 | 11) if self.modifiers.is_empty() => {
+                    Some("Mission Control, Launchpad or Show Desktop")
+                }
+                KeyName::Char('1'..='9') if only(&[Modifier::Ctrl]) => {
+                    Some("Mission Control (switching Spaces)")
+                }
                 KeyName::Char('q') if only(&[Modifier::Meta, Modifier::Ctrl]) => {
                     Some("macOS (Lock Screen)")
                 }
@@ -225,6 +251,16 @@ impl KeyCombo {
             KeyName::Escape if self.has(Modifier::Ctrl) => Some("the Start menu"),
             KeyName::Delete if only(&[Modifier::Ctrl, Modifier::Alt]) => {
                 Some("the Windows secure attention sequence")
+            }
+            // Alt+Shift and Ctrl+Shift switch the input language, for every
+            // window at once.
+            KeyName::Modifier(Modifier::Shift)
+                if self.has(Modifier::Alt) || self.has(Modifier::Ctrl) =>
+            {
+                Some("the Windows input-language switch")
+            }
+            KeyName::Modifier(Modifier::Alt | Modifier::Ctrl) if self.has(Modifier::Shift) => {
+                Some("the Windows input-language switch")
             }
             _ => None,
         }
@@ -392,7 +428,7 @@ mod tests {
             "ctrl+alt+delete",
         ] {
             assert!(
-                parse(shell).shell_hotkey(false).is_some(),
+                parse(shell).shell_hotkey(false, 1).is_some(),
                 "`{shell}` on Windows"
             );
         }
@@ -405,7 +441,11 @@ mod tests {
             "ctrl+shift+s",
             "alt+d",
         ] {
-            assert_eq!(parse(app).shell_hotkey(false), None, "`{app}` on Windows");
+            assert_eq!(
+                parse(app).shell_hotkey(false, 1),
+                None,
+                "`{app}` on Windows"
+            );
         }
         for shell in [
             "cmd+tab",
@@ -416,14 +456,43 @@ mod tests {
             "ctrl+cmd+q",
             "cmd+shift+q",
             "cmd+alt+shift+q",
+            "ctrl+f3",
+            "ctrl+f2",
+            "cmd+ctrl+space",
+            "ctrl+space",
+            "cmd+alt+d",
+            "ctrl+2",
+            "f11",
         ] {
             assert!(
-                parse(shell).shell_hotkey(true).is_some(),
+                parse(shell).shell_hotkey(true, 1).is_some(),
                 "`{shell}` on macOS"
             );
         }
         for app in ["cmd+q", "cmd+s", "cmd+shift+s", "esc", "cmd+w"] {
-            assert_eq!(parse(app).shell_hotkey(true), None, "`{app}` on macOS");
+            assert_eq!(parse(app).shell_hotkey(true, 1), None, "`{app}` on macOS");
+        }
+    }
+
+    /// Windows switches the input language on Alt+Shift and Ctrl+Shift, and
+    /// Shift pressed five times opens the Sticky Keys prompt.
+    #[test]
+    fn language_switch_and_sticky_keys_are_shell_hotkeys() {
+        for shell in ["alt+shift", "ctrl+shift", "shift+alt"] {
+            assert!(parse(shell).shell_hotkey(false, 1).is_some(), "`{shell}`");
+        }
+        assert!(parse("shift").shell_hotkey(false, 5).is_some());
+        assert!(parse("shift").shell_hotkey(true, 5).is_some());
+        assert_eq!(parse("shift").shell_hotkey(false, 4), None);
+    }
+
+    /// A control character is not a key of its own: a raw ESC would
+    /// otherwise reach the keyboard as Escape without the checks that know
+    /// Escape by name (ctrl+esc opens Start).
+    #[test]
+    fn control_characters_are_not_keys() {
+        for raw in ["ctrl+\u{1b}", "alt+\u{1b}", "\u{7f}", "ctrl+\u{0}"] {
+            assert!(KeyCombo::parse(raw).is_err(), "{raw:?} must be refused");
         }
     }
 

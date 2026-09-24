@@ -195,6 +195,16 @@ impl Input {
     }
 
     /// Unreachable: no `Input` exists.
+    pub fn ready(&mut self) -> crate::error::ToolResult<()> {
+        match *self {}
+    }
+
+    /// Unreachable: no `Input` exists.
+    pub fn release_all(&mut self) {
+        match *self {}
+    }
+
+    /// Unreachable: no `Input` exists.
     pub fn position(&self) -> Option<(i32, i32)> {
         match *self {}
     }

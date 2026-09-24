@@ -213,15 +213,39 @@ fn a11y_probe_counter_through_mcp() {
     );
     println!("-- count region pixels changed after invoke");
 
-    // Input the safety rule must refuse: the test process owns no foreground window.
+    // Input the safety rules must refuse. A pid this session never handed
+    // out is refused before anything is looked at.
     let refused = client.call("key", json!({ "combo": "a", "pid": std::process::id() }));
-    show("key refused", &refused["content"][0]);
+    show("key to an unlisted pid (refused)", &refused["content"][0]);
     assert_eq!(refused["isError"], true, "{refused}");
     let text = refused["content"][0]["text"].as_str().unwrap_or_default();
     assert!(
-        text.contains("not the foreground window"),
+        text.contains("not listed"),
         "refused for that reason: {text}"
     );
+    // A listed window of another application, while the probe is in front,
+    // is refused as not the foreground window.
+    let all = ok("list_windows", &client.call("list_windows", json!({})));
+    if let Some(other) = all["windows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|w| w["pid"].as_u64() != Some(pid) && w["is_minimized"] != true)
+    {
+        let refused = client.call("key", json!({ "combo": "a", "window_id": other["id"] }));
+        show(
+            "key to a window behind the probe (refused)",
+            &refused["content"][0],
+        );
+        assert_eq!(refused["isError"], true, "{refused}");
+        let text = refused["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.contains("not the foreground window"),
+            "refused for that reason: {text}"
+        );
+    } else {
+        println!("-- NOT EXERCISED: no other application window to aim at");
+    }
 
     // A real pointer click on the same button.
     {
@@ -276,7 +300,10 @@ fn a11y_probe_counter_through_mcp() {
     } else {
         assert_eq!(focused["isError"], true, "{focused}");
         let text = focused["content"][0]["text"].as_str().unwrap_or_default();
-        assert!(text.contains("did not take keyboard focus"), "{text}");
+        assert!(
+            text.contains("keyboard focus is neither on it nor inside it"),
+            "{text}"
+        );
     }
 
     // The pointer lands where asked, in physical pixels (DPI-aware SendInput).

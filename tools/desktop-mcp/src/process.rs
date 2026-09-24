@@ -51,6 +51,15 @@ struct Tracked {
 }
 
 impl Tracked {
+    /// Remembers how `pid` ended, dropping the oldest past the cap.
+    fn remember(&mut self, pid: u32, code: Option<i32>) {
+        self.exited.retain(|&(old, _)| old != pid);
+        if self.exited.len() == REMEMBERED_EXITS {
+            self.exited.pop_front();
+        }
+        self.exited.push_back((pid, code));
+    }
+
     /// Moves the children that exited on their own to `exited`, so a long
     /// session of short-lived launches does not pile up handles or zombies.
     fn reap(&mut self) {
@@ -66,13 +75,17 @@ impl Tracked {
                 false
             }
         });
-        for exit in done {
-            if self.exited.len() == REMEMBERED_EXITS {
-                self.exited.pop_front();
-            }
-            self.exited.push_back(exit);
+        for (pid, code) in done {
+            self.remember(pid, code);
         }
     }
+}
+
+/// How a launched process ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Exited {
+    /// Its exit code, when the OS reports one.
+    pub code: Option<i32>,
 }
 
 /// The launched children, by pid.
@@ -83,12 +96,6 @@ pub struct Children {
     /// launched, since a hard kill of the server would leave it running.
     #[cfg(target_os = "windows")]
     job: Result<crate::os::KillOnExitJob, String>,
-}
-
-impl Default for Children {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl Children {
@@ -183,16 +190,22 @@ impl Children {
         let mut tracked = self.lock();
         if let Some(mut child) = tracked.running.remove(&pid) {
             drop(tracked);
-            return end(pid, &mut child).inspect_err(|_| {
+            return match end(pid, &mut child) {
+                // Remembered, so a second kill of the same pid says it has
+                // exited rather than that it was never launched.
+                Ok(killed) => {
+                    self.lock().remember(pid, killed.exit_code);
+                    Ok(killed)
+                }
                 // Still running: keep it tracked, so it can be retried and
                 // is ended again at shutdown.
-                self.lock().running.insert(pid, child);
-            });
+                Err(e) => {
+                    self.lock().running.insert(pid, child);
+                    Err(e)
+                }
+            };
         }
-        let exited = tracked.exited.iter().position(|&(old, _)| old == pid);
-        if let Some(at) = exited
-            && let Some((_, exit_code)) = tracked.exited.remove(at)
-        {
+        if let Some(&(_, exit_code)) = tracked.exited.iter().rev().find(|&&(old, _)| old == pid) {
             return Ok(Killed {
                 pid,
                 already_exited: true,
@@ -202,6 +215,22 @@ impl Children {
         Err(ToolError::InvalidArgument(format!(
             "pid {pid} was not launched by this session; kill only ends processes started with launch"
         )))
+    }
+
+    /// How a launched `pid` ended, once it has (`Some(exit code)`); `None`
+    /// while it runs or when it is not this session's.
+    pub fn exited(&self, pid: u32) -> Option<Exited> {
+        let mut tracked = self.lock();
+        tracked.reap();
+        if tracked.running.contains_key(&pid) {
+            return None;
+        }
+        tracked
+            .exited
+            .iter()
+            .rev()
+            .find(|&&(old, _)| old == pid)
+            .map(|&(_, code)| Exited { code })
     }
 
     /// Whether `pid` was launched and has not been killed or reaped.
@@ -311,32 +340,42 @@ mod tests {
             .expect("BUG: relaunching the test binary works")
             .0;
         assert!(!children.contains(first), "the exited child was reaped");
+        assert_eq!(children.exited(first), Some(Exited { code: Some(0) }));
         let killed = children
             .kill(first)
             .expect("BUG: a reaped child is still known");
         assert!(killed.already_exited);
         assert_eq!(killed.exit_code, Some(0));
+        let again = children
+            .kill(first)
+            .expect("BUG: a second kill says it exited");
+        assert!(again.already_exited);
         let _ = children.kill(second);
     }
 
     #[test]
     fn launch_then_kill_round_trip() {
         let children = Children::new();
-        let program = std::env::current_exe().expect("BUG: the test binary has a path");
-        // The test binary itself; `--list` prints the test names and exits.
+        // A child that runs well past the kill, so the kill is what ends it.
+        let (program, args) = if cfg!(windows) {
+            ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
+        } else {
+            ("sleep", vec!["60".into()])
+        };
         let pid = children
             .launch(&LaunchSpec {
-                program: program.to_string_lossy().into_owned(),
-                args: vec!["--list".into()],
+                program: program.into(),
+                args,
                 ..LaunchSpec::default()
             })
-            .expect("BUG: relaunching the test binary works")
+            .expect("BUG: a long-running system program starts")
             .0;
         assert!(children.contains(pid));
         let killed = children
             .kill(pid)
             .expect("BUG: a launched pid can be killed");
         assert_eq!(killed.pid, pid);
+        assert!(!killed.already_exited, "the kill ended it");
         assert!(!children.contains(pid));
     }
 }

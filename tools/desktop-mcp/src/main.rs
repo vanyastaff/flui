@@ -23,14 +23,21 @@ mod server;
 mod worker;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context as _;
 use rmcp::ServiceExt as _;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use crate::process::Children;
 use crate::server::DesktopServer;
 use crate::worker::Worker;
+
+/// How long shutdown waits for the desktop thread to finish the call in
+/// progress and release held input: longer than any one call (a drag lasts
+/// at most 10 s).
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -51,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
 
     let worker = Worker::spawn().context("starting the desktop thread")?;
     let children = Arc::new(Children::new());
-    let server = DesktopServer::new(worker, Arc::clone(&children));
+    let server = DesktopServer::new(worker.clone(), Arc::clone(&children));
 
     let service = server
         .serve(rmcp::transport::stdio())
@@ -60,6 +67,20 @@ async fn main() -> anyhow::Result<()> {
     let reason = service.waiting().await;
     tracing::info!(?reason, "MCP session ended");
 
+    // Whatever was running when the client left finishes first (the queue
+    // runs in order), then everything held is released: exiting with a
+    // button or a modifier down would leave it down for the whole desktop.
+    let released = tokio::time::timeout(
+        SHUTDOWN_WAIT,
+        worker.run(&CancellationToken::new(), |d| {
+            d.release_input();
+            Ok(())
+        }),
+    )
+    .await;
+    if !matches!(released, Ok(Ok(()))) {
+        tracing::warn!("could not release held input before exiting: {released:?}");
+    }
     children.kill_all();
     Ok(())
 }

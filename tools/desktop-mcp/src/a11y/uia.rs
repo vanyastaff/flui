@@ -2,7 +2,9 @@
 //!
 //! Lives on the worker thread: [`uiautomation::UIAutomation::new`] joins that
 //! thread to the COM multithreaded apartment, and every `UIElement` this
-//! backend holds stays on it.
+//! backend holds stays on it. Calls into providers carry UI Automation's own
+//! timeouts ([`crate::os::uia_with_timeouts`]), so a hung application fails
+//! a call instead of holding the thread.
 //!
 //! A tree read walks the control view one element at a time: each step
 //! fetches the next child or sibling together with every property the
@@ -11,7 +13,7 @@
 //! budget is ever fetched, however many children a provider claims. The
 //! runtime id (the handle's identity) is read live per element.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use uiautomation::core::UICacheRequest;
@@ -85,6 +87,7 @@ const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::ValueValue,
     UIProperty::RangeValueValue,
     UIProperty::ToggleToggleState,
+    UIProperty::ProcessId,
 ];
 
 /// `UIA_E_ELEMENTNOTAVAILABLE`: the provider removed the element.
@@ -102,6 +105,17 @@ const E_INVALID_WINDOW: i32 = 0x8007_0578_u32 as i32;
 /// `UIA_E_ELEMENTNOTENABLED`: the element is disabled.
 const E_ELEMENT_NOT_ENABLED: i32 = 0x8004_0200_u32 as i32;
 
+/// An issued element, with the process it belonged to when issued: a handle
+/// is refused once that process is gone, even if UI Automation (keyed by
+/// window handle for Win32 controls) would follow a recycled handle into
+/// another application.
+#[derive(Debug, Clone)]
+struct Held {
+    element: UIElement,
+    pid: u32,
+    started: Option<u64>,
+}
+
 /// UI Automation client state for the session.
 pub struct Uia {
     automation: UIAutomation,
@@ -109,8 +123,11 @@ pub struct Uia {
     /// are fetched only as far as the budget reaches.
     walker: UITreeWalker,
     single: UICacheRequest,
-    elements: ElementCache<Identity, UIElement>,
+    elements: ElementCache<Identity, Held>,
     anonymous: u64,
+    /// Process start times looked up during the current read, one lookup
+    /// per process rather than per element.
+    starts: HashMap<u32, Option<u64>>,
 }
 
 impl std::fmt::Debug for Uia {
@@ -128,7 +145,10 @@ fn platform(context: &str) -> impl FnOnce(uiautomation::Error) -> ToolError + '_
 impl Uia {
     /// Joins this thread to the COM MTA and prepares the cache requests.
     pub fn new() -> Result<Self, uiautomation::Error> {
-        let automation = UIAutomation::new()?;
+        // The first client joins the thread to COM; the one with timeouts,
+        // created on top of it, replaces it where the OS offers one.
+        let plain = UIAutomation::new()?;
+        let automation = crate::os::uia_with_timeouts().map_or(plain, UIAutomation::from);
         let walker = automation.get_control_view_walker()?;
         let single = node_request(&automation, TreeScope::Element)?;
         Ok(Self {
@@ -137,34 +157,65 @@ impl Uia {
             single,
             elements: ElementCache::default(),
             anonymous: 0,
+            starts: HashMap::new(),
         })
     }
 
-    /// Issues (or re-issues) the handle for `element`. UI Automation may
-    /// hand a removed element's runtime id to a new one; the handle already
-    /// issued for the id is kept only while its own object still answers to
-    /// that id, else the id is retired and the new element gets a fresh
-    /// handle, so a held handle never retargets to another control.
-    fn register(&mut self, element: &UIElement) -> String {
-        let key = match element.get_runtime_id() {
-            Ok(id) if !id.is_empty() => Identity::Runtime(id),
-            // No runtime id: a handle that is never shared with another read.
-            _ => {
-                self.anonymous += 1;
-                Identity::Anonymous(self.anonymous)
-            }
-        };
+    /// The identity a handle for `element` is keyed by: its runtime id, or
+    /// an identity of its own when it has none.
+    fn identity(&mut self, element: &UIElement) -> Identity {
+        match crate::os::runtime_id(element.as_ref()) {
+            Ok(Some(id)) => Identity::Runtime(id),
+            _ => self.fresh_identity(),
+        }
+    }
+
+    fn fresh_identity(&mut self) -> Identity {
+        self.anonymous += 1;
+        Identity::Anonymous(self.anonymous)
+    }
+
+    /// Issues (or re-issues) the handle for `element` under `key`. UI
+    /// Automation may hand a removed element's runtime id to a new one; the
+    /// handle already issued for the id is kept only while its own object
+    /// still answers to that id, else the id is retired and the new element
+    /// gets a fresh handle, so a held handle never retargets to another
+    /// control.
+    fn register(&mut self, key: Identity, element: &UIElement) -> String {
         if let Identity::Runtime(id) = &key
             && let Some(held) = self.elements.by_identity(&key)
-            && !held.get_runtime_id().is_ok_and(|now| now == *id)
+            && !crate::os::runtime_id(held.element.as_ref())
+                .is_ok_and(|now| now.as_deref() == Some(id.as_slice()))
         {
             self.elements.retire(&key);
         }
-        self.elements.insert(key, element.clone())
+        let pid = cached_i32(element, UIProperty::ProcessId)
+            .and_then(|pid| u32::try_from(pid).ok())
+            .unwrap_or(0);
+        let started = *self
+            .starts
+            .entry(pid)
+            .or_insert_with(|| crate::os::process_started(pid));
+        self.elements.insert(
+            key,
+            Held {
+                element: element.clone(),
+                pid,
+                started,
+            },
+        )
     }
 
-    fn element(&self, handle: &str) -> ToolResult<UIElement> {
-        self.elements.get(handle).cloned()
+    /// The element behind `handle`, refused as stale once the process it
+    /// belonged to when issued is gone.
+    fn alive(&self, handle: &str) -> ToolResult<UIElement> {
+        let held = self.elements.get(handle)?;
+        if let Some(started) = held.started
+            && crate::os::process_started(held.pid) != Some(started)
+        {
+            return Err(ToolError::StaleElement(handle.to_owned()));
+        }
+        Ok(held.element.clone())
     }
 
     /// `element` and its descendants, fetched one child at a time through
@@ -175,14 +226,27 @@ impl Uia {
     /// shows an owned window (a dialog) both as a top-level window and under
     /// its owner, and it is reported once.
     fn build(&mut self, element: &UIElement, depth: usize, walk: &mut Walk) -> Option<Node> {
-        let mut node = self.describe(element);
-        if !walk.seen.insert(node.id.clone()) {
-            return None;
+        // Spent before anything else: a repeat or a cycle costs its fetch.
+        walk.budget = walk.budget.saturating_sub(1);
+        let mut key = self.identity(element);
+        if let Some(handle) = self.elements.handle_of(&key)
+            && walk.seen.contains(&handle)
+        {
+            // The same runtime id twice in one read. An owned window listed
+            // at the top and under its owner is one element; anything else
+            // is a different element claiming the id, which gets a handle of
+            // its own instead of taking over the first one's.
+            if role(element) == "Window" {
+                return None;
+            }
+            key = self.fresh_identity();
         }
+        let id = self.register(key, element);
+        walk.seen.insert(id.clone());
+        let mut node = describe(element, id);
         // A cut string is not what a search for the whole one would match,
         // and a property the provider failed to report matches nothing.
-        walk.truncated |= node.is_clipped() || !Self::searchable(element);
-        walk.budget = walk.budget.saturating_sub(1);
+        walk.truncated |= node.is_clipped() || !searchable(element);
         walk.bytes = walk.bytes.saturating_sub(node.text_bytes());
         let mut omitted = 0;
         // Past the budget no child is fetched at all, not even the first:
@@ -229,80 +293,15 @@ impl Uia {
         Some(node)
     }
 
-    /// A [`Node`] from `element`'s cached properties, children empty.
-    fn describe(&mut self, element: &UIElement) -> Node {
-        let id = self.register(element);
-        let patterns: Vec<&'static str> = PATTERNS
-            .iter()
-            .filter(|(prop, _)| cached_bool(element, *prop))
-            .map(|&(_, name)| name)
-            .collect();
-        // A text control's value, or a slider's number when it exposes only
-        // RangeValue — what `set_value` writes, so a caller can read it back.
-        let value = if patterns.contains(&"Value") {
-            element
-                .get_cached_property_value(UIProperty::ValueValue)
-                .ok()
-                .and_then(|v| TryInto::<String>::try_into(v).ok())
-                .map(clip)
-        } else if patterns.contains(&"RangeValue") {
-            element
-                .get_cached_property_value(UIProperty::RangeValueValue)
-                .ok()
-                .and_then(|v| TryInto::<f64>::try_into(v).ok())
-                .map(|number| number.to_string())
-        } else {
-            None
-        };
-        let toggle_state = patterns
-            .contains(&"Toggle")
-            .then(|| {
-                element
-                    .get_cached_property_value(UIProperty::ToggleToggleState)
-                    .ok()
-                    .and_then(|v| TryInto::<i32>::try_into(v).ok())
-                    .map(toggle_name)
-            })
-            .flatten();
-        Node {
-            id,
-            role: element
-                .get_cached_control_type()
-                .map_or_else(|_| "Unknown".to_owned(), |t| format!("{t:?}")),
-            name: non_empty(element.get_cached_name()),
-            value,
-            automation_id: non_empty(element.get_cached_automation_id()),
-            class_name: non_empty(element.get_cached_classname()),
-            rect: element
-                .get_cached_bounding_rectangle()
-                .ok()
-                .map(|r| Rect::from_ltrb(r.get_left(), r.get_top(), r.get_right(), r.get_bottom())),
-            enabled: element.is_cached_enabled().unwrap_or(false),
-            has_keyboard_focus: element.has_cached_keyboard_focus().unwrap_or(false),
-            is_keyboard_focusable: element.is_cached_keyboard_focusable().unwrap_or(false),
-            toggle_state,
-            patterns,
-            children: Vec::new(),
-            omitted_children: None,
-        }
-    }
-
-    /// Whether the element UIA hit-tests at `(x, y)` is `element` or one of
-    /// its descendants.
-    fn hits_element(&self, x: i32, y: i32, element: &UIElement) -> bool {
-        let Ok(hit) = self
-            .automation
-            .element_from_point(uiautomation::types::Point::new(x, y))
-        else {
-            return false;
-        };
+    /// Whether `candidate` is `element` or one of its descendants.
+    fn is_within(&self, candidate: UIElement, element: &UIElement) -> bool {
         let (Ok(walker), Ok(root)) = (
             self.automation.get_raw_view_walker(),
             self.automation.get_root_element(),
         ) else {
             return false;
         };
-        let mut current = hit;
+        let mut current = candidate;
         for _ in 0..ANCESTOR_LIMIT {
             if self
                 .automation
@@ -326,6 +325,14 @@ impl Uia {
         false
     }
 
+    /// Whether the element UIA hit-tests at `(x, y)` is `element` or one of
+    /// its descendants.
+    fn hits_element(&self, x: i32, y: i32, element: &UIElement) -> bool {
+        self.automation
+            .element_from_point(uiautomation::types::Point::new(x, y))
+            .is_ok_and(|hit| self.is_within(hit, element))
+    }
+
     /// The top-level window `element` belongs to, by the definition the
     /// point check uses (`GA_ROOT` of the window under the point): the root
     /// of the nearest native window at or above it. UI Automation's own
@@ -344,43 +351,46 @@ impl Uia {
         None
     }
 
-    /// `element` once it holds keyboard focus. A provider can accept
-    /// `SetFocus` and leave the focus where it was (an element that is not
-    /// keyboard-focusable does), so success is read back, not assumed; the
-    /// focus may land a moment later, so it is polled briefly.
+    /// `element` once keyboard focus is on it or inside it (a combo box
+    /// hands focus to its edit field, a web view host to its content). A
+    /// provider can accept `SetFocus` and leave the focus where it was (an
+    /// element that is not keyboard-focusable does), so success is read
+    /// back, not assumed; the focus may land a moment later, so it is polled
+    /// briefly. The request itself went out, so a failed readback says so.
     fn focused(&mut self, handle: &str, element: &UIElement) -> ToolResult<Node> {
         let mut last = None;
         for attempt in 0..FOCUS_POLLS {
             if attempt > 0 {
                 std::thread::sleep(FOCUS_POLL_INTERVAL);
             }
-            let fresh = element
-                .build_updated_cache(&self.single)
-                .map_err(|e| classify(handle, "reading back focus", &e))?;
-            let node = self.describe(&fresh);
-            if node.has_keyboard_focus {
+            let fresh =
+                element
+                    .build_updated_cache(&self.single)
+                    .map_err(|e| ToolError::Interrupted {
+                        cause: Box::new(classify(handle, "reading back focus", &e)),
+                        what: "focus was requested; only reading back where it landed failed"
+                            .into(),
+                    })?;
+            let node = describe(&fresh, handle.to_owned());
+            let inside = !node.has_keyboard_focus
+                && self
+                    .automation
+                    .get_focused_element()
+                    .is_ok_and(|focused| self.is_within(focused, element));
+            if node.has_keyboard_focus || inside {
                 return Ok(node);
             }
             last = Some(node);
         }
         let focusable = last.is_some_and(|n| n.is_keyboard_focusable);
         Err(ToolError::NotSupported(format!(
-            "element `{handle}` accepted focus but did not take keyboard focus{}; click it or use key tab to move focus",
+            "element `{handle}` accepted focus but keyboard focus is neither on it nor inside it{}; click it or use key tab to move focus",
             if focusable {
                 ""
             } else {
                 " (it reports is_keyboard_focusable: false)"
             }
         )))
-    }
-
-    /// Whether the provider reported the properties a search matches on
-    /// (name, control type, automation id): a failure there is not the same
-    /// as an empty value.
-    fn searchable(element: &UIElement) -> bool {
-        element.get_cached_name().is_ok()
-            && element.get_cached_control_type().is_ok()
-            && element.get_cached_automation_id().is_ok()
     }
 
     /// The element's patterns, read live, for error messages.
@@ -428,19 +438,31 @@ impl Uia {
     }
 
     fn perform(handle: &str, element: &UIElement, action: &Action) -> ToolResult<()> {
-        // The action's own call failing because its element went away most
-        // often means it ran and closed its window (an OK or Delete button):
-        // the caller must look before it retries, not repeat it blindly.
         let lookup = |what: &'static str| move |e: uiautomation::Error| classify(handle, what, &e);
+        // The action's own call reached the application, so a failure there
+        // does not mean it did not run: its element going away most often
+        // means it ran and closed its window (an OK or Delete button), and a
+        // timeout that it is still running (a modal dialog it opened keeps
+        // the call from returning). Only a disabled element is a clean
+        // refusal. Anything else must be looked at before a retry.
         let fail = |what: &'static str| {
             move |e: uiautomation::Error| match classify(handle, what, &e) {
-                stale @ ToolError::StaleElement(_) => ToolError::Interrupted {
-                    cause: Box::new(stale),
-                    what: format!(
-                        "it went away during {what}, which usually means the action ran; read the tree before retrying"
-                    ),
-                },
-                other => other,
+                refused @ ToolError::InvalidArgument(_) => refused,
+                cause => {
+                    let what = if matches!(cause, ToolError::StaleElement(_)) {
+                        format!(
+                            "it went away during {what}, which usually means the action ran; read the tree before retrying"
+                        )
+                    } else {
+                        format!(
+                            "{what} reached the application and then failed or timed out, so it may have run; read the tree before retrying"
+                        )
+                    };
+                    ToolError::Interrupted {
+                        cause: Box::new(cause),
+                        what,
+                    }
+                }
             }
         };
         match action {
@@ -515,7 +537,12 @@ impl Uia {
 }
 
 impl AccessibilityBackend for Uia {
+    fn available(&self) -> ToolResult<()> {
+        Ok(())
+    }
+
     fn tree(&mut self, windows: &[u32], max_depth: usize, deadline: Instant) -> ToolResult<Read> {
+        self.starts.clear();
         let mut roots = Vec::with_capacity(windows.len());
         let mut walk = Walk {
             max_depth,
@@ -526,6 +553,7 @@ impl AccessibilityBackend for Uia {
             truncated: false,
         };
         let mut spare = NODE_BUDGET;
+        let mut failed = None;
         for (read, &window) in windows.iter().enumerate() {
             if spare == 0 || walk.bytes == 0 || Instant::now() >= deadline {
                 walk.truncated = true;
@@ -544,20 +572,29 @@ impl AccessibilityBackend for Uia {
                 // Closed between listing and reading (a splash screen, a
                 // popup): the rest of the target is still worth reading.
                 Err(e) if is_gone(e.code()) => continue,
+                // Failing (hung, timed out): the rest is still read, and the
+                // read says it is incomplete.
                 Err(e) => {
-                    return Err(ToolError::platform(
-                        format!("reading the tree of window {window}"),
-                        e,
-                    ));
+                    walk.truncated = true;
+                    failed.get_or_insert((window, e));
+                    continue;
                 }
             };
             roots.extend(self.build(&root, 0, &mut walk));
             spare = spare.saturating_sub(share - walk.budget);
         }
-        if roots.is_empty() && !walk.truncated {
-            return Err(ToolError::NotFound(
-                "the target's windows closed while they were being read".into(),
-            ));
+        if roots.is_empty() {
+            if let Some((window, e)) = failed {
+                return Err(ToolError::platform(
+                    format!("reading the tree of window {window}"),
+                    e,
+                ));
+            }
+            if !walk.truncated {
+                return Err(ToolError::NotFound(
+                    "the target's windows closed while they were being read".into(),
+                ));
+            }
         }
         Ok(Read {
             roots,
@@ -566,23 +603,28 @@ impl AccessibilityBackend for Uia {
     }
 
     fn act(&mut self, handle: &str, action: &Action) -> ToolResult<Node> {
-        let element = self.element(handle)?;
+        let element = self.alive(handle)?;
         Self::perform(handle, &element, action)?;
         if matches!(action, Action::Focus) {
             return self.focused(handle, &element);
         }
+        // The reply keeps the caller's handle either way: a readback that
+        // minted another one would hide which element this was.
         match element.build_updated_cache(&self.single) {
-            Ok(fresh) => Ok(self.describe(&fresh)),
+            Ok(fresh) => Ok(describe(&fresh, handle.to_owned())),
             // The action succeeded and took its own element away (a Close or
             // Delete button, a navigation): that is the action's result, not a
-            // failure. Answer with the node as it was just before.
+            // failure. Answer with the node as it was just before, marked.
             Err(e)
                 if matches!(
                     classify(handle, "reading back", &e),
                     ToolError::StaleElement(_)
                 ) =>
             {
-                Ok(self.describe(&element))
+                Ok(Node {
+                    gone: true,
+                    ..describe(&element, handle.to_owned())
+                })
             }
             // The action itself succeeded; only reading the result failed.
             // Say so, or a retry repeats a destructive action.
@@ -594,7 +636,7 @@ impl AccessibilityBackend for Uia {
     }
 
     fn click_point(&mut self, handle: &str) -> ToolResult<ClickPoint> {
-        let element = self.element(handle)?;
+        let element = self.alive(handle)?;
         let (x, y) = if let Ok(Some(p)) = element.get_clickable_point() {
             (p.get_x(), p.get_y())
         } else {
@@ -626,7 +668,7 @@ impl AccessibilityBackend for Uia {
     }
 
     fn hits(&mut self, handle: &str, x: i32, y: i32) -> ToolResult<bool> {
-        let element = self.element(handle)?;
+        let element = self.alive(handle)?;
         Ok(self.hits_element(x, y, &element))
     }
 
@@ -636,6 +678,77 @@ impl AccessibilityBackend for Uia {
             .and_then(|e| e.set_focus())
             .map_err(platform("focusing the window through UI Automation"))
     }
+}
+
+/// A [`Node`] from `element`'s cached properties under handle `id`,
+/// children empty.
+fn describe(element: &UIElement, id: String) -> Node {
+    let patterns: Vec<&'static str> = PATTERNS
+        .iter()
+        .filter(|(prop, _)| cached_bool(element, *prop))
+        .map(|&(_, name)| name)
+        .collect();
+    // A text control's value, or a slider's number when it exposes only
+    // RangeValue — what `set_value` writes, so a caller can read it back.
+    let value = if patterns.contains(&"Value") {
+        element
+            .get_cached_property_value(UIProperty::ValueValue)
+            .ok()
+            .and_then(|v| TryInto::<String>::try_into(v).ok())
+            .map(clip)
+    } else if patterns.contains(&"RangeValue") {
+        element
+            .get_cached_property_value(UIProperty::RangeValueValue)
+            .ok()
+            .and_then(|v| TryInto::<f64>::try_into(v).ok())
+            .map(|number| number.to_string())
+    } else {
+        None
+    };
+    let toggle_state = patterns
+        .contains(&"Toggle")
+        .then(|| cached_i32(element, UIProperty::ToggleToggleState).map(toggle_name))
+        .flatten();
+    Node {
+        id,
+        role: role(element),
+        name: non_empty(element.get_cached_name()),
+        value,
+        automation_id: non_empty(element.get_cached_automation_id()),
+        class_name: non_empty(element.get_cached_classname()),
+        rect: element
+            .get_cached_bounding_rectangle()
+            .ok()
+            .map(|r| Rect::from_ltrb(r.get_left(), r.get_top(), r.get_right(), r.get_bottom())),
+        enabled: element.is_cached_enabled().unwrap_or(false),
+        has_keyboard_focus: element.has_cached_keyboard_focus().unwrap_or(false),
+        is_keyboard_focusable: element.is_cached_keyboard_focusable().unwrap_or(false),
+        toggle_state,
+        patterns,
+        children: Vec::new(),
+        omitted_children: None,
+        gone: false,
+    }
+}
+
+/// The element's control type, as `find`'s `role` matches it: the UIA name
+/// (`Button`), or `Custom(<id>)` for an id the `uiautomation` crate does
+/// not name, rather than a failure that would hide the element from search.
+fn role(element: &UIElement) -> String {
+    match element.get_cached_control_type() {
+        Ok(known) => format!("{known:?}"),
+        Err(_) => cached_i32(element, UIProperty::ControlType)
+            .map_or_else(|| "Unknown".to_owned(), |id| format!("Custom({id})")),
+    }
+}
+
+/// Whether the provider reported the properties a search matches on (name,
+/// control type, automation id): a failure there is not the same as an
+/// empty value.
+fn searchable(element: &UIElement) -> bool {
+    element.get_cached_name().is_ok()
+        && cached_i32(element, UIProperty::ControlType).is_some()
+        && element.get_cached_automation_id().is_ok()
 }
 
 /// The element a walker step reached: `None` at the end of the children,
@@ -654,9 +767,9 @@ fn walked(step: uiautomation::Result<UIElement>, walk: &mut Walk) -> Option<UIEl
     }
 }
 
-/// What an element handle is keyed by. An element without a runtime id
-/// gets an identity of its own that no runtime id can equal, whatever
-/// integers a provider reports.
+/// What an element handle is keyed by. An element without a runtime id, or
+/// a second element claiming one already issued in the same read, gets an
+/// identity of its own that no runtime id can equal.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum Identity {
     Runtime(Vec<i32>),
@@ -711,6 +824,13 @@ fn cached_bool(element: &UIElement, prop: UIProperty) -> bool {
         .ok()
         .and_then(|v| TryInto::<bool>::try_into(v).ok())
         .unwrap_or(false)
+}
+
+fn cached_i32(element: &UIElement, prop: UIProperty) -> Option<i32> {
+    element
+        .get_cached_property_value(prop)
+        .ok()
+        .and_then(|v| TryInto::<i32>::try_into(v).ok())
 }
 
 fn non_empty(value: uiautomation::Result<String>) -> Option<String> {
@@ -778,5 +898,18 @@ mod tests {
         let cut = clip("я".repeat(MAX_PROPERTY_CHARS + 10));
         assert_eq!(cut.chars().count(), MAX_PROPERTY_CHARS + 1);
         assert!(cut.ends_with('…'));
+    }
+
+    /// Reading a runtime id repeatedly does not grow the process: the
+    /// arrays UI Automation hands back are freed.
+    #[test]
+    fn runtime_ids_are_read_without_leaking() {
+        let uia = Uia::new().expect("BUG: UI Automation is available on Windows");
+        let root = uia
+            .automation
+            .get_root_element()
+            .expect("BUG: the desktop element exists");
+        let id = crate::os::runtime_id(root.as_ref()).expect("BUG: the desktop has a runtime id");
+        assert!(id.is_some_and(|id| !id.is_empty()));
     }
 }

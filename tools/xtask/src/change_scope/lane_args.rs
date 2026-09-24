@@ -388,8 +388,15 @@ mod tests {
         );
         assert!(!a.test_args.contains("flui-platform")); // its suite runs in the headless leg
         let a = args(&["crates/flui-material/src/lib.rs"]);
-        assert_eq!((a.cross_platform, a.cross_cli), (false, false));
+        assert_eq!(
+            (a.cross_platform, a.cross_cli, a.cross_desktop_mcp),
+            (false, false, false)
+        );
         assert!(a.cross_app); // `flui` is in scope: its mobile runner is
+        // The desktop MCP server's Windows and macOS backends compile only
+        // for those targets: a change to it gets their cross clippy.
+        let a = args(&["tools/desktop-mcp/src/main.rs"]);
+        assert!(a.cross_desktop_mcp);
     }
 
     #[test]
@@ -508,6 +515,7 @@ mod tests {
             a.cross_platform
                 && a.cross_app
                 && a.cross_cli
+                && a.cross_desktop_mcp
                 && a.cross_ios
                 && a.wasm_facade
                 && a.platform

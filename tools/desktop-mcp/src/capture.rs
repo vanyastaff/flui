@@ -158,7 +158,7 @@ mod backend {
 mod backend {
     use super::{Shot, ShotTarget, ToolError, ToolResult, WindowInfo};
 
-    fn unsupported() -> ToolError {
+    pub(super) fn unsupported() -> ToolError {
         ToolError::NotSupported(format!(
             "window listing and capture are not supported on {} yet (Windows and macOS only)",
             std::env::consts::OS
@@ -175,6 +175,26 @@ mod backend {
 }
 
 pub use backend::{screenshot, windows};
+
+/// Whether capture works on this OS; checked first, so an unsupported OS
+/// says so rather than failing on a target's binding.
+#[cfg_attr(
+    any(target_os = "windows", target_os = "macos"),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "the error is the answer on the OSes without a capture backend"
+    )
+)]
+pub fn available() -> ToolResult<()> {
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Err(backend::unsupported())
+    }
+}
 
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 fn encode(image: RgbaImage, source: Rect, max_side: Option<u32>) -> ToolResult<Shot> {

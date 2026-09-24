@@ -34,13 +34,6 @@ pub enum ToolError {
     )]
     UnknownElement(String),
 
-    #[cfg_attr(
-        not(target_os = "windows"),
-        allow(
-            dead_code,
-            reason = "raised by the UIA backend, the only accessibility backend built yet"
-        )
-    )]
     /// The element existed once but the application has since removed it.
     #[error(
         "element `{0}` is no longer available (the UI changed); read the tree again for a fresh id"
@@ -109,6 +102,10 @@ pub enum ToolError {
         /// What had already happened.
         what: String,
     },
+
+    /// The client cancelled the request before it ran; nothing was done.
+    #[error("cancelled by the client before it ran; nothing was done")]
+    Cancelled,
 
     /// An OS API call failed.
     #[error("{context}: {message}")]

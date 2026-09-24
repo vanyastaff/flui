@@ -1,5 +1,9 @@
 //! The MCP surface: one `#[tool]` per operation, each validating its
 //! arguments and handing the work to the desktop thread.
+//!
+//! Every tool takes the request's cancellation (rmcp hands it over as a
+//! `CancellationToken`): a call cancelled while it waits for the desktop
+//! thread or the process pool never runs, and a waiting loop stops.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,6 +15,7 @@ use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabiliti
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use serde::Serialize;
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 
 use crate::a11y::{self, Action};
 use crate::error::{ToolError, ToolResult};
@@ -27,12 +32,17 @@ const POLL: Duration = Duration::from_millis(250);
 
 /// The longest one tree read (`accessibility_tree`, `find`) runs before it
 /// returns what it has, marked `truncated`: a slow or hung provider must not
-/// hold the one desktop thread every tool shares.
+/// hold the one desktop thread every tool shares. Counted from when the read
+/// starts on that thread, not from when it was queued.
 const READ_DEADLINE: Duration = Duration::from_secs(10);
 
+/// The least time one `wait_for` poll reads for.
+const MIN_READ: Duration = Duration::from_secs(1);
+
 const INSTRUCTIONS: &str = "\
-Drives desktop applications like a person with a screen reader. Coordinates are physical \
-screen pixels everywhere (window rects, element rects, screenshots at scale 1, input).
+Drives desktop applications like a person with a screen reader. Coordinates are screen \
+coordinates everywhere (window rects, element rects, input): physical pixels on Windows, \
+points on macOS. A screenshot reports scale_x/scale_y to map its pixels back to them.
 
 Typical loop: list_windows (or launch) -> activate_window -> accessibility_tree / find / \
 screenshot -> invoke / toggle / set_value (preferred: no pointer, works when covered) or \
@@ -40,21 +50,24 @@ click / type_text / key -> read the tree again to confirm.
 
 Safety: always pass window_id or pid to click, drag, scroll, type_text and key. The server \
 then refuses the input unless that window is in front (and, for coordinates, holds the \
-point uncovered), so keystrokes never land in another application. Window ids and pids are \
-bound to the process they named when this session first saw them. Element clicks always \
+point uncovered; for keys, holds keyboard focus in its own process), so input never lands in \
+another application. Window ids and pids are bound to the process they named when this \
+session handed them out, and refused once that process is gone. Element clicks always \
 require the element's own window to be under the point and its process in front. Popup \
 menus and drop-downs are windows of their own: target them with pid, not window_id. Shell \
-hotkeys (the Windows key, alt+tab, ctrl+esc) are refused with a safety target.
+hotkeys (the Windows key, alt+tab, ctrl+esc, the language switch) are refused with a safety \
+target. An error that says part of an action already went out, or that it may have run, \
+means: look before retrying.
 
 Element ids (e12) are session handles from accessibility_tree, find and wait_for; the same \
-element keeps its id across reads (an id whose element is gone answers stale, even if UI \
-Automation reuses its identity). A read visits at most 5000 elements and stops after 10 s; \
-strings longer than 4096 characters end in an ellipsis; \
-a reply with truncated: true did not see the whole tree, so an empty find result then does \
-not mean the element is absent. Accessibility tools use UI Automation and are Windows-only \
-for now. Window listing, screenshots and input work on Windows and macOS (on macOS, \
-coordinate input with a safety target is refused: the server cannot yet verify what covers a \
-point); on Linux none of them is available yet.";
+element keeps its id across reads (an id whose element or process is gone answers stale, \
+even if UI Automation reuses its identity). A read visits at most 5000 elements and stops \
+after 10 s; strings longer than 4096 characters end in an ellipsis; a reply with truncated: \
+true did not see the whole tree, so an empty find result then does not mean the element is \
+absent. Accessibility tools use UI Automation and are Windows-only for now. Window listing, \
+screenshots and input work on Windows and macOS; on macOS targeted input is refused for now \
+(the server cannot verify what covers a point or holds keyboard focus there). On Linux none \
+of them is available yet.";
 
 /// The MCP server.
 #[derive(Debug, Clone)]
@@ -94,11 +107,16 @@ fn element_reply(result: ToolResult<a11y::Node>) -> CallToolResult {
 /// request was cancelled before it started does nothing, as on the desktop
 /// thread.
 async fn blocking<T: Send + 'static>(
+    ct: &CancellationToken,
     work: impl FnOnce() -> ToolResult<T> + Send + 'static,
 ) -> ToolResult<T> {
+    if ct.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
     let (reply, result) = tokio::sync::oneshot::channel();
+    let job_ct = ct.clone();
     tokio::task::spawn_blocking(move || {
-        if reply.is_closed() {
+        if reply.is_closed() || job_ct.is_cancelled() {
             return;
         }
         let _ = reply.send(work());
@@ -106,6 +124,14 @@ async fn blocking<T: Send + 'static>(
     result
         .await
         .map_err(|_| ToolError::platform("running process work", "it panicked"))?
+}
+
+/// Sleeps `duration`, or less when `ct` fires; whether it fired.
+async fn pause(ct: &CancellationToken, duration: Duration) -> bool {
+    tokio::select! {
+        () = tokio::time::sleep(duration) => false,
+        () = ct.cancelled() => true,
+    }
 }
 
 impl DesktopServer {
@@ -118,33 +144,40 @@ impl DesktopServer {
         }
     }
 
-    async fn act(&self, element: String, action: Action) -> CallToolResult {
-        element_reply(self.worker.run(move |d| d.act(&element, &action)).await)
+    async fn act(&self, ct: &CancellationToken, element: String, action: Action) -> CallToolResult {
+        element_reply(self.worker.run(ct, move |d| d.act(&element, &action)).await)
     }
 }
 
 #[tool_router]
 impl DesktopServer {
     #[tool(
-        description = "List top-level windows: id (pass as window_id), pid, app_name, title, rect (physical px), is_minimized, is_focused. Front to back.",
+        description = "List top-level windows: id (pass as window_id), pid, app_name, title, rect, is_minimized, is_focused. Front to back.",
         annotations(read_only_hint = true)
     )]
     async fn list_windows(
         &self,
+        ct: CancellationToken,
         Parameters(Args(p)): Parameters<Args<ListWindowsParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
         let windows = self
             .worker
-            .run(move |d| d.list_windows(p.title_contains.as_deref(), p.pid))
+            .run(&ct, move |d| {
+                d.list_windows(p.title_contains.as_deref(), p.pid)
+            })
             .await;
         respond(windows.map(|w| json!({ "windows": w })))
     }
 
     #[tool(
-        description = "Start a program (stdio discarded). Returns its pid; with wait_for_window_ms (at most 120000), also its first window. The server kills every launched process when it exits (on Windows also everything those start, even on a hard kill; elsewhere only the launched process itself)."
+        description = "Start a program (stdio discarded). Returns its pid; with wait_for_window_ms (at most 120000), also its first window, or its exit code if it exits first. The server kills every launched process when it exits: on Windows also everything those start, even when the server itself is killed; elsewhere only the launched processes, on a clean exit."
     )]
-    async fn launch(&self, Parameters(Args(p)): Parameters<Args<LaunchParams>>) -> CallToolResult {
+    async fn launch(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<LaunchParams>>,
+    ) -> CallToolResult {
         let p = valid!(p);
         valid!(p.validate());
         let spec = LaunchSpec {
@@ -154,11 +187,12 @@ impl DesktopServer {
             env: p.env.into_iter().collect(),
         };
         let children = Arc::clone(&self.children);
-        let (pid, started) = valid!(blocking(move || children.launch(&spec)).await);
-        // Bind the pid to the identity read at the spawn.
+        let (pid, started) = valid!(blocking(&ct, move || children.launch(&spec)).await);
+        // Bind the pid to the identity read at the spawn. The process runs
+        // now whatever happens to this request, so this step is not skipped.
         let _ = self
             .worker
-            .run(move |d| {
+            .run(&CancellationToken::new(), move |d| {
                 d.bind_launched(pid, started);
                 Ok(())
             })
@@ -168,9 +202,17 @@ impl DesktopServer {
         };
         let deadline = Instant::now() + Duration::from_millis(ms);
         loop {
+            if let Some(exit) = self.children.exited(pid) {
+                return respond(Ok(json!({
+                    "pid": pid,
+                    "window": null,
+                    "exit_code": exit.code,
+                    "note": "the process exited before it showed a window; if it handed off to another process, find that one with list_windows",
+                })));
+            }
             let windows = self
                 .worker
-                .run(move |d| d.list_windows(None, Some(pid)))
+                .run(&ct, move |d| d.list_windows(None, Some(pid)))
                 .await;
             match windows {
                 Ok(w) if !w.is_empty() => {
@@ -192,34 +234,43 @@ impl DesktopServer {
                         "note": "no window for this pid yet; it may hand off to another process, see list_windows",
                     })));
                 }
-                Ok(_) => tokio::time::sleep(POLL).await,
+                Ok(_) => {
+                    if pause(&ct, POLL).await {
+                        return respond::<Value>(Err(ToolError::Cancelled));
+                    }
+                }
             }
         }
     }
 
     #[tool(
-        description = "End a process started by launch in this session (other pids are refused). Ends that process only; what it started itself ends when the server exits. Reports already_exited for one that ended on its own."
+        description = "End a process started by launch in this session (other pids are refused). Ends that process only; what it started itself ends when the server exits (on Windows). Reports already_exited for one that ended on its own or was killed before."
     )]
-    async fn kill(&self, Parameters(Args(p)): Parameters<Args<KillParams>>) -> CallToolResult {
+    async fn kill(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<KillParams>>,
+    ) -> CallToolResult {
         let p = valid!(p);
         let children = Arc::clone(&self.children);
-        respond(blocking(move || children.kill(p.pid)).await)
+        respond(blocking(&ct, move || children.kill(p.pid)).await)
     }
 
     #[tool(
-        description = "Capture a window (window_id or pid; covered windows are captured where the OS allows), a monitor (0-based index), or the primary monitor (no target). Returns a PNG plus, as structured content, its size, the captured screen rect (source) and scale_x/scale_y (image px per screen px, from the pixels: 2 on a Retina display, below 1 when downscaled): screen x = source.x + image x / scale_x. Refused if the window moved during the capture.",
+        description = "Capture a window (window_id or pid; covered windows are captured where the OS allows), a monitor (0-based index), or the primary monitor (no target). The image is downscaled to max_side (default 1920) on its longer side. Returns a PNG plus, as structured content, its size, the captured screen rect (source) and scale_x/scale_y (image px per screen unit, measured from the pixels: 2 on a Retina display, below 1 when downscaled): screen x = source.x + image x / scale_x. Refused if the window moved during the capture or no longer belongs to the process it was listed for.",
         annotations(read_only_hint = true)
     )]
     async fn screenshot(
         &self,
+        ct: CancellationToken,
         Parameters(Args(p)): Parameters<Args<ScreenshotParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
         let target = valid!(p.target());
-        let max_side = p.max_side;
+        let max_side = p.max_side();
         let shot = valid!(
             self.worker
-                .run(move |d| d.screenshot(target, max_side))
+                .run(&ct, move |d| d.screenshot(target, Some(max_side)))
                 .await
         );
         let meta = json!({
@@ -241,19 +292,21 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Read the accessibility tree of a window (window_id) or of all a process's windows and popups (pid). Nodes: id (e12, for later calls), role, name, value, automation_id, class_name, rect, enabled, has_keyboard_focus, is_keyboard_focusable, toggle_state, patterns, children, omitted_children. truncated: true when the read left anything out (a budget, the depth, a provider failing partway).",
+        description = "Read the accessibility tree of a window (window_id) or of all a process's windows and popups (pid), max_depth levels deep (default 30, at most 200). Nodes: id (e12, for later calls), role, name, value, automation_id, class_name, rect, enabled, has_keyboard_focus, is_keyboard_focusable, toggle_state, patterns, children, omitted_children. truncated: true when the read left anything out (a budget, the depth, a provider failing partway).",
         annotations(read_only_hint = true)
     )]
     async fn accessibility_tree(
         &self,
+        ct: CancellationToken,
         Parameters(Args(p)): Parameters<Args<TreeParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
         let (target, depth) = valid!(p.validate());
-        let deadline = Instant::now() + READ_DEADLINE;
         let read = self
             .worker
-            .run(move |d| d.tree(target, depth, deadline))
+            .run(&ct, move |d| {
+                d.tree(target, depth, Instant::now() + READ_DEADLINE)
+            })
             .await;
         respond(read.map(|r| json!({ "roots": r.roots, "truncated": r.truncated })))
     }
@@ -262,13 +315,18 @@ impl DesktopServer {
         description = "Find elements in a window or process by name (exact), name_contains (case-insensitive), role (control type, e.g. Button) and/or automation_id; all given criteria must match. Returns a flat list of nodes without children, and truncated: true when the read did not see the whole tree (then no match is not proof of absence).",
         annotations(read_only_hint = true)
     )]
-    async fn find(&self, Parameters(Args(p)): Parameters<Args<FindParams>>) -> CallToolResult {
+    async fn find(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<FindParams>>,
+    ) -> CallToolResult {
         let p = valid!(p);
         let (target, query) = valid!(p.validate());
-        let deadline = Instant::now() + READ_DEADLINE;
         let found = self
             .worker
-            .run(move |d| d.find(target, &query, deadline))
+            .run(&ct, move |d| {
+                d.find(target, &query, Instant::now() + READ_DEADLINE)
+            })
             .await;
         respond(
             found.map(|(matches, read)| json!({ "matches": matches, "truncated": read.truncated })),
@@ -276,10 +334,11 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Wait until an element matching the criteria (as for find) exists, polling every 250 ms. Returns the first match, or a timeout error listing the last tree seen. Windows that appear or close meanwhile are followed; the reply can come one UI Automation call past timeout_ms."
+        description = "Wait until an element matching the criteria (as for find) exists, polling every 250 ms. Returns the first match, or a timeout error listing the last tree seen. With pid, windows that appear or close meanwhile are followed; with window_id, a window that closes ends the wait. The reply can come later than timeout_ms by one read, and by however long other calls hold the desktop thread."
     )]
     async fn wait_for(
         &self,
+        ct: CancellationToken,
         Parameters(Args(p)): Parameters<Args<WaitForParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
@@ -288,10 +347,16 @@ impl DesktopServer {
         let mut summary = String::from("(no tree read: the target had no window)");
         loop {
             let q = query.clone();
-            let read_deadline = deadline.min(Instant::now() + READ_DEADLINE);
             match self
                 .worker
-                .run(move |d| d.find(target, &q, read_deadline))
+                .run(&ct, move |d| {
+                    // Counted from when the read starts, not when it queued,
+                    // and never so short that a poll the queue delayed past
+                    // the wait's end reads nothing at all.
+                    let now = Instant::now();
+                    let read_deadline = deadline.max(now + MIN_READ).min(now + READ_DEADLINE);
+                    d.find(target, &q, read_deadline)
+                })
                 .await
             {
                 Ok((matches, read)) => {
@@ -317,140 +382,188 @@ impl DesktopServer {
                     summary,
                 }));
             }
-            tokio::time::sleep(POLL.min(deadline.saturating_duration_since(Instant::now()))).await;
+            if pause(
+                &ct,
+                POLL.min(deadline.saturating_duration_since(Instant::now())),
+            )
+            .await
+            {
+                return respond::<Value>(Err(ToolError::Cancelled));
+            }
         }
     }
 
     #[tool(
-        description = "Invoke (press) an element through its Invoke pattern. No pointer involved; works even when the window is covered."
+        description = "Invoke (press) an element through its Invoke pattern. No pointer involved; works even when the window is covered. An error that says the action may have run means: read the tree before retrying."
     )]
-    async fn invoke(&self, Parameters(Args(p)): Parameters<Args<ElementParams>>) -> CallToolResult {
+    async fn invoke(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<ElementParams>>,
+    ) -> CallToolResult {
         let p = valid!(p);
-        self.act(p.element, Action::Invoke).await
+        self.act(&ct, p.element, Action::Invoke).await
     }
 
     #[tool(
         description = "Flip a checkbox/switch through its Toggle pattern. Returns the element with its new toggle_state."
     )]
-    async fn toggle(&self, Parameters(Args(p)): Parameters<Args<ElementParams>>) -> CallToolResult {
+    async fn toggle(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<ElementParams>>,
+    ) -> CallToolResult {
         let p = valid!(p);
-        self.act(p.element, Action::Toggle).await
+        self.act(&ct, p.element, Action::Toggle).await
     }
 
     #[tool(
-        description = "Replace an element's value through its Value pattern (text fields), or RangeValue (sliders; value must be a number). Returns the element afterwards."
+        description = "Replace an element's value (at most 100000 characters) through its Value pattern (text fields), or RangeValue (sliders; value must be a number). Returns the element afterwards."
     )]
     async fn set_value(
         &self,
+        ct: CancellationToken,
         Parameters(Args(p)): Parameters<Args<SetValueParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
-        self.act(p.element, Action::SetValue(p.value)).await
+        valid!(p.validate());
+        self.act(&ct, p.element, Action::SetValue(p.value)).await
     }
 
     #[tool(
-        description = "Give an element keyboard focus through the accessibility API. Succeeds only once the element reports has_keyboard_focus; an element that accepts the request but keeps no focus is an error."
+        description = "Give an element keyboard focus through the accessibility API. Succeeds once keyboard focus is on the element or inside it; an element that accepts the request but keeps no focus is an error."
     )]
-    async fn focus(&self, Parameters(Args(p)): Parameters<Args<ElementParams>>) -> CallToolResult {
+    async fn focus(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<ElementParams>>,
+    ) -> CallToolResult {
         let p = valid!(p);
-        self.act(p.element, Action::Focus).await
+        self.act(&ct, p.element, Action::Focus).await
     }
 
     #[tool(
         description = "Select an item (list item, tab, radio button) through its SelectionItem pattern."
     )]
-    async fn select(&self, Parameters(Args(p)): Parameters<Args<ElementParams>>) -> CallToolResult {
+    async fn select(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<ElementParams>>,
+    ) -> CallToolResult {
         let p = valid!(p);
-        self.act(p.element, Action::Select).await
+        self.act(&ct, p.element, Action::Select).await
     }
 
     #[tool(
-        description = "Real mouse click at an element's clickable point (element) or a screen point (x, y). Pass window_id or pid: the click is refused unless that window is in front and holds the point. button: left|right|middle; double for a double-click."
+        description = "Real mouse click at an element's clickable point (element) or a screen point (x, y). Pass window_id or pid: the click is refused unless that window is in front and holds the point. button: left|right|middle (logical: swapped buttons are honoured); double for a double-click."
     )]
-    async fn click(&self, Parameters(Args(p)): Parameters<Args<ClickParams>>) -> CallToolResult {
+    async fn click(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<ClickParams>>,
+    ) -> CallToolResult {
         let p = valid!(p);
         let (at, target) = valid!(p.validate());
         let (button, double) = (p.button.into(), p.double);
         respond(
             self.worker
-                .run(move |d| d.click(&at, button, double, target))
+                .run(&ct, move |d| d.click(&at, button, double, target))
                 .await,
         )
     }
 
     #[tool(
-        description = "Move the pointer to a screen point (physical pixels). Returns where the pointer ended up."
+        description = "Move the pointer to a screen point. Returns where the pointer ended up. Sends no press, so it takes no safety target; refused while a button is still held from a failed release."
     )]
     async fn move_mouse(
         &self,
+        ct: CancellationToken,
         Parameters(Args(p)): Parameters<Args<MoveMouseParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
-        respond(self.worker.run(move |d| d.move_mouse(p.x, p.y)).await)
+        respond(self.worker.run(&ct, move |d| d.move_mouse(p.x, p.y)).await)
     }
 
     #[tool(
         description = "Left-button drag from one screen point to another over duration_ms. Pass window_id or pid: refused unless that window is in front and holds both points and every point between. If that stops holding partway, the button is released at a point verified inside the target where one still verifies; otherwise the release, the one event that must go out, happens where the pointer is, and the error says so."
     )]
-    async fn drag(&self, Parameters(Args(p)): Parameters<Args<DragParams>>) -> CallToolResult {
+    async fn drag(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<DragParams>>,
+    ) -> CallToolResult {
         let p = valid!(p);
         let (target, duration) = valid!(p.validate());
         let (from, to) = ((p.from.x, p.from.y), (p.to.x, p.to.y));
         respond(
             self.worker
-                .run(move |d| d.drag(from, to, duration, target))
+                .run(&ct, move |d| d.drag(from, to, duration, target))
                 .await,
         )
     }
 
     #[tool(
-        description = "Scroll the wheel at a screen point: dy notches (positive = down), dx notches (positive = right). Pass window_id or pid: refused unless that window is in front and holds the point."
+        description = "Scroll the wheel at a screen point: dy notches (positive = down), dx notches (positive = right), at most 100 each. Pass window_id or pid: refused unless that window is in front and holds the point."
     )]
-    async fn scroll(&self, Parameters(Args(p)): Parameters<Args<ScrollParams>>) -> CallToolResult {
+    async fn scroll(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<ScrollParams>>,
+    ) -> CallToolResult {
         let p = valid!(p);
         let target = valid!(p.validate());
         respond(
             self.worker
-                .run(move |d| d.scroll(p.x, p.y, p.dx, p.dy, target))
+                .run(&ct, move |d| d.scroll(p.x, p.y, p.dx, p.dy, target))
                 .await,
         )
     }
 
     #[tool(
-        description = "Type text (at most 10000 characters) into the focused control as real keystrokes, layout-independent; a newline is Enter, a tab is Tab. Pass window_id or pid: refused unless that window is in front. If it stops partway, the error says how many characters went out."
+        description = "Type text (at most 10000 characters) into the focused control as real keystrokes, layout-independent; a newline is Enter, a tab is Tab. Pass window_id or pid: refused unless that window is in front and holds keyboard focus in its own process. If it stops partway, the error says how many characters went out."
     )]
     async fn type_text(
         &self,
+        ct: CancellationToken,
         Parameters(Args(p)): Parameters<Args<TypeTextParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
         let target = valid!(p.validate());
-        respond(self.worker.run(move |d| d.type_text(&p.text, target)).await)
-    }
-
-    #[tool(
-        description = "Press a key or combo as real keystrokes: enter, tab, esc, f5, ctrl+shift+s, alt+f4, cmd+q, ctrl+plus (modifiers: ctrl shift alt meta/win/cmd; a character that needs Shift gets it). repeat presses it N times. Pass window_id or pid: refused unless that window is in front; shell hotkeys are refused then."
-    )]
-    async fn key(&self, Parameters(Args(p)): Parameters<Args<KeyParams>>) -> CallToolResult {
-        let p = valid!(p);
-        let (combo, repeat, target) = valid!(p.validate());
         respond(
             self.worker
-                .run(move |d| d.key(&combo, repeat, target))
+                .run(&ct, move |d| d.type_text(&p.text, target))
                 .await,
         )
     }
 
     #[tool(
-        description = "Bring a window (window_id) or a process's window (pid) to the foreground, restoring it if minimized. Reports became_foreground: Windows can refuse focus changes, so check it before sending input."
+        description = "Press a key or combo as real keystrokes: enter, tab, esc, f5, ctrl+shift+s, alt+f4, cmd+q, ctrl+plus (modifiers: ctrl shift alt meta/win/cmd; on Windows a character that needs Shift or AltGr on the layout gets it). repeat presses it N times. Pass window_id or pid: refused unless that window is in front and holds keyboard focus in its own process; shell hotkeys are refused then."
+    )]
+    async fn key(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<KeyParams>>,
+    ) -> CallToolResult {
+        let p = valid!(p);
+        let (combo, repeat, target) = valid!(p.validate());
+        respond(
+            self.worker
+                .run(&ct, move |d| d.key(&combo, repeat, target))
+                .await,
+        )
+    }
+
+    #[tool(
+        description = "Bring a window (window_id) or a process's window (pid) to the foreground, restoring it if minimized. Reports became_foreground: Windows can refuse focus changes, so check it before sending input. Windows only for now."
     )]
     async fn activate_window(
         &self,
+        ct: CancellationToken,
         Parameters(Args(p)): Parameters<Args<ActivateParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
         let target = valid!(required_target(p.window_id, p.pid));
-        respond(self.worker.run(move |d| d.activate(target)).await)
+        respond(self.worker.run(&ct, move |d| d.activate(target)).await)
     }
 }
 

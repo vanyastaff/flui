@@ -7,7 +7,9 @@
 mod windows;
 
 #[cfg(target_os = "windows")]
-pub use windows::{KillOnExitJob, init_dpi, move_pointer};
+pub use windows::{
+    KillOnExitJob, init_dpi, move_pointer, runtime_id, send_unicode, uia_with_timeouts,
+};
 
 #[cfg(not(target_os = "windows"))]
 use crate::error::ToolError;
@@ -51,21 +53,52 @@ pub fn window_at(x: i32, y: i32) -> Option<Under> {
     }
 }
 
-/// The process of the window holding keyboard focus inside the foreground
-/// window, when the OS reports it (`None`: none has focus, or the OS cannot
-/// say).
+/// Where keyboard input goes inside the foreground window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(target_os = "windows"),
+    allow(
+        dead_code,
+        reason = "only the Windows lookup reports a focus; elsewhere it is Unknown"
+    )
+)]
+pub enum Focus {
+    /// No window in it has focus: keys reach the foreground window itself.
+    Foreground,
+    /// A window of this process holds keyboard focus.
+    Pid(u32),
+    /// The OS cannot say, so keyboard input with a safety target is refused.
+    Unknown,
+}
+
+/// Where keyboard input goes inside foreground window `fg` (the one just
+/// checked); an error when the foreground has changed since.
 #[cfg_attr(
     not(target_os = "windows"),
     expect(clippy::unnecessary_wraps, reason = "only the Windows lookup can fail")
 )]
-pub fn focused_pid() -> ToolResult<Option<u32>> {
+pub fn focus(fg: u32) -> ToolResult<Focus> {
     #[cfg(target_os = "windows")]
     {
-        windows::focused_pid()
+        windows::focus(fg)
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Ok(None)
+        let _ = fg;
+        Ok(Focus::Unknown)
+    }
+}
+
+/// Whether the primary and secondary mouse buttons are swapped.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+pub fn buttons_swapped() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        windows::buttons_swapped()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
     }
 }
 
