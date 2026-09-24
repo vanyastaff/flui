@@ -93,9 +93,13 @@ impl Input {
                 Err(e) => still_held.push(format!("the {button:?} mouse button ({e})")),
             }
         }
-        self.mask_lone_menu_keys();
+        self.mask_lone_modifiers();
         for key in self.enigo.held().0 {
             match self.enigo.key(key, Direction::Release) {
+                // The mask key itself does nothing: releasing it is no
+                // side effect to report.
+                #[cfg(target_os = "windows")]
+                Ok(()) if key == Key::Other(UNASSIGNED_VK) => {}
                 Ok(()) => released.push(format!("{key:?}")),
                 Err(e) => still_held.push(format!("{key:?} ({e})")),
             }
@@ -144,7 +148,7 @@ impl Input {
         if self.held_button.is_some() && self.release_held().is_err() {
             tracing::warn!("a mouse button could not be released");
         }
-        self.mask_lone_menu_keys();
+        self.mask_lone_modifiers();
         for key in self.enigo.held().0 {
             if let Err(e) = self.enigo.key(key, Direction::Release) {
                 tracing::warn!("{key:?} could not be released: {e}");
@@ -152,27 +156,24 @@ impl Input {
         }
     }
 
-    /// Before a held Alt or Windows key is released on its own: the mask
-    /// tap, so the release does not open the menu bar or Start menu of
-    /// whatever window is in front now.
+    /// Before held modifiers are released on their own: the mask tap, as a
+    /// chord does it, so the release does not open the menu bar or Start
+    /// menu, or switch the input language, in whatever window is in front.
     #[cfg_attr(
         not(target_os = "windows"),
-        expect(
-            clippy::unused_self,
-            reason = "only Windows opens a menu on a lone Alt"
-        )
+        expect(clippy::unused_self, reason = "the masked gestures are Windows ones")
     )]
-    fn mask_lone_menu_keys(&mut self) {
+    fn mask_lone_modifiers(&mut self) {
         #[cfg(target_os = "windows")]
         if self
             .enigo
             .held()
             .0
             .iter()
-            .any(|k| matches!(k, Key::Alt | Key::Meta))
-            && self.mask().is_err()
+            .any(|k| matches!(k, Key::Alt | Key::Meta | Key::Control | Key::Shift))
+            && !self.mask()
         {
-            tracing::warn!("could not mask a held Alt or Windows key before releasing it");
+            tracing::warn!("could not mask held modifiers before releasing them");
         }
     }
 
@@ -486,15 +487,14 @@ impl Input {
                 // unit with the high one).
                 #[cfg(target_os = "windows")]
                 Stroke::Char(c) => {
-                    crate::os::send_unicode(c).map_err(|(e, stuck)| {
+                    crate::os::send_unicode(c).map_err(|(e, stuck, typed)| {
                         // Not in enigo's held set: kept here, released first
                         // by the next input and at shutdown.
                         if stuck.is_some() {
                             self.stuck_unit = stuck;
                         }
-                        // Part of it went in (reported as interrupted): the
-                        // key-down already typed it.
-                        tapped = matches!(e, ToolError::Interrupted { .. });
+                        // Its last unit's key-down went in: that typed it.
+                        tapped = typed;
                         e
                     })
                 }
@@ -547,15 +547,23 @@ impl Input {
     }
 
     /// Taps the unassigned key that turns modifiers released on their own
-    /// into a chord that does nothing. A press and a release, not one
-    /// click: a press that went in is then tracked by enigo, and released by
-    /// the next input if its release fails.
+    /// into a chord that does nothing; whether it masked them. A press and a
+    /// release, not one click: the press going in is what masks, and if only
+    /// its release fails, enigo tracks the key as held and the next input
+    /// releases it (a key that does nothing, so no side effect).
     #[cfg(target_os = "windows")]
-    fn mask(&mut self) -> Result<(), enigo::InputError> {
-        self.enigo
-            .key(Key::Other(UNASSIGNED_VK), Direction::Press)?;
-        self.enigo
-            .key(Key::Other(UNASSIGNED_VK), Direction::Release)
+    fn mask(&mut self) -> bool {
+        if self
+            .enigo
+            .key(Key::Other(UNASSIGNED_VK), Direction::Press)
+            .is_err()
+        {
+            return false;
+        }
+        let _ = self
+            .enigo
+            .key(Key::Other(UNASSIGNED_VK), Direction::Release);
+        true
     }
 
     /// Presses the combo `repeat` times: modifiers down in order, key
@@ -593,16 +601,8 @@ impl Input {
         let (key, modifiers, layout_of) = resolve(combo).map_err(|e| (e, false))?;
         guard(None).map_err(|e| (e, false))?;
         #[cfg(target_os = "windows")]
-        if let Some(owner) = layout_of
-            && crate::os::keyboard_owner() != owner
-        {
-            return Err((
-                ToolError::NotForeground {
-                    target: format!("window {}", owner.foreground),
-                    foreground: "the foreground, its focused control, or the keyboard layout changed while the key was looked up".into(),
-                },
-                false,
-            ));
+        if let Some(changed) = layout_of.and_then(owner_changed) {
+            return Err((changed, false));
         }
         #[cfg(not(target_os = "windows"))]
         let _ = layout_of;
@@ -633,13 +633,9 @@ impl Input {
         // with another layout, where the key chosen would be another one.
         #[cfg(target_os = "windows")]
         if result.is_ok()
-            && let Some(owner) = layout_of
-            && crate::os::keyboard_owner() != owner
+            && let Some(changed) = layout_of.and_then(owner_changed)
         {
-            result = Err(ToolError::NotForeground {
-                target: format!("window {}", owner.foreground),
-                foreground: "the focused control or the keyboard layout changed while the modifiers went down".into(),
-            });
+            result = Err(changed);
         }
         let mut sent = false;
         // Whether the key surely went down: only then is the chord a real
@@ -687,7 +683,7 @@ impl Input {
         // between makes it an ordinary chord that does nothing; if even that
         // fails, the error says the gesture may have gone out.
         #[cfg(target_os = "windows")]
-        if !emitted && !held.is_empty() && self.mask().is_err() {
+        if !emitted && !held.is_empty() && !self.mask() {
             let what = format!(
                 "{held:?} were pressed without the key and could not be masked, so releasing them may act as a shortcut of their own (menu bar, Start, language switch); look before retrying"
             );
@@ -739,6 +735,27 @@ impl Input {
             });
         }
         result.map_err(|e| (e, sent))
+    }
+}
+
+/// Why a key chosen for `owner` must not go out now, if it must not: other
+/// windows would get it, or the layout or Caps Lock changed under it (the
+/// same key would type something else; passing, so worth a retry).
+#[cfg(target_os = "windows")]
+fn owner_changed(owner: LayoutOwner) -> Option<ToolError> {
+    let now = crate::os::keyboard_owner();
+    if now == owner {
+        None
+    } else if now.same_windows(&owner) {
+        Some(ToolError::Busy(
+            "the keyboard layout or Caps Lock changed while the key was chosen".into(),
+        ))
+    } else {
+        Some(ToolError::NotForeground {
+            target: format!("window {}", owner.foreground),
+            foreground: "the foreground or its focused control changed while the key was chosen"
+                .into(),
+        })
     }
 }
 

@@ -248,7 +248,10 @@ pub fn release_unicode(unit: u16) -> bool {
 /// itself (enigo releases a surrogate pair's low unit with the high one).
 /// On failure, also the unit left down, if a partial send left one whose
 /// release did not go through: the caller keeps it to release later.
-pub fn send_unicode(c: char) -> Result<(), (ToolError, Option<u16>)> {
+///
+/// On failure also whether the character itself went in: its last unit's
+/// key-down is what types it (a surrogate pair needs both halves).
+pub fn send_unicode(c: char) -> Result<(), (ToolError, Option<u16>, bool)> {
     let mut units = [0_u16; 2];
     let key = |unit: u16, up: bool| INPUT {
         r#type: INPUT_KEYBOARD,
@@ -281,8 +284,9 @@ pub fn send_unicode(c: char) -> Result<(), (ToolError, Option<u16>)> {
         "SendInput was blocked (UIPI: the target may run elevated)",
     );
     if sent == 0 {
-        return Err((blocked, None));
+        return Err((blocked, None, false));
     }
+    let typed = sent + 1 >= inputs.len();
     // Part of it went in. The events alternate down and up per unit, so an
     // odd count left a unit down: release it, and say the character may
     // have arrived in part.
@@ -301,20 +305,26 @@ pub fn send_unicode(c: char) -> Result<(), (ToolError, Option<u16>)> {
         }
     }
     let released = stuck.is_none();
+    let arrived = if typed {
+        format!("`{c}` was typed before the rest of its events were blocked")
+    } else {
+        format!(
+            "only the first half of `{c}` went in before the rest was blocked, so the field may hold half a character"
+        )
+    };
     Err((
         ToolError::Interrupted {
             cause: Box::new(blocked),
             what: if released {
-                format!(
-                    "part of `{c}` was typed before the rest was blocked; check the text before retrying"
-                )
+                format!("{arrived}; check the text before retrying")
             } else {
                 format!(
-                    "part of `{c}` was typed, and releasing its last unit failed, so a key may still be held; check the text before retrying"
+                    "{arrived}, and releasing its last unit failed, so a key may still be held; check the text before retrying"
                 )
             },
         },
         stuck,
+        typed,
     ))
 }
 
@@ -510,6 +520,14 @@ pub struct KeyboardOwner {
     focus: u32,
     layout: usize,
     caps: bool,
+}
+
+impl KeyboardOwner {
+    /// Whether keys would go to the same windows as under `other`; the
+    /// layout or Caps Lock may differ.
+    pub fn same_windows(&self, other: &Self) -> bool {
+        self.foreground == other.foreground && self.focus == other.focus
+    }
 }
 
 /// The [`KeyboardOwner`] now, as [`char_key`] reads it.
