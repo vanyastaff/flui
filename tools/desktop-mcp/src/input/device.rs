@@ -74,28 +74,26 @@ impl Input {
     /// the call stops there and says so, rather than going on as if nothing
     /// had been sent.
     pub fn ready(&mut self) -> ToolResult<()> {
-        let mut released = Vec::new();
-        #[cfg(target_os = "windows")]
-        if let Some(unit) = self.stuck_unit {
-            if !crate::os::release_unicode(unit) {
-                return Err(ToolError::NotSupported(
-                    "a typed character's key is still held from an earlier failed release; no input is sent until it is released".into(),
-                ));
-            }
-            self.stuck_unit = None;
-            released.push("a typed character's key".to_owned());
-        }
-        if let Some(button) = self.held_button {
-            self.release_held().map_err(|e| {
-                ToolError::NotSupported(format!(
-                    "a mouse button is still held from an earlier failed release ({e}); no input is sent until it is released"
-                ))
-            })?;
-            released.push(format!("the {button:?} mouse button"));
-        }
         // Every one is tried: the ones that go out are side effects to
         // report even when another stays down.
+        let mut released = Vec::new();
         let mut still_held = Vec::new();
+        #[cfg(target_os = "windows")]
+        if let Some(unit) = self.stuck_unit {
+            if crate::os::release_unicode(unit) {
+                self.stuck_unit = None;
+                released.push("a typed character's key".to_owned());
+            } else {
+                still_held.push("a typed character's key".to_owned());
+            }
+        }
+        if let Some(button) = self.held_button {
+            match self.release_held() {
+                Ok(()) => released.push(format!("the {button:?} mouse button")),
+                Err(e) => still_held.push(format!("the {button:?} mouse button ({e})")),
+            }
+        }
+        self.mask_lone_menu_keys();
         for key in self.enigo.held().0 {
             match self.enigo.key(key, Direction::Release) {
                 Ok(()) => released.push(format!("{key:?}")),
@@ -146,10 +144,32 @@ impl Input {
         if self.held_button.is_some() && self.release_held().is_err() {
             tracing::warn!("a mouse button could not be released");
         }
+        self.mask_lone_menu_keys();
         for key in self.enigo.held().0 {
             if let Err(e) = self.enigo.key(key, Direction::Release) {
                 tracing::warn!("{key:?} could not be released: {e}");
             }
+        }
+    }
+
+    /// Before a held Alt or Windows key is released on its own: the mask
+    /// tap, so the release does not open the menu bar or Start menu of
+    /// whatever window is in front now.
+    #[cfg_attr(
+        not(target_os = "windows"),
+        expect(clippy::unused_self, reason = "only Windows opens a menu on a lone Alt")
+    )]
+    fn mask_lone_menu_keys(&mut self) {
+        #[cfg(target_os = "windows")]
+        if self
+            .enigo
+            .held()
+            .0
+            .iter()
+            .any(|k| matches!(k, Key::Alt | Key::Meta))
+            && self.mask().is_err()
+        {
+            tracing::warn!("could not mask a held Alt or Windows key before releasing it");
         }
     }
 
@@ -469,6 +489,9 @@ impl Input {
                         if stuck.is_some() {
                             self.stuck_unit = stuck;
                         }
+                        // Part of it went in (reported as interrupted): the
+                        // key-down already typed it.
+                        tapped = matches!(e, ToolError::Interrupted { .. });
                         e
                     })
                 }
@@ -520,6 +543,18 @@ impl Input {
         }
     }
 
+    /// Taps the unassigned key that turns modifiers released on their own
+    /// into a chord that does nothing. A press and a release, not one
+    /// click: a press that went in is then tracked by enigo, and released by
+    /// the next input if its release fails.
+    #[cfg(target_os = "windows")]
+    fn mask(&mut self) -> Result<(), enigo::InputError> {
+        self.enigo
+            .key(Key::Other(UNASSIGNED_VK), Direction::Press)?;
+        self.enigo
+            .key(Key::Other(UNASSIGNED_VK), Direction::Release)
+    }
+
     /// Presses the combo `repeat` times: modifiers down in order, key
     /// clicked, modifiers up in reverse. A character that needs Shift (or
     /// AltGr) on the current layout gets it added.
@@ -560,8 +595,8 @@ impl Input {
         {
             return Err((
                 ToolError::NotForeground {
-                    target: format!("window {}", owner.0),
-                    foreground: "the foreground or its focused control changed while the key was looked up on its keyboard layout".into(),
+                    target: format!("window {}", owner.foreground),
+                    foreground: "the foreground, its focused control, or the keyboard layout changed while the key was looked up".into(),
                 },
                 false,
             ));
@@ -569,7 +604,7 @@ impl Input {
         #[cfg(not(target_os = "windows"))]
         let _ = layout_of;
         let modifiers = modifiers.as_slice();
-        let mut held = Vec::with_capacity(modifiers.len());
+        let mut held: Vec<Key> = Vec::with_capacity(modifiers.len());
         let mut result = Ok(());
         for &m in modifiers {
             let k = modifier_key(m);
@@ -599,8 +634,8 @@ impl Input {
             && crate::os::keyboard_owner() != owner
         {
             result = Err(ToolError::NotForeground {
-                target: format!("window {}", owner.0),
-                foreground: "the focused control changed while the modifiers went down".into(),
+                target: format!("window {}", owner.foreground),
+                foreground: "the focused control or the keyboard layout changed while the modifiers went down".into(),
             });
         }
         let mut sent = false;
@@ -649,13 +684,7 @@ impl Input {
         // between makes it an ordinary chord that does nothing; if even that
         // fails, the error says the gesture may have gone out.
         #[cfg(target_os = "windows")]
-        if !emitted
-            && !held.is_empty()
-            && self
-                .enigo
-                .key(Key::Other(UNASSIGNED_VK), Direction::Click)
-                .is_err()
-        {
+        if !emitted && !held.is_empty() && self.mask().is_err() {
             let what = format!(
                 "{held:?} were pressed without the key and could not be masked, so releasing them may act as a shortcut of their own (menu bar, Start, language switch); look before retrying"
             );
@@ -670,6 +699,7 @@ impl Input {
         // Every release is tried; one that fails is reported even when an
         // earlier failure is the cause, since a modifier left down changes
         // the user's next keystroke.
+        let went_down = held.clone();
         let stuck: Vec<Key> = held
             .into_iter()
             .rev()
@@ -687,17 +717,39 @@ impl Input {
                 },
             });
         }
+        // Stopped with modifiers already down: they reached the target and
+        // came back up (masked), which the caller is told rather than
+        // "nothing was sent".
+        if !sent
+            && !went_down.is_empty()
+            && let Err(cause) = result
+        {
+            result = Err(if matches!(cause, ToolError::Interrupted { .. }) {
+                cause
+            } else {
+                ToolError::Interrupted {
+                    cause: Box::new(cause),
+                    what: format!(
+                        "{went_down:?} went down and were released again without the key; nothing else was sent"
+                    ),
+                }
+            });
+        }
         result.map_err(|e| (e, sent))
     }
 }
+
+/// The window, focus, layout and Caps Lock a character's key was chosen
+/// for (Windows); nothing elsewhere.
+#[cfg(target_os = "windows")]
+type LayoutOwner = crate::os::KeyboardOwner;
+#[cfg(not(target_os = "windows"))]
+type LayoutOwner = ();
 
 /// The OS key for a combo's key and the modifiers to hold for it. On
 /// Windows a character goes out as its layout's virtual key with the shift
 /// state that layout needs: enigo would send the character's shifted
 /// virtual-key code as is, which is no key at all.
-/// The foreground and focused windows whose keyboard layout chose a key.
-type LayoutOwner = (u32, u32);
-
 /// The key and modifiers for `combo`, and for a character the
 /// [`LayoutOwner`] whose layout chose its key.
 fn resolve(combo: &KeyCombo) -> ToolResult<(Key, Vec<Modifier>, Option<LayoutOwner>)> {

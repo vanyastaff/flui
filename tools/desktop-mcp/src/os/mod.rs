@@ -243,12 +243,15 @@ pub fn cursor() -> Option<(i32, i32)> {
 /// itself, Caps Lock left out. Also the [`keyboard_owner`] whose layout that
 /// was, for the caller to check it still is.
 #[cfg(target_os = "windows")]
-pub fn char_key(c: char, command: bool) -> Option<(u16, u8, (u32, u32))> {
+pub fn char_key(c: char, command: bool) -> Option<(u16, u8, KeyboardOwner)> {
     windows::char_key(c, command)
 }
 
-/// The foreground window and the window holding keyboard focus in it.
 #[cfg(target_os = "windows")]
-pub fn keyboard_owner() -> (u32, u32) {
+pub use windows::KeyboardOwner;
+
+/// The [`KeyboardOwner`] now.
+#[cfg(target_os = "windows")]
+pub fn keyboard_owner() -> KeyboardOwner {
     windows::keyboard_owner()
 }

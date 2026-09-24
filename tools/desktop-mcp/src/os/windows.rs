@@ -34,7 +34,7 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
+    GetKeyState, GetKeyboardLayout, HKL, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
     KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MOUSEEVENTF_MOVE, MOUSEINPUT,
     MapVirtualKeyExW, SendInput, ToUnicodeEx, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_MENU,
     VK_SHIFT, VkKeyScanExW,
@@ -450,33 +450,12 @@ pub fn process_windows(pid: u32) -> ToolResult<Vec<u32>> {
 /// as a plain key press: none does, it needs a state this server cannot
 /// hold (Kana, Hankaku), or it is a dead key, which types nothing itself
 /// and changes the key after it.
-pub fn char_key(c: char, command: bool) -> Option<(u16, u8, (u32, u32))> {
+pub fn char_key(c: char, command: bool) -> Option<(u16, u8, KeyboardOwner)> {
     let mut units = [0_u16; 2];
     let [unit] = c.encode_utf16(&mut units) else {
         return None;
     };
-    // Layouts are per thread: the one that counts is the thread of the
-    // window holding keyboard focus (an editor thread can use another layout
-    // than its top-level window's), else the foreground window's.
-    // SAFETY: no arguments.
-    let foreground = unsafe { GetForegroundWindow() };
-    // SAFETY: a null window yields thread 0, whose layout is the caller's.
-    let foreground_thread = unsafe { GetWindowThreadProcessId(foreground, None) };
-    let mut info = GUITHREADINFO {
-        cbSize: size_of::<GUITHREADINFO>() as u32,
-        ..GUITHREADINFO::default()
-    };
-    // SAFETY: `info` is a local with its size set, as the call requires.
-    let read = unsafe { GetGUIThreadInfo(foreground_thread, &raw mut info) }.is_ok();
-    let focus_window = if read && !info.hwndFocus.is_invalid() {
-        info.hwndFocus
-    } else {
-        foreground
-    };
-    // SAFETY: a window handle the call just returned, or the foreground.
-    let focus_thread = unsafe { GetWindowThreadProcessId(focus_window, None) };
-    // SAFETY: plain value argument.
-    let layout = unsafe { GetKeyboardLayout(focus_thread) };
+    let (owner, layout) = owner_now();
     // SAFETY: plain value arguments.
     let scan = unsafe { VkKeyScanExW(*unit, layout) };
     let [vk, shift] = scan.to_le_bytes();
@@ -489,10 +468,9 @@ pub fn char_key(c: char, command: bool) -> Option<(u16, u8, (u32, u32))> {
     // leave a pending dead key in; a negative result is a dead key.
     // The live Caps Lock toggle is part of the state the key meets: with it
     // on, a letter needs the opposite Shift from what `VkKeyScanExW` says.
-    // SAFETY: plain value argument.
     // Not for a shortcut: there the physical key counts, whatever Caps
     // Lock would make it type.
-    let caps = !command && unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0;
+    let caps = !command && owner.caps;
     // SAFETY: plain value arguments.
     let scan = unsafe { MapVirtualKeyExW(u32::from(vk), MAPVK_VK_TO_VSC, Some(layout)) };
     let types = |shift: u8| {
@@ -512,35 +490,68 @@ pub fn char_key(c: char, command: bool) -> Option<(u16, u8, (u32, u32))> {
         // character is not this key.
         typed == 1 && out[0] == *unit
     };
-    let window = (foreground.0 as usize as u32, focus_window.0 as usize as u32);
     if types(shift) {
-        Some((u16::from(vk), shift, window))
+        Some((u16::from(vk), shift, owner))
     } else if types(shift ^ 1) {
-        Some((u16::from(vk), shift ^ 1, window))
+        Some((u16::from(vk), shift ^ 1, owner))
     } else {
         None
     }
 }
 
-/// The foreground window and the window holding keyboard focus in it (the
-/// foreground itself when none does), as [`char_key`] reads them.
-pub fn keyboard_owner() -> (u32, u32) {
+/// Where a key goes and how it is read there: the foreground window, the
+/// window holding keyboard focus in it, that window's thread's keyboard
+/// layout, and Caps Lock. A key chosen for one owner is another key under
+/// another (a US `z` is a German `y`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyboardOwner {
+    /// The foreground window.
+    pub foreground: u32,
+    focus: u32,
+    layout: usize,
+    caps: bool,
+}
+
+/// The [`KeyboardOwner`] now, as [`char_key`] reads it.
+pub fn keyboard_owner() -> KeyboardOwner {
+    owner_now().0
+}
+
+/// The owner and its layout handle. Layouts are per thread: the one that
+/// counts is the thread of the window holding keyboard focus (an editor
+/// thread can use another layout than its top-level window's), else the
+/// foreground window's.
+fn owner_now() -> (KeyboardOwner, HKL) {
     // SAFETY: no arguments.
     let foreground = unsafe { GetForegroundWindow() };
-    // SAFETY: a null window yields thread 0.
-    let thread = unsafe { GetWindowThreadProcessId(foreground, None) };
+    // SAFETY: a null window yields thread 0, whose layout is the caller's.
+    let foreground_thread = unsafe { GetWindowThreadProcessId(foreground, None) };
     let mut info = GUITHREADINFO {
         cbSize: size_of::<GUITHREADINFO>() as u32,
         ..GUITHREADINFO::default()
     };
     // SAFETY: `info` is a local with its size set, as the call requires.
-    let read = unsafe { GetGUIThreadInfo(thread, &raw mut info) }.is_ok();
+    let read = unsafe { GetGUIThreadInfo(foreground_thread, &raw mut info) }.is_ok();
     let focus = if read && !info.hwndFocus.is_invalid() {
         info.hwndFocus
     } else {
         foreground
     };
-    (foreground.0 as usize as u32, focus.0 as usize as u32)
+    // SAFETY: a window handle the call just returned, or the foreground.
+    let focus_thread = unsafe { GetWindowThreadProcessId(focus, None) };
+    // SAFETY: plain value argument.
+    let layout = unsafe { GetKeyboardLayout(focus_thread) };
+    // SAFETY: plain value argument.
+    let caps = unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0;
+    (
+        KeyboardOwner {
+            foreground: foreground.0 as usize as u32,
+            focus: focus.0 as usize as u32,
+            layout: layout.0 as usize,
+            caps,
+        },
+        layout,
+    )
 }
 
 /// Restores `id` if minimized and asks Windows to put it in front. Windows
