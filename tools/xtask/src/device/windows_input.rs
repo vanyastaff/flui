@@ -219,7 +219,13 @@ fn still_foreground(hwnd: HWND) -> bool {
 }
 
 /// A left click at `point`, in physical screen pixels. `false` when the
-/// probe lost the foreground and nothing was sent.
+/// probe lost the foreground and no press was sent.
+///
+/// The foreground is checked again immediately before the press, after the
+/// cursor move's settle, since a window can take it in between. A press that
+/// went out is always released, even if the foreground moved meanwhile: a
+/// release carries no action of its own, and withholding it would leave the
+/// button held for whatever the user does next.
 fn click(hwnd: HWND, point: POINT) -> anyhow::Result<bool> {
     if !still_foreground(hwnd) {
         return Ok(false);
@@ -227,6 +233,9 @@ fn click(hwnd: HWND, point: POINT) -> anyhow::Result<bool> {
     // SAFETY: moves the cursor; `point` is on the probe's window.
     unsafe { SetCursorPos(point.x, point.y) }?;
     std::thread::sleep(HOLD);
+    if !still_foreground(hwnd) {
+        return Ok(false);
+    }
     send(&[mouse(MOUSEEVENTF_LEFTDOWN)])?;
     std::thread::sleep(HOLD);
     send(&[mouse(MOUSEEVENTF_LEFTUP)])?;
@@ -235,7 +244,8 @@ fn click(hwnd: HWND, point: POINT) -> anyhow::Result<bool> {
 }
 
 /// A press and release of `key`. `false` when the probe lost the foreground
-/// and nothing was sent.
+/// and no press was sent; a press that went out is always released, as in
+/// [`click`].
 fn press(hwnd: HWND, key: VIRTUAL_KEY) -> anyhow::Result<bool> {
     if !still_foreground(hwnd) {
         return Ok(false);

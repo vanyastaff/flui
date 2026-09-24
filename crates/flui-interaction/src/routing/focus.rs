@@ -66,9 +66,9 @@ pub struct FocusManager {
     listeners: RefCell<Vec<(ListenerId, FocusChangeCallback)>>,
     next_listener_id: Cell<usize>,
     global_key_handlers: RefCell<Vec<KeyEventCallback>>,
-    /// Where a key starts its leaf-to-root walk while nothing is focused
-    /// ([`Self::set_unfocused_key_target`]).
-    unfocused_key_target: RefCell<Weak<FocusNode>>,
+    /// Nodes that asked to start a key's walk while nothing is focused,
+    /// oldest first ([`Self::claim_unfocused_keys`]).
+    unfocused_key_claims: RefCell<Vec<Weak<FocusNode>>>,
     closed: Cell<bool>,
     /// Depth of the commit+notify transaction currently publishing a focus
     /// transition. Zero between transitions; `>0` while node or manager
@@ -155,7 +155,7 @@ impl FocusManager {
             listeners: RefCell::new(Vec::new()),
             next_listener_id: Cell::new(1),
             global_key_handlers: RefCell::new(Vec::new()),
-            unfocused_key_target: RefCell::new(Weak::new()),
+            unfocused_key_claims: RefCell::new(Vec::new()),
             closed: Cell::new(false),
             notification_depth: Cell::new(0),
             pending_focus_transitions: RefCell::new(VecDeque::new()),
@@ -600,8 +600,7 @@ impl FocusManager {
             }
         }
 
-        let unfocused_target = || self.unfocused_key_target.borrow().upgrade();
-        let Some(focused) = self.primary_focus().or_else(unfocused_target) else {
+        let Some(focused) = self.primary_focus().or_else(|| self.unfocused_key_target()) else {
             tracing::trace!("key event ignored because nothing is focused");
             return false;
         };
@@ -627,25 +626,45 @@ impl FocusManager {
         false
     }
 
-    /// Name the node a key starts its walk at while nothing is focused, or
-    /// `None` to stop.
+    /// Ask for keys to start their walk at `node` while nothing is focused.
     ///
     /// The walk normally starts at the primary focus. A window opened with
     /// nothing focused has none, so without a target every key is dropped —
     /// including the first Tab that would bring the focus in. Flutter never
     /// has that state: its primary focus falls back to the root scope, and an
     /// app's route scope sits under the `WidgetsApp` shortcuts. FLUI's
-    /// default bindings name their own node here instead, so the walk reaches
-    /// them and nothing about `primary_focus` changes. Held weakly: the node's
-    /// owner decides its lifetime.
-    pub fn set_unfocused_key_target(&self, node: Option<&Rc<FocusNode>>) {
-        *self.unfocused_key_target.borrow_mut() = node.map_or_else(Weak::new, Rc::downgrade);
+    /// default bindings claim their own node here instead, so the walk
+    /// reaches them and nothing about `primary_focus` changes.
+    ///
+    /// Claims nest: the newest one that is still alive, attached and owned by
+    /// this manager is the target ([`Self::unfocused_key_target`]), so a
+    /// nested claimant going away hands the keys back to the one it covered.
+    /// Held weakly: the node's owner decides its lifetime. Claiming a node
+    /// again moves it to the top.
+    pub fn claim_unfocused_keys(&self, node: &Rc<FocusNode>) {
+        let mut claims = self.unfocused_key_claims.borrow_mut();
+        claims.retain(|claim| claim.upgrade().is_some_and(|live| !Rc::ptr_eq(&live, node)));
+        claims.push(Rc::downgrade(node));
     }
 
-    /// The node [`Self::set_unfocused_key_target`] named, while it lives.
+    /// Withdraw `node`'s claim, wherever it sits among the claims.
+    pub fn release_unfocused_keys(&self, node: &Rc<FocusNode>) {
+        self.unfocused_key_claims
+            .borrow_mut()
+            .retain(|claim| claim.upgrade().is_some_and(|live| !Rc::ptr_eq(&live, node)));
+    }
+
+    /// Where a key starts while nothing is focused: the newest claim whose
+    /// node is alive, attached and owned by this manager. A node of another
+    /// window's tree never qualifies, so a key cannot reach its handlers.
     #[must_use]
     pub fn unfocused_key_target(&self) -> Option<Rc<FocusNode>> {
-        self.unfocused_key_target.borrow().upgrade()
+        self.unfocused_key_claims
+            .borrow()
+            .iter()
+            .rev()
+            .filter_map(Weak::upgrade)
+            .find(|node| node.is_attached() && self.owns(node))
     }
 
     /// Deterministically retire this focus owner.
@@ -2347,5 +2366,100 @@ mod tests {
             "a node listener removed by an earlier one in the same dispatch must not be called"
         );
         assert_eq!(node.listener_count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod unfocused_key_tests {
+    use std::cell::Cell;
+
+    use super::*;
+    use crate::events::{Key, KeyState, NamedKey};
+    use crate::routing::focus_scope::{KeyEventResult, NodeContext};
+
+    fn tab() -> KeyEvent {
+        KeyEvent {
+            state: KeyState::Down,
+            key: Key::Named(NamedKey::Tab),
+            ..KeyEvent::default()
+        }
+    }
+
+    /// A node that counts the keys it sees and consumes them.
+    fn counting(label: &str, manager: &FocusManager) -> (Rc<FocusNode>, Rc<Cell<u32>>) {
+        let node = FocusNode::with_debug_label(label);
+        let seen = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&seen);
+        node.set_on_key_event(Rc::new(move |_| {
+            counted.set(counted.get() + 1);
+            KeyEventResult::Handled
+        }));
+        manager
+            .root_scope()
+            .attach_node(&node)
+            .expect("attaches under the root scope");
+        (node, seen)
+    }
+
+    /// Claims nest: a nested claimant going away hands the keys back to the
+    /// one it covered, instead of leaving no target and dropping the next Tab.
+    #[test]
+    fn releasing_a_nested_claim_restores_the_outer_one() {
+        let manager = FocusManager::new();
+        let (outer, outer_seen) = counting("outer", &manager);
+        let (inner, inner_seen) = counting("inner", &manager);
+
+        manager.claim_unfocused_keys(&outer);
+        manager.claim_unfocused_keys(&inner);
+        assert!(manager.dispatch_key_event(&tab()));
+        assert_eq!(
+            (outer_seen.get(), inner_seen.get()),
+            (0, 1),
+            "the newest claim wins"
+        );
+
+        manager.release_unfocused_keys(&inner);
+        assert!(manager.dispatch_key_event(&tab()));
+        assert_eq!(outer_seen.get(), 1, "the outer claim is the target again");
+
+        manager.release_unfocused_keys(&outer);
+        assert!(!manager.dispatch_key_event(&tab()), "no claim, no target");
+    }
+
+    /// A node attached to another manager's tree is never the target, so a key
+    /// dispatched for one window cannot reach another window's handlers.
+    #[test]
+    fn a_claim_on_another_managers_node_is_ignored() {
+        let this = FocusManager::new();
+        let other = FocusManager::new();
+        let (foreign, foreign_seen) = counting("foreign", &other);
+
+        this.claim_unfocused_keys(&foreign);
+
+        assert!(this.unfocused_key_target().is_none());
+        assert!(!this.dispatch_key_event(&tab()));
+        assert_eq!(foreign_seen.get(), 0);
+    }
+
+    /// Closing the owner retires the widget layer's record on every node it
+    /// owned, so a node that outlives its window does not keep that window's
+    /// callbacks alive.
+    #[test]
+    fn closing_the_owner_clears_node_contexts() {
+        let manager = FocusManager::new();
+        let node = FocusNode::with_debug_label("kept");
+        manager
+            .root_scope()
+            .attach_node(&node)
+            .expect("attaches under the root scope");
+        let context: NodeContext = Rc::new(7_u32);
+        let registration = node.register_context(Rc::clone(&context));
+        assert_eq!(Rc::strong_count(&context), 2);
+
+        manager.close();
+
+        assert!(node.context().is_none());
+        assert_eq!(Rc::strong_count(&context), 1, "the record was released");
+        registration.relinquish();
     }
 }

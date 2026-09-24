@@ -45,9 +45,12 @@ only for a focused node no `Focus` widget hosts. So any `Actions` between the fo
 and the `Shortcuts` takes part, as in Flutter's `ShortcutManager.handleKeypress`, and the
 `Actions(Shortcuts(child))` nesting rule is no longer needed.
 
-**3. A key target while nothing is focused.** `FocusManager::set_unfocused_key_target` names the
-node a key starts its walk at when there is no primary focus; `DefaultFocusTraversal` names
-its own `Shortcuts` node. `primary_focus()` is unchanged (`None` until a widget takes focus).
+**3. A key target while nothing is focused.** `FocusManager::claim_unfocused_keys` asks for keys
+to start their walk at a node when there is no primary focus; `DefaultFocusTraversal` claims its
+own `Shortcuts` node and releases it on dispose. Claims nest — the newest live one wins, so a
+nested traversal going away hands the keys back — and only a node attached to and owned by this
+manager qualifies, so a key cannot reach another window's handlers. `primary_focus()` is
+unchanged (`None` until a widget takes focus).
 
 **4. Focus is published to assistive technology.** `Focus` wraps its child in a semantics
 annotation that says `focusable` when its node can take focus and `focused` while it holds the

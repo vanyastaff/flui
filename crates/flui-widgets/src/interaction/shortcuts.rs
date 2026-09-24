@@ -430,21 +430,18 @@ impl StatefulView for DefaultFocusTraversal {
 
 impl DefaultFocusTraversalState {
     /// Make these bindings where a key starts while nothing is focused, so
-    /// the first Tab into a window with no focus reaches them.
+    /// the first Tab into a window with no focus reaches them. A nested
+    /// instance's claim covers this one only while it is mounted.
     fn claim_unfocused_keys(&mut self, owner: Rc<flui_interaction::FocusManager>) {
         self.release_unfocused_keys();
-        owner.set_unfocused_key_target(Some(&self.keys));
+        owner.claim_unfocused_keys(&self.keys);
         self.focus_owner = Some(owner);
     }
 
-    /// Give the target up, unless a later instance has claimed it since.
+    /// Withdraw this instance's claim.
     fn release_unfocused_keys(&self) {
-        if let Some(owner) = &self.focus_owner
-            && owner
-                .unfocused_key_target()
-                .is_some_and(|target| Rc::ptr_eq(&target, &self.keys))
-        {
-            owner.set_unfocused_key_target(None);
+        if let Some(owner) = &self.focus_owner {
+            owner.release_unfocused_keys(&self.keys);
         }
     }
 }
@@ -995,7 +992,7 @@ mod activation_tests {
     /// none, and every key was dropped — no control was reachable from the
     /// keyboard at all.
     ///
-    /// Red-check: drop `set_unfocused_key_target` from
+    /// Red-check: drop `claim_unfocused_keys` from
     /// `DefaultFocusTraversalState::claim_unfocused_keys` — the Tab is
     /// ignored and nothing gains focus.
     #[test]

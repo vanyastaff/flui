@@ -1222,6 +1222,9 @@ impl FocusNode {
         node.clear_on_key_event();
         let _prev = std::mem::take(&mut *node.listeners.borrow_mut());
         node.clear_rect_provider();
+        // The widget layer's record holds its callbacks and state; a node
+        // that outlives its owner must not keep them alive.
+        let _prev = node.replace_context(None);
         if let Some(scope) = node.as_scope() {
             scope.pending_first_focus.set(false);
             scope.focus_history.borrow_mut().clear();
