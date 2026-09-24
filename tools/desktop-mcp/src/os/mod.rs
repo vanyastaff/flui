@@ -106,7 +106,14 @@ pub fn other_key_down() -> Option<u16> {
 /// Whether any mouse button is down now, the user's included.
 #[cfg(target_os = "windows")]
 pub fn mouse_button_down() -> bool {
-    windows::mouse_button_down()
+    windows::mouse_buttons_down() != 0
+}
+
+/// The physical mouse buttons down now, as bits (1 left, 2 right, 4 middle,
+/// 8 and 16 the extra buttons), the user's included.
+#[cfg(target_os = "windows")]
+pub fn mouse_buttons_down() -> u8 {
+    windows::mouse_buttons_down()
 }
 
 /// Whether the primary and secondary mouse buttons are swapped.

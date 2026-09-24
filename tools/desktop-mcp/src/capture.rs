@@ -149,6 +149,16 @@ mod backend {
                         .and_then(|m| m.scale_factor().ok()),
                     "make the window smaller or capture another",
                 )?;
+                // The capture allocates the window's size as it is when it
+                // runs, and xcap takes no bounds for a window: the size is
+                // read again as the last step before it, so what was
+                // checked against the limit is what is allocated, save a
+                // resize in the microseconds between.
+                if describe(window).map(|w| w.rect) != Some(info.rect) {
+                    return Err(ToolError::Busy(format!(
+                        "window {id} moved or resized while the capture was prepared"
+                    )));
+                }
                 let image = window
                     .capture_image()
                     .map_err(|e| ToolError::platform(format!("capturing window {id}"), e))?;

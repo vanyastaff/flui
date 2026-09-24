@@ -286,15 +286,18 @@ pub fn other_key_down() -> Option<u16> {
         })
 }
 
-/// Whether any mouse button is down right now, the user's included.
-pub fn mouse_button_down() -> bool {
+/// The physical mouse buttons down right now, the user's included, as bits:
+/// 1 left, 2 right, 4 middle, 8 and 16 the two extra buttons.
+pub fn mouse_buttons_down() -> u8 {
     [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]
         .into_iter()
-        .any(|vk| {
+        .enumerate()
+        .filter(|&(_, vk)| {
             // SAFETY: plain value argument.
             let state = unsafe { GetAsyncKeyState(i32::from(vk.0)) };
             state < 0
         })
+        .fold(0, |bits, (i, _)| bits | (1 << i))
 }
 
 /// Whether the primary and secondary mouse buttons are swapped: injected

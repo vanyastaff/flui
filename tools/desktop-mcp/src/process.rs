@@ -49,20 +49,16 @@ struct Tracked {
     running: HashMap<u32, Child>,
     /// `(pid, exit code)`, oldest first.
     exited: VecDeque<(u32, Option<i32>)>,
-    /// Every pid `launch` returned, and those it returned for two processes:
-    /// a `kill` of such a pid cannot tell which launch it means.
-    returned: std::collections::HashSet<u32>,
-    shared: std::collections::HashSet<u32>,
+    /// Per pid, the launches that returned it and whose caller may hold it
+    /// (an abandoned launch's caller never got the pid, so it is dropped):
+    /// with two, a `kill` of the pid cannot tell which launch it means.
+    returned: HashMap<u32, std::collections::HashSet<u64>>,
     /// Pids a `kill` is ending right now.
     ending: std::collections::HashSet<u32>,
     /// How many launches were recorded, and which one each pid's child in
     /// `running` came from: a pid a later launch reused names that one.
     launches: u64,
     launch_of: HashMap<u32, u64>,
-    /// Per launch, whether it put its pid in `returned` and in `shared`:
-    /// undone when the launch is abandoned, since its caller never got the
-    /// pid, so a later launch reusing it is not refused as shared.
-    marks: HashMap<u64, (bool, bool)>,
     /// Launches between their spawn and their entry in `running`.
     launching: usize,
     /// Set by shutdown's `kill_all`: nothing is launched after it.
@@ -251,13 +247,11 @@ impl Children {
         // A reused pid is a new process: its old exit no longer answers, and
         // a kill held for the old launch must not end this one.
         tracked.exited.retain(|&(old, _)| old != pid);
-        let first = tracked.returned.insert(pid);
-        let made_shared = !first && tracked.shared.insert(pid);
         tracked.running.insert(pid, child);
         tracked.launches += 1;
         let launch = tracked.launches;
         tracked.launch_of.insert(pid, launch);
-        tracked.marks.insert(launch, (first, made_shared));
+        tracked.returned.entry(pid).or_default().insert(launch);
         Ok((pid, started, launch))
     }
 
@@ -283,28 +277,29 @@ impl Children {
     fn end_tracked(&self, pid: u32, launch: Option<u64>) -> ToolResult<Killed> {
         let mut tracked = self.lock();
         match launch {
-            None if tracked.shared.contains(&pid) => {
+            None if tracked.returned.get(&pid).is_some_and(|l| l.len() > 1) => {
                 return Err(ToolError::InvalidArgument(format!(
                     "pid {pid} was returned by two launches of this session, so it cannot be told which one to end; the running one is ended when the server exits"
                 )));
             }
-            Some(launch) if tracked.launch_of.get(&pid) != Some(&launch) => {
-                return Ok(Killed {
-                    pid,
-                    already_exited: true,
-                    exit_code: None,
-                });
-            }
-            // Its caller never got the pid: what this launch recorded about
-            // handing it out is undone.
+            // Its caller never got the pid: it no longer counts as a launch
+            // that returned it, whether or not a later launch has taken the
+            // pid over since (whose own entry stays).
             Some(launch) => {
-                if let Some((first, made_shared)) = tracked.marks.remove(&launch) {
-                    if first {
+                if let Some(launches) = tracked.returned.get_mut(&pid) {
+                    launches.remove(&launch);
+                    if launches.is_empty() {
                         tracked.returned.remove(&pid);
                     }
-                    if made_shared {
-                        tracked.shared.remove(&pid);
-                    }
+                }
+                // Its process is gone and the pid names a later launch's:
+                // that one is left alone.
+                if tracked.launch_of.get(&pid) != Some(&launch) {
+                    return Ok(Killed {
+                        pid,
+                        already_exited: true,
+                        exit_code: None,
+                    });
                 }
             }
             None => {}
@@ -349,7 +344,7 @@ impl Children {
         }
         // Launched and neither running nor ending: it exited, and its exit
         // record was dropped to make room for newer ones.
-        if tracked.returned.contains(&pid) {
+        if tracked.returned.contains_key(&pid) {
             return Ok(Killed {
                 pid,
                 already_exited: true,
@@ -626,6 +621,46 @@ mod tests {
             .expect("BUG: its own launch is ended");
         assert!(!own.already_exited);
         assert!(!children.contains(pid));
+    }
+
+    /// A launch abandoned after a later launch took its pid over drops its
+    /// own claim on the pid: the later launch is then the only one that
+    /// returned it, and `kill` ends it rather than refusing it as shared.
+    #[test]
+    fn an_abandoned_launch_releases_a_reused_pid() {
+        let children = Children::new();
+        let (program, args) = if cfg!(windows) {
+            ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
+        } else {
+            ("sleep", vec!["60".into()])
+        };
+        let (pid, _, launch) = children
+            .launch(&LaunchSpec {
+                program: program.into(),
+                args,
+                ..LaunchSpec::default()
+            })
+            .expect("BUG: a long-running system program starts");
+        // An earlier launch that returned the same pid, whose process exited
+        // and was reaped before this one reused the number.
+        let earlier = launch + 100;
+        children
+            .lock()
+            .returned
+            .entry(pid)
+            .or_default()
+            .insert(earlier);
+        assert!(matches!(
+            children.kill(pid),
+            Err(ToolError::InvalidArgument(_))
+        ));
+        let abandoned = children
+            .abandon(pid, earlier)
+            .expect("BUG: an abandon is answered");
+        assert!(abandoned.already_exited, "its own process is gone");
+        assert!(children.contains(pid), "the later launch's is left running");
+        let killed = children.kill(pid).expect("BUG: no longer shared");
+        assert!(!killed.already_exited);
     }
 
     #[test]

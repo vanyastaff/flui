@@ -175,8 +175,10 @@ impl Input {
         {
             // With a button the user holds, a move is a drag (or its drop)
             // in whatever has the mouse: refused. Our own held button (a
-            // drag in progress) is the one exception.
-            if self.held_button.is_none() && crate::os::mouse_button_down() {
+            // drag in progress) is the one exception, that button only: a
+            // second one pressed during the drag refuses the next step.
+            let ours = self.held_button.map_or(0, physical_bit);
+            if crate::os::mouse_buttons_down() & !ours != 0 {
                 return Err(ToolError::Busy(
                     "a mouse button is held down, so moving the pointer would drag".into(),
                 ));
@@ -494,8 +496,11 @@ impl Input {
             let clear = || only_modifiers(&[]);
             #[cfg(not(target_os = "windows"))]
             let clear = || Ok(());
-            let sent = guard(None)
-                .and_then(|()| clear())
+            // The key-state wait first: it can take a moment, in which the
+            // foreground can change, so the target is checked after it,
+            // right before the keystroke.
+            let sent = clear()
+                .and_then(|()| guard(None))
                 .and_then(|()| match stroke {
                     Stroke::Key(key) => {
                         let key = enigo_key(key)?;
@@ -651,6 +656,13 @@ impl Input {
                 break;
             }
         }
+        // Exactly ours are down before the key. Polled, so it can take a
+        // moment in which the foreground can change: the target and the
+        // layout owner are checked after it, right before the key.
+        #[cfg(target_os = "windows")]
+        if result.is_ok() {
+            result = only_modifiers(&held);
+        }
         if result.is_ok() {
             result = guard(None);
         }
@@ -661,11 +673,6 @@ impl Input {
             && let Some(changed) = layout_of.and_then(owner_changed)
         {
             result = Err(changed);
-        }
-        // And exactly ours are down right before the key.
-        #[cfg(target_os = "windows")]
-        if result.is_ok() {
-            result = only_modifiers(&held);
         }
         let mut sent = false;
         // Whether the key surely went down: only then is the chord a real
@@ -882,6 +889,20 @@ fn resolve(combo: &KeyCombo) -> ToolResult<(Key, Vec<Modifier>, Option<LayoutOwn
         return Ok((Key::Other(u32::from(vk)), modifiers, Some(window)));
     }
     Ok((enigo_key(combo.key)?, combo.modifiers.clone(), None))
+}
+
+/// The bit [`crate::os::mouse_buttons_down`] reports for an injected
+/// button: both are physical.
+#[cfg(target_os = "windows")]
+fn physical_bit(button: Button) -> u8 {
+    match button {
+        Button::Left => 1,
+        Button::Right => 2,
+        Button::Middle => 4,
+        Button::Back => 8,
+        Button::Forward => 16,
+        _ => 0,
+    }
 }
 
 /// The physical button for a logical one: injected button events are
