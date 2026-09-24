@@ -89,11 +89,19 @@ impl Children {
         let child = command
             .spawn()
             .map_err(|e| ToolError::platform(format!("launching `{}`", spec.program), e))?;
+        // On Windows the kill-on-exit job is what ends children when the
+        // server dies hard; a child that cannot join it is ended at once.
         #[cfg(target_os = "windows")]
         if let Some(job) = &self.job
             && let Err(e) = job.assign(&child)
         {
-            tracing::warn!("pid {} is not tied to the job: {e}", child.id());
+            let mut child = child;
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ToolError::NotSupported(format!(
+                "`{}` started but could not join the kill-on-exit job ({e}), so it was ended",
+                spec.program
+            )));
         }
         let pid = child.id();
         let mut children = self.lock();

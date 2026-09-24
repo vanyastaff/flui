@@ -46,6 +46,11 @@ const PATTERNS: &[(UIProperty, &str)] = &[
 /// cache's capacity, so every handle a response carries stays resolvable.
 pub const NODE_BUDGET: usize = 5_000;
 
+/// How many parents a walk up to the desktop takes at most: a hostile
+/// provider can report an endless or cyclic chain, and the walk runs on the
+/// one worker every tool shares.
+const ANCESTOR_LIMIT: usize = 256;
+
 /// How far past the budget or the depth a node's remaining children are
 /// counted before the count stops being exact.
 const OMITTED_COUNT_CAP: usize = 256;
@@ -153,9 +158,13 @@ impl Uia {
                     .push(self.build(&current, depth + 1, max_depth, budget));
             } else {
                 omitted += 1;
-                if omitted >= OMITTED_COUNT_CAP {
+                // Counting what is left out costs a fetch per child too, so
+                // it spends the same budget: an exhausted budget stops the
+                // count (a lower bound from there).
+                if *budget == 0 || omitted >= OMITTED_COUNT_CAP {
                     break;
                 }
+                *budget -= 1;
             }
             child = self
                 .walker
@@ -241,7 +250,7 @@ impl Uia {
             return false;
         };
         let mut current = hit;
-        loop {
+        for _ in 0..ANCESTOR_LIMIT {
             if self
                 .automation
                 .compare_elements(&current, element)
@@ -261,6 +270,7 @@ impl Uia {
                 Err(_) => return false,
             }
         }
+        false
     }
 
     /// The top-level window `element` belongs to: the ancestor whose parent is
@@ -270,12 +280,17 @@ impl Uia {
         let walker = self.automation.get_raw_view_walker().ok()?;
         let root = self.automation.get_root_element().ok()?;
         let mut current = element.clone();
-        loop {
+        let mut reached = false;
+        for _ in 0..ANCESTOR_LIMIT {
             let parent = walker.get_parent(&current).ok()?;
             if self.automation.compare_elements(&parent, &root).ok()? {
+                reached = true;
                 break;
             }
             current = parent;
+        }
+        if !reached {
+            return None;
         }
         let handle: isize = current.get_native_window_handle().ok()?.into();
         u32::try_from(handle).ok().filter(|&id| id != 0)
@@ -396,11 +411,11 @@ impl Uia {
 impl AccessibilityBackend for Uia {
     fn tree(&mut self, windows: &[u32], max_depth: usize) -> ToolResult<Vec<Node>> {
         let mut roots = Vec::with_capacity(windows.len());
-        let mut budget = NODE_BUDGET;
+        // Each window gets its share, so a large first window cannot hide the
+        // rest of a process's windows from `find` and `wait_for`.
+        let share = (NODE_BUDGET / windows.len().max(1)).max(1);
         for &window in windows {
-            if budget == 0 {
-                break;
-            }
+            let mut budget = share;
             let root = self
                 .automation
                 .element_from_handle_build_cache(hwnd(window), &self.single)

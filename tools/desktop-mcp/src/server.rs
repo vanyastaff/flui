@@ -92,7 +92,7 @@ impl DesktopServer {
     async fn list_windows(&self, Parameters(p): Parameters<ListWindowsParams>) -> CallToolResult {
         let windows = self
             .worker
-            .run(move |_| Desktop::list_windows(p.title_contains.as_deref(), p.pid))
+            .run(move |d| d.list_windows(p.title_contains.as_deref(), p.pid))
             .await;
         respond(windows.map(|w| json!({ "windows": w })))
     }
@@ -121,7 +121,7 @@ impl DesktopServer {
         loop {
             let windows = self
                 .worker
-                .run(move |_| Desktop::list_windows(None, Some(pid)))
+                .run(move |d| d.list_windows(None, Some(pid)))
                 .await;
             match windows {
                 Ok(w) if !w.is_empty() => {

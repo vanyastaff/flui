@@ -113,10 +113,30 @@ pub fn verify(
     Ok(())
 }
 
+/// Refuses a window target whose id now belongs to a different process than
+/// the one that owned it when this session listed it (`bound`): Windows
+/// recycles `HWND`s, and input must not follow an id to an unrelated window.
+pub fn still_bound(target: Target, bound: Option<u32>, fg: Option<&Foreground>) -> ToolResult<()> {
+    if let (Target::Window(id), Some(pid), Some(fg)) = (target, bound, fg)
+        && fg.id == id
+        && fg.pid != pid
+    {
+        return Err(ToolError::NotForeground {
+            target: format!("{target} (of process {pid} when listed)"),
+            foreground: format!("{fg}: the id now belongs to another process"),
+        });
+    }
+    Ok(())
+}
+
 /// Session state on the worker thread.
 pub struct Desktop {
     a11y: Box<dyn AccessibilityBackend>,
     input: Result<Input, String>,
+    /// Every window id this session handed out, with the process that owned
+    /// it then. Windows recycles an `HWND` for an unrelated window, so a
+    /// window target is accepted only while the same process still owns it.
+    issued: std::collections::HashMap<u32, u32>,
 }
 
 impl std::fmt::Debug for Desktop {
@@ -134,6 +154,7 @@ impl Desktop {
         Self {
             a11y: a11y::backend(),
             input: Input::new(),
+            issued: std::collections::HashMap::new(),
         }
     }
 
@@ -143,13 +164,15 @@ impl Desktop {
             .map_err(|e| ToolError::NotSupported(e.clone()))
     }
 
-    /// The window list, optionally filtered.
+    /// The window list, optionally filtered. Every id it returns is recorded
+    /// with its owner, so a later window target can be bound to it.
     pub fn list_windows(
+        &mut self,
         title_contains: Option<&str>,
         pid: Option<u32>,
     ) -> ToolResult<Vec<WindowInfo>> {
         let needle = title_contains.map(str::to_lowercase);
-        Ok(capture::windows()?
+        let windows: Vec<WindowInfo> = capture::windows()?
             .into_iter()
             .filter(|w| pid.is_none_or(|p| w.pid == p))
             .filter(|w| {
@@ -157,7 +180,25 @@ impl Desktop {
                     .as_deref()
                     .is_none_or(|n| w.title.to_lowercase().contains(n))
             })
-            .collect())
+            .collect();
+        for w in &windows {
+            self.issued.insert(w.id, w.pid);
+        }
+        Ok(windows)
+    }
+
+    /// The process a window target is bound to: the owner recorded when this
+    /// session handed the id out. An id never handed out is refused — it
+    /// cannot be told apart from a recycled one.
+    fn bound(&self, target: Option<Target>) -> ToolResult<Option<u32>> {
+        match target {
+            Some(Target::Window(id)) => self.issued.get(&id).copied().map(Some).ok_or_else(|| {
+                ToolError::NotFound(format!(
+                    "window {id} was not listed in this session; take window ids from list_windows or launch"
+                ))
+            }),
+            _ => Ok(None),
+        }
     }
 
     /// The windows a target names: one window, or a process's windows front
@@ -238,11 +279,26 @@ impl Desktop {
         })
     }
 
-    fn check(target: Option<Target>, points: &[(i32, i32)]) -> ToolResult<()> {
+    fn check(target: Option<Target>, bound: Option<u32>, points: &[(i32, i32)]) -> ToolResult<()> {
         let Some(target) = target else {
             return Ok(());
         };
-        let fg = Self::foreground()?;
+        // Keys and text need only who is in front, which the OS answers
+        // directly; the full window list (for bounds) only for points.
+        let fg = if points.is_empty() {
+            match crate::os::foreground() {
+                Some((id, pid)) => Some(Foreground {
+                    id,
+                    pid,
+                    title: None,
+                    rect: None,
+                }),
+                None => Self::foreground()?,
+            }
+        } else {
+            Self::foreground()?
+        };
+        still_bound(target, bound, fg.as_ref())?;
         let points: Vec<_> = points
             .iter()
             .map(|&(x, y)| {
@@ -261,6 +317,7 @@ impl Desktop {
         double: bool,
         target: Option<Target>,
     ) -> ToolResult<Value> {
+        let bound = self.bound(target)?;
         let (x, y, element_target) = match at {
             ClickAt::Point(x, y) => (*x, *y, None),
             ClickAt::Element(handle) => {
@@ -276,15 +333,15 @@ impl Desktop {
                 (p.x, p.y, Some(Target::Window(window)))
             }
         };
-        Self::check(target, &[(x, y)])?;
+        Self::check(target, bound, &[(x, y)])?;
         // An element click always lands on the element: the point must be in
         // its window, in front, not on whatever covers it.
         if let Some(own) = element_target {
-            Self::check(Some(own), &[(x, y)])?;
+            Self::check(Some(own), None, &[(x, y)])?;
         }
         let mut guard = |_: Option<(i32, i32)>| {
-            Self::check(target, &[(x, y)])?;
-            element_target.map_or(Ok(()), |own| Self::check(Some(own), &[(x, y)]))
+            Self::check(target, bound, &[(x, y)])?;
+            element_target.map_or(Ok(()), |own| Self::check(Some(own), None, &[(x, y)]))
         };
         self.input()?.click(x, y, button, double, &mut guard)?;
         Ok(
@@ -311,11 +368,12 @@ impl Desktop {
         duration: Duration,
         target: Option<Target>,
     ) -> ToolResult<Value> {
-        Self::check(target, &[from, to])?;
+        let bound = self.bound(target)?;
+        Self::check(target, bound, &[from, to])?;
         let mut guard = |at: Option<(i32, i32)>| {
             let mut points = vec![from, to];
             points.extend(at);
-            Self::check(target, &points)
+            Self::check(target, bound, &points)
         };
         self.input()?.drag(from, to, duration, &mut guard)?;
         Ok(json!({ "from": { "x": from.0, "y": from.1 }, "to": { "x": to.0, "y": to.1 } }))
@@ -330,16 +388,18 @@ impl Desktop {
         dy: i32,
         target: Option<Target>,
     ) -> ToolResult<Value> {
-        Self::check(target, &[(x, y)])?;
-        let mut guard = |_: Option<(i32, i32)>| Self::check(target, &[(x, y)]);
+        let bound = self.bound(target)?;
+        Self::check(target, bound, &[(x, y)])?;
+        let mut guard = |_: Option<(i32, i32)>| Self::check(target, bound, &[(x, y)]);
         self.input()?.scroll(x, y, dx, dy, &mut guard)?;
         Ok(json!({ "at": { "x": x, "y": y }, "dx": dx, "dy": dy }))
     }
 
     /// Types text into whatever has keyboard focus.
     pub fn type_text(&mut self, text: &str, target: Option<Target>) -> ToolResult<Value> {
-        Self::check(target, &[])?;
-        let mut guard = |_: Option<(i32, i32)>| Self::check(target, &[]);
+        let bound = self.bound(target)?;
+        Self::check(target, bound, &[])?;
+        let mut guard = |_: Option<(i32, i32)>| Self::check(target, bound, &[]);
         self.input()?.type_text(text, &mut guard)?;
         Ok(json!({ "typed_chars": text.chars().count() }))
     }
@@ -351,8 +411,9 @@ impl Desktop {
         repeat: u32,
         target: Option<Target>,
     ) -> ToolResult<Value> {
-        Self::check(target, &[])?;
-        let mut guard = |_: Option<(i32, i32)>| Self::check(target, &[]);
+        let bound = self.bound(target)?;
+        Self::check(target, bound, &[])?;
+        let mut guard = |_: Option<(i32, i32)>| Self::check(target, bound, &[]);
         self.input()?.key(combo, repeat, &mut guard)?;
         Ok(json!({ "pressed": combo.to_string(), "repeat": repeat }))
     }
@@ -360,6 +421,9 @@ impl Desktop {
     /// Brings a window to the front and reports whether it got there.
     pub fn activate(&mut self, target: Target) -> ToolResult<Value> {
         let windows = Self::resolve(target)?;
+        for w in &windows {
+            self.issued.insert(w.id, w.pid);
+        }
         let window = windows
             .iter()
             .find(|w| !w.is_minimized)
@@ -427,6 +491,18 @@ mod tests {
         let own = Under { id: 10, pid: 100 };
         assert!(verify(Target::Pid(100), Some(&fg()), &[((5, 5), Some(own))]).is_ok());
         assert!(verify(Target::Window(10), Some(&fg()), &[((5, 5), Some(own))]).is_ok());
+    }
+
+    /// A window id recycled for another process's window is refused, even
+    /// though that window is in front under the same id.
+    #[test]
+    fn a_recycled_window_id_is_refused() {
+        assert!(still_bound(Target::Window(10), Some(100), Some(&fg())).is_ok());
+        assert!(matches!(
+            still_bound(Target::Window(10), Some(555), Some(&fg())),
+            Err(ToolError::NotForeground { .. })
+        ));
+        assert!(still_bound(Target::Pid(100), None, Some(&fg())).is_ok());
     }
 
     /// A point whose window the OS cannot name is refused, not waved

@@ -70,6 +70,13 @@ impl Input {
     /// the safety check never looked at.
     fn move_verified(&mut self, x: i32, y: i32) -> ToolResult<()> {
         self.move_to(x, y)?;
+        self.ensure_at(x, y)
+    }
+
+    /// Refuses unless the pointer is exactly at the point now — read again
+    /// right before a press, since the user or another program can move it
+    /// between the move and the press.
+    fn ensure_at(&self, x: i32, y: i32) -> ToolResult<()> {
         match self.position() {
             Some(at) if at == (x, y) => Ok(()),
             Some((ax, ay)) => Err(ToolError::OutsideTarget {
@@ -105,6 +112,7 @@ impl Input {
         let button = enigo_button(button);
         for _ in 0..if double { 2 } else { 1 } {
             guard(None)?;
+            self.ensure_at(x, y)?;
             self.enigo
                 .button(button, Direction::Click)
                 .map_err(failed("clicking"))?;
@@ -125,6 +133,7 @@ impl Input {
         self.move_verified(from.0, from.1)?;
         thread::sleep(STEP);
         guard(None)?;
+        self.ensure_at(from.0, from.1)?;
         self.enigo
             .button(Button::Left, Direction::Press)
             .map_err(failed("pressing for a drag"))?;
@@ -161,12 +170,14 @@ impl Input {
         thread::sleep(STEP);
         if dy != 0 {
             guard(None)?;
+            self.ensure_at(x, y)?;
             self.enigo
                 .scroll(dy, Axis::Vertical)
                 .map_err(failed("scrolling"))?;
         }
         if dx != 0 {
             guard(None)?;
+            self.ensure_at(x, y)?;
             self.enigo
                 .scroll(dx, Axis::Horizontal)
                 .map_err(failed("scrolling"))?;

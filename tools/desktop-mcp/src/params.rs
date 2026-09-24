@@ -136,6 +136,11 @@ pub enum ScreenshotTarget {
 impl ScreenshotParams {
     /// At most one target.
     pub fn target(&self) -> ToolResult<ScreenshotTarget> {
+        if self.max_side == Some(0) {
+            return Err(ToolError::InvalidArgument(
+                "`max_side` must be at least 1".into(),
+            ));
+        }
         match (self.window_id, self.pid, self.monitor) {
             (None, None, None) => Ok(ScreenshotTarget::Direct(ShotTarget::Primary)),
             (Some(id), None, None) => Ok(ScreenshotTarget::Direct(ShotTarget::Window(id))),
@@ -571,6 +576,21 @@ mod tests {
             .expect("BUG: a role is a criterion");
         assert_eq!(target, Target::Window(4));
         assert_eq!(query.role.as_deref(), Some("Button"));
+    }
+
+    /// A zero size limit is refused rather than read as "no limit".
+    #[test]
+    fn a_zero_screenshot_limit_is_refused() {
+        assert!(
+            parse::<ScreenshotParams>(json!({"max_side": 0}))
+                .target()
+                .is_err()
+        );
+        assert!(
+            parse::<ScreenshotParams>(json!({"max_side": 1}))
+                .target()
+                .is_ok()
+        );
     }
 
     /// A window wait above the ceiling is refused, not shortened.
