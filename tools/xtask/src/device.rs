@@ -4,9 +4,10 @@
 //! The Apple drivers stay Python and Swift under `tools/device-checks/`: they
 //! only run on a Mac, so only a Mac can port them with evidence. The Windows
 //! checks are clients of Win32 APIs xtask can call itself, so they run
-//! in-process ([`windows_a11y`]). This module owns the build, the staging and
-//! the verdict on a probe's output as a plan computed first and executed
-//! second, so a test on any host can hold each check against its steps.
+//! in-process (`device/windows_a11y.rs`, Windows only). This module owns the
+//! build, the staging and the verdict on a probe's output as a plan computed
+//! first and executed second, so a test on any host can hold each check
+//! against its steps.
 //!
 //! On another host a check says why it is skipped and exits 0.
 //! `macos-workload` and `macos-hot-reload-loop` leave that decision to their

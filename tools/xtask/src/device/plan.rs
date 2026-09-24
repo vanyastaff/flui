@@ -204,7 +204,7 @@ impl Step {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Native {
     /// The built `a11y_probe` driven through UI Automation
-    /// ([`super::windows_a11y`]).
+    /// (`device/windows_a11y.rs`, Windows only).
     WindowsA11y { probe: PathBuf },
 }
 
