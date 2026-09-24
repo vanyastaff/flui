@@ -148,7 +148,7 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   Space and Select now activate the focused control (`ActivateIntent`, `ButtonActivateIntent`;
   `InkWell` answers both); a `Shortcuts` resolves its intent at the primary focus, so an
   `Actions` between it and the focused widget takes part; the first Tab into a window with
-  nothing focused reaches the default bindings (`FocusManager::set_unfocused_key_target`);
+  nothing focused reaches the default bindings (`FocusManager::claim_unfocused_keys`);
   `Focus` publishes `focusable`/`focused` semantics; and the root of the accessibility tree is a
   `Role::Window`, so moving the focus no longer hides the window's contents from UI Automation.
   `cargo xtask device windows-input` drives the counter with `SendInput`: a missed click

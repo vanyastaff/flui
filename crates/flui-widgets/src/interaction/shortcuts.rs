@@ -430,21 +430,18 @@ impl StatefulView for DefaultFocusTraversal {
 
 impl DefaultFocusTraversalState {
     /// Make these bindings where a key starts while nothing is focused, so
-    /// the first Tab into a window with no focus reaches them.
+    /// the first Tab into a window with no focus reaches them. A nested
+    /// instance's claim covers this one only while it is mounted.
     fn claim_unfocused_keys(&mut self, owner: Rc<flui_interaction::FocusManager>) {
         self.release_unfocused_keys();
-        owner.set_unfocused_key_target(Some(&self.keys));
+        owner.claim_unfocused_keys(&self.keys);
         self.focus_owner = Some(owner);
     }
 
-    /// Give the target up, unless a later instance has claimed it since.
+    /// Withdraw this instance's claim.
     fn release_unfocused_keys(&self) {
-        if let Some(owner) = &self.focus_owner
-            && owner
-                .unfocused_key_target()
-                .is_some_and(|target| Rc::ptr_eq(&target, &self.keys))
-        {
-            owner.set_unfocused_key_target(None);
+        if let Some(owner) = &self.focus_owner {
+            owner.release_unfocused_keys(&self.keys);
         }
     }
 }
@@ -956,6 +953,53 @@ mod activation_tests {
         assert_eq!(runs.get(), 1, "the action below the Shortcuts ran");
     }
 
+    /// A focused `FocusScope` node resolves at its own position too: its
+    /// backing node can hold the primary focus, and an `Actions` between it
+    /// and the `Shortcuts` must answer.
+    ///
+    /// Red-check: drop the `record_action_chain` calls from
+    /// `FocusScopeState` — the scope's node has no record, the `Shortcuts`
+    /// falls back to its own position, and the action never runs.
+    #[test]
+    fn a_focused_scope_resolves_intents_at_its_own_position() {
+        use flui_interaction::routing::FocusScopeNode;
+
+        use crate::interaction::focus::FocusScope;
+
+        let runs = Rc::new(Cell::new(0));
+        let scope = FocusScopeNode::with_debug_label("scope");
+        let counted = Rc::clone(&runs);
+        let harness = mount(
+            Shortcuts::new(
+                Actions::new(FocusScope::with_external_node(
+                    Rc::clone(&scope),
+                    SizedBox::new(10.0, 10.0),
+                ))
+                .action(CallbackAction::new(move |_: &SaveIntent| {
+                    counted.set(counted.get() + 1);
+                })),
+            )
+            .shortcut(SingleActivator::character("s").control(), SaveIntent),
+        );
+        let manager = harness.focus_manager();
+        scope.as_focus_node().request_focus();
+        assert!(
+            scope.as_focus_node().has_primary_focus(),
+            "the empty scope holds the focus"
+        );
+
+        let ctrl_s = KeyEvent {
+            modifiers: Modifiers::CONTROL,
+            ..key_down(Key::Character("s".into()))
+        };
+        assert!(manager.dispatch_key_event(&ctrl_s), "consumed");
+        assert_eq!(
+            runs.get(),
+            1,
+            "the action between the scope and the Shortcuts ran"
+        );
+    }
+
     /// Enter, Space and Select activate the focused control through the
     /// root bindings — `WidgetsApp`'s `_defaultShortcuts` (`app.dart:1265-1269`,
     /// tag `3.44.0`) — and an activation key no control claims keeps bubbling.
@@ -995,7 +1039,7 @@ mod activation_tests {
     /// none, and every key was dropped — no control was reachable from the
     /// keyboard at all.
     ///
-    /// Red-check: drop `set_unfocused_key_target` from
+    /// Red-check: drop `claim_unfocused_keys` from
     /// `DefaultFocusTraversalState::claim_unfocused_keys` — the Tab is
     /// ignored and nothing gains focus.
     #[test]

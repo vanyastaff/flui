@@ -462,7 +462,8 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
 }
 
 /// A node as the adapter is handed it: [`to_node`], except that the root of a
-/// window's tree is a [`Role::Window`] when nothing gave it a role.
+/// window's tree is a [`Role::Window`] when nothing gave it a role — no
+/// explicit role, and no flag or label that resolves one.
 ///
 /// AccessKit's filter keeps a `GenericContainer` only while it holds the
 /// focus (`accesskit_consumer::common_filter`), and the window's own UI
@@ -474,7 +475,9 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
 #[must_use]
 pub(crate) fn to_published_node(data: &SemanticsNodeData, is_root: bool) -> Node {
     let mut node = to_node(data);
-    if is_root && node.role() == Role::GenericContainer {
+    // Only a root no role reached: an explicit role AccessKit can only
+    // express as a container (`DragHandle`, `HotKey`) keeps that container.
+    if is_root && data.role == SemanticsRole::None && node.role() == Role::GenericContainer {
         node.set_role(Role::Window);
     }
     node
@@ -1241,6 +1244,24 @@ mod tests {
             .map(|node| node.role())
             .collect();
         assert_eq!(reachable, vec![Role::Label, Role::Label, Role::Button]);
+    }
+
+    /// A root with an explicit role AccessKit can only express as a container
+    /// keeps that container: only a root no role reached becomes a `Window`.
+    ///
+    /// Red-check: gate the promotion on the translated role alone — the
+    /// drag-handle root is published as a window.
+    #[test]
+    fn an_explicit_container_role_on_the_root_is_not_promoted_to_a_window() {
+        let mut tree = SemanticsTree::new();
+        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(2));
+        root_node.config_mut().set_role(SemanticsRole::DragHandle);
+        let root = tree.insert(root_node);
+        tree.set_root(Some(root));
+
+        let update = tree_to_update(&tree, None).expect("rooted");
+        let (_, published) = &update.nodes[0];
+        assert_eq!(published.role(), Role::GenericContainer);
     }
 
     /// AccessKit requires a valid focus target, so a node the adapter has never
