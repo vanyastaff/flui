@@ -122,12 +122,15 @@ fn element_reply(result: ToolResult<a11y::Node>) -> CallToolResult {
 /// With `admit`, the work takes one of the [`PROCESS_THREADS`]; with
 /// `give_up`, the caller stops waiting once that time passes or `ct` fires,
 /// and the work (which sees the same `ct`, cancelled then) undoes itself
-/// when it finishes.
+/// when it finishes. Exactly one side handles a result: one the caller
+/// stopped waiting for is either picked up anyway (it arrived first) or
+/// handed to `undo` on the work's thread.
 async fn blocking<T: Send + 'static>(
     ct: &CancellationToken,
     admit: bool,
     give_up: Option<Duration>,
     work: impl FnOnce() -> ToolResult<T> + Send + 'static,
+    undo: impl FnOnce(T) + Send + 'static,
 ) -> ToolResult<T> {
     if ct.is_cancelled() {
         return Err(ToolError::Cancelled);
@@ -139,7 +142,7 @@ async fn blocking<T: Send + 'static>(
     } else {
         None
     };
-    let (reply, result) = tokio::sync::oneshot::channel();
+    let (reply, mut result) = tokio::sync::oneshot::channel();
     let job_ct = ct.clone();
     std::thread::Builder::new()
         .name("desktop-process".into())
@@ -154,23 +157,37 @@ async fn blocking<T: Send + 'static>(
             if reply.is_closed() {
                 return;
             }
-            let _ = reply.send(work());
+            // The caller stopped waiting before this arrived: undone here.
+            if let Err(Ok(unsent)) = reply.send(work()) {
+                undo(unsent);
+            }
         })
         .map_err(|e| ToolError::platform("starting process work", e))?;
     let panicked = |_| ToolError::platform("running process work", "it panicked");
     let Some(limit) = give_up else {
         return result.await.map_err(panicked)?;
     };
-    tokio::select! {
-        reply = result => reply.map_err(panicked)?,
+    let gave_up = tokio::select! {
+        reply = &mut result => return reply.map_err(panicked)?,
         () = ct.cancelled() => Err(ToolError::Cancelled),
         () = tokio::time::sleep(limit) => {
             ct.cancel();
-            Err(ToolError::Busy(format!(
-                "the program is still starting after {} s (a slow or unreachable path?); it is ended if it does start",
-                limit.as_secs()
-            )))
+            // Not "retry shortly": the same path would hang again.
+            Err(ToolError::platform(
+                "starting the program",
+                format!(
+                    "it did not start within {} s (a slow or unreachable path?); it is ended if it does start",
+                    limit.as_secs()
+                ),
+            ))
         }
+    };
+    // Closed first, then read: a result sent before the close is the
+    // caller's to handle; one sent after it fails and goes to `undo`.
+    result.close();
+    match result.try_recv() {
+        Ok(arrived) => arrived,
+        Err(_) => gave_up,
     }
 }
 
@@ -196,8 +213,9 @@ impl ProcessSlot {
             })
             .map(|_| Self)
             .map_err(|_| {
-                ToolError::Busy(format!(
-                    "{PROCESS_THREADS} launches are already running (one may be stuck starting a program)"
+                // Not "retry shortly": they stay stuck as long as their paths do.
+                ToolError::NotSupported(format!(
+                    "{PROCESS_THREADS} launches are still starting their programs (stuck on unreachable paths?); launch is unavailable until one finishes"
                 ))
             })
     }
@@ -232,9 +250,13 @@ impl DesktopServer {
     /// pid, and the process is ended rather than left running unnamed.
     async fn void_launch(&self, pid: u32) -> CallToolResult {
         let children = Arc::clone(&self.children);
-        let ended = blocking(&CancellationToken::new(), false, None, move || {
-            children.kill(pid)
-        })
+        let ended = blocking(
+            &CancellationToken::new(),
+            false,
+            None,
+            move || children.abandon(pid),
+            |_| {},
+        )
         .await;
         match ended {
             Ok(_) => tracing::info!(pid, "ended the process of a cancelled launch"),
@@ -286,21 +308,31 @@ impl DesktopServer {
             env: p.env.into_iter().collect(),
         };
         let children = Arc::clone(&self.children);
+        let unsent = Arc::clone(&self.children);
         // Its own token: cancelled with the request, or when the wait for
         // the spawn gives up, and read by the spawn thread when it finishes.
         let spawn_ct = ct.child_token();
         let finished = spawn_ct.clone();
         let (pid, started) = valid!(
-            blocking(&spawn_ct, true, Some(SPAWN_WAIT), move || {
-                let (pid, started) = children.launch(&spec)?;
-                // Nobody will be told this pid: end the process rather than
-                // leave one running that no one can name.
-                if finished.is_cancelled() {
-                    let _ = children.kill(pid);
-                    return Err(ToolError::Cancelled);
-                }
-                Ok((pid, started))
-            })
+            blocking(
+                &spawn_ct,
+                true,
+                Some(SPAWN_WAIT),
+                move || {
+                    let (pid, started) = children.launch(&spec)?;
+                    // Nobody will be told this pid: end the process rather
+                    // than leave one running that no one can name.
+                    if finished.is_cancelled() {
+                        let _ = children.abandon(pid);
+                        return Err(ToolError::Cancelled);
+                    }
+                    Ok((pid, started))
+                },
+                // Started, but the wait was over before the pid got back.
+                move |(pid, _)| {
+                    let _ = unsent.abandon(pid);
+                },
+            )
             .await
         );
         if ct.is_cancelled() {
@@ -337,8 +369,12 @@ impl DesktopServer {
             if Instant::now() >= bind_until {
                 break;
             }
-            // Refused for good: stop. Anything else (a full queue) is retried.
-            if matches!(bound, Err(ToolError::InvalidArgument(_))) {
+            // Refused for good, or skipped because the server is stopping:
+            // stop. Anything else (a full queue) is retried.
+            if matches!(
+                bound,
+                Err(ToolError::InvalidArgument(_) | ToolError::Cancelled)
+            ) {
                 break;
             }
             if bound.is_ok() {
@@ -353,7 +389,7 @@ impl DesktopServer {
             return respond(Ok(json!({
                 "pid": pid,
                 "window": null,
-                "note": format!("started, but binding its pid as a target did not finish ({e}); it may still be bound shortly, and until then target its windows by window_id from list_windows, or kill it"),
+                "note": format!("started, but its pid was not bound as a target ({e}); target its windows by window_id from list_windows, or kill it"),
             })));
         }
         let Some(ms) = p.wait_for_window_ms else {
@@ -391,8 +427,12 @@ impl DesktopServer {
                         "note": "the process exited before it showed a window; if it handed off to another process, find that one with list_windows",
                     })));
                 }
-                Ok(Some(w)) if !w.is_empty() => {
-                    return respond(Ok(json!({ "pid": pid, "window": w[0] })));
+                // The first window it can be targeted by: one that closed
+                // while listed (a splash screen) is not its window, and the
+                // wait goes on for the next.
+                Ok(Some(w)) if w.iter().any(|w| w.not_targetable.is_none()) => {
+                    let first = w.into_iter().find(|w| w.not_targetable.is_none());
+                    return respond(Ok(json!({ "pid": pid, "window": first })));
                 }
                 Err(ToolError::Cancelled) => return self.void_launch(pid).await,
                 // The process is running and only this session can end it:
@@ -442,7 +482,7 @@ impl DesktopServer {
     ) -> CallToolResult {
         let p = valid!(p);
         let children = Arc::clone(&self.children);
-        respond(blocking(&ct, false, None, move || children.kill(p.pid)).await)
+        respond(blocking(&ct, false, None, move || children.kill(p.pid), |_| {}).await)
     }
 
     #[tool(
@@ -779,7 +819,11 @@ mod tests {
         let held: Vec<ProcessSlot> = (0..PROCESS_THREADS)
             .map(|_| ProcessSlot::take().expect("BUG: below the bound"))
             .collect();
-        assert!(matches!(ProcessSlot::take(), Err(ToolError::Busy(_))));
+        // Not `Busy`: slots held by stuck spawns do not free up by retrying.
+        assert!(matches!(
+            ProcessSlot::take(),
+            Err(ToolError::NotSupported(_))
+        ));
         drop(held);
         assert!(ProcessSlot::take().is_ok());
     }

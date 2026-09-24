@@ -241,12 +241,24 @@ impl Children {
     /// Kills a child this session launched; one that already exited on its
     /// own is reported as such.
     pub fn kill(&self, pid: u32) -> ToolResult<Killed> {
-        let mut tracked = self.lock();
-        if tracked.shared.contains(&pid) {
+        if self.lock().shared.contains(&pid) {
             return Err(ToolError::InvalidArgument(format!(
                 "pid {pid} was returned by two launches of this session, so it cannot be told which one to end; the running one is ended when the server exits"
             )));
         }
+        self.end_tracked(pid)
+    }
+
+    /// Ends the process a launch just started, for a launch whose caller
+    /// will never be told its pid. Unlike [`Self::kill`] it holds for a pid
+    /// two launches shared: the child tracked under it is the newest, the one
+    /// this launch started, since a launch replaces the entry for its pid.
+    pub fn abandon(&self, pid: u32) -> ToolResult<Killed> {
+        self.end_tracked(pid)
+    }
+
+    fn end_tracked(&self, pid: u32) -> ToolResult<Killed> {
+        let mut tracked = self.lock();
         if tracked.ending.contains(&pid) {
             return Err(ToolError::InvalidArgument(format!(
                 "process {pid} is being ended by another kill; wait for that one"
@@ -353,9 +365,11 @@ impl Children {
         // Every kill first, then one shared wait: a child stuck in IO does
         // not hold up the others' kills, nor multiply the shutdown time.
         let mut failed = Vec::new();
-        drained.retain_mut(|(pid, child)| {
+        // One that already exited stays in the list, so the pass below
+        // clears its `ending` mark like every other's.
+        for (pid, child) in &mut drained {
             if matches!(child.try_wait(), Ok(Some(_))) {
-                return false;
+                continue;
             }
             if let Err(e) = child.kill()
                 && !matches!(child.try_wait(), Ok(Some(_)))
@@ -363,8 +377,7 @@ impl Children {
                 tracing::warn!("could not end launched child {pid} on shutdown: {e}");
                 failed.push(*pid);
             }
-            true
-        });
+        }
         let until = std::time::Instant::now() + REAP_WAIT;
         while std::time::Instant::now() < until
             && drained

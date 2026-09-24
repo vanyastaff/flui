@@ -60,8 +60,11 @@ async fn main() -> anyhow::Result<()> {
     let children = Arc::new(Children::new());
     let server = DesktopServer::new(worker.clone(), Arc::clone(&children));
 
+    // Stdin at EOF is the client leaving: input stops and queued calls are
+    // skipped from then, not only once rmcp has drained its requests (up to
+    // seconds, while queued keystrokes would still be typed).
     let service = server
-        .serve(rmcp::transport::stdio())
+        .serve((ShutdownOnEof(tokio::io::stdin()), tokio::io::stdout()))
         .await
         .context("starting the MCP session")?;
     // A host that closes stdin and then sends SIGTERM (or a Ctrl+C at a
@@ -107,30 +110,72 @@ async fn main() -> anyhow::Result<()> {
             children.kill_all();
         }
     }
-    Ok(())
+    // Everything is released and ended. Exiting here rather than returning:
+    // after a signal, stdin is still open, and the runtime's teardown would
+    // wait on its blocked read for good.
+    std::process::exit(0)
 }
 
-/// Resolves on SIGTERM (Unix) or Ctrl+C; never when neither can be watched.
+/// Stdin that starts shutdown at EOF.
+struct ShutdownOnEof<R>(R);
+
+impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for ShutdownOnEof<R> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let read = std::pin::Pin::new(&mut self.0).poll_read(cx, buf);
+        if matches!(read, std::task::Poll::Ready(Ok(()))) && buf.filled().len() == before {
+            desktop::stop_input();
+        }
+        read
+    }
+}
+
+/// Resolves on SIGTERM or SIGHUP (Unix), on Ctrl+C, and on Windows on the
+/// console closing, logoff or shutdown; never when none can be watched.
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::terminate()) {
-            Ok(mut term) => {
-                tokio::select! {
-                    _ = term.recv() => {}
-                    _ = tokio::signal::ctrl_c() => {}
+        let watch = |kind| async move {
+            match signal(kind) {
+                Ok(mut s) => {
+                    s.recv().await;
                 }
+                Err(_) => std::future::pending::<()>().await,
             }
-            Err(_) => {
-                let _ = tokio::signal::ctrl_c().await;
-            }
+        };
+        tokio::select! {
+            () = watch(SignalKind::terminate()) => {}
+            () = watch(SignalKind::hangup()) => {}
+            _ = tokio::signal::ctrl_c() => {}
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        if tokio::signal::ctrl_c().await.is_err() {
-            std::future::pending::<()>().await;
+        use tokio::signal::windows::{ctrl_break, ctrl_close, ctrl_logoff, ctrl_shutdown};
+        // Each one watched if it can be; one that cannot never fires.
+        macro_rules! watch {
+            ($make:expr) => {
+                async {
+                    match $make {
+                        Ok(mut s) => {
+                            s.recv().await;
+                        }
+                        Err(_) => std::future::pending::<()>().await,
+                    }
+                }
+            };
+        }
+        tokio::select! {
+            () = watch!(ctrl_close()) => {}
+            () = watch!(ctrl_logoff()) => {}
+            () = watch!(ctrl_shutdown()) => {}
+            () = watch!(ctrl_break()) => {}
+            _ = tokio::signal::ctrl_c() => {}
         }
     }
 }
