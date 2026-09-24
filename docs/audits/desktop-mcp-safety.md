@@ -78,6 +78,17 @@ The FLUI probe executable was prebuilt; that live run did not rebuild the framew
 
 ## Remaining limits
 
+Action/readback boundary changes passed
+`cargo xtask check-changed --base 8b469ffc5a008bedd1f65c55ded1d558b5bdee50`:
+130 tests passed, five were skipped, with strict docs and Windows/macOS clippy passing.
+Regression checks cover extra physical buttons at a stationary drag drop, permanent
+unidentified-PID metadata, process replacement during the final element refresh, and
+expand/collapse transition eligibility shared between action descriptions and dispatch.
+The Windows `native_controls_through_mcp` test now starts its fixture minimized and
+passed restoration through MCP, asserting refreshed focus, minimization, geometry and
+the retained session handle. Extra-button interleaving and provider replacement were
+tested deterministically through production helpers, not by racing a live provider.
+
 The later native-boundary changes passed the full workspace scope selected by
 `cargo xtask check-changed --base 84d074534866584b68244fda778d3d6a12d07f63`:
 10,115 tests passed, five were skipped, and workspace clippy, strict rustdoc, doctests,

@@ -439,7 +439,11 @@ impl Uia {
             .map_err(|e| classify(handle, "re-reading it", &e, Some(held.pid)))?;
         // Unreadable is not "gone": the element may be there and fine.
         before_call()?;
-        match held.same_as(&fresh, Some(started)) {
+        match identity_after_refresh(
+            started,
+            || held.same_as(&fresh, Some(started)),
+            || crate::os::process_started(held.pid),
+        ) {
             Some(true) => Ok(fresh),
             None => Err(ToolError::platform(
                 "re-reading the element",
@@ -991,11 +995,30 @@ impl Uia {
                 let pattern = element
                     .get_pattern::<UIExpandCollapsePattern>()
                     .map_err(lookup(name))?;
-                if action == ActionName::Expand {
-                    pattern.expand().map_err(fail(name))
-                } else {
-                    pattern.collapse().map_err(fail(name))
-                }
+                perform_expansion(
+                    action,
+                    || {
+                        let value = element
+                            .get_property_value(UIProperty::ExpandCollapseExpandCollapseState)
+                            .map_err(lookup("reading expansion state"))?;
+                        of_type(value, VT_I4)
+                            .and_then(|value| TryInto::<i32>::try_into(value).ok())
+                            .ok_or_else(|| {
+                                ToolError::platform(
+                                    "reading expansion state",
+                                    "the provider did not return an integer state",
+                                )
+                            })
+                    },
+                    || {
+                        if action == ActionName::Expand {
+                            pattern.expand().map_err(fail(name))
+                        } else {
+                            pattern.collapse().map_err(fail(name))
+                        }
+                    },
+                    || self.unsupported(handle, element, action),
+                )
             }
             Action::ScrollIntoView => {
                 self.require(handle, element, ActionName::ScrollIntoView)?;
@@ -1034,6 +1057,50 @@ impl Uia {
             }
         }
     }
+}
+
+/// The process identity must be observed after the final provider call:
+/// refreshing a recycled native proxy may outlive the process checked before it.
+fn identity_after_refresh(
+    started: u64,
+    refresh: impl FnOnce() -> Option<bool>,
+    process_now: impl FnOnce() -> Option<u64>,
+) -> Option<bool> {
+    let same = refresh();
+    if process_now() == Some(started) {
+        same
+    } else {
+        Some(false)
+    }
+}
+
+/// The shared state rule for advertised and directly requested transitions.
+fn expansion_allows(state: Option<i32>, action: ActionName) -> bool {
+    let partly = state == Some(ExpandCollapseState::PartiallyExpanded as i32);
+    match action {
+        ActionName::Expand => partly || state == Some(ExpandCollapseState::Collapsed as i32),
+        ActionName::Collapse => partly || state == Some(ExpandCollapseState::Expanded as i32),
+        _ => false,
+    }
+}
+
+fn perform_expansion(
+    action: ActionName,
+    read: impl FnOnce() -> ToolResult<i32>,
+    perform: impl FnOnce() -> ToolResult<()>,
+    unsupported: impl FnOnce() -> ToolError,
+) -> ToolResult<()> {
+    let state = read()?;
+    if !(0..=3).contains(&state) {
+        return Err(ToolError::platform(
+            "reading expansion state",
+            "the provider returned an invalid expansion state",
+        ));
+    }
+    if !expansion_allows(Some(state), action) {
+        return Err(unsupported());
+    }
+    perform()
 }
 
 /// A write dispatched only after its pattern is known to be writable.
@@ -1346,7 +1413,6 @@ fn describe(element: &UIElement, id: String) -> Node {
         .then(|| cached_i32(element, UIProperty::ExpandCollapseExpandCollapseState))
         .flatten();
     let expanded = expansion.and_then(expanded_state);
-    let partly = expansion == Some(ExpandCollapseState::PartiallyExpanded as i32);
     // A value the provider marks read-only is shown, not offered to set.
     let read_only = |prop: UIProperty| match prop {
         UIProperty::IsValuePatternAvailable => {
@@ -1370,8 +1436,7 @@ fn describe(element: &UIElement, id: String) -> Node {
             // Which of expand and collapse applies is the element's state
             // (a partly expanded one takes both); a leaf offers neither.
             let applies = match action {
-                ActionName::Expand => expanded == Some(false) || partly,
-                ActionName::Collapse => expanded == Some(true) || partly,
+                ActionName::Expand | ActionName::Collapse => expansion_allows(expansion, action),
                 _ => true,
             };
             if applies && !actions.contains(&action) {
@@ -1787,6 +1852,79 @@ fn classify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_replacement_during_identity_refresh_is_refused() {
+        let started = std::cell::Cell::new(Some(10));
+        assert_eq!(
+            identity_after_refresh(10, || Some(true), || started.get()),
+            Some(true)
+        );
+        for replacement in [Some(20), None] {
+            started.set(Some(10));
+            let verdict = identity_after_refresh(
+                10,
+                || {
+                    started.set(replacement);
+                    Some(true)
+                },
+                || started.get(),
+            );
+            assert_eq!(
+                verdict,
+                Some(false),
+                "a refreshed proxy cannot outlive its original process"
+            );
+        }
+        started.set(Some(10));
+        assert_eq!(identity_after_refresh(10, || None, || started.get()), None);
+    }
+
+    #[test]
+    fn expansion_dispatch_requires_a_supported_live_transition() {
+        for (state, expand, collapse) in [
+            (ExpandCollapseState::Collapsed, true, false),
+            (ExpandCollapseState::Expanded, false, true),
+            (ExpandCollapseState::PartiallyExpanded, true, true),
+            (ExpandCollapseState::LeafNode, false, false),
+        ] {
+            for (action, allowed) in [
+                (ActionName::Expand, expand),
+                (ActionName::Collapse, collapse),
+            ] {
+                let called = std::cell::Cell::new(false);
+                let result = perform_expansion(
+                    action,
+                    || Ok(state as i32),
+                    || {
+                        called.set(true);
+                        Ok(())
+                    },
+                    || ToolError::ActionUnsupported {
+                        element: "e1".into(),
+                        action: action.name(),
+                        supported: Vec::new(),
+                        unread: Vec::new(),
+                    },
+                );
+                assert_eq!(called.get(), allowed, "{state:?} {action:?}");
+                assert_eq!(result.is_ok(), allowed);
+                assert_eq!(expansion_allows(Some(state as i32), action), allowed);
+            }
+        }
+        for read in [
+            Ok(99),
+            Err(ToolError::platform("reading expansion", "unreadable")),
+        ] {
+            let result = perform_expansion(
+                ActionName::Expand,
+                || read,
+                || panic!("unknown state must not authorize a transition"),
+                unsupported_value,
+            );
+            assert!(matches!(result, Err(ToolError::Platform { .. })));
+        }
+    }
 
     fn unsupported_value() -> ToolError {
         ToolError::ActionUnsupported {

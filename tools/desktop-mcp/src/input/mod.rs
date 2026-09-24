@@ -142,6 +142,19 @@ pub fn partial(
     cause.counted(sent, total, unit)
 }
 
+/// Only the session's own physical button is exempt during a drag. A
+/// second button belongs to another gesture, including at a stationary drop.
+#[cfg(any(target_os = "windows", test))]
+fn only_owned_button(down: u8, owned: u8) -> crate::error::ToolResult<()> {
+    if down & !owned == 0 {
+        Ok(())
+    } else {
+        Err(crate::error::ToolError::Busy(
+            "another physical mouse button is held; further movement or the requested drop would join its gesture".into(),
+        ))
+    }
+}
+
 /// Checks the keyboard on both sides of a potentially slow target lookup.
 /// Shared by pointer and keyboard input as well as drag recovery. A physical
 /// key or button pressed during a slow guard must prevent the next event.
@@ -291,6 +304,55 @@ mod tests {
             button_down.get(),
             "the physical button is not ours to release"
         );
+    }
+
+    #[test]
+    fn a_second_mouse_button_during_the_drop_guard_refuses_normal_completion() {
+        use std::cell::Cell;
+        // Both primary-button configurations, and every additional button.
+        for owned in [1_u8, 2] {
+            for extra in [1_u8, 2, 4, 8, 16]
+                .into_iter()
+                .filter(|extra| *extra != owned)
+            {
+                let down = Cell::new(owned);
+                let dropped = Cell::new(false);
+                let result = guarded_input_event(
+                    || only_owned_button(down.get(), owned),
+                    || {
+                        down.set(owned | extra);
+                        Ok(())
+                    },
+                    || {
+                        dropped.set(true);
+                        Ok(())
+                    },
+                );
+                assert!(matches!(result, Err(crate::error::ToolError::Busy(_))));
+                assert!(
+                    !dropped.get(),
+                    "normal drop must be refused even without another move"
+                );
+                assert_eq!(
+                    down.get(),
+                    owned | extra,
+                    "the other button is not ours to release"
+                );
+                let recovered = guarded_input_event(
+                    || only_owned_button(down.get(), owned),
+                    || Ok(()),
+                    || {
+                        dropped.set(true);
+                        Ok(())
+                    },
+                );
+                assert!(recovered.is_err());
+                assert!(
+                    !dropped.get(),
+                    "stationary recovery cannot bypass the button check"
+                );
+            }
+        }
     }
 
     #[test]

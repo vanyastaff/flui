@@ -183,11 +183,7 @@ impl Input {
             // drag in progress) is the one exception, that button only: a
             // second one pressed during the drag refuses the next step.
             let ours = self.held_button.map_or(0, physical_bit);
-            if crate::os::mouse_buttons_down() & !ours != 0 {
-                return Err(ToolError::Busy(
-                    "a mouse button is held down, so moving the pointer would drag".into(),
-                ));
-            }
+            super::only_owned_button(crate::os::mouse_buttons_down(), ours)?;
             crate::os::move_pointer(x, y)
         }
         #[cfg(not(target_os = "windows"))]
@@ -390,10 +386,11 @@ impl Input {
         let mut last = from;
         let mut done = 0;
         let mut moved = Ok(());
+        let held_button = self.held_button;
         for point in path {
             thread::sleep(interval);
             moved = super::guarded_input_event(
-                no_keyboard_input,
+                || no_drag_interference(held_button),
                 || guard(Some(point)),
                 || self.move_verified(point.0, point.1),
             );
@@ -405,7 +402,7 @@ impl Input {
         }
         if moved.is_ok() {
             moved = super::guarded_input_event(
-                no_keyboard_input,
+                || no_drag_interference(held_button),
                 || guard(Some(to)),
                 || self.ensure_at(to.0, to.1),
             );
@@ -462,11 +459,12 @@ impl Input {
         went: Effect,
         guard: &mut Guard<'_>,
     ) -> ToolError {
-        // Never move during a modified drag, even for recovery. If already
-        // at the last point, no move is needed (another mouse button can be
-        // down), but both the keyboard and target must still be checked.
+        // Never move during a modified drag, even for recovery. Being at
+        // the last point already does not exempt a drop from checking other
+        // physical buttons and the keyboard around the target lookup.
+        let held_button = self.held_button;
         let back = super::guarded_input_event(
-            no_keyboard_input,
+            || no_drag_interference(held_button),
             || guard(Some(last)),
             || {
                 if self.position() == Some(last) {
@@ -478,7 +476,7 @@ impl Input {
         )
         .and_then(|()| {
             super::guarded_input_event(
-                no_keyboard_input,
+                || no_drag_interference(held_button),
                 || guard(Some(last)),
                 || self.ensure_at(last.0, last.1),
             )
@@ -497,7 +495,7 @@ impl Input {
                 |(x, y)| format!("({x}, {y})"),
             );
             format!(
-                "the drag stopped and recovery was refused; the button had to be released where the pointer was, at {at}, which may have dropped there; any physical keys still held may modify that drop and were not released by this tool"
+                "the drag stopped and recovery was refused; the button had to be released where the pointer was, at {at}, which may have dropped there; any physical keys or additional mouse buttons still held may modify that drop and were not released by this tool"
             )
         };
         if let Err(e) = self.release_held() {
@@ -828,6 +826,21 @@ impl Input {
         }
         result.map_err(|e| (e, sent))
     }
+}
+
+/// A drag may hold only its own physical mouse button. Both this button
+/// snapshot and the keyboard snapshot run around every potentially slow
+/// guard, including the final drop and recovery without pointer movement.
+fn no_drag_interference(held: Option<Button>) -> ToolResult<()> {
+    no_keyboard_input()?;
+    #[cfg(target_os = "windows")]
+    super::only_owned_button(
+        crate::os::mouse_buttons_down(),
+        held.map_or(0, physical_bit),
+    )?;
+    #[cfg(not(target_os = "windows"))]
+    let _ = held;
+    Ok(())
 }
 
 /// A non-blocking keyboard preflight for an in-progress drag. Waiting for

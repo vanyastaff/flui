@@ -341,24 +341,29 @@ impl Registry {
         if cfg!(target_os = "windows") && (os::window_pid(w.id) != Some(w.pid) || class.is_none()) {
             return None;
         }
-        let unidentified = started.is_none();
-        if unidentified {
-            self.unidentified.insert(w.pid);
-        }
-        // A pid once listed as unidentifiable stays unbound.
-        if let Some(started) = started
-            && !self.unidentified.contains(&w.pid)
-        {
-            self.started.entry(w.pid).or_insert(started);
-        }
+        let reason = self.observe_process(w.pid, started);
         let n = self.register_window(Issued {
             hwnd: w.id,
             pid: w.pid,
             started,
             class,
         });
-        let reason = unidentified.then_some(Untargetable::UnidentifiedProcess);
         Some((n, reason))
+    }
+
+    /// Targetability follows session history, not only this lookup: a pid
+    /// handed out without an identity must never silently bind later.
+    fn observe_process(&mut self, pid: u32, started: Option<u64>) -> Option<Untargetable> {
+        if started.is_none() {
+            self.unidentified.insert(pid);
+        }
+        if self.unidentified.contains(&pid) {
+            return Some(Untargetable::UnidentifiedProcess);
+        }
+        if let Some(started) = started {
+            self.started.entry(pid).or_insert(started);
+        }
+        None
     }
 
     /// Records an observed window identity. A displaced handle stays gone
@@ -1445,25 +1450,44 @@ impl Desktop {
             self.registry
                 .revalidate(Target::Window(native.id, n), chosen)
         };
-        let fg = activate_while_current(recheck, || {
+        let (fg, refreshed) = activate_while_current(recheck, || {
             os::bring_to_front(native.id)?;
-            let mut fg = Self::foreground(&self.registry)?;
-            if fg.as_ref().map(|f| f.id) != Some(native.id) {
+            let foreground = Self::foreground(&self.registry)?;
+            if foreground.as_ref().map(|f| f.id) != Some(native.id) {
                 recheck()?;
                 if let Err(e) = self.a11y.focus_window(native.id) {
                     tracing::debug!("UIA focus fallback failed: {e}");
                 }
                 std::thread::sleep(Duration::from_millis(100));
-                fg = Self::foreground(&self.registry)?;
             }
-            Ok(fg)
+            let mut refreshed = Self::resolve(Target::Window(native.id, n))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| no_window(Target::Window(native.id, n)))?;
+            let fg = Self::foreground(&self.registry)?;
+            refreshed.is_focused = fg.as_ref().map(|f| f.id) == Some(native.id);
+            Ok((fg, refreshed))
         })?;
         let became = fg.as_ref().map(|f| f.id) == Some(native.id);
         Ok(Activated {
-            window,
+            window: refreshed_window(window, refreshed),
             became_foreground: became,
             foreground: fg.as_ref().map(Foreground::as_ref),
         })
+    }
+}
+
+/// Fresh observable fields after activation, retaining the session handle
+/// and its targetability decision rather than adopting another identity.
+fn refreshed_window(window: Window, refreshed: NativeWindow) -> Window {
+    Window {
+        pid: refreshed.pid,
+        app_name: refreshed.app_name,
+        title: refreshed.title,
+        rect: refreshed.rect,
+        is_minimized: refreshed.is_minimized,
+        is_focused: refreshed.is_focused,
+        ..window
     }
 }
 
@@ -1536,6 +1560,70 @@ fn activate_while_current<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_later_readable_identity_does_not_make_an_unidentified_pid_targetable() {
+        let mut registry = Registry::default();
+        assert_eq!(
+            registry.observe_process(100, None),
+            Some(Untargetable::UnidentifiedProcess)
+        );
+        assert_eq!(
+            registry.observe_process(100, Some(123)),
+            Some(Untargetable::UnidentifiedProcess)
+        );
+        assert!(!registry.bind_launched(100, Some(123)));
+        assert_eq!(
+            registry
+                .bound(TargetArg::Pid(100))
+                .expect_err("BUG: unidentifiable pid remains unbound")
+                .code(),
+            "not_supported"
+        );
+        assert_eq!(registry.observe_process(200, Some(456)), None);
+        assert!(registry.bind_launched(200, Some(456)));
+    }
+
+    #[test]
+    fn activation_refresh_keeps_the_handle_and_updates_observable_fields() {
+        let before = Window {
+            id: "w3".into(),
+            pid: 100,
+            app_name: "app".into(),
+            title: "before".into(),
+            rect: Rect {
+                x: -32000,
+                y: -32000,
+                width: 160,
+                height: 28,
+            },
+            is_minimized: true,
+            is_focused: false,
+            targetable: true,
+            untargetable_reason: None,
+        };
+        let after = NativeWindow {
+            id: 7,
+            pid: 100,
+            app_name: "app".into(),
+            title: "after".into(),
+            rect: Rect {
+                x: 10,
+                y: 20,
+                width: 800,
+                height: 600,
+            },
+            is_minimized: false,
+            is_focused: true,
+        };
+        let updated = refreshed_window(before, after.clone());
+        assert_eq!(updated.id, "w3");
+        assert_eq!(updated.title, "after");
+        assert_eq!(updated.rect, after.rect);
+        assert!(!updated.is_minimized);
+        assert!(updated.is_focused);
+        assert!(updated.targetable);
+    }
 
     #[test]
     fn complete_owner_snapshots_retire_only_confirmed_missing_windows() {

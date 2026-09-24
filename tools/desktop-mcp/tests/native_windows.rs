@@ -28,8 +28,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BS_AUTOCHECKBOX, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, ES_READONLY,
     GetMessageW, HMENU, IsDialogMessageW, MSG, PostQuitMessage, RegisterClassW, SetTimer,
     SetWindowTextW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEWHEEL, WM_TIMER, WNDCLASSW, WS_BORDER, WS_CHILD, WS_OVERLAPPEDWINDOW,
-    WS_TABSTOP, WS_VISIBLE,
+    WM_LBUTTONUP, WM_MOUSEWHEEL, WM_TIMER, WNDCLASSW, WS_BORDER, WS_CHILD, WS_MINIMIZE,
+    WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -127,7 +127,7 @@ fn native_fixture_process() {
             WINDOW_EX_STYLE::default(),
             class.lpszClassName,
             w!("MCP Native Fixture wheel=0 drag=0,0"),
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_MINIMIZE,
             100,
             100,
             620,
@@ -365,8 +365,20 @@ fn native_controls_through_mcp() {
         .as_str()
         .expect("BUG: child window")
         .to_owned();
+    assert_eq!(waited["window"]["is_minimized"], true, "{waited}");
     let activated = call(&mut client, "activate_window", json!({"window": window}));
     assert_eq!(activated["became_foreground"], true, "{activated}");
+    assert_eq!(activated["window"]["id"], window, "{activated}");
+    assert_eq!(activated["window"]["is_minimized"], false, "{activated}");
+    assert_eq!(activated["window"]["is_focused"], true, "{activated}");
+    let restored = call(&mut client, "list_windows", json!({"pid": pid}));
+    let current = restored["windows"]
+        .as_array()
+        .expect("BUG: window list")
+        .iter()
+        .find(|entry| entry["id"] == window)
+        .expect("BUG: restored fixture keeps its handle");
+    assert_eq!(activated["window"]["rect"], current["rect"], "{activated}");
     let unknown = client.call(
         "wait_for",
         json!({"window": window, "element": "e999999", "gone": true, "timeout_ms": 100}),
