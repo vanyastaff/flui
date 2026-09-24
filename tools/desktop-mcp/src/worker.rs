@@ -131,10 +131,19 @@ impl Worker {
         let job: Job = Box::new(move |desktop| {
             let _ = reply.send(f(desktop));
         });
-        tokio::task::spawn_blocking(move || jobs.send(job))
-            .await
-            .map_err(|e| ToolError::platform("desktop thread", e))?
-            .map_err(|_| ToolError::platform("desktop thread", "it has stopped"))?;
+        // A plain thread, not the runtime's blocking pool: if the queue stays
+        // full past the caller's timeout, the runtime does not wait for this
+        // send at teardown, and the process still exits.
+        let (queued, sent) = oneshot::channel();
+        thread::Builder::new()
+            .name("desktop-shutdown".into())
+            .spawn(move || {
+                let _ = queued.send(jobs.send(job).is_ok());
+            })
+            .map_err(|e| ToolError::platform("desktop thread", e))?;
+        if !sent.await.unwrap_or(false) {
+            return Err(ToolError::platform("desktop thread", "it has stopped"));
+        }
         result
             .await
             .map_err(|_| ToolError::platform("desktop thread", "the call panicked"))?

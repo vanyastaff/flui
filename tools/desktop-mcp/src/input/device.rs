@@ -483,8 +483,10 @@ impl Input {
     /// releases the modifiers already held and stops.
     pub fn key(&mut self, combo: &KeyCombo, repeat: u32, guard: &mut Guard<'_>) -> ToolResult<()> {
         self.ready()?;
-        let (key, modifiers) = resolve(combo)?;
         for done in 0..repeat {
+            // Resolved again each time: the previous press can move focus to
+            // a thread with another keyboard layout.
+            let (key, modifiers) = resolve(combo)?;
             let pressed = self.press_once(key, &modifiers, guard);
             if let Err((cause, sent)) = pressed {
                 let sent = done as usize + usize::from(sent);
@@ -558,13 +560,30 @@ impl Input {
                 }),
             };
         }
-        // Alt (or the Windows key) released on its own, with nothing pressed
-        // while it was down, opens the menu bar (the Start menu) of whatever
-        // window is in front now. An unassigned key tapped in between makes
-        // it an ordinary chord that does nothing.
+        // Modifiers released with nothing pressed while they were down are a
+        // gesture of their own: a lone Alt opens the menu bar, the Windows
+        // key the Start menu, Ctrl+Shift switches the input language, and
+        // lone Shift taps add up to Sticky Keys. An unassigned key tapped in
+        // between makes it an ordinary chord that does nothing; if even that
+        // fails, the error says the gesture may have gone out.
         #[cfg(target_os = "windows")]
-        if !sent && held.iter().any(|k| matches!(k, Key::Alt | Key::Meta)) {
-            let _ = self.enigo.key(Key::Other(UNASSIGNED_VK), Direction::Click);
+        if !sent
+            && !held.is_empty()
+            && self
+                .enigo
+                .key(Key::Other(UNASSIGNED_VK), Direction::Click)
+                .is_err()
+        {
+            let what = format!(
+                "{held:?} were pressed without the key and could not be masked, so releasing them may act as a shortcut of their own (menu bar, Start, language switch); look before retrying"
+            );
+            result = Err(match result {
+                Ok(()) => ToolError::platform("masking released modifiers", what),
+                Err(cause) => ToolError::Interrupted {
+                    cause: Box::new(cause),
+                    what,
+                },
+            });
         }
         // Every release is tried; one that fails is reported even when an
         // earlier failure is the cause, since a modifier left down changes

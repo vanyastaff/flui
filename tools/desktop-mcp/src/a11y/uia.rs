@@ -88,7 +88,6 @@ const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::IsEnabled,
     UIProperty::HasKeyboardFocus,
     UIProperty::IsKeyboardFocusable,
-    UIProperty::ValueValue,
     UIProperty::RangeValueValue,
     UIProperty::ToggleToggleState,
     UIProperty::ProcessId,
@@ -142,6 +141,10 @@ pub struct Uia {
     /// are fetched only as far as the budget reaches.
     walker: UITreeWalker,
     single: UICacheRequest,
+    /// A text control's value, read on its own: the element a handle keeps
+    /// is the one from the walk, and a value cached there (a whole document)
+    /// would stay in memory as long as the handle.
+    value: UICacheRequest,
     elements: ElementCache<Identity, Held>,
     anonymous: u64,
     /// Process start times looked up during the current read, one lookup
@@ -180,10 +183,19 @@ impl Uia {
             .get_control_view_walker()
             .map_err(|e| e.to_string())?;
         let single = node_request(&automation, TreeScope::Element).map_err(|e| e.to_string())?;
+        let value = automation
+            .create_cache_request()
+            .and_then(|request| {
+                request.add_property(UIProperty::ValueValue)?;
+                request.set_tree_scope(TreeScope::Element)?;
+                Ok(request)
+            })
+            .map_err(|e| e.to_string())?;
         Ok(Self {
             automation,
             walker,
             single,
+            value,
             elements: ElementCache::default(),
             anonymous: 0,
             starts: HashMap::new(),
@@ -342,6 +354,11 @@ impl Uia {
         let id = self.register(key, element);
         walk.seen.insert(id.clone());
         let mut node = describe(element, id);
+        // One more call for a text control's value, charged like any other.
+        if node.patterns.contains(&"Value") {
+            walk.budget = walk.budget.saturating_sub(1);
+            walk.truncated |= !self.read_value(element, &mut node);
+        }
         // A cut string is not what a search for the whole one would match,
         // and a property the provider failed to report matches nothing.
         node.unmatchable |= node.is_clipped();
@@ -435,6 +452,23 @@ impl Uia {
         false
     }
 
+    /// Fills in a text control's value with a read of its own, clipped, so
+    /// only the clipped string outlives the call. Whether it could be read.
+    fn read_value(&self, element: &UIElement, node: &mut Node) -> bool {
+        if !node.patterns.contains(&"Value") {
+            return true;
+        }
+        let Ok(fresh) = element.build_updated_cache(&self.value) else {
+            return false;
+        };
+        node.value = fresh
+            .get_cached_property_value(UIProperty::ValueValue)
+            .ok()
+            .and_then(|v| TryInto::<String>::try_into(v).ok())
+            .map(clip);
+        true
+    }
+
     /// Whether the element UIA hit-tests at `(x, y)` is `element` or one of
     /// its descendants.
     fn hits_element(&self, x: i32, y: i32, element: &UIElement) -> bool {
@@ -495,11 +529,13 @@ impl Uia {
                             .into(),
                     })?;
             let node = describe(&fresh, handle.to_owned());
+            // Checked between the provider calls as well: each can take the
+            // whole call timeout.
             let inside = !node.has_keyboard_focus
-                && self
-                    .automation
-                    .get_focused_element()
-                    .is_ok_and(|focused| self.is_within(focused, element));
+                && Instant::now() < until
+                && self.automation.get_focused_element().is_ok_and(|focused| {
+                    Instant::now() < until && self.is_within(focused, element)
+                });
             if node.has_keyboard_focus || inside {
                 return Ok(node);
             }
@@ -755,7 +791,11 @@ impl AccessibilityBackend for Uia {
         // The reply keeps the caller's handle either way: a readback that
         // minted another one would hide which element this was.
         match element.build_updated_cache(&self.single) {
-            Ok(fresh) => Ok(describe(&fresh, handle.to_owned())),
+            Ok(fresh) => {
+                let mut node = describe(&fresh, handle.to_owned());
+                self.read_value(&fresh, &mut node);
+                Ok(node)
+            }
             // The action succeeded and took its own element away (a Close or
             // Delete button, a navigation): that is the action's result, not a
             // failure. Answer with the node as it was just before, marked.
@@ -838,12 +878,10 @@ fn describe(element: &UIElement, id: String) -> Node {
         .collect();
     // A text control's value, or a slider's number when it exposes only
     // RangeValue — what `set_value` writes, so a caller can read it back.
+    // A text control's value is read apart ([`Uia::read_value`]); a
+    // slider's number is small and comes with the walk.
     let value = if patterns.contains(&"Value") {
-        element
-            .get_cached_property_value(UIProperty::ValueValue)
-            .ok()
-            .and_then(|v| TryInto::<String>::try_into(v).ok())
-            .map(clip)
+        None
     } else if patterns.contains(&"RangeValue") {
         element
             .get_cached_property_value(UIProperty::RangeValueValue)

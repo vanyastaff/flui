@@ -48,6 +48,10 @@ struct Tracked {
     running: HashMap<u32, Child>,
     /// `(pid, exit code)`, oldest first.
     exited: VecDeque<(u32, Option<i32>)>,
+    /// Every pid `launch` returned, and those it returned for two processes:
+    /// a `kill` of such a pid cannot tell which launch it means.
+    returned: std::collections::HashSet<u32>,
+    shared: std::collections::HashSet<u32>,
 }
 
 impl Tracked {
@@ -180,8 +184,12 @@ impl Children {
         let pid = child.id();
         let started = crate::os::process_started(pid);
         let mut tracked = self.lock();
-        // A reused pid is a new process: its old exit no longer answers.
+        // A reused pid is a new process: its old exit no longer answers, and
+        // a kill held for the old launch must not end this one.
         tracked.exited.retain(|&(old, _)| old != pid);
+        if !tracked.returned.insert(pid) {
+            tracked.shared.insert(pid);
+        }
         tracked.running.insert(pid, child);
         Ok((pid, started))
     }
@@ -190,6 +198,11 @@ impl Children {
     /// own is reported as such.
     pub fn kill(&self, pid: u32) -> ToolResult<Killed> {
         let mut tracked = self.lock();
+        if tracked.shared.contains(&pid) {
+            return Err(ToolError::InvalidArgument(format!(
+                "pid {pid} was returned by two launches of this session, so it cannot be told which one to end; the running one is ended when the server exits"
+            )));
+        }
         if let Some(mut child) = tracked.running.remove(&pid) {
             drop(tracked);
             return match end(pid, &mut child) {
