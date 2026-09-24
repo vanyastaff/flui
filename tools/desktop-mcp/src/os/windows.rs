@@ -478,14 +478,30 @@ pub fn window_title(id: u32) -> Option<String> {
 pub fn process_started(pid: u32) -> Option<u64> {
     // SAFETY: plain value arguments; the handle is closed below.
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let started = creation_time(process);
+    // SAFETY: the handle opened above, closed once.
+    let _ = unsafe { CloseHandle(process) };
+    started
+}
+
+/// The start time of the process a child handle this server holds names:
+/// read through the handle, not the pid, so it is the launched process's
+/// whatever the pid names by now.
+pub fn child_started(child: &std::process::Child) -> Option<u64> {
+    use std::os::windows::io::AsRawHandle as _;
+    creation_time(HANDLE(child.as_raw_handle()))
+}
+
+fn creation_time(process: HANDLE) -> Option<u64> {
     let (mut created, mut exited, mut kernel, mut user) = (
         FILETIME::default(),
         FILETIME::default(),
         FILETIME::default(),
         FILETIME::default(),
     );
-    // SAFETY: an open process handle and four locals the call writes.
-    let times = unsafe {
+    // SAFETY: an open process handle the caller keeps open for the call,
+    // and four locals the call writes.
+    unsafe {
         GetProcessTimes(
             process,
             &raw mut created,
@@ -493,10 +509,8 @@ pub fn process_started(pid: u32) -> Option<u64> {
             &raw mut kernel,
             &raw mut user,
         )
-    };
-    // SAFETY: the handle opened above, closed once.
-    let _ = unsafe { CloseHandle(process) };
-    times.ok()?;
+    }
+    .ok()?;
     Some(u64::from(created.dwHighDateTime) << 32 | u64::from(created.dwLowDateTime))
 }
 

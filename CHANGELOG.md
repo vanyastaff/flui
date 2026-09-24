@@ -152,7 +152,7 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 ### Fixed
 
 - **No control was usable from the keyboard, and Narrator could not follow the focus**
-  (`flui-widgets`, `flui-material`, `flui-interaction`, `flui-semantics`; ADR-0080). Found by
+  (`flui-widgets`, `flui-material`, `flui-interaction`, `flui-semantics`; ADR-0079). Found by
   the first run of real input on a Windows window (`cargo xtask device windows-input`). Enter,
   Space and Select now activate the focused control (`ActivateIntent`, `ButtonActivateIntent`;
   `InkWell` answers both); a `Shortcuts` resolves its intent at the primary focus, so an

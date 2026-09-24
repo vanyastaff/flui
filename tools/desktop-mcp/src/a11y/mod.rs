@@ -579,11 +579,17 @@ pub fn backend() -> Box<dyn AccessibilityBackend> {
     }
 }
 
+/// A bare node for other modules' tests.
+#[cfg(test)]
+pub fn tests_node() -> Node {
+    tests::node("e1", Role::TextInput, "field", Vec::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn node(id: &str, role: Role, name: &str, children: Vec<Node>) -> Node {
+    pub(super) fn node(id: &str, role: Role, name: &str, children: Vec<Node>) -> Node {
         Node {
             id: id.into(),
             role,

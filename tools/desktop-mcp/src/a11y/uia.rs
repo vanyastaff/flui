@@ -291,8 +291,8 @@ impl Uia {
         let control_type = cached_i32(element, UIProperty::ControlType);
         if let Identity::Runtime(id) = &key
             && let Some(held) = self.elements.by_identity(&key)
-            && (held.same_as(element, started) != Some(true)
-                || Instant::now() >= deadline
+            && (Instant::now() >= deadline
+                || held.same_as(element, started) != Some(true)
                 || !crate::os::runtime_id(held.element.as_ref())
                     .is_ok_and(|now| now.as_deref() == Some(id.as_slice())))
         {
@@ -703,11 +703,10 @@ impl Uia {
                     break;
                 }
             }
-            const REQUESTED: &str =
-                "focus was requested and may have landed; only reading it back failed";
+            const REQUESTED: &str = "focus was requested; only reading back where it landed failed";
             let fresh = element.build_updated_cache(&self.single).map_err(|e| {
                 classify(handle, "reading back focus", &e, cached_pid(element))
-                    .after(Effect::MayHaveRun, REQUESTED)
+                    .after(Effect::Ran, REQUESTED)
             })?;
             let mut node = describe(&fresh, handle.to_owned());
             // Checked between the provider calls as well: each can take the
@@ -715,7 +714,7 @@ impl Uia {
             let late = || {
                 (Instant::now() >= until).then(|| {
                     ToolError::platform("reading back focus", "the readback ran out of time")
-                        .after(Effect::MayHaveRun, REQUESTED)
+                        .after(Effect::Ran, REQUESTED)
                 })
             };
             if node.focused {
@@ -750,7 +749,7 @@ impl Uia {
                 "where keyboard focus is could not be read",
             )
             .after(
-                Effect::MayHaveRun,
+                Effect::Ran,
                 "focus was requested; only reading back where it landed failed",
             ));
         }

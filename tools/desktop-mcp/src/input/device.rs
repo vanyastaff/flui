@@ -249,7 +249,7 @@ impl Input {
             // Refused before the press: nothing of this click went out.
             // The button wait first: it can take a moment, and the target
             // and position are checked after it, right before the press.
-            if let Err(cause) = no_button_down()
+            if let Err(cause) = nothing_held()
                 .and_then(|()| guard(None))
                 .and_then(|()| self.ensure_at(x, y))
             {
@@ -317,7 +317,7 @@ impl Input {
         guard(None)?;
         self.move_verified(from.0, from.1)?;
         thread::sleep(STEP);
-        no_button_down()?;
+        nothing_held()?;
         guard(None)?;
         self.ensure_at(from.0, from.1)?;
         // The primary button, as the user set it: with swapped buttons a
@@ -464,7 +464,8 @@ impl Input {
         let axes = [(dy, Axis::Vertical), (dx, Axis::Horizontal)];
         let total = axes.iter().filter(|(n, _)| *n != 0).count();
         for (sent, (notches, axis)) in axes.into_iter().filter(|(n, _)| *n != 0).enumerate() {
-            let scrolled = guard(None)
+            let scrolled = nothing_held()
+                .and_then(|()| guard(None))
                 .and_then(|()| self.ensure_at(x, y))
                 .and_then(|()| {
                     self.enigo
@@ -764,6 +765,17 @@ impl Input {
         }
         result.map_err(|e| (e, sent))
     }
+}
+
+/// Refuses right before a synthetic press or wheel turn while the person at
+/// the desk holds a mouse button or a key: a held Ctrl turns a click into
+/// Ctrl+click and a wheel turn into zoom, a held button completes or drops
+/// its own gesture. The target and position are checked after it.
+fn nothing_held() -> ToolResult<()> {
+    no_button_down()?;
+    #[cfg(target_os = "windows")]
+    only_modifiers(&[])?;
+    Ok(())
 }
 
 /// Refuses right before a synthetic press while a mouse button the user

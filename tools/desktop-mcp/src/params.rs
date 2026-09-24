@@ -582,17 +582,49 @@ pub struct StateArg {
 impl StateArg {
     /// Whether every given field holds for `node`.
     pub fn holds(&self, node: &Node) -> bool {
-        let value = node.value.as_deref().unwrap_or("");
+        // A value predicate needs a value that was read: an element with
+        // none, or whose value could not be read, matches neither
+        // `value: ""` nor any substring. `value_contains` is folded already
+        // ([`Self::prepared`]).
+        let value = node.value.as_deref();
         self.checked.is_none_or(|c| node.checked == Some(c))
             && self.expanded.is_none_or(|e| node.expanded == Some(e))
             && self.selected.is_none_or(|s| node.selected == Some(s))
             && self.focused.is_none_or(|f| node.focused == f)
             && self.disabled.is_none_or(|d| node.disabled == d)
-            && self.value.as_deref().is_none_or(|v| value == v)
+            && self.value.as_deref().is_none_or(|v| value == Some(v))
             && self
                 .value_contains
                 .as_deref()
-                .is_none_or(|v| crate::a11y::fold(value).contains(&crate::a11y::fold(v)))
+                .is_none_or(|v| value.is_some_and(|value| crate::a11y::fold(value).contains(v)))
+    }
+
+    /// The state ready to test: value criteria at most
+    /// [`crate::a11y::CLIPPED_CHARS`] characters (no reported value is
+    /// longer), `value_contains` not empty and folded once here rather than
+    /// for every node on every poll.
+    fn prepared(mut self) -> ToolResult<Self> {
+        for (field, value) in [
+            ("value", &self.value),
+            ("value_contains", &self.value_contains),
+        ] {
+            if value
+                .as_deref()
+                .is_some_and(|v| v.chars().count() > crate::a11y::CLIPPED_CHARS)
+            {
+                return Err(ToolError::InvalidArgument(format!(
+                    "`state.{field}` is longer than {} characters, longer than any value a read reports",
+                    crate::a11y::CLIPPED_CHARS
+                )));
+            }
+        }
+        if self.value_contains.as_deref() == Some("") {
+            return Err(ToolError::InvalidArgument(
+                "`state.value_contains` must not be empty; every value contains it".into(),
+            ));
+        }
+        self.value_contains = self.value_contains.as_deref().map(crate::a11y::fold);
+        Ok(self)
     }
 
     /// Whether any field is given.
@@ -718,7 +750,12 @@ impl WaitForParams {
                     .into(),
             ));
         }
-        let state = self.state.clone().filter(|s| !s.is_empty());
+        let state = self
+            .state
+            .clone()
+            .filter(|s| !s.is_empty())
+            .map(StateArg::prepared)
+            .transpose()?;
         if self.gone && state.is_some() {
             return Err(ToolError::InvalidArgument(
                 "`gone` waits for no match at all; pass either `gone` or `state`".into(),
@@ -1352,6 +1389,37 @@ mod tests {
                 .validate()
                 .is_err(),
             "a scope is still needed"
+        );
+    }
+
+    /// A value predicate needs a value that was read, and its criteria are
+    /// bounded and folded once.
+    #[test]
+    fn state_value_needs_a_read_value() {
+        let wait = parse::<WaitForParams>(
+            json!({"pid": 1, "role": "text_input", "state": {"value_contains": "STRASSE"}}),
+        )
+        .validate()
+        .expect("BUG: valid");
+        let state = wait.state.expect("BUG: a state");
+        assert_eq!(state.value_contains.as_deref(), Some("strasse"));
+        let mut node = crate::a11y::tests_node();
+        assert!(!state.holds(&node), "no value read");
+        node.value = Some("Hauptstraße".into());
+        assert!(state.holds(&node));
+        let empty = StateArg {
+            value: Some(String::new()),
+            ..StateArg::default()
+        };
+        node.value = None;
+        assert!(!empty.holds(&node), "an unread value is not the empty one");
+        let long = "x".repeat(crate::a11y::CLIPPED_CHARS + 1);
+        assert!(
+            parse::<WaitForParams>(
+                json!({"pid": 1, "role": "x", "state": {"value_contains": long}})
+            )
+            .validate()
+            .is_err()
         );
     }
 

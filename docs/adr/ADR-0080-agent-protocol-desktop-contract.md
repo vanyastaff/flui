@@ -36,8 +36,13 @@ backend speaks the same one.
 
 Windows, elements and screenshots are session handles: `w3`, `e12`, `s2`. A handle names
 one thing; the same window or element keeps its handle across reads; one whose window,
-element or process is gone answers `gone` and is never re-bound. A native id the OS
-reuses for another window gets a fresh handle. A pid stays the OS number, bound to the
+element or process is gone answers `gone` and is never re-bound. A window is identified
+by its native id, owner, the owner's start time and its class; a native id the OS reuses
+for a window that differs in any of them gets a fresh handle, and so does one whose
+earlier window the session saw close (every call on a handle, and every listing, checks).
+What no OS field can tell apart is a same-class window of the same process reusing the
+native id with no call in between; on Windows the id's 16-bit reuse counter makes that
+need 65536 reuses of one slot. A pid stays the OS number, bound to the
 start time of the process it named when first handed out. Error codes name a handle's
 kind (`unknown_handle` / `gone` with `kind: element | window | screenshot | process`).
 

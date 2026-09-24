@@ -582,7 +582,7 @@ impl DesktopServer {
     #[tool(
         title = "Launch a program",
         description = "Start a program (stdio discarded) and return its pid, bound as a target in this session. Then wait_for_window to get its window. The server kills every launched process when it exits: on Windows also everything those start, even when the server itself is killed; elsewhere only the launched processes, on a clean exit. A launch the client cancels ends the process it started, since the pid is never delivered.",
-        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = true),
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = true),
         output_schema = schema::<LaunchReply>()
     )]
     async fn launch(

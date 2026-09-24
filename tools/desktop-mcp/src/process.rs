@@ -221,6 +221,11 @@ impl Children {
             )));
         }
         let pid = child.id();
+        // Through the child's own handle: the launched process's start time
+        // whatever the pid names by now.
+        #[cfg(target_os = "windows")]
+        let started = crate::os::child_started(&child);
+        #[cfg(not(target_os = "windows"))]
         let started = crate::os::process_started(pid);
         let mut tracked = self.lock();
         // Shutdown gave up waiting and already ended the rest: this one is

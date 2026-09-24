@@ -246,6 +246,8 @@ struct ShotMeta {
     height: u32,
     /// The window it captured, held to its identity and place.
     window: Option<(u32, u64, Binding)>,
+    /// The monitor it captured, whose geometry must still be `source`.
+    monitor: Option<ShotTarget>,
 }
 
 /// How many screenshots stay addressable by handle.
@@ -292,6 +294,11 @@ pub struct Registry {
     /// and never bound later, or a caller holding the pid from that listing
     /// would reach a successor.
     unidentified: HashSet<u32>,
+    /// Window handles whose window this session saw gone (closed, or its
+    /// native id taken by another process or class): never handed out
+    /// again, so a later window that happens to match every recorded field
+    /// under the same native id still gets a handle of its own.
+    closed: HashSet<u64>,
     shots: VecDeque<(u64, ShotMeta)>,
     next_shot: u64,
 }
@@ -341,13 +348,15 @@ impl Registry {
             self.started.entry(w.pid).or_insert(started);
         }
         // The same window as before keeps its handle; a native id the OS
-        // reused for another window or process gets a new one.
+        // reused for another window or process gets a new one, and so does
+        // one whose earlier window this session saw close.
         let same = self.by_hwnd.get(&w.id).copied().filter(|n| {
-            self.windows.get(n).is_some_and(|issued| {
-                issued.pid == w.pid
-                    && issued.started == started
-                    && (issued.class.is_none() || class.is_none() || issued.class == class)
-            })
+            !self.closed.contains(n)
+                && self.windows.get(n).is_some_and(|issued| {
+                    issued.pid == w.pid
+                        && issued.started == started
+                        && (issued.class.is_none() || class.is_none() || issued.class == class)
+                })
         });
         let n = same.unwrap_or_else(|| {
             self.next_window += 1;
@@ -366,6 +375,40 @@ impl Registry {
         });
         let reason = unidentified.then_some(Untargetable::UnidentifiedProcess);
         Some((n, reason))
+    }
+
+    /// Marks every issued window whose native window is gone, or now
+    /// another process's: seen once, its handle is never reused, whatever
+    /// the OS later puts under the same native id.
+    fn sweep(&mut self) {
+        // Only where the OS answers who owns a native id directly: elsewhere
+        // no answer is not "gone".
+        if !cfg!(target_os = "windows") {
+            return;
+        }
+        let gone: Vec<u64> = self
+            .by_hwnd
+            .iter()
+            .filter(|&(&hwnd, n)| {
+                self.windows
+                    .get(n)
+                    .is_some_and(|w| os::window_pid(hwnd) != Some(w.pid))
+            })
+            .map(|(_, &n)| n)
+            .collect();
+        for n in gone {
+            self.close(n);
+        }
+    }
+
+    /// Retires window handle `n` for good.
+    fn close(&mut self, n: u64) {
+        if let Some(issued) = self.windows.get(&n)
+            && self.by_hwnd.get(&issued.hwnd) == Some(&n)
+        {
+            self.by_hwnd.remove(&issued.hwnd);
+        }
+        self.closed.insert(n);
     }
 
     /// `w` as the tools report it, or `None` for one that closed meanwhile.
@@ -408,16 +451,23 @@ impl Registry {
     /// What a target is bound to. A handle never issued is unknown; one
     /// issued for a window that is gone, or a pid whose process has exited,
     /// is gone; a target the OS cannot identify is refused.
-    fn bound(&self, target: TargetArg) -> ToolResult<(Target, Binding)> {
+    fn bound(&mut self, target: TargetArg) -> ToolResult<(Target, Binding)> {
         match target {
             TargetArg::Window(n) => {
-                let issued = self
+                let issued = *self
                     .windows
                     .get(&n)
                     .ok_or_else(|| ToolError::UnknownHandle {
                         handle: Self::handle(n),
                         kind: HandleKind::Window,
                     })?;
+                if self.closed.contains(&n) {
+                    return Err(ToolError::Gone {
+                        handle: Self::handle(n),
+                        kind: HandleKind::Window,
+                        why: "it has closed".into(),
+                    });
+                }
                 // On Windows every process has a start time unless it could
                 // not be read: then nothing tells it from a successor.
                 if issued.started.is_none() && cfg!(target_os = "windows") {
@@ -427,7 +477,12 @@ impl Registry {
                     )));
                 }
                 let target = Target::Window(issued.hwnd, n);
-                Self::revalidate(target, issued.binding())?;
+                if let Err(e) = Self::revalidate(target, issued.binding()) {
+                    if matches!(e, ToolError::Gone { .. }) {
+                        self.close(n);
+                    }
+                    return Err(e);
+                }
                 Ok((target, issued.binding()))
             }
             TargetArg::Pid(pid) => {
@@ -643,6 +698,7 @@ impl Desktop {
         title_contains: Option<&str>,
         pid: Option<u32>,
     ) -> ToolResult<Vec<Window>> {
+        self.registry.sweep();
         let needle = title_contains.map(a11y::fold);
         let windows: Vec<NativeWindow> = capture::windows()?
             .into_iter()
@@ -747,6 +803,8 @@ impl Desktop {
                 Target::Window(hwnd, n) => Some((hwnd, n, b)),
                 Target::Pid(_) => None,
             }),
+            monitor: matches!(direct, ShotTarget::Monitor(_) | ShotTarget::Primary)
+                .then_some(direct),
         });
         Ok((shot, id))
     }
@@ -816,11 +874,26 @@ impl Desktop {
         }
         // Each root is named after its window, so a popup or dialog read
         // under a pid can be targeted by handle afterwards.
+        // The capture list leaves popups out (menus, drop-downs, tooltips),
+        // which the OS enumeration read: those are described from the OS.
         let all = capture::windows().unwrap_or_default();
         for root in &mut read.roots {
-            if let Some(hwnd) = root.native_window
-                && let Some(w) = all.iter().find(|w| w.id == hwnd)
-                && let Some((n, _)) = self.registry.adopt(w)
+            let Some(hwnd) = root.native_window else {
+                continue;
+            };
+            let native = all.iter().find(|w| w.id == hwnd).cloned().or_else(|| {
+                Some(NativeWindow {
+                    id: hwnd,
+                    pid: os::window_pid(hwnd)?,
+                    app_name: String::new(),
+                    title: os::window_title(hwnd).unwrap_or_default(),
+                    rect: os::window_rect(hwnd)?,
+                    is_minimized: false,
+                    is_focused: false,
+                })
+            });
+            if let Some(w) = native
+                && let Some((n, _)) = self.registry.adopt(&w)
             {
                 root.window = Some(Registry::handle(n));
             }
@@ -960,24 +1033,44 @@ impl Desktop {
                 }
                 // The pixels describe the screen only while what they show
                 // is still where it was.
+                // Unreadable counts as changed: stale pixels must not aim.
                 if let Some((hwnd, n, bound)) = meta.window {
                     Registry::revalidate(Target::Window(hwnd, n), bound)?;
-                    if os::window_rect(hwnd).is_some_and(|now| now != meta.source) {
+                    let now = os::window_rect(hwnd).or_else(|| {
+                        capture::windows()
+                            .ok()?
+                            .into_iter()
+                            .find(|w| w.id == hwnd)
+                            .map(|w| w.rect)
+                    });
+                    if now != Some(meta.source) {
                         return Err(ToolError::Busy(format!(
-                            "window w{n} has moved or resized since screenshot s{shot}; take another"
+                            "window w{n} has moved or resized since screenshot s{shot} (or its bounds cannot be read); take another"
                         )));
                     }
                 }
+                if let Some(monitor) = meta.monitor
+                    && capture::monitor_geometry(monitor).ok() != Some(meta.source)
+                {
+                    return Err(ToolError::Busy(format!(
+                        "the display captured in screenshot s{shot} has moved or changed mode since; take another"
+                    )));
+                }
+                // Down to the screen unit the pixel lies in, and never past
+                // the captured rect's far edge (a rounded HiDPI pixel would).
                 #[expect(
                     clippy::cast_possible_truncation,
                     reason = "a pixel of a bounded image divided by a positive scale"
                 )]
-                let map = |px: i32, origin: i32, scale: f64| {
-                    origin + (f64::from(px) / scale.max(f64::EPSILON)).round() as i32
+                let map = |px: i32, origin: i32, span: u32, scale: f64| {
+                    let unit = (f64::from(px) / scale.max(f64::EPSILON)).floor() as i64;
+                    let last = i64::from(span).saturating_sub(1).max(0);
+                    let at = i64::from(origin) + unit.clamp(0, last);
+                    i32::try_from(at).unwrap_or(origin)
                 };
                 Ok((
-                    map(*x, meta.source.x, meta.scale_x),
-                    map(*y, meta.source.y, meta.scale_y),
+                    map(*x, meta.source.x, meta.source.width, meta.scale_x),
+                    map(*y, meta.source.y, meta.source.height, meta.scale_y),
                     None,
                 ))
             }
@@ -996,6 +1089,32 @@ impl Desktop {
                 Ok((p.x, p.y, Some((handle.clone(), window, pid))))
             }
         }
+    }
+
+    /// Refuses unless an element location still names what is at its point:
+    /// the element itself (or a descendant) is what UI Automation hit-tests
+    /// there, its own top-level window is under the point and its process is
+    /// in front. Nothing for a point location.
+    fn element_still_there(
+        a11y: &mut dyn AccessibilityBackend,
+        registry: &Registry,
+        element: Option<&ElementWindow>,
+        (x, y): (i32, i32),
+    ) -> ToolResult<()> {
+        let Some((handle, window, pid)) = element else {
+            return Ok(());
+        };
+        if !a11y.hits(handle, x, y)? {
+            return Err(ToolError::OutsideTarget {
+                x,
+                y,
+                reason: format!(
+                    "element `{handle}` is no longer what is under it (something inside its window covers it); use invoke, or read the tree again"
+                ),
+                covered_by: None,
+            });
+        }
+        Self::check_element(registry, *window, *pid, (x, y))
     }
 
     /// Clicks an element's clickable point or a screen point.
@@ -1022,19 +1141,7 @@ impl Desktop {
             // (a UI Automation hit-test, a cross-process call) runs first and
             // the fast OS checks last, right before the event, so what they
             // saw is as fresh as it can be.
-            if let Some((handle, window, pid)) = &element_window {
-                if !a11y.hits(handle, x, y)? {
-                    return Err(ToolError::OutsideTarget {
-                        x,
-                        y,
-                        reason: format!(
-                            "element `{handle}` is no longer what is under it (something inside its window covers it); use invoke, or read the tree again"
-                        ),
-                        covered_by: None,
-                    });
-                }
-                Self::check_element(registry, *window, *pid, (x, y))?;
-            }
+            Self::element_still_there(a11y.as_mut(), registry, element_window.as_ref(), (x, y))?;
             Self::check(registry, target, bound, &[(x, y)])
         };
         guard(None)?;
@@ -1070,18 +1177,29 @@ impl Desktop {
     ) -> ToolResult<((i32, i32), (i32, i32))> {
         self.input()?;
         let (target, bound) = self.registry.bound(target)?;
-        let (fx, fy, _) = self.locate(from)?;
-        let (tx, ty, _) = self.locate(to)?;
+        let (fx, fy, from_element) = self.locate(from)?;
+        let (tx, ty, to_element) = self.locate(to)?;
         let (from, to) = ((fx, fy), (tx, ty));
         let mut path = vec![from];
         path.extend(crate::input::drag_path(from, to, duration));
-        let registry = &self.registry;
+        let Self {
+            a11y,
+            input,
+            registry,
+        } = self;
         Self::check(registry, target, bound, &path)?;
-        let mut guard = |at: Option<(i32, i32)>| match at {
-            Some(point) => Self::check(registry, target, bound, &[point]),
-            None => Self::check(registry, target, bound, &path),
+        // Before the press, the ends given as elements are still those
+        // elements: covered by the target at their old points, the drag
+        // would act on the target instead.
+        let mut guard = |at: Option<(i32, i32)>| {
+            if let Some(point) = at {
+                return Self::check(registry, target, bound, &[point]);
+            }
+            Self::element_still_there(a11y.as_mut(), registry, from_element.as_ref(), from)?;
+            Self::element_still_there(a11y.as_mut(), registry, to_element.as_ref(), to)?;
+            Self::check(registry, target, bound, &path)
         };
-        self.input
+        input
             .as_mut()
             .map_err(|e| ToolError::NotSupported(e.clone()))?
             .drag(from, to, duration, &mut guard)?;
@@ -1098,11 +1216,18 @@ impl Desktop {
     ) -> ToolResult<(i32, i32)> {
         self.input()?;
         let (target, bound) = self.registry.bound(target)?;
-        let (x, y, _) = self.locate(at)?;
-        let registry = &self.registry;
-        Self::check(registry, target, bound, &[(x, y)])?;
-        let mut guard = |_: Option<(i32, i32)>| Self::check(registry, target, bound, &[(x, y)]);
-        self.input
+        let (x, y, element) = self.locate(at)?;
+        let Self {
+            a11y,
+            input,
+            registry,
+        } = self;
+        let mut guard = |_: Option<(i32, i32)>| {
+            Self::element_still_there(a11y.as_mut(), registry, element.as_ref(), (x, y))?;
+            Self::check(registry, target, bound, &[(x, y)])
+        };
+        guard(None)?;
+        input
             .as_mut()
             .map_err(|e| ToolError::NotSupported(e.clone()))?
             .scroll(x, y, dx, dy, &mut guard)?;
@@ -1403,14 +1528,21 @@ mod tests {
     /// that `wait_for` would keep polling for.
     #[test]
     fn an_unissued_target_is_unknown() {
-        let registry = Registry::default();
-        assert!(matches!(
-            registry.bound(TargetArg::Pid(std::process::id())),
-            Err(ToolError::UnknownHandle {
-                kind: HandleKind::Process,
-                ..
-            })
-        ));
+        let mut registry = Registry::default();
+        // Where the OS reports no start times, a pid is no target at all,
+        // and that is the answer instead.
+        let pid = registry.bound(TargetArg::Pid(std::process::id()));
+        if cfg!(target_os = "windows") {
+            assert!(matches!(
+                pid,
+                Err(ToolError::UnknownHandle {
+                    kind: HandleKind::Process,
+                    ..
+                })
+            ));
+        } else {
+            assert!(matches!(pid, Err(ToolError::NotSupported(_))));
+        }
         assert!(matches!(
             registry.bound(TargetArg::Window(123_456_789)),
             Err(ToolError::UnknownHandle {
@@ -1495,6 +1627,7 @@ mod tests {
             width: 10,
             height: 10,
             window: None,
+            monitor: None,
         };
         let first = registry.remember_shot(meta);
         assert_eq!(first, "s1");

@@ -119,6 +119,24 @@ mod backend {
         })
     }
 
+    /// A monitor's position and size now, read as `screenshot` reads them.
+    pub fn monitor_geometry(target: ShotTarget) -> ToolResult<Rect> {
+        let monitors = Monitor::all().map_err(|e| ToolError::platform("listing monitors", e))?;
+        let monitor = match target {
+            ShotTarget::Monitor(i) => monitors.get(i),
+            ShotTarget::Primary => monitors.iter().find(|m| m.is_primary().unwrap_or(false)),
+            ShotTarget::Window(_) => None,
+        }
+        .ok_or_else(|| ToolError::NotFound("the monitor is gone".into()))?;
+        let meta = |e| ToolError::platform("reading the monitor's position and size", e);
+        Ok(Rect {
+            x: monitor.x().map_err(meta)?,
+            y: monitor.y().map_err(meta)?,
+            width: monitor.width().map_err(meta)?,
+            height: monitor.height().map_err(meta)?,
+        })
+    }
+
     /// Every top-level window xcap can see, front to back.
     pub fn windows() -> ToolResult<Vec<NativeWindow>> {
         let all = Window::all().map_err(|e| ToolError::platform("listing windows", e))?;
@@ -261,9 +279,13 @@ mod backend {
     pub fn screenshot(_: ShotTarget, _: Option<u32>) -> ToolResult<Shot> {
         Err(unsupported())
     }
+
+    pub fn monitor_geometry(_: ShotTarget) -> ToolResult<super::Rect> {
+        Err(unsupported())
+    }
 }
 
-pub use backend::{screenshot, windows};
+pub use backend::{monitor_geometry, screenshot, windows};
 
 /// Whether capture works on this OS; checked first, so an unsupported OS
 /// says so rather than failing on a target's binding.
