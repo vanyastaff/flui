@@ -495,12 +495,25 @@ impl Input {
         if !sent && held.iter().any(|k| matches!(k, Key::Alt | Key::Meta)) {
             let _ = self.enigo.key(Key::Other(UNASSIGNED_VK), Direction::Click);
         }
-        for k in held.into_iter().rev() {
-            let released = self
-                .enigo
-                .key(k, Direction::Release)
-                .map_err(failed("releasing a modifier (it may still be held)"));
-            result = result.and(released);
+        // Every release is tried; one that fails is reported even when an
+        // earlier failure is the cause, since a modifier left down changes
+        // the user's next keystroke.
+        let stuck: Vec<Key> = held
+            .into_iter()
+            .rev()
+            .filter(|&k| self.enigo.key(k, Direction::Release).is_err())
+            .collect();
+        if !stuck.is_empty() {
+            let what = format!(
+                "{stuck:?} could not be released and may still be held; the next input releases them first"
+            );
+            result = Err(match result {
+                Ok(()) => ToolError::platform("releasing a modifier", what),
+                Err(cause) => ToolError::Interrupted {
+                    cause: Box::new(cause),
+                    what,
+                },
+            });
         }
         result.map_err(|e| (e, sent))
     }

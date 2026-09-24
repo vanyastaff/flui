@@ -319,7 +319,19 @@ impl Uia {
             // at the top and under its owner is one element; anything else
             // is a different element claiming the id, which gets a handle of
             // its own instead of taking over the first one's.
-            if role(element) == "Window" {
+            // It is the same one only if both have the same native window;
+            // otherwise the collision gets its own handle, never hidden.
+            let same_window = role(element) == "Window"
+                && self.elements.by_identity(&key).is_some_and(|held| {
+                    let native = |e: &UIElement| {
+                        e.get_native_window_handle()
+                            .map(Into::<isize>::into)
+                            .ok()
+                            .filter(|&h| h != 0)
+                    };
+                    native(&held.element).is_some_and(|h| native(element) == Some(h))
+                });
+            if same_window {
                 return None;
             }
             key = self.fresh_identity();
@@ -450,8 +462,13 @@ impl Uia {
     /// briefly. The request itself went out, so a failed readback says so.
     fn focused(&mut self, handle: &str, element: &UIElement) -> ToolResult<Node> {
         let mut last = None;
+        // One deadline for the whole readback, however slow each poll is.
+        let until = Instant::now() + ANCESTOR_DEADLINE;
         for attempt in 0..FOCUS_POLLS {
             if attempt > 0 {
+                if Instant::now() >= until {
+                    break;
+                }
                 std::thread::sleep(FOCUS_POLL_INTERVAL);
             }
             let fresh =

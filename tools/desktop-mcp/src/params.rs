@@ -411,7 +411,8 @@ impl From<ButtonArg> for MouseButton {
     }
 }
 
-/// A point in physical screen pixels.
+/// A point in screen coordinates: physical pixels on Windows, points on
+/// macOS.
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PointArg {
@@ -427,9 +428,9 @@ pub struct PointArg {
 pub struct ClickParams {
     /// Click this element's clickable point. Its window must be in front.
     pub element: Option<String>,
-    /// Screen x (physical pixels), with `y`, instead of `element`.
+    /// Screen x (screen coordinates: physical pixels on Windows, points on macOS), with `y`, instead of `element`.
     pub x: Option<i32>,
-    /// Screen y (physical pixels), with `x`, instead of `element`.
+    /// Screen y (screen coordinates: physical pixels on Windows, points on macOS), with `x`, instead of `element`.
     pub y: Option<i32>,
     /// left (default), right or middle.
     #[serde(default)]
@@ -478,9 +479,9 @@ impl ClickParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MoveMouseParams {
-    /// Screen x (physical pixels).
+    /// Screen x (screen coordinates: physical pixels on Windows, points on macOS).
     pub x: i32,
-    /// Screen y (physical pixels).
+    /// Screen y (screen coordinates: physical pixels on Windows, points on macOS).
     pub y: i32,
 }
 

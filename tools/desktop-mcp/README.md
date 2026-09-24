@@ -135,9 +135,10 @@ sends nothing, so keystrokes and clicks never land in another application.
   foreground one, so target it with `pid`.
 - Shell hotkeys reach the shell, not the window in front, so `key` refuses them when a target
   is given: on Windows the Windows key, `alt+tab`, `alt+esc`, `ctrl+esc`, `ctrl+shift+esc`,
-  `ctrl+alt+delete`, the input-language switch (`alt+shift`, `ctrl+shift`) and Shift pressed five
-  times; on macOS `cmd+tab`, `cmd+space`, `ctrl+space`, Force Quit, Lock Screen, Log Out, Mission
-  Control and Spaces, the screenshot tool, the Dock and keyboard-navigation shortcuts. Other
+  `ctrl+alt+delete`, the input-language switch (`alt+shift`, `ctrl+shift`) and a lone Shift
+  (five taps, counted across calls, open Sticky Keys); on macOS `cmd+tab`, `cmd+space`,
+  `ctrl+space`, Force Quit, Lock Screen, Log Out, Mission Control and Spaces, the screenshot
+  tool, the Dock and keyboard-navigation shortcuts, a lone Shift and a lone Option (Mouse Keys). Other
   applications' own global hotkeys are not detected.
 - The pointer position is read back before every press: a move the OS clamped, or a pointer
   someone else moved, refuses the press.

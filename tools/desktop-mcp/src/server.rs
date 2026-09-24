@@ -521,7 +521,7 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Move the pointer to a screen point. Returns where the pointer ended up. Sends no press, so it takes no safety target; refused while a button is still held from a failed release."
+        description = "Move the pointer to a screen point (screen coordinates: physical pixels on Windows, points on macOS). Returns where the pointer ended up. Sends no press, so it takes no safety target; refused while a button is still held from a failed release."
     )]
     async fn move_mouse(
         &self,

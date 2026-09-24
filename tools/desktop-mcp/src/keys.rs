@@ -210,9 +210,11 @@ impl KeyCombo {
         // A modifier pressed five times in a row is an accessibility
         // shortcut: Shift turns on Sticky Keys (Windows, macOS), Option
         // turns on Mouse Keys (macOS).
-        let tapped = |m: Modifier| {
-            self.key == KeyName::Modifier(m) && self.modifiers.is_empty() && repeat >= 5
-        };
+        // Counted across calls by the OS, not per call: four taps now and
+        // one more later still make five, so a lone Shift (or a lone Option
+        // on macOS) is refused with a target however few it presses.
+        let _ = repeat;
+        let tapped = |m: Modifier| self.key == KeyName::Modifier(m) && self.modifiers.is_empty();
         if tapped(Modifier::Shift) {
             return Some("the accessibility shortcut (Sticky Keys)");
         }
@@ -504,7 +506,15 @@ mod tests {
         }
         assert!(parse("shift").shell_hotkey(false, 5).is_some());
         assert!(parse("shift").shell_hotkey(true, 5).is_some());
-        assert_eq!(parse("shift").shell_hotkey(false, 4), None);
+        assert!(
+            parse("shift").shell_hotkey(false, 1).is_some(),
+            "taps add up across calls"
+        );
+        assert_eq!(
+            parse("alt").shell_hotkey(false, 1),
+            None,
+            "a lone Alt stays in the window"
+        );
         assert!(parse("alt").shell_hotkey(true, 5).is_some(), "Mouse Keys");
         assert!(
             parse("capslock").shell_hotkey(false, 1).is_some(),
