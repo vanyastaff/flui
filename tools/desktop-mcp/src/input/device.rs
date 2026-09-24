@@ -532,6 +532,7 @@ impl Input {
         let mut sent = false;
         // Whether the key surely went down: only then is the chord a real
         // shortcut rather than modifiers on their own, which get masked.
+        #[cfg(target_os = "windows")]
         let mut emitted = false;
         if result.is_ok() {
             // Press and release apart: once the press is in, the key counts
@@ -545,7 +546,10 @@ impl Input {
             // released regardless, and counted as possibly sent, so a retry
             // does not repeat a shortcut that ran.
             sent = true;
-            emitted = result.is_ok();
+            #[cfg(target_os = "windows")]
+            {
+                emitted = result.is_ok();
+            }
             let released = self.enigo.key(key, Direction::Release);
             result = match (result, released) {
                 (Ok(()), Ok(())) => Ok(()),
