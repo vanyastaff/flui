@@ -4,10 +4,10 @@
 //! The Apple drivers stay Python and Swift under `tools/device-checks/`: they
 //! only run on a Mac, so only a Mac can port them with evidence. The Windows
 //! checks are clients of Win32 APIs xtask can call itself, so they run
-//! in-process (`device/windows_a11y.rs`, Windows only). This module owns the
-//! build, the staging and the verdict on a probe's output as a plan computed
-//! first and executed second, so a test on any host can hold each check
-//! against its steps.
+//! in-process (`device/windows_a11y.rs`, `device/windows_input.rs`, Windows
+//! only). This module owns the build, the staging and the verdict on a probe's
+//! output as a plan computed first and executed second, so a test on any host
+//! can hold each check against its steps.
 //!
 //! On another host a check says why it is skipped and exits 0.
 //! `macos-workload` and `macos-hot-reload-loop` leave that decision to their
@@ -20,7 +20,19 @@ mod plan;
     unsafe_code,
     reason = "a UI Automation client is COM calls through the `windows` bindings"
 )]
+mod uia;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "a UI Automation client is COM calls through the `windows` bindings"
+)]
 mod windows_a11y;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "OS input is `SendInput` through the `windows` bindings"
+)]
+mod windows_input;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -300,12 +312,26 @@ enum DeviceCheck {
     /// when UI Automation cannot be instantiated. Needs an interactive
     /// desktop session.
     WindowsA11y,
+    /// Real pointer and keyboard input on a real Windows window.
+    ///
+    /// Builds the same `a11y_probe` and drives it with `SendInput` — events
+    /// entering the system input queue as a device's would, hit-tested and
+    /// routed by the OS — while UI Automation only locates the button and
+    /// reads the count: a click on the window outside the button must leave
+    /// the count at "0" (the control), a click on the button must make it
+    /// "1", and Tab then Enter must make it "2". Before every event the
+    /// probe's window must be the foreground window, so no keystroke can
+    /// reach another application; when Windows will not bring it forward the
+    /// check exits 2 (cannot verify). Moves the cursor and restores it. Needs
+    /// an interactive desktop session; do not touch the mouse or keyboard
+    /// while it runs.
+    WindowsInput,
 }
 
 impl DeviceCheck {
     /// Whether this host is the OS the check needs.
     fn runs_on_this_host(&self) -> bool {
-        let needs = if matches!(self, Self::WindowsA11y) {
+        let needs = if matches!(self, Self::WindowsA11y | Self::WindowsInput) {
             "windows"
         } else {
             "macos"
@@ -353,6 +379,9 @@ impl DeviceCheck {
             Self::WindowsA11y => {
                 "Skipping windows-a11y on this host: the check reads a real window through UI Automation, so it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-a11y"
             }
+            Self::WindowsInput => {
+                "Skipping windows-input on this host: the check sends real pointer and keyboard input to a real window, so it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-input"
+            }
             Self::MacosWorkload | Self::MacosHotReloadLoop { .. } => return None,
         })
     }
@@ -391,23 +420,26 @@ impl DeviceCheck {
                 announce: None,
             }],
             Self::WindowsA11y => vec![
-                cargo_build([
-                    "-p",
-                    "flui",
-                    "--locked",
-                    "--release",
-                    "--example",
-                    "a11y_probe",
-                    "--features",
-                    "material,a11y",
-                ]),
+                build_a11y_probe(),
                 Step::Native {
                     check: Native::WindowsA11y {
-                        probe: target.join("release/examples/a11y_probe.exe"),
+                        probe: target.join(A11Y_PROBE_EXE),
                     },
                     announce: Announce {
                         cannot_verify: "windows-a11y CANNOT VERIFY: UI Automation could not be instantiated on this host — details above",
                         failed: "windows-a11y FAILED: a text or the button was missing or unnamed in the UIA tree, Invoke was refused, or the count did not advance (tree dumps above)",
+                    },
+                },
+            ],
+            Self::WindowsInput => vec![
+                build_a11y_probe(),
+                Step::Native {
+                    check: Native::WindowsInput {
+                        probe: target.join(A11Y_PROBE_EXE),
+                    },
+                    announce: Announce {
+                        cannot_verify: "windows-input CANNOT VERIFY: the probe window could not be kept in the foreground, or UI Automation was unavailable — no input was sent past that point; details above",
+                        failed: "windows-input FAILED: a missed click changed the count, or a click on the button or Tab then Enter did not advance it (tree dumps above)",
                     },
                 },
             ],
@@ -437,6 +469,24 @@ impl Context {
             sim_device,
         })
     }
+}
+
+/// Where the release build of `a11y_probe` lands on Windows.
+const A11Y_PROBE_EXE: &str = "release/examples/a11y_probe.exe";
+
+/// The counter with the AccessKit adapter installed, which both Windows
+/// checks run.
+fn build_a11y_probe() -> Step {
+    cargo_build([
+        "-p",
+        "flui",
+        "--locked",
+        "--release",
+        "--example",
+        "a11y_probe",
+        "--features",
+        "material,a11y",
+    ])
 }
 
 fn cargo_build<const N: usize>(args: [&str; N]) -> Step {
@@ -874,6 +924,7 @@ mod tests {
             ),
             (&["ios-sim"], DeviceCheck::IosSim),
             (&["windows-a11y"], DeviceCheck::WindowsA11y),
+            (&["windows-input"], DeviceCheck::WindowsInput),
             (
                 &["ios-input-check", "UDID-1"],
                 DeviceCheck::IosInputCheck {
@@ -949,12 +1000,17 @@ mod tests {
                 "{reason}"
             );
         }
-        let windows = DeviceCheck::WindowsA11y.skip_reason().expect("gated");
-        assert!(
-            windows.ends_with("; on Windows run: cargo xtask device windows-a11y"),
-            "{windows}"
-        );
-        assert_eq!(DeviceCheck::WindowsA11y.runs_on_this_host(), cfg!(windows));
+        for (check, name) in [
+            (DeviceCheck::WindowsA11y, "windows-a11y"),
+            (DeviceCheck::WindowsInput, "windows-input"),
+        ] {
+            let reason = check.skip_reason().expect("gated");
+            assert!(
+                reason.ends_with(&format!("; on Windows run: cargo xtask device {name}")),
+                "{reason}"
+            );
+            assert_eq!(check.runs_on_this_host(), cfg!(windows));
+        }
         assert_eq!(DeviceCheck::MacosWorkload.skip_reason(), None);
         assert_eq!(
             DeviceCheck::MacosHotReloadLoop { work: "w".into() }.skip_reason(),
@@ -1061,6 +1117,17 @@ mod tests {
             &[
                 "cargo build -p flui --locked --release --example a11y_probe --features material,a11y",
                 "uia-client target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-a11y CANNOT VERIFY: UI Automation could not be instantiated on this host — details above'; elif rc!=0: echo 'windows-a11y FAILED: a text or the button was missing or unnamed in the UIA tree, Invoke was refused, or the count did not advance (tree dumps above)'; exit $rc",
+            ],
+        );
+    }
+
+    #[test]
+    fn windows_input_builds_the_probe_and_drives_it_in_process() {
+        assert_plan(
+            &DeviceCheck::WindowsInput,
+            &[
+                "cargo build -p flui --locked --release --example a11y_probe --features material,a11y",
+                "send-input target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-input CANNOT VERIFY: the probe window could not be kept in the foreground, or UI Automation was unavailable — no input was sent past that point; details above'; elif rc!=0: echo 'windows-input FAILED: a missed click changed the count, or a click on the button or Tab then Enter did not advance it (tree dumps above)'; exit $rc",
             ],
         );
     }

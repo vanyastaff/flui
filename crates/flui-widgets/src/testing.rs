@@ -1173,15 +1173,20 @@ impl LaidOut {
 
     /// Every `RenderSemanticsAnnotations` node that describes a control —
     /// the nodes a widget's own `Semantics` wrapper mounts — as opposed to
-    /// the actions-only annotation a `GestureDetector` adds beneath it to
-    /// advertise its tap to assistive technology (see `GestureDetector`'s
-    /// "Assistive-technology activation" and
-    /// `SemanticsConfiguration::is_actions_only`). A widget test asserting
-    /// "my Semantics wrapper is there and sized so" wants these.
+    /// the helper annotations the framework adds beneath it: the actions-only
+    /// one a `GestureDetector` mounts to advertise its tap (see
+    /// `GestureDetector`'s "Assistive-technology activation" and
+    /// `SemanticsConfiguration::is_actions_only`), and the focus-state one a
+    /// `Focus` mounts (`SemanticsConfiguration::is_focus_state_only`). A
+    /// widget test asserting "my Semantics wrapper is there and sized so"
+    /// wants these.
     pub fn find_semantics_wrappers(&self) -> Vec<RenderId> {
         self.find_all_by_render_type("RenderSemanticsAnnotations")
             .into_iter()
-            .filter(|&id| self.render_property(id, "actions_only").is_none())
+            .filter(|&id| {
+                self.render_property(id, "actions_only").is_none()
+                    && self.render_property(id, "focus_state_only").is_none()
+            })
             .collect()
     }
 

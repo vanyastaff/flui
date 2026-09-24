@@ -17,13 +17,18 @@ serde_json = { workspace = true }
 toml = { workspace = true }
 walkdir = { workspace = true }
 
-# `cargo xtask device windows-a11y` is a UI Automation client.
+# `cargo xtask device windows-a11y` and `windows-input`: a UI Automation
+# client, and real input through `SendInput`.
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
+    "Win32_Foundation",
     "Win32_System_Com",
     "Win32_System_Ole",
     "Win32_System_Variant",
     "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [lints]

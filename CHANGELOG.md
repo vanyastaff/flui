@@ -142,6 +142,17 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Fixed
 
+- **No control was usable from the keyboard, and Narrator could not follow the focus**
+  (`flui-widgets`, `flui-material`, `flui-interaction`, `flui-semantics`; ADR-0079). Found by
+  the first run of real input on a Windows window (`cargo xtask device windows-input`). Enter,
+  Space and Select now activate the focused control (`ActivateIntent`, `ButtonActivateIntent`;
+  `InkWell` answers both); a `Shortcuts` resolves its intent at the primary focus, so an
+  `Actions` between it and the focused widget takes part; the first Tab into a window with
+  nothing focused reaches the default bindings (`FocusManager::set_unfocused_key_target`);
+  `Focus` publishes `focusable`/`focused` semantics; and the root of the accessibility tree is a
+  `Role::Window`, so moving the focus no longer hides the window's contents from UI Automation.
+  `cargo xtask device windows-input` drives the counter with `SendInput`: a missed click
+  changes nothing, a click presses the button, Tab focuses it as UIA reports, Enter presses it.
 - **Static text was nameless to Narrator and Orca** (`flui-semantics`): a `Text` reached
   AccessKit as a `Role::Label` carrying its text only as a label, and the UI Automation and
   AT-SPI adapters read a label node's name from its value, so every plain text in a FLUI app

@@ -7,7 +7,7 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{HashSet, VecDeque},
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 use flui_foundation::ListenerId;
@@ -66,6 +66,9 @@ pub struct FocusManager {
     listeners: RefCell<Vec<(ListenerId, FocusChangeCallback)>>,
     next_listener_id: Cell<usize>,
     global_key_handlers: RefCell<Vec<KeyEventCallback>>,
+    /// Where a key starts its leaf-to-root walk while nothing is focused
+    /// ([`Self::set_unfocused_key_target`]).
+    unfocused_key_target: RefCell<Weak<FocusNode>>,
     closed: Cell<bool>,
     /// Depth of the commit+notify transaction currently publishing a focus
     /// transition. Zero between transitions; `>0` while node or manager
@@ -152,6 +155,7 @@ impl FocusManager {
             listeners: RefCell::new(Vec::new()),
             next_listener_id: Cell::new(1),
             global_key_handlers: RefCell::new(Vec::new()),
+            unfocused_key_target: RefCell::new(Weak::new()),
             closed: Cell::new(false),
             notification_depth: Cell::new(0),
             pending_focus_transitions: RefCell::new(VecDeque::new()),
@@ -596,7 +600,8 @@ impl FocusManager {
             }
         }
 
-        let Some(focused) = self.primary_focus() else {
+        let unfocused_target = || self.unfocused_key_target.borrow().upgrade();
+        let Some(focused) = self.primary_focus().or_else(unfocused_target) else {
             tracing::trace!("key event ignored because nothing is focused");
             return false;
         };
@@ -620,6 +625,27 @@ impl FocusManager {
 
         tracing::trace!("key event not handled");
         false
+    }
+
+    /// Name the node a key starts its walk at while nothing is focused, or
+    /// `None` to stop.
+    ///
+    /// The walk normally starts at the primary focus. A window opened with
+    /// nothing focused has none, so without a target every key is dropped —
+    /// including the first Tab that would bring the focus in. Flutter never
+    /// has that state: its primary focus falls back to the root scope, and an
+    /// app's route scope sits under the `WidgetsApp` shortcuts. FLUI's
+    /// default bindings name their own node here instead, so the walk reaches
+    /// them and nothing about `primary_focus` changes. Held weakly: the node's
+    /// owner decides its lifetime.
+    pub fn set_unfocused_key_target(&self, node: Option<&Rc<FocusNode>>) {
+        *self.unfocused_key_target.borrow_mut() = node.map_or_else(Weak::new, Rc::downgrade);
+    }
+
+    /// The node [`Self::set_unfocused_key_target`] named, while it lives.
+    #[must_use]
+    pub fn unfocused_key_target(&self) -> Option<Rc<FocusNode>> {
+        self.unfocused_key_target.borrow().upgrade()
     }
 
     /// Deterministically retire this focus owner.

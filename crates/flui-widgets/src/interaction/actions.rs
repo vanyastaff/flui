@@ -33,16 +33,16 @@
 //! # Deferred, and named
 //!
 //! `ActionDispatcher` as a replaceable object, `Action.addActionListener`,
-//! `Actions.handler`, `DoNothingAction` (write `CallbackAction::new(|_| ())`
-//! until the propagation-control use case arrives), and invoke-at-primary-focus
-//! context resolution (ADR-0023's resolve-at-own-position divergence — `Shortcuts` resolves from its own
-//! position until `FocusNode` records an element).
+//! `Actions.handler` and `DoNothingAction` (write `CallbackAction::new(|_| ())`
+//! until the propagation-control use case arrives). A `Shortcuts` resolves
+//! from the primary focus's position, the chain each `Focus` records on its
+//! node (ADR-0079).
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use flui_interaction::routing::{FocusManager, KeyEventResult};
+use flui_interaction::routing::{FocusManager, FocusNode, KeyEventResult, NodeContext};
 use flui_view::element::ElementKind;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
@@ -327,10 +327,27 @@ impl StatelessView for Actions {
     }
 }
 
+/// The chain a focused [`Focus`](super::focus::Focus) recorded on its node:
+/// the bindings visible at the focused widget's position, which is where
+/// Flutter resolves a shortcut's intent (`primaryFocus.context`,
+/// `shortcuts.dart`'s `ShortcutManager.handleKeypress`). `None` for a node no
+/// `Focus` widget hosts, or one with no `Actions` above it.
+pub(crate) fn chain_at(node: &FocusNode) -> Option<ActionChain> {
+    node.context()?
+        .downcast::<HashMap<TypeId, ErasedAction>>()
+        .ok()
+}
+
+/// The chain as the opaque context a focus node carries ([`chain_at`] reads
+/// it back).
+pub(crate) fn as_node_context(chain: &ActionChain) -> NodeContext {
+    Rc::clone(chain) as NodeContext
+}
+
 /// The nearest provider's chain, if any. Resolved at call time, so late reads
 /// (a key handler built earlier) still see the tree's current bindings only if
-/// they re-read — `Shortcuts` captures at build and re-captures when this
-/// provider's subtree rebuilds (ADR-0023's resolve-at-own-position divergence).
+/// they re-read — which is why `Focus` records the chain with a dependency and
+/// `Shortcuts` reads the primary focus's record at key time (ADR-0079).
 pub(crate) fn ambient_action_chain(ctx: &dyn BuildContext) -> Option<ActionChain> {
     ctx.get::<ActionChainProvider, _>(|provider| Rc::clone(&provider.chain))
 }
@@ -549,6 +566,26 @@ mod tests {
         assert_eq!(ran.load(Ordering::SeqCst), 0, "nothing to invoke");
     }
 }
+
+// ============================================================================
+// Activation intents (ADR-0079)
+// ============================================================================
+
+/// "Activate the focused control" — Flutter's `ActivateIntent`
+/// (`actions.dart`), what `WidgetsApp` binds Enter, Space and Select to
+/// (`app.dart:1265-1269`, tag `3.44.0`). A control answers it with an
+/// [`Actions`] binding around its `Focus`; nothing answers it at the root, so
+/// an unclaimed activation key keeps bubbling.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ActivateIntent;
+impl Intent for ActivateIntent {}
+
+/// "Activate this button" — Flutter's `ButtonActivateIntent`, the variant a
+/// button answers the same way as [`ActivateIntent`], so an app can bind a
+/// key to buttons alone.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ButtonActivateIntent;
+impl Intent for ButtonActivateIntent {}
 
 // ============================================================================
 // Focus traversal intents (ADR-0026)

@@ -33,6 +33,16 @@ pub type KeyEventHandler = Rc<dyn Fn(&KeyEvent) -> KeyEventResult>;
 /// Computes a node's bounding rectangle on demand, in root coordinates.
 pub type RectProvider = Rc<dyn Fn() -> Option<Rect<Pixels>>>;
 
+/// What the widget layer records about where a node sits in its tree — the
+/// counterpart of Flutter's `FocusNode.context`, which this crate cannot hold
+/// because it sits below the element tree.
+///
+/// Opaque here: this crate stores and returns it and never reads it.
+/// `flui-widgets` records the `Actions` chain visible at the node's `Focus`
+/// widget, so a `Shortcuts` above the focused widget resolves an intent from
+/// the focused widget's position, as Flutter's `primaryFocus.context` does.
+pub type NodeContext = Rc<dyn std::any::Any>;
+
 /// ChangeNotifier-style callback for one focus node.
 pub type FocusNodeChangeCallback = Rc<dyn Fn()>;
 
@@ -269,13 +279,15 @@ impl FocusAttachment {
 enum FocusNodeRegistrationKind {
     KeyHandler,
     RectProvider,
+    Context,
 }
 
 /// Generation-checked ownership of one replaceable [`FocusNode`] property.
 ///
 /// A registration is returned by
-/// [`FocusNode::register_on_key_event`] or
-/// [`FocusNode::register_rect_provider`]. Dropping it clears the installed
+/// [`FocusNode::register_on_key_event`],
+/// [`FocusNode::register_rect_provider`] or [`FocusNode::register_context`].
+/// Dropping it clears the installed
 /// value only when no later writer has replaced that property. This lets a
 /// widget clean up the callback it installed without erasing newer
 /// caller-owned state on a hosted external node.
@@ -313,6 +325,9 @@ impl FocusNodeRegistration {
                 FocusNodeRegistrationKind::RectProvider => {
                     node.rect_provider_generation.get() == self.generation
                 }
+                FocusNodeRegistrationKind::Context => {
+                    node.context_generation.get() == self.generation
+                }
             })
     }
 
@@ -339,6 +354,9 @@ impl FocusNodeRegistration {
             }
             FocusNodeRegistrationKind::RectProvider => {
                 node.clear_rect_provider_generation(self.generation);
+            }
+            FocusNodeRegistrationKind::Context => {
+                node.clear_context_generation(self.generation);
             }
         }
     }
@@ -377,6 +395,8 @@ pub struct FocusNode {
     rect: Cell<Rect<Pixels>>,
     rect_provider: RefCell<Option<RectProvider>>,
     rect_provider_generation: Cell<u64>,
+    context: RefCell<Option<NodeContext>>,
+    context_generation: Cell<u64>,
     manager_binding: RefCell<ManagerBinding>,
     attached: Cell<bool>,
     pending_focus_request: Cell<bool>,
@@ -413,6 +433,8 @@ impl FocusNode {
             rect: Cell::new(Rect::ZERO),
             rect_provider: RefCell::new(None),
             rect_provider_generation: Cell::new(0),
+            context: RefCell::new(None),
+            context_generation: Cell::new(0),
             manager_binding: RefCell::new(ManagerBinding::Unbound),
             attached: Cell::new(false),
             pending_focus_request: Cell::new(false),
@@ -568,6 +590,23 @@ impl FocusNode {
         FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::RectProvider)
     }
 
+    /// What the widget layer recorded about this node's position, if
+    /// anything ([`NodeContext`]).
+    #[must_use]
+    pub fn context(&self) -> Option<NodeContext> {
+        self.context.borrow().clone()
+    }
+
+    /// Record the widget layer's [`NodeContext`] with generation-checked
+    /// cleanup ownership.
+    ///
+    /// Dropping the returned registration clears `context` only if no later
+    /// writer has replaced it.
+    pub fn register_context(self: &Rc<Self>, context: NodeContext) -> FocusNodeRegistration {
+        let generation = self.replace_context(Some(context));
+        FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::Context)
+    }
+
     /// Install this node's key handler.
     pub fn set_on_key_event(&self, handler: KeyEventHandler) {
         self.replace_on_key_event(Some(handler));
@@ -600,6 +639,18 @@ impl FocusNode {
     fn clear_rect_provider_generation(&self, generation: u64) {
         if self.rect_provider_generation.get() == generation {
             self.replace_rect_provider(None);
+        }
+    }
+
+    fn replace_context(&self, context: Option<NodeContext>) -> u64 {
+        let generation = Self::next_property_generation(&self.context_generation);
+        let _prev = std::mem::replace(&mut *self.context.borrow_mut(), context);
+        generation
+    }
+
+    fn clear_context_generation(&self, generation: u64) {
+        if self.context_generation.get() == generation {
+            self.replace_context(None);
         }
     }
 

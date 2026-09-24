@@ -206,6 +206,9 @@ pub(super) enum Native {
     /// The built `a11y_probe` driven through UI Automation
     /// (`device/windows_a11y.rs`, Windows only).
     WindowsA11y { probe: PathBuf },
+    /// The built `a11y_probe` driven by `SendInput` (`device/windows_input.rs`,
+    /// Windows only).
+    WindowsInput { probe: PathBuf },
 }
 
 impl Native {
@@ -213,18 +216,25 @@ impl Native {
     fn run(&self, root: &Path) -> anyhow::Result<u8> {
         match self {
             Self::WindowsA11y { probe } => windows_a11y(&root.join(probe)),
+            Self::WindowsInput { probe } => windows_input(&root.join(probe)),
         }
     }
 }
 
 #[cfg(windows)]
-use super::windows_a11y::run as windows_a11y;
+use super::{windows_a11y::run as windows_a11y, windows_input::run as windows_input};
 
 /// Unreachable in practice: the check is skipped off Windows before any step
 /// runs.
 #[cfg(not(windows))]
 fn windows_a11y(_probe: &Path) -> anyhow::Result<u8> {
     anyhow::bail!("the UI Automation client only exists on Windows")
+}
+
+/// Unreachable in practice, as above.
+#[cfg(not(windows))]
+fn windows_input(_probe: &Path) -> anyhow::Result<u8> {
+    anyhow::bail!("the SendInput driver only exists on Windows")
 }
 
 /// Whether the plan goes on after a step.
@@ -640,17 +650,23 @@ impl fmt::Display for Step {
                 f.write_str("; exit $rc")
             }
             Self::Native {
-                check: Native::WindowsA11y { probe },
+                check,
                 announce:
                     Announce {
                         cannot_verify,
                         failed,
                     },
-            } => write!(
-                f,
-                "uia-client {}; if rc=2: echo '{cannot_verify}'; elif rc!=0: echo '{failed}'; exit $rc",
-                quote(&show(probe))
-            ),
+            } => {
+                let (driver, probe) = match check {
+                    Native::WindowsA11y { probe } => ("uia-client", probe),
+                    Native::WindowsInput { probe } => ("send-input", probe),
+                };
+                write!(
+                    f,
+                    "{driver} {}; if rc=2: echo '{cannot_verify}'; elif rc!=0: echo '{failed}'; exit $rc",
+                    quote(&show(probe))
+                )
+            }
             Self::RequireLog {
                 log,
                 patterns,

@@ -23,8 +23,8 @@ mod visibility_gate;
 
 pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
-    Action, ActionOutcome, Actions, CallbackAction, Intent, NextFocusAction, NextFocusIntent,
-    PreviousFocusAction, PreviousFocusIntent,
+    Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent, CallbackAction, Intent,
+    NextFocusAction, NextFocusIntent, PreviousFocusAction, PreviousFocusIntent,
 };
 pub use dismissible::{
     DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
@@ -53,7 +53,7 @@ pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
 pub use shortcuts::{
     CallbackShortcuts, DefaultFocusTraversal, DefaultFocusTraversalState, ShortcutCallback,
-    Shortcuts, SingleActivator,
+    Shortcuts, ShortcutsState, SingleActivator,
 };
 pub use transformation_controller::TransformationController;
 pub use visibility::Visibility;
