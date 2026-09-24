@@ -469,16 +469,18 @@ impl Uia {
     /// `None` when it cannot be told: a provider call failed or the walk ran
     /// out of time (`until`) or steps.
     fn within(&self, candidate: UIElement, element: &UIElement, until: Instant) -> Option<bool> {
-        let (Ok(walker), Ok(root)) = (
-            self.automation.get_raw_view_walker(),
-            self.automation.get_root_element(),
-        ) else {
-            return None;
-        };
-        let mut current = candidate;
-        // Checked before every provider call, each of which can take the
-        // whole call timeout, so the walk as a whole keeps to the deadline.
+        // Checked before every call, the setup ones included: each can take
+        // a whole call timeout, so the walk as a whole keeps to the deadline.
         let late = || Instant::now() >= until;
+        if late() {
+            return None;
+        }
+        let walker = self.automation.get_raw_view_walker().ok()?;
+        if late() {
+            return None;
+        }
+        let root = self.automation.get_root_element().ok()?;
+        let mut current = candidate;
         for _ in 0..ANCESTOR_LIMIT {
             if late() || self.automation.compare_elements(&current, element).ok()? {
                 return (!late()).then_some(true);
