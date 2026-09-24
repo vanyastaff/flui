@@ -212,10 +212,20 @@ impl DesktopServer {
             }
             let windows = self
                 .worker
-                .run(&ct, move |d| d.list_windows(None, Some(pid)))
+                .run(&ct, move |d| d.launched_windows(pid, started))
                 .await;
             match windows {
-                Ok(w) if !w.is_empty() => {
+                // Gone, and the pid may already be another process's: its
+                // windows are not this launch's.
+                Ok(None) => {
+                    return respond(Ok(json!({
+                        "pid": pid,
+                        "window": null,
+                        "exit_code": self.children.exited(pid).and_then(|exit| exit.code),
+                        "note": "the process exited before it showed a window; if it handed off to another process, find that one with list_windows",
+                    })));
+                }
+                Ok(Some(w)) if !w.is_empty() => {
                     return respond(Ok(json!({ "pid": pid, "window": w[0] })));
                 }
                 // The process is running and only this session can end it:
@@ -227,14 +237,14 @@ impl DesktopServer {
                         "note": format!("started, but its window cannot be listed: {e}; kill it by pid if needed"),
                     })));
                 }
-                Ok(_) if Instant::now() >= deadline => {
+                Ok(Some(_)) if Instant::now() >= deadline => {
                     return respond(Ok(json!({
                         "pid": pid,
                         "window": null,
                         "note": "no window for this pid yet; it may hand off to another process, see list_windows",
                     })));
                 }
-                Ok(_) => {
+                Ok(Some(_)) => {
                     if pause(&ct, POLL).await {
                         return respond::<Value>(Err(ToolError::Cancelled));
                     }

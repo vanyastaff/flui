@@ -260,16 +260,6 @@ impl Desktop {
         }
     }
 
-    /// Records the process holding `pid` now, unless the pid is already
-    /// bound: the first sighting is the one later targets are held to.
-    fn adopt_pid(&mut self, pid: u32) {
-        if !self.started.contains_key(&pid)
-            && let Some(started) = os::process_started(pid)
-        {
-            self.started.insert(pid, started);
-        }
-    }
-
     /// Binds `pid` to the process `launch` just started under it. The one
     /// re-binding there is: this session created that process and hands the
     /// pid out now, so it is the sighting the caller holds. Window ids stay
@@ -284,11 +274,46 @@ impl Desktop {
 
     /// Records a window id with its owner and the owner's start time, unless
     /// the id is already bound.
+    ///
+    /// The start time is read after the window list was taken, so it is kept
+    /// only if the window still belongs to that pid afterwards: a window
+    /// cannot outlive its process, so its owner was alive, under that pid,
+    /// when the start time was read. A window that went meanwhile is not
+    /// bound at all (its id is refused as never listed).
     fn adopt_window(&mut self, w: &WindowInfo) {
-        self.issued
-            .entry(w.id)
-            .or_insert_with(|| (w.pid, os::process_started(w.pid)));
-        self.adopt_pid(w.pid);
+        let started = os::process_started(w.pid);
+        if cfg!(target_os = "windows") && os::window_pid(w.id) != Some(w.pid) {
+            return;
+        }
+        self.issued.entry(w.id).or_insert((w.pid, started));
+        if let Some(started) = started {
+            self.started.entry(w.pid).or_insert(started);
+        }
+    }
+
+    /// The windows of the process `launch` started as `pid` (at `started`),
+    /// or `None` once that process is gone: the pid may already name
+    /// another process, whose windows are neither returned nor bound.
+    pub fn launched_windows(
+        &mut self,
+        pid: u32,
+        started: Option<u64>,
+    ) -> ToolResult<Option<Vec<WindowInfo>>> {
+        let same = || started.is_none() || os::process_started(pid) == started;
+        if !same() {
+            return Ok(None);
+        }
+        let windows: Vec<WindowInfo> = capture::windows()?
+            .into_iter()
+            .filter(|w| w.pid == pid)
+            .collect();
+        if !same() {
+            return Ok(None);
+        }
+        for w in &windows {
+            self.adopt_window(w);
+        }
+        Ok(Some(windows))
     }
 
     /// The window list, optionally filtered. Every id and pid it returns is
@@ -520,6 +545,19 @@ impl Desktop {
         })
     }
 
+    /// The process that owns window `id` now: from the OS where it answers
+    /// directly, else from the window list (macOS), so an owner check never
+    /// passes just because the fast lookup is missing.
+    fn owner_now(id: u32) -> Option<u32> {
+        os::window_pid(id).or_else(|| {
+            capture::windows()
+                .ok()?
+                .into_iter()
+                .find(|w| w.id == id)
+                .map(|w| w.pid)
+        })
+    }
+
     /// Refuses a target that no longer names what it was issued for: a
     /// window whose owner changed, or a process (the pid's, or the window
     /// owner's) whose start time changed — Windows can recycle both the
@@ -528,7 +566,7 @@ impl Desktop {
         let pid = match target {
             Target::Pid(pid) => Some(pid),
             Target::Window(id) => {
-                if let (Some(pid), Some(now)) = (bound.window_pid, os::window_pid(id))
+                if let (Some(pid), Some(now)) = (bound.window_pid, Self::owner_now(id))
                     && now != pid
                 {
                     return Err(ToolError::InvalidArgument(format!(

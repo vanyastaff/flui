@@ -27,9 +27,10 @@ const UNASSIGNED_VK: u32 = 0xE8;
 /// The session's input device.
 pub struct Input {
     enigo: Enigo,
-    /// Whether the left button is down: pressed by a drag whose release has
-    /// not gone through yet. Every input call releases it first, or refuses.
-    left_held: bool,
+    /// The mouse button that is down: pressed by a click or a drag whose
+    /// release has not gone through yet. Every input call releases it first,
+    /// or refuses.
+    held_button: Option<Button>,
 }
 
 impl std::fmt::Debug for Input {
@@ -52,7 +53,7 @@ impl Input {
         Enigo::new(&settings)
             .map(|enigo| Self {
                 enigo,
-                left_held: false,
+                held_button: None,
             })
             .map_err(|e| format!("opening the input device failed: {e}"))
     }
@@ -62,10 +63,10 @@ impl Input {
     /// left button held a move is a drag, and with Ctrl held a typed `x` is
     /// Ctrl+X.
     pub fn ready(&mut self) -> ToolResult<()> {
-        if self.left_held {
-            self.release_left().map_err(|e| {
+        if self.held_button.is_some() {
+            self.release_held().map_err(|e| {
                 ToolError::NotSupported(format!(
-                    "the left mouse button is still held from an earlier failed release ({e}); no input is sent until it is released"
+                    "a mouse button is still held from an earlier failed release ({e}); no input is sent until it is released"
                 ))
             })?;
         }
@@ -83,8 +84,8 @@ impl Input {
     /// lets it: after a call panicked mid-action, and before the server
     /// exits.
     pub fn release_all(&mut self) {
-        if self.left_held && self.release_left().is_err() {
-            tracing::warn!("the left mouse button could not be released");
+        if self.held_button.is_some() && self.release_held().is_err() {
+            tracing::warn!("a mouse button could not be released");
         }
         for key in self.enigo.held().0 {
             if let Err(e) = self.enigo.key(key, Direction::Release) {
@@ -160,15 +161,30 @@ impl Input {
         let button = enigo_button(button);
         let clicks = if double { 2 } else { 1 };
         for sent in 0..clicks {
-            let clicked = guard(None)
+            // Press and release apart, so a press that went out is known:
+            // its release is retried, and a failure counts the click as sent
+            // with the button possibly still down.
+            let pressed = guard(None)
                 .and_then(|()| self.ensure_at(x, y))
                 .and_then(|()| {
+                    self.held_button = Some(button);
                     self.enigo
-                        .button(button, Direction::Click)
-                        .map_err(failed("clicking"))
+                        .button(button, Direction::Press)
+                        .map_err(failed("pressing the button"))
                 });
-            if let Err(cause) = clicked {
+            if let Err(cause) = pressed {
+                // A press reported failed may still have gone out: release.
+                let _ = self.release_held();
                 return Err(partial(cause, sent, clicks, "clicks"));
+            }
+            if let Err(cause) = self.release_held() {
+                return Err(ToolError::Interrupted {
+                    cause: Box::new(cause),
+                    what: format!(
+                        "click {} of {clicks} was pressed but not released; the button may still be held, and the next input releases it first",
+                        sent + 1
+                    ),
+                });
             }
         }
         Ok(())
@@ -197,7 +213,7 @@ impl Input {
         self.ensure_at(from.0, from.1)?;
         // Marked held before the press: a press that went out but reported
         // failure is released by the next call rather than forgotten.
-        self.left_held = true;
+        self.held_button = Some(Button::Left);
         self.enigo
             .button(Button::Left, Direction::Press)
             .map_err(failed("pressing for a drag"))?;
@@ -220,7 +236,7 @@ impl Input {
             moved = guard(Some(to)).and_then(|()| self.ensure_at(to.0, to.1));
         }
         match moved {
-            Ok(()) => self.release_left().map_err(|cause| ToolError::Interrupted {
+            Ok(()) => self.release_held().map_err(|cause| ToolError::Interrupted {
                 cause: Box::new(cause),
                 what: format!(
                     "the drag reached ({}, {}) but the button could not be released; it may still be held, so move nothing until it is released",
@@ -231,9 +247,12 @@ impl Input {
         }
     }
 
-    /// Releases the left button, retrying: a button left held turns the
-    /// next pointer move, the user's included, into a drag.
-    fn release_left(&mut self) -> ToolResult<()> {
+    /// Releases the held mouse button, retrying: a button left held turns
+    /// the next pointer move, the user's included, into a drag.
+    fn release_held(&mut self) -> ToolResult<()> {
+        let Some(button) = self.held_button else {
+            return Ok(());
+        };
         let mut result = Ok(());
         for attempt in 0..3 {
             if attempt > 0 {
@@ -241,10 +260,10 @@ impl Input {
             }
             result = self
                 .enigo
-                .button(Button::Left, Direction::Release)
+                .button(button, Direction::Release)
                 .map_err(failed("releasing the mouse button"));
             if result.is_ok() {
-                self.left_held = false;
+                self.held_button = None;
                 break;
             }
         }
@@ -278,7 +297,7 @@ impl Input {
                 "the drag stopped where no point could be verified inside the target; the button had to be released where the pointer was, at {at}, which may have dropped there"
             )
         };
-        if let Err(e) = self.release_left() {
+        if let Err(e) = self.release_held() {
             what = format!("{what}; releasing the button failed ({e}), so it may still be held");
         }
         ToolError::Interrupted {

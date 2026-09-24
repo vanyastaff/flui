@@ -621,8 +621,12 @@ impl AccessibilityBackend for Uia {
                     ToolError::StaleElement(_)
                 ) =>
             {
+                // Its identity only: the value and toggle state cached
+                // before the action are not what the action left behind.
                 Ok(Node {
                     gone: true,
+                    value: None,
+                    toggle_state: None,
                     ..describe(&element, handle.to_owned())
                 })
             }
@@ -742,13 +746,24 @@ fn role(element: &UIElement) -> String {
     }
 }
 
-/// Whether the provider reported the properties a search matches on (name,
-/// control type, automation id): a failure there is not the same as an
-/// empty value.
+/// Whether the provider reported every property a node shows: what a
+/// search matches on (name, control type, automation id), and the states and
+/// patterns an agent acts on. A failed read is not the same as an empty
+/// value or `false` — a control that reads as disabled because the read
+/// failed would be skipped — so it marks the read incomplete.
 fn searchable(element: &UIElement) -> bool {
+    let states = [
+        UIProperty::IsEnabled,
+        UIProperty::HasKeyboardFocus,
+        UIProperty::IsKeyboardFocusable,
+    ];
     element.get_cached_name().is_ok()
         && cached_i32(element, UIProperty::ControlType).is_some()
         && element.get_cached_automation_id().is_ok()
+        && states
+            .iter()
+            .chain(PATTERNS.iter().map(|(prop, _)| prop))
+            .all(|&prop| element.get_cached_property_value(prop).is_ok())
 }
 
 /// The element a walker step reached: `None` at the end of the children,

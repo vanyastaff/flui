@@ -198,11 +198,17 @@ impl KeyCombo {
     /// prompt.
     pub fn shell_hotkey(&self, macos: bool, repeat: u32) -> Option<&'static str> {
         let only = |mods: &[Modifier]| mods.iter().all(|&m| self.modifiers.contains(&m));
-        if self.key == KeyName::Modifier(Modifier::Shift)
-            && self.modifiers.is_empty()
-            && repeat >= 5
-        {
+        // A modifier pressed five times in a row is an accessibility
+        // shortcut: Shift turns on Sticky Keys (Windows, macOS), Option
+        // turns on Mouse Keys (macOS).
+        let tapped = |m: Modifier| {
+            self.key == KeyName::Modifier(m) && self.modifiers.is_empty() && repeat >= 5
+        };
+        if tapped(Modifier::Shift) {
             return Some("the accessibility shortcut (Sticky Keys)");
+        }
+        if macos && tapped(Modifier::Alt) {
+            return Some("the accessibility shortcut (Mouse Keys)");
         }
         if macos {
             return match self.key {
@@ -484,6 +490,7 @@ mod tests {
         assert!(parse("shift").shell_hotkey(false, 5).is_some());
         assert!(parse("shift").shell_hotkey(true, 5).is_some());
         assert_eq!(parse("shift").shell_hotkey(false, 4), None);
+        assert!(parse("alt").shell_hotkey(true, 5).is_some(), "Mouse Keys");
     }
 
     /// A control character is not a key of its own: a raw ESC would
