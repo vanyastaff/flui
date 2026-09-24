@@ -38,10 +38,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VIRTUAL_KEY, VkKeyScanExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GA_ROOT, GUITHREADINFO, GetAncestor, GetCursorPos, GetForegroundWindow,
-    GetGUIThreadInfo, GetSystemMetrics, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
-    IsIconic, IsWindow, IsWindowVisible, SM_SWAPBUTTON, SW_RESTORE, SetCursorPos,
-    SetForegroundWindow, ShowWindow, WindowFromPoint,
+    EnumWindows, GA_ROOT, GUITHREADINFO, GetAncestor, GetClassNameW, GetCursorPos,
+    GetForegroundWindow, GetGUIThreadInfo, GetSystemMetrics, GetWindowRect, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SM_SWAPBUTTON, SW_RESTORE,
+    SetCursorPos, SetForegroundWindow, ShowWindow, WindowFromPoint,
 };
 use windows::core::{BOOL, Interface};
 
@@ -294,6 +294,22 @@ pub fn window_rect(id: u32) -> Option<crate::geometry::Rect> {
     Some(crate::geometry::Rect::from_ltrb(
         r.left, r.top, r.right, r.bottom,
     ))
+}
+
+/// A fingerprint of window `id`'s class name. An `HWND` value names a new
+/// window only once the slot's reuse counter wraps, and then usually one of
+/// another class; with the owner's process identity this tells a window from
+/// its replacement without a per-window creation time, which Windows keeps
+/// none of.
+pub fn window_class(id: u32) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let mut buffer = [0_u16; 256];
+    // SAFETY: the buffer is a local slice the call writes at most its length of.
+    let len = unsafe { GetClassNameW(hwnd(id), &mut buffer) };
+    let len = usize::try_from(len).ok().filter(|&len| len > 0)?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    buffer[..len].hash(&mut hasher);
+    Some(hasher.finish())
 }
 
 /// Window `id`'s title.

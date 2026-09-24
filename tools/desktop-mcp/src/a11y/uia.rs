@@ -208,11 +208,17 @@ impl Uia {
 
     /// The element behind `handle`, refused as stale once the process it
     /// belonged to when issued is gone.
+    ///
+    /// An element whose process could not be identified when issued is not
+    /// acted on at all: nothing would tell its replacement from it.
     fn alive(&self, handle: &str) -> ToolResult<UIElement> {
         let held = self.elements.get(handle)?;
-        if let Some(started) = held.started
-            && crate::os::process_started(held.pid) != Some(started)
-        {
+        let Some(started) = held.started else {
+            return Err(ToolError::NotSupported(format!(
+                "element `{handle}` came from a process this server could not identify, so it is not acted on; read the tree again"
+            )));
+        };
+        if crate::os::process_started(held.pid) != Some(started) {
             return Err(ToolError::StaleElement(handle.to_owned()));
         }
         Ok(held.element.clone())

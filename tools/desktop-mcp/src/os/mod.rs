@@ -115,6 +115,21 @@ pub fn window_rect(id: u32) -> Option<Rect> {
     }
 }
 
+/// A fingerprint of window `id`'s class, where the OS reports it: with the
+/// owner's process identity, what tells a window from a later one that got
+/// the same id.
+pub fn window_class(id: u32) -> Option<u64> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::window_class(id)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = id;
+        None
+    }
+}
+
 /// Window `id`'s title, read directly.
 pub fn window_title(id: u32) -> Option<String> {
     #[cfg(target_os = "windows")]

@@ -208,6 +208,16 @@ pub fn same_process(pid: u32, then: Option<u64>, now: Option<u64>) -> ToolResult
 struct Binding {
     window_pid: Option<u32>,
     started: Option<u64>,
+    /// The window's class fingerprint when issued ([`os::window_class`]).
+    class: Option<u64>,
+}
+
+/// What a window id was bound to when this session handed it out.
+#[derive(Debug, Clone, Copy)]
+struct Issued {
+    pid: u32,
+    started: Option<u64>,
+    class: Option<u64>,
 }
 
 /// Session state on the worker thread.
@@ -218,7 +228,7 @@ pub struct Desktop {
     /// it then and that process's start time (`None` where the OS reports
     /// none). Windows recycles an `HWND`, and a pid, for an unrelated window,
     /// so a window target is accepted only while that same process owns it.
-    issued: HashMap<u32, (u32, Option<u64>)>,
+    issued: HashMap<u32, Issued>,
     /// Every pid this session handed out (listed or launched), with its
     /// process's start time: a pid target is accepted only while that
     /// process holds the pid. A pid whose start time the OS cannot report is
@@ -285,7 +295,11 @@ impl Desktop {
         if cfg!(target_os = "windows") && os::window_pid(w.id) != Some(w.pid) {
             return;
         }
-        self.issued.entry(w.id).or_insert((w.pid, started));
+        self.issued.entry(w.id).or_insert(Issued {
+            pid: w.pid,
+            started,
+            class: os::window_class(w.id),
+        });
         if let Some(started) = started {
             self.started.entry(w.pid).or_insert(started);
         }
@@ -350,7 +364,11 @@ impl Desktop {
     fn bound(&mut self, target: Option<Target>) -> ToolResult<Binding> {
         match target {
             Some(Target::Window(id)) => {
-                let &(pid, started) = self.issued.get(&id).ok_or_else(|| {
+                let &Issued {
+                    pid,
+                    started,
+                    class,
+                } = self.issued.get(&id).ok_or_else(|| {
                     ToolError::NotFound(format!(
                         "window {id} was not listed in this session; take window ids from list_windows or launch"
                     ))
@@ -358,6 +376,7 @@ impl Desktop {
                 Ok(Binding {
                     window_pid: Some(pid),
                     started,
+                    class,
                 })
             }
             Some(Target::Pid(pid)) => {
@@ -375,6 +394,7 @@ impl Desktop {
                 Ok(Binding {
                     window_pid: None,
                     started: Some(then),
+                    class: None,
                 })
             }
             None => Ok(Binding::default()),
@@ -430,6 +450,7 @@ impl Desktop {
                 let bound = Binding {
                     window_pid: Some(pid),
                     started,
+                    class: os::window_class(pick.id),
                 };
                 (
                     ShotTarget::Window(pick.id),
@@ -566,6 +587,13 @@ impl Desktop {
         let pid = match target {
             Target::Pid(pid) => Some(pid),
             Target::Window(id) => {
+                if let (Some(then), Some(now)) = (bound.class, os::window_class(id))
+                    && now != then
+                {
+                    return Err(ToolError::InvalidArgument(format!(
+                        "window {id} is no longer the window this session listed (its class changed); list_windows again"
+                    )));
+                }
                 if let (Some(pid), Some(now)) = (bound.window_pid, Self::owner_now(id))
                     && now != pid
                 {
