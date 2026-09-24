@@ -168,6 +168,13 @@ impl Input {
     }
 
     /// Moves the pointer to a physical screen point.
+    #[cfg_attr(
+        not(target_os = "windows"),
+        expect(
+            clippy::unused_self,
+            reason = "unsupported platforms refuse movement before accessing device state"
+        )
+    )]
     pub fn move_to(&mut self, x: i32, y: i32) -> ToolResult<()> {
         #[cfg(target_os = "windows")]
         {
