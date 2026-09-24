@@ -6,7 +6,8 @@
 //! await its result; no tokio thread ever touches UIA.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread;
 
 use tokio::sync::oneshot;
@@ -67,13 +68,16 @@ impl Worker {
         if ct.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
-        let (reply, result) = oneshot::channel();
+        let (reply, mut result) = oneshot::channel();
         let job_ct = ct.clone();
+        let started = Arc::new(AtomicBool::new(false));
+        let job_started = Arc::clone(&started);
         self.jobs
             .try_send(Box::new(move |desktop| {
                 if reply.is_closed() || job_ct.is_cancelled() {
                     return;
                 }
+                job_started.store(true, Ordering::SeqCst);
                 let _ = reply.send(f(desktop));
             }))
             .map_err(|e| match e {
@@ -84,11 +88,19 @@ impl Worker {
                     ToolError::platform("desktop thread", "it has stopped")
                 }
             })?;
+        let panicked = |_| ToolError::platform("desktop thread", "the call panicked");
         tokio::select! {
-            reply = result => {
-                reply.map_err(|_| ToolError::platform("desktop thread", "the call panicked"))?
+            reply = &mut result => reply.map_err(panicked)?,
+            () = ct.cancelled() => {
+                // Cancelled once running: it runs to the end on the desktop
+                // thread either way, so its real outcome is the answer, not
+                // "nothing was done".
+                if started.load(Ordering::SeqCst) {
+                    result.await.map_err(panicked)?
+                } else {
+                    Err(ToolError::Cancelled)
+                }
             }
-            () = ct.cancelled() => Err(ToolError::Cancelled),
         }
     }
 }
@@ -119,10 +131,42 @@ impl Worker {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     use super::*;
+
+    /// A call cancelled after it started is not reported as never run: its
+    /// real result comes back, since it runs to the end regardless.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_call_cancelled_while_running_reports_its_result() {
+        let worker = Worker::spawn().expect("BUG: the thread starts");
+        let (running, started) = std::sync::mpsc::channel::<()>();
+        let (release, hold) = std::sync::mpsc::channel::<()>();
+        let ct = CancellationToken::new();
+        let call = {
+            let (worker, ct) = (worker.clone(), ct.clone());
+            tokio::spawn(async move {
+                worker
+                    .run(&ct, move |_| {
+                        let _ = running.send(());
+                        let _ = hold.recv();
+                        Ok(7)
+                    })
+                    .await
+            })
+        };
+        tokio::task::spawn_blocking(move || started.recv())
+            .await
+            .expect("BUG: the wait completes")
+            .expect("BUG: the job starts");
+        ct.cancel();
+        tokio::task::yield_now().await;
+        release.send(()).expect("BUG: the job waits");
+        let outcome = call.await.expect("BUG: the task completes");
+        assert_eq!(
+            outcome.ok(),
+            Some(7),
+            "the call's own result, not Cancelled"
+        );
+    }
 
     /// A call cancelled while it waits behind another never runs: its side
     /// effect does not happen once the thread gets to it.

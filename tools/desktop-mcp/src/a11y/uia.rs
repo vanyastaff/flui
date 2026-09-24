@@ -150,13 +150,23 @@ fn platform(context: &str) -> impl FnOnce(uiautomation::Error) -> ToolError + '_
 
 impl Uia {
     /// Joins this thread to the COM MTA and prepares the cache requests.
-    pub fn new() -> Result<Self, uiautomation::Error> {
-        // The first client joins the thread to COM; the one with timeouts,
-        // created on top of it, replaces it where the OS offers one.
-        let plain = UIAutomation::new()?;
-        let automation = crate::os::uia_with_timeouts().map_or(plain, UIAutomation::from);
-        let walker = automation.get_control_view_walker()?;
-        let single = node_request(&automation, TreeScope::Element)?;
+    /// Refused without call timeouts: a client that can wait on a hung
+    /// provider forever would hold the one desktop thread, every queued tool
+    /// and the shutdown release with it.
+    pub fn new() -> Result<Self, String> {
+        // The first client joins the thread to COM; the one with timeouts is
+        // created on top of it and is the one used.
+        let _plain = UIAutomation::new().map_err(|e| e.to_string())?;
+        let automation = crate::os::uia_with_timeouts()
+            .map(UIAutomation::from)
+            .ok_or_else(|| {
+                "no UI Automation client with call timeouts (CUIAutomation8) is available"
+                    .to_owned()
+            })?;
+        let walker = automation
+            .get_control_view_walker()
+            .map_err(|e| e.to_string())?;
+        let single = node_request(&automation, TreeScope::Element).map_err(|e| e.to_string())?;
         Ok(Self {
             automation,
             walker,
@@ -242,9 +252,15 @@ impl Uia {
         // under: a control destroyed and replaced inside the same running
         // process (a recycled native window behind a UIA proxy) would
         // otherwise take the action.
-        if let Some(id) = &held.runtime
-            && !crate::os::runtime_id(held.element.as_ref())
-                .is_ok_and(|now| now.as_deref() == Some(id.as_slice()))
+        // An element without a runtime id has nothing to re-check it by, so
+        // it is read, not acted on: its object could follow a replacement.
+        let Some(id) = &held.runtime else {
+            return Err(ToolError::NotSupported(format!(
+                "element `{handle}` has no runtime id, so it cannot be told from a replacement and is not acted on; use its window's input tools"
+            )));
+        };
+        if !crate::os::runtime_id(held.element.as_ref())
+            .is_ok_and(|now| now.as_deref() == Some(id.as_slice()))
         {
             return Err(ToolError::StaleElement(handle.to_owned()));
         }
@@ -434,20 +450,27 @@ impl Uia {
         )))
     }
 
-    /// The element's patterns, read live, for error messages.
+    /// The element's patterns, read live, for error messages: stopped after
+    /// [`ANCESTOR_DEADLINE`] in all, since each read can take a provider's
+    /// whole call timeout, and marked when cut short.
     fn live_patterns(element: &UIElement) -> String {
-        PATTERNS
-            .iter()
-            .filter(|(prop, _)| {
-                element
-                    .get_property_value(*prop)
-                    .ok()
-                    .and_then(|v| TryInto::<bool>::try_into(v).ok())
-                    .unwrap_or(false)
-            })
-            .map(|&(_, name)| name)
-            .collect::<Vec<_>>()
-            .join(", ")
+        let until = Instant::now() + ANCESTOR_DEADLINE;
+        let mut names = Vec::new();
+        for &(prop, name) in PATTERNS {
+            if Instant::now() >= until {
+                names.push("… (not all read)");
+                break;
+            }
+            let offered = element
+                .get_property_value(prop)
+                .ok()
+                .and_then(|v| TryInto::<bool>::try_into(v).ok())
+                .unwrap_or(false);
+            if offered {
+                names.push(name);
+            }
+        }
+        names.join(", ")
     }
 
     /// Whether `element` offers the pattern `prop` names, read live. A failed

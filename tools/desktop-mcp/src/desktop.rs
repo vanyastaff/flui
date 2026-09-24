@@ -599,12 +599,17 @@ impl Desktop {
                         "window {id} is no longer the window this session listed (its class changed); list_windows again"
                     )));
                 }
-                if let (Some(pid), Some(now)) = (bound.window_pid, Self::owner_now(id))
-                    && now != pid
-                {
-                    return Err(ToolError::InvalidArgument(format!(
-                        "window {id} belonged to process {pid} when listed and now belongs to process {now}; this session does not re-bind it, so target the new window's process by pid"
-                    )));
+                if let Some(pid) = bound.window_pid {
+                    match Self::owner_now(id) {
+                        // Gone: nothing read or sent can be about it any more.
+                        None => return Err(no_window(target)),
+                        Some(now) if now != pid => {
+                            return Err(ToolError::InvalidArgument(format!(
+                                "window {id} belonged to process {pid} when listed and now belongs to process {now}; this session does not re-bind it, so target the new window's process by pid"
+                            )));
+                        }
+                        Some(_) => {}
+                    }
                 }
                 bound.window_pid
             }
