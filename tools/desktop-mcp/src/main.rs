@@ -33,9 +33,10 @@ use crate::process::Children;
 use crate::server::DesktopServer;
 use crate::worker::Worker;
 
-/// How long shutdown waits for the desktop thread to finish the call in
-/// progress and release held input: longer than any one call (a drag lasts
-/// at most 10 s).
+/// How long shutdown waits for the desktop thread to stop the call in
+/// progress and release held input. Input stops at its next event once
+/// shutdown is flagged; the wait covers a UI Automation call running out its
+/// own timeout (5 s) on the way.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
 
 #[tokio::main(flavor = "current_thread")]
@@ -66,9 +67,11 @@ async fn main() -> anyhow::Result<()> {
     let reason = service.waiting().await;
     tracing::info!(?reason, "MCP session ended");
 
-    // Whatever was running when the client left finishes first (the queue
-    // runs in order), then everything held is released: exiting with a
-    // button or a modifier down would leave it down for the whole desktop.
+    // The action running when the client left stops at its next event, the
+    // queue ahead of the release drains, then everything held is released:
+    // exiting with a button or a modifier down would leave it down for the
+    // whole desktop.
+    desktop::stop_input();
     let released = tokio::time::timeout(
         SHUTDOWN_WAIT,
         worker.run_at_shutdown(|d| {

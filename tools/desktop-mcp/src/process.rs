@@ -70,9 +70,11 @@ impl Tracked {
                 done.push((pid, status.code()));
                 false
             }
-            Err(_) => {
-                done.push((pid, None));
-                false
+            // Unknown is not exited: kept, so kill and shutdown can still
+            // end it.
+            Err(e) => {
+                tracing::warn!("could not query whether process {pid} exited: {e}");
+                true
             }
         });
         for (pid, code) in done {

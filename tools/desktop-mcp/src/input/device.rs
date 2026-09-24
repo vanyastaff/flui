@@ -176,9 +176,17 @@ impl Input {
                         .map_err(failed("pressing the button"))
                 });
             if let Err(cause) = pressed {
-                // A press reported failed may still have gone out: release.
-                let _ = self.release_held();
-                return Err(partial(cause, sent, clicks, "clicks"));
+                // A press reported failed may still have gone out: release,
+                // and say so if even that fails.
+                return Err(match self.release_held() {
+                    Ok(()) => partial(cause, sent, clicks, "clicks"),
+                    Err(e) => ToolError::Interrupted {
+                        cause: Box::new(cause),
+                        what: format!(
+                            "{sent} of {clicks} clicks completed, the next press may have gone out and releasing it failed ({e}); the button may still be held"
+                        ),
+                    },
+                });
             }
             if let Err(cause) = self.release_held() {
                 return Err(ToolError::Interrupted {

@@ -6,6 +6,7 @@
 //! coordinate must be where the OS says the target's window is, uncovered.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -218,6 +219,17 @@ struct Issued {
     pid: u32,
     started: Option<u64>,
     class: Option<u64>,
+}
+
+/// Set once the server is shutting down: every input action checks it
+/// before each event (it runs its checks even without a safety target) and
+/// stops, so the release of held input that follows is never raced by a
+/// long `type_text` or drag.
+static STOPPING: AtomicBool = AtomicBool::new(false);
+
+/// Makes every input action in progress stop at its next event.
+pub fn stop_input() {
+    STOPPING.store(true, Ordering::SeqCst);
 }
 
 /// Session state on the worker thread.
@@ -621,6 +633,11 @@ impl Desktop {
     }
 
     fn check(target: Option<Target>, bound: Binding, points: &[(i32, i32)]) -> ToolResult<()> {
+        // Shutting down: the action in progress stops at its next event and
+        // releases what it holds, instead of the server exiting under it.
+        if STOPPING.load(Ordering::SeqCst) {
+            return Err(ToolError::Cancelled);
+        }
         let Some(target) = target else {
             return Ok(());
         };
@@ -811,12 +828,26 @@ impl Desktop {
             .unwrap_or(&windows[0])
             .clone();
         let mut attempts = Vec::new();
-        Self::revalidate(target, bound)?;
+        // The chosen window itself, not only its process, is what gets
+        // raised: held to its owner, the process's start time and its class
+        // as resolved, right before each attempt.
+        let chosen = Binding {
+            window_pid: Some(window.pid),
+            started: bound
+                .started
+                .or_else(|| self.issued.get(&window.id).and_then(|i| i.started)),
+            class: os::window_class(window.id),
+        };
+        let recheck = || {
+            Self::revalidate(target, bound)?;
+            Self::revalidate(Target::Window(window.id), chosen)
+        };
+        recheck()?;
         os::bring_to_front(window.id)?;
         attempts.push("SetForegroundWindow");
         let mut fg = Self::foreground()?;
         if fg.as_ref().map(|f| f.id) != Some(window.id) {
-            Self::revalidate(target, bound)?;
+            recheck()?;
             if let Err(e) = self.a11y.focus_window(window.id) {
                 tracing::debug!("UIA focus fallback failed: {e}");
             }

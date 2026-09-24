@@ -6,7 +6,7 @@
 //! await its result; no tokio thread ever touches UIA.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -17,6 +17,11 @@ use crate::desktop::Desktop;
 use crate::error::{ToolError, ToolResult};
 
 type Job = Box<dyn FnOnce(&mut Desktop) + Send>;
+
+/// A job's state, moved on by exactly one compare-and-swap.
+const QUEUED: u8 = 0;
+const RUNNING: u8 = 1;
+const CANCELLED: u8 = 2;
 
 /// How many calls may wait for the desktop thread at once. Past it a call is
 /// refused rather than queued: a client retrying on its own timeouts would
@@ -69,15 +74,19 @@ impl Worker {
             return Err(ToolError::Cancelled);
         }
         let (reply, mut result) = oneshot::channel();
-        let job_ct = ct.clone();
-        let started = Arc::new(AtomicBool::new(false));
-        let job_started = Arc::clone(&started);
+        // Queued, then either running or cancelled: one compare-and-swap
+        // decides, so a job cannot start after its caller was told it never
+        // would, nor be reported unstarted while it runs.
+        let state = Arc::new(AtomicU8::new(QUEUED));
+        let job_state = Arc::clone(&state);
         self.jobs
             .try_send(Box::new(move |desktop| {
-                if reply.is_closed() || job_ct.is_cancelled() {
+                let claimed = job_state
+                    .compare_exchange(QUEUED, RUNNING, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok();
+                if !claimed || reply.is_closed() {
                     return;
                 }
-                job_started.store(true, Ordering::SeqCst);
                 let _ = reply.send(f(desktop));
             }))
             .map_err(|e| match e {
@@ -92,13 +101,16 @@ impl Worker {
         tokio::select! {
             reply = &mut result => reply.map_err(panicked)?,
             () = ct.cancelled() => {
-                // Cancelled once running: it runs to the end on the desktop
-                // thread either way, so its real outcome is the answer, not
-                // "nothing was done".
-                if started.load(Ordering::SeqCst) {
-                    result.await.map_err(panicked)?
-                } else {
+                // Still queued: it will never run. Already running: it runs
+                // to the end on the desktop thread either way, so its real
+                // outcome is the answer, not "nothing was done".
+                let cancelled = state
+                    .compare_exchange(QUEUED, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok();
+                if cancelled {
                     Err(ToolError::Cancelled)
+                } else {
+                    result.await.map_err(panicked)?
                 }
             }
         }
@@ -131,6 +143,8 @@ impl Worker {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+
     use super::*;
 
     /// A call cancelled after it started is not reported as never run: its
