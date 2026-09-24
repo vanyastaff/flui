@@ -8,6 +8,8 @@
 #[cfg(target_os = "windows")]
 mod uia;
 
+use std::time::Instant;
+
 use serde::Serialize;
 
 use crate::error::{ToolError, ToolResult};
@@ -50,9 +52,21 @@ pub struct Node {
     /// Child elements, in tree order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Node>,
-    /// Children left out because `max_depth` was reached.
+    /// Children left out because `max_depth` or the read's budget was
+    /// reached (a lower bound past a few hundred).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub omitted_children: Option<usize>,
+}
+
+/// What one read of a target's windows saw.
+#[derive(Debug, Clone, Default)]
+pub struct Read {
+    /// One tree per window read, front to back.
+    pub roots: Vec<Node>,
+    /// Whether the read stopped at its element budget or its deadline before
+    /// it saw everything within `max_depth`: then a search that found nothing
+    /// is not proof that nothing matches.
+    pub truncated: bool,
 }
 
 /// An action performed through an element's control pattern.
@@ -136,7 +150,6 @@ impl Query {
     }
 }
 
-/// Depth-first matches of `query` in `roots`, children dropped.
 impl Node {
     /// This node without its children, copying nothing below it.
     #[must_use]
@@ -160,6 +173,7 @@ impl Node {
     }
 }
 
+/// Depth-first matches of `query` in `roots`, children dropped.
 pub fn search(roots: &[Node], query: &Query) -> Vec<Node> {
     fn walk(node: &Node, query: &Query, out: &mut Vec<Node>) {
         if query.matches(node) {
@@ -219,8 +233,9 @@ pub struct ClickPoint {
 /// An OS accessibility API, reached from the one worker thread.
 pub trait AccessibilityBackend {
     /// The element trees of the given top-level windows, `max_depth` levels
-    /// below each window.
-    fn tree(&mut self, windows: &[u32], max_depth: usize) -> ToolResult<Vec<Node>>;
+    /// below each window, read until `deadline` at most. A window that closes
+    /// while it is read is left out; none left is `NotFound`.
+    fn tree(&mut self, windows: &[u32], max_depth: usize, deadline: Instant) -> ToolResult<Read>;
 
     /// Performs `action` on a previously issued element and returns its
     /// state afterwards.
@@ -253,7 +268,7 @@ impl Unsupported {
 }
 
 impl AccessibilityBackend for Unsupported {
-    fn tree(&mut self, _: &[u32], _: usize) -> ToolResult<Vec<Node>> {
+    fn tree(&mut self, _: &[u32], _: usize, _: Instant) -> ToolResult<Read> {
         self.err()
     }
     fn act(&mut self, _: &str, _: &Action) -> ToolResult<Node> {

@@ -4,10 +4,15 @@
 //! thread to the COM multithreaded apartment, and every `UIElement` this
 //! backend holds stays on it.
 //!
-//! A tree read is one cross-process round trip: a cache request with
-//! `TreeScope::Subtree` over the control view prefetches every property the
-//! [`Node`] shape reports, and the walk reads the cached copies. Only the
+//! A tree read walks the control view one element at a time: each step
+//! fetches the next child or sibling together with every property the
+//! [`Node`] shape reports (a cache request with `TreeScope::Element`), so an
+//! element costs about two cross-process calls and nothing past the read's
+//! budget is ever fetched, however many children a provider claims. The
 //! runtime id (the handle's identity) is read live per element.
+
+use std::collections::HashSet;
+use std::time::Instant;
 
 use uiautomation::core::UICacheRequest;
 use uiautomation::patterns::{
@@ -16,7 +21,7 @@ use uiautomation::patterns::{
 use uiautomation::types::{Handle, ToggleState, TreeScope, UIProperty};
 use uiautomation::{UIAutomation, UIElement, UITreeWalker};
 
-use super::{AccessibilityBackend, Action, ClickPoint, Node};
+use super::{AccessibilityBackend, Action, ClickPoint, Node, Read};
 use crate::cache::ElementCache;
 use crate::error::{ToolError, ToolResult};
 use crate::geometry::Rect;
@@ -41,9 +46,10 @@ const PATTERNS: &[(UIProperty, &str)] = &[
     (UIProperty::IsWindowPatternAvailable, "Window"),
 ];
 
-/// How many nodes one read (`accessibility_tree`, `find`, a `wait_for` poll)
-/// visits at most, across all the windows it reads. Well under the element
-/// cache's capacity, so every handle a response carries stays resolvable.
+/// How many elements one read (`accessibility_tree`, `find`, a `wait_for`
+/// poll) fetches at most, across all the windows it reads; counting a node's
+/// left-out children spends it too. Well under the element cache's capacity,
+/// so every handle a response carries stays resolvable.
 pub const NODE_BUDGET: usize = 5_000;
 
 /// How many parents a walk up to the desktop takes at most: a hostile
@@ -74,6 +80,14 @@ const NODE_PROPERTIES: &[UIProperty] = &[
 const E_ELEMENT_NOT_AVAILABLE: i32 = 0x8004_0201_u32 as i32;
 /// `RPC_E_DISCONNECTED`: the providing process went away.
 const E_DISCONNECTED: i32 = 0x8001_0108_u32 as i32;
+/// `RPC_S_SERVER_UNAVAILABLE`: the providing process exited.
+const E_SERVER_UNAVAILABLE: i32 = 0x8007_06BA_u32 as i32;
+/// `RPC_S_CALL_FAILED`: the providing process died during the call.
+const E_CALL_FAILED: i32 = 0x8007_06BE_u32 as i32;
+/// `CO_E_OBJNOTCONNECTED`: the provider object was disconnected.
+const E_NOT_CONNECTED: i32 = 0x8004_01FD_u32 as i32;
+/// `ERROR_INVALID_WINDOW_HANDLE`: the window was destroyed.
+const E_INVALID_WINDOW: i32 = 0x8007_0578_u32 as i32;
 /// `UIA_E_ELEMENTNOTENABLED`: the element is disabled.
 const E_ELEMENT_NOT_ENABLED: i32 = 0x8004_0200_u32 as i32;
 
@@ -133,38 +147,36 @@ impl Uia {
     }
 
     /// `element` and its descendants, fetched one child at a time through
-    /// the control-view walker, `budget` nodes at most across the whole read.
-    /// Nothing wider than the budget is ever materialized, however many
-    /// children a hostile node claims. Children left out by the depth or the
-    /// budget are counted in `omitted_children`, up to [`OMITTED_COUNT_CAP`]
-    /// (a lower bound past it).
-    fn build(
-        &mut self,
-        element: &UIElement,
-        depth: usize,
-        max_depth: usize,
-        budget: &mut usize,
-    ) -> Node {
-        *budget = budget.saturating_sub(1);
+    /// the control-view walker until the walk's budget or deadline runs out.
+    /// Children left out by the depth or the budget are counted in
+    /// `omitted_children`, up to [`OMITTED_COUNT_CAP`] (a lower bound past
+    /// it). `None` for an element this read already emitted: UI Automation
+    /// shows an owned window (a dialog) both as a top-level window and under
+    /// its owner, and it is reported once.
+    fn build(&mut self, element: &UIElement, depth: usize, walk: &mut Walk) -> Option<Node> {
         let mut node = self.describe(element);
+        if !walk.seen.insert(node.id.clone()) {
+            return None;
+        }
+        walk.budget = walk.budget.saturating_sub(1);
         let mut omitted = 0;
         let mut child = self
             .walker
             .get_first_child_build_cache(element, &self.single)
             .ok();
         while let Some(current) = child {
-            if depth < max_depth && *budget > 0 {
-                node.children
-                    .push(self.build(&current, depth + 1, max_depth, budget));
+            let exhausted = walk.exhausted();
+            if depth < walk.max_depth && !exhausted {
+                node.children.extend(self.build(&current, depth + 1, walk));
             } else {
                 omitted += 1;
                 // Counting what is left out costs a fetch per child too, so
                 // it spends the same budget: an exhausted budget stops the
                 // count (a lower bound from there).
-                if *budget == 0 || omitted >= OMITTED_COUNT_CAP {
+                if exhausted || omitted >= OMITTED_COUNT_CAP {
                     break;
                 }
-                *budget -= 1;
+                walk.budget -= 1;
             }
             child = self
                 .walker
@@ -174,7 +186,7 @@ impl Uia {
         if omitted > 0 {
             node.omitted_children = Some(omitted);
         }
-        node
+        Some(node)
     }
 
     /// A [`Node`] from `element`'s cached properties, children empty.
@@ -273,27 +285,22 @@ impl Uia {
         false
     }
 
-    /// The top-level window `element` belongs to: the ancestor whose parent is
-    /// the desktop, as the handle `list_windows` reports. `None` when the walk
-    /// fails or that ancestor has no native window.
+    /// The top-level window `element` belongs to, by the definition the
+    /// point check uses (`GA_ROOT` of the window under the point): the root
+    /// of the nearest native window at or above it. UI Automation's own
+    /// parent chain is no guide there, since it nests an owned dialog under
+    /// its owner window. `None` when no native window is found.
     fn top_level_window(&self, element: &UIElement) -> Option<u32> {
         let walker = self.automation.get_raw_view_walker().ok()?;
-        let root = self.automation.get_root_element().ok()?;
         let mut current = element.clone();
-        let mut reached = false;
         for _ in 0..ANCESTOR_LIMIT {
-            let parent = walker.get_parent(&current).ok()?;
-            if self.automation.compare_elements(&parent, &root).ok()? {
-                reached = true;
-                break;
+            let handle: isize = current.get_native_window_handle().map_or(0, Into::into);
+            if let Some(id) = u32::try_from(handle).ok().filter(|&id| id != 0) {
+                return crate::os::root_window(id);
             }
-            current = parent;
+            current = walker.get_parent(&current).ok()?;
         }
-        if !reached {
-            return None;
-        }
-        let handle: isize = current.get_native_window_handle().ok()?.into();
-        u32::try_from(handle).ok().filter(|&id| id != 0)
+        None
     }
 
     /// The element's patterns, read live, for error messages.
@@ -341,7 +348,20 @@ impl Uia {
     }
 
     fn perform(handle: &str, element: &UIElement, action: &Action) -> ToolResult<()> {
-        let fail = |what: &'static str| move |e: uiautomation::Error| classify(handle, what, &e);
+        // The action's own call failing because its element went away most
+        // often means it ran and closed its window (an OK or Delete button):
+        // the caller must look before it retries, not repeat it blindly.
+        let fail = |what: &'static str| {
+            move |e: uiautomation::Error| match classify(handle, what, &e) {
+                stale @ ToolError::StaleElement(_) => ToolError::Interrupted {
+                    cause: Box::new(stale),
+                    what: format!(
+                        "it went away during {what}, which usually means the action ran; read the tree before retrying"
+                    ),
+                },
+                other => other,
+            }
+        };
         match action {
             Action::Invoke => {
                 Self::require(
@@ -409,22 +429,53 @@ impl Uia {
 }
 
 impl AccessibilityBackend for Uia {
-    fn tree(&mut self, windows: &[u32], max_depth: usize) -> ToolResult<Vec<Node>> {
+    fn tree(&mut self, windows: &[u32], max_depth: usize, deadline: Instant) -> ToolResult<Read> {
         let mut roots = Vec::with_capacity(windows.len());
-        // Each window gets its share, so a large first window cannot hide the
-        // rest of a process's windows from `find` and `wait_for`.
-        let share = (NODE_BUDGET / windows.len().max(1)).max(1);
-        for &window in windows {
-            let mut budget = share;
-            let root = self
+        let mut walk = Walk {
+            max_depth,
+            budget: 0,
+            deadline,
+            seen: HashSet::new(),
+            truncated: false,
+        };
+        let mut spare = NODE_BUDGET;
+        for (read, &window) in windows.iter().enumerate() {
+            if Instant::now() >= deadline {
+                walk.truncated = true;
+                break;
+            }
+            // Each window is held to its share of what is left, so a large
+            // first window cannot hide the rest of a process's windows from
+            // `find` and `wait_for`; what a small one leaves goes on.
+            let share = (spare / (windows.len() - read)).max(1);
+            walk.budget = share;
+            let root = match self
                 .automation
                 .element_from_handle_build_cache(hwnd(window), &self.single)
-                .map_err(|e| {
-                    ToolError::platform(format!("reading the tree of window {window}"), e)
-                })?;
-            roots.push(self.build(&root, 0, max_depth, &mut budget));
+            {
+                Ok(root) => root,
+                // Closed between listing and reading (a splash screen, a
+                // popup): the rest of the target is still worth reading.
+                Err(e) if is_gone(e.code()) => continue,
+                Err(e) => {
+                    return Err(ToolError::platform(
+                        format!("reading the tree of window {window}"),
+                        e,
+                    ));
+                }
+            };
+            roots.extend(self.build(&root, 0, &mut walk));
+            spare = spare.saturating_sub(share - walk.budget);
         }
-        Ok(roots)
+        if roots.is_empty() && !walk.truncated {
+            return Err(ToolError::NotFound(
+                "the target's windows closed while they were being read".into(),
+            ));
+        }
+        Ok(Read {
+            roots,
+            truncated: walk.truncated,
+        })
     }
 
     fn act(&mut self, handle: &str, action: &Action) -> ToolResult<Node> {
@@ -487,6 +538,25 @@ impl AccessibilityBackend for Uia {
     }
 }
 
+/// One read's progress: what it may still spend, and what it has emitted.
+struct Walk {
+    max_depth: usize,
+    budget: usize,
+    deadline: Instant,
+    seen: HashSet<String>,
+    truncated: bool,
+}
+
+impl Walk {
+    /// Whether the read must stop fetching; once it has, the read is
+    /// marked truncated.
+    fn exhausted(&mut self) -> bool {
+        let out = self.budget == 0 || Instant::now() >= self.deadline;
+        self.truncated |= out;
+        out
+    }
+}
+
 fn node_request(
     automation: &UIAutomation,
     scope: TreeScope,
@@ -528,10 +598,24 @@ fn toggle_name(state: i32) -> &'static str {
     }
 }
 
+/// Whether a UIA failure means the element, its window or its process is
+/// gone rather than that the call is wrong.
+fn is_gone(code: i32) -> bool {
+    matches!(
+        code,
+        E_ELEMENT_NOT_AVAILABLE
+            | E_DISCONNECTED
+            | E_SERVER_UNAVAILABLE
+            | E_CALL_FAILED
+            | E_NOT_CONNECTED
+            | E_INVALID_WINDOW
+    )
+}
+
 /// Maps a UIA failure on `handle` to the error the agent can act on.
 fn classify(handle: &str, what: &str, e: &uiautomation::Error) -> ToolError {
     match e.code() {
-        E_ELEMENT_NOT_AVAILABLE | E_DISCONNECTED => ToolError::StaleElement(handle.to_owned()),
+        code if is_gone(code) => ToolError::StaleElement(handle.to_owned()),
         E_ELEMENT_NOT_ENABLED => ToolError::InvalidArgument(format!(
             "element `{handle}` is disabled; {what} was not performed"
         )),

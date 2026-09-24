@@ -94,3 +94,28 @@ fn argument_errors_are_tool_errors_the_agent_can_read() {
     let text = reply["content"][0]["text"].as_str().unwrap_or_default();
     assert!(text.contains("not launched by this session"), "{text}");
 }
+
+/// Arguments that do not even deserialize (an unknown field, a wrong type,
+/// a missing field) are tool errors too, not JSON-RPC errors: the agent
+/// sees the tool's answer, and it names the argument.
+#[test]
+fn malformed_arguments_are_tool_errors_not_protocol_errors() {
+    let (mut client, _) = Client::start();
+    for (tool, args, names) in [
+        (
+            "key",
+            serde_json::json!({ "combo": "enter", "windowId": 3 }),
+            "windowId",
+        ),
+        ("kill", serde_json::json!({ "pid": -1 }), "-1"),
+        ("key", serde_json::json!({}), "combo"),
+    ] {
+        let reply = client.call(tool, args.clone());
+        assert_eq!(reply["isError"], true, "{tool} {args}: {reply}");
+        let text = reply["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.contains("invalid arguments") && text.contains(names),
+            "{tool} {args}: {text}"
+        );
+    }
+}

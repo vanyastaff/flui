@@ -198,6 +198,11 @@ fn a11y_probe_counter_through_mcp() {
     let refused = client.call("key", json!({ "combo": "a", "pid": std::process::id() }));
     show("key refused", &refused["content"][0]);
     assert_eq!(refused["isError"], true, "{refused}");
+    let text = refused["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("not the foreground window"),
+        "refused for that reason: {text}"
+    );
 
     // A real pointer click on the same button, gated on the probe being in front.
     if activated["became_foreground"] == true {
@@ -227,7 +232,10 @@ fn a11y_probe_counter_through_mcp() {
             show("wait_for count text 2", &after_click);
         }
     } else {
-        println!("-- click skipped: Windows kept another window in front");
+        println!(
+            "-- NOT EXERCISED: the real click, keys, text, scroll and drag; Windows kept \
+             another window in front of the probe"
+        );
     }
 
     // Pattern actions the button does not support name what it does support.
@@ -261,6 +269,11 @@ fn a11y_probe_counter_through_mcp() {
     if activated["became_foreground"] == true {
         for (tool, args) in [
             ("key", json!({ "combo": "tab", "window_id": window_id })),
+            // A character that needs Shift on the layout goes out with it.
+            (
+                "key",
+                json!({ "combo": "ctrl+plus", "window_id": window_id }),
+            ),
             ("type_text", json!({ "text": "x", "window_id": window_id })),
             (
                 "scroll",
@@ -283,6 +296,23 @@ fn a11y_probe_counter_through_mcp() {
     );
     show("click outside (refused)", &outside["content"][0]);
     assert_eq!(outside["isError"], true, "{outside}");
+    let text = outside["content"][0]["text"].as_str().unwrap_or_default();
+    let reason = if activated["became_foreground"] == true {
+        "no input is sent there"
+    } else {
+        "not the foreground window"
+    };
+    assert!(text.contains(reason), "refused for that reason: {text}");
+
+    // The shell takes the Windows key before any window sees it: refused
+    // with a target, whoever is in front.
+    let shell = client.call("key", json!({ "combo": "win+r", "window_id": window_id }));
+    show("key win+r (refused)", &shell["content"][0]);
+    let text = shell["content"][0]["text"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("Windows shell") && text.contains("`meta+r`"),
+        "{text}"
+    );
 
     let killed = ok("kill", &client.call("kill", json!({ "pid": pid })));
     show("kill", &killed);

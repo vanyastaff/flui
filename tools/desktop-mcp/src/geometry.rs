@@ -29,16 +29,6 @@ impl Rect {
         }
     }
 
-    /// Whether the point lies inside (right and bottom edges excluded).
-    pub fn contains(&self, x: i32, y: i32) -> bool {
-        let (x, y) = (i64::from(x), i64::from(y));
-        let (left, top) = (i64::from(self.x), i64::from(self.y));
-        x >= left
-            && y >= top
-            && x < left + i64::from(self.width)
-            && y < top + i64::from(self.height)
-    }
-
     /// The centre point.
     #[cfg(any(target_os = "windows", test))]
     pub fn center(&self) -> (i32, i32) {
@@ -64,16 +54,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn contains_excludes_far_edges() {
-        let r = Rect::from_ltrb(-10, 0, 10, 20);
-        assert!(r.contains(-10, 0));
-        assert!(r.contains(9, 19));
-        assert!(!r.contains(10, 5));
-        assert!(!r.contains(0, 20));
-        assert!(!r.contains(-11, 5));
-    }
-
-    #[test]
     fn center_rounds_down() {
         let r = Rect::from_ltrb(10, 20, 15, 30);
         assert_eq!(r.center(), (12, 25));
@@ -83,6 +63,5 @@ mod tests {
     fn inverted_rect_is_empty() {
         let r = Rect::from_ltrb(5, 5, 0, 0);
         assert_eq!((r.width, r.height), (0, 0));
-        assert!(!r.contains(5, 5));
     }
 }

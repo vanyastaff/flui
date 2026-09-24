@@ -133,7 +133,6 @@ fn ios_runner() -> Cmd {
     ]))
 }
 
-/// flui-cli's Windows paths, which no Linux job compiles.
 /// flui-desktop-mcp's UI Automation, capture and input backends, which sit
 /// behind `cfg(windows)` / `cfg(target_os = "macos")`: on Linux only its
 /// unsupported fallbacks compile.
@@ -149,6 +148,7 @@ fn desktop_mcp_clippy(target: &str) -> Cmd {
     ]))
 }
 
+/// flui-cli's Windows paths, which no Linux job compiles.
 fn cli_windows() -> Cmd {
     deny_warnings(Cmd::cargo([
         "clippy",

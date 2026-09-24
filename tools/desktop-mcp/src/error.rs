@@ -102,6 +102,16 @@ pub enum ToolError {
         summary: String,
     },
 
+    /// An action failed partway, after part of it reached the OS or the
+    /// application: `what` says how much, so a retry does not repeat it.
+    #[error("{cause}; {what}")]
+    Interrupted {
+        /// Why it stopped.
+        cause: Box<ToolError>,
+        /// What had already happened.
+        what: String,
+    },
+
     /// An OS API call failed.
     #[error("{context}: {message}")]
     Platform {

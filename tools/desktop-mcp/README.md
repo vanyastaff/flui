@@ -60,34 +60,59 @@ window rects, element rects, screenshots (at `scale` 1) and input all share one 
 | `move_mouse` | `x`, `y` | Moves the pointer; reports where it ended up |
 | `drag` | `from`, `to`, `duration_ms?`, `window_id?` \| `pid?` | Left-button drag |
 | `scroll` | `x`, `y`, `dx?`, `dy?`, `window_id?` \| `pid?` | Wheel notches at a point; positive is right/down |
-| `type_text` | `text`, `window_id?` \| `pid?` | Types characters into the focused control |
-| `key` | `combo`, `repeat?`, `window_id?` \| `pid?` | A key or combo: `enter`, `tab`, `f5`, `ctrl+shift+s`, `alt+f4`, `cmd+q` |
+| `type_text` | `text`, `window_id?` \| `pid?` | Types up to 10000 characters into the focused control; a newline is Enter, a tab is Tab |
+| `key` | `combo`, `repeat?`, `window_id?` \| `pid?` | A key or combo: `enter`, `tab`, `f5`, `ctrl+shift+s`, `alt+f4`, `cmd+q`, `ctrl+plus` (a character that needs Shift on the layout gets it) |
 | `activate_window` | `window_id` \| `pid` | Brings a window to the front; reports `became_foreground` |
 
 Element ids (`e12`) are session handles issued by `accessibility_tree`, `find` and `wait_for`.
 They are keyed by the element's UI Automation runtime id, so the same element keeps its id
 across reads. A handle whose element the application has removed reports that it is stale.
 
+A read (`accessibility_tree`, `find`, one `wait_for` poll) fetches at most 5000 elements and
+stops after 10 s (a `wait_for` at its own timeout), so a huge or hung tree cannot hold the
+server; a reply that stopped early says `truncated: true`, and an empty `find` is then no proof
+the element is absent. A process's reads include its popup menus and drop-downs, which are
+windows of their own; an element that shows up under two windows (an owned dialog) is reported
+once.
+
 A failing call returns a tool error (`isError: true`) whose text names what went wrong and,
 where there is one, the call that would succeed: the patterns an element does support, the
-window that is in front instead, the tree seen before a timeout.
+window that is in front instead, the tree seen before a timeout. That includes arguments that
+do not parse. An action that stopped partway says how much of it already went out (characters
+typed, presses sent, the first click of a double click), and an action whose element vanished
+during the call says it probably ran, so a retry does not repeat it blindly.
 
 ## Safety rule for input
 
 `click`, `drag`, `scroll`, `type_text` and `key` take an optional `window_id` or `pid`.
 **Agents should always pass it.** When it is given, the server checks that the target owns
-the foreground window and that every coordinate lies inside that window with the target
-itself under it — a `window_id` admits only that window at the point, a `pid` any of the
-process's windows (its own popups). The check runs again before **every** event of a
-multi-event action — each repeat of `key`, each character of `type_text`, each step of
-`drag`, each click of a double click — so a window that takes the foreground partway through
-receives none of the rest; a pressed button or held modifier is still released. Otherwise it
-refuses and sends nothing, so keystrokes and clicks never land in another application. An
-element click always requires the element's own top-level window to be in front and under
-the point, target or not.
+the foreground window and that at every coordinate the OS reports the target — a `window_id`
+admits only that window at the point, a `pid` any of the process's windows (its own popups) —
+with the deepest window there, the one that takes the click, in the same process (a preview
+pane another process hosts is refused). The check runs again before **every** event of a
+multi-event action — each repeat of `key`, each modifier press, each character of
+`type_text`, each step of `drag` and its release, each click of a double click — so a window
+that takes the foreground partway through receives none of the rest; a pressed button or held
+modifier is still released. Otherwise it refuses and sends nothing, so keystrokes and clicks
+never land in another application.
+
+- A window id is bound to the process that owned it when this session listed it, and a pid to
+  the process that held it when first seen (its start time): Windows recycles both, and a
+  target that now names another process is refused. `activate_window` never re-binds an id.
+- A drag that stops partway releases the button (the drop) only at a point verified inside the
+  target; if none verifies, it cancels the drag with Esc first.
+- An element click requires the element's own top-level window to be under the point and its
+  application in front, target or not. A popup menu is a window of its own, never the
+  foreground one, so target it with `pid`.
+- Shell hotkeys (the Windows key, `alt+tab`, `ctrl+esc`, `ctrl+shift+esc`; `cmd+tab`,
+  `cmd+space` on macOS) reach the shell, not the window in front, so `key` refuses them when a
+  target is given.
+- The pointer position is read back before every press: a move the OS clamped, or a pointer
+  someone else moved, refuses the press.
 
 The check fails closed: where the OS cannot say which window is under a point (macOS, for
-now), coordinate input with a target is refused rather than sent unverified.
+now), coordinate input with a target is refused rather than sent unverified. What it cannot
+close is the gap between the last check and the event itself, a few milliseconds.
 
 The pattern tools (`invoke`, `toggle`, `set_value`, `focus`, `select`) send no input at all
 and work on covered windows; prefer them where the element supports the pattern.
@@ -100,11 +125,13 @@ sending input.
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
-| `list_windows`, `screenshot` | yes (xcap) | built (xcap), never run or type-checked here | not yet |
-| Input (`click`, `key`, …) | yes (enigo; pointer moves via `SetCursorPos`) | built (enigo), never run or type-checked here | not yet |
+| `list_windows`, `screenshot` | yes (xcap) | built (xcap); type-checked in CI (clippy), never run | not yet |
+| Input (`click`, `key`, …) | yes (enigo; pointer moves via `SetCursorPos`) | built (enigo); type-checked in CI (clippy), never run | not yet |
 | Accessibility tools | yes (UI Automation) | "not supported on this OS yet (UIA only)" | same |
 | `activate_window` | yes | not supported yet | not supported yet |
-| Children killed on server exit | yes, also on a hard kill (job object) | on a clean exit | on a clean exit |
+| Launched processes ended on server exit | yes, with everything they started, also on a hard kill (the server runs in a kill-on-close job) | on a clean exit, direct children only | same |
+
+`kill` ends the launched process itself; what it started ends when the server exits.
 
 On Linux the server builds, starts and lists its tools, and every desktop tool reports that the
 OS is not supported yet: xcap links PipeWire and XCB there and enigo links libxkbcommon, system
@@ -124,22 +151,26 @@ belong to that thread's COM apartment, and synthesized input must not interleave
 cargo nextest run -p flui-desktop-mcp
 ```
 
-runs on any host without a desktop: key-combo parsing, the element-handle cache, argument
-validation, the input safety check, and `tests/protocol.rs`, which spawns the binary and does
-an MCP `initialize` plus `tools/list` over stdio, checking every tool is listed with a schema.
+runs on any host without a desktop: key-combo parsing and shell-hotkey detection, the
+keystrokes text becomes, the element-handle cache, argument validation, the input safety
+checks, process bookkeeping, and `tests/protocol.rs`, which spawns the binary and speaks MCP
+over stdio: every tool is listed with a schema, and malformed arguments come back as tool
+errors.
 
 `tests/live_windows.rs` is an ignored test for an interactive Windows desktop. It launches the
 repository's `a11y_probe` counter, lists and captures its window, reads the tree, finds and
-invokes the Increment button, then clicks it, and checks each press changed the count; it also
-checks that refused input is refused:
+invokes the Increment button, and checks that refused input is refused for the reason given.
+When Windows lets the probe take the foreground, it also clicks the button and checks the
+count changed, then presses Tab, types, scrolls and drags; when Windows refuses, it says those
+steps were not exercised:
 
 ```bash
 cargo build --release --example a11y_probe --features material,a11y
 cargo nextest run -p flui-desktop-mcp --test live_windows --run-ignored only --no-capture
 ```
 
-It moves the real pointer, and clicks, presses Tab, types one character, scrolls a notch and
-drags inside the probe window, each only after the probe is confirmed in front.
+It moves the real pointer and sends real input to the probe window only, each step only after
+the probe is confirmed in front.
 
 ## Relation to the other live checks
 

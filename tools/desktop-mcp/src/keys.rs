@@ -181,14 +181,90 @@ impl KeyCombo {
             key: key_name,
         })
     }
+
+    fn has(&self, m: Modifier) -> bool {
+        self.modifiers.contains(&m) || self.key == KeyName::Modifier(m)
+    }
+
+    /// What handles this combo instead of the foreground window, if the OS
+    /// shell does: the Windows key, the task switcher, Spotlight. No
+    /// foreground check can hold for such a combo, since the window in front
+    /// never receives it. `macos` picks the platform's set.
+    pub fn shell_hotkey(&self, macos: bool) -> Option<&'static str> {
+        let only = |mods: &[Modifier]| mods.iter().all(|&m| self.modifiers.contains(&m));
+        if macos {
+            return match self.key {
+                KeyName::Tab if self.has(Modifier::Meta) => Some("the macOS app switcher"),
+                KeyName::Space if self.has(Modifier::Meta) => Some("Spotlight"),
+                KeyName::Escape if only(&[Modifier::Meta, Modifier::Alt]) => Some("Force Quit"),
+                KeyName::Up | KeyName::Down | KeyName::Left | KeyName::Right
+                    if self.has(Modifier::Ctrl) =>
+                {
+                    Some("Mission Control")
+                }
+                KeyName::Char('3' | '4' | '5') if only(&[Modifier::Meta, Modifier::Shift]) => {
+                    Some("the macOS screenshot tool")
+                }
+                _ => None,
+            };
+        }
+        if self.has(Modifier::Meta) {
+            return Some("the Windows shell (the Windows key)");
+        }
+        match self.key {
+            KeyName::Tab | KeyName::Escape if self.has(Modifier::Alt) => {
+                Some("the Windows task switcher")
+            }
+            KeyName::Escape if only(&[Modifier::Ctrl, Modifier::Shift]) => Some("Task Manager"),
+            KeyName::Escape if self.has(Modifier::Ctrl) => Some("the Start menu"),
+            KeyName::Delete if only(&[Modifier::Ctrl, Modifier::Alt]) => {
+                Some("the Windows secure attention sequence")
+            }
+            _ => None,
+        }
+    }
 }
 
+impl Modifier {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Ctrl => "ctrl",
+            Self::Shift => "shift",
+            Self::Alt => "alt",
+            Self::Meta => "meta",
+        }
+    }
+}
+
+/// The combo in the syntax [`KeyCombo::parse`] reads: `ctrl+shift+s`.
 impl fmt::Display for KeyCombo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for m in &self.modifiers {
-            write!(f, "{m:?}+")?;
+            write!(f, "{}+", m.name())?;
         }
-        write!(f, "{:?}", self.key)
+        match self.key {
+            KeyName::Char('+') => f.write_str("plus"),
+            KeyName::Char(c) => write!(f, "{c}"),
+            KeyName::F(n) => write!(f, "f{n}"),
+            KeyName::Modifier(m) => f.write_str(m.name()),
+            KeyName::Enter => f.write_str("enter"),
+            KeyName::Tab => f.write_str("tab"),
+            KeyName::Escape => f.write_str("esc"),
+            KeyName::Space => f.write_str("space"),
+            KeyName::Backspace => f.write_str("backspace"),
+            KeyName::Delete => f.write_str("delete"),
+            KeyName::Insert => f.write_str("insert"),
+            KeyName::Home => f.write_str("home"),
+            KeyName::End => f.write_str("end"),
+            KeyName::PageUp => f.write_str("pageup"),
+            KeyName::PageDown => f.write_str("pagedown"),
+            KeyName::Up => f.write_str("up"),
+            KeyName::Down => f.write_str("down"),
+            KeyName::Left => f.write_str("left"),
+            KeyName::Right => f.write_str("right"),
+            KeyName::CapsLock => f.write_str("capslock"),
+            KeyName::Menu => f.write_str("menu"),
+        }
     }
 }
 
@@ -272,6 +348,73 @@ mod tests {
             "enterr",
         ] {
             assert!(KeyCombo::parse(bad).is_err(), "`{bad}` should be rejected");
+        }
+    }
+
+    /// A combo prints in the syntax it is parsed from, so messages quote
+    /// what the agent can send back.
+    #[test]
+    fn a_combo_prints_as_it_parses() {
+        for text in [
+            "ctrl+shift+s",
+            "alt+f4",
+            "meta+r",
+            "ctrl+plus",
+            "enter",
+            "shift",
+            "pagedown",
+        ] {
+            let combo = parse(text);
+            assert_eq!(combo.to_string(), text);
+            assert_eq!(parse(&combo.to_string()), combo);
+        }
+    }
+
+    /// Combos the OS shell takes before the foreground window sees them are
+    /// named, per platform; ordinary shortcuts are not.
+    #[test]
+    fn shell_hotkeys_are_recognized() {
+        for shell in [
+            "win",
+            "win+r",
+            "win+d",
+            "ctrl+esc",
+            "alt+tab",
+            "alt+shift+tab",
+            "alt+esc",
+            "ctrl+shift+esc",
+            "ctrl+alt+delete",
+        ] {
+            assert!(
+                parse(shell).shell_hotkey(false).is_some(),
+                "`{shell}` on Windows"
+            );
+        }
+        for app in [
+            "ctrl+s",
+            "alt+f4",
+            "ctrl+tab",
+            "esc",
+            "shift+tab",
+            "ctrl+shift+s",
+            "alt+d",
+        ] {
+            assert_eq!(parse(app).shell_hotkey(false), None, "`{app}` on Windows");
+        }
+        for shell in [
+            "cmd+tab",
+            "cmd+space",
+            "cmd+alt+esc",
+            "ctrl+left",
+            "cmd+shift+4",
+        ] {
+            assert!(
+                parse(shell).shell_hotkey(true).is_some(),
+                "`{shell}` on macOS"
+            );
+        }
+        for app in ["cmd+q", "cmd+s", "cmd+shift+s", "esc", "cmd+w"] {
+            assert_eq!(parse(app).shell_hotkey(true), None, "`{app}` on macOS");
         }
     }
 

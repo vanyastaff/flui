@@ -1,6 +1,8 @@
 //! Win32 calls the portable crates do not cover: DPI awareness, the
-//! foreground window, absolute pointer moves across the virtual desktop, and
-//! the job object that ties launched children to this process.
+//! foreground window and what lies under a point, window and process
+//! identity, absolute pointer moves across the virtual desktop, keyboard
+//! layout lookups, and the job object that ties launched children to this
+//! process.
 #![expect(
     unsafe_code,
     reason = "Win32 FFI; each call takes plain values or pointers to locals"
@@ -8,11 +10,15 @@
 
 use std::os::windows::io::AsRawHandle;
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, POINT};
+use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, HWND, LPARAM, POINT, RECT};
+use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject,
+};
+use windows::Win32::System::Threading::{
+    GetCurrentProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, DPI_AWARENESS_PER_MONITOR_AWARE,
@@ -20,12 +26,15 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
+    GetKeyboardLayout, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
+    VkKeyScanExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId, IsIconic,
-    IsWindow, SW_RESTORE, SetCursorPos, SetForegroundWindow, ShowWindow, WindowFromPoint,
+    EnumWindows, GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetWindowRect,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SW_RESTORE,
+    SetCursorPos, SetForegroundWindow, ShowWindow, WindowFromPoint,
 };
+use windows::core::BOOL;
 
 use crate::error::{ToolError, ToolResult};
 
@@ -64,12 +73,140 @@ pub fn foreground() -> Option<(u32, u32)> {
     id_and_pid(unsafe { GetForegroundWindow() })
 }
 
-/// The top-level window that would receive a click at the point, and its
-/// process.
-pub fn window_at(x: i32, y: i32) -> Option<(u32, u32)> {
-    // SAFETY: plain value arguments; `GetAncestor` accepts any handle.
-    let root = unsafe { GetAncestor(WindowFromPoint(POINT { x, y }), GA_ROOT) };
-    id_and_pid(root)
+/// The top-level window that would receive a click at the point with its
+/// process, and the process of the deepest window there, which can differ:
+/// a top-level window can host another process's child window (a preview
+/// pane, an embedded browser), and that child is what takes the click.
+pub fn window_at(x: i32, y: i32) -> Option<super::Under> {
+    // SAFETY: plain value arguments.
+    let deepest = unsafe { WindowFromPoint(POINT { x, y }) };
+    // SAFETY: `GetAncestor` accepts any handle.
+    let (id, pid) = id_and_pid(unsafe { GetAncestor(deepest, GA_ROOT) })?;
+    let (_, inner_pid) = id_and_pid(deepest)?;
+    Some(super::Under { id, pid, inner_pid })
+}
+
+/// The top-level window `id` belongs to (itself when it is one), by the
+/// same definition [`window_at`] uses.
+pub fn root_window(id: u32) -> Option<u32> {
+    // SAFETY: `GetAncestor` accepts any handle.
+    id_and_pid(unsafe { GetAncestor(hwnd(id), GA_ROOT) }).map(|(root, _)| root)
+}
+
+/// The process that owns window `id`.
+pub fn window_pid(id: u32) -> Option<u32> {
+    let h = hwnd(id);
+    // SAFETY: `IsWindow` accepts any value and validates it.
+    if !unsafe { IsWindow(Some(h)) }.as_bool() {
+        return None;
+    }
+    id_and_pid(h).map(|(_, pid)| pid)
+}
+
+/// Window `id`'s bounds as the window list reports them (the visible frame,
+/// without the invisible resize border), else its window rect.
+pub fn window_rect(id: u32) -> Option<crate::geometry::Rect> {
+    let h = hwnd(id);
+    let mut r = RECT::default();
+    // SAFETY: `r` is a local RECT and the size passed is its size.
+    let framed = unsafe {
+        DwmGetWindowAttribute(
+            h,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            (&raw mut r).cast(),
+            size_of::<RECT>() as u32,
+        )
+    };
+    // SAFETY: `r` is a local the call writes.
+    if framed.is_err() && unsafe { GetWindowRect(h, &raw mut r) }.is_err() {
+        return None;
+    }
+    Some(crate::geometry::Rect::from_ltrb(
+        r.left, r.top, r.right, r.bottom,
+    ))
+}
+
+/// Window `id`'s title.
+pub fn window_title(id: u32) -> Option<String> {
+    let mut buffer = [0_u16; 256];
+    // SAFETY: the buffer is a local slice the call writes at most its length of.
+    let len = unsafe { GetWindowTextW(hwnd(id), &mut buffer) };
+    let len = usize::try_from(len).ok()?;
+    Some(String::from_utf16_lossy(&buffer[..len]))
+}
+
+/// When process `pid` started, as a `FILETIME` count: with the pid, an
+/// identity Windows does not recycle.
+pub fn process_started(pid: u32) -> Option<u64> {
+    // SAFETY: plain value arguments; the handle is closed below.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let (mut created, mut exited, mut kernel, mut user) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
+    // SAFETY: an open process handle and four locals the call writes.
+    let times = unsafe {
+        GetProcessTimes(
+            process,
+            &raw mut created,
+            &raw mut exited,
+            &raw mut kernel,
+            &raw mut user,
+        )
+    };
+    // SAFETY: the handle opened above, closed once.
+    let _ = unsafe { CloseHandle(process) };
+    times.ok()?;
+    Some(u64::from(created.dwHighDateTime) << 32 | u64::from(created.dwLowDateTime))
+}
+
+/// Process `pid`'s visible top-level windows, front to back — its popup
+/// menus, drop-downs and tooltips included, which the capture window list
+/// leaves out.
+pub fn process_windows(pid: u32) -> Vec<u32> {
+    struct Search {
+        pid: u32,
+        found: Vec<u32>,
+    }
+    unsafe extern "system" fn visit(h: HWND, state: LPARAM) -> BOOL {
+        // SAFETY: `state` is the `Search` `process_windows` passes, alive and
+        // borrowed by nothing else for the whole enumeration.
+        let search = unsafe { &mut *(state.0 as *mut Search) };
+        // SAFETY: `h` is a window the enumeration hands over.
+        if unsafe { IsWindowVisible(h) }.as_bool()
+            && let Some((id, pid)) = id_and_pid(h)
+            && pid == search.pid
+        {
+            search.found.push(id);
+        }
+        true.into()
+    }
+    let mut search = Search {
+        pid,
+        found: Vec::new(),
+    };
+    // SAFETY: `visit` matches `WNDENUMPROC`; the pointer is to a local that
+    // outlives the call, which returns only when the enumeration is done.
+    let _ = unsafe { EnumWindows(Some(visit), LPARAM((&raw mut search) as isize)) };
+    search.found
+}
+
+/// The virtual key that types `c` on the foreground window's keyboard
+/// layout, and the modifiers it needs (bit 1 Shift, 2 Ctrl, 4 Alt), as
+/// `VkKeyScanExW` reports them. `None` when no key on that layout types it.
+pub fn char_key(c: char) -> Option<(u16, u8)> {
+    let mut units = [0_u16; 2];
+    let [unit] = c.encode_utf16(&mut units) else {
+        return None;
+    };
+    // SAFETY: a null window yields thread 0, whose layout is the caller's.
+    let thread = unsafe { GetWindowThreadProcessId(GetForegroundWindow(), None) };
+    // SAFETY: plain value arguments.
+    let scan = unsafe { VkKeyScanExW(*unit, GetKeyboardLayout(thread)) };
+    let [vk, shift] = scan.to_le_bytes();
+    (scan != -1).then_some((u16::from(vk), shift))
 }
 
 /// Restores `id` if minimized and asks Windows to put it in front. Windows
@@ -137,7 +274,14 @@ pub fn cursor() -> Option<(i32, i32)> {
 /// A job object that kills every assigned process when this process exits,
 /// however it exits.
 #[derive(Debug)]
-pub struct KillOnExitJob(HANDLE);
+pub struct KillOnExitJob {
+    handle: HANDLE,
+    /// Whether dropping this closes the handle. Not once this process is in
+    /// the job itself: closing the last handle kills every process in the
+    /// job, this one included, so the handle then lives exactly as long as
+    /// the process and the OS closes it at exit.
+    closes: bool,
+}
 
 // SAFETY: a job handle is a kernel object reference, usable from any thread.
 unsafe impl Send for KillOnExitJob {}
@@ -167,7 +311,23 @@ impl KillOnExitJob {
             let _ = unsafe { CloseHandle(job) };
             return Err(ToolError::platform("configuring the child job object", e));
         }
-        Ok(Self(job))
+        Ok(Self {
+            handle: job,
+            closes: true,
+        })
+    }
+
+    /// Puts this process itself in the job. Every process it starts from
+    /// then on is in the job from its creation, and so is everything those
+    /// start: nothing can slip out between a child's spawn and its
+    /// assignment. The job ends them all when this process's handle to it
+    /// closes, which from then on is only at this process's exit.
+    pub fn assign_self(&mut self) -> ToolResult<()> {
+        // SAFETY: the job is owned by `self`; the pseudo handle needs no close.
+        unsafe { AssignProcessToJobObject(self.handle, GetCurrentProcess()) }
+            .map_err(|e| ToolError::platform("adding the server to its child job object", e))?;
+        self.closes = false;
+        Ok(())
     }
 
     /// Ties `child` to the job.
@@ -175,14 +335,16 @@ impl KillOnExitJob {
         let process = HANDLE(child.as_raw_handle());
         // SAFETY: both handles are open for the duration of the call: the job
         // is owned by `self`, the process by `child`.
-        unsafe { AssignProcessToJobObject(self.0, process) }
+        unsafe { AssignProcessToJobObject(self.handle, process) }
             .map_err(|e| ToolError::platform("adding the child to the job object", e))
     }
 }
 
 impl Drop for KillOnExitJob {
     fn drop(&mut self) {
-        // SAFETY: the handle is owned by `self` and closed exactly once.
-        let _ = unsafe { CloseHandle(self.0) };
+        if self.closes {
+            // SAFETY: the handle is owned by `self` and closed exactly once.
+            let _ = unsafe { CloseHandle(self.handle) };
+        }
     }
 }

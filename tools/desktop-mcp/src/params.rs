@@ -3,17 +3,57 @@
 //!
 //! Doc comments on fields become the JSON-schema descriptions agents read.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use crate::a11y::Query;
 use crate::capture::ShotTarget;
 use crate::error::{ToolError, ToolResult};
 use crate::input::MouseButton;
 use crate::keys::KeyCombo;
+
+/// A tool's arguments, or why they do not parse. rmcp answers a failed
+/// `Parameters<T>` with a JSON-RPC error, which an agent does not see as the
+/// tool's result; kept here, the failure becomes a tool error the agent reads
+/// and corrects, like every other refusal. The schema is `T`'s.
+#[derive(Debug)]
+pub struct Args<T>(pub ToolResult<T>);
+
+impl<'de, T: DeserializeOwned> Deserialize<'de> for Args<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(Self(
+            serde_json::from_value(value).map_err(|e| ToolError::InvalidArgument(e.to_string())),
+        ))
+    }
+}
+
+impl<T: JsonSchema> JsonSchema for Args<T> {
+    fn inline_schema() -> bool {
+        T::inline_schema()
+    }
+
+    fn schema_name() -> Cow<'static, str> {
+        T::schema_name()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        T::schema_id()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        T::json_schema(generator)
+    }
+}
+
+/// The most characters one `type_text` call types: each is a guarded OS
+/// event on the one desktop thread, which every other tool waits behind.
+pub const MAX_TEXT_CHARS: usize = 10_000;
 
 /// A window, or every top-level window of a process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -462,12 +502,33 @@ impl ScrollParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TypeTextParams {
-    /// Text to type into the focused control, as characters.
+    /// Text to type into the focused control, as characters (at most 10000).
+    /// A newline is sent as Enter and a tab as Tab.
     pub text: String,
     /// Safety target: refuse unless this window is in front.
     pub window_id: Option<u32>,
     /// Safety target: refuse unless this process owns the foreground window.
     pub pid: Option<u32>,
+}
+
+impl TypeTextParams {
+    /// The safety target; the text is refused above [`MAX_TEXT_CHARS`]
+    /// before anything is typed.
+    pub fn validate(&self) -> ToolResult<Option<Target>> {
+        let target = optional_target(self.window_id, self.pid)?;
+        let count = self.text.chars().count();
+        if count > MAX_TEXT_CHARS {
+            return Err(ToolError::InvalidArgument(format!(
+                "text has {count} characters; type at most {MAX_TEXT_CHARS} per call"
+            )));
+        }
+        if self.text.contains('\0') {
+            return Err(ToolError::InvalidArgument(
+                "text must not contain NUL characters".into(),
+            ));
+        }
+        Ok(target)
+    }
 }
 
 /// `key` arguments.
@@ -534,6 +595,40 @@ mod tests {
         let r: Result<KeyParams, _> =
             serde_json::from_value(json!({"combo": "enter", "windowId": 3}));
         assert!(r.is_err(), "a misspelled safety target must not be ignored");
+    }
+
+    /// Malformed arguments are kept as a readable tool error, with the same
+    /// schema the arguments themselves have.
+    #[test]
+    fn args_keep_a_parse_failure_as_a_tool_error() {
+        let bad: Args<KeyParams> = parse(json!({"combo": "enter", "windowId": 3}));
+        let err = bad.0.expect_err("BUG: an unknown field fails");
+        assert!(matches!(err, ToolError::InvalidArgument(_)), "{err}");
+        assert!(err.to_string().contains("windowId"), "{err}");
+        let good: Args<KeyParams> = parse(json!({"combo": "enter"}));
+        assert!(good.0.is_ok());
+        assert_eq!(
+            schemars::schema_for!(Args<KeyParams>),
+            schemars::schema_for!(KeyParams)
+        );
+    }
+
+    /// Oversized text is refused before anything is typed.
+    #[test]
+    fn type_text_is_capped() {
+        let long = "a".repeat(MAX_TEXT_CHARS + 1);
+        assert!(
+            parse::<TypeTextParams>(json!({"text": long}))
+                .validate()
+                .is_err()
+        );
+        let most = "я".repeat(MAX_TEXT_CHARS);
+        assert!(
+            parse::<TypeTextParams>(json!({"text": most}))
+                .validate()
+                .is_ok(),
+            "the cap counts characters, not bytes"
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 
-use super::{Guard, MouseButton};
+use super::{Guard, MouseButton, Stroke, partial, strokes};
 use crate::error::{ToolError, ToolResult};
 use crate::keys::{KeyCombo, KeyName, Modifier};
 #[cfg(not(target_os = "windows"))]
@@ -83,7 +83,7 @@ impl Input {
                 x,
                 y,
                 rect: format!(
-                    "the pointer stopped at ({ax}, {ay}) (clamped to a screen edge or a cursor clip); nothing was pressed"
+                    "the pointer is at ({ax}, {ay}) instead (clamped to a screen edge or a cursor clip, or moved by someone else); nothing was pressed there"
                 ),
             }),
             None => Err(ToolError::NotSupported(
@@ -110,19 +110,31 @@ impl Input {
         self.move_verified(x, y)?;
         thread::sleep(STEP);
         let button = enigo_button(button);
-        for _ in 0..if double { 2 } else { 1 } {
-            guard(None)?;
-            self.ensure_at(x, y)?;
-            self.enigo
-                .button(button, Direction::Click)
-                .map_err(failed("clicking"))?;
+        let clicks = if double { 2 } else { 1 };
+        for sent in 0..clicks {
+            let clicked = guard(None)
+                .and_then(|()| self.ensure_at(x, y))
+                .and_then(|()| {
+                    self.enigo
+                        .button(button, Direction::Click)
+                        .map_err(failed("clicking"))
+                });
+            if let Err(cause) = clicked {
+                return Err(partial(cause, sent, clicks, "clicks"));
+            }
         }
         Ok(())
     }
 
     /// Presses at `from`, moves in steps over `duration`, releases at `to`.
-    /// `guard` runs before the press and before every step; a failed guard
-    /// stops the drag, and the button is released either way.
+    /// `guard` runs before the press, before every step and before the
+    /// release, with the point about to be reached.
+    ///
+    /// The release is the drop, so it happens only at a verified point: when
+    /// a check fails partway, the pointer goes back to the last point that
+    /// passed and the button is released there once it passes again; if even
+    /// that fails, Esc cancels the drag while the button is still held, and
+    /// only then is it released.
     pub fn drag(
         &mut self,
         from: (i32, i32),
@@ -141,19 +153,62 @@ impl Input {
         // The steps are bounded; their interval is not, so a long drag lasts
         // as long as it was asked to.
         let interval = (duration / steps.unsigned_abs()).max(STEP);
-        let moved = (1..=steps).try_for_each(|i| {
-            let x = lerp(from.0, to.0, i, steps);
-            let y = lerp(from.1, to.1, i, steps);
+        let mut last = from;
+        let mut moved = Ok(());
+        for i in 1..=steps {
+            let point = (lerp(from.0, to.0, i, steps), lerp(from.1, to.1, i, steps));
             thread::sleep(interval);
-            guard(Some((x, y)))?;
-            self.move_verified(x, y)
-        });
-        // Release even if a move failed, so no button stays held.
-        let released = self
-            .enigo
-            .button(Button::Left, Direction::Release)
-            .map_err(failed("releasing after a drag"));
-        moved.and(released)
+            moved = guard(Some(point)).and_then(|()| self.move_verified(point.0, point.1));
+            if moved.is_err() {
+                break;
+            }
+            last = point;
+        }
+        if moved.is_ok() {
+            moved = guard(Some(to)).and_then(|()| self.ensure_at(to.0, to.1));
+        }
+        match moved {
+            Ok(()) => self
+                .enigo
+                .button(Button::Left, Direction::Release)
+                .map_err(failed("releasing at the end of a drag")),
+            Err(cause) => Err(self.abort_drag(last, cause, guard)),
+        }
+    }
+
+    /// Ends a drag that stopped partway (see [`Self::drag`]) and says how.
+    fn abort_drag(
+        &mut self,
+        last: (i32, i32),
+        cause: ToolError,
+        guard: &mut Guard<'_>,
+    ) -> ToolError {
+        let back = self
+            .move_verified(last.0, last.1)
+            .and_then(|()| guard(Some(last)));
+        let mut what = if back.is_ok() {
+            format!(
+                "the drag stopped; the button was released back at ({}, {}), a point verified inside the target",
+                last.0, last.1
+            )
+        } else {
+            let cancelled = self.enigo.key(Key::Escape, Direction::Click);
+            format!(
+                "the drag stopped where no point could be verified inside the target, so it was cancelled with Esc{} before the button was released",
+                if cancelled.is_ok() {
+                    ""
+                } else {
+                    " (which failed)"
+                }
+            )
+        };
+        if let Err(e) = self.enigo.button(Button::Left, Direction::Release) {
+            what = format!("{what}; releasing the button failed: {e}");
+        }
+        ToolError::Interrupted {
+            cause: Box::new(cause),
+            what,
+        }
     }
 
     /// Moves to the point, then scrolls `dx`/`dy` wheel notches (positive
@@ -168,87 +223,126 @@ impl Input {
     ) -> ToolResult<()> {
         self.move_verified(x, y)?;
         thread::sleep(STEP);
-        if dy != 0 {
-            guard(None)?;
-            self.ensure_at(x, y)?;
-            self.enigo
-                .scroll(dy, Axis::Vertical)
-                .map_err(failed("scrolling"))?;
-        }
-        if dx != 0 {
-            guard(None)?;
-            self.ensure_at(x, y)?;
-            self.enigo
-                .scroll(dx, Axis::Horizontal)
-                .map_err(failed("scrolling"))?;
+        let axes = [(dy, Axis::Vertical), (dx, Axis::Horizontal)];
+        let total = axes.iter().filter(|(n, _)| *n != 0).count();
+        for (sent, (notches, axis)) in axes.into_iter().filter(|(n, _)| *n != 0).enumerate() {
+            let scrolled = guard(None)
+                .and_then(|()| self.ensure_at(x, y))
+                .and_then(|()| {
+                    self.enigo
+                        .scroll(notches, axis)
+                        .map_err(failed("scrolling"))
+                });
+            if let Err(cause) = scrolled {
+                return Err(partial(cause, sent, total, "scroll axes"));
+            }
         }
         Ok(())
     }
 
-    /// Types text as characters, independent of the keyboard layout, one
-    /// character at a time with `guard` before each, so a target that lost
-    /// the foreground receives none of the rest.
+    /// Types text one keystroke at a time (see [`strokes`]) with `guard`
+    /// before each, so a target that lost the foreground receives none of
+    /// the rest; the error then says how much was typed.
     pub fn type_text(&mut self, text: &str, guard: &mut Guard<'_>) -> ToolResult<()> {
-        if text.contains('\0') {
-            return Err(ToolError::InvalidArgument(
-                "text must not contain NUL characters".into(),
-            ));
-        }
+        let total = text.chars().count();
+        let mut typed = 0;
         let mut buffer = [0_u8; 4];
-        for ch in text.chars() {
-            guard(None)?;
-            self.enigo
-                .text(ch.encode_utf8(&mut buffer))
-                .map_err(failed("typing text"))?;
+        for (stroke, chars) in strokes(text) {
+            let sent = guard(None).and_then(|()| match stroke {
+                Stroke::Key(key) => self
+                    .enigo
+                    .key(enigo_key(key)?, Direction::Click)
+                    .map_err(failed("typing a key")),
+                Stroke::Char(c) => self
+                    .enigo
+                    .text(c.encode_utf8(&mut buffer))
+                    .map_err(failed("typing text")),
+            });
+            if let Err(cause) = sent {
+                return Err(partial(cause, typed, total, "characters"));
+            }
+            typed += chars;
         }
         Ok(())
     }
 
     /// Presses the combo `repeat` times: modifiers down in order, key
-    /// clicked, modifiers up in reverse.
+    /// clicked, modifiers up in reverse. A character that needs Shift (or
+    /// AltGr) on the current layout gets it added.
     ///
     /// `guard` runs before each repetition, before every modifier press and
     /// again before the key itself; a failed guard sends nothing more,
     /// releases the modifiers already held and stops.
     pub fn key(&mut self, combo: &KeyCombo, repeat: u32, guard: &mut Guard<'_>) -> ToolResult<()> {
-        let key = enigo_key(combo.key)?;
-        for _ in 0..repeat {
-            guard(None)?;
-            let mut held = Vec::with_capacity(combo.modifiers.len());
-            let mut result = Ok(());
-            for &m in &combo.modifiers {
-                let k = modifier_key(m);
-                result = guard(None).and_then(|()| {
-                    self.enigo
-                        .key(k, Direction::Press)
-                        .map_err(failed("pressing a modifier"))
-                });
-                if result.is_err() {
-                    break;
-                }
-                held.push(k);
+        let (key, modifiers) = resolve(combo)?;
+        for done in 0..repeat {
+            let pressed = self.press_once(key, &modifiers, guard);
+            if let Err(cause) = pressed {
+                return Err(partial(cause, done as usize, repeat as usize, "presses"));
             }
-            if result.is_ok() {
-                result = guard(None);
-            }
-            if result.is_ok() {
-                result = self
-                    .enigo
-                    .key(key, Direction::Click)
-                    .map_err(failed("pressing the key"));
-            }
-            for k in held.into_iter().rev() {
-                let released = self
-                    .enigo
-                    .key(k, Direction::Release)
-                    .map_err(failed("releasing a modifier"));
-                result = result.and(released);
-            }
-            result?;
             thread::sleep(STEP);
         }
         Ok(())
     }
+
+    fn press_once(
+        &mut self,
+        key: Key,
+        modifiers: &[Modifier],
+        guard: &mut Guard<'_>,
+    ) -> ToolResult<()> {
+        guard(None)?;
+        let mut held = Vec::with_capacity(modifiers.len());
+        let mut result = Ok(());
+        for &m in modifiers {
+            let k = modifier_key(m);
+            result = guard(None).and_then(|()| {
+                self.enigo
+                    .key(k, Direction::Press)
+                    .map_err(failed("pressing a modifier"))
+            });
+            if result.is_err() {
+                break;
+            }
+            held.push(k);
+        }
+        if result.is_ok() {
+            result = guard(None);
+        }
+        if result.is_ok() {
+            result = self
+                .enigo
+                .key(key, Direction::Click)
+                .map_err(failed("pressing the key"));
+        }
+        for k in held.into_iter().rev() {
+            let released = self
+                .enigo
+                .key(k, Direction::Release)
+                .map_err(failed("releasing a modifier"));
+            result = result.and(released);
+        }
+        result
+    }
+}
+
+/// The OS key for a combo's key and the modifiers to hold for it. On
+/// Windows a character goes out as its layout's virtual key with the shift
+/// state that layout needs: enigo would send the character's shifted
+/// virtual-key code as is, which is no key at all.
+fn resolve(combo: &KeyCombo) -> ToolResult<(Key, Vec<Modifier>)> {
+    #[cfg(target_os = "windows")]
+    if let KeyName::Char(c) = combo.key {
+        let (vk, shift) = crate::os::char_key(c).ok_or_else(|| {
+            ToolError::InvalidArgument(format!(
+                "no key types `{c}` on the current keyboard layout; send it with type_text"
+            ))
+        })?;
+        let mut modifiers = combo.modifiers.clone();
+        modifiers.extend(super::implied_modifiers(shift, &combo.modifiers));
+        return Ok((Key::Other(u32::from(vk)), modifiers));
+    }
+    Ok((enigo_key(combo.key)?, combo.modifiers.clone()))
 }
 
 /// The point `i/steps` of the way from `a` to `b`, in `i64` so a wide drag

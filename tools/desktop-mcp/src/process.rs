@@ -1,10 +1,11 @@
 //! Processes the session launched, and their cleanup.
 //!
-//! Every child is killed when the server exits. On Windows each child is also
-//! placed in a kill-on-close job object, so the children die even when the
-//! server itself is killed without running any cleanup.
+//! Every child is killed when the server exits. On Windows the server puts
+//! itself in a kill-on-close job object, so every process it starts, and
+//! everything those start, dies even when the server itself is killed
+//! without running any cleanup.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -37,10 +38,47 @@ pub struct Killed {
     pub exit_code: Option<i32>,
 }
 
+/// How many exited children `kill` still recognizes.
+const REMEMBERED_EXITS: usize = 256;
+
+/// The launched children still tracked, and the recent ones that exited on
+/// their own, so `kill` can say so instead of "not launched".
+#[derive(Debug, Default)]
+struct Tracked {
+    running: HashMap<u32, Child>,
+    /// `(pid, exit code)`, oldest first.
+    exited: VecDeque<(u32, Option<i32>)>,
+}
+
+impl Tracked {
+    /// Moves the children that exited on their own to `exited`, so a long
+    /// session of short-lived launches does not pile up handles or zombies.
+    fn reap(&mut self) {
+        let mut done = Vec::new();
+        self.running.retain(|&pid, child| match child.try_wait() {
+            Ok(None) => true,
+            Ok(Some(status)) => {
+                done.push((pid, status.code()));
+                false
+            }
+            Err(_) => {
+                done.push((pid, None));
+                false
+            }
+        });
+        for exit in done {
+            if self.exited.len() == REMEMBERED_EXITS {
+                self.exited.pop_front();
+            }
+            self.exited.push_back(exit);
+        }
+    }
+}
+
 /// The launched children, by pid.
 #[derive(Debug)]
 pub struct Children {
-    running: Mutex<HashMap<u32, Child>>,
+    tracked: Mutex<Tracked>,
     #[cfg(target_os = "windows")]
     job: Option<crate::os::KillOnExitJob>,
 }
@@ -54,19 +92,31 @@ impl Default for Children {
 impl Children {
     /// An empty set; on Windows it also creates the job object.
     pub fn new() -> Self {
+        #[cfg(target_os = "windows")]
+        let mut job = crate::os::KillOnExitJob::new()
+            .inspect_err(|e| tracing::warn!("children will not be tied to a job: {e}"))
+            .ok();
+        // Joining the job itself is what keeps grandchildren in: a child is
+        // then in the job from its creation, before it can start anything.
+        // Refused (a host job that forbids nesting), each child still joins
+        // right after its spawn.
+        #[cfg(target_os = "windows")]
+        if let Some(job) = &mut job
+            && let Err(e) = job.assign_self()
+        {
+            tracing::warn!("processes the children start may outlive a hard kill: {e}");
+        }
         Self {
-            running: Mutex::new(HashMap::new()),
+            tracked: Mutex::new(Tracked::default()),
             #[cfg(target_os = "windows")]
-            job: crate::os::KillOnExitJob::new()
-                .inspect_err(|e| tracing::warn!("children will not be tied to a job: {e}"))
-                .ok(),
+            job,
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u32, Child>> {
-        // A poisoned map is still a correct map: every operation on it is a
-        // single insert or remove.
-        self.running
+    fn lock(&self) -> std::sync::MutexGuard<'_, Tracked> {
+        // A poisoned set is still a correct set: every operation on it is a
+        // single insert, remove or move.
+        self.tracked
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -104,33 +154,46 @@ impl Children {
             )));
         }
         let pid = child.id();
-        let mut children = self.lock();
-        // Reap the children that exited on their own, so a long session of
-        // short-lived launches does not pile up handles or zombies.
-        children.retain(|_, child| matches!(child.try_wait(), Ok(None)));
-        children.insert(pid, child);
+        let mut tracked = self.lock();
+        tracked.reap();
+        // A reused pid is a new process: its old exit no longer answers.
+        tracked.exited.retain(|&(old, _)| old != pid);
+        tracked.running.insert(pid, child);
         Ok(pid)
     }
 
-    /// Kills a child this session launched.
+    /// Kills a child this session launched; one that already exited on its
+    /// own is reported as such.
     pub fn kill(&self, pid: u32) -> ToolResult<Killed> {
-        let mut child = self.lock().remove(&pid).ok_or_else(|| {
-            ToolError::InvalidArgument(format!(
-                "pid {pid} was not launched by this session; kill only ends processes started with launch"
-            ))
-        })?;
-        Ok(end(pid, &mut child))
+        let mut tracked = self.lock();
+        if let Some(mut child) = tracked.running.remove(&pid) {
+            drop(tracked);
+            return Ok(end(pid, &mut child));
+        }
+        let exited = tracked.exited.iter().position(|&(old, _)| old == pid);
+        if let Some(at) = exited
+            && let Some((_, exit_code)) = tracked.exited.remove(at)
+        {
+            return Ok(Killed {
+                pid,
+                already_exited: true,
+                exit_code,
+            });
+        }
+        Err(ToolError::InvalidArgument(format!(
+            "pid {pid} was not launched by this session; kill only ends processes started with launch"
+        )))
     }
 
-    /// Whether `pid` was launched and has not been killed.
+    /// Whether `pid` was launched and has not been killed or reaped.
     #[cfg(test)]
     pub fn contains(&self, pid: u32) -> bool {
-        self.lock().contains_key(&pid)
+        self.lock().running.contains_key(&pid)
     }
 
     /// Kills every child. Idempotent.
     pub fn kill_all(&self) {
-        let drained: Vec<(u32, Child)> = self.lock().drain().collect();
+        let drained: Vec<(u32, Child)> = self.lock().running.drain().collect();
         for (pid, mut child) in drained {
             let killed = end(pid, &mut child);
             tracing::info!(?killed, "ended launched child on shutdown");
@@ -181,6 +244,46 @@ mod tests {
             children.launch(&LaunchSpec::default()),
             Err(ToolError::InvalidArgument(_))
         ));
+    }
+
+    /// A child that exited on its own and was reaped by a later launch is
+    /// reported as exited, not as a pid this session never launched.
+    #[test]
+    fn a_reaped_child_is_reported_as_exited() {
+        let children = Children::new();
+        let program = std::env::current_exe()
+            .expect("BUG: the test binary has a path")
+            .to_string_lossy()
+            .into_owned();
+        let spec = LaunchSpec {
+            program,
+            args: vec!["--list".into()],
+            ..LaunchSpec::default()
+        };
+        let first = children
+            .launch(&spec)
+            .expect("BUG: relaunching the test binary works");
+        // Wait for `--list` to finish, then launch again: that reaps it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while children
+            .lock()
+            .running
+            .get_mut(&first)
+            .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+        {
+            assert!(std::time::Instant::now() < deadline, "BUG: `--list` exits");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let second = children
+            .launch(&spec)
+            .expect("BUG: relaunching the test binary works");
+        assert!(!children.contains(first), "the exited child was reaped");
+        let killed = children
+            .kill(first)
+            .expect("BUG: a reaped child is still known");
+        assert!(killed.already_exited);
+        assert_eq!(killed.exit_code, Some(0));
+        let _ = children.kill(second);
     }
 
     #[test]
