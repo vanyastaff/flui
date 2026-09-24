@@ -344,7 +344,8 @@ impl Uia {
         let mut node = describe(element, id);
         // A cut string is not what a search for the whole one would match,
         // and a property the provider failed to report matches nothing.
-        walk.truncated |= node.is_clipped() || !searchable(element);
+        node.unmatchable |= node.is_clipped();
+        walk.truncated |= node.unmatchable;
         walk.bytes = walk.bytes.saturating_sub(node.text_bytes());
         let mut omitted = 0;
         // Past the budget no child is fetched at all, not even the first:
@@ -401,8 +402,11 @@ impl Uia {
         };
         let mut current = candidate;
         let until = Instant::now() + ANCESTOR_DEADLINE;
+        // Checked before every provider call, each of which can take the
+        // whole call timeout, so the walk as a whole keeps to the deadline.
+        let late = || Instant::now() >= until;
         for _ in 0..ANCESTOR_LIMIT {
-            if Instant::now() >= until {
+            if late() {
                 return false;
             }
             if self
@@ -412,11 +416,15 @@ impl Uia {
             {
                 return true;
             }
-            if self
-                .automation
-                .compare_elements(&current, &root)
-                .unwrap_or(true)
+            if late()
+                || self
+                    .automation
+                    .compare_elements(&current, &root)
+                    .unwrap_or(true)
             {
+                return false;
+            }
+            if late() {
                 return false;
             }
             match walker.get_parent(&current) {
@@ -864,6 +872,7 @@ fn describe(element: &UIElement, id: String) -> Node {
         children: Vec::new(),
         omitted_children: None,
         gone: false,
+        unmatchable: !searchable(element),
     }
 }
 

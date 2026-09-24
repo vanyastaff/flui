@@ -31,6 +31,10 @@ pub struct Input {
     /// release has not gone through yet. Every input call releases it first,
     /// or refuses.
     held_button: Option<Button>,
+    /// A Unicode unit a partial send left down (Windows), outside enigo's
+    /// held set: released before any further input.
+    #[cfg(target_os = "windows")]
+    stuck_unit: Option<u16>,
 }
 
 impl std::fmt::Debug for Input {
@@ -54,6 +58,8 @@ impl Input {
             .map(|enigo| Self {
                 enigo,
                 held_button: None,
+                #[cfg(target_os = "windows")]
+                stuck_unit: None,
             })
             .map_err(|e| format!("opening the input device failed: {e}"))
     }
@@ -63,6 +69,15 @@ impl Input {
     /// left button held a move is a drag, and with Ctrl held a typed `x` is
     /// Ctrl+X.
     pub fn ready(&mut self) -> ToolResult<()> {
+        #[cfg(target_os = "windows")]
+        if let Some(unit) = self.stuck_unit {
+            if !crate::os::release_unicode(unit) {
+                return Err(ToolError::NotSupported(
+                    "a typed character's key is still held from an earlier failed release; no input is sent until it is released".into(),
+                ));
+            }
+            self.stuck_unit = None;
+        }
         if self.held_button.is_some() {
             self.release_held().map_err(|e| {
                 ToolError::NotSupported(format!(
@@ -84,6 +99,12 @@ impl Input {
     /// lets it: after a call panicked mid-action, and before the server
     /// exits.
     pub fn release_all(&mut self) {
+        #[cfg(target_os = "windows")]
+        if let Some(unit) = self.stuck_unit.take()
+            && !crate::os::release_unicode(unit)
+        {
+            tracing::warn!("a typed character's key could not be released");
+        }
         if self.held_button.is_some() && self.release_held().is_err() {
             tracing::warn!("a mouse button could not be released");
         }
@@ -393,7 +414,16 @@ impl Input {
                 // enigo releases a surrogate pair's low unit with the high
                 // one, so a character past the BMP goes out on its own.
                 #[cfg(target_os = "windows")]
-                Stroke::Char(c) if u32::from(c) > 0xFFFF => crate::os::send_unicode(c),
+                Stroke::Char(c) if u32::from(c) > 0xFFFF => {
+                    crate::os::send_unicode(c).map_err(|(e, stuck)| {
+                        // Not in enigo's held set: kept here, released first
+                        // by the next input and at shutdown.
+                        if stuck.is_some() {
+                            self.stuck_unit = stuck;
+                        }
+                        e
+                    })
+                }
                 Stroke::Char(c) => self
                     .enigo
                     .text(c.encode_utf8(&mut buffer))

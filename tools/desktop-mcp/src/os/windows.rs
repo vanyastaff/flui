@@ -33,9 +33,10 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
-    KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MOUSEEVENTF_MOVE, MOUSEINPUT, MapVirtualKeyExW, SendInput,
-    ToUnicodeEx, VIRTUAL_KEY, VK_CONTROL, VK_MENU, VK_SHIFT, VkKeyScanExW,
+    GetKeyState, GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
+    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC, MOUSEEVENTF_MOVE, MOUSEINPUT,
+    MapVirtualKeyExW, SendInput, ToUnicodeEx, VIRTUAL_KEY, VK_CAPITAL, VK_CONTROL, VK_MENU,
+    VK_SHIFT, VkKeyScanExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GA_ROOT, GUITHREADINFO, GetAncestor, GetClassNameW, GetCursorPos,
@@ -204,9 +205,29 @@ pub fn buttons_swapped() -> bool {
     unsafe { GetSystemMetrics(SM_SWAPBUTTON) != 0 }
 }
 
+/// Releases a Unicode unit a partial send left down; whether it went out.
+pub fn release_unicode(unit: u16) -> bool {
+    let up = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(0),
+                wScan: unit,
+                dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    // SAFETY: one fully initialized `INPUT` and the size of one.
+    unsafe { SendInput(&[up], size_of::<INPUT>() as i32) == 1 }
+}
+
 /// Types `c` as Unicode input, each UTF-16 unit pressed and released with
 /// itself (enigo releases a surrogate pair's low unit with the high one).
-pub fn send_unicode(c: char) -> ToolResult<()> {
+/// On failure, also the unit left down, if a partial send left one whose
+/// release did not go through: the caller keeps it to release later.
+pub fn send_unicode(c: char) -> Result<(), (ToolError, Option<u16>)> {
     let mut units = [0_u16; 2];
     let key = |unit: u16, up: bool| INPUT {
         r#type: INPUT_KEYBOARD,
@@ -239,34 +260,41 @@ pub fn send_unicode(c: char) -> ToolResult<()> {
         "SendInput was blocked (UIPI: the target may run elevated)",
     );
     if sent == 0 {
-        return Err(blocked);
+        return Err((blocked, None));
     }
     // Part of it went in. The events alternate down and up per unit, so an
     // odd count left a unit down: release it, and say the character may
     // have arrived in part.
-    let mut released = true;
+    let mut stuck = None;
     if sent % 2 == 1 {
-        released = (0..3).any(|attempt| {
+        // SAFETY: the down event just sent is the one before `sent`.
+        let unit = unsafe { inputs[sent - 1].Anonymous.ki.wScan };
+        let released = (0..3).any(|attempt| {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(15));
             }
-            // SAFETY: one fully initialized `INPUT` and the size of one.
-            let up = unsafe { SendInput(&inputs[sent..=sent], size_of::<INPUT>() as i32) };
-            up == 1
+            release_unicode(unit)
         });
+        if !released {
+            stuck = Some(unit);
+        }
     }
-    Err(ToolError::Interrupted {
-        cause: Box::new(blocked),
-        what: if released {
-            format!(
-                "part of `{c}` was typed before the rest was blocked; check the text before retrying"
-            )
-        } else {
-            format!(
-                "part of `{c}` was typed, and releasing its last unit failed, so a key may still be held; check the text before retrying"
-            )
+    let released = stuck.is_none();
+    Err((
+        ToolError::Interrupted {
+            cause: Box::new(blocked),
+            what: if released {
+                format!(
+                    "part of `{c}` was typed before the rest was blocked; check the text before retrying"
+                )
+            } else {
+                format!(
+                    "part of `{c}` was typed, and releasing its last unit failed, so a key may still be held; check the text before retrying"
+                )
+            },
         },
-    })
+        stuck,
+    ))
 }
 
 /// The top-level window `id` belongs to (itself when it is one), by the
@@ -435,18 +463,36 @@ pub fn char_key(c: char) -> Option<(u16, u8)> {
     // International, and only the shifted 6 is dead. `ToUnicodeEx` with flag
     // 4 translates without touching the keyboard state it would otherwise
     // leave a pending dead key in; a negative result is a dead key.
-    let mut state = [0_u8; 256];
-    for (bit, vk_mod) in [(1, VK_SHIFT), (2, VK_CONTROL), (4, VK_MENU)] {
-        if shift & bit != 0 {
-            state[usize::from(vk_mod.0)] = 0x80;
-        }
-    }
-    let mut out = [0_u16; 8];
-    // SAFETY: plain values, a local key-state table and a local buffer.
+    // The live Caps Lock toggle is part of the state the key meets: with it
+    // on, a letter needs the opposite Shift from what `VkKeyScanExW` says.
+    // SAFETY: plain value argument.
+    let caps = unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0;
+    // SAFETY: plain value arguments.
     let scan = unsafe { MapVirtualKeyExW(u32::from(vk), MAPVK_VK_TO_VSC, Some(layout)) };
-    // SAFETY: as above.
-    let typed = unsafe { ToUnicodeEx(u32::from(vk), scan, &state, &mut out, 4, Some(layout)) };
-    (typed > 0).then_some((u16::from(vk), shift))
+    let types = |shift: u8| {
+        let mut state = [0_u8; 256];
+        for (bit, vk_mod) in [(1, VK_SHIFT), (2, VK_CONTROL), (4, VK_MENU)] {
+            if shift & bit != 0 {
+                state[usize::from(vk_mod.0)] = 0x80;
+            }
+        }
+        if caps {
+            state[usize::from(VK_CAPITAL.0)] = 0x01;
+        }
+        let mut out = [0_u16; 8];
+        // SAFETY: plain values, a local key-state table and a local buffer.
+        let typed = unsafe { ToUnicodeEx(u32::from(vk), scan, &state, &mut out, 4, Some(layout)) };
+        // One unit, and the one asked for: a dead key (negative) or another
+        // character is not this key.
+        typed == 1 && out[0] == *unit
+    };
+    if types(shift) {
+        Some((u16::from(vk), shift))
+    } else if types(shift ^ 1) {
+        Some((u16::from(vk), shift ^ 1))
+    } else {
+        None
+    }
 }
 
 /// Restores `id` if minimized and asks Windows to put it in front. Windows

@@ -288,10 +288,19 @@ impl Desktop {
     /// bound to the start time recorded with each, so none of them follows.
     /// `started` is read at the spawn, while the launcher still holds the
     /// child, so it cannot belong to a later process reusing the pid.
-    pub fn bind_launched(&mut self, pid: u32, started: Option<u64>) {
-        if let Some(started) = started {
-            self.started.insert(pid, started);
+    ///
+    /// A pid this session already handed out for another process is not
+    /// re-bound: a target still holding the old one would come to name the
+    /// new process. Whether the pid is bound comes back.
+    pub fn bind_launched(&mut self, pid: u32, started: Option<u64>) -> bool {
+        let Some(started) = started else {
+            return false;
+        };
+        if let Some(&then) = self.started.get(&pid) {
+            return then == started;
         }
+        self.started.insert(pid, started);
+        true
     }
 
     /// Records a window id with its owner and the owner's start time, unless

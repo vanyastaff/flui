@@ -60,6 +60,11 @@ pub struct Node {
     /// button), and the other fields are its state from just before.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub gone: bool,
+    /// A searched property was cut or could not be read: its shown value
+    /// (an empty name, `Unknown`, a trailing `…`) is not the real one, so the
+    /// node matches no query rather than a wrong one.
+    #[serde(skip)]
+    pub unmatchable: bool,
 }
 
 /// `s` under Unicode full case folding, so a case-insensitive substring
@@ -169,6 +174,9 @@ impl Query {
     /// Whether `node` satisfies every given criterion. Expects a
     /// [`Self::prepared`] query (`name_contains` already lower-cased).
     pub fn matches(&self, node: &Node) -> bool {
+        if node.unmatchable {
+            return false;
+        }
         let name = node.name.as_deref().unwrap_or("");
         self.name.as_deref().is_none_or(|n| name == n)
             && self
@@ -268,6 +276,7 @@ impl Node {
             children: Vec::new(),
             omitted_children: None,
             gone: false,
+            unmatchable: self.unmatchable,
         }
     }
 }
@@ -438,6 +447,7 @@ mod tests {
             children,
             omitted_children: None,
             gone: false,
+            unmatchable: false,
         }
     }
 
@@ -486,6 +496,21 @@ mod tests {
         assert!(!query("strasse").matches(&named("Hauptstrase")));
         // The window-title filter folds the same way.
         assert!(fold("Hauptstraße").contains(&fold("STRASSE")));
+    }
+
+    /// A node whose searched properties were not read in full matches no
+    /// query, not even `name: ""` against its missing name.
+    #[test]
+    fn an_unreadable_node_matches_nothing() {
+        let mut unread = node("e1", "Unknown", "", vec![]);
+        unread.unmatchable = true;
+        let query = Query {
+            name: Some(String::new()),
+            ..Query::default()
+        };
+        assert!(!query.matches(&unread));
+        unread.unmatchable = false;
+        assert!(query.matches(&unread));
     }
 
     #[test]

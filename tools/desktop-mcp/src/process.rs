@@ -247,13 +247,19 @@ impl Children {
         for (pid, mut child) in drained {
             match end(pid, &mut child) {
                 Ok(killed) => tracing::info!(?killed, "ended launched child on shutdown"),
-                Err(e) => tracing::warn!("could not end launched child on shutdown: {e}"),
+                // Kept, so the cleanup on drop tries it once more.
+                Err(e) => {
+                    tracing::warn!("could not end launched child on shutdown: {e}");
+                    self.lock().running.insert(pid, child);
+                }
             }
         }
     }
 }
 
 impl Drop for Children {
+    /// The last attempt: what `kill_all` could not end is tried again, then
+    /// reported.
     fn drop(&mut self) {
         self.kill_all();
     }

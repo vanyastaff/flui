@@ -206,10 +206,18 @@ impl DesktopServer {
             bound = self
                 .worker
                 .run(&CancellationToken::new(), move |d| {
-                    d.bind_launched(pid, started);
-                    Ok(())
+                    if d.bind_launched(pid, started) {
+                        Ok(())
+                    } else {
+                        Err(ToolError::NotSupported(
+                            "this pid was handed out before for another process, or the OS reports no start time".into(),
+                        ))
+                    }
                 })
                 .await;
+            if matches!(bound, Err(ToolError::NotSupported(_))) {
+                break;
+            }
             if bound.is_ok() {
                 break;
             }
