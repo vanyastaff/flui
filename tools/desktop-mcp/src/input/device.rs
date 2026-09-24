@@ -258,9 +258,9 @@ impl Input {
         let button = enigo_button(button);
         let clicks = if double { 2 } else { 1 };
         for sent in 0..clicks {
-            // Press and release apart, so a press that went out is known:
-            // its release is retried, and a failure counts the click as sent
-            // with the button possibly still down.
+            // A completed click needs both press and release. A failed
+            // release leaves this click uncertain, even though its down is
+            // known; only earlier completed clicks contribute to progress.
             // Refused before the press: nothing of this click went out.
             // The button wait first: it can take a moment, and the target
             // and position are checked after it, right before the press.
@@ -278,47 +278,7 @@ impl Input {
                 .enigo
                 .button(button, Direction::Press)
                 .map_err(failed("pressing the button"));
-            // A press that reported failure may still have gone out: none
-            // before it is `may_have_run`, some before it a count.
-            let went = |sent| {
-                if sent == 0 {
-                    Effect::MayHaveRun
-                } else {
-                    Effect::Partial {
-                        sent,
-                        total: clicks,
-                        unit: "clicks",
-                    }
-                }
-            };
-            if let Err(cause) = pressed {
-                // A press reported failed may still have gone out, and with
-                // the release that follows it that is a whole click: say so,
-                // whether or not the release went through.
-                let released = self.release_held();
-                return Err(cause.after(
-                    went(sent),
-                    match released {
-                        Ok(()) => format!(
-                            "{sent} of {clicks} clicks completed, and click {} may also have gone through (its press reported failure, then it was released); look before retrying",
-                            sent + 1
-                        ),
-                        Err(e) => format!(
-                            "{sent} of {clicks} clicks completed, click {} may have been pressed and releasing it failed ({e}); the button may still be held",
-                            sent + 1
-                        ),
-                    },
-                ));
-            }
-            if let Err(cause) = self.release_held() {
-                return Err(cause.after(
-                    went(sent + 1),
-                    format!(
-                        "click {} of {clicks} was pressed but not released; the button may still be held, and the next input releases it first",
-                        sent + 1
-                    ),
-                ));
-            }
+            super::complete_click(pressed, || self.release_held(), sent, clicks)?;
         }
         Ok(())
     }

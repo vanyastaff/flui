@@ -142,6 +142,50 @@ pub fn partial(
     cause.counted(sent, total, unit)
 }
 
+/// Always releases a click's button, but advances click progress only after
+/// both halves succeed. A failed release can leave the button down or can
+/// have delivered the click before reporting failure; neither is completion.
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+fn complete_click(
+    pressed: crate::error::ToolResult<()>,
+    release: impl FnOnce() -> crate::error::ToolResult<()>,
+    completed: usize,
+    total: usize,
+) -> crate::error::ToolResult<()> {
+    use crate::error::Effect;
+    let released = release();
+    let (cause, detail) = match (pressed, released) {
+        (Ok(()), Ok(())) => return Ok(()),
+        (Ok(()), Err(cause)) => (
+            cause,
+            format!(
+                "click {} of {total} was pressed but its release was not confirmed; it may have completed or the button may still be held, and the next input releases it first; look before retrying",
+                completed + 1,
+            ),
+        ),
+        (Err(cause), Ok(())) => (
+            cause,
+            format!(
+                "click {} of {total} may have gone through (its press reported failure, then it was released); look before retrying",
+                completed + 1,
+            ),
+        ),
+        (Err(cause), Err(release)) => (
+            cause,
+            format!(
+                "click {} of {total} may have been pressed and releasing it failed ({release}); the button may still be held; look before retrying",
+                completed + 1,
+            ),
+        ),
+    };
+    Err(partial(
+        cause.after(Effect::MayHaveRun, detail),
+        completed,
+        total,
+        "clicks",
+    ))
+}
+
 /// Only the session's own physical button is exempt during a drag. A
 /// second button belongs to another gesture, including at a stationary drop.
 #[cfg(any(target_os = "windows", test))]
@@ -429,6 +473,83 @@ mod tests {
             only_owned_button(0, 0).is_ok(),
             "targetless moves require no button"
         );
+    }
+
+    #[test]
+    fn an_unconfirmed_click_release_counts_only_prior_completed_clicks() {
+        use crate::error::{Effect, ToolError};
+        for (failed_at, total) in [(0, 1), (0, 2), (1, 2)] {
+            for completed in 0..total {
+                let result = complete_click(
+                    Ok(()),
+                    || {
+                        if completed == failed_at {
+                            Err(ToolError::Busy("release failed".into()))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    completed,
+                    total,
+                );
+                if completed < failed_at {
+                    result.expect("BUG: earlier click completed");
+                } else {
+                    let error = result.expect_err("BUG: release failure must interrupt");
+                    match error {
+                        ToolError::Interrupted { effect, detail, .. } => {
+                            if failed_at == 0 {
+                                assert_eq!(effect, Effect::MayHaveRun);
+                            } else {
+                                assert_eq!(
+                                    effect,
+                                    Effect::Partial {
+                                        sent: 1,
+                                        total: 2,
+                                        unit: "clicks"
+                                    }
+                                );
+                                assert!(detail.contains("may_have_run"), "{detail}");
+                            }
+                            assert!(detail.contains("release was not confirmed"), "{detail}");
+                            assert!(detail.contains("button may still be held"), "{detail}");
+                        }
+                        error => panic!("BUG: missing uncertain effect: {error}"),
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_uncertain_click_press_always_attempts_release_without_claiming_completion() {
+        use crate::error::{Effect, ToolError};
+        use std::cell::Cell;
+        for release_fails in [false, true] {
+            let released = Cell::new(false);
+            let result = complete_click(
+                Err(ToolError::Busy("press failed".into())),
+                || {
+                    released.set(true);
+                    if release_fails {
+                        Err(ToolError::Busy("release failed".into()))
+                    } else {
+                        Ok(())
+                    }
+                },
+                0,
+                1,
+            );
+            assert!(released.get());
+            assert!(matches!(
+                result,
+                Err(ToolError::Interrupted {
+                    effect: Effect::MayHaveRun,
+                    ..
+                })
+            ));
+        }
     }
 
     #[test]

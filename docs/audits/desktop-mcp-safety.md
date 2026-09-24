@@ -9,6 +9,18 @@ to the desktop tool and this report; no framework, CI workflow or publishing cha
 
 ## Repaired failure scenarios
 
+PID activation and capture retain the selected window's adopted class rather than
+reading it again after adoption; they also retain the original process start time.
+This prevents a replacement window from being accepted under a retired identity when
+the intervening class lookup would have failed. Click accounting counts only completed
+press/release pairs: a failed release preserves the current click's uncertainty without
+adding it to the completed count. These failure paths use injected regression checks;
+ordinary native smoke does not force OS release failures or native-handle reuse.
+`cargo xtask check-changed --base 5d17eb044e29a73a4872216ff07b1041e8997d60`
+passed: 139 tests, six skipped, formatting, strict rustdoc, and Windows/macOS clippy.
+The native Windows suite above was rerun with `--run-ignored only --no-capture`;
+all three entries passed, including ordinary controls and drag interruption.
+
 Action readback now checks process identity after the last provider call, including
 failed readback. Drag guards require the owned button to remain down; only initial
 press delivery receives a bounded settling period. A PID bound to an earlier process

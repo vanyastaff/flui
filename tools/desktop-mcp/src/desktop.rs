@@ -396,6 +396,21 @@ impl Registry {
         })
     }
 
+    /// A selected window keeps the identity recorded when it was adopted.
+    /// Never weaken its class fingerprint with another native lookup. The
+    /// caller's process binding remains authoritative if selection raced
+    /// with process replacement.
+    fn selected_binding(&self, handle: u64, target: Binding) -> Binding {
+        let issued = self
+            .windows
+            .get(&handle)
+            .expect("BUG: a selected window was adopted before its binding is requested");
+        Binding {
+            started: target.started.or(issued.started),
+            ..issued.binding()
+        }
+    }
+
     /// Marks every issued window whose native window is gone, or now
     /// another process's: seen once, its handle is never reused, whatever
     /// the OS later puts under the same native id.
@@ -867,11 +882,7 @@ impl Desktop {
                         "the window of process {pid} closed while it was picked"
                     )));
                 };
-                let bound = Binding {
-                    window_pid: Some(pid),
-                    started: bound.started,
-                    class: os::window_class(pick.id),
-                };
+                let bound = self.registry.selected_binding(n, bound);
                 (
                     ShotTarget::Window(pick.id),
                     Some((Target::Window(pick.id, n), bound)),
@@ -1451,13 +1462,7 @@ impl Desktop {
         // The chosen window itself, not only its process, is what gets
         // raised: held to its owner, the process's start time and its class
         // as resolved, right before each attempt.
-        let chosen = Binding {
-            window_pid: Some(native.pid),
-            started: bound
-                .started
-                .or_else(|| self.registry.windows.get(&n).and_then(|i| i.started)),
-            class: os::window_class(native.id),
-        };
+        let chosen = self.registry.selected_binding(n, bound);
         let recheck = || {
             self.registry.revalidate(target, bound)?;
             self.registry
@@ -1602,6 +1607,45 @@ fn activate_while_current<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selection_uses_the_adopted_class_and_keeps_the_original_process_binding() {
+        let mut registry = Registry::default();
+        let issued = Issued {
+            hwnd: 7,
+            pid: 100,
+            started: Some(456),
+            class: Some(789),
+        };
+        let handle = registry.register_window(issued);
+        let selected = registry.selected_binding(
+            handle,
+            Binding {
+                started: Some(123),
+                ..Binding::default()
+            },
+        );
+        assert_eq!(
+            selected.class,
+            Some(789),
+            "selection must retain the recorded class without another native query"
+        );
+        assert_eq!(selected.window_pid, Some(100));
+        assert_eq!(
+            selected.started,
+            Some(123),
+            "adoption must not replace the caller's process identity"
+        );
+        assert_eq!(
+            same_process(100, selected.started, Some(456))
+                .expect_err("BUG: a successor process is refused")
+                .code(),
+            "gone"
+        );
+        let selected = registry.selected_binding(handle, Binding::default());
+        assert_eq!(selected.class, Some(789));
+        assert_eq!(selected.started, issued.started);
+    }
 
     #[test]
     fn a_reused_readable_pid_is_not_advertised_as_targetable() {
