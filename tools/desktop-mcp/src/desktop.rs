@@ -395,7 +395,7 @@ impl Desktop {
                     started,
                     class,
                 } = self.issued.get(&id).ok_or_else(|| {
-                    ToolError::NotFound(format!(
+                    ToolError::InvalidArgument(format!(
                         "window {id} was not listed in this session; take window ids from list_windows or launch"
                     ))
                 })?;
@@ -412,7 +412,9 @@ impl Desktop {
                         // The OS has no start times: the reason to report.
                         same_process(pid, None, None)?;
                     }
-                    return Err(ToolError::NotFound(format!(
+                    // Not `NotFound`: `wait_for` polls on that, and an unissued
+                    // pid never becomes issued by waiting.
+                    return Err(ToolError::InvalidArgument(format!(
                         "process {pid} was not listed or launched in this session; take pids from list_windows or launch"
                     )));
                 };
@@ -1032,6 +1034,22 @@ mod tests {
             Err(ToolError::NotSupported(_))
         ));
         assert!(verify_focus(None, Focus::Foreground).is_err());
+    }
+
+    /// An unissued pid or window id is an argument error, not the
+    /// `NotFound` that `wait_for` keeps polling on.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn an_unissued_target_is_not_a_missing_window() {
+        let mut desktop = Desktop::new();
+        assert!(matches!(
+            desktop.bound(Some(Target::Pid(std::process::id()))),
+            Err(ToolError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            desktop.bound(Some(Target::Window(123_456_789))),
+            Err(ToolError::InvalidArgument(_))
+        ));
     }
 
     /// The safety wiring end to end, on any host: a shell hotkey with a

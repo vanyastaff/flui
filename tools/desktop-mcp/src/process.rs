@@ -249,6 +249,7 @@ impl Children {
             // nowhere and call it never launched.
             let mut tracked = self.lock();
             tracked.ending.remove(&pid);
+            self.settled.notify_all();
             return match outcome {
                 // Remembered, so a second kill of the same pid says it has
                 // exited rather than that it was never launched.
@@ -311,15 +312,17 @@ impl Children {
     pub fn kill_all(&self) {
         let mut tracked = self.lock();
         tracked.closed = true;
-        // A spawn still running would record its child after this pass:
+        // A spawn still running would record its child after this pass, and
+        // a kill in progress puts back one the OS refused to end: both are
         // waited for, bounded, since a spawn can hang on a network path.
         let until = Instant::now() + LAUNCH_SETTLE;
-        while tracked.launching > 0 {
+        while tracked.launching > 0 || !tracked.ending.is_empty() {
             let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
                 tracing::warn!(
-                    "{} launches still running at shutdown; each ends its process if it finishes",
-                    tracked.launching
+                    "{} launches and {} kills still running at shutdown; a launch ends its process if it finishes",
+                    tracked.launching,
+                    tracked.ending.len()
                 );
                 break;
             }
@@ -344,7 +347,7 @@ impl Children {
     }
 }
 
-/// How long shutdown waits for launches in flight to record their child.
+/// How long shutdown waits for launches and kills in flight to settle.
 const LAUNCH_SETTLE: Duration = Duration::from_secs(5);
 
 /// One launch in flight; counted out when dropped, on every path.

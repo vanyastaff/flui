@@ -122,11 +122,15 @@ async fn blocking<T: Send + 'static>(
     if ct.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
+    // Admission like the desktop queue's: a spawn stuck on a network path
+    // holds its thread, and unbounded threads would exhaust the process.
+    let slot = ProcessSlot::take()?;
     let (reply, result) = tokio::sync::oneshot::channel();
     let job_ct = ct.clone();
     std::thread::Builder::new()
         .name("desktop-process".into())
         .spawn(move || {
+            let _slot = slot;
             // Cancelled before it started: say so, rather than drop the reply
             // and have it read as a panic.
             if job_ct.is_cancelled() {
@@ -142,6 +146,37 @@ async fn blocking<T: Send + 'static>(
     result
         .await
         .map_err(|_| ToolError::platform("running process work", "it panicked"))?
+}
+
+/// How many process threads (launch, kill) may run at once.
+const PROCESS_THREADS: usize = 8;
+
+/// One of the [`PROCESS_THREADS`], given back when dropped.
+struct ProcessSlot;
+
+static PROCESS_THREADS_RUNNING: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+impl ProcessSlot {
+    fn take() -> ToolResult<Self> {
+        use std::sync::atomic::Ordering;
+        PROCESS_THREADS_RUNNING
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < PROCESS_THREADS).then_some(n + 1)
+            })
+            .map(|_| Self)
+            .map_err(|_| {
+                ToolError::NotSupported(format!(
+                    "{PROCESS_THREADS} launches or kills are already running (one may be stuck starting a program); retry once one finishes"
+                ))
+            })
+    }
+}
+
+impl Drop for ProcessSlot {
+    fn drop(&mut self) {
+        PROCESS_THREADS_RUNNING.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 /// Sleeps `duration`, or less when `ct` fires; whether it fired.
@@ -296,11 +331,23 @@ impl DesktopServer {
                 // The process runs whatever happens to this request, so a
                 // cancelled wait still hands back its pid.
                 Ok(Some(_)) => {
-                    if pause(&ct, POLL).await {
+                    if pause(
+                        &ct,
+                        POLL.min(deadline.saturating_duration_since(Instant::now())),
+                    )
+                    .await
+                    {
                         return respond(Ok(json!({
                             "pid": pid,
                             "window": null,
                             "note": "the wait for a window was cancelled; the process is running, kill it by pid if needed",
+                        })));
+                    }
+                    if Instant::now() >= deadline {
+                        return respond(Ok(json!({
+                            "pid": pid,
+                            "window": null,
+                            "note": "no window for this pid yet; it may hand off to another process, see list_windows",
                         })));
                     }
                 }
@@ -641,5 +688,23 @@ impl ServerHandler for DesktopServer {
                     .with_title("Desktop automation"),
             )
             .with_instructions(INSTRUCTIONS)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_threads_are_admitted_up_to_the_bound() {
+        let held: Vec<ProcessSlot> = (0..PROCESS_THREADS)
+            .map(|_| ProcessSlot::take().expect("BUG: below the bound"))
+            .collect();
+        assert!(matches!(
+            ProcessSlot::take(),
+            Err(ToolError::NotSupported(_))
+        ));
+        drop(held);
+        assert!(ProcessSlot::take().is_ok());
     }
 }

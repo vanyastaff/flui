@@ -418,11 +418,17 @@ impl Uia {
 
     /// Whether `candidate` is `element` or one of its descendants.
     fn is_within(&self, candidate: UIElement, element: &UIElement) -> bool {
+        self.within(candidate, element).unwrap_or(false)
+    }
+
+    /// [`Self::is_within`], `None` when it cannot be told: a provider call
+    /// failed or the walk ran out of time or steps.
+    fn within(&self, candidate: UIElement, element: &UIElement) -> Option<bool> {
         let (Ok(walker), Ok(root)) = (
             self.automation.get_raw_view_walker(),
             self.automation.get_root_element(),
         ) else {
-            return false;
+            return None;
         };
         let mut current = candidate;
         let until = Instant::now() + ANCESTOR_DEADLINE;
@@ -430,33 +436,18 @@ impl Uia {
         // whole call timeout, so the walk as a whole keeps to the deadline.
         let late = || Instant::now() >= until;
         for _ in 0..ANCESTOR_LIMIT {
-            if late() {
-                return false;
+            if late() || self.automation.compare_elements(&current, element).ok()? {
+                return (!late()).then_some(true);
             }
-            if self
-                .automation
-                .compare_elements(&current, element)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-            if late()
-                || self
-                    .automation
-                    .compare_elements(&current, &root)
-                    .unwrap_or(true)
-            {
-                return false;
+            if late() || self.automation.compare_elements(&current, &root).ok()? {
+                return (!late()).then_some(false);
             }
             if late() {
-                return false;
+                return None;
             }
-            match walker.get_parent(&current) {
-                Ok(parent) => current = parent,
-                Err(_) => return false,
-            }
+            current = walker.get_parent(&current).ok()?;
         }
-        false
+        None
     }
 
     /// `element`'s kind from its cached properties.
@@ -535,6 +526,7 @@ impl Uia {
     /// briefly. The request itself went out, so a failed readback says so.
     fn focused(&mut self, handle: &str, element: &UIElement) -> ToolResult<Node> {
         let mut last = None;
+        let mut unknown = false;
         // One deadline for the whole readback, however slow each poll is.
         let until = Instant::now() + ANCESTOR_DEADLINE;
         for attempt in 0..FOCUS_POLLS {
@@ -555,15 +547,32 @@ impl Uia {
             let node = describe(&fresh, handle.to_owned());
             // Checked between the provider calls as well: each can take the
             // whole call timeout.
-            let inside = !node.has_keyboard_focus
-                && Instant::now() < until
-                && self.automation.get_focused_element().is_ok_and(|focused| {
-                    Instant::now() < until && self.is_within(focused, element)
-                });
-            if node.has_keyboard_focus || inside {
+            if node.has_keyboard_focus {
                 return Ok(node);
             }
+            // `None`: where focus is could not be read in time.
+            let inside = if Instant::now() < until {
+                self.automation
+                    .get_focused_element()
+                    .ok()
+                    .and_then(|focused| self.within(focused, element))
+            } else {
+                None
+            };
+            if inside == Some(true) {
+                return Ok(node);
+            }
+            unknown = inside.is_none();
             last = Some(node);
+        }
+        if unknown {
+            return Err(ToolError::Interrupted {
+                cause: Box::new(ToolError::platform(
+                    "reading back focus",
+                    "where keyboard focus is could not be read",
+                )),
+                what: "focus was requested; only reading back where it landed failed".into(),
+            });
         }
         let focusable = last.is_some_and(|n| n.is_keyboard_focusable);
         Err(ToolError::NotSupported(format!(
@@ -819,7 +828,11 @@ impl AccessibilityBackend for Uia {
                 let mut node = describe(&fresh, handle.to_owned());
                 // A value that cannot be read back is not a control without
                 // one: the action ran, and what it left is unknown.
+                let range_unread = node.patterns.contains(&"RangeValue")
+                    && !node.patterns.contains(&"Value")
+                    && node.value.is_none();
                 if !self.read_value(&fresh, &mut node)
+                    || range_unread
                     || (matches!(action, Action::Toggle) && node.toggle_state.is_none())
                 {
                     return Err(ToolError::Interrupted {
@@ -859,7 +872,10 @@ impl AccessibilityBackend for Uia {
 
     fn click_point(&mut self, handle: &str) -> ToolResult<ClickPoint> {
         let element = self.alive(handle)?;
-        let (x, y) = if let Ok(Some(p)) = element.get_clickable_point() {
+        let point = element
+            .get_clickable_point()
+            .map_err(|e| classify(handle, "reading its clickable point", &e))?;
+        let (x, y) = if let Some(p) = point {
             (p.get_x(), p.get_y())
         } else {
             let r = element

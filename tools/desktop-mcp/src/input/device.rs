@@ -68,7 +68,13 @@ impl Input {
     /// call is still down, after trying once more to release it: with the
     /// left button held a move is a drag, and with Ctrl held a typed `x` is
     /// Ctrl+X.
+    ///
+    /// A release that goes through now lands wherever the pointer and the
+    /// focus are now: a dropped drag, a click, a lone Alt opening a menu. So
+    /// the call stops there and says so, rather than going on as if nothing
+    /// had been sent.
     pub fn ready(&mut self) -> ToolResult<()> {
+        let mut released = Vec::new();
         #[cfg(target_os = "windows")]
         if let Some(unit) = self.stuck_unit {
             if !crate::os::release_unicode(unit) {
@@ -77,22 +83,15 @@ impl Input {
                 ));
             }
             self.stuck_unit = None;
+            released.push("a typed character's key".to_owned());
         }
-        if self.held_button.is_some() {
+        if let Some(button) = self.held_button {
             self.release_held().map_err(|e| {
                 ToolError::NotSupported(format!(
                     "a mouse button is still held from an earlier failed release ({e}); no input is sent until it is released"
                 ))
             })?;
-            // Released wherever the pointer is now, over whatever window is
-            // there: that can drop or click, so this call stops and says so
-            // rather than going on as if nothing happened.
-            return Err(ToolError::Interrupted {
-                cause: Box::new(ToolError::NotSupported(
-                    "a mouse button held from an earlier failed release was released first".into(),
-                )),
-                what: "the release went to wherever the pointer is now and may have dropped or clicked there; nothing of this call was sent, so look, then retry".into(),
-            });
+            released.push(format!("the {button:?} mouse button"));
         }
         for key in self.enigo.held().0 {
             self.enigo.key(key, Direction::Release).map_err(|e| {
@@ -100,8 +99,19 @@ impl Input {
                     "{key:?} is still held from an earlier failed release ({e}); no input is sent until it is released"
                 ))
             })?;
+            released.push(format!("{key:?}"));
         }
-        Ok(())
+        if released.is_empty() {
+            return Ok(());
+        }
+        Err(ToolError::Interrupted {
+            cause: Box::new(ToolError::NotSupported(format!(
+                "{} held from an earlier failed release {} released first",
+                released.join(", "),
+                if released.len() == 1 { "was" } else { "were" }
+            ))),
+            what: "the release went to wherever the pointer and focus are now and may have dropped, clicked or opened a menu there; nothing of this call was sent, so look, then retry".into(),
+        })
     }
 
     /// Releases every button and key this device holds, as far as the OS
