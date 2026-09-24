@@ -71,6 +71,19 @@ pub enum ToolError {
         foreground: String,
     },
 
+    /// The target is in front, but keyboard focus inside it is in another
+    /// process's window (an embedded browser or preview pane), where keys
+    /// would go. Activating the window again does not move it.
+    #[error(
+        "refused: keyboard focus in {target} is in a window of process {holder} (an embedded panel), so keys would go there; focus an element of the target or click into it first"
+    )]
+    FocusElsewhere {
+        /// The window the caller wanted the input to reach.
+        target: String,
+        /// The process whose window holds keyboard focus.
+        holder: u32,
+    },
+
     /// A coordinate input would not land on the target.
     #[error("refused: point ({x}, {y}) is not on the target: {reason}; nothing was sent there")]
     OutsideTarget {

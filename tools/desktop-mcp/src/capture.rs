@@ -28,6 +28,9 @@ pub struct WindowInfo {
     pub is_minimized: bool,
     /// Whether it is the foreground window.
     pub is_focused: bool,
+    /// Set when this session cannot target the window, and why.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_targetable: Option<String>,
 }
 
 /// A captured image, PNG-encoded.
@@ -83,6 +86,7 @@ mod backend {
             },
             is_minimized: w.is_minimized().unwrap_or(false),
             is_focused: w.is_focused().unwrap_or(false),
+            not_targetable: None,
         })
     }
 
@@ -122,8 +126,8 @@ mod backend {
                 // if the window stayed put meanwhile.
                 let after = describe(window).map(|w| w.rect);
                 if after != Some(info.rect) {
-                    return Err(ToolError::NotFound(format!(
-                        "window {id} moved or resized while it was captured; capture it again"
+                    return Err(ToolError::Busy(format!(
+                        "window {id} moved or resized while it was captured"
                     )));
                 }
                 (image, info.rect)
@@ -218,12 +222,10 @@ pub fn available() -> ToolResult<()> {
     }
 }
 
-/// The most pixels one capture reads (8K by 8K, about 256 MB as RGBA): the
-/// bitmap is allocated at full size before `max_side` shrinks it, so an
+/// The most pixels one capture reads: an 8K display, about 127 MiB as RGBA.
+/// The bitmap is allocated at full size before `max_side` shrinks it, so an
 /// enormous window would otherwise take the server down first.
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
-/// An 8K display: its bitmap is about 127 MiB as RGBA, and the encoded
-/// output stays bounded by [`crate::params::MAX_SIDE`].
 const MAX_CAPTURE_PIXELS: u64 = 7680 * 4320;
 
 /// Refuses a capture larger than [`MAX_CAPTURE_PIXELS`] before anything is
@@ -253,8 +255,10 @@ fn within_pixel_limit(source: Rect, scale: Option<f32>) -> ToolResult<()> {
     )]
     let limit = MAX_CAPTURE_PIXELS as f64;
     if pixels > limit {
-        return Err(ToolError::InvalidArgument(format!(
-            "the capture would be about {pixels} pixels ({}x{} screen units at {scale}x), above the {MAX_CAPTURE_PIXELS}-pixel limit; capture a monitor or a smaller window",
+        // `max_side` does not help: the limit is on the bitmap read before
+        // it is shrunk.
+        return Err(ToolError::NotSupported(format!(
+            "the capture would be about {pixels} pixels ({}x{} screen units at {scale}x), above the {MAX_CAPTURE_PIXELS}-pixel limit on what one capture reads; capture a smaller window instead",
             source.width, source.height
         )));
     }

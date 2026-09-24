@@ -129,9 +129,19 @@ fn function_key(name: &str) -> Option<KeyName> {
     (1..=24).contains(&n).then_some(KeyName::F(n))
 }
 
+/// The longest key combo accepted.
+const MAX_COMBO_CHARS: usize = 64;
+
 impl KeyCombo {
     /// Parses `"ctrl+shift+s"`-style text.
     pub fn parse(text: &str) -> ToolResult<Self> {
+        // Longer than any real chord ("ctrl+shift+alt+meta+pagedown" is 30):
+        // refused before parsing, since every parse error quotes the input.
+        if text.chars().count() > MAX_COMBO_CHARS {
+            return Err(ToolError::InvalidArgument(format!(
+                "a key combo is at most {MAX_COMBO_CHARS} characters; send text with type_text"
+            )));
+        }
         let lower = text.trim().to_lowercase();
         if lower.is_empty() {
             return Err(ToolError::InvalidArgument("key combo is empty".into()));
@@ -334,6 +344,16 @@ impl fmt::Display for KeyCombo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A long combo is refused without being quoted back.
+    #[test]
+    fn a_long_combo_is_refused_without_an_echo() {
+        let long = format!("ctrl+{}", "z".repeat(100_000));
+        let err = KeyCombo::parse(&long)
+            .expect_err("BUG: too long")
+            .to_string();
+        assert!(err.len() < 200, "{err}");
+    }
 
     fn parse(text: &str) -> KeyCombo {
         KeyCombo::parse(text).expect("BUG: test combo should parse")

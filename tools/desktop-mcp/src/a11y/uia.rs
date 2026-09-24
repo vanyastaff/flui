@@ -796,8 +796,10 @@ impl Uia {
                 }
                 if Self::has_pattern(handle, element, UIProperty::IsRangeValuePatternAvailable)? {
                     let number: f64 = value.trim().parse().map_err(|_| {
+                        let shown: String = value.chars().take(40).collect();
+                        let more = if value.chars().nth(40).is_some() { "…" } else { "" };
                         ToolError::InvalidArgument(format!(
-                            "element `{handle}` takes a number (RangeValue pattern); `{value}` is not one"
+                            "element `{handle}` takes a number (RangeValue pattern); `{shown}{more}` is not one"
                         ))
                     })?;
                     return element

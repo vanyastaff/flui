@@ -120,11 +120,9 @@ pub fn verify_focus(foreground: Option<&Foreground>, focus: Focus) -> ToolResult
     match focus {
         Focus::Foreground => Ok(()),
         Focus::Pid(pid) if pid == fg.pid => Ok(()),
-        Focus::Pid(pid) => Err(ToolError::NotForeground {
+        Focus::Pid(pid) => Err(ToolError::FocusElsewhere {
             target: format!("window {} of process {}", fg.id, fg.pid),
-            foreground: format!(
-                "{fg}, but keyboard focus is inside it in a window of process {pid}"
-            ),
+            holder: pid,
         }),
         Focus::Unknown => Err(ToolError::NotSupported(format!(
             "this OS does not report which window has keyboard focus ({fg} could hold it inside another process's panel), so keys and text with a safety target are refused"
@@ -252,6 +250,9 @@ pub struct Desktop {
     /// process holds the pid. A pid whose start time the OS cannot report is
     /// never recorded, so it is never accepted as a target.
     started: HashMap<u32, u64>,
+    /// Listed pids whose start time could not be read (a protected process
+    /// on Windows): refused as unidentifiable rather than as never listed.
+    unidentified: std::collections::HashSet<u32>,
 }
 
 impl std::fmt::Debug for Desktop {
@@ -271,6 +272,7 @@ impl Desktop {
             input: Input::new(),
             issued: HashMap::new(),
             started: HashMap::new(),
+            unidentified: std::collections::HashSet::new(),
         }
     }
 
@@ -317,12 +319,18 @@ impl Desktop {
     /// cannot outlive its process, so its owner was alive, under that pid,
     /// when the start time was read. A window that went meanwhile is not
     /// bound at all (its id is refused as never listed).
-    fn adopt_window(&mut self, w: &WindowInfo) {
+    ///
+    /// Why the window cannot be targeted, if it cannot: the listing says so
+    /// next to it, rather than handing out an id every call then refuses.
+    fn adopt_window(&mut self, w: &WindowInfo) -> Option<String> {
         let started = os::process_started(w.pid);
         if cfg!(target_os = "windows") && os::window_pid(w.id) != Some(w.pid) {
-            return;
+            return Some("it closed or changed owner while it was listed; list again".into());
         }
-        self.issued.entry(w.id).or_insert(Issued {
+        if started.is_none() && cfg!(target_os = "windows") {
+            self.unidentified.insert(w.pid);
+        }
+        let issued = *self.issued.entry(w.id).or_insert(Issued {
             pid: w.pid,
             started,
             class: os::window_class(w.id),
@@ -330,6 +338,18 @@ impl Desktop {
         if let Some(started) = started {
             self.started.entry(w.pid).or_insert(started);
         }
+        if issued.pid != w.pid || issued.started != started {
+            return Some(format!(
+                "this id was handed out earlier for process {}, and an id is never re-bound; target this window by pid if that is allowed",
+                issued.pid
+            ));
+        }
+        if started.is_none() && cfg!(target_os = "windows") {
+            return Some(
+                "its process cannot be identified (its start time cannot be read), so it is not a safety target".into(),
+            );
+        }
+        None
     }
 
     /// The windows of the process `launch` started as `pid` (at `started`),
@@ -356,8 +376,9 @@ impl Desktop {
         if !same() {
             return Ok(None);
         }
-        for w in &windows {
-            self.adopt_window(w);
+        let mut windows = windows;
+        for w in &mut windows {
+            w.not_targetable = self.adopt_window(w);
         }
         Ok(Some(windows))
     }
@@ -383,8 +404,9 @@ impl Desktop {
         // A listing never re-binds: an agent may still hold an id or pid from
         // an earlier listing, and a later one seeing the number reused must
         // not make that old target name the new process.
-        for w in &windows {
-            self.adopt_window(w);
+        let mut windows = windows;
+        for w in &mut windows {
+            w.not_targetable = self.adopt_window(w);
         }
         Ok(windows)
     }
@@ -405,6 +427,13 @@ impl Desktop {
                         "window {id} was not listed in this session; take window ids from list_windows or launch"
                     ))
                 })?;
+                // On Windows every process has a start time unless it could
+                // not be read: then nothing tells it from a successor.
+                if started.is_none() && cfg!(target_os = "windows") {
+                    return Err(ToolError::NotSupported(format!(
+                        "window {id} belongs to process {pid}, which cannot be identified (its start time cannot be read), so it is not a safety target"
+                    )));
+                }
                 Ok(Binding {
                     window_pid: Some(pid),
                     started,
@@ -414,6 +443,11 @@ impl Desktop {
             Some(Target::Pid(pid)) => {
                 let now = os::process_started(pid);
                 let Some(&then) = self.started.get(&pid) else {
+                    if self.unidentified.contains(&pid) {
+                        return Err(ToolError::NotSupported(format!(
+                            "process {pid} cannot be identified (its start time cannot be read), so it is not a safety target"
+                        )));
+                    }
                     if now.is_none() && !cfg!(target_os = "windows") {
                         // The OS has no start times: the reason to report.
                         same_process(pid, None, None)?;
@@ -536,9 +570,14 @@ impl Desktop {
                     .map(|now| (id, now))
             })
         {
-            return Err(ToolError::InvalidArgument(format!(
-                "window {id} changed owner to process {now} while it was read; read again"
-            )));
+            let changed = format!("window {id} changed owner to process {now} while it was read");
+            return Err(if matches!(target, Target::Pid(_)) {
+                ToolError::Busy(changed)
+            } else {
+                ToolError::InvalidArgument(format!(
+                    "{changed}; this id now names another process's window and is not re-bound"
+                ))
+            });
         }
         Ok(read)
     }
@@ -698,7 +737,7 @@ impl Desktop {
                 // same process in front would take a click checked against the
                 // process alone, so an unknown window is refused, not relaxed.
                 let window = p.window.ok_or_else(|| {
-                    ToolError::NotFound(format!(
+                    ToolError::NotSupported(format!(
                         "cannot tell which window element `{handle}` belongs to, so it is not clicked; use invoke"
                     ))
                 })?;
@@ -1025,7 +1064,11 @@ mod tests {
     #[test]
     fn keyboard_focus_in_another_process_is_refused() {
         let err = verify_focus(Some(&fg()), Focus::Pid(555)).expect_err("BUG: focus is elsewhere");
-        assert!(err.to_string().contains("process 555"), "{err}");
+        // Its own error: "activate the window" would not move the focus.
+        assert!(
+            matches!(err, ToolError::FocusElsewhere { holder: 555, .. }),
+            "{err}"
+        );
         assert!(verify_focus(Some(&fg()), Focus::Pid(100)).is_ok());
         assert!(verify_focus(Some(&fg()), Focus::Foreground).is_ok());
     }

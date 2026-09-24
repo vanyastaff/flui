@@ -219,8 +219,10 @@ pub enum ScreenshotTarget {
 /// than MCP clients and models take for an image.
 pub const DEFAULT_MAX_SIDE: u32 = 1920;
 
-/// The largest `max_side`: the image, its PNG and the base64 reply each
-/// stay within about 64 MiB for any content.
+/// The largest `max_side`: the shrunk image is at most 64 MiB as RGBA, its
+/// PNG about as much for content that does not compress, and the base64
+/// reply a third more (about 85 MiB); the bitmap read before shrinking is
+/// bounded apart (an 8K display, about 127 MiB).
 pub const MAX_SIDE: u32 = 4096;
 
 impl ScreenshotParams {
@@ -445,7 +447,8 @@ pub struct PointArg {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClickParams {
-    /// Click this element's clickable point. Its window must be in front.
+    /// Click this element's clickable point. Its process must be in front
+    /// and its own window under the point (a popup counts).
     pub element: Option<String>,
     /// Screen x (screen coordinates: physical pixels on Windows, points on macOS), with `y`, instead of `element`.
     pub x: Option<i32>,
