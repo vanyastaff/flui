@@ -40,6 +40,9 @@ const READ_DEADLINE: Duration = Duration::from_secs(10);
 /// queue is full (every [`POLL`]).
 const BIND_ATTEMPTS: u32 = 40;
 
+/// How long `launch` waits in all to bind the pid it started.
+const BIND_WAIT: Duration = Duration::from_secs(10);
+
 /// The least time one `wait_for` poll reads for.
 const MIN_READ: Duration = Duration::from_secs(1);
 
@@ -244,11 +247,16 @@ impl DesktopServer {
         // Bind the pid to the identity read at the spawn. The process runs
         // now whatever happens to this request, so this step is not skipped;
         // a full queue is waited out rather than failing the binding.
+        // Bounded as a whole: a desktop thread stuck in a platform call
+        // would otherwise hold the pid back from the caller for good.
+        let bind_until = Instant::now() + BIND_WAIT;
+        let never = CancellationToken::new();
         let mut bound = Err(ToolError::Cancelled);
         for _ in 0..BIND_ATTEMPTS {
-            bound = self
+            let left = bind_until.saturating_duration_since(Instant::now());
+            let attempt = self
                 .worker
-                .run(&CancellationToken::new(), move |d| {
+                .run(&never, move |d| {
                     if d.bind_launched(pid, started) {
                         Ok(())
                     } else {
@@ -256,8 +264,18 @@ impl DesktopServer {
                             "this pid was handed out before for another process, or the OS reports no start time".into(),
                         ))
                     }
-                })
-                .await;
+                });
+            bound = tokio::time::timeout(left, attempt)
+                .await
+                .unwrap_or_else(|_| {
+                    Err(ToolError::platform(
+                        "binding the launched pid",
+                        "the desktop thread is busy with an earlier call",
+                    ))
+                });
+            if Instant::now() >= bind_until {
+                break;
+            }
             // Refused for good: stop. Anything else (a full queue) is retried.
             if matches!(bound, Err(ToolError::InvalidArgument(_))) {
                 break;

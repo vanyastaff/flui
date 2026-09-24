@@ -438,7 +438,7 @@ pub fn process_windows(pid: u32) -> ToolResult<Vec<u32>> {
 /// as a plain key press: none does, it needs a state this server cannot
 /// hold (Kana, Hankaku), or it is a dead key, which types nothing itself
 /// and changes the key after it.
-pub fn char_key(c: char, command: bool) -> Option<(u16, u8, u32)> {
+pub fn char_key(c: char, command: bool) -> Option<(u16, u8, (u32, u32))> {
     let mut units = [0_u16; 2];
     let [unit] = c.encode_utf16(&mut units) else {
         return None;
@@ -456,12 +456,13 @@ pub fn char_key(c: char, command: bool) -> Option<(u16, u8, u32)> {
     };
     // SAFETY: `info` is a local with its size set, as the call requires.
     let read = unsafe { GetGUIThreadInfo(foreground_thread, &raw mut info) }.is_ok();
-    let focus_thread = if read && !info.hwndFocus.is_invalid() {
-        // SAFETY: a window handle the call just returned.
-        unsafe { GetWindowThreadProcessId(info.hwndFocus, None) }
+    let focus_window = if read && !info.hwndFocus.is_invalid() {
+        info.hwndFocus
     } else {
-        foreground_thread
+        foreground
     };
+    // SAFETY: a window handle the call just returned, or the foreground.
+    let focus_thread = unsafe { GetWindowThreadProcessId(focus_window, None) };
     // SAFETY: plain value argument.
     let layout = unsafe { GetKeyboardLayout(focus_thread) };
     // SAFETY: plain value arguments.
@@ -499,7 +500,7 @@ pub fn char_key(c: char, command: bool) -> Option<(u16, u8, u32)> {
         // character is not this key.
         typed == 1 && out[0] == *unit
     };
-    let window = foreground.0 as usize as u32;
+    let window = (foreground.0 as usize as u32, focus_window.0 as usize as u32);
     if types(shift) {
         Some((u16::from(vk), shift, window))
     } else if types(shift ^ 1) {
@@ -507,6 +508,27 @@ pub fn char_key(c: char, command: bool) -> Option<(u16, u8, u32)> {
     } else {
         None
     }
+}
+
+/// The foreground window and the window holding keyboard focus in it (the
+/// foreground itself when none does), as [`char_key`] reads them.
+pub fn keyboard_owner() -> (u32, u32) {
+    // SAFETY: no arguments.
+    let foreground = unsafe { GetForegroundWindow() };
+    // SAFETY: a null window yields thread 0.
+    let thread = unsafe { GetWindowThreadProcessId(foreground, None) };
+    let mut info = GUITHREADINFO {
+        cbSize: size_of::<GUITHREADINFO>() as u32,
+        ..GUITHREADINFO::default()
+    };
+    // SAFETY: `info` is a local with its size set, as the call requires.
+    let read = unsafe { GetGUIThreadInfo(thread, &raw mut info) }.is_ok();
+    let focus = if read && !info.hwndFocus.is_invalid() {
+        info.hwndFocus
+    } else {
+        foreground
+    };
+    (foreground.0 as usize as u32, focus.0 as usize as u32)
 }
 
 /// Restores `id` if minimized and asks Windows to put it in front. Windows

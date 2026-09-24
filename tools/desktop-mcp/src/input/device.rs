@@ -93,24 +93,39 @@ impl Input {
             })?;
             released.push(format!("the {button:?} mouse button"));
         }
+        // Every one is tried: the ones that go out are side effects to
+        // report even when another stays down.
+        let mut still_held = Vec::new();
         for key in self.enigo.held().0 {
-            self.enigo.key(key, Direction::Release).map_err(|e| {
-                ToolError::NotSupported(format!(
-                    "{key:?} is still held from an earlier failed release ({e}); no input is sent until it is released"
-                ))
-            })?;
-            released.push(format!("{key:?}"));
+            match self.enigo.key(key, Direction::Release) {
+                Ok(()) => released.push(format!("{key:?}")),
+                Err(e) => still_held.push(format!("{key:?} ({e})")),
+            }
         }
-        if released.is_empty() {
+        if released.is_empty() && still_held.is_empty() {
             return Ok(());
         }
+        let stuck = (!still_held.is_empty()).then(|| {
+            ToolError::NotSupported(format!(
+                "{} still held from an earlier failed release; no input is sent until released",
+                still_held.join(", ")
+            ))
+        });
+        if released.is_empty() {
+            return Err(stuck.expect("BUG: something was held"));
+        }
         Err(ToolError::Interrupted {
-            cause: Box::new(ToolError::NotSupported(format!(
-                "{} held from an earlier failed release {} released first",
-                released.join(", "),
-                if released.len() == 1 { "was" } else { "were" }
-            ))),
-            what: "the release went to wherever the pointer and focus are now and may have dropped, clicked or opened a menu there; nothing of this call was sent, so look, then retry".into(),
+            cause: Box::new(stuck.unwrap_or_else(|| {
+                ToolError::NotSupported(format!(
+                    "{} held from an earlier failed release {} released first",
+                    released.join(", "),
+                    if released.len() == 1 { "was" } else { "were" }
+                ))
+            })),
+            what: format!(
+                "{} went to wherever the pointer and focus are now and may have dropped, clicked or opened a menu there; nothing of this call was sent, so look, then retry",
+                released.join(", ")
+            ),
         })
     }
 
@@ -531,19 +546,20 @@ impl Input {
         // the key (a window that was in front for a moment has another).
         let (key, modifiers, layout_of) = resolve(combo).map_err(|e| (e, false))?;
         guard(None).map_err(|e| (e, false))?;
-        if let Some(window) = layout_of
-            && crate::os::foreground().map(|(id, _)| id) != Some(window)
+        #[cfg(target_os = "windows")]
+        if let Some(owner) = layout_of
+            && crate::os::keyboard_owner() != owner
         {
             return Err((
                 ToolError::NotForeground {
-                    target: format!("window {window}"),
-                    foreground:
-                        "the foreground changed while the key was looked up on its keyboard layout"
-                            .into(),
+                    target: format!("window {}", owner.0),
+                    foreground: "the foreground or its focused control changed while the key was looked up on its keyboard layout".into(),
                 },
                 false,
             ));
         }
+        #[cfg(not(target_os = "windows"))]
+        let _ = layout_of;
         let modifiers = modifiers.as_slice();
         let mut held = Vec::with_capacity(modifiers.len());
         let mut result = Ok(());
@@ -659,9 +675,12 @@ impl Input {
 /// Windows a character goes out as its layout's virtual key with the shift
 /// state that layout needs: enigo would send the character's shifted
 /// virtual-key code as is, which is no key at all.
-/// The key and modifiers for `combo`, and for a character the foreground
-/// window whose keyboard layout chose its key.
-fn resolve(combo: &KeyCombo) -> ToolResult<(Key, Vec<Modifier>, Option<u32>)> {
+/// The foreground and focused windows whose keyboard layout chose a key.
+type LayoutOwner = (u32, u32);
+
+/// The key and modifiers for `combo`, and for a character the
+/// [`LayoutOwner`] whose layout chose its key.
+fn resolve(combo: &KeyCombo) -> ToolResult<(Key, Vec<Modifier>, Option<LayoutOwner>)> {
     #[cfg(target_os = "windows")]
     if let KeyName::Char(c) = combo.key {
         // With a command modifier the key is a shortcut: the layout's key as

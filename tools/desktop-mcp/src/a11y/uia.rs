@@ -993,16 +993,32 @@ fn role(element: &UIElement) -> String {
 /// value or `false` — a control that reads as disabled because the read
 /// failed would be skipped — so it marks the read incomplete.
 fn searchable(element: &UIElement) -> bool {
-    // The typed reads `describe` makes: a variant of the wrong type is there
-    // but reads as missing, and a missing name would match `name: ""`.
+    // The typed reads `describe` and `register` make: a variant of the wrong
+    // type is there but reads as missing or false, so a missing name would
+    // match `name: ""` and a missing pid would issue a handle every action
+    // refuses.
+    let typed = |prop, check: fn(uiautomation::variants::Variant) -> bool| {
+        element.get_cached_property_value(prop).is_ok_and(check)
+    };
+    let is_bool: fn(uiautomation::variants::Variant) -> bool =
+        |v| TryInto::<bool>::try_into(v).is_ok();
+    let offered = |prop| cached_bool(element, prop);
     cached_i32(element, UIProperty::ControlType).is_some()
+        && cached_i32(element, UIProperty::ProcessId).is_some()
         && element.get_cached_name().is_ok()
         && element.get_cached_automation_id().is_ok()
         && element.get_cached_classname().is_ok()
-        && NODE_PROPERTIES
-            .iter()
-            .chain(PATTERNS.iter().map(|(prop, _)| prop))
-            .all(|&prop| element.get_cached_property_value(prop).is_ok())
+        && element.get_cached_bounding_rectangle().is_ok()
+        && typed(UIProperty::IsEnabled, is_bool)
+        && typed(UIProperty::HasKeyboardFocus, is_bool)
+        && typed(UIProperty::IsKeyboardFocusable, is_bool)
+        && PATTERNS.iter().all(|&(prop, _)| typed(prop, is_bool))
+        && (!offered(UIProperty::IsTogglePatternAvailable)
+            || cached_i32(element, UIProperty::ToggleToggleState).is_some())
+        && (!offered(UIProperty::IsRangeValuePatternAvailable)
+            || typed(UIProperty::RangeValueValue, |v| {
+                TryInto::<f64>::try_into(v).is_ok()
+            }))
 }
 
 /// The element a walker step reached: `None` at the end of the children,
