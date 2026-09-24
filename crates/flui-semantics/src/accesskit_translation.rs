@@ -370,12 +370,27 @@ pub fn semantics_action_args_for(
 /// unrepresentable.)
 #[must_use]
 pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
-    let mut node = Node::new(resolve_role(data));
+    let role = resolve_role(data);
+    let mut node = Node::new(role);
 
     if let Some(label) = &data.label {
         node.set_label(label.as_str());
     }
-    if let Some(value) = &data.value {
+    if role == Role::Label {
+        // Static text is named by its value: the Windows and AT-SPI adapters
+        // read a `Label`'s name from `value` alone
+        // (`accesskit_consumer::Node::label_comes_from_value`), so a `Text`
+        // published with only a label reached UI Automation and AT-SPI with an
+        // empty name (the AppKit adapter falls back to the label, which is why
+        // VoiceOver read it). The label stays for queries by label. A value the
+        // node also carries follows the label on its own line, the separator
+        // the reference joins merged labels with.
+        match (&data.label, &data.value) {
+            (Some(label), Some(value)) => node.set_value(format!("{label}\n{value}")),
+            (Some(text), None) | (None, Some(text)) => node.set_value(text.as_str()),
+            (None, None) => {}
+        }
+    } else if let Some(value) = &data.value {
         node.set_value(value.as_str());
     }
     // FLUI's `hint` is supplementary prose about what a control does, which is
@@ -854,6 +869,78 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(translate(&labelled_button).role(), Role::Button);
+    }
+
+    /// The name an assistive technology reads for each node, as the AccessKit
+    /// adapters derive it: a `Label`'s from its value, anything else's from its
+    /// label. Read through `accesskit_consumer`, the layer every adapter sits on.
+    fn adapter_names(nodes: &[(u64, Node)]) -> Vec<(Role, Option<String>)> {
+        let mut root = Node::new(Role::Window);
+        root.set_children(nodes.iter().map(|(id, _)| NodeId(*id)).collect::<Vec<_>>());
+        let mut all = vec![(NodeId(1), root)];
+        all.extend(nodes.iter().map(|(id, node)| (NodeId(*id), node.clone())));
+        let tree = accesskit_consumer::Tree::new(
+            TreeUpdate {
+                nodes: all,
+                tree: Some(TreeInfo::new(NodeId(1))),
+                tree_id: TreeId::ROOT,
+                focus: NodeId(1),
+            },
+            true,
+        );
+        tree.state()
+            .root()
+            .children()
+            .map(|node| {
+                let name = if node.label_comes_from_value() {
+                    node.value()
+                } else {
+                    node.label()
+                };
+                (node.role(), name)
+            })
+            .collect()
+    }
+
+    /// A plain `Text` is named by its text on every adapter. Found on the first
+    /// live Windows run (`cargo xtask device windows-a11y`): UI Automation
+    /// reported the counter's two texts with empty names beside a correctly
+    /// named button, because the text went out as a label and an adapter reads
+    /// a `Label`'s name from its value.
+    #[test]
+    fn static_text_is_named_by_its_text() {
+        let text = SemanticsNodeData {
+            label: Some("You have pushed the button this many times:".into()),
+            ..Default::default()
+        };
+        let labelled_value = SemanticsNodeData {
+            label: Some("Volume".into()),
+            value: Some("40%".into()),
+            ..Default::default()
+        };
+        let button = SemanticsNodeData {
+            flags: flags(&[SemanticsFlag::IsButton]),
+            label: Some("Increment".into()),
+            ..Default::default()
+        };
+
+        let names = adapter_names(&[
+            (2, translate(&text)),
+            (3, translate(&labelled_value)),
+            (4, translate(&button)),
+        ]);
+
+        assert_eq!(
+            names,
+            vec![
+                (
+                    Role::Label,
+                    Some("You have pushed the button this many times:".into())
+                ),
+                (Role::Label, Some("Volume\n40%".into())),
+                (Role::Button, Some("Increment".into())),
+            ]
+        );
     }
 
     /// `IsButton` outranks `IsLink` and `IsTextField`, and keeps doing so.

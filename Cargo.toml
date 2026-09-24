@@ -141,6 +141,13 @@ web-time = "1.1"
 # belongs in flui-platform, which cannot depend on flui-semantics (layer 2 vs 3).
 # One required dependency of its own (uuid), MIT OR Apache-2.0.
 accesskit = "0.25"
+# The tree model every AccessKit adapter reads through; tests use it to see
+# a node the way UI Automation, AT-SPI and NSAccessibility are handed it.
+accesskit_consumer = "0.39"
+
+# Win32 bindings: the Windows platform backend, hot-reload's library loader,
+# and xtask's UI Automation client. Each member names the API families it uses.
+windows = "0.62"
 
 # COLLECTIONS - Used by multiple crates
 smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }

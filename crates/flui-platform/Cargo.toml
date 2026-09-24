@@ -86,7 +86,7 @@ static_assertions = { workspace = true }
 
 # Windows platform
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = [
+windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",

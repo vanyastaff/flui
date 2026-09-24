@@ -1,25 +1,33 @@
-//! End-to-end checks on Apple hardware: build a probe, stage it the way the
-//! platform needs it, and run it or its driver from `tools/device-checks/`.
+//! End-to-end checks on a real OS: build a probe, stage it the way the
+//! platform needs it, and run it or its driver.
 //!
-//! The drivers stay Python and Swift: they only run on a Mac, so only a Mac
-//! can port them with evidence. This module owns what the recipes around them
-//! did — the build, the staging and the verdict on a probe's output — as a
-//! plan computed first and executed second, so a test on any host can hold
-//! each check against the commands it replaced.
+//! The Apple drivers stay Python and Swift under `tools/device-checks/`: they
+//! only run on a Mac, so only a Mac can port them with evidence. The Windows
+//! checks are clients of Win32 APIs xtask can call itself, so they run
+//! in-process (`device/windows_a11y.rs`, Windows only). This module owns the
+//! build, the staging and the verdict on a probe's output as a plan computed
+//! first and executed second, so a test on any host can hold each check
+//! against its steps.
 //!
-//! On another host a check that needs macOS says why it is skipped and exits
-//! 0. `macos-workload` and `macos-hot-reload-loop` leave that decision to
-//! their drivers (the first skips with 0, the second refuses with 1). Paths
-//! are relative to the repository root, where every step runs.
+//! On another host a check says why it is skipped and exits 0.
+//! `macos-workload` and `macos-hot-reload-loop` leave that decision to their
+//! drivers (the first skips with 0, the second refuses with 1). Paths are
+//! relative to the repository root, where every step runs.
 
 mod plan;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "a UI Automation client is COM calls through the `windows` bindings"
+)]
+mod windows_a11y;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
-use plan::{Announce, Program, Run, Sink, Step};
+use plan::{Announce, Native, Program, Run, Sink, Step};
 
 use crate::util::{metadata, repo_root};
 
@@ -38,9 +46,9 @@ pub(crate) struct DeviceArgs {
     check: DeviceCheck,
 }
 
-/// `cargo xtask device <check>`: run a macOS or iOS device check.
+/// `cargo xtask device <check>`: run a macOS, iOS or Windows device check.
 pub(crate) fn device(args: &DeviceArgs) -> anyhow::Result<ExitCode> {
-    if !cfg!(target_os = "macos")
+    if !args.check.runs_on_this_host()
         && let Some(reason) = args.check.skip_reason()
     {
         println!("{reason}");
@@ -277,10 +285,35 @@ enum DeviceCheck {
         /// An already booted simulator.
         udid: String,
     },
+    /// Assistive technology on a real Windows desktop.
+    ///
+    /// Builds `examples/a11y_probe` (the generated counter with the facade's
+    /// `a11y` feature, so the AccessKit UIA adapter is installed), runs it on
+    /// a real window, and acts as the screen reader itself through UI
+    /// Automation, the API Narrator, NVDA and JAWS use: finds the window by
+    /// the probe's process id, requires the prompt, the count and the
+    /// Increment button in the raw tree under the names a screen reader
+    /// speaks, invokes the button through `IUIAutomationInvokePattern`, and
+    /// requires the count's name to become "1". No pointer or keyboard event
+    /// is synthesised. The oracle is names rather than presence: its first run
+    /// found both texts in the tree with empty names. Exits 2 (cannot verify)
+    /// when UI Automation cannot be instantiated. Needs an interactive
+    /// desktop session.
+    WindowsA11y,
 }
 
 impl DeviceCheck {
-    /// Why this check does nothing off macOS, or `None` when its driver
+    /// Whether this host is the OS the check needs.
+    fn runs_on_this_host(&self) -> bool {
+        let needs = if matches!(self, Self::WindowsA11y) {
+            "windows"
+        } else {
+            "macos"
+        };
+        std::env::consts::OS == needs
+    }
+
+    /// Why this check does nothing off its host, or `None` when its driver
     /// decides that itself.
     fn skip_reason(&self) -> Option<&'static str> {
         Some(match self {
@@ -316,6 +349,9 @@ impl DeviceCheck {
             }
             Self::IosSafeAreaCheck { .. } => {
                 "Skipping ios-safe-area-check on this host: it needs a macOS host with Xcode, the aarch64-apple-ios-sim target and an already booted simulator; on a Mac run: cargo xtask device ios-safe-area-check <udid>"
+            }
+            Self::WindowsA11y => {
+                "Skipping windows-a11y on this host: the check reads a real window through UI Automation, so it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-a11y"
             }
             Self::MacosWorkload | Self::MacosHotReloadLoop { .. } => return None,
         })
@@ -354,6 +390,27 @@ impl DeviceCheck {
                     .args([udid.as_str(), "target/ios-safe-area-check"]),
                 announce: None,
             }],
+            Self::WindowsA11y => vec![
+                cargo_build([
+                    "-p",
+                    "flui",
+                    "--locked",
+                    "--release",
+                    "--example",
+                    "a11y_probe",
+                    "--features",
+                    "material,a11y",
+                ]),
+                Step::Native {
+                    check: Native::WindowsA11y {
+                        probe: target.join("release/examples/a11y_probe.exe"),
+                    },
+                    announce: Announce {
+                        cannot_verify: "windows-a11y CANNOT VERIFY: UI Automation could not be instantiated on this host — details above",
+                        failed: "windows-a11y FAILED: a text or the button was missing or unnamed in the UIA tree, Invoke was refused, or the count did not advance (tree dumps above)",
+                    },
+                },
+            ],
         }
     }
 }
@@ -816,6 +873,7 @@ mod tests {
                 },
             ),
             (&["ios-sim"], DeviceCheck::IosSim),
+            (&["windows-a11y"], DeviceCheck::WindowsA11y),
             (
                 &["ios-input-check", "UDID-1"],
                 DeviceCheck::IosInputCheck {
@@ -891,6 +949,12 @@ mod tests {
                 "{reason}"
             );
         }
+        let windows = DeviceCheck::WindowsA11y.skip_reason().expect("gated");
+        assert!(
+            windows.ends_with("; on Windows run: cargo xtask device windows-a11y"),
+            "{windows}"
+        );
+        assert_eq!(DeviceCheck::WindowsA11y.runs_on_this_host(), cfg!(windows));
         assert_eq!(DeviceCheck::MacosWorkload.skip_reason(), None);
         assert_eq!(
             DeviceCheck::MacosHotReloadLoop { work: "w".into() }.skip_reason(),
@@ -986,6 +1050,17 @@ mod tests {
             &DeviceCheck::MacosA11y,
             &[
                 "python -B tools/device-checks/check-macos-a11y.py; if rc=2: echo 'macos-a11y CANNOT VERIFY: this host could not take the measurement (accessibility trust not granted, or swiftc missing) — details above'; elif rc!=0: echo 'macos-a11y FAILED: the button was not in the accessibility tree, AXPress was refused, or the count did not advance (tree dumps above)'; exit $rc",
+            ],
+        );
+    }
+
+    #[test]
+    fn windows_a11y_builds_the_probe_and_drives_it_in_process() {
+        assert_plan(
+            &DeviceCheck::WindowsA11y,
+            &[
+                "cargo build -p flui --locked --release --example a11y_probe --features material,a11y",
+                "uia-client target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-a11y CANNOT VERIFY: UI Automation could not be instantiated on this host — details above'; elif rc!=0: echo 'windows-a11y FAILED: a text or the button was missing or unnamed in the UIA tree, Invoke was refused, or the count did not advance (tree dumps above)'; exit $rc",
             ],
         );
     }

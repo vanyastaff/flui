@@ -160,6 +160,10 @@ pub(super) enum Step {
         run: Run,
         announce: Option<Announce>,
     },
+    /// Runs a check this process performs itself — an OS client API with no
+    /// command-line tool in front of it — and ends the plan with its exit
+    /// code, announced as a driver's is.
+    Native { check: Native, announce: Announce },
     /// Ends the plan with 1 after `failure` and the last `tail` lines of
     /// `log` containing `excerpt`, unless each pattern matches a line of
     /// `log`.
@@ -194,6 +198,33 @@ impl Step {
             _ => false,
         }
     }
+}
+
+/// A check xtask runs in-process rather than as a child program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Native {
+    /// The built `a11y_probe` driven through UI Automation
+    /// (`device/windows_a11y.rs`, Windows only).
+    WindowsA11y { probe: PathBuf },
+}
+
+impl Native {
+    /// Its exit code: 0 pass, 1 fail, 2 cannot verify on this host.
+    fn run(&self, root: &Path) -> anyhow::Result<u8> {
+        match self {
+            Self::WindowsA11y { probe } => windows_a11y(&root.join(probe)),
+        }
+    }
+}
+
+#[cfg(windows)]
+use super::windows_a11y::run as windows_a11y;
+
+/// Unreachable in practice: the check is skipped off Windows before any step
+/// runs.
+#[cfg(not(windows))]
+fn windows_a11y(_probe: &Path) -> anyhow::Result<u8> {
+    anyhow::bail!("the UI Automation client only exists on Windows")
 }
 
 /// Whether the plan goes on after a step.
@@ -260,6 +291,13 @@ impl<'a> Executor<'a> {
                 failure,
             } => return self.probe(run, markers, failure),
             Step::Driver { run, announce } => return self.driver(run, announce.as_ref()),
+            Step::Native { check, announce } => {
+                let code = check.run(self.root)?;
+                if let Some(line) = announce.line_for(code) {
+                    println!("{line}");
+                }
+                return Ok(Flow::Exit(code));
+            }
             Step::RequireLog {
                 log,
                 patterns,
@@ -601,6 +639,18 @@ impl fmt::Display for Step {
                 }
                 f.write_str("; exit $rc")
             }
+            Self::Native {
+                check: Native::WindowsA11y { probe },
+                announce:
+                    Announce {
+                        cannot_verify,
+                        failed,
+                    },
+            } => write!(
+                f,
+                "uia-client {}; if rc=2: echo '{cannot_verify}'; elif rc!=0: echo '{failed}'; exit $rc",
+                quote(&show(probe))
+            ),
             Self::RequireLog {
                 log,
                 patterns,

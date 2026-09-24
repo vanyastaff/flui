@@ -18,4 +18,6 @@ what each proves.
 
 The drivers are Python + Swift rather than Rust because they can only be run,
 and so only be ported with evidence, on a Mac. Everything that runs on any
-host lives in `tools/xtask`.
+host lives in `tools/xtask`, and so do the Windows checks
+(`cargo xtask device windows-a11y`): they are Win32 API clients xtask calls
+in-process, with no driver script.

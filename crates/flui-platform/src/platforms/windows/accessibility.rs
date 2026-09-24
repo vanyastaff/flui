@@ -17,13 +17,14 @@
 //! for the window's lifetime. That is the platform's shape, not an
 //! oversight; AT-SPI's explicit deactivation is the outlier.
 //!
-//! # Honesty note: type-checked, never executed
+//! # What executes it
 //!
-//! Like the whole Win32 backend, this module is covered only by the
-//! `cross-typecheck` gate (clippy, no link, no tests). The retention and
-//! dispatch rules it relies on are executed on Linux via
-//! [`BridgeShared`]'s own tests; the adapter shell around them has not run
-//! on a real Windows machine yet.
+//! `cargo xtask device windows-a11y` runs the generated counter on a real
+//! window and drives it as a UIA client: it reads this adapter's tree,
+//! invokes the button and reads the new count back. That is a manual check
+//! on a Windows desktop, not a CI job; CI only type-checks this module. The
+//! retention and dispatch rules it relies on are executed on every host via
+//! [`BridgeShared`]'s own tests.
 
 use std::sync::Arc;
 
