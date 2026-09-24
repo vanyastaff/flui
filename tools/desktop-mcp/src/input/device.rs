@@ -385,9 +385,25 @@ impl Input {
         let interval = (duration / steps).max(STEP);
         let mut last = from;
         let mut done = 0;
+        // SendInput can return before async button state reflects the down.
+        // Only this initial transition gets a bounded settling wait. Once
+        // observed held, a later missing bit means the drag was interrupted.
+        #[cfg(target_os = "windows")]
+        let mut moved = super::settle_owned_button(
+            physical_bit(primary),
+            || {
+                no_keyboard_input()?;
+                Ok(crate::os::mouse_buttons_down())
+            },
+            || thread::sleep(Duration::from_millis(5)),
+        );
+        #[cfg(not(target_os = "windows"))]
         let mut moved = Ok(());
         let held_button = self.held_button;
         for point in path {
+            if moved.is_err() {
+                break;
+            }
             thread::sleep(interval);
             moved = super::guarded_input_event(
                 || no_drag_interference(held_button),
@@ -828,7 +844,7 @@ impl Input {
     }
 }
 
-/// A drag may hold only its own physical mouse button. Both this button
+/// A drag must still hold exactly its own physical mouse button. Both this button
 /// snapshot and the keyboard snapshot run around every potentially slow
 /// guard, including the final drop and recovery without pointer movement.
 fn no_drag_interference(held: Option<Button>) -> ToolResult<()> {

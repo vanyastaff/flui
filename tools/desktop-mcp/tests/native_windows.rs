@@ -1,6 +1,6 @@
 //! Real Win32 controls driven only through MCP, with observable postconditions.
 //! Run explicitly on an interactive Windows desktop:
-//! `cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only --no-capture`.
+//! `cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only --test-threads 1 --no-capture`.
 #![cfg(target_os = "windows")]
 #![expect(
     unsafe_code,
@@ -23,13 +23,16 @@ use windows::Win32::System::SystemServices::SS_BLACKRECT;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput,
+    SetFocus,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     BS_AUTOCHECKBOX, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, ES_READONLY,
-    GetMessageW, HMENU, IsDialogMessageW, MSG, PostQuitMessage, RegisterClassW, SetTimer,
-    SetWindowTextW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_DESTROY, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEWHEEL, WM_TIMER, WNDCLASSW, WS_BORDER, WS_CHILD, WS_MINIMIZE,
-    WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+    GetMessageW, GetSystemMetrics, HMENU, IsDialogMessageW, MSG, PostQuitMessage, RegisterClassW,
+    SM_SWAPBUTTON, SetTimer, SetWindowTextW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_TIMER, WNDCLASSW,
+    WS_BORDER, WS_CHILD, WS_MINIMIZE, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -42,6 +45,7 @@ struct Metrics {
 
 thread_local! {
     static METRICS: Cell<Metrics> = const { Cell::new(Metrics { wheel: 0, down: None, drag: (0, 0) }) };
+    static EARLY_RELEASED: Cell<bool> = const { Cell::new(false) };
 }
 
 fn point(lparam: LPARAM) -> (i32, i32) {
@@ -76,6 +80,33 @@ unsafe extern "system" fn window_proc(
                 metrics.down = Some(point(lparam));
                 state.set(metrics);
             }),
+            WM_MOUSEMOVE
+                if wparam.0 & 1 != 0
+                    && std::env::var_os("FLUI_MCP_DROP_EARLY").is_some()
+                    && !EARLY_RELEASED.with(Cell::get) =>
+            {
+                // This event belongs to our visible fixture while the MCP drag
+                // holds its primary button. An injected release changes the real
+                // OS button state, exactly what an intervening physical release
+                // does; no press or move is injected outside the fixture.
+                let flags = if GetSystemMetrics(SM_SWAPBUTTON) == 0 {
+                    MOUSEEVENTF_LEFTUP
+                } else {
+                    MOUSEEVENTF_RIGHTUP
+                };
+                let input = INPUT {
+                    r#type: INPUT_MOUSE,
+                    Anonymous: INPUT_0 {
+                        mi: MOUSEINPUT {
+                            dwFlags: flags,
+                            ..Default::default()
+                        },
+                    },
+                };
+                if SendInput(&[input], size_of::<INPUT>() as i32) == 1 {
+                    EARLY_RELEASED.with(|released| released.set(true));
+                }
+            }
             WM_LBUTTONUP | WM_MOUSEWHEEL => METRICS.with(|state| {
                 let mut metrics = state.get();
                 if message == WM_MOUSEWHEEL {
@@ -87,8 +118,15 @@ unsafe extern "system" fn window_proc(
                 }
                 state.set(metrics);
                 let title: Vec<u16> = format!(
-                    "MCP Native Fixture wheel={} drag={},{}",
-                    metrics.wheel, metrics.drag.0, metrics.drag.1
+                    "MCP Native Fixture wheel={} drag={},{}{}",
+                    metrics.wheel,
+                    metrics.drag.0,
+                    metrics.drag.1,
+                    if EARLY_RELEASED.with(Cell::get) {
+                        " released_early=true"
+                    } else {
+                        ""
+                    }
                 )
                 .encode_utf16()
                 .chain(Some(0))
@@ -468,6 +506,73 @@ fn native_controls_through_mcp() {
         &mut client,
         pid,
         "MCP Native Fixture wheel=-120 drag=100,40",
+    );
+    call(&mut client, "kill", json!({"pid": pid}));
+}
+
+#[test]
+#[ignore = "moves the real pointer and releases the drag button inside its owned fixture"]
+fn a_native_release_interrupts_the_drag() {
+    let (mut client, _) = Client::start();
+    let executable = std::env::current_exe().expect("BUG: test executable path");
+    let launched = call(
+        &mut client,
+        "launch",
+        json!({
+            "program": executable.to_string_lossy(),
+            "args": ["--exact", "native_fixture_process", "--ignored", "--nocapture"],
+            "env": {"FLUI_MCP_NATIVE_FIXTURE": "1", "FLUI_MCP_DROP_EARLY": "1"}
+        }),
+    );
+    let pid = launched["pid"].as_u64().expect("BUG: child pid");
+    let waited = call(
+        &mut client,
+        "wait_for_window",
+        json!({"pid": pid, "timeout_ms": 15000}),
+    );
+    let window = waited["window"]["id"].as_str().expect("BUG: child window");
+    let activated = call(&mut client, "activate_window", json!({"window": window}));
+    assert_eq!(activated["became_foreground"], true, "{activated}");
+    let x = activated["window"]["rect"]["x"].as_i64().expect("BUG: x") + 320;
+    let y = activated["window"]["rect"]["y"].as_i64().expect("BUG: y") + 260;
+    let result = client.call(
+        "drag",
+        json!({
+            "window": window,
+            "from": {"x": x, "y": y}, "to": {"x": x + 100, "y": y + 40},
+            "duration_ms": 1000
+        }),
+    );
+    assert_eq!(result["isError"], true, "{result}");
+    let error = &result["structuredContent"]["error"];
+    assert_eq!(error["code"], "busy", "{result}");
+    assert_eq!(error["effect"]["kind"], "partial", "{result}");
+    assert!(
+        error["message"]
+            .as_str()
+            .expect("BUG: message")
+            .contains("no longer down"),
+        "{result}"
+    );
+    assert!(
+        error["effect"]["sent"].as_u64() < error["effect"]["total"].as_u64(),
+        "{result}"
+    );
+    let listed = call(&mut client, "list_windows", json!({"pid": pid}));
+    let title = listed["windows"][0]["title"]
+        .as_str()
+        .expect("BUG: fixture title");
+    assert!(title.contains("released_early=true"), "{listed}");
+    assert!(!title.contains("drag=100,40"), "{listed}");
+    // The actual system cursor is the independent oracle that no subsequent
+    // hover movement completed the abandoned drag path.
+    let mut cursor = windows::Win32::Foundation::POINT::default();
+    // SAFETY: the output pointer refers to this initialized, writable POINT.
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&raw mut cursor) }
+        .expect("BUG: cursor position is readable");
+    assert_ne!(
+        (i64::from(cursor.x), i64::from(cursor.y)),
+        (x + 100, y + 40)
     );
     call(&mut client, "kill", json!({"pid": pid}));
 }

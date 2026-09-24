@@ -734,6 +734,25 @@ impl Uia {
         until: Option<Instant>,
     ) -> ToolResult<()> {
         let held = self.elements.get(handle)?;
+        let (pid, started) = (held.pid, held.started);
+        let result = readback_while_current(
+            handle,
+            started,
+            || self.readback_state(handle, fresh, node, toggled, until),
+            || crate::os::process_started(pid),
+        );
+        result.map_err(|error| self.remember_error(handle, error))
+    }
+
+    fn readback_state(
+        &self,
+        handle: &str,
+        fresh: &UIElement,
+        node: &mut Node,
+        toggled: bool,
+        until: Option<Instant>,
+    ) -> ToolResult<()> {
+        let held = self.elements.get(handle)?;
         // The same rule as before the action: an element read back must be
         // the one acted on, in the same process.
         let same = held.same_as(fresh, crate::os::process_started(held.pid));
@@ -751,9 +770,8 @@ impl Uia {
             ));
         }
         if same == Some(false) {
-            self.elements.invalidate(handle);
-            return Err(ToolError::platform(
-                "reading back",
+            return Err(ToolError::gone_element(
+                handle,
                 "another element now answers for this one (its window was reused)",
             )
             .after(
@@ -1057,6 +1075,29 @@ impl Uia {
             }
         }
     }
+}
+
+/// Readback follows an action that already succeeded. Even its final value
+/// cache may block long enough for the process to be replaced; check after
+/// all provider work, on failed reads as well as successful ones.
+fn readback_while_current(
+    handle: &str,
+    started: Option<u64>,
+    read: impl FnOnce() -> ToolResult<()>,
+    process_now: impl FnOnce() -> Option<u64>,
+) -> ToolResult<()> {
+    let result = read();
+    if started.is_none() || process_now() != started {
+        return Err(ToolError::gone_element(
+            handle,
+            "its process exited or was replaced during readback",
+        )
+        .after(
+            Effect::Ran,
+            "the action itself succeeded; its original element is gone, so do not repeat it",
+        ));
+    }
+    result
 }
 
 /// The process identity must be observed after the final provider call:
@@ -1852,6 +1893,44 @@ fn classify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn readback_rechecks_process_after_the_last_provider_call() {
+        for fails in [false, true] {
+            for replacement in [None, Some(20)] {
+                let started = std::cell::Cell::new(Some(10));
+                let result = readback_while_current(
+                    "e1",
+                    Some(10),
+                    || {
+                        // The identity lookup succeeded, then the value
+                        // lookup outlived the original process.
+                        assert_eq!(started.get(), Some(10));
+                        started.set(replacement);
+                        if fails {
+                            Err(ToolError::platform(
+                                "reading value",
+                                "provider disconnected",
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    || started.get(),
+                );
+                let error = result.expect_err("BUG: replacement state is never returned");
+                assert_eq!(error.code(), "gone");
+                assert!(matches!(
+                    error,
+                    ToolError::Interrupted {
+                        effect: Effect::Ran,
+                        ..
+                    }
+                ));
+            }
+        }
+        assert!(readback_while_current("e1", Some(10), || Ok(()), || Some(10)).is_ok());
+    }
 
     #[test]
     fn process_replacement_during_identity_refresh_is_refused() {

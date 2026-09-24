@@ -360,8 +360,10 @@ impl Registry {
         if self.unidentified.contains(&pid) {
             return Some(Untargetable::UnidentifiedProcess);
         }
-        if let Some(started) = started {
-            self.started.entry(pid).or_insert(started);
+        if let Some(started) = started
+            && *self.started.entry(pid).or_insert(started) != started
+        {
+            return Some(Untargetable::ReusedProcess);
         }
         None
     }
@@ -850,7 +852,10 @@ impl Desktop {
                 // (macOS) a reused pid would capture another application's
                 // window, so the pid is refused and a window handle is the way.
                 let (_, bound) = self.registry.bound(TargetArg::Pid(pid))?;
-                let windows = Self::resolve(Target::Pid(pid))?;
+                let windows = read_while_current(
+                    || self.registry.revalidate(Target::Pid(pid), bound),
+                    || Self::resolve(Target::Pid(pid)),
+                )?;
                 let pick = windows
                     .iter()
                     .find(|w| w.is_focused)
@@ -873,13 +878,11 @@ impl Desktop {
                 )
             }
         };
-        let passing = |e: ToolError| match (target, e) {
+        let passing = |e: ToolError| match target {
             // For a pid, the window it picked closing is passing: the same
             // call picks another of its windows.
-            (ScreenshotTarget::Pid(_), ToolError::NotFound(why) | ToolError::Gone { why, .. }) => {
-                ToolError::Busy(why)
-            }
-            (_, e) => e,
+            ScreenshotTarget::Pid(pid) => selected_window_error(Target::Pid(pid), e),
+            _ => e,
         };
         let recheck = || {
             // A chosen window closing is transient for a pid; the process
@@ -914,16 +917,23 @@ impl Desktop {
     /// The native windows a scope's target names, held to their identity.
     fn scoped_windows(&mut self, target: TargetArg) -> ToolResult<(Target, Binding, Vec<u32>)> {
         let (target, bound) = self.registry.bound(target)?;
-        let ids: Vec<u32> = self.registry.observe(target, || {
-            Ok(match target {
-                Target::Pid(pid) => match os::process_windows(pid)? {
-                    Some(ids) if !ids.is_empty() => ids,
-                    Some(_) => return Err(no_window(target)),
-                    None => Self::resolve(target)?.iter().map(|w| w.id).collect(),
-                },
-                Target::Window(_, _) => Self::resolve(target)?.iter().map(|w| w.id).collect(),
-            })
-        })?;
+        let ids: Vec<u32> = read_while_current(
+            || self.registry.revalidate(target, bound),
+            || {
+                self.registry.observe(target, || {
+                    Ok(match target {
+                        Target::Pid(pid) => match os::process_windows(pid)? {
+                            Some(ids) if !ids.is_empty() => ids,
+                            Some(_) => return Err(no_window(target)),
+                            None => Self::resolve(target)?.iter().map(|w| w.id).collect(),
+                        },
+                        Target::Window(_, _) => {
+                            Self::resolve(target)?.iter().map(|w| w.id).collect()
+                        }
+                    })
+                })
+            },
+        )?;
         Ok((target, bound, ids))
     }
 
@@ -1415,7 +1425,10 @@ impl Desktop {
             )));
         }
         let (target, bound) = self.registry.bound(target)?;
-        let windows = self.registry.observe(target, || Self::resolve(target))?;
+        let windows = read_while_current(
+            || self.registry.revalidate(target, bound),
+            || self.registry.observe(target, || Self::resolve(target)),
+        )?;
         // A window that closed meanwhile is dropped; one whose own id cannot
         // be targeted still belongs to the target (a pid reaches it).
         let native = windows
@@ -1467,13 +1480,42 @@ impl Desktop {
             let fg = Self::foreground(&self.registry)?;
             refreshed.is_focused = fg.as_ref().map(|f| f.id) == Some(native.id);
             Ok((fg, refreshed))
-        })?;
+        })
+        .map_err(|error| selected_window_error(target, error))?;
         let became = fg.as_ref().map(|f| f.id) == Some(native.id);
         Ok(Activated {
             window: refreshed_window(window, refreshed),
             became_foreground: became,
             foreground: fg.as_ref().map(Foreground::as_ref),
         })
+    }
+}
+
+/// A pid can select another window on a later call, so losing only its
+/// chosen window is transient. Preserve process disappearance and any
+/// action effects: transient selection does not justify replaying an
+/// action that may already have run.
+fn selected_window_error(target: Target, error: ToolError) -> ToolError {
+    if !matches!(target, Target::Pid(_)) {
+        return error;
+    }
+    match error {
+        ToolError::Gone {
+            kind: HandleKind::Window,
+            why,
+            ..
+        }
+        | ToolError::NotFound(why) => ToolError::Busy(why),
+        ToolError::Interrupted {
+            cause,
+            effect,
+            detail,
+        } => ToolError::Interrupted {
+            cause: Box::new(selected_window_error(target, *cause)),
+            effect,
+            detail,
+        },
+        other => other,
     }
 }
 
@@ -1560,6 +1602,100 @@ fn activate_while_current<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reused_readable_pid_is_not_advertised_as_targetable() {
+        let mut registry = Registry::default();
+        assert_eq!(registry.observe_process(100, Some(123)), None);
+        assert_eq!(
+            registry.observe_process(100, Some(456)),
+            Some(Untargetable::ReusedProcess)
+        );
+        assert!(!registry.bind_launched(100, Some(456)));
+        assert_eq!(registry.started.get(&100), Some(&123));
+        assert_eq!(
+            same_process(100, registry.started.get(&100).copied(), Some(456))
+                .expect_err("BUG: the old pid binding remains final")
+                .code(),
+            "gone"
+        );
+        assert_eq!(
+            registry.observe_process(100, Some(456)),
+            Some(Untargetable::ReusedProcess)
+        );
+        let replacement = Issued {
+            hwnd: 7,
+            pid: 100,
+            started: Some(456),
+            class: Some(1),
+        };
+        let handle = registry.register_window(replacement);
+        assert_eq!(registry.register_window(replacement), handle);
+        assert!(
+            registry
+                .observe(Target::Window(7, handle), || Ok(()))
+                .is_ok(),
+            "the replacement window keeps its independent current handle"
+        );
+    }
+
+    #[test]
+    fn losing_a_selected_window_is_transient_only_for_a_pid_and_keeps_effects() {
+        let window = Target::Window(7, 1);
+        let plain = selected_window_error(Target::Pid(100), no_window(window));
+        assert_eq!(plain.code(), "busy");
+        assert_eq!(plain.retry(), crate::error::Retry::Soon);
+        assert_eq!(
+            selected_window_error(window, no_window(window)).code(),
+            "gone"
+        );
+        let interrupted = selected_window_error(
+            Target::Pid(100),
+            no_window(window).after(Effect::MayHaveRun, "the restore was attempted"),
+        );
+        assert_eq!(interrupted.code(), "busy");
+        assert_eq!(
+            interrupted.payload()["error"]["effect"]["kind"],
+            "may_have_run"
+        );
+        assert_eq!(
+            interrupted.payload()["error"]["effect"]["detail"],
+            "the restore was attempted"
+        );
+        assert_eq!(interrupted.retry(), crate::error::Retry::Never);
+        let process = ToolError::Gone {
+            handle: "100".into(),
+            kind: HandleKind::Process,
+            why: "exited".into(),
+        };
+        let error = selected_window_error(Target::Pid(100), process);
+        assert_eq!(error.code(), "gone");
+        assert_eq!(error.payload()["error"]["kind"], "process");
+    }
+
+    #[test]
+    fn selection_distinguishes_an_exited_process_from_one_with_no_windows() {
+        for exits_during_selection in [false, true] {
+            let now = std::cell::Cell::new(Some(123));
+            let result = read_while_current(
+                || same_process(100, Some(123), now.get()),
+                || {
+                    if exits_during_selection {
+                        now.set(None);
+                    }
+                    Err::<(), _>(no_window(Target::Pid(100)))
+                },
+            );
+            let error = result.expect_err("BUG: selection found no window");
+            if exits_during_selection {
+                assert_eq!(error.code(), "gone");
+                assert_eq!(error.payload()["error"]["kind"], "process");
+            } else {
+                assert_eq!(error.code(), "not_found");
+                assert_eq!(error.retry(), crate::error::Retry::WhenAppears);
+            }
+        }
+    }
 
     #[test]
     fn a_later_readable_identity_does_not_make_an_unidentified_pid_targetable() {

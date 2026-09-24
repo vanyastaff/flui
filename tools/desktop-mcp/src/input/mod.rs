@@ -146,13 +146,36 @@ pub fn partial(
 /// second button belongs to another gesture, including at a stationary drop.
 #[cfg(any(target_os = "windows", test))]
 fn only_owned_button(down: u8, owned: u8) -> crate::error::ToolResult<()> {
-    if down & !owned == 0 {
+    if down == owned {
         Ok(())
-    } else {
+    } else if down & !owned != 0 {
         Err(crate::error::ToolError::Busy(
             "another physical mouse button is held; further movement or the requested drop would join its gesture".into(),
         ))
+    } else {
+        Err(crate::error::ToolError::Busy(
+            "the drag's mouse button is no longer down; it may already have been released outside this call".into(),
+        ))
     }
+}
+
+/// Only the first observation after our press may lag behind SendInput.
+/// Settle before target guards; later snapshots must detect a lost hold
+/// immediately instead of waiting for another physical press to replace it.
+#[cfg(any(target_os = "windows", test))]
+fn settle_owned_button(
+    owned: u8,
+    mut read: impl FnMut() -> crate::error::ToolResult<u8>,
+    mut pause: impl FnMut(),
+) -> crate::error::ToolResult<()> {
+    for attempt in 0..10 {
+        let down = read()?;
+        if down == owned || down & !owned != 0 || attempt == 9 {
+            return only_owned_button(down, owned);
+        }
+        pause();
+    }
+    unreachable!("BUG: the last settling attempt returns")
 }
 
 /// Checks the keyboard on both sides of a potentially slow target lookup.
@@ -353,6 +376,59 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_initial_drag_press_can_settle_but_a_lost_hold_cannot_resume() {
+        use std::cell::Cell;
+        for owned in [1_u8, 2] {
+            let mut observations = [0, 0, owned].into_iter();
+            let pauses = Cell::new(0);
+            settle_owned_button(
+                owned,
+                || Ok(observations.next().expect("BUG: bounded sequence")),
+                || pauses.set(pauses.get() + 1),
+            )
+            .expect("BUG: the synthetic press became visible");
+            assert_eq!(pauses.get(), 2);
+            let down = Cell::new(owned);
+            let sent = Cell::new(false);
+            let result = guarded_input_event(
+                || only_owned_button(down.get(), owned),
+                || {
+                    down.set(0);
+                    Ok(())
+                },
+                || {
+                    sent.set(true);
+                    Ok(())
+                },
+            );
+            assert!(result.is_err());
+            assert!(
+                !sent.get(),
+                "a release during a guard must stop movement or drop"
+            );
+            assert!(
+                only_owned_button(0, owned).is_err(),
+                "recovery cannot turn a lost drag into hover"
+            );
+        }
+    }
+
+    #[test]
+    fn initial_drag_settling_is_bounded_and_rejects_additional_buttons() {
+        use std::cell::Cell;
+        for down in [0_u8, 3] {
+            let pauses = Cell::new(0);
+            let result = settle_owned_button(1, || Ok(down), || pauses.set(pauses.get() + 1));
+            assert!(result.is_err());
+            assert_eq!(pauses.get(), if down == 0 { 9 } else { 0 });
+        }
+        assert!(
+            only_owned_button(0, 0).is_ok(),
+            "targetless moves require no button"
+        );
     }
 
     #[test]

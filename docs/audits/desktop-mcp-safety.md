@@ -9,6 +9,24 @@ to the desktop tool and this report; no framework, CI workflow or publishing cha
 
 ## Repaired failure scenarios
 
+Action readback now checks process identity after the last provider call, including
+failed readback. Drag guards require the owned button to remain down; only initial
+press delivery receives a bounded settling period. A PID bound to an earlier process
+is reported as untargetable after reuse. Losing a selected window remains a transient
+error for a live PID target, preserving any action effects; failed window enumeration
+also rechecks whether the process itself has exited.
+
+These changes passed `cargo xtask check-changed --base
+e61be9e2444c32e60a9d5fefc92ed7e0c12e7603`: 136 tests passed, six skipped,
+with formatting, clippy, strict rustdoc and Windows/macOS target checks passing.
+`cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only
+--test-threads 1 --no-capture` passed all three entries (two live scenarios and the
+fixture helper). The new native fixture releases the primary button after movement;
+the MCP drag reports partial interruption and an independent cursor read confirms it
+does not reach the endpoint. The ordinary native controls scenario also passed.
+Process replacement during provider readback is covered by an injected production
+helper test, not a live PID-reuse race.
+
 | Scenario | Repair and evidence |
 |---|---|
 | A queued window lookup starts after its deadline because of a minimum 50 ms grace | Check the deadline on the worker thread and withdraw queued reads. `expired_window_lookup_never_starts` verifies no read starts. [Original comment](https://github.com/vanyastaff/flui/pull/1287#discussion_r4097158852). |

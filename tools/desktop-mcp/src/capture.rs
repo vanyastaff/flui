@@ -37,6 +37,8 @@ pub enum Untargetable {
     /// The OS reports no start time for its process, so a later process
     /// under the same pid could not be told from it.
     UnidentifiedProcess,
+    /// This PID was already bound to an earlier process in this session.
+    ReusedProcess,
 }
 
 /// A top-level window as `list_windows` reports it.
