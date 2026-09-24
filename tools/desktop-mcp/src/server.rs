@@ -134,7 +134,7 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Start a program (stdio discarded). Returns its pid; with wait_for_window_ms (at most 120000), also its first window. The server kills every launched process, and everything those start, when it exits."
+        description = "Start a program (stdio discarded). Returns its pid; with wait_for_window_ms (at most 120000), also its first window. The server kills every launched process when it exits (on Windows also everything those start, even on a hard kill; elsewhere only the launched process itself)."
     )]
     async fn launch(&self, Parameters(Args(p)): Parameters<Args<LaunchParams>>) -> CallToolResult {
         let p = valid!(p);

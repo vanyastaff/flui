@@ -51,6 +51,12 @@ impl Worker {
         let (reply, result) = oneshot::channel();
         self.jobs
             .send(Box::new(move |desktop| {
+                // Cancelled while queued (the request's future was dropped):
+                // not started, so none of its effects happen. One already
+                // running finishes normally.
+                if reply.is_closed() {
+                    return;
+                }
                 let _ = reply.send(f(desktop));
             }))
             .map_err(|_| ToolError::platform("desktop thread", "it has stopped"))?;

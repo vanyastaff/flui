@@ -339,7 +339,7 @@ impl Desktop {
             )));
         }
         let ids: Vec<u32> = match target {
-            Target::Pid(pid) => match os::process_windows(pid) {
+            Target::Pid(pid) => match os::process_windows(pid)? {
                 Some(ids) if !ids.is_empty() => ids,
                 Some(_) => return Err(no_window(target)),
                 None => Self::resolve(target)?.iter().map(|w| w.id).collect(),

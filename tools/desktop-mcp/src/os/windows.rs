@@ -165,7 +165,7 @@ pub fn process_started(pid: u32) -> Option<u64> {
 /// Process `pid`'s visible top-level windows, front to back — its popup
 /// menus, drop-downs and tooltips included, which the capture window list
 /// leaves out.
-pub fn process_windows(pid: u32) -> Vec<u32> {
+pub fn process_windows(pid: u32) -> ToolResult<Vec<u32>> {
     struct Search {
         pid: u32,
         found: Vec<u32>,
@@ -189,8 +189,11 @@ pub fn process_windows(pid: u32) -> Vec<u32> {
     };
     // SAFETY: `visit` matches `WNDENUMPROC`; the pointer is to a local that
     // outlives the call, which returns only when the enumeration is done.
-    let _ = unsafe { EnumWindows(Some(visit), LPARAM((&raw mut search) as isize)) };
-    search.found
+    // The callback never stops the enumeration, so a failure is the API's
+    // own, possibly after only some windows: not a complete list.
+    unsafe { EnumWindows(Some(visit), LPARAM((&raw mut search) as isize)) }
+        .map_err(|e| ToolError::platform("enumerating top-level windows", e))?;
+    Ok(search.found)
 }
 
 /// The virtual key that types `c` on the foreground window's keyboard

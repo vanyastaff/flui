@@ -267,7 +267,7 @@ impl FindParams {
                 "`name_contains` must not be empty".into(),
             ));
         }
-        Ok((target, query))
+        Ok((target, query.prepared()?))
     }
 }
 
@@ -701,6 +701,22 @@ mod tests {
                 .validate()
                 .is_ok()
         );
+    }
+
+    /// A criterion longer than any reported string is refused; the
+    /// substring is folded once.
+    #[test]
+    fn criteria_are_bounded_and_folded_once() {
+        let long = "x".repeat(crate::a11y::CLIPPED_CHARS + 1);
+        assert!(
+            parse::<FindParams>(json!({"pid": 1, "name_contains": long}))
+                .validate()
+                .is_err()
+        );
+        let (_, query) = parse::<FindParams>(json!({"pid": 1, "name_contains": "OK"}))
+            .validate()
+            .expect("BUG: a short substring is valid");
+        assert_eq!(query.name_contains.as_deref(), Some("ok"));
     }
 
     /// Every name contains "", so an empty substring would match everything.

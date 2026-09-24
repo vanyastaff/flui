@@ -278,21 +278,25 @@ impl Input {
         let (key, modifiers) = resolve(combo)?;
         for done in 0..repeat {
             let pressed = self.press_once(key, &modifiers, guard);
-            if let Err(cause) = pressed {
-                return Err(partial(cause, done as usize, repeat as usize, "presses"));
+            if let Err((cause, sent)) = pressed {
+                let sent = done as usize + usize::from(sent);
+                return Err(partial(cause, sent, repeat as usize, "presses"));
             }
             thread::sleep(STEP);
         }
         Ok(())
     }
 
+    /// One press of the combo; on failure, whether the key itself had
+    /// already gone out (a modifier release failing after it), which the
+    /// caller counts as a press sent.
     fn press_once(
         &mut self,
         key: Key,
         modifiers: &[Modifier],
         guard: &mut Guard<'_>,
-    ) -> ToolResult<()> {
-        guard(None)?;
+    ) -> Result<(), (ToolError, bool)> {
+        guard(None).map_err(|e| (e, false))?;
         let mut held = Vec::with_capacity(modifiers.len());
         let mut result = Ok(());
         for &m in modifiers {
@@ -310,20 +314,22 @@ impl Input {
         if result.is_ok() {
             result = guard(None);
         }
+        let mut sent = false;
         if result.is_ok() {
             result = self
                 .enigo
                 .key(key, Direction::Click)
                 .map_err(failed("pressing the key"));
+            sent = result.is_ok();
         }
         for k in held.into_iter().rev() {
             let released = self
                 .enigo
                 .key(k, Direction::Release)
-                .map_err(failed("releasing a modifier"));
+                .map_err(failed("releasing a modifier (it may still be held)"));
             result = result.and(released);
         }
-        result
+        result.map_err(|e| (e, sent))
     }
 }
 

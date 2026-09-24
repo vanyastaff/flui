@@ -58,6 +58,11 @@ pub struct Node {
     pub omitted_children: Option<usize>,
 }
 
+/// The longest a string property is reported, in characters; a longer one
+/// is cut and ends in `…`. A provider's strings are otherwise unbounded (a
+/// text control's value is the whole document).
+pub const CLIPPED_CHARS: usize = 4_096;
+
 /// What one read of a target's windows saw.
 #[derive(Debug, Clone, Default)]
 pub struct Read {
@@ -113,14 +118,38 @@ impl Query {
             && self.automation_id.is_none()
     }
 
-    /// Whether `node` satisfies every given criterion.
+    /// The query ready to run: each criterion at most [`CLIPPED_CHARS`]
+    /// characters (no reported string is longer), and `name_contains`
+    /// lower-cased once here rather than for every node visited.
+    pub fn prepared(mut self) -> ToolResult<Self> {
+        for (field, value) in [
+            ("name", &self.name),
+            ("name_contains", &self.name_contains),
+            ("role", &self.role),
+            ("automation_id", &self.automation_id),
+        ] {
+            if value
+                .as_deref()
+                .is_some_and(|v| v.chars().count() > CLIPPED_CHARS)
+            {
+                return Err(ToolError::InvalidArgument(format!(
+                    "`{field}` is longer than {CLIPPED_CHARS} characters, longer than any string a read reports"
+                )));
+            }
+        }
+        self.name_contains = self.name_contains.map(|n| n.to_lowercase());
+        Ok(self)
+    }
+
+    /// Whether `node` satisfies every given criterion. Expects a
+    /// [`Self::prepared`] query (`name_contains` already lower-cased).
     pub fn matches(&self, node: &Node) -> bool {
         let name = node.name.as_deref().unwrap_or("");
         self.name.as_deref().is_none_or(|n| name == n)
             && self
                 .name_contains
                 .as_deref()
-                .is_none_or(|n| name.to_lowercase().contains(&n.to_lowercase()))
+                .is_none_or(|n| name.to_lowercase().contains(n))
             && self
                 .role
                 .as_deref()
@@ -172,6 +201,27 @@ impl Node {
             .flatten()
             .map(String::len)
             .sum::<usize>()
+    }
+
+    /// Whether a string property was cut to the longest one reported
+    /// ([`CLIPPED_CHARS`] characters and a trailing `…`).
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(
+            dead_code,
+            reason = "checked by the UIA backend, the only accessibility backend built yet"
+        )
+    )]
+    pub fn is_clipped(&self) -> bool {
+        [
+            &self.name,
+            &self.value,
+            &self.automation_id,
+            &self.class_name,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|s| s.ends_with('…') && s.chars().count() == CLIPPED_CHARS + 1)
     }
 
     /// This node without its children, copying nothing below it.
@@ -376,7 +426,9 @@ mod tests {
             role: Some("button".into()),
             name_contains: Some("INC".into()),
             ..Query::default()
-        };
+        }
+        .prepared()
+        .expect("BUG: short criteria are valid");
         let found = search(&sample(), &q);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, "e3");

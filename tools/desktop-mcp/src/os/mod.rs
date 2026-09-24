@@ -124,21 +124,21 @@ pub fn process_started(pid: u32) -> Option<u64> {
 /// Process `pid`'s visible top-level windows front to back, popups
 /// included; `None` when the OS offers no such list (use the window list).
 #[cfg_attr(
-    target_os = "windows",
+    not(target_os = "windows"),
     expect(
         clippy::unnecessary_wraps,
-        reason = "`None` is the answer on the OSes without a window enumeration"
+        reason = "only the Windows enumeration can fail"
     )
 )]
-pub fn process_windows(pid: u32) -> Option<Vec<u32>> {
+pub fn process_windows(pid: u32) -> ToolResult<Option<Vec<u32>>> {
     #[cfg(target_os = "windows")]
     {
-        Some(windows::process_windows(pid))
+        windows::process_windows(pid).map(Some)
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = pid;
-        None
+        Ok(None)
     }
 }
 

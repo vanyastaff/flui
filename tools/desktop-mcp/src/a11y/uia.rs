@@ -57,11 +57,7 @@ pub const NODE_BUDGET: usize = 5_000;
 const FOCUS_POLLS: u32 = 5;
 const FOCUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
-/// The longest a string property (name, value, automation id, class name)
-/// is reported, in characters; a longer one is cut and ends in `…`. A
-/// provider's strings are otherwise unbounded (a text control's value is the
-/// whole document).
-const MAX_PROPERTY_CHARS: usize = 4_096;
+use super::CLIPPED_CHARS as MAX_PROPERTY_CHARS;
 
 /// How many bytes of strings one read reports at most, across all its
 /// elements; past it the read stops, marked truncated.
@@ -182,6 +178,8 @@ impl Uia {
         if !walk.seen.insert(node.id.clone()) {
             return None;
         }
+        // A cut string is not what a search for the whole one would match.
+        walk.truncated |= node.is_clipped();
         walk.budget = walk.budget.saturating_sub(1);
         walk.bytes = walk.bytes.saturating_sub(node.text_bytes());
         let mut omitted = 0;
@@ -507,7 +505,7 @@ impl AccessibilityBackend for Uia {
         };
         let mut spare = NODE_BUDGET;
         for (read, &window) in windows.iter().enumerate() {
-            if spare == 0 || Instant::now() >= deadline {
+            if spare == 0 || walk.bytes == 0 || Instant::now() >= deadline {
                 walk.truncated = true;
                 break;
             }
@@ -683,7 +681,8 @@ fn non_empty(value: uiautomation::Result<String>) -> Option<String> {
     value.ok().filter(|s| !s.is_empty()).map(clip)
 }
 
-/// `s` cut to [`MAX_PROPERTY_CHARS`], ending in `…` when it was longer.
+/// `s` cut to [`MAX_PROPERTY_CHARS`], ending in `…` when it was longer
+/// (see [`Node::is_clipped`]).
 fn clip(s: String) -> String {
     match s.char_indices().nth(MAX_PROPERTY_CHARS) {
         None => s,
