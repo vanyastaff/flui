@@ -142,6 +142,14 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Fixed
 
+- **`Image::from_rgba8` length check could wrap** (`flui-types`): the expected length
+  `width * height * 4` was computed in `u32`, so it panicked on overflow in debug builds and
+  wrapped in release — a 65536×65536 image matched an empty buffer. The length is now computed
+  in `usize` with checked arithmetic. The new fallible `Image::try_from_rgba8` returns an
+  `ImageDataError` and is what the decoders in `flui-assets` and `flui-widgets` now call.
+  `Image::from_rgba8_unchecked` is removed: it had no callers, and its `# Safety` section
+  described a safe function.
+
 - **Static text was nameless to Narrator and Orca** (`flui-semantics`): a `Text` reached
   AccessKit as a `Role::Label` carrying its text only as a label, and the UI Automation and
   AT-SPI adapters read a label node's name from its value, so every plain text in a FLUI app

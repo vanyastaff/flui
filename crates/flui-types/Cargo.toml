@@ -24,6 +24,7 @@ autotests = false
 # flui-types re-exports `pub use flui_geometry as geometry`
 # so existing `flui_types::geometry::*` consumers continue to compile.
 flui-geometry = { path = "../flui-geometry", version = "=0.2.0-dev" }
+thiserror = { workspace = true }
 
 # Serialization support (optional).
 # `rc` enables `Serialize`/`Deserialize` for `Arc<T>` — needed by

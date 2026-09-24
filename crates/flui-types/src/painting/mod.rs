@@ -28,7 +28,9 @@ pub use clipping::{
 pub use effects::{
     BlurMode, BlurQuality, ColorAdjustment, ColorMatrix, ImageFilter, PathPaintMode, StrokeOptions,
 };
-pub use image::{BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageRepeat};
+pub use image::{
+    BoxFit, ColorFilter, FittedSizes, Image, ImageConfiguration, ImageDataError, ImageRepeat,
+};
 pub use paint::{DashPattern, Paint, PaintBuilder, PaintStyle};
 pub use path::{Path, PathCommand};
 pub use shader::{ImageShader, MaskFilter, Shader};
