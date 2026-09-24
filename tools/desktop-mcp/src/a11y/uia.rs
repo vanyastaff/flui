@@ -210,10 +210,14 @@ impl Uia {
 
     /// The identity a handle for `element` is keyed by: its runtime id, or
     /// an identity of its own when it has none.
-    fn identity(&mut self, element: &UIElement) -> Identity {
+    ///
+    /// `None` when the read failed (a timeout, a disconnect, a malformed
+    /// array): not the same as an element without one.
+    fn identity(&mut self, element: &UIElement) -> Option<Identity> {
         match crate::os::runtime_id(element.as_ref()) {
-            Ok(Some(id)) => Identity::Runtime(id),
-            _ => self.fresh_identity(),
+            Ok(Some(id)) => Some(Identity::Runtime(id)),
+            Ok(None) => Some(self.fresh_identity()),
+            Err(_) => None,
         }
     }
 
@@ -330,7 +334,11 @@ impl Uia {
         }
         // Spent before anything else: a repeat or a cycle costs its fetch.
         walk.budget = walk.budget.saturating_sub(1);
-        let mut key = self.identity(element);
+        // An unreadable runtime id would mint a handle every action refuses.
+        let Some(mut key) = self.identity(element) else {
+            walk.truncated = true;
+            return None;
+        };
         if let Some(handle) = self.elements.handle_of(&key)
             && walk.seen.contains(&handle)
         {
@@ -1088,9 +1096,10 @@ fn non_empty(value: uiautomation::Result<String>) -> Option<String> {
 fn clip(s: String) -> String {
     match s.char_indices().nth(MAX_PROPERTY_CHARS) {
         None => s,
+        // A new string: truncating would keep the provider-sized buffer.
         Some((at, _)) => {
-            let mut cut = s;
-            cut.truncate(at);
+            let mut cut = String::with_capacity(at + '…'.len_utf8());
+            cut.push_str(&s[..at]);
             cut.push('…');
             cut
         }
@@ -1133,6 +1142,18 @@ fn classify(handle: &str, what: &str, e: &uiautomation::Error) -> ToolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A clipped string keeps no provider-sized buffer behind it.
+    #[test]
+    fn a_clipped_string_is_right_sized() {
+        let cut = clip("x".repeat(1 << 20));
+        assert_eq!(cut.chars().count(), MAX_PROPERTY_CHARS + 1);
+        assert!(
+            cut.capacity() < 2 * MAX_PROPERTY_CHARS,
+            "{}",
+            cut.capacity()
+        );
+    }
 
     /// A provider's string is cut at a character boundary, marked, and
     /// left alone when it fits.

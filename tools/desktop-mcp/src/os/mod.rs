@@ -240,8 +240,9 @@ pub fn cursor() -> Option<(i32, i32)> {
 
 /// The virtual key and modifier bits (1 Shift, 2 Ctrl, 4 Alt) that type
 /// `c` on the current keyboard layout; with `command` (a shortcut), the key
-/// itself, Caps Lock left out.
+/// itself, Caps Lock left out. Also the foreground window whose layout that
+/// was, for the caller to check it is still the one in front.
 #[cfg(target_os = "windows")]
-pub fn char_key(c: char, command: bool) -> Option<(u16, u8)> {
+pub fn char_key(c: char, command: bool) -> Option<(u16, u8, u32)> {
     windows::char_key(c, command)
 }

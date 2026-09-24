@@ -119,7 +119,8 @@ pub struct LaunchParams {
     /// If set, wait up to this many ms (at most 120000) for the process to
     /// show a window and return it. Some apps (Windows 11 Notepad) hand off to
     /// another process; then no window appears for this pid and list_windows
-    /// finds it.
+    /// finds it. Windows only: elsewhere the OS reports no process start
+    /// time, so a window under the pid cannot be told from a later process's.
     pub wait_for_window_ms: Option<u64>,
 }
 
@@ -141,6 +142,14 @@ impl LaunchParams {
         {
             return Err(ToolError::InvalidArgument(format!(
                 "wait_for_window_ms {ms} is above {MAX_LAUNCH_WAIT_MS}"
+            )));
+        }
+        // Refused before anything starts, rather than a wait that returns at
+        // once with no window.
+        if self.wait_for_window_ms.is_some() && !cfg!(target_os = "windows") {
+            return Err(ToolError::NotSupported(format!(
+                "wait_for_window_ms is not supported on {}: the OS reports no process start time, so a window under the pid cannot be told from a later process's; launch without it and find the window with list_windows",
+                std::env::consts::OS
             )));
         }
         let strings = std::iter::once(&self.program)
@@ -766,10 +775,11 @@ mod tests {
                 .validate()
                 .is_err()
         );
-        assert!(
+        assert_eq!(
             parse::<LaunchParams>(json!({"program": "x", "wait_for_window_ms": 120_000}))
                 .validate()
-                .is_ok()
+                .is_ok(),
+            cfg!(target_os = "windows")
         );
     }
 

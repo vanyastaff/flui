@@ -438,7 +438,7 @@ pub fn process_windows(pid: u32) -> ToolResult<Vec<u32>> {
 /// as a plain key press: none does, it needs a state this server cannot
 /// hold (Kana, Hankaku), or it is a dead key, which types nothing itself
 /// and changes the key after it.
-pub fn char_key(c: char, command: bool) -> Option<(u16, u8)> {
+pub fn char_key(c: char, command: bool) -> Option<(u16, u8, u32)> {
     let mut units = [0_u16; 2];
     let [unit] = c.encode_utf16(&mut units) else {
         return None;
@@ -446,8 +446,10 @@ pub fn char_key(c: char, command: bool) -> Option<(u16, u8)> {
     // Layouts are per thread: the one that counts is the thread of the
     // window holding keyboard focus (an editor thread can use another layout
     // than its top-level window's), else the foreground window's.
+    // SAFETY: no arguments.
+    let foreground = unsafe { GetForegroundWindow() };
     // SAFETY: a null window yields thread 0, whose layout is the caller's.
-    let foreground_thread = unsafe { GetWindowThreadProcessId(GetForegroundWindow(), None) };
+    let foreground_thread = unsafe { GetWindowThreadProcessId(foreground, None) };
     let mut info = GUITHREADINFO {
         cbSize: size_of::<GUITHREADINFO>() as u32,
         ..GUITHREADINFO::default()
@@ -497,10 +499,11 @@ pub fn char_key(c: char, command: bool) -> Option<(u16, u8)> {
         // character is not this key.
         typed == 1 && out[0] == *unit
     };
+    let window = foreground.0 as usize as u32;
     if types(shift) {
-        Some((u16::from(vk), shift))
+        Some((u16::from(vk), shift, window))
     } else if types(shift ^ 1) {
-        Some((u16::from(vk), shift ^ 1))
+        Some((u16::from(vk), shift ^ 1, window))
     } else {
         None
     }

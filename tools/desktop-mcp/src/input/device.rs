@@ -119,10 +119,14 @@ impl Input {
     /// exits.
     pub fn release_all(&mut self) {
         #[cfg(target_os = "windows")]
-        if let Some(unit) = self.stuck_unit.take()
-            && !crate::os::release_unicode(unit)
-        {
-            tracing::warn!("a typed character's key could not be released");
+        // Cleared only once released: `ready` keeps refusing input while it
+        // is still down.
+        if let Some(unit) = self.stuck_unit {
+            if crate::os::release_unicode(unit) {
+                self.stuck_unit = None;
+            } else {
+                tracing::warn!("a typed character's key could not be released");
+            }
         }
         if self.held_button.is_some() && self.release_held().is_err() {
             tracing::warn!("a mouse button could not be released");
@@ -521,10 +525,25 @@ impl Input {
         combo: &KeyCombo,
         guard: &mut Guard<'_>,
     ) -> Result<(), (ToolError, bool)> {
+        // Resolved on every press, since the previous one can have moved
+        // focus to a thread with another keyboard layout, and then checked:
+        // the target must be in front, and be the window whose layout chose
+        // the key (a window that was in front for a moment has another).
+        let (key, modifiers, layout_of) = resolve(combo).map_err(|e| (e, false))?;
         guard(None).map_err(|e| (e, false))?;
-        // Resolved after that check, on every press: the previous one can
-        // have moved focus to a thread with another keyboard layout.
-        let (key, modifiers) = resolve(combo).map_err(|e| (e, false))?;
+        if let Some(window) = layout_of
+            && crate::os::foreground().map(|(id, _)| id) != Some(window)
+        {
+            return Err((
+                ToolError::NotForeground {
+                    target: format!("window {window}"),
+                    foreground:
+                        "the foreground changed while the key was looked up on its keyboard layout"
+                            .into(),
+                },
+                false,
+            ));
+        }
         let modifiers = modifiers.as_slice();
         let mut held = Vec::with_capacity(modifiers.len());
         let mut result = Ok(());
@@ -640,7 +659,9 @@ impl Input {
 /// Windows a character goes out as its layout's virtual key with the shift
 /// state that layout needs: enigo would send the character's shifted
 /// virtual-key code as is, which is no key at all.
-fn resolve(combo: &KeyCombo) -> ToolResult<(Key, Vec<Modifier>)> {
+/// The key and modifiers for `combo`, and for a character the foreground
+/// window whose keyboard layout chose its key.
+fn resolve(combo: &KeyCombo) -> ToolResult<(Key, Vec<Modifier>, Option<u32>)> {
     #[cfg(target_os = "windows")]
     if let KeyName::Char(c) = combo.key {
         // With a command modifier the key is a shortcut: the layout's key as
@@ -649,16 +670,16 @@ fn resolve(combo: &KeyCombo) -> ToolResult<(Key, Vec<Modifier>)> {
             .modifiers
             .iter()
             .any(|m| !matches!(m, Modifier::Shift));
-        let (vk, shift) = crate::os::char_key(c, command).ok_or_else(|| {
+        let (vk, shift, window) = crate::os::char_key(c, command).ok_or_else(|| {
             ToolError::InvalidArgument(format!(
                 "no key types `{c}` on the current keyboard layout; send it with type_text"
             ))
         })?;
         let mut modifiers = combo.modifiers.clone();
         modifiers.extend(super::implied_modifiers(shift, &combo.modifiers));
-        return Ok((Key::Other(u32::from(vk)), modifiers));
+        return Ok((Key::Other(u32::from(vk)), modifiers, Some(window)));
     }
-    Ok((enigo_key(combo.key)?, combo.modifiers.clone()))
+    Ok((enigo_key(combo.key)?, combo.modifiers.clone(), None))
 }
 
 /// The point `i/steps` of the way from `a` to `b`, in `i64` so a wide drag
