@@ -8,7 +8,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -54,6 +55,10 @@ struct Tracked {
     shared: std::collections::HashSet<u32>,
     /// Pids a `kill` is ending right now.
     ending: std::collections::HashSet<u32>,
+    /// Launches between their spawn and their entry in `running`.
+    launching: usize,
+    /// Set by shutdown's `kill_all`: nothing is launched after it.
+    closed: bool,
 }
 
 impl Tracked {
@@ -100,6 +105,8 @@ pub struct Exited {
 #[derive(Debug)]
 pub struct Children {
     tracked: Mutex<Tracked>,
+    /// Signalled when a launch in flight is recorded (or failed).
+    settled: Condvar,
     /// The kill-on-exit job, or why there is none: then nothing is
     /// launched, since a hard kill of the server would leave it running.
     #[cfg(target_os = "windows")]
@@ -128,6 +135,7 @@ impl Children {
         }
         Self {
             tracked: Mutex::new(Tracked::default()),
+            settled: Condvar::new(),
             #[cfg(target_os = "windows")]
             job,
         }
@@ -151,7 +159,19 @@ impl Children {
         }
         // Reaped before the spawn: exited children still count against the
         // process limit until reaped, and a full limit would fail the spawn.
-        self.lock().reap();
+        {
+            let mut tracked = self.lock();
+            if tracked.closed {
+                return Err(ToolError::NotSupported(
+                    "the server is shutting down; nothing more is launched".into(),
+                ));
+            }
+            tracked.reap();
+            tracked.launching += 1;
+        }
+        // Counted in flight until recorded or failed, so shutdown waits for
+        // a spawn that is still running instead of missing its child.
+        let _in_flight = InFlight(self);
         let mut command = Command::new(&spec.program);
         command
             .args(&spec.args)
@@ -186,6 +206,16 @@ impl Children {
         let pid = child.id();
         let started = crate::os::process_started(pid);
         let mut tracked = self.lock();
+        // Shutdown gave up waiting and already ended the rest: this one is
+        // ended here rather than left running.
+        if tracked.closed {
+            drop(tracked);
+            let mut child = child;
+            let _ = end(pid, &mut child);
+            return Err(ToolError::NotSupported(
+                "the server shut down while this launch ran; the process was ended".into(),
+            ));
+        }
         // A reused pid is a new process: its old exit no longer answers, and
         // a kill held for the old launch must not end this one.
         tracked.exited.retain(|&(old, _)| old != pid);
@@ -266,7 +296,28 @@ impl Children {
 
     /// Kills every child. Idempotent.
     pub fn kill_all(&self) {
-        let drained: Vec<(u32, Child)> = self.lock().running.drain().collect();
+        let mut tracked = self.lock();
+        tracked.closed = true;
+        // A spawn still running would record its child after this pass:
+        // waited for, bounded, since a spawn can hang on a network path.
+        let until = Instant::now() + LAUNCH_SETTLE;
+        while tracked.launching > 0 {
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                tracing::warn!(
+                    "{} launches still running at shutdown; each ends its process if it finishes",
+                    tracked.launching
+                );
+                break;
+            }
+            tracked = self
+                .settled
+                .wait_timeout(tracked, left)
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .0;
+        }
+        let drained: Vec<(u32, Child)> = tracked.running.drain().collect();
+        drop(tracked);
         for (pid, mut child) in drained {
             match end(pid, &mut child) {
                 Ok(killed) => tracing::info!(?killed, "ended launched child on shutdown"),
@@ -277,6 +328,19 @@ impl Children {
                 }
             }
         }
+    }
+}
+
+/// How long shutdown waits for launches in flight to record their child.
+const LAUNCH_SETTLE: Duration = Duration::from_secs(5);
+
+/// One launch in flight; counted out when dropped, on every path.
+struct InFlight<'a>(&'a Children);
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.lock().launching -= 1;
+        self.0.settled.notify_all();
     }
 }
 
@@ -318,6 +382,22 @@ fn end(pid: u32, child: &mut Child) -> ToolResult<Killed> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nothing_is_launched_after_shutdown() {
+        let children = Children::new();
+        children.kill_all();
+        let spec = LaunchSpec {
+            program: "definitely-not-a-program".into(),
+            args: Vec::new(),
+            env: Vec::new(),
+            cwd: None,
+        };
+        assert!(matches!(
+            children.launch(&spec),
+            Err(ToolError::NotSupported(_))
+        ));
+    }
 
     #[test]
     fn kill_refuses_foreign_pids() {

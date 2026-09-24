@@ -130,8 +130,10 @@ struct Held {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Kind {
     control_type: Option<i32>,
-    automation_id: Option<String>,
-    class_name: Option<String>,
+    /// A keyed hash of the automation id and class name: a provider can
+    /// return strings of any length, and thousands of held elements must
+    /// not keep them.
+    names: u64,
 }
 
 /// UI Automation client state for the session.
@@ -145,6 +147,9 @@ pub struct Uia {
     /// is the one from the walk, and a value cached there (a whole document)
     /// would stay in memory as long as the handle.
     value: UICacheRequest,
+    /// Keys [`Kind::names`], per session, so a provider cannot aim two
+    /// different names at one hash.
+    names: std::hash::RandomState,
     elements: ElementCache<Identity, Held>,
     anonymous: u64,
     /// Process start times looked up during the current read, one lookup
@@ -196,6 +201,7 @@ impl Uia {
             walker,
             single,
             value,
+            names: std::hash::RandomState::new(),
             elements: ElementCache::default(),
             anonymous: 0,
             starts: HashMap::new(),
@@ -234,11 +240,7 @@ impl Uia {
         // answers to the id, and the new element comes from the same process.
         // A provider elsewhere claiming a trusted application's runtime id
         // gets a handle of its own instead of taking over that one.
-        let kind = Kind {
-            control_type: cached_i32(element, UIProperty::ControlType),
-            automation_id: element.get_cached_automation_id().ok(),
-            class_name: element.get_cached_classname().ok(),
-        };
+        let kind = self.kind(element);
         // A new element of another kind claiming the id is a collision, not
         // the same control read again: it gets its own handle.
         if let Identity::Runtime(id) = &key
@@ -305,11 +307,7 @@ impl Uia {
             .element
             .build_updated_cache(&self.single)
             .map_err(|_| ToolError::StaleElement(handle.to_owned()))?;
-        let live = Kind {
-            control_type: cached_i32(&fresh, UIProperty::ControlType),
-            automation_id: fresh.get_cached_automation_id().ok(),
-            class_name: fresh.get_cached_classname().ok(),
-        };
+        let live = self.kind(&fresh);
         if live != held.kind {
             return Err(ToolError::StaleElement(handle.to_owned()));
         }
@@ -459,6 +457,18 @@ impl Uia {
             }
         }
         false
+    }
+
+    /// `element`'s kind from its cached properties.
+    fn kind(&self, element: &UIElement) -> Kind {
+        use std::hash::BuildHasher;
+        Kind {
+            control_type: cached_i32(element, UIProperty::ControlType),
+            names: self.names.hash_one((
+                element.get_cached_automation_id().ok(),
+                element.get_cached_classname().ok(),
+            )),
+        }
     }
 
     /// Fills in a text control's value with a read of its own, clipped, so
@@ -809,13 +819,15 @@ impl AccessibilityBackend for Uia {
                 let mut node = describe(&fresh, handle.to_owned());
                 // A value that cannot be read back is not a control without
                 // one: the action ran, and what it left is unknown.
-                if !self.read_value(&fresh, &mut node) {
+                if !self.read_value(&fresh, &mut node)
+                    || (matches!(action, Action::Toggle) && node.toggle_state.is_none())
+                {
                     return Err(ToolError::Interrupted {
                         cause: Box::new(ToolError::platform(
                             "reading back",
-                            "the element's value could not be read",
+                            "the element's value or toggle state could not be read",
                         )),
-                        what: "the action itself succeeded; only reading the element's value afterwards failed, so do not repeat it".into(),
+                        what: "the action itself succeeded; only reading the element's state afterwards failed, so do not repeat it".into(),
                     });
                 }
                 Ok(node)

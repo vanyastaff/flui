@@ -190,7 +190,8 @@ pub struct ScreenshotParams {
     /// Capture this monitor (0-based index). With no target at all, the
     /// primary monitor is captured.
     pub monitor: Option<u32>,
-    /// Downscale so neither side exceeds this many pixels (default 1920);
+    /// Downscale so neither side exceeds this many pixels (default 1920,
+    /// at most 4096);
     /// the reply's `scale_x`/`scale_y` map image pixels back to the screen.
     pub max_side: Option<u32>,
 }
@@ -209,6 +210,10 @@ pub enum ScreenshotTarget {
 /// than MCP clients and models take for an image.
 pub const DEFAULT_MAX_SIDE: u32 = 1920;
 
+/// The largest `max_side`: the image, its PNG and the base64 reply each
+/// stay within about 64 MiB for any content.
+pub const MAX_SIDE: u32 = 4096;
+
 impl ScreenshotParams {
     /// The longer side to downscale to.
     pub fn max_side(&self) -> u32 {
@@ -221,6 +226,11 @@ impl ScreenshotParams {
             return Err(ToolError::InvalidArgument(
                 "`max_side` must be at least 1".into(),
             ));
+        }
+        if self.max_side.is_some_and(|m| m > MAX_SIDE) {
+            return Err(ToolError::InvalidArgument(format!(
+                "`max_side` is at most {MAX_SIDE}"
+            )));
         }
         match (self.window_id, self.pid, self.monitor) {
             (None, None, None) => Ok(ScreenshotTarget::Direct(ShotTarget::Primary)),
@@ -733,6 +743,11 @@ mod tests {
     fn a_zero_screenshot_limit_is_refused() {
         assert!(
             parse::<ScreenshotParams>(json!({"max_side": 0}))
+                .target()
+                .is_err()
+        );
+        assert!(
+            parse::<ScreenshotParams>(json!({"max_side": 4097}))
                 .target()
                 .is_err()
         );

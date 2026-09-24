@@ -222,7 +222,9 @@ pub fn available() -> ToolResult<()> {
 /// bitmap is allocated at full size before `max_side` shrinks it, so an
 /// enormous window would otherwise take the server down first.
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
-const MAX_CAPTURE_PIXELS: u64 = 8192 * 8192;
+/// An 8K display: its bitmap is about 127 MiB as RGBA, and the encoded
+/// output stays bounded by [`crate::params::MAX_SIDE`].
+const MAX_CAPTURE_PIXELS: u64 = 7680 * 4320;
 
 /// Refuses a capture larger than [`MAX_CAPTURE_PIXELS`] before anything is
 /// allocated. `scale` is the display's backing pixels per screen unit, which
@@ -342,7 +344,8 @@ mod tests {
             height,
         };
         assert!(within_pixel_limit(rect(30_000, 30_000), Some(1.0)).is_err());
-        assert!(within_pixel_limit(rect(8192, 8192), Some(1.0)).is_ok());
+        assert!(within_pixel_limit(rect(7680, 4320), Some(1.0)).is_ok());
+        assert!(within_pixel_limit(rect(8192, 8192), Some(1.0)).is_err());
     }
 
     /// A HiDPI capture has more pixels than screen units; the reply says

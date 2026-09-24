@@ -322,7 +322,7 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Capture a window (window_id or pid; covered windows are captured where the OS allows), a monitor (0-based index), or the primary monitor (no target). The image is downscaled to max_side (default 1920) on its longer side. Returns a PNG plus, as structured content, its size, the captured screen rect (source) and scale_x/scale_y (image px per screen unit, measured from the pixels: 2 on a Retina display, below 1 when downscaled): screen x = source.x + image x / scale_x. Refused if the window moved during the capture or no longer belongs to the process it was listed for.",
+        description = "Capture a window (window_id or pid; covered windows are captured where the OS allows), a monitor (0-based index), or the primary monitor (no target). The image is downscaled to max_side (default 1920, at most 4096) on its longer side. Returns a PNG plus, as structured content, its size, the captured screen rect (source) and scale_x/scale_y (image px per screen unit, measured from the pixels: 2 on a Retina display, below 1 when downscaled): screen x = source.x + image x / scale_x. Refused if the window moved during the capture or no longer belongs to the process it was listed for.",
         annotations(read_only_hint = true)
     )]
     async fn screenshot(

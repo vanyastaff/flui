@@ -56,7 +56,7 @@ reports how its pixels map back to them.
 | `list_windows` | `title_contains?`, `pid?` | Top-level windows: `id`, `pid`, `app_name`, `title`, `rect`, `is_minimized`, `is_focused` (on macOS every window of the active app) |
 | `launch` | `program`, `args?`, `cwd?`, `env?`, `wait_for_window_ms?` | Starts a process; returns its `pid`, and its first window, or its exit code if it exits first. Command line and environment at most 32 KiB |
 | `kill` | `pid` | Ends a process this session launched (other pids are refused) |
-| `screenshot` | `window_id?` \| `pid?` \| `monitor?`, `max_side?` | PNG of a window (captured even when covered, where the OS allows), a monitor, or the primary monitor, its longer side at most `max_side` (default 1920); plus size, the captured rect `source` and `scale_x`/`scale_y` |
+| `screenshot` | `window_id?` \| `pid?` \| `monitor?`, `max_side?` | PNG of a window (captured even when covered, where the OS allows), a monitor, or the primary monitor, its longer side at most `max_side` (default 1920, at most 4096); plus size, the captured rect `source` and `scale_x`/`scale_y` |
 | `accessibility_tree` | `window_id` \| `pid`, `max_depth?` | Nested nodes, `max_depth` levels (default 30, at most 200): `id`, `role`, `name`, `value`, `automation_id`, `class_name`, `rect`, `enabled`, `has_keyboard_focus`, `is_keyboard_focusable`, `toggle_state`, `patterns`, `children`, `omitted_children` |
 | `find` | `window_id` \| `pid`, `name?`, `name_contains?`, `role?`, `automation_id?` | Matching nodes, flat |
 | `wait_for` | as `find`, plus `timeout_ms?` | The first match once it exists, or a timeout error listing the last tree seen |

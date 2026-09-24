@@ -122,6 +122,15 @@ pub fn focus(fg: u32) -> ToolResult<Focus> {
     // SAFETY: `info` is a local with its size set, as the call requires.
     unsafe { GetGUIThreadInfo(thread, &raw mut info) }
         .map_err(|e| ToolError::platform("reading which window has keyboard focus", e))?;
+    // Read again: a window that took the foreground during the lookup would
+    // get the input, while the focus read describes the old one.
+    // SAFETY: no arguments.
+    if unsafe { GetForegroundWindow() } != now {
+        return Err(ToolError::NotForeground {
+            target: format!("window {fg}"),
+            foreground: "another window took the foreground during the check".into(),
+        });
+    }
     // No focus window: keys reach the foreground window itself.
     Ok(id_and_pid(info.hwndFocus).map_or(Focus::Foreground, |(_, pid)| Focus::Pid(pid)))
 }
