@@ -36,6 +36,10 @@ const POLL: Duration = Duration::from_millis(250);
 /// starts on that thread, not from when it was queued.
 const READ_DEADLINE: Duration = Duration::from_secs(10);
 
+/// How many times `launch` tries to bind a started pid while the desktop
+/// queue is full (every [`POLL`]).
+const BIND_ATTEMPTS: u32 = 40;
+
 /// The least time one `wait_for` poll reads for.
 const MIN_READ: Duration = Duration::from_secs(1);
 
@@ -189,14 +193,29 @@ impl DesktopServer {
         let children = Arc::clone(&self.children);
         let (pid, started) = valid!(blocking(&ct, move || children.launch(&spec)).await);
         // Bind the pid to the identity read at the spawn. The process runs
-        // now whatever happens to this request, so this step is not skipped.
-        let _ = self
-            .worker
-            .run(&CancellationToken::new(), move |d| {
-                d.bind_launched(pid, started);
-                Ok(())
-            })
-            .await;
+        // now whatever happens to this request, so this step is not skipped;
+        // a full queue is waited out rather than failing the binding.
+        let mut bound = Err(ToolError::Cancelled);
+        for _ in 0..BIND_ATTEMPTS {
+            bound = self
+                .worker
+                .run(&CancellationToken::new(), move |d| {
+                    d.bind_launched(pid, started);
+                    Ok(())
+                })
+                .await;
+            if bound.is_ok() {
+                break;
+            }
+            tokio::time::sleep(POLL).await;
+        }
+        if let Err(e) = bound {
+            return respond(Ok(json!({
+                "pid": pid,
+                "window": null,
+                "note": format!("started, but its pid could not be bound as a target ({e}); target its windows by window_id from list_windows, or kill it"),
+            })));
+        }
         let Some(ms) = p.wait_for_window_ms else {
             return respond(Ok(json!({ "pid": pid })));
         };

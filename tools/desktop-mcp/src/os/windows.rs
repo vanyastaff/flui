@@ -14,12 +14,12 @@ use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, HWND, LPARAM, PO
 use windows::Win32::Graphics::Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject,
 };
 use windows::Win32::System::Ole::{
-    SafeArrayDestroy, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
+    SafeArrayDestroy, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
 };
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -151,6 +151,10 @@ pub fn uia_with_timeouts() -> Option<IUIAutomation> {
     automation.cast().ok()
 }
 
+/// The longest runtime id read: UI Automation's own are a handful of
+/// integers; a provider claiming more is not trusted with an allocation.
+const MAX_RUNTIME_ID_LEN: i64 = 64;
+
 /// `element`'s runtime id, read live, with the array freed (the
 /// `uiautomation` crate's reader leaks every array it reads). `Ok(None)` for
 /// an element without one.
@@ -166,8 +170,18 @@ pub fn runtime_id(
     // returns, read by index within its bounds, then destroyed exactly once.
     let ids = unsafe {
         let read = || -> Result<Vec<i32>, windows::core::Error> {
+            // The bounds come from the provider: anything but a short
+            // one-dimensional array is refused before a single element is
+            // read, so a hostile provider cannot make the read allocate or
+            // loop without bound.
             let (low, high) = (SafeArrayGetLBound(array, 1)?, SafeArrayGetUBound(array, 1)?);
-            let mut ids = Vec::with_capacity(usize::try_from(high - low + 1).unwrap_or(0));
+            let len = i64::from(high) - i64::from(low) + 1;
+            if SafeArrayGetDim(array) != 1 || !(0..=MAX_RUNTIME_ID_LEN).contains(&len) {
+                return Err(windows::core::Error::from(
+                    windows::Win32::Foundation::E_INVALIDARG,
+                ));
+            }
+            let mut ids = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
             for index in low..=high {
                 let mut value = 0_i32;
                 SafeArrayGetElement(array, &raw const index, (&raw mut value).cast())?;
@@ -216,15 +230,30 @@ pub fn send_unicode(c: char) -> ToolResult<()> {
         .flat_map(|&unit| [key(unit, false), key(unit, true)])
         .collect();
     // SAFETY: fully initialized `INPUT` values and the size of one.
-    let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
-    if sent as usize == inputs.len() {
-        Ok(())
-    } else {
-        Err(ToolError::platform(
-            "typing a character",
-            "SendInput was blocked (UIPI: the target may run elevated)",
-        ))
+    let sent = unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) } as usize;
+    if sent == inputs.len() {
+        return Ok(());
     }
+    let blocked = ToolError::platform(
+        "typing a character",
+        "SendInput was blocked (UIPI: the target may run elevated)",
+    );
+    if sent == 0 {
+        return Err(blocked);
+    }
+    // Part of it went in. The events alternate down and up per unit, so an
+    // odd count left a unit down: release it, and say the character may
+    // have arrived in part.
+    if sent % 2 == 1 {
+        // SAFETY: one fully initialized `INPUT` and the size of one.
+        let _ = unsafe { SendInput(&inputs[sent..=sent], size_of::<INPUT>() as i32) };
+    }
+    Err(ToolError::Interrupted {
+        cause: Box::new(blocked),
+        what: format!(
+            "part of `{c}` was typed before the rest was blocked; check the text before retrying"
+        ),
+    })
 }
 
 /// The top-level window `id` belongs to (itself when it is one), by the
@@ -486,12 +515,25 @@ impl KillOnExitJob {
     }
 
     /// Ties `child` to the job.
+    ///
+    /// A child of a server that joined the job ([`Self::assign_self`]) is in
+    /// it from its creation; that counts as assigned whatever the explicit
+    /// assignment answers.
     pub fn assign(&self, child: &std::process::Child) -> ToolResult<()> {
         let process = HANDLE(child.as_raw_handle());
         // SAFETY: both handles are open for the duration of the call: the job
         // is owned by `self`, the process by `child`.
-        unsafe { AssignProcessToJobObject(self.handle, process) }
-            .map_err(|e| ToolError::platform("adding the child to the job object", e))
+        let assigned = unsafe { AssignProcessToJobObject(self.handle, process) };
+        if assigned.is_ok() {
+            return Ok(());
+        }
+        let mut inside = BOOL::default();
+        // SAFETY: as above; `inside` is a local the call writes.
+        let checked = unsafe { IsProcessInJob(process, Some(self.handle), &raw mut inside) };
+        if checked.is_ok() && inside.as_bool() {
+            return Ok(());
+        }
+        assigned.map_err(|e| ToolError::platform("adding the child to the job object", e))
     }
 }
 
