@@ -313,7 +313,12 @@ impl Desktop {
         pid: u32,
         started: Option<u64>,
     ) -> ToolResult<Option<Vec<WindowInfo>>> {
-        let same = || started.is_none() || os::process_started(pid) == started;
+        // Without a start time nothing tells the launched process from a
+        // later one under its pid, so no window is taken as its.
+        let Some(started) = started else {
+            return Ok(None);
+        };
+        let same = || os::process_started(pid) == Some(started);
         if !same() {
             return Ok(None);
         }
@@ -338,14 +343,14 @@ impl Desktop {
         title_contains: Option<&str>,
         pid: Option<u32>,
     ) -> ToolResult<Vec<WindowInfo>> {
-        let needle = title_contains.map(str::to_lowercase);
+        let needle = title_contains.map(a11y::fold);
         let windows: Vec<WindowInfo> = capture::windows()?
             .into_iter()
             .filter(|w| pid.is_none_or(|p| w.pid == p))
             .filter(|w| {
                 needle
                     .as_deref()
-                    .is_none_or(|n| w.title.to_lowercase().contains(n))
+                    .is_none_or(|n| a11y::fold(&w.title).contains(n))
             })
             .collect();
         // A listing never re-binds: an agent may still hold an id or pid from

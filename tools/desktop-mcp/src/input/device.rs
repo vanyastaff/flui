@@ -156,6 +156,9 @@ impl Input {
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
         self.ready()?;
+        // Checked before the first move too: a move is an event (hover,
+        // tooltips) and must not reach a window that took the foreground.
+        guard(None)?;
         self.move_verified(x, y)?;
         thread::sleep(STEP);
         let button = enigo_button(button);
@@ -207,6 +210,7 @@ impl Input {
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
         self.ready()?;
+        guard(None)?;
         self.move_verified(from.0, from.1)?;
         thread::sleep(STEP);
         guard(None)?;
@@ -332,6 +336,9 @@ impl Input {
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
         self.ready()?;
+        // Checked before the first move too: a move is an event (hover,
+        // tooltips) and must not reach a window that took the foreground.
+        guard(None)?;
         self.move_verified(x, y)?;
         thread::sleep(STEP);
         let axes = [(dy, Axis::Vertical), (dx, Axis::Horizontal)];

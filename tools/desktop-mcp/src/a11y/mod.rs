@@ -484,6 +484,8 @@ mod tests {
         assert!(query("STRASSE").matches(&named("Hauptstraße 1")));
         assert!(query("ΟΣ").matches(&named("λόγος και")));
         assert!(!query("strasse").matches(&named("Hauptstrase")));
+        // The window-title filter folds the same way.
+        assert!(fold("Hauptstraße").contains(&fold("STRASSE")));
     }
 
     #[test]

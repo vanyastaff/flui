@@ -219,6 +219,13 @@ impl DesktopServer {
         let Some(ms) = p.wait_for_window_ms else {
             return respond(Ok(json!({ "pid": pid })));
         };
+        if started.is_none() {
+            return respond(Ok(json!({
+                "pid": pid,
+                "window": null,
+                "note": "this OS reports no process start time, so a window under this pid cannot be told from a later process's; find it with list_windows",
+            })));
+        }
         let deadline = Instant::now() + Duration::from_millis(ms);
         loop {
             if let Some(exit) = self.children.exited(pid) {
