@@ -136,7 +136,7 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
     /// Why a parsed handle does not resolve: never issued, or issued and
     /// dropped since to make room for newer ones.
     fn missing(&self, handle: &str, n: u64) -> ToolError {
-        if n < self.next {
+        if n > 0 && n < self.next {
             ToolError::Gone {
                 handle: handle.to_owned(),
                 kind: HandleKind::Element,
@@ -174,9 +174,16 @@ pub fn parse_handle(handle: &str, kind: HandleKind) -> ToolResult<u64> {
             "that is not a {kind} id; ids look like `{example}`"
         )));
     }
+    // Digits only, without a leading zero: `e+5` or `e05` would otherwise
+    // alias `e5`.
     handle
         .trim()
         .strip_prefix(prefix)
+        .filter(|d| {
+            !d.is_empty()
+                && d.bytes().all(|b| b.is_ascii_digit())
+                && (d == &"0" || !d.starts_with('0'))
+        })
         .and_then(|digits| digits.parse().ok())
         .ok_or_else(|| {
             ToolError::InvalidArgument(format!(
@@ -215,7 +222,7 @@ mod tests {
         assert!(
             matches!(cache.get("e9"), Err(ToolError::UnknownHandle { handle, .. }) if handle == "e9")
         );
-        for bad in ["", "12", "x1", "e", "e-1", "eabc"] {
+        for bad in ["", "12", "x1", "e", "e-1", "eabc", "e+5", "e05"] {
             assert!(
                 matches!(cache.get(bad), Err(ToolError::InvalidArgument(_))),
                 "`{bad}` should be malformed"

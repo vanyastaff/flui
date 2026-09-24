@@ -720,7 +720,14 @@ impl Desktop {
     fn resolve(target: Target) -> ToolResult<Vec<NativeWindow>> {
         let all = capture::windows()?;
         let found: Vec<_> = match target {
-            Target::Window(hwnd, _) => all.into_iter().filter(|w| w.id == hwnd).collect(),
+            // The capture list leaves popups out; the OS still knows them.
+            Target::Window(hwnd, _) => all
+                .iter()
+                .find(|w| w.id == hwnd)
+                .cloned()
+                .or_else(|| os_window(hwnd))
+                .into_iter()
+                .collect(),
             Target::Pid(pid) => all.into_iter().filter(|w| w.pid == pid).collect(),
         };
         if found.is_empty() {
@@ -845,7 +852,17 @@ impl Desktop {
             Scope::Target(target) => *target,
         };
         let (target, bound, ids) = self.scoped_windows(target)?;
-        let mut read = self.a11y.tree(&ids, max_depth, max_nodes, deadline)?;
+        let mut read = self
+            .a11y
+            .tree(&ids, max_depth, max_nodes, deadline)
+            .map_err(|e| match (target, e) {
+                (Target::Window(_, n), ToolError::NotFound(_)) => ToolError::Gone {
+                    handle: Registry::handle(n),
+                    kind: HandleKind::Window,
+                    why: "it closed while it was being read".into(),
+                },
+                (_, e) => e,
+            })?;
         // Checked again after the read: a window or process recycled while
         // it was read would otherwise hand out handles in another
         // application, which `invoke` and `set_value` (no target) act on.
@@ -881,17 +898,11 @@ impl Desktop {
             let Some(hwnd) = root.native_window else {
                 continue;
             };
-            let native = all.iter().find(|w| w.id == hwnd).cloned().or_else(|| {
-                Some(NativeWindow {
-                    id: hwnd,
-                    pid: os::window_pid(hwnd)?,
-                    app_name: String::new(),
-                    title: os::window_title(hwnd).unwrap_or_default(),
-                    rect: os::window_rect(hwnd)?,
-                    is_minimized: false,
-                    is_focused: false,
-                })
-            });
+            let native = all
+                .iter()
+                .find(|w| w.id == hwnd)
+                .cloned()
+                .or_else(|| os_window(hwnd));
             if let Some(w) = native
                 && let Some((n, _)) = self.registry.adopt(&w)
             {
@@ -1101,20 +1112,45 @@ impl Desktop {
         element: Option<&ElementWindow>,
         (x, y): (i32, i32),
     ) -> ToolResult<()> {
-        let Some((handle, window, pid)) = element else {
+        Self::element_hit(a11y, element, (x, y))?;
+        Self::element_window(registry, element, (x, y))
+    }
+
+    /// The UI Automation half of [`Self::element_still_there`]: the element
+    /// (or a descendant) is what is hit-tested at the point. A cross-process
+    /// call, so it runs before the fast checks.
+    fn element_hit(
+        a11y: &mut dyn AccessibilityBackend,
+        element: Option<&ElementWindow>,
+        (x, y): (i32, i32),
+    ) -> ToolResult<()> {
+        let Some((handle, _, _)) = element else {
             return Ok(());
         };
-        if !a11y.hits(handle, x, y)? {
-            return Err(ToolError::OutsideTarget {
-                x,
-                y,
-                reason: format!(
-                    "element `{handle}` is no longer what is under it (something inside its window covers it); use invoke, or read the tree again"
-                ),
-                covered_by: None,
-            });
+        if a11y.hits(handle, x, y)? {
+            return Ok(());
         }
-        Self::check_element(registry, *window, *pid, (x, y))
+        Err(ToolError::OutsideTarget {
+            x,
+            y,
+            reason: format!(
+                "element `{handle}` is no longer what is under it (something inside its window covers it); use invoke, or read the tree again"
+            ),
+            covered_by: None,
+        })
+    }
+
+    /// The OS half: the element's own window is under the point and its
+    /// process in front.
+    fn element_window(
+        registry: &Registry,
+        element: Option<&ElementWindow>,
+        point: (i32, i32),
+    ) -> ToolResult<()> {
+        match element {
+            Some((_, window, pid)) => Self::check_element(registry, *window, *pid, point),
+            None => Ok(()),
+        }
     }
 
     /// Clicks an element's clickable point or a screen point.
@@ -1200,8 +1236,12 @@ impl Desktop {
             if let Some(point) = at {
                 return Self::check(registry, target, bound, &[point]);
             }
-            Self::element_still_there(a11y.as_mut(), registry, from_element.as_ref(), from)?;
-            Self::element_still_there(a11y.as_mut(), registry, to_element.as_ref(), to)?;
+            // The slow hit-tests first, the fast window checks after both,
+            // so what they saw is as fresh as it can be.
+            Self::element_hit(a11y.as_mut(), from_element.as_ref(), from)?;
+            Self::element_hit(a11y.as_mut(), to_element.as_ref(), to)?;
+            Self::element_window(registry, from_element.as_ref(), from)?;
+            Self::element_window(registry, to_element.as_ref(), to)?;
             Self::check(registry, target, bound, &path)
         };
         input
@@ -1333,6 +1373,20 @@ impl Desktop {
             foreground: fg.as_ref().map(Foreground::as_ref),
         })
     }
+}
+
+/// A window the capture list does not show (a popup), described from the
+/// OS.
+fn os_window(hwnd: u32) -> Option<NativeWindow> {
+    Some(NativeWindow {
+        id: hwnd,
+        pid: os::window_pid(hwnd)?,
+        app_name: String::new(),
+        title: os::window_title(hwnd).unwrap_or_default(),
+        rect: os::window_rect(hwnd)?,
+        is_minimized: false,
+        is_focused: false,
+    })
 }
 
 fn no_window(target: Target) -> ToolError {

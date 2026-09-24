@@ -76,6 +76,11 @@ pub struct Node {
     /// reached (a lower bound past a few hundred).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub omitted_children: Option<usize>,
+    /// The read stopped before it had seen all of this element's children
+    /// (its budget or time ran out): there may be more than `children` and
+    /// `omitted_children` show. Read it with `root` for the rest.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub children_unread: bool,
     /// The element is gone: an action removed it (a Close or Delete
     /// button), and the other fields are its state from just before.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -335,6 +340,7 @@ impl Node {
             window: self.window.clone(),
             children: Vec::new(),
             omitted_children: None,
+            children_unread: false,
             gone: false,
             unmatchable: self.unmatchable,
             has_text_value: self.has_text_value,
@@ -415,8 +421,10 @@ pub fn outline(roots: &[Node]) -> String {
                 out,
                 "{}- … {n}{} more children not read",
                 "  ".repeat(depth + 1),
-                if n >= 256 { "+" } else { "" }
+                if node.children_unread { "+" } else { "" }
             );
+        } else if node.children_unread {
+            let _ = writeln!(out, "{}- … children not read", "  ".repeat(depth + 1));
         }
     }
     let mut out = String::new();
@@ -609,6 +617,7 @@ mod tests {
             window: None,
             children,
             omitted_children: None,
+            children_unread: false,
             gone: false,
             unmatchable: false,
             has_text_value: false,

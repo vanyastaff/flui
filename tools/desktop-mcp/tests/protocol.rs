@@ -151,7 +151,11 @@ fn refusals_carry_a_code_and_a_message() {
     let reply = client.call("kill", serde_json::json!({ "pid": 1 }));
     assert_eq!(reply["isError"], true, "{reply}");
     let text = reply["content"][0]["text"].as_str().unwrap_or_default();
-    assert!(text.contains("not launched by this session"), "{text}");
+    assert_eq!(
+        reply["structuredContent"]["error"]["code"], "unknown_handle",
+        "{reply}"
+    );
+    assert!(text.contains("launch"), "{text}");
 
     // A handle never issued is unknown, with its kind as data.
     let reply = client.call(

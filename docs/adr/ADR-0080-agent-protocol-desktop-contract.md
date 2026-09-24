@@ -83,8 +83,10 @@ A failed call is a tool error (`isError`) whose structured content is
 `disabled`, `action_unsupported`, `not_foreground`, `focus_elsewhere`, `outside_target`,
 `timeout`, `input_held`, `shutting_down`, `platform`. `retry` is `never`, `soon` or
 `when_appears`; polling tools poll on it. `effect` is present when part of the action
-reached the OS or the application: `partial` (with `sent`, `total`, `unit`),
-`may_have_run`, `ran`, `incidental`. Windows named in an error are data (`foreground`,
+reached the OS or the application: an object `{kind, detail, sent?, total?, unit?}` whose
+`kind` is `partial` (with `sent`, `total`, `unit`), `may_have_run`, `ran` or `incidental`,
+and whose `detail` says what went out. A count outranks an inner effect: `partial` then
+carries the next unit's own kind in its detail. Windows named in an error are data (`foreground`,
 `covered_by`: `{window, pid, title}`). An action that ran but whose element could not be
 read back afterwards is a success with `readback_failed`, not an error.
 
@@ -93,8 +95,10 @@ read back afterwards is a success with `readback_failed`, not an error.
 Reads take a scope (`window`, `pid`, or `root` for a subtree), `max_depth` and
 `max_nodes`, and say `truncated` when they left anything out. `wait_for` waits for an
 element (by criteria or by handle), for its `state`, or with `gone` for no match.
-`launch` returns at spawn; `wait_for_window` waits for the window, so a client timeout
-cannot end the application.
+`launch` returns once the process is started and its pid bound (a busy desktop thread
+can delay the bind by up to 10 s; past that the reply says `bound: false` and
+`wait_for_window` binds it); `wait_for_window` waits for the window, so a client timeout
+on the window cannot end the application.
 
 ## Consequences
 

@@ -199,7 +199,20 @@ impl Input {
     /// the safety check never looked at.
     fn move_verified(&mut self, x: i32, y: i32) -> ToolResult<()> {
         self.move_to(x, y)?;
-        self.ensure_at(x, y)
+        match self.position() {
+            // Right after our own move: the OS clamped it (a screen edge, a
+            // cursor clip), which a retry repeats.
+            Some(at) if at != (x, y) => Err(ToolError::OutsideTarget {
+                x,
+                y,
+                reason: format!(
+                    "the pointer stopped at ({}, {}): the OS keeps it out of that point (a screen edge, or a cursor clip the application holds)",
+                    at.0, at.1
+                ),
+                covered_by: None,
+            }),
+            _ => self.ensure_at(x, y),
+        }
     }
 
     /// Refuses unless the pointer is exactly at the point now — read again
@@ -260,10 +273,18 @@ impl Input {
                 .enigo
                 .button(button, Direction::Press)
                 .map_err(failed("pressing the button"));
-            let went = |sent| Effect::Partial {
-                sent,
-                total: clicks,
-                unit: "clicks",
+            // A press that reported failure may still have gone out: none
+            // before it is `may_have_run`, some before it a count.
+            let went = |sent| {
+                if sent == 0 {
+                    Effect::MayHaveRun
+                } else {
+                    Effect::Partial {
+                        sent,
+                        total: clicks,
+                        unit: "clicks",
+                    }
+                }
             };
             if let Err(cause) = pressed {
                 // A press reported failed may still have gone out, and with
@@ -365,7 +386,15 @@ impl Input {
             done += 1;
         }
         if moved.is_ok() {
-            moved = guard(Some(to)).and_then(|()| self.ensure_at(to.0, to.1));
+            // A key held at the drop changes it (Ctrl copies, Esc cancels):
+            // the keyboard is checked first, the target last.
+            #[cfg(target_os = "windows")]
+            {
+                moved = only_modifiers(&[]);
+            }
+            moved = moved
+                .and_then(|()| guard(Some(to)))
+                .and_then(|()| self.ensure_at(to.0, to.1));
         }
         match moved {
             Ok(()) => self.release_held().map_err(|cause| {
@@ -421,7 +450,17 @@ impl Input {
     ) -> ToolError {
         // Checked before the move: with the button held, a move is itself a
         // drag, and it must not reach a window that took the foreground.
-        let back = guard(Some(last)).and_then(|()| self.move_verified(last.0, last.1));
+        let back = guard(Some(last))
+            .and_then(|()| self.move_verified(last.0, last.1))
+            // Refused only because the pointer is there already (a move
+            // is refused while another button is down): still verified.
+            .or_else(|e| {
+                if self.position() == Some(last) {
+                    guard(Some(last))
+                } else {
+                    Err(e)
+                }
+            });
         // No key goes out unverified: an Esc after the target lost the
         // foreground would reach whatever took it. The release is the one
         // event that must go out regardless, or the button stays held.
@@ -625,8 +664,8 @@ impl Input {
         // focus to a thread with another keyboard layout, and then checked:
         // the target must be in front, and be the window whose layout chose
         // the key (a window that was in front for a moment has another).
-        let (key, modifiers, layout_of) = resolve(combo).map_err(|e| (e, false))?;
         guard(None).map_err(|e| (e, false))?;
+        let (key, modifiers, layout_of) = resolve(combo).map_err(|e| (e, false))?;
         #[cfg(target_os = "windows")]
         if let Some(changed) = layout_of.and_then(owner_changed) {
             return Err((changed, false));
@@ -664,16 +703,17 @@ impl Input {
         if result.is_ok() {
             result = only_modifiers(&held);
         }
-        if result.is_ok() {
-            result = guard(None);
-        }
         // Again after the modifiers: pressing one can move focus to a control
         // with another layout, where the key chosen would be another one.
+        // Before the guard, which is the last check before the key.
         #[cfg(target_os = "windows")]
         if result.is_ok()
             && let Some(changed) = layout_of.and_then(owner_changed)
         {
             result = Err(changed);
+        }
+        if result.is_ok() {
+            result = guard(None);
         }
         let mut sent = false;
         // Whether the key surely went down: only then is the chord a real
@@ -851,6 +891,9 @@ fn only_modifiers(ours: &[Key]) -> ToolResult<()> {
 /// same key would type something else; passing, so worth a retry).
 #[cfg(target_os = "windows")]
 fn owner_changed(owner: LayoutOwner) -> Option<ToolError> {
+    // Passing either way: the key is chosen again on a retry, and a target
+    // that lost the foreground or its focus is refused by the guard, with
+    // the code that says so.
     let now = crate::os::keyboard_owner();
     if now == owner {
         None
@@ -859,13 +902,9 @@ fn owner_changed(owner: LayoutOwner) -> Option<ToolError> {
             "the keyboard layout or Caps Lock changed while the key was chosen".into(),
         ))
     } else {
-        Some(ToolError::NotForeground {
-            target: format!(
-                "the target (native window {}), whose foreground or focused control changed while the key was chosen",
-                owner.foreground
-            ),
-            foreground: crate::os::foreground_ref(),
-        })
+        Some(ToolError::Busy(
+            "the foreground window or its focused control changed while the key was chosen".into(),
+        ))
     }
 }
 

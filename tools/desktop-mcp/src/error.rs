@@ -341,6 +341,13 @@ impl ToolError {
     /// carries an effect keeps it (what happened first is what a retry must
     /// know) and gains the new detail.
     #[must_use]
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos", test)),
+        expect(
+            dead_code,
+            reason = "used by the input device and the UIA backend, not built on this OS"
+        )
+    )]
     pub fn after(self, effect: Effect, detail: impl Into<String>) -> Self {
         match self {
             Self::Interrupted {
@@ -356,6 +363,37 @@ impl ToolError {
                 cause: Box::new(cause),
                 effect,
                 detail: detail.into(),
+            },
+        }
+    }
+
+    /// This error, after `sent` of `total` `unit` of a multi-part action
+    /// went out. The count is what a retry must know first, so it becomes
+    /// the effect even when the cause already carries one (a key whose
+    /// release failed in the middle of typed text): that one's kind and
+    /// detail are kept in the detail.
+    #[must_use]
+    pub fn counted(self, sent: usize, total: usize, unit: &'static str) -> Self {
+        let count =
+            format!("{sent} of {total} {unit} had already been sent, so a retry repeats them");
+        let partial = Effect::Partial { sent, total, unit };
+        match self {
+            Self::Interrupted {
+                cause,
+                effect,
+                detail,
+            } => Self::Interrupted {
+                cause,
+                effect: partial,
+                detail: format!(
+                    "{count}; then, for the next one ({}): {detail}",
+                    effect.kind()
+                ),
+            },
+            cause => Self::Interrupted {
+                cause: Box::new(cause),
+                effect: partial,
+                detail: count,
             },
         }
     }

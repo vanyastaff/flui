@@ -120,6 +120,8 @@ const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::SelectionItemIsSelected,
     UIProperty::ProcessId,
     UIProperty::IsPassword,
+    UIProperty::ValueIsReadOnly,
+    UIProperty::RangeValueIsReadOnly,
 ];
 
 /// `UIA_E_ELEMENTNOTAVAILABLE`: the provider removed the element.
@@ -275,7 +277,19 @@ impl Uia {
     ///
     /// Past `deadline` the held object is not asked again: the id is retired
     /// instead, which only costs the old handle.
-    fn register(&mut self, key: Identity, element: &UIElement, deadline: Instant) -> String {
+    ///
+    /// Retiring on doubt (the deadline passed, an identity read failed) is
+    /// the safe side, a handle never follows an unverified element, but it
+    /// can move a live element to a new handle: `uncertain` is then set, and
+    /// the read says it is truncated, so a wait for the old handle to be
+    /// gone does not conclude from it.
+    fn register(
+        &mut self,
+        key: Identity,
+        element: &UIElement,
+        deadline: Instant,
+        uncertain: &mut bool,
+    ) -> String {
         let pid = cached_pid(element).unwrap_or(0);
         let started = *self
             .starts
@@ -291,12 +305,27 @@ impl Uia {
         let control_type = cached_i32(element, UIProperty::ControlType);
         if let Identity::Runtime(id) = &key
             && let Some(held) = self.elements.by_identity(&key)
-            && (Instant::now() >= deadline
-                || held.same_as(element, started) != Some(true)
-                || !crate::os::runtime_id(held.element.as_ref())
-                    .is_ok_and(|now| now.as_deref() == Some(id.as_slice())))
         {
-            self.elements.retire(&key);
+            // `Some(true)` keep, `Some(false)` a different element, `None`
+            // not known; each provider call only while time is left.
+            let verdict = if Instant::now() >= deadline {
+                None
+            } else {
+                match held.same_as(element, started) {
+                    Some(true) if Instant::now() < deadline => {
+                        match crate::os::runtime_id(held.element.as_ref()) {
+                            Ok(now) => Some(now.as_deref() == Some(id.as_slice())),
+                            Err(_) => None,
+                        }
+                    }
+                    Some(true) => None,
+                    other => other,
+                }
+            };
+            if verdict != Some(true) {
+                *uncertain |= verdict.is_none();
+                self.elements.retire(&key);
+            }
         }
         let runtime = match &key {
             Identity::Runtime(id) => Some(id.clone()),
@@ -319,6 +348,8 @@ impl Uia {
     ///
     /// An element whose process could not be identified when issued is not
     /// acted on at all: nothing would tell its replacement from it.
+    ///
+    /// Returns the element as read just now, its cache current.
     fn alive(&self, handle: &str) -> ToolResult<UIElement> {
         let held = self.elements.get(handle)?;
         let Some(started) = held.started else {
@@ -340,13 +371,25 @@ impl Uia {
                 "element `{handle}` has no runtime id, so it cannot be told from a replacement and is not acted on; use its window's input tools"
             )));
         };
-        if !crate::os::runtime_id(held.element.as_ref())
-            .is_ok_and(|now| now.as_deref() == Some(id.as_slice()))
-        {
-            return Err(ToolError::gone_element(
-                handle,
-                "the application replaced or removed it",
-            ));
+        // Unreadable is not "gone" (a provider that timed out still holds
+        // it); a different id is.
+        match crate::os::runtime_id(held.element.as_ref()) {
+            Ok(now) if now.as_deref() == Some(id.as_slice()) => {}
+            Ok(_) => {
+                return Err(ToolError::gone_element(
+                    handle,
+                    "the application replaced or removed it",
+                ));
+            }
+            Err(e) => {
+                return Err(classify_code(
+                    handle,
+                    "re-reading it",
+                    e.code().0,
+                    &e,
+                    Some(held.pid),
+                ));
+            }
         }
         // Read live: an object that now reports another control type, or
         // another process (a runtime id derived from a recycled native window
@@ -364,7 +407,7 @@ impl Uia {
             .map_err(|e| classify(handle, "re-reading it", &e, Some(held.pid)))?;
         // Unreadable is not "gone": the element may be there and fine.
         match held.same_as(&fresh, Some(started)) {
-            Some(true) => Ok(held.element.clone()),
+            Some(true) => Ok(fresh),
             None => Err(ToolError::platform(
                 "re-reading the element",
                 "its identity could not all be read, so it is not acted on",
@@ -444,7 +487,9 @@ impl Uia {
             walk.truncated = true;
             return None;
         }
-        let id = self.register(key, element, walk.deadline);
+        let mut uncertain = false;
+        let id = self.register(key, element, walk.deadline, &mut uncertain);
+        walk.truncated |= uncertain;
         walk.seen.insert(id.clone());
         let mut node = describe(element, id);
         // One more call for a text control's value, charged like any other.
@@ -467,6 +512,8 @@ impl Uia {
         // Past the budget no child is fetched at all, not even the first:
         // `exhausted` marks what is left unread.
         let mut child = if walk.exhausted() {
+            // Its children, if any, were not even looked for.
+            node.children_unread = true;
             None
         } else {
             walked(
@@ -487,6 +534,7 @@ impl Uia {
                 // it spends the same budget: an exhausted budget stops the
                 // count (a lower bound from there).
                 if exhausted || omitted >= OMITTED_COUNT_CAP {
+                    node.children_unread = true;
                     break;
                 }
                 walk.budget -= 1;
@@ -494,6 +542,7 @@ impl Uia {
             // A spent budget fetches no further sibling either; `exhausted`
             // marks the rest unread.
             if walk.exhausted() {
+                node.children_unread = true;
                 break;
             }
             child = walked(
@@ -647,11 +696,21 @@ impl Uia {
         let held = self.elements.get(handle)?;
         // The same rule as before the action: an element read back must be
         // the one acted on, in the same process.
-        let same = held.same_as(fresh, crate::os::process_started(held.pid)) == Some(true);
+        let same = held.same_as(fresh, crate::os::process_started(held.pid));
         let range_unread = !node.has_text_value
             && cached_bool(fresh, UIProperty::IsRangeValuePatternAvailable)
             && node.value.is_none();
-        if !same {
+        if same.is_none() {
+            return Err(ToolError::platform(
+                "reading back",
+                "the element's identity could not be read back",
+            )
+            .after(
+                Effect::Ran,
+                "the action itself succeeded; only reading the element afterwards failed, so do not repeat it",
+            ));
+        }
+        if same == Some(false) {
             return Err(ToolError::platform(
                 "reading back",
                 "another element now answers for this one (its window was reused)",
@@ -760,46 +819,50 @@ impl Uia {
             } else {
                 ""
             }
-        )))
+        ))
+        .after(
+            Effect::Incidental,
+            "the focus request went out and may have raised or activated its window",
+        ))
     }
 
     /// The element's actions, read live, for error messages: the ones it
     /// offers, and the ones whose availability could not be read. Stopped
     /// after [`ANCESTOR_DEADLINE`] in all, since each read can take a
     /// provider's whole call timeout; the rest then count as unread.
-    fn live_actions(element: &UIElement) -> (Vec<&'static str>, Vec<&'static str>) {
-        let until = Instant::now() + ANCESTOR_DEADLINE;
-        let mut names = Vec::new();
-        let mut unread = Vec::new();
-        let mut note = |actions: &[ActionName], available: Option<bool>| {
-            for action in actions {
-                let list = match available {
-                    Some(true) => &mut names,
-                    Some(false) => continue,
-                    None => &mut unread,
-                };
-                if !list.contains(&action.name()) {
-                    list.push(action.name());
-                }
-            }
-        };
-        for &(prop, actions) in PATTERNS {
-            if Instant::now() >= until {
-                note(actions, None);
-                continue;
-            }
-            let available = element
-                .get_property_value(prop)
-                .ok()
-                .and_then(|v| of_type(v, VT_BOOL))
-                .and_then(|v| TryInto::<bool>::try_into(v).ok());
-            note(actions, available);
+    fn live_actions(&self, element: &UIElement) -> (Vec<&'static str>, Vec<&'static str>) {
+        // One read, by the rule a node's own `actions` follows, so the two
+        // never disagree.
+        match element.build_updated_cache(&self.single) {
+            Ok(fresh) if searchable(&fresh) => (
+                describe(&fresh, String::new())
+                    .actions
+                    .iter()
+                    .map(|a| a.name())
+                    .collect(),
+                Vec::new(),
+            ),
+            _ => (
+                Vec::new(),
+                [
+                    ActionName::Invoke,
+                    ActionName::Toggle,
+                    ActionName::SetValue,
+                    ActionName::Select,
+                    ActionName::Focus,
+                    ActionName::Expand,
+                    ActionName::Collapse,
+                    ActionName::ScrollIntoView,
+                ]
+                .iter()
+                .map(|a| a.name())
+                .collect(),
+            ),
         }
-        (names, unread)
     }
 
-    fn unsupported(handle: &str, element: &UIElement, action: ActionName) -> ToolError {
-        let (supported, unread) = Self::live_actions(element);
+    fn unsupported(&self, handle: &str, element: &UIElement, action: ActionName) -> ToolError {
+        let (supported, unread) = self.live_actions(element);
         ToolError::ActionUnsupported {
             element: handle.to_owned(),
             action: action.name(),
@@ -829,15 +892,15 @@ impl Uia {
     }
 
     /// Refuses `action` unless its pattern is available, read live.
-    fn require(handle: &str, element: &UIElement, action: ActionName) -> ToolResult<()> {
+    fn require(&self, handle: &str, element: &UIElement, action: ActionName) -> ToolResult<()> {
         if Self::has_pattern(handle, element, pattern_of(action).0)? {
             Ok(())
         } else {
-            Err(Self::unsupported(handle, element, action))
+            Err(self.unsupported(handle, element, action))
         }
     }
 
-    fn perform(handle: &str, element: &UIElement, action: &Action) -> ToolResult<()> {
+    fn perform(&self, handle: &str, element: &UIElement, action: &Action) -> ToolResult<()> {
         let pid = cached_pid(element);
         let lookup =
             |what: &'static str| move |e: uiautomation::Error| classify(handle, what, &e, pid);
@@ -866,7 +929,7 @@ impl Uia {
         };
         match action {
             Action::Invoke => {
-                Self::require(handle, element, ActionName::Invoke)?;
+                self.require(handle, element, ActionName::Invoke)?;
                 element
                     .get_pattern::<UIInvokePattern>()
                     .map_err(lookup("invoke"))?
@@ -874,7 +937,7 @@ impl Uia {
                     .map_err(fail("invoke"))
             }
             Action::Toggle => {
-                Self::require(handle, element, ActionName::Toggle)?;
+                self.require(handle, element, ActionName::Toggle)?;
                 element
                     .get_pattern::<UITogglePattern>()
                     .map_err(lookup("toggle"))?
@@ -887,7 +950,7 @@ impl Uia {
                 } else {
                     ("collapse", ActionName::Collapse)
                 };
-                Self::require(handle, element, action)?;
+                self.require(handle, element, action)?;
                 let pattern = element
                     .get_pattern::<UIExpandCollapsePattern>()
                     .map_err(lookup(name))?;
@@ -898,7 +961,7 @@ impl Uia {
                 }
             }
             Action::ScrollIntoView => {
-                Self::require(handle, element, ActionName::ScrollIntoView)?;
+                self.require(handle, element, ActionName::ScrollIntoView)?;
                 element
                     .get_pattern::<UIScrollItemPattern>()
                     .map_err(lookup("scroll_into_view"))?
@@ -934,11 +997,11 @@ impl Uia {
                         .set_value(number)
                         .map_err(fail("set_value"));
                 }
-                Err(Self::unsupported(handle, element, ActionName::SetValue))
+                Err(self.unsupported(handle, element, ActionName::SetValue))
             }
             Action::Focus => element.set_focus().map_err(fail("focus")),
             Action::Select => {
-                Self::require(handle, element, ActionName::Select)?;
+                self.require(handle, element, ActionName::Select)?;
                 element
                     .get_pattern::<UISelectionItemPattern>()
                     .map_err(lookup("select"))?
@@ -1046,12 +1109,20 @@ impl AccessibilityBackend for Uia {
         deadline: Instant,
     ) -> ToolResult<Read> {
         self.starts.clear();
+        let past = || ToolError::Timeout {
+            timeout_ms: 0,
+            what: format!("reading the subtree of `{element}` (the read's time ran out first)"),
+            summary: String::new(),
+        };
+        if Instant::now() >= deadline {
+            return Err(past());
+        }
+        // Read fresh (`alive` returns the element as read just now): the
+        // held object's cache is from the read that issued it.
         let root = self.alive(element)?;
-        // Read fresh: the held object's cache is from the read that issued
-        // it, and a subtree read is asked for because things have changed.
-        let root = root
-            .build_updated_cache(&self.single)
-            .map_err(|e| classify(element, "re-reading it", &e, cached_pid(&root)))?;
+        if Instant::now() >= deadline {
+            return Err(past());
+        }
         let mut walk = Walk {
             max_depth,
             budget: max_nodes.clamp(1, NODE_BUDGET),
@@ -1075,7 +1146,7 @@ impl AccessibilityBackend for Uia {
 
     fn act(&mut self, handle: &str, action: &Action) -> ToolResult<Node> {
         let element = self.alive(handle)?;
-        Self::perform(handle, &element, action)?;
+        self.perform(handle, &element, action)?;
         if matches!(action, Action::Focus) {
             return self.focused(handle, &element);
         }
@@ -1191,25 +1262,34 @@ fn describe(element: &UIElement, id: String) -> Node {
     let checked = offered(UIProperty::IsTogglePatternAvailable)
         .then(|| cached_i32(element, UIProperty::ToggleToggleState).and_then(checked_state))
         .flatten();
-    let expanded = offered(UIProperty::IsExpandCollapsePatternAvailable)
+    let expansion = offered(UIProperty::IsExpandCollapsePatternAvailable)
         .then(|| cached_i32(element, UIProperty::ExpandCollapseExpandCollapseState))
-        .flatten()
-        .and_then(expanded_state);
+        .flatten();
+    let expanded = expansion.and_then(expanded_state);
+    let partly = expansion == Some(ExpandCollapseState::PartiallyExpanded as i32);
+    // A value the provider marks read-only is shown, not offered to set.
+    let read_only = |prop: UIProperty| match prop {
+        UIProperty::IsValuePatternAvailable => cached_bool(element, UIProperty::ValueIsReadOnly),
+        UIProperty::IsRangeValuePatternAvailable => {
+            cached_bool(element, UIProperty::RangeValueIsReadOnly)
+        }
+        _ => false,
+    };
     let selected = offered(UIProperty::IsSelectionItemPatternAvailable)
         .then(|| cached_flag(element, UIProperty::SelectionItemIsSelected))
         .flatten();
     let focusable = cached_bool(element, UIProperty::IsKeyboardFocusable);
     let mut actions = Vec::new();
     for &(prop, offers) in PATTERNS {
-        if !offered(prop) {
+        if !offered(prop) || read_only(prop) {
             continue;
         }
         for &action in offers {
-            // Which of expand and collapse applies is the element's state;
-            // an element that is neither (a leaf) offers none.
+            // Which of expand and collapse applies is the element's state
+            // (a partly expanded one takes both); a leaf offers neither.
             let applies = match action {
                 ActionName::Expand => expanded == Some(false),
-                ActionName::Collapse => expanded == Some(true),
+                ActionName::Collapse => expanded == Some(true) || partly,
                 _ => true,
             };
             if applies && !actions.contains(&action) {
@@ -1221,10 +1301,10 @@ fn describe(element: &UIElement, id: String) -> Node {
         actions.push(ActionName::Focus);
     }
     let (role, native_role) = role(element);
-    let role = if role == Role::TextInput && cached_bool(element, UIProperty::IsPassword) {
-        Role::PasswordInput
-    } else {
-        role
+    let role = match role {
+        Role::TextInput if cached_bool(element, UIProperty::IsPassword) => Role::PasswordInput,
+        Role::Window if cached_bool(element, UIProperty::IsDialog) => Role::Dialog,
+        role => role,
     };
     Node {
         id,
@@ -1248,6 +1328,7 @@ fn describe(element: &UIElement, id: String) -> Node {
         window: None,
         children: Vec::new(),
         omitted_children: None,
+        children_unread: false,
         gone: false,
         unmatchable: !searchable(element),
         has_text_value,
@@ -1422,6 +1503,11 @@ fn node_request(
     for &(prop, _) in PATTERNS {
         request.add_property(prop)?;
     }
+    // Newer than the rest (Windows 10 1809): without it, no window reads as
+    // a dialog, and nothing else changes.
+    if request.add_property(UIProperty::IsDialog).is_err() {
+        tracing::debug!("UI Automation does not know IsDialog; dialogs read as windows");
+    }
     request.set_tree_scope(scope)?;
     request.set_tree_filter(automation.get_control_view_condition()?)?;
     Ok(request)
@@ -1558,7 +1644,17 @@ fn classify(
     e: &uiautomation::Error,
     pid: Option<u32>,
 ) -> ToolError {
-    let code = e.code();
+    classify_code(handle, what, e.code(), e, pid)
+}
+
+/// [`classify`] for a bare HRESULT and its message.
+fn classify_code(
+    handle: &str,
+    what: &'static str,
+    code: i32,
+    e: &dyn std::fmt::Display,
+    pid: Option<u32>,
+) -> ToolError {
     let running = || pid.is_some_and(|pid| crate::os::process_started(pid).is_some());
     match code {
         E_ELEMENT_NOT_AVAILABLE => ToolError::gone_element(handle, "the application removed it"),

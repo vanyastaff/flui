@@ -167,7 +167,14 @@ impl ErrorInfo {
 /// validating error results against the schema (the TypeScript SDK does)
 /// must not reject them.
 fn schema<T: JsonSchema>() -> Arc<JsonObject> {
-    let mut root = schemars::schema_for!(T).to_value();
+    // For serialization: a field left out at its default
+    // (`skip_serializing_if`) is optional there, and an `Option` that is
+    // always sent is required and nullable.
+    let mut root = schemars::generate::SchemaSettings::draft2020_12()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<T>()
+        .to_value();
     let object = root
         .as_object_mut()
         .expect("BUG: a struct's schema is an object");
@@ -447,8 +454,9 @@ async fn blocking<T: Send + 'static>(
     // caller's to handle; one sent after it fails and goes to `undo`.
     result.close();
     match result.try_recv() {
+        // The work saw the cancel this wait sent when it gave up.
+        Ok(Err(ToolError::Cancelled)) | Err(_) => gave_up,
         Ok(arrived) => arrived,
-        Err(_) => gave_up,
     }
 }
 
@@ -581,7 +589,7 @@ impl DesktopServer {
 
     #[tool(
         title = "Launch a program",
-        description = "Start a program (stdio discarded) and return its pid, bound as a target in this session. Then wait_for_window to get its window. The server kills every launched process when it exits: on Windows also everything those start, even when the server itself is killed; elsewhere only the launched processes, on a clean exit. A launch the client cancels ends the process it started, since the pid is never delivered.",
+        description = "Start a program (stdio discarded) and return its pid, bound as a target in this session once the desktop thread is free (`bound`; wait_for_window binds it later when it could not be at once). Then wait_for_window to get its window. The server kills every launched process when it exits: on Windows also everything those start, even when the server itself is killed; elsewhere only the launched processes, on a clean exit. A launch the client cancels ends the process it started, since the pid is never delivered.",
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = true),
         output_schema = schema::<LaunchReply>()
     )]
@@ -663,7 +671,9 @@ impl DesktopServer {
             if !bound.as_ref().is_err_and(|e| e.retry() == Retry::Soon) {
                 break;
             }
-            tokio::time::sleep(POLL).await;
+            if pause(&ct, POLL).await {
+                return self.void_launch(pid, launch).await;
+            }
         }
         if ct.is_cancelled() {
             return self.void_launch(pid, launch).await;
@@ -688,6 +698,12 @@ impl DesktopServer {
     ) -> CallToolResult {
         let p = valid!(p);
         let (pid, needle, timeout) = valid!(p.validate());
+        if !cfg!(target_os = "windows") {
+            return failure(&ToolError::NotSupported(format!(
+                "wait_for_window is not supported on {}: the OS reports no process start time, so a window under the pid cannot be told from a later process's; find it with list_windows",
+                std::env::consts::OS
+            )));
+        }
         let deadline = Instant::now() + timeout;
         loop {
             if let Some(exit) = self.children.exited(pid) {
@@ -704,12 +720,26 @@ impl DesktopServer {
             // Bounded by what is left of the wait: a lookup still queued
             // behind other desktop work when the time is up is withdrawn
             // (one already running finishes; it cannot be stopped halfway).
+            // A pid this session launched but could not bind then (the
+            // desktop thread was busy) is bound now, from the start time
+            // read at the spawn.
+            let started = self.children.launched_start(pid);
             let lookup = ct.child_token();
-            let run = self.worker.run(&lookup, move |d| d.windows_of(pid));
+            let run = self.worker.run(&lookup, move |d| {
+                if started.is_some() {
+                    d.bind_launched(pid, started);
+                }
+                d.windows_of(pid)
+            });
             tokio::pin!(run);
+            // At least a moment even at the deadline, so an idle desktop
+            // thread gets to the lookup before it is withdrawn.
+            let left = deadline
+                .saturating_duration_since(Instant::now())
+                .max(Duration::from_millis(50));
             let windows = tokio::select! {
                 windows = &mut run => windows,
-                () = tokio::time::sleep(deadline.saturating_duration_since(Instant::now())) => {
+                () = tokio::time::sleep(left) => {
                     lookup.cancel();
                     run.await
                 }
@@ -1347,6 +1377,28 @@ mod tests {
                 .is_some_and(|r| r.iter().any(|f| f == "pid")),
             "{value}"
         );
+    }
+
+    /// A field left out at its default is not required by the published
+    /// schema, so a reply that leaves it out still conforms.
+    #[test]
+    fn skipped_fields_are_not_required() {
+        let wait = Value::Object((*schema::<WaitReply>()).clone());
+        let required = &wait["anyOf"][0]["required"];
+        assert!(
+            !required
+                .as_array()
+                .is_some_and(|r| r.iter().any(|f| f == "gone")),
+            "{wait}"
+        );
+        let node = &wait["$defs"]["Node"];
+        let required: Vec<&str> = node["required"]
+            .as_array()
+            .expect("BUG: Node has required fields")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(required, ["id", "role", "native_role"], "{node}");
     }
 
     /// A failure's structured content is the error envelope; a reply's is

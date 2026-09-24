@@ -142,7 +142,8 @@ A failing call returns a tool error (`isError: true`) whose structured content i
 - `retry`: `never`, `soon` (something passing got in the way: a full queue, a window that
   moved during a capture, a layout that changed under a key) or `when_appears` (nothing
   matches now). `wait_for` and `wait_for_window` keep polling through `soon`.
-- `effect`, when part of the action already went out: `partial` (`sent` of `total`
+- `effect`, when part of the action already went out: an object with `kind`, `detail`
+  and, for `partial`, `sent`, `total`, `unit`. `kind` is `partial` (`sent` of `total`
   `unit`: characters, presses, clicks, scroll axes, drag steps), `may_have_run` (the
   action reached the application and then failed or timed out), `ran` (the action went
   out; what followed failed), `incidental` (something else went out: modifiers tapped on

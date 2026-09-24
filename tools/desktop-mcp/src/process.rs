@@ -59,6 +59,9 @@ struct Tracked {
     /// `running` came from: a pid a later launch reused names that one.
     launches: u64,
     launch_of: HashMap<u32, u64>,
+    /// The start time read at each running child's spawn, through its
+    /// handle.
+    start_of: HashMap<u32, Option<u64>>,
     /// Launches between their spawn and their entry in `running`.
     launching: usize,
     /// Set by shutdown's `kill_all`: nothing is launched after it.
@@ -178,9 +181,7 @@ impl Children {
         {
             let mut tracked = self.lock();
             if tracked.closed {
-                return Err(ToolError::NotSupported(
-                    "the server is shutting down; nothing more is launched".into(),
-                ));
+                return Err(ToolError::ShuttingDown);
             }
             tracked.reap();
             tracked.launching += 1;
@@ -236,16 +237,13 @@ impl Children {
             return Err(match end(pid, &mut child) {
                 Ok(_) => {
                     self.lock().hold_unreaped(pid, child);
-                    ToolError::NotSupported(
-                        "the server shut down while this launch ran; the process was ended".into(),
-                    )
+                    ToolError::ShuttingDown
                 }
                 // Kept, so shutdown's last pass tries it again.
                 Err(e) => {
                     self.lock().running.insert(pid, child);
-                    ToolError::NotSupported(format!(
-                        "the server shut down while this launch ran, and ending the process failed ({e}); it is tried again as the server exits"
-                    ))
+                    tracing::warn!(pid, "ending a process launched during shutdown failed: {e}");
+                    ToolError::ShuttingDown
                 }
             });
         }
@@ -256,6 +254,7 @@ impl Children {
         tracked.launches += 1;
         let launch = tracked.launches;
         tracked.launch_of.insert(pid, launch);
+        tracked.start_of.insert(pid, started);
         tracked.returned.entry(pid).or_default().insert(launch);
         Ok((pid, started, launch))
     }
@@ -356,9 +355,21 @@ impl Children {
                 exit_code: None,
             });
         }
-        Err(ToolError::InvalidArgument(format!(
-            "pid {pid} was not launched by this session; kill only ends processes started with launch"
-        )))
+        // Never launched here: kill only ends processes started with launch.
+        Err(ToolError::UnknownHandle {
+            handle: pid.to_string(),
+            kind: crate::error::HandleKind::Process,
+        })
+    }
+
+    /// The start time read when this session launched the process now
+    /// running under `pid`, if it did and one was read.
+    pub fn launched_start(&self, pid: u32) -> Option<u64> {
+        let tracked = self.lock();
+        if !tracked.running.contains_key(&pid) {
+            return None;
+        }
+        tracked.start_of.get(&pid).copied().flatten()
     }
 
     /// How a launched `pid` ended, once it has (`Some(exit code)`); `None`
@@ -530,7 +541,7 @@ mod tests {
         };
         assert!(matches!(
             children.launch(&spec),
-            Err(ToolError::NotSupported(_))
+            Err(ToolError::ShuttingDown)
         ));
     }
 
@@ -540,7 +551,7 @@ mod tests {
         let err = children
             .kill(std::process::id())
             .expect_err("BUG: the test process was not launched by the set");
-        assert!(err.to_string().contains("not launched"), "{err}");
+        assert_eq!(err.code(), "unknown_handle", "{err}");
     }
 
     #[test]

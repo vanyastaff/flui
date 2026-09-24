@@ -139,10 +139,7 @@ pub fn partial(
     if sent == 0 {
         return cause;
     }
-    cause.after(
-        crate::error::Effect::Partial { sent, total, unit },
-        format!("{sent} of {total} {unit} had already been sent, so a retry repeats them"),
-    )
+    cause.counted(sent, total, unit)
 }
 
 #[cfg(test)]
@@ -185,6 +182,26 @@ mod tests {
         assert_eq!(implied_modifiers(1, &[Modifier::Shift]), []);
         assert_eq!(implied_modifiers(6, &[]), [Modifier::Ctrl, Modifier::Alt]);
         assert_eq!(implied_modifiers(0, &[Modifier::Alt]), []);
+    }
+
+    /// A count is kept when the cause already carries an effect of its
+    /// own (a key whose release failed partway through typed text).
+    #[test]
+    fn the_count_outranks_an_inner_effect() {
+        use crate::error::{Effect, ToolError};
+        let inner = ToolError::Busy("x".into()).after(Effect::Ran, "the Enter release failed");
+        let err = partial(inner, 2, 5, "characters");
+        assert!(
+            matches!(
+                &err,
+                ToolError::Interrupted {
+                    effect: Effect::Partial { sent: 2, total: 5, .. },
+                    detail,
+                    ..
+                } if detail.contains("(ran)") && detail.contains("Enter release")
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]
