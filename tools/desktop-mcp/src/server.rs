@@ -434,14 +434,36 @@ impl DesktopServer {
                     "note": "the process exited before it showed a window; if it handed off to another process, find that one with list_windows",
                 })));
             }
-            let windows = self
+            // Bounded by what is left of the wait: a lookup still queued
+            // behind other desktop work when the time is up is withdrawn
+            // (one already running finishes; it cannot be stopped halfway).
+            let lookup = ct.child_token();
+            let run = self
                 .worker
-                .run(&ct, move |d| d.launched_windows(pid, started))
-                .await;
+                .run(&lookup, move |d| d.launched_windows(pid, started));
+            tokio::pin!(run);
+            let windows = tokio::select! {
+                windows = &mut run => windows,
+                () = tokio::time::sleep(deadline.saturating_duration_since(Instant::now())) => {
+                    lookup.cancel();
+                    run.await
+                }
+            };
             // Cancelled while the lookup ran: it finished and answered, but
             // the reply will not reach the client, so neither does the pid.
             if ct.is_cancelled() {
                 return self.void_launch(pid, launch).await;
+            }
+            // Withdrawn at the deadline, not by the client or shutdown.
+            if matches!(windows, Err(ToolError::Cancelled))
+                && lookup.is_cancelled()
+                && !crate::desktop::stopping()
+            {
+                return respond(Ok(json!({
+                    "pid": pid,
+                    "window": null,
+                    "note": "no window for this pid within the wait (the desktop was busy with other calls); see list_windows",
+                })));
             }
             match windows {
                 // Gone, and the pid may already be another process's: its

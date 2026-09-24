@@ -156,6 +156,10 @@ impl LaunchParams {
             .chain(&self.args)
             .chain(&self.cwd)
             .chain(self.env.iter().flat_map(|(k, v)| [k, v]));
+        // Counted as encoded, conservatively: each string can gain a
+        // separator and a pair of quotes, and each quote or backslash an
+        // escape (Windows' command-line quoting), so an empty argument or a
+        // run of backslashes cannot slip a line past the limit.
         let mut bytes = 0_usize;
         for s in strings {
             if s.contains('\0') {
@@ -163,7 +167,8 @@ impl LaunchParams {
                     "launch arguments must not contain NUL characters".into(),
                 ));
             }
-            bytes = bytes.saturating_add(s.len());
+            let escapes = s.bytes().filter(|&b| b == b'"' || b == b'\\').count();
+            bytes = bytes.saturating_add(s.len() + escapes + 3);
         }
         if bytes > MAX_LAUNCH_BYTES {
             return Err(ToolError::InvalidArgument(format!(
@@ -687,6 +692,30 @@ mod tests {
         assert_eq!(
             schemars::schema_for!(Args<KeyParams>),
             schemars::schema_for!(KeyParams)
+        );
+    }
+
+    /// The launch limit counts what the command line becomes: empty
+    /// arguments still take separators and quotes, and backslashes their
+    /// escapes.
+    #[test]
+    fn launch_limit_counts_encoding() {
+        let empties: Vec<String> = vec![String::new(); MAX_LAUNCH_BYTES / 2];
+        assert!(
+            parse::<LaunchParams>(json!({"program": "x", "args": empties}))
+                .validate()
+                .is_err()
+        );
+        let slashes = "\\".repeat(MAX_LAUNCH_BYTES / 2 + 10);
+        assert!(
+            parse::<LaunchParams>(json!({"program": "x", "args": [slashes]}))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            parse::<LaunchParams>(json!({"program": "x", "args": ["a", "b"]}))
+                .validate()
+                .is_ok()
         );
     }
 
