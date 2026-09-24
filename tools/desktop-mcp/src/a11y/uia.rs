@@ -91,6 +91,7 @@ const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::RangeValueValue,
     UIProperty::ToggleToggleState,
     UIProperty::ProcessId,
+    UIProperty::IsPassword,
 ];
 
 /// `UIA_E_ELEMENTNOTAVAILABLE`: the provider removed the element.
@@ -322,10 +323,15 @@ impl Uia {
             .map_err(|e| classify(handle, "re-reading it", &e))?;
         // The process too: a runtime id derived from a recycled native
         // window can come back in another process while the first still runs.
-        if self.kind(&fresh).as_ref() != Some(kind) || cached_pid(&fresh) != Some(held.pid) {
-            return Err(ToolError::StaleElement(handle.to_owned()));
+        // Unreadable is not "gone": the element may be there and fine.
+        match (self.kind(&fresh), cached_pid(&fresh)) {
+            (Some(now), Some(pid)) if &now == kind && pid == held.pid => Ok(held.element.clone()),
+            (None, _) | (_, None) => Err(ToolError::platform(
+                "re-reading the element",
+                "its kind or process could not be read, so it is not acted on",
+            )),
+            _ => Err(ToolError::StaleElement(handle.to_owned())),
         }
-        Ok(held.element.clone())
     }
 
     /// `element` and its descendants, fetched one child at a time through
@@ -367,16 +373,25 @@ impl Uia {
                 walk.truncated = true;
                 return None;
             }
-            let same_window = role(element) == "Window"
-                && self.elements.by_identity(&key).is_some_and(|held| {
-                    let native = |e: &UIElement| {
-                        e.get_native_window_handle()
-                            .map(Into::<isize>::into)
-                            .ok()
-                            .filter(|&h| h != 0)
-                    };
-                    native(&held.element).is_some_and(|h| native(element) == Some(h))
-                });
+            let native = |e: &UIElement| {
+                e.get_native_window_handle()
+                    .map(Into::<isize>::into)
+                    .ok()
+                    .filter(|&h| h != 0)
+            };
+            let held_native = if role(element) == "Window" {
+                self.elements
+                    .by_identity(&key)
+                    .and_then(|held| native(&held.element))
+            } else {
+                None
+            };
+            // Between the two provider calls, as before each.
+            if held_native.is_some() && Instant::now() >= walk.deadline {
+                walk.truncated = true;
+                return None;
+            }
+            let same_window = held_native.is_some_and(|h| native(element) == Some(h));
             if same_window {
                 return None;
             }
@@ -486,8 +501,8 @@ impl Uia {
         Some(Kind {
             control_type: Some(cached_i32(element, UIProperty::ControlType)?),
             names: self.names.hash_one((
-                element.get_cached_automation_id().ok()?,
-                element.get_cached_classname().ok()?,
+                cached_str(element, UIProperty::AutomationId)?,
+                cached_str(element, UIProperty::ClassName)?,
             )),
         })
     }
@@ -496,8 +511,13 @@ impl Uia {
     /// only the clipped string outlives the call. Whether it could be read:
     /// a property the provider does not return, or returns as something
     /// other than a string, is a failed read, not an empty value.
+    ///
+    /// A password field's value is withheld by design, not unreadable: it
+    /// has none to report, and the read is complete.
     fn read_value(&self, element: &UIElement, node: &mut Node) -> bool {
-        if !node.patterns.contains(&"Value") {
+        if !node.patterns.contains(&"Value")
+            || cached_flag(element, UIProperty::IsPassword) == Some(true)
+        {
             return true;
         }
         let Ok(fresh) = element.build_updated_cache(&self.value) else {
@@ -567,18 +587,26 @@ impl Uia {
     }
 
     /// Completes `node` from `fresh` and refuses a readback whose state could
-    /// not all be read: the action ran, so the answer is `Interrupted`, not
-    /// a node with defaulted fields.
+    /// not all be read, or that came from another element than the one acted
+    /// on (the action closed a window whose handle a new control took): the
+    /// action ran, so the answer is `Interrupted`, not a node with defaulted
+    /// or borrowed fields.
     fn complete_readback(
         &self,
+        handle: &str,
         fresh: &UIElement,
         node: &mut Node,
         toggled: bool,
     ) -> ToolResult<()> {
+        let held = self.elements.get(handle)?;
+        let same = held.kind.is_some()
+            && self.kind(fresh) == held.kind
+            && cached_pid(fresh) == Some(held.pid);
         let range_unread = node.patterns.contains(&"RangeValue")
             && !node.patterns.contains(&"Value")
             && node.value.is_none();
-        if !self.read_value(fresh, node)
+        if !same
+            || !self.read_value(fresh, node)
             || node.unmatchable
             || range_unread
             || (toggled && node.toggle_state.is_none())
@@ -601,16 +629,17 @@ impl Uia {
     /// back, not assumed; the focus may land a moment later, so it is polled
     /// briefly. The request itself went out, so a failed readback says so.
     fn focused(&mut self, handle: &str, element: &UIElement) -> ToolResult<Node> {
-        let mut last = None;
+        let mut focusable = None;
         let mut unknown = false;
         // One deadline for the whole readback, however slow each poll is.
         let until = Instant::now() + ANCESTOR_DEADLINE;
         for attempt in 0..FOCUS_POLLS {
             if attempt > 0 {
+                std::thread::sleep(FOCUS_POLL_INTERVAL);
+                // After the pause, so no poll starts past the deadline.
                 if Instant::now() >= until {
                     break;
                 }
-                std::thread::sleep(FOCUS_POLL_INTERVAL);
             }
             let fresh =
                 element
@@ -624,7 +653,7 @@ impl Uia {
             // Checked between the provider calls as well: each can take the
             // whole call timeout.
             if node.has_keyboard_focus {
-                self.complete_readback(&fresh, &mut node, false)?;
+                self.complete_readback(handle, &fresh, &mut node, false)?;
                 return Ok(node);
             }
             // `None`: where focus is could not be read in time.
@@ -637,11 +666,11 @@ impl Uia {
                 None
             };
             if inside == Some(true) {
-                self.complete_readback(&fresh, &mut node, false)?;
+                self.complete_readback(handle, &fresh, &mut node, false)?;
                 return Ok(node);
             }
             unknown = inside.is_none();
-            last = Some(node);
+            focusable = cached_flag(&fresh, UIProperty::IsKeyboardFocusable);
         }
         if unknown {
             return Err(ToolError::Interrupted {
@@ -652,13 +681,12 @@ impl Uia {
                 what: "focus was requested; only reading back where it landed failed".into(),
             });
         }
-        let focusable = last.is_some_and(|n| n.is_keyboard_focusable);
         Err(ToolError::NotSupported(format!(
             "element `{handle}` accepted focus but keyboard focus is neither on it nor inside it{}; click it or use key tab to move focus",
-            if focusable {
-                ""
-            } else {
+            if focusable == Some(false) {
                 " (it reports is_keyboard_focusable: false)"
+            } else {
+                ""
             }
         )))
     }
@@ -925,7 +953,12 @@ impl AccessibilityBackend for Uia {
                 let mut node = describe(&fresh, handle.to_owned());
                 // A value that cannot be read back is not a control without
                 // one: the action ran, and what it left is unknown.
-                self.complete_readback(&fresh, &mut node, matches!(action, Action::Toggle))?;
+                self.complete_readback(
+                    handle,
+                    &fresh,
+                    &mut node,
+                    matches!(action, Action::Toggle),
+                )?;
                 Ok(node)
             }
             // The action succeeded and took its own element away (a Close or
@@ -1027,10 +1060,10 @@ fn describe(element: &UIElement, id: String) -> Node {
     Node {
         id,
         role: role(element),
-        name: non_empty(element.get_cached_name()),
+        name: non_empty(cached_str(element, UIProperty::Name)),
         value,
-        automation_id: non_empty(element.get_cached_automation_id()),
-        class_name: non_empty(element.get_cached_classname()),
+        automation_id: non_empty(cached_str(element, UIProperty::AutomationId)),
+        class_name: non_empty(cached_str(element, UIProperty::ClassName)),
         rect: element
             .get_cached_bounding_rectangle()
             .ok()
@@ -1071,9 +1104,9 @@ fn searchable(element: &UIElement) -> bool {
     let offered = |prop| cached_bool(element, prop);
     cached_i32(element, UIProperty::ControlType).is_some()
         && cached_pid(element).is_some()
-        && element.get_cached_name().is_ok()
-        && element.get_cached_automation_id().is_ok()
-        && element.get_cached_classname().is_ok()
+        && cached_str(element, UIProperty::Name).is_some()
+        && cached_str(element, UIProperty::AutomationId).is_some()
+        && cached_str(element, UIProperty::ClassName).is_some()
         && element.get_cached_bounding_rectangle().is_ok()
         && cached_flag(element, UIProperty::IsEnabled).is_some()
         && cached_flag(element, UIProperty::HasKeyboardFocus).is_some()
@@ -1205,8 +1238,12 @@ fn cached_pid(element: &UIElement) -> Option<u32> {
         .filter(|&pid| pid != 0)
 }
 
-fn non_empty(value: uiautomation::Result<String>) -> Option<String> {
-    value.ok().filter(|s| !s.is_empty()).map(clip)
+fn cached_str(element: &UIElement, prop: UIProperty) -> Option<String> {
+    cached_of(element, prop, VT_BSTR).and_then(|v| TryInto::<String>::try_into(v).ok())
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|s| !s.is_empty()).map(clip)
 }
 
 /// `s` cut to [`MAX_PROPERTY_CHARS`], ending in `…` when it was longer
