@@ -118,17 +118,26 @@ mod backend {
                         .current_monitor()
                         .ok()
                         .and_then(|m| m.scale_factor().ok()),
+                    "make the window smaller or capture another",
                 )?;
                 let image = window
                     .capture_image()
                     .map_err(|e| ToolError::platform(format!("capturing window {id}"), e))?;
                 // Bounds read before the capture describe these pixels only
                 // if the window stayed put meanwhile.
-                let after = describe(window).map(|w| w.rect);
-                if after != Some(info.rect) {
-                    return Err(ToolError::Busy(format!(
-                        "window {id} moved or resized while it was captured"
-                    )));
+                // Closed is final; moved is passing.
+                match describe(window).map(|w| w.rect) {
+                    None => {
+                        return Err(ToolError::NotFound(format!(
+                            "window {id} closed while it was captured"
+                        )));
+                    }
+                    Some(after) if after != info.rect => {
+                        return Err(ToolError::Busy(format!(
+                            "window {id} moved or resized while it was captured"
+                        )));
+                    }
+                    Some(_) => {}
                 }
                 (image, info.rect)
             }
@@ -169,7 +178,11 @@ mod backend {
                     width: monitor.width().map_err(meta)?,
                     height: monitor.height().map_err(meta)?,
                 };
-                within_pixel_limit(source, monitor.scale_factor().ok())?;
+                within_pixel_limit(
+                    source,
+                    monitor.scale_factor().ok(),
+                    "capture a window on it instead",
+                )?;
                 let image = monitor
                     .capture_image()
                     .map_err(|e| ToolError::platform("capturing the monitor", e))?;
@@ -232,9 +245,9 @@ const MAX_CAPTURE_PIXELS: u64 = 7680 * 4320;
 /// allocated. `scale` is the display's backing pixels per screen unit, which
 /// the bitmap is allocated in: 1 on Windows (the server works in physical
 /// pixels there), 2 for a Retina display on macOS, where screen units are
-/// points.
+/// points. `advice` is what to do instead, for this kind of target.
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
-fn within_pixel_limit(source: Rect, scale: Option<f32>) -> ToolResult<()> {
+fn within_pixel_limit(source: Rect, scale: Option<f32>, advice: &str) -> ToolResult<()> {
     let scale = if cfg!(target_os = "macos") {
         // Unknown there means the bitmap's size is unknown: refused rather
         // than guessed at one pixel per point.
@@ -258,7 +271,7 @@ fn within_pixel_limit(source: Rect, scale: Option<f32>) -> ToolResult<()> {
         // `max_side` does not help: the limit is on the bitmap read before
         // it is shrunk.
         return Err(ToolError::NotSupported(format!(
-            "the capture would be about {pixels} pixels ({}x{} screen units at {scale}x), above the {MAX_CAPTURE_PIXELS}-pixel limit on what one capture reads; capture a smaller window instead",
+            "the capture would be about {pixels} pixels ({}x{} screen units at {scale}x), above the {MAX_CAPTURE_PIXELS}-pixel limit on what one capture reads (max_side does not change it); {advice}",
             source.width, source.height
         )));
     }
@@ -347,9 +360,9 @@ mod tests {
             width,
             height,
         };
-        assert!(within_pixel_limit(rect(30_000, 30_000), Some(1.0)).is_err());
-        assert!(within_pixel_limit(rect(7680, 4320), Some(1.0)).is_ok());
-        assert!(within_pixel_limit(rect(8192, 8192), Some(1.0)).is_err());
+        assert!(within_pixel_limit(rect(30_000, 30_000), Some(1.0), "x").is_err());
+        assert!(within_pixel_limit(rect(7680, 4320), Some(1.0), "x").is_ok());
+        assert!(within_pixel_limit(rect(8192, 8192), Some(1.0), "x").is_err());
     }
 
     /// A HiDPI capture has more pixels than screen units; the reply says

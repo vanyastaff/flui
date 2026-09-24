@@ -75,7 +75,7 @@ pub enum ToolError {
     /// process's window (an embedded browser or preview pane), where keys
     /// would go. Activating the window again does not move it.
     #[error(
-        "refused: keyboard focus in {target} is in a window of process {holder} (an embedded panel), so keys would go there; focus an element of the target or click into it first"
+        "refused: keyboard focus in {target} is in a window of process {holder} (an embedded panel), so keys would go there; move focus to a control of the target's own outside that panel (focus or click one); if the panel fills the window, keys cannot be sent to it with a safety target"
     )]
     FocusElsewhere {
         /// The window the caller wanted the input to reach.

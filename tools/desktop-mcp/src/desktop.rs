@@ -330,19 +330,30 @@ impl Desktop {
         if started.is_none() && cfg!(target_os = "windows") {
             self.unidentified.insert(w.pid);
         }
+        let class = os::window_class(w.id);
         let issued = *self.issued.entry(w.id).or_insert(Issued {
             pid: w.pid,
             started,
-            class: os::window_class(w.id),
+            class,
         });
         if let Some(started) = started {
             self.started.entry(w.pid).or_insert(started);
         }
-        if issued.pid != w.pid || issued.started != started {
-            return Some(format!(
-                "this id was handed out earlier for process {}, and an id is never re-bound; target this window by pid if that is allowed",
-                issued.pid
-            ));
+        // The same checks `revalidate` makes, so a window listed as
+        // targetable is one a call accepts.
+        let class_changed = issued.class.is_some() && class != issued.class;
+        if issued.pid != w.pid || issued.started != started || class_changed {
+            // The pid is a way in only while it still names the process it
+            // was handed out for.
+            let pid_bound = started.is_some() && self.started.get(&w.pid).copied() == started;
+            return Some(if issued.pid != w.pid && pid_bound {
+                format!(
+                    "this id was handed out earlier for process {}, and an id is never re-bound; target this window by pid {}",
+                    issued.pid, w.pid
+                )
+            } else {
+                "this id (and its pid) were handed out earlier for another window or process, and neither is re-bound, so this window cannot be targeted in this session".into()
+            });
         }
         if started.is_none() && cfg!(target_os = "windows") {
             return Some(
@@ -660,7 +671,7 @@ impl Desktop {
                     && now != then
                 {
                     return Err(ToolError::InvalidArgument(format!(
-                        "window {id} is no longer the window this session listed (its class changed); list_windows again"
+                        "window {id} is no longer the window this session listed (its class changed), and an id is never re-bound; target the window by pid"
                     )));
                 }
                 if let Some(pid) = bound.window_pid {
@@ -874,14 +885,25 @@ impl Desktop {
         }
         let bound = self.bound(Some(target))?;
         Self::revalidate(target, bound)?;
-        let windows = Self::resolve(target)?;
-        for w in &windows {
-            self.adopt_window(w);
+        let mut windows = Self::resolve(target)?;
+        for w in &mut windows {
+            w.not_targetable = self.adopt_window(w);
         }
+        // Only a window later calls accept is worth raising and reporting.
+        windows.retain(|w| w.not_targetable.is_none());
         let window = windows
             .iter()
             .find(|w| !w.is_minimized)
-            .unwrap_or(&windows[0])
+            .or_else(|| windows.first())
+            .ok_or_else(|| {
+                let what = match target {
+                    Target::Window(id) => format!("window {id}"),
+                    Target::Pid(pid) => format!("process {pid}"),
+                };
+                ToolError::NotSupported(format!(
+                    "{what} has no window this session can target (see not_targetable in list_windows)"
+                ))
+            })?
             .clone();
         let mut attempts = Vec::new();
         // The chosen window itself, not only its process, is what gets

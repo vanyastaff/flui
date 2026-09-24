@@ -53,8 +53,8 @@ reports how its pixels map back to them.
 
 | Tool | Arguments | Does |
 |------|-----------|------|
-| `list_windows` | `title_contains?`, `pid?` | Top-level windows: `id`, `pid`, `app_name`, `title`, `rect`, `is_minimized`, `is_focused` (on macOS every window of the active app) |
-| `launch` | `program`, `args?`, `cwd?`, `env?`, `wait_for_window_ms?` | Starts a process; returns its `pid`, and its first window, or its exit code if it exits first (the window wait is Windows only). Command line and environment at most 32 KiB |
+| `list_windows` | `title_contains?`, `pid?` | Top-level windows: `id`, `pid`, `app_name`, `title`, `rect`, `is_minimized`, `is_focused` (on macOS every window of the active app), and `not_targetable` with the reason when this session cannot target it |
+| `launch` | `program`, `args?`, `cwd?`, `env?`, `wait_for_window_ms?` | Starts a process; returns its `pid`, and its first targetable window, or its exit code if it exits first (the window wait is Windows only). Command line and environment at most 32 KiB. A launch the client cancels ends its process; a program still starting after 30 s is given up on (and ended if it starts) |
 | `kill` | `pid` | Ends a process this session launched (other pids are refused) |
 | `screenshot` | `window_id?` \| `pid?` \| `monitor?`, `max_side?` | PNG of a window (captured even when covered, where the OS allows), a monitor, or the primary monitor, its longer side at most `max_side` (default 1920, at most 4096); plus size, the captured rect `source` and `scale_x`/`scale_y` |
 | `accessibility_tree` | `window_id` \| `pid`, `max_depth?` | Nested nodes, `max_depth` levels (default 30, at most 200): `id`, `role`, `name`, `value`, `automation_id`, `class_name`, `rect`, `enabled`, `has_keyboard_focus`, `is_keyboard_focusable`, `toggle_state`, `patterns`, `children`, `omitted_children` |
@@ -77,9 +77,11 @@ when UI Automation later gives its runtime id to a new element (which gets a new
 
 `screenshot` reports the captured screen rect (`source`) and `scale_x`/`scale_y`, image
 pixels per screen unit measured from the image itself (2 on a Retina display, below 1 when
-`max_side` shrank it): screen x = `source.x` + image x / `scale_x`. A window that moves, or no
-longer belongs to the process it was listed for, is refused rather than returned with bounds or
-pixels that do not match.
+`max_side` shrank it): screen x = `source.x` + image x / `scale_x`. A window that moves during
+the capture (busy, retry), closes, or no longer belongs to the process it was listed for, is
+refused rather than returned with bounds or pixels that do not match. One capture reads at most
+an 8K display's pixels (7680×4320) before shrinking, so `max_side` does not get a larger window
+or monitor past it.
 
 A read (`accessibility_tree`, `find`, one `wait_for` poll) fetches at most 5000 elements and
 16 MiB of strings, cuts any one string at 4096 characters (ending in `…`), and stops 10 s after
@@ -99,7 +101,10 @@ after reaching the application, or whose element vanished during it, says it may
 action that ran but could not be read back says so. Look before retrying any of them.
 
 A request the client cancels while it waits for the desktop thread never runs, and at most 32
-calls wait at once; past that a call is refused as busy.
+calls wait at once. An error that ends in "retry shortly" is passing (a full queue, a window
+that moved during a capture, a keyboard layout that changed under a key, a process's window
+changing hands mid-read) and the same call can succeed moments later; `wait_for` keeps polling
+through it.
 
 ## Safety rule for input
 
@@ -118,12 +123,16 @@ sends nothing, so keystrokes and clicks never land in another application.
   process's start time; a pid to the start time of the process it named when listed or
   launched. OSes recycle both, and a target that now names another process is refused, before
   every event. A pid this session never handed out is refused, and so is any pid where the OS
-  reports no start time (macOS, for now). Neither a later `list_windows` nor `activate_window`
-  re-binds an id or pid; only `launch` binds the pid of the process it just started.
+  reports no start time (macOS, for now); on Windows so are the window ids and pid of a process
+  whose start time cannot be read (a protected one). Neither a later `list_windows` nor
+  `activate_window` re-binds an id or pid; only `launch` binds the pid of the process it just
+  started. `list_windows` marks a window it cannot be targeted by with `not_targetable`.
 - Keys and text also require the window holding keyboard focus inside the target to belong
   to the target's process: an embedded browser or preview pane of another process with focus
-  refuses them. Where the OS cannot say which window has focus (macOS, for now), keys and text
-  with a target are refused.
+  refuses them, with advice to move focus to one of the target's own controls. When such a
+  panel fills the window (an app that is one web view), keys cannot reach it with a safety
+  target. Where the OS cannot say which window has focus (macOS, for now), keys and text with a
+  target are refused.
 - A drag that stops partway releases the button (the drop) at a point verified inside the
   target; if none verifies, the release still has to go out (a held button would drag on), and
   the error says where it happened. No other event is sent unverified.

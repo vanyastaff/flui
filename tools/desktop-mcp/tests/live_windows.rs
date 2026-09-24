@@ -226,12 +226,9 @@ fn a11y_probe_counter_through_mcp() {
     // A listed window of another application, while the probe is in front,
     // is refused as not the foreground window.
     let all = ok("list_windows", &client.call("list_windows", json!({})));
-    if let Some(other) = all["windows"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|w| w["pid"].as_u64() != Some(pid) && w["is_minimized"] != true)
-    {
+    if let Some(other) = all["windows"].as_array().into_iter().flatten().find(|w| {
+        w["pid"].as_u64() != Some(pid) && w["is_minimized"] != true && w["not_targetable"].is_null()
+    }) {
         let refused = client.call("key", json!({ "combo": "a", "window_id": other["id"] }));
         show(
             "key to a window behind the probe (refused)",
