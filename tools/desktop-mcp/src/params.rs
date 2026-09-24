@@ -146,7 +146,8 @@ pub struct TreeParams {
 
 /// Default and ceiling for `max_depth`.
 pub const DEFAULT_DEPTH: usize = 30;
-const MAX_DEPTH: u32 = 200;
+/// The deepest tree any tool reads: `max_depth`'s ceiling, and `find`'s bound.
+pub const MAX_DEPTH: u32 = 200;
 
 impl TreeParams {
     /// The target and depth.

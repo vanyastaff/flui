@@ -109,8 +109,8 @@ impl Input {
             .map_err(failed("pressing for a drag"))?;
         let steps = (duration.as_millis() / STEP.as_millis()).clamp(2, 200) as i32;
         let moved = (1..=steps).try_for_each(|i| {
-            let x = from.0 + (to.0 - from.0) * i / steps;
-            let y = from.1 + (to.1 - from.1) * i / steps;
+            let x = lerp(from.0, to.0, i, steps);
+            let y = lerp(from.1, to.1, i, steps);
             thread::sleep(STEP);
             guard()?;
             self.move_to(x, y)
@@ -213,6 +213,14 @@ impl Input {
         }
         Ok(())
     }
+}
+
+/// The point `i/steps` of the way from `a` to `b`, in `i64` so a wide drag
+/// cannot overflow after the button is already down. The result lies between
+/// `a` and `b`, so it fits back in `i32`.
+fn lerp(a: i32, b: i32, i: i32, steps: i32) -> i32 {
+    let at = i64::from(a) + (i64::from(b) - i64::from(a)) * i64::from(i) / i64::from(steps);
+    i32::try_from(at).expect("BUG: an interpolated point lies between two i32 endpoints")
 }
 
 fn enigo_button(button: MouseButton) -> Button {

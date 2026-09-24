@@ -182,6 +182,44 @@ impl Uia {
         }
     }
 
+    /// Whether the element UIA hit-tests at `(x, y)` is `element` or one of
+    /// its descendants.
+    fn hits_element(&self, x: i32, y: i32, element: &UIElement) -> bool {
+        let Ok(hit) = self
+            .automation
+            .element_from_point(uiautomation::types::Point::new(x, y))
+        else {
+            return false;
+        };
+        let (Ok(walker), Ok(root)) = (
+            self.automation.get_raw_view_walker(),
+            self.automation.get_root_element(),
+        ) else {
+            return false;
+        };
+        let mut current = hit;
+        loop {
+            if self
+                .automation
+                .compare_elements(&current, element)
+                .unwrap_or(false)
+            {
+                return true;
+            }
+            if self
+                .automation
+                .compare_elements(&current, &root)
+                .unwrap_or(true)
+            {
+                return false;
+            }
+            match walker.get_parent(&current) {
+                Ok(parent) => current = parent,
+                Err(_) => return false,
+            }
+        }
+    }
+
     /// The top-level window `element` belongs to: the ancestor whose parent is
     /// the desktop, as the handle `list_windows` reports. `None` when the walk
     /// fails or that ancestor has no native window.
@@ -330,10 +368,21 @@ impl AccessibilityBackend for Uia {
     fn act(&mut self, handle: &str, action: &Action) -> ToolResult<Node> {
         let element = self.element(handle)?;
         Self::perform(handle, &element, action)?;
-        let fresh = element
-            .build_updated_cache(&self.single)
-            .map_err(|e| classify(handle, "reading back", &e))?;
-        Ok(self.describe(&fresh))
+        match element.build_updated_cache(&self.single) {
+            Ok(fresh) => Ok(self.describe(&fresh)),
+            // The action succeeded and took its own element away (a Close or
+            // Delete button, a navigation): that is the action's result, not a
+            // failure. Answer with the node as it was just before.
+            Err(e)
+                if matches!(
+                    classify(handle, "reading back", &e),
+                    ToolError::StaleElement(_)
+                ) =>
+            {
+                Ok(self.describe(&element))
+            }
+            Err(e) => Err(classify(handle, "reading back", &e)),
+        }
     }
 
     fn click_point(&mut self, handle: &str) -> ToolResult<ClickPoint> {
@@ -353,7 +402,16 @@ impl AccessibilityBackend for Uia {
                     "element `{handle}` has no on-screen area to click (offscreen or collapsed)"
                 )));
             }
-            rect.center()
+            // No clickable point from UIA: the centre is only a guess, so it
+            // must hit the element itself (or a descendant) — a sibling
+            // covering it would otherwise take the click.
+            let (x, y) = rect.center();
+            if !self.hits_element(x, y, &element) {
+                return Err(ToolError::NotFound(format!(
+                    "element `{handle}` reports no clickable point and its centre ({x}, {y}) is covered by another element; use invoke, or click a point you have verified"
+                )));
+            }
+            (x, y)
         };
         Ok(ClickPoint {
             x,

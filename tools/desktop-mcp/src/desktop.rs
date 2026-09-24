@@ -205,7 +205,10 @@ impl Desktop {
 
     /// Elements matching `query` anywhere in a target's windows.
     pub fn find(&mut self, target: Target, query: &Query) -> ToolResult<(Vec<Node>, Vec<Node>)> {
-        let roots = self.tree(target, usize::MAX)?;
+        // Bounded like `accessibility_tree`: an unbounded walk of a deeply
+        // nested tree (a browser's, a document's) recurses until the worker's
+        // stack runs out.
+        let roots = self.tree(target, crate::params::MAX_DEPTH as usize)?;
         Ok((a11y::search(&roots, query), roots))
     }
 

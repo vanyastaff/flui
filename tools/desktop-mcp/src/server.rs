@@ -41,7 +41,9 @@ require the element's own window to be in front.
 
 Element ids (e12) are session handles from accessibility_tree, find and wait_for; the same \
 element keeps its id across reads. Accessibility tools use UI Automation and are Windows-only \
-for now; window listing, screenshots and input work on every OS.";
+for now. Window listing, screenshots and input work on Windows and macOS (on macOS, \
+coordinate input with a safety target is refused: the server cannot yet verify what covers a \
+point); on Linux none of them is available yet.";
 
 /// The MCP server.
 #[derive(Debug, Clone)]
