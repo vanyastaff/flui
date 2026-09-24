@@ -402,13 +402,19 @@ pub struct SetValueParams {
 pub const MAX_VALUE_CHARS: usize = 100_000;
 
 impl SetValueParams {
-    /// Refuses a value above [`MAX_VALUE_CHARS`] before anything is sent.
+    /// Refuses a value above [`MAX_VALUE_CHARS`], or one with a NUL (which
+    /// the provider would cut at), before anything is sent.
     pub fn validate(&self) -> ToolResult<()> {
         let count = self.value.chars().count();
         if count > MAX_VALUE_CHARS {
             return Err(ToolError::InvalidArgument(format!(
                 "value has {count} characters; at most {MAX_VALUE_CHARS}"
             )));
+        }
+        if self.value.contains('\0') {
+            return Err(ToolError::InvalidArgument(
+                "value must not contain NUL characters".into(),
+            ));
         }
         Ok(())
     }

@@ -8,8 +8,8 @@ mod windows;
 
 #[cfg(target_os = "windows")]
 pub use windows::{
-    KillOnExitJob, init_dpi, move_pointer, release_unicode, runtime_id, send_unicode,
-    uia_with_timeouts,
+    KillOnExitJob, UIA_TRANSACTION_TIMEOUT_MS, init_dpi, move_pointer, release_unicode, runtime_id,
+    send_unicode, uia_with_timeouts,
 };
 
 #[cfg(not(target_os = "windows"))]

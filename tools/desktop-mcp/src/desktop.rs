@@ -53,10 +53,10 @@ fn not_foreground(target: impl std::fmt::Display, fg: Option<&Foreground>) -> To
 
 /// Fail closed: a point is only sent where the OS confirms what is under it.
 fn under_or_refuse((x, y): (i32, i32), under: Option<Under>) -> ToolResult<Under> {
-    under.ok_or_else(|| {
-        ToolError::NotSupported(format!(
-            "cannot tell what is under ({x}, {y}) (it is off every screen, or this OS does not report it), so no input is sent there"
-        ))
+    under.ok_or_else(|| ToolError::OutsideTarget {
+        x,
+        y,
+        reason: "nothing is known to be there (it is off every screen, or this OS does not report what is under a point)".into(),
     })
 }
 
@@ -154,22 +154,6 @@ pub fn verify_element(
             &format!("the element is in window {window}"),
             under,
         ));
-    }
-    Ok(())
-}
-
-/// Refuses a window target whose id now belongs to a different process than
-/// the one that owned it when this session listed it (`bound`): Windows
-/// recycles `HWND`s, and input must not follow an id to an unrelated window.
-pub fn still_bound(target: Target, bound: Option<u32>, fg: Option<&Foreground>) -> ToolResult<()> {
-    if let (Target::Window(id), Some(pid), Some(fg)) = (target, bound, fg)
-        && fg.id == id
-        && fg.pid != pid
-    {
-        return Err(ToolError::NotForeground {
-            target: format!("{target} (of process {pid} when listed)"),
-            foreground: format!("{fg}: the id now belongs to another process"),
-        });
     }
     Ok(())
 }
@@ -752,7 +736,6 @@ impl Desktop {
         };
         Self::revalidate(target, bound)?;
         let fg = Self::foreground()?;
-        still_bound(target, bound.window_pid, fg.as_ref())?;
         if points.is_empty() {
             // Keys and text: they go to the focused window, which must be
             // the target's process too; the focus is read on the very
@@ -850,8 +833,9 @@ impl Desktop {
         )
     }
 
-    /// Drags with the left button. Each step checks the point it is about to
-    /// reach; the start and end are checked before the press.
+    /// Drags with the left button. The start, the end and every point the
+    /// drag passes through are checked before the press, and each step
+    /// checks the point it is about to reach again before moving there.
     pub fn drag(
         &mut self,
         from: (i32, i32),
@@ -861,10 +845,12 @@ impl Desktop {
     ) -> ToolResult<Value> {
         self.input()?;
         let bound = self.bound(target)?;
-        Self::check(target, bound, &[from, to])?;
+        let mut path = vec![from];
+        path.extend(crate::input::drag_path(from, to, duration));
+        Self::check(target, bound, &path)?;
         let mut guard = |at: Option<(i32, i32)>| match at {
             Some(point) => Self::check(target, bound, &[point]),
-            None => Self::check(target, bound, &[from, to]),
+            None => Self::check(target, bound, &path),
         };
         self.input()?.drag(from, to, duration, &mut guard)?;
         Ok(json!({ "from": { "x": from.0, "y": from.1 }, "to": { "x": to.0, "y": to.1 } }))
@@ -906,7 +892,7 @@ impl Desktop {
     ) -> ToolResult<Value> {
         self.input()?;
         if target.is_some()
-            && let Some(handler) = combo.shell_hotkey(cfg!(target_os = "macos"), repeat)
+            && let Some(handler) = combo.shell_hotkey(cfg!(target_os = "macos"))
         {
             return Err(ToolError::InvalidArgument(format!(
                 "`{combo}` is handled by {handler}, not by the target window, so no safety target can hold for it; it is refused"
@@ -1041,18 +1027,6 @@ mod tests {
         assert!(verify(Target::Window(10), Some(&fg()), &[]).is_ok());
         assert!(verify(Target::Pid(100), Some(&fg()), &[((5, 5), Some(OWN))]).is_ok());
         assert!(verify(Target::Window(10), Some(&fg()), &[((5, 5), Some(OWN))]).is_ok());
-    }
-
-    /// A window id recycled for another process's window is refused, even
-    /// though that window is in front under the same id.
-    #[test]
-    fn a_recycled_window_id_is_refused() {
-        assert!(still_bound(Target::Window(10), Some(100), Some(&fg())).is_ok());
-        assert!(matches!(
-            still_bound(Target::Window(10), Some(555), Some(&fg())),
-            Err(ToolError::NotForeground { .. })
-        ));
-        assert!(still_bound(Target::Pid(100), None, Some(&fg())).is_ok());
     }
 
     /// A pid held by another process than the one first seen under it, or

@@ -118,24 +118,35 @@ struct Held {
     element: UIElement,
     /// The runtime id it was issued under, `None` for an anonymous one.
     runtime: Option<Vec<i32>>,
-    /// What kind of element it was when issued: control type, automation id
-    /// and class name. A runtime id derived from a recycled native window can
-    /// repeat for a replacement in the same process; one of another kind is
-    /// told apart by these. `None` when it could not be read: such a
-    /// handle is not acted on.
-    kind: Option<Kind>,
+    /// Its control type when issued. A runtime id derived from a recycled
+    /// native window can repeat for a replacement in the same process; one
+    /// of another control type is told apart by this. Not its class name or
+    /// automation id: an action can change those on the same control (a web
+    /// toggle's CSS classes, a re-keyed DOM id). `None` when it could not be
+    /// read: such a handle is not acted on.
+    control_type: Option<i32>,
     pid: u32,
     started: Option<u64>,
 }
 
-/// An element's kind, the properties that do not change over its life.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Kind {
-    control_type: Option<i32>,
-    /// A keyed hash of the automation id and class name: a provider can
-    /// return strings of any length, and thousands of held elements must
-    /// not keep them.
-    names: u64,
+impl Held {
+    /// Whether `fresh`, read live, is still the element this handle was
+    /// issued for: the same runtime id, in the same process (by pid and
+    /// start time), of the same control type. The one rule every path uses,
+    /// so a read, an action's precheck and its readback agree. `None` when
+    /// it cannot be told: a property could not be read.
+    fn same_as(&self, fresh: &UIElement, started_now: Option<u64>) -> Option<bool> {
+        let id = self.runtime.as_deref()?;
+        let runtime = crate::os::runtime_id(fresh.as_ref()).ok()?;
+        let control_type = cached_i32(fresh, UIProperty::ControlType)?;
+        let pid = cached_pid(fresh)?;
+        Some(
+            runtime.as_deref() == Some(id)
+                && Some(control_type) == self.control_type
+                && pid == self.pid
+                && started_now == self.started,
+        )
+    }
 }
 
 /// UI Automation client state for the session.
@@ -149,9 +160,6 @@ pub struct Uia {
     /// is the one from the walk, and a value cached there (a whole document)
     /// would stay in memory as long as the handle.
     value: UICacheRequest,
-    /// Keys [`Kind::names`], per session, so a provider cannot aim two
-    /// different names at one hash.
-    names: std::hash::RandomState,
     elements: ElementCache<Identity, Held>,
     anonymous: u64,
     /// Process start times looked up during the current read, one lookup
@@ -206,7 +214,6 @@ impl Uia {
             walker,
             single,
             value,
-            names: std::hash::RandomState::new(),
             elements: ElementCache::default(),
             anonymous: 0,
             starts: HashMap::new(),
@@ -246,19 +253,17 @@ impl Uia {
             .starts
             .entry(pid)
             .or_insert_with(|| crate::os::process_started(pid));
-        // The handle is kept only for the same element: its object still
-        // answers to the id, and the new element comes from the same process.
-        // A provider elsewhere claiming a trusted application's runtime id
-        // gets a handle of its own instead of taking over that one.
-        let kind = self.kind(element);
-        // A new element of another kind claiming the id is a collision, not
-        // the same control read again: it gets its own handle.
+        // The handle is kept only for the same element ([`Held::same_as`]),
+        // and only while its own object still answers to the id: a new
+        // element of another control type or process claiming the id is a
+        // collision, not the same control read again, and gets its own
+        // handle. A provider elsewhere claiming a trusted application's
+        // runtime id gets a handle of its own instead of taking over that
+        // one.
+        let control_type = cached_i32(element, UIProperty::ControlType);
         if let Identity::Runtime(id) = &key
             && let Some(held) = self.elements.by_identity(&key)
-            && (held.pid != pid
-                || held.started != started
-                || held.kind != kind
-                || kind.is_none()
+            && (held.same_as(element, started) != Some(true)
                 || Instant::now() >= deadline
                 || !crate::os::runtime_id(held.element.as_ref())
                     .is_ok_and(|now| now.as_deref() == Some(id.as_slice())))
@@ -274,7 +279,7 @@ impl Uia {
             Held {
                 element: element.clone(),
                 runtime,
-                kind,
+                control_type,
                 pid,
                 started,
             },
@@ -315,30 +320,30 @@ impl Uia {
                 "the application replaced or removed it",
             ));
         }
-        // Read live: an object that now reports another kind of element is a
-        // replacement, whatever its runtime id says.
-        // One cross-process call for all three, bounded by the call timeout.
-        let Some(kind) = &held.kind else {
+        // Read live: an object that now reports another control type, or
+        // another process (a runtime id derived from a recycled native window
+        // can come back in another process while the first still runs), is a
+        // replacement, whatever its runtime id says. One cross-process call
+        // for all of it, bounded by the call timeout.
+        if held.control_type.is_none() {
             return Err(ToolError::NotSupported(format!(
-                "element `{handle}` could not be told apart when it was read (its kind was unreadable), so it is not acted on; read the tree again"
+                "element `{handle}` could not be told apart when it was read (its control type was unreadable), so it is not acted on; read the tree again"
             )));
-        };
+        }
         let fresh = held
             .element
             .build_updated_cache(&self.single)
-            .map_err(|e| classify(handle, "re-reading it", &e))?;
-        // The process too: a runtime id derived from a recycled native
-        // window can come back in another process while the first still runs.
+            .map_err(|e| classify(handle, "re-reading it", &e, Some(held.pid)))?;
         // Unreadable is not "gone": the element may be there and fine.
-        match (self.kind(&fresh), cached_pid(&fresh)) {
-            (Some(now), Some(pid)) if &now == kind && pid == held.pid => Ok(held.element.clone()),
-            (None, _) | (_, None) => Err(ToolError::platform(
+        match held.same_as(&fresh, Some(started)) {
+            Some(true) => Ok(held.element.clone()),
+            None => Err(ToolError::platform(
                 "re-reading the element",
-                "its kind or process could not be read, so it is not acted on",
+                "its identity could not all be read, so it is not acted on",
             )),
-            _ => Err(ToolError::gone_element(
+            Some(false) => Err(ToolError::gone_element(
                 handle,
-                "another element of the same process now answers under its identity",
+                "another element now answers under its identity",
             )),
         }
     }
@@ -505,19 +510,6 @@ impl Uia {
         None
     }
 
-    /// `element`'s kind from its cached properties, `None` when any part of
-    /// it could not be read: two unreadable kinds must not compare equal.
-    fn kind(&self, element: &UIElement) -> Option<Kind> {
-        use std::hash::BuildHasher;
-        Some(Kind {
-            control_type: Some(cached_i32(element, UIProperty::ControlType)?),
-            names: self.names.hash_one((
-                cached_str(element, UIProperty::AutomationId)?,
-                cached_str(element, UIProperty::ClassName)?,
-            )),
-        })
-    }
-
     /// Fills in a text control's value with a read of its own, clipped, so
     /// only the clipped string outlives the call. Whether it could be read:
     /// a property the provider does not return, or returns as something
@@ -624,18 +616,9 @@ impl Uia {
         until: Option<Instant>,
     ) -> ToolResult<()> {
         let held = self.elements.get(handle)?;
-        // What identifies the element across an action: its control type,
-        // process and runtime id. Not its class name or automation id, which
-        // an action can change on the same control (a web toggle's CSS
-        // classes, a re-keyed DOM id).
-        let same = held
-            .kind
-            .as_ref()
-            .is_some_and(|kind| cached_i32(fresh, UIProperty::ControlType) == kind.control_type)
-            && cached_pid(fresh) == Some(held.pid)
-            && held.runtime.as_deref().is_some_and(|id| {
-                crate::os::runtime_id(fresh.as_ref()).is_ok_and(|now| now.as_deref() == Some(id))
-            });
+        // The same rule as before the action: an element read back must be
+        // the one acted on, in the same process.
+        let same = held.same_as(fresh, crate::os::process_started(held.pid)) == Some(true);
         let range_unread = node.patterns.contains(&"RangeValue")
             && !node.patterns.contains(&"Value")
             && node.value.is_none();
@@ -669,15 +652,6 @@ impl Uia {
             )
             .after(Effect::Ran, READBACK));
         }
-        // The same element, as it is now: a class name or automation id the
-        // action changed is what the next action's check compares against,
-        // or the handle it just returned would read as stale.
-        let kind = self.kind(fresh);
-        if kind.is_some()
-            && let Ok(held) = self.elements.get_mut(handle)
-        {
-            held.kind = kind;
-        }
         Ok(())
     }
 
@@ -703,7 +677,8 @@ impl Uia {
             const REQUESTED: &str =
                 "focus was requested and may have landed; only reading it back failed";
             let fresh = element.build_updated_cache(&self.single).map_err(|e| {
-                classify(handle, "reading back focus", &e).after(Effect::MayHaveRun, REQUESTED)
+                classify(handle, "reading back focus", &e, cached_pid(element))
+                    .after(Effect::MayHaveRun, REQUESTED)
             })?;
             let mut node = describe(&fresh, handle.to_owned());
             // Checked between the provider calls as well: each can take the
@@ -804,7 +779,7 @@ impl Uia {
     fn has_pattern(handle: &str, element: &UIElement, prop: UIProperty) -> ToolResult<bool> {
         let value = element
             .get_property_value(prop)
-            .map_err(|e| classify(handle, "reading its patterns", &e))?;
+            .map_err(|e| classify(handle, "reading its patterns", &e, cached_pid(element)))?;
         // Anything but a boolean is an unreadable answer, not "no": taken
         // for "no", a `set_value` would go to the other pattern.
         of_type(value, VT_BOOL)
@@ -831,7 +806,9 @@ impl Uia {
     }
 
     fn perform(handle: &str, element: &UIElement, action: &Action) -> ToolResult<()> {
-        let lookup = |what: &'static str| move |e: uiautomation::Error| classify(handle, what, &e);
+        let pid = cached_pid(element);
+        let lookup =
+            |what: &'static str| move |e: uiautomation::Error| classify(handle, what, &e, pid);
         // The action's own call reached the application, so a failure there
         // does not mean it did not run: its element going away most often
         // means it ran and closed its window (an OK or Delete button), and a
@@ -839,7 +816,7 @@ impl Uia {
         // the call from returning). Only a disabled element is a clean
         // refusal. Anything else must be looked at before a retry.
         let fail = |what: &'static str| {
-            move |e: uiautomation::Error| match classify(handle, what, &e) {
+            move |e: uiautomation::Error| match classify(handle, what, &e, pid) {
                 refused @ ToolError::Disabled { .. } => refused,
                 cause => {
                     let detail = if matches!(cause, ToolError::Gone { .. }) {
@@ -1051,7 +1028,7 @@ impl AccessibilityBackend for Uia {
             }
             // The action itself succeeded; only reading the result failed.
             // Say so, or a retry repeats a destructive action.
-            Err(e) => Err(classify(handle, "reading back", &e).after(
+            Err(e) => Err(classify(handle, "reading back", &e, cached_pid(&element)).after(
                 Effect::Ran,
                 "the action itself succeeded; only reading the element afterwards failed, so do not repeat it",
             )),
@@ -1060,15 +1037,16 @@ impl AccessibilityBackend for Uia {
 
     fn click_point(&mut self, handle: &str) -> ToolResult<ClickPoint> {
         let element = self.alive(handle)?;
+        let pid = cached_pid(&element);
         let point = element
             .get_clickable_point()
-            .map_err(|e| classify(handle, "reading its clickable point", &e))?;
+            .map_err(|e| classify(handle, "reading its clickable point", &e, pid))?;
         let (x, y) = if let Some(p) = point {
             (p.get_x(), p.get_y())
         } else {
             let r = element
                 .get_bounding_rectangle()
-                .map_err(|e| classify(handle, "reading its bounds", &e))?;
+                .map_err(|e| classify(handle, "reading its bounds", &e, pid))?;
             let rect = Rect::from_ltrb(r.get_left(), r.get_top(), r.get_right(), r.get_bottom());
             if rect.width == 0 || rect.height == 0 {
                 return Err(ToolError::NotFound(format!(
@@ -1361,28 +1339,54 @@ fn toggle_name(state: i32) -> Option<&'static str> {
 /// Whether a UIA failure means the element, its window or its process is
 /// gone rather than that the call is wrong.
 fn is_gone(code: i32) -> bool {
+    matches!(code, E_ELEMENT_NOT_AVAILABLE | E_INVALID_WINDOW) || is_disconnected(code)
+}
+
+/// Whether a UIA failure is the provider's process having gone away, or its
+/// connection: one while the process still runs is the provider failing,
+/// not the element going.
+fn is_disconnected(code: i32) -> bool {
     matches!(
         code,
-        E_ELEMENT_NOT_AVAILABLE
-            | E_DISCONNECTED
-            | E_SERVER_UNAVAILABLE
-            | E_CALL_FAILED
-            | E_NOT_CONNECTED
-            | E_INVALID_WINDOW
+        E_DISCONNECTED | E_SERVER_UNAVAILABLE | E_CALL_FAILED | E_NOT_CONNECTED
     )
 }
 
+/// `UIA_E_TIMEOUT`: the provider did not answer within the call timeout.
+const E_TIMEOUT: i32 = 0x8013_1505_u32 as i32;
+
 /// Maps a UIA failure on `handle` during `what` to the error the agent can
-/// act on.
-fn classify(handle: &str, what: &'static str, e: &uiautomation::Error) -> ToolError {
-    match e.code() {
-        code if is_gone(code) => ToolError::gone_element(
-            handle,
-            "the application removed it, or its window or process is gone",
+/// act on. `pid` is the element's process when known: a disconnect from a
+/// process that still runs is the provider failing, so the element is not
+/// reported gone.
+fn classify(
+    handle: &str,
+    what: &'static str,
+    e: &uiautomation::Error,
+    pid: Option<u32>,
+) -> ToolError {
+    let code = e.code();
+    let running = || pid.is_some_and(|pid| crate::os::process_started(pid).is_some());
+    match code {
+        E_ELEMENT_NOT_AVAILABLE => ToolError::gone_element(handle, "the application removed it"),
+        E_INVALID_WINDOW => ToolError::gone_element(handle, "its window has closed"),
+        _ if is_disconnected(code) && !running() => {
+            ToolError::gone_element(handle, "its process has exited")
+        }
+        _ if is_disconnected(code) => ToolError::platform(
+            format!("{what} on element `{handle}`"),
+            "the application's accessibility provider disconnected while the application runs",
         ),
         E_ELEMENT_NOT_ENABLED => ToolError::Disabled {
             element: handle.to_owned(),
             action: what,
+        },
+        E_TIMEOUT => ToolError::Timeout {
+            timeout_ms: u64::from(crate::os::UIA_TRANSACTION_TIMEOUT_MS),
+            what: format!(
+                "{what} on element `{handle}` (the application did not answer; a modal dialog it opened can hold the call)"
+            ),
+            summary: String::new(),
         },
         _ => ToolError::platform(format!("{what} on element `{handle}`"), e),
     }

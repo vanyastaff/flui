@@ -212,18 +212,15 @@ impl KeyCombo {
     /// What handles this combo instead of the foreground window, if the OS
     /// does: the Windows key, the task switcher, Spotlight, the input-language
     /// switch. No foreground check can hold for such a combo, since the window
-    /// in front never receives it. `macos` picks the platform's set; `repeat`
-    /// matters for Shift, which pressed five times opens the Sticky Keys
-    /// prompt.
-    pub fn shell_hotkey(&self, macos: bool, repeat: u32) -> Option<&'static str> {
+    /// in front never receives it. `macos` picks the platform's set.
+    pub fn shell_hotkey(&self, macos: bool) -> Option<&'static str> {
         let only = |mods: &[Modifier]| mods.iter().all(|&m| self.modifiers.contains(&m));
         // A modifier pressed five times in a row is an accessibility
         // shortcut: Shift turns on Sticky Keys (Windows, macOS), Option
-        // turns on Mouse Keys (macOS).
-        // Counted across calls by the OS, not per call: four taps now and
-        // one more later still make five, so a lone Shift (or a lone Option
-        // on macOS) is refused with a target however few it presses.
-        let _ = repeat;
+        // turns on Mouse Keys (macOS). Counted across calls by the OS, not
+        // per call: four taps now and one more later still make five, so a
+        // lone Shift (or a lone Option on macOS) is refused with a target
+        // however few times it is pressed.
         let tapped = |m: Modifier| self.key == KeyName::Modifier(m) && self.modifiers.is_empty();
         if tapped(Modifier::Shift) {
             return Some("the accessibility shortcut (Sticky Keys)");
@@ -474,7 +471,7 @@ mod tests {
             "ctrl+alt+delete",
         ] {
             assert!(
-                parse(shell).shell_hotkey(false, 1).is_some(),
+                parse(shell).shell_hotkey(false).is_some(),
                 "`{shell}` on Windows"
             );
         }
@@ -487,11 +484,7 @@ mod tests {
             "ctrl+shift+s",
             "alt+d",
         ] {
-            assert_eq!(
-                parse(app).shell_hotkey(false, 1),
-                None,
-                "`{app}` on Windows"
-            );
+            assert_eq!(parse(app).shell_hotkey(false), None, "`{app}` on Windows");
         }
         for shell in [
             "cmd+tab",
@@ -511,12 +504,12 @@ mod tests {
             "f11",
         ] {
             assert!(
-                parse(shell).shell_hotkey(true, 1).is_some(),
+                parse(shell).shell_hotkey(true).is_some(),
                 "`{shell}` on macOS"
             );
         }
         for app in ["cmd+q", "cmd+s", "cmd+shift+s", "esc", "cmd+w"] {
-            assert_eq!(parse(app).shell_hotkey(true, 1), None, "`{app}` on macOS");
+            assert_eq!(parse(app).shell_hotkey(true), None, "`{app}` on macOS");
         }
     }
 
@@ -525,24 +518,21 @@ mod tests {
     #[test]
     fn language_switch_and_sticky_keys_are_shell_hotkeys() {
         for shell in ["alt+shift", "ctrl+shift", "shift+alt"] {
-            assert!(parse(shell).shell_hotkey(false, 1).is_some(), "`{shell}`");
+            assert!(parse(shell).shell_hotkey(false).is_some(), "`{shell}`");
         }
-        assert!(parse("shift").shell_hotkey(false, 5).is_some());
-        assert!(parse("shift").shell_hotkey(true, 5).is_some());
+        assert!(parse("shift").shell_hotkey(false).is_some());
+        assert!(parse("shift").shell_hotkey(true).is_some());
         assert!(
-            parse("shift").shell_hotkey(false, 1).is_some(),
+            parse("shift").shell_hotkey(false).is_some(),
             "taps add up across calls"
         );
         assert_eq!(
-            parse("alt").shell_hotkey(false, 1),
+            parse("alt").shell_hotkey(false),
             None,
             "a lone Alt stays in the window"
         );
-        assert!(parse("alt").shell_hotkey(true, 5).is_some(), "Mouse Keys");
-        assert!(
-            parse("capslock").shell_hotkey(false, 1).is_some(),
-            "Caps Lock"
-        );
+        assert!(parse("alt").shell_hotkey(true).is_some(), "Mouse Keys");
+        assert!(parse("capslock").shell_hotkey(false).is_some(), "Caps Lock");
     }
 
     /// A control character is not a key of its own: a raw ESC would

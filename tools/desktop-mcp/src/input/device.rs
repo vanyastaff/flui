@@ -9,15 +9,11 @@ use std::time::Duration;
 
 use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 
-use super::{Guard, MouseButton, Stroke, partial, strokes};
+use super::{Guard, MouseButton, STEP, Stroke, drag_path, partial, strokes};
 use crate::error::{Effect, ToolError, ToolResult};
 use crate::keys::{KeyCombo, KeyName, Modifier};
 #[cfg(not(target_os = "windows"))]
 use enigo::Coordinate;
-
-/// Pause between the parts of a synthesized gesture, so the target's event
-/// loop sees distinct events rather than one coalesced burst.
-const STEP: Duration = Duration::from_millis(15);
 
 /// A virtual key Windows assigns to nothing (0xE8), tapped to keep a lone
 /// Alt or Windows-key release from opening a menu.
@@ -210,13 +206,11 @@ impl Input {
     fn ensure_at(&self, x: i32, y: i32) -> ToolResult<()> {
         match self.position() {
             Some(at) if at == (x, y) => Ok(()),
-            Some((ax, ay)) => Err(ToolError::OutsideTarget {
-                x,
-                y,
-                reason: format!(
-                    "the pointer is at ({ax}, {ay}) instead (clamped to a screen edge or a cursor clip, or moved by someone else)"
-                ),
-            }),
+            // Passing when someone moved it; a clamp repeats, and the
+            // message says which to suspect.
+            Some((ax, ay)) => Err(ToolError::Busy(format!(
+                "the pointer is at ({ax}, {ay}) instead of ({x}, {y}) (moved by someone else, or clamped to a screen edge or a cursor clip, which a retry repeats)"
+            ))),
             None => Err(ToolError::NotSupported(
                 "the pointer position cannot be read back, so the move is not verified".into(),
             )),
@@ -351,22 +345,22 @@ impl Input {
                 },
             ));
         }
-        let steps = (duration.as_millis() / STEP.as_millis()).clamp(2, 200) as i32;
+        let path = drag_path(from, to, duration);
+        let steps = u32::try_from(path.len()).expect("BUG: at most 200 steps");
         // The steps are bounded; their interval is not, so a long drag lasts
         // as long as it was asked to.
-        let interval = (duration / steps.unsigned_abs()).max(STEP);
+        let interval = (duration / steps).max(STEP);
         let mut last = from;
         let mut done = 0;
         let mut moved = Ok(());
-        for i in 1..=steps {
-            let point = (lerp(from.0, to.0, i, steps), lerp(from.1, to.1, i, steps));
+        for point in path {
             thread::sleep(interval);
             moved = guard(Some(point)).and_then(|()| self.move_verified(point.0, point.1));
             if moved.is_err() {
                 break;
             }
             last = point;
-            done = i;
+            done += 1;
         }
         if moved.is_ok() {
             moved = guard(Some(to)).and_then(|()| self.ensure_at(to.0, to.1));
@@ -383,8 +377,8 @@ impl Input {
             }),
             Err(cause) => {
                 let went = Effect::Partial {
-                    sent: done.unsigned_abs() as usize,
-                    total: steps.unsigned_abs() as usize,
+                    sent: done,
+                    total: steps as usize,
                     unit: "drag steps",
                 };
                 Err(self.abort_drag(last, cause, went, guard))
@@ -886,14 +880,6 @@ fn resolve(combo: &KeyCombo) -> ToolResult<(Key, Vec<Modifier>, Option<LayoutOwn
         return Ok((Key::Other(u32::from(vk)), modifiers, Some(window)));
     }
     Ok((enigo_key(combo.key)?, combo.modifiers.clone(), None))
-}
-
-/// The point `i/steps` of the way from `a` to `b`, in `i64` so a wide drag
-/// cannot overflow after the button is already down. The result lies between
-/// `a` and `b`, so it fits back in `i32`.
-fn lerp(a: i32, b: i32, i: i32, steps: i32) -> i32 {
-    let at = i64::from(a) + (i64::from(b) - i64::from(a)) * i64::from(i) / i64::from(steps);
-    i32::try_from(at).expect("BUG: an interpolated point lies between two i32 endpoints")
 }
 
 /// The physical button for a logical one: injected button events are

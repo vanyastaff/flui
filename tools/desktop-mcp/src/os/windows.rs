@@ -141,7 +141,7 @@ pub fn focus(fg: u32) -> ToolResult<Focus> {
 /// How long UI Automation waits for a provider to answer one call, and to
 /// finish connecting to one: a hung application fails the call instead of
 /// holding the one desktop thread every tool shares.
-const UIA_TRANSACTION_TIMEOUT_MS: u32 = 5_000;
+pub const UIA_TRANSACTION_TIMEOUT_MS: u32 = 5_000;
 const UIA_CONNECTION_TIMEOUT_MS: u32 = 2_000;
 
 /// A UI Automation client with call timeouts (`CUIAutomation8`, through

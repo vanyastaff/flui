@@ -69,6 +69,37 @@ pub fn strokes(text: &str) -> Vec<(Stroke, usize)> {
     out
 }
 
+/// The pause between the parts of a synthesized gesture, so the target's
+/// event loop sees distinct events rather than one coalesced burst.
+pub const STEP: std::time::Duration = std::time::Duration::from_millis(15);
+
+/// The points a drag from `from` to `to` over `duration` passes through,
+/// `from` excluded and `to` included: at most 200 steps, at least 2, one
+/// per [`STEP`] of the duration. What the device moves through, and what
+/// the safety check verifies before the button goes down, so the two agree.
+pub fn drag_path(
+    from: (i32, i32),
+    to: (i32, i32),
+    duration: std::time::Duration,
+) -> Vec<(i32, i32)> {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "clamped to at most 200 before the cast"
+    )]
+    let steps = (duration.as_millis() / STEP.as_millis()).clamp(2, 200) as i32;
+    (1..=steps)
+        .map(|i| (lerp(from.0, to.0, i, steps), lerp(from.1, to.1, i, steps)))
+        .collect()
+}
+
+/// The point `i/steps` of the way from `a` to `b`, in `i64` so a wide drag
+/// cannot overflow after the button is already down. The result lies between
+/// `a` and `b`, so it fits back in `i32`.
+fn lerp(a: i32, b: i32, i: i32, steps: i32) -> i32 {
+    let at = i64::from(a) + (i64::from(b) - i64::from(a)) * i64::from(i) / i64::from(steps);
+    i32::try_from(at).expect("BUG: an interpolated point lies between two i32 endpoints")
+}
+
 /// The modifiers a combo's character needs beyond `given`, from the shift
 /// state a keyboard layout reports for it (bit 1 Shift, 2 Ctrl, 4 Alt —
 /// Ctrl+Alt is AltGr): `+` is Shift+`=` on a US layout, so `ctrl+plus` must
