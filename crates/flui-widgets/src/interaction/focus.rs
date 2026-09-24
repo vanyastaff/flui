@@ -646,29 +646,13 @@ impl FocusState {
         }))
     }
 
-    /// Record the `Actions` chain visible here on the node, and depend on it,
-    /// so a changed chain is recorded again (ADR-0079).
     fn record_action_chain(&mut self, ctx: &dyn BuildContext) {
-        let chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
-        let unchanged = match (&chain, &self.action_chain) {
-            (Some(new), Some(held)) => Rc::ptr_eq(new, held),
-            (None, None) => true,
-            _ => false,
-        };
-        if unchanged
-            && self
-                .context_registration
-                .as_ref()
-                .is_none_or(FocusNodeRegistration::is_current)
-        {
-            return;
-        }
-        // Register the new record before the old token drops: the old one is
-        // no longer current then, so dropping it leaves the new one in place.
-        self.context_registration = chain
-            .as_ref()
-            .map(|chain| self.node.register_context(as_node_context(chain)));
-        self.action_chain = chain;
+        record_action_chain(
+            ctx,
+            &self.node,
+            &mut self.action_chain,
+            &mut self.context_registration,
+        );
     }
 
     fn install_focus_listener(&mut self) {
@@ -712,6 +696,37 @@ impl FocusState {
             self.node.request_focus();
         }
     }
+}
+
+/// Record the `Actions` chain visible at a widget on its focus `node`, and
+/// depend on it, so a changed chain is recorded again (ADR-0079). Shared by
+/// `Focus` and `FocusScope`: either widget's node can hold the primary focus,
+/// and a `Shortcuts` above resolves its intent from that node's record.
+fn record_action_chain(
+    ctx: &dyn BuildContext,
+    node: &Rc<FocusNode>,
+    held: &mut Option<ActionChain>,
+    registration: &mut Option<FocusNodeRegistration>,
+) {
+    let chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+    let unchanged = match (&chain, &*held) {
+        (Some(new), Some(held)) => Rc::ptr_eq(new, held),
+        (None, None) => true,
+        _ => false,
+    };
+    if unchanged
+        && registration
+            .as_ref()
+            .is_none_or(FocusNodeRegistration::is_current)
+    {
+        return;
+    }
+    // Register the new record before the old token drops: the old one is no
+    // longer current then, so dropping it leaves the new one in place.
+    *registration = chain
+        .as_ref()
+        .map(|chain| node.register_context(as_node_context(chain)));
+    *held = chain;
 }
 
 impl ViewState<Focus> for FocusState {
@@ -1028,6 +1043,8 @@ impl StatefulView for FocusScope {
             node_revision: Rc::new(Cell::new(0)),
             rebuild_handle: None,
             focus_listener_id: None,
+            action_chain: None,
+            context_registration: None,
         }
     }
 }
@@ -1046,6 +1063,11 @@ pub struct FocusScopeState {
     node_revision: Rc<Cell<u64>>,
     rebuild_handle: Option<RebuildHandle>,
     focus_listener_id: Option<ListenerId>,
+    /// The `Actions` chain visible at this scope, recorded on its backing
+    /// node: the node itself can hold the primary focus (ADR-0079).
+    action_chain: Option<ActionChain>,
+    /// Generation-checked ownership of that record.
+    context_registration: Option<FocusNodeRegistration>,
 }
 
 impl std::fmt::Debug for FocusScopeState {
@@ -1087,6 +1109,12 @@ impl ViewState<FocusScope> for FocusScopeState {
                 .expect("BUG: FocusScope could not attach to the enclosing focus tree"),
         );
         self.parent = Some(parent);
+        record_action_chain(
+            ctx,
+            self.scope.as_focus_node(),
+            &mut self.action_chain,
+            &mut self.context_registration,
+        );
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
@@ -1105,6 +1133,12 @@ impl ViewState<FocusScope> for FocusScopeState {
                 .expect("BUG: FocusScope could not reparent within its presentation focus tree");
             self.parent = Some(parent);
         }
+        record_action_chain(
+            ctx,
+            self.scope.as_focus_node(),
+            &mut self.action_chain,
+            &mut self.context_registration,
+        );
     }
 
     fn did_update_view(&mut self, old_view: &FocusScope, new_view: &FocusScope) {
@@ -1125,6 +1159,11 @@ impl ViewState<FocusScope> for FocusScopeState {
             .clone()
             .unwrap_or_else(|| FocusScopeNode::with_debug_label("FocusScope"));
         let replacement_listener_id = self.add_focus_listener(replacement.as_focus_node());
+        let replacement_context_registration = self.action_chain.as_ref().map(|chain| {
+            replacement
+                .as_focus_node()
+                .register_context(as_node_context(chain))
+        });
         let attachment = self
             .attachment
             .take()
@@ -1137,12 +1176,26 @@ impl ViewState<FocusScope> for FocusScopeState {
         if let Some(listener_id) = self.focus_listener_id.replace(replacement_listener_id) {
             self.scope.as_focus_node().remove_listener(listener_id);
         }
+        // The replaced scope's record goes with it; the replacement carries
+        // the same chain.
+        self.context_registration = replacement_context_registration;
         self.scope = replacement;
     }
 
     fn dispose(&mut self) {
         if let Some(listener_id) = self.focus_listener_id.take() {
             self.scope.as_focus_node().remove_listener(listener_id);
+        }
+        // Only the current attachment may clear the record on an external
+        // scope node a newer host may already have adopted.
+        let owns_attachment = self
+            .attachment
+            .as_ref()
+            .is_some_and(FocusAttachment::is_attached);
+        if let Some(registration) = self.context_registration.take()
+            && !owns_attachment
+        {
+            registration.relinquish();
         }
         if let Some(attachment) = self.attachment.take() {
             let _ = attachment.detach();

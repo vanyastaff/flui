@@ -953,6 +953,53 @@ mod activation_tests {
         assert_eq!(runs.get(), 1, "the action below the Shortcuts ran");
     }
 
+    /// A focused `FocusScope` node resolves at its own position too: its
+    /// backing node can hold the primary focus, and an `Actions` between it
+    /// and the `Shortcuts` must answer.
+    ///
+    /// Red-check: drop the `record_action_chain` calls from
+    /// `FocusScopeState` — the scope's node has no record, the `Shortcuts`
+    /// falls back to its own position, and the action never runs.
+    #[test]
+    fn a_focused_scope_resolves_intents_at_its_own_position() {
+        use flui_interaction::routing::FocusScopeNode;
+
+        use crate::interaction::focus::FocusScope;
+
+        let runs = Rc::new(Cell::new(0));
+        let scope = FocusScopeNode::with_debug_label("scope");
+        let counted = Rc::clone(&runs);
+        let harness = mount(
+            Shortcuts::new(
+                Actions::new(FocusScope::with_external_node(
+                    Rc::clone(&scope),
+                    SizedBox::new(10.0, 10.0),
+                ))
+                .action(CallbackAction::new(move |_: &SaveIntent| {
+                    counted.set(counted.get() + 1);
+                })),
+            )
+            .shortcut(SingleActivator::character("s").control(), SaveIntent),
+        );
+        let manager = harness.focus_manager();
+        scope.as_focus_node().request_focus();
+        assert!(
+            scope.as_focus_node().has_primary_focus(),
+            "the empty scope holds the focus"
+        );
+
+        let ctrl_s = KeyEvent {
+            modifiers: Modifiers::CONTROL,
+            ..key_down(Key::Character("s".into()))
+        };
+        assert!(manager.dispatch_key_event(&ctrl_s), "consumed");
+        assert_eq!(
+            runs.get(),
+            1,
+            "the action between the scope and the Shortcuts ran"
+        );
+    }
+
     /// Enter, Space and Select activate the focused control through the
     /// root bindings — `WidgetsApp`'s `_defaultShortcuts` (`app.dart:1265-1269`,
     /// tag `3.44.0`) — and an activation key no control claims keeps bubbling.
