@@ -151,7 +151,7 @@ impl DesktopServer {
         let _ = self
             .worker
             .run(move |d| {
-                d.adopt_pid(pid);
+                d.bind_launched(pid);
                 Ok(())
             })
             .await;
@@ -340,7 +340,9 @@ impl DesktopServer {
         self.act(p.element, Action::SetValue(p.value)).await
     }
 
-    #[tool(description = "Give an element keyboard focus through the accessibility API.")]
+    #[tool(
+        description = "Give an element keyboard focus through the accessibility API. Succeeds only once the element reports has_keyboard_focus; an element that accepts the request but keeps no focus is an error."
+    )]
     async fn focus(&self, Parameters(Args(p)): Parameters<Args<ElementParams>>) -> CallToolResult {
         let p = valid!(p);
         self.act(p.element, Action::Focus).await
@@ -380,7 +382,7 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Left-button drag from one screen point to another over duration_ms. Pass window_id or pid: refused unless that window is in front and holds both points and every point between. If that stops holding partway, the button is released only at a point verified inside the target (else the drag is cancelled with Esc first)."
+        description = "Left-button drag from one screen point to another over duration_ms. Pass window_id or pid: refused unless that window is in front and holds both points and every point between. If that stops holding partway, the button is released at a point verified inside the target where one still verifies; otherwise the release, the one event that must go out, happens where the pointer is, and the error says so."
     )]
     async fn drag(&self, Parameters(Args(p)): Parameters<Args<DragParams>>) -> CallToolResult {
         let p = valid!(p);

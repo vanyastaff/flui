@@ -132,9 +132,9 @@ impl Input {
     ///
     /// The release is the drop, so it happens only at a verified point: when
     /// a check fails partway, the pointer goes back to the last point that
-    /// passed and the button is released there once it passes again; if even
-    /// that fails, Esc cancels the drag while the button is still held, and
-    /// only then is it released.
+    /// passed and the button is released there once it passes again. If even
+    /// that fails, the release still goes out (a held button would drag on)
+    /// and the error says where; nothing else is sent unverified.
     pub fn drag(
         &mut self,
         from: (i32, i32),
@@ -186,20 +186,21 @@ impl Input {
         let back = self
             .move_verified(last.0, last.1)
             .and_then(|()| guard(Some(last)));
+        // No key goes out unverified: an Esc after the target lost the
+        // foreground would reach whatever took it. The release is the one
+        // event that must go out regardless, or the button stays held.
         let mut what = if back.is_ok() {
             format!(
                 "the drag stopped; the button was released back at ({}, {}), a point verified inside the target",
                 last.0, last.1
             )
         } else {
-            let cancelled = self.enigo.key(Key::Escape, Direction::Click);
+            let at = self.position().map_or_else(
+                || "an unknown point".to_owned(),
+                |(x, y)| format!("({x}, {y})"),
+            );
             format!(
-                "the drag stopped where no point could be verified inside the target, so it was cancelled with Esc{} before the button was released",
-                if cancelled.is_ok() {
-                    ""
-                } else {
-                    " (which failed)"
-                }
+                "the drag stopped where no point could be verified inside the target; the button had to be released where the pointer was, at {at}, which may have dropped there"
             )
         };
         if let Err(e) = self.enigo.button(Button::Left, Direction::Release) {

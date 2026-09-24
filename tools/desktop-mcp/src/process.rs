@@ -79,8 +79,10 @@ impl Tracked {
 #[derive(Debug)]
 pub struct Children {
     tracked: Mutex<Tracked>,
+    /// The kill-on-exit job, or why there is none: then nothing is
+    /// launched, since a hard kill of the server would leave it running.
     #[cfg(target_os = "windows")]
-    job: Option<crate::os::KillOnExitJob>,
+    job: Result<crate::os::KillOnExitJob, String>,
 }
 
 impl Default for Children {
@@ -93,15 +95,16 @@ impl Children {
     /// An empty set; on Windows it also creates the job object.
     pub fn new() -> Self {
         #[cfg(target_os = "windows")]
-        let mut job = crate::os::KillOnExitJob::new()
-            .inspect_err(|e| tracing::warn!("children will not be tied to a job: {e}"))
-            .ok();
+        let mut job = crate::os::KillOnExitJob::new().map_err(|e| {
+            tracing::warn!("launch is disabled, there is no kill-on-exit job: {e}");
+            e.to_string()
+        });
         // Joining the job itself is what keeps grandchildren in: a child is
         // then in the job from its creation, before it can start anything.
         // Refused (a host job that forbids nesting), each child still joins
         // right after its spawn.
         #[cfg(target_os = "windows")]
-        if let Some(job) = &mut job
+        if let Ok(job) = &mut job
             && let Err(e) = job.assign_self()
         {
             tracing::warn!("processes the children start may outlive a hard kill: {e}");
@@ -136,15 +139,19 @@ impl Children {
         if let Some(cwd) = &spec.cwd {
             command.current_dir(cwd);
         }
+        #[cfg(target_os = "windows")]
+        let job = self.job.as_ref().map_err(|e| {
+            ToolError::NotSupported(format!(
+                "launch is unavailable: the kill-on-exit job that ends launched processes if the server dies could not be created ({e})"
+            ))
+        })?;
         let child = command
             .spawn()
             .map_err(|e| ToolError::platform(format!("launching `{}`", spec.program), e))?;
         // On Windows the kill-on-exit job is what ends children when the
         // server dies hard; a child that cannot join it is ended at once.
         #[cfg(target_os = "windows")]
-        if let Some(job) = &self.job
-            && let Err(e) = job.assign(&child)
-        {
+        if let Err(e) = job.assign(&child) {
             let mut child = child;
             let _ = child.kill();
             let _ = child.wait();

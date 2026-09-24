@@ -158,7 +158,7 @@ pub fn still_bound(target: Target, bound: Option<u32>, fg: Option<&Foreground>) 
 pub fn same_process(pid: u32, then: Option<u64>, now: Option<u64>) -> ToolResult<()> {
     match then {
         Some(then) if now != Some(then) => Err(ToolError::NotFound(format!(
-            "process {pid} has exited since this session saw it{}; list_windows or launch again",
+            "process {pid} has exited since this session saw it{}; this session does not re-bind a pid it handed out, so target the new process by window_id",
             if now.is_some() {
                 " (the pid now belongs to another process)"
             } else {
@@ -217,6 +217,13 @@ impl Desktop {
             .or_insert_with(|| os::process_started(pid));
     }
 
+    /// Binds `pid` to the process `launch` just started under it. The one
+    /// re-binding there is: this session created that process and hands the
+    /// pid out now, so it is the sighting the caller holds.
+    pub fn bind_launched(&mut self, pid: u32) {
+        self.started.insert(pid, os::process_started(pid));
+    }
+
     /// Records a window id with its owner, unless the id is already bound.
     fn adopt_window(&mut self, w: &WindowInfo) {
         self.issued.entry(w.id).or_insert(w.pid);
@@ -224,7 +231,8 @@ impl Desktop {
     }
 
     /// The window list, optionally filtered. Every id and pid it returns is
-    /// recorded with its owner, so a later target can be bound to it.
+    /// recorded with its owner the first time it is seen, so a later target
+    /// can be bound to it.
     pub fn list_windows(
         &mut self,
         title_contains: Option<&str>,
@@ -240,11 +248,11 @@ impl Desktop {
                     .is_none_or(|n| w.title.to_lowercase().contains(n))
             })
             .collect();
+        // A listing never re-binds: an agent may still hold an id or pid from
+        // an earlier listing, and a later one seeing the number reused must
+        // not make that old target name the new process.
         for w in &windows {
-            // A listing re-binds: the list is the fresh sighting an agent
-            // is told to take after a recycled id or pid was refused.
-            self.issued.insert(w.id, w.pid);
-            self.started.insert(w.pid, os::process_started(w.pid));
+            self.adopt_window(w);
         }
         Ok(windows)
     }

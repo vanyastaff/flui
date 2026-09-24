@@ -106,9 +106,12 @@ never land in another application.
 
 - A window id is bound to the process that owned it when this session listed it, and a pid to
   the process that held it when first seen (its start time): Windows recycles both, and a
-  target that now names another process is refused. `activate_window` never re-binds an id.
-- A drag that stops partway releases the button (the drop) only at a point verified inside the
-  target; if none verifies, it cancels the drag with Esc first.
+  target that now names another process is refused. Neither a later `list_windows` nor
+  `activate_window` re-binds an id or pid, so a target an agent still holds never comes to name
+  a new process; only `launch` binds the pid of the process it just started.
+- A drag that stops partway releases the button (the drop) at a point verified inside the
+  target; if none verifies, the release still has to go out (a held button would drag on), and
+  the error says where it happened. No other event is sent unverified.
 - An element click requires the element's own top-level window to be under the point, its
   application in front, and, before every click, the element itself (or a descendant) to be
   what UI Automation hit-tests there, target or not. A popup menu is a window of its own, never the
@@ -138,7 +141,7 @@ sending input.
 | Input (`click`, `key`, …) | yes (enigo; pointer moves via `SetCursorPos`) | built (enigo); type-checked in CI (clippy), never run | not yet |
 | Accessibility tools | yes (UI Automation) | "not supported on this OS yet (UIA only)" | same |
 | `activate_window` | yes | not supported yet | not supported yet |
-| Launched processes ended on server exit | yes, with everything they started, also on a hard kill (the server runs in a kill-on-close job) | on a clean exit, direct children only | same |
+| Launched processes ended on server exit (`launch` refuses to start anything without the job on Windows) | yes, with everything they started, also on a hard kill (the server runs in a kill-on-close job) | on a clean exit, direct children only | same |
 
 `kill` ends the launched process itself; what it started ends when the server exits.
 

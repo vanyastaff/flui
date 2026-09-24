@@ -259,8 +259,20 @@ fn a11y_probe_counter_through_mcp() {
         let text = reply["content"][0]["text"].as_str().unwrap_or_default();
         assert!(text.contains("supports: [Invoke]"), "{text}");
     }
+    // `focus` succeeds only when focus actually moves. The probe's button
+    // does not publish itself as keyboard-focusable to UI Automation, so the
+    // request is accepted and focus stays put: that must be an error, not a
+    // success the agent would act on.
     let focused = client.call("focus", json!({ "element": element }));
-    show("focus", &focused);
+    show("focus", &focused["content"][0]);
+    if button["element"]["is_keyboard_focusable"] == true {
+        let node = ok("focus", &focused);
+        assert_eq!(node["element"]["has_keyboard_focus"], true, "{node}");
+    } else {
+        assert_eq!(focused["isError"], true, "{focused}");
+        let text = focused["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(text.contains("did not take keyboard focus"), "{text}");
+    }
 
     // The pointer lands where asked, in physical pixels (DPI-aware SendInput).
     let (cx, cy) = (

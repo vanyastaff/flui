@@ -52,6 +52,11 @@ const PATTERNS: &[(UIProperty, &str)] = &[
 /// so every handle a response carries stays resolvable.
 pub const NODE_BUDGET: usize = 5_000;
 
+/// How often, and how far apart, `focus` reads back whether the element
+/// took keyboard focus.
+const FOCUS_POLLS: u32 = 5;
+const FOCUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// The longest a string property (name, value, automation id, class name)
 /// is reported, in characters; a longer one is cut and ends in `…`. A
 /// provider's strings are otherwise unbounded (a text control's value is the
@@ -324,6 +329,36 @@ impl Uia {
         None
     }
 
+    /// `element` once it holds keyboard focus. A provider can accept
+    /// `SetFocus` and leave the focus where it was (an element that is not
+    /// keyboard-focusable does), so success is read back, not assumed; the
+    /// focus may land a moment later, so it is polled briefly.
+    fn focused(&mut self, handle: &str, element: &UIElement) -> ToolResult<Node> {
+        let mut last = None;
+        for attempt in 0..FOCUS_POLLS {
+            if attempt > 0 {
+                std::thread::sleep(FOCUS_POLL_INTERVAL);
+            }
+            let fresh = element
+                .build_updated_cache(&self.single)
+                .map_err(|e| classify(handle, "reading back focus", &e))?;
+            let node = self.describe(&fresh);
+            if node.has_keyboard_focus {
+                return Ok(node);
+            }
+            last = Some(node);
+        }
+        let focusable = last.is_some_and(|n| n.is_keyboard_focusable);
+        Err(ToolError::NotSupported(format!(
+            "element `{handle}` accepted focus but did not take keyboard focus{}; click it or use key tab to move focus",
+            if focusable {
+                ""
+            } else {
+                " (it reports is_keyboard_focusable: false)"
+            }
+        )))
+    }
+
     /// The element's patterns, read live, for error messages.
     fn live_patterns(element: &UIElement) -> String {
         PATTERNS
@@ -372,6 +407,7 @@ impl Uia {
         // The action's own call failing because its element went away most
         // often means it ran and closed its window (an OK or Delete button):
         // the caller must look before it retries, not repeat it blindly.
+        let lookup = |what: &'static str| move |e: uiautomation::Error| classify(handle, what, &e);
         let fail = |what: &'static str| {
             move |e: uiautomation::Error| match classify(handle, what, &e) {
                 stale @ ToolError::StaleElement(_) => ToolError::Interrupted {
@@ -393,7 +429,8 @@ impl Uia {
                 )?;
                 element
                     .get_pattern::<UIInvokePattern>()
-                    .and_then(|p| p.invoke())
+                    .map_err(lookup("invoke"))?
+                    .invoke()
                     .map_err(fail("invoke"))
             }
             Action::Toggle => {
@@ -405,14 +442,16 @@ impl Uia {
                 )?;
                 element
                     .get_pattern::<UITogglePattern>()
-                    .and_then(|p| p.toggle())
+                    .map_err(lookup("toggle"))?
+                    .toggle()
                     .map_err(fail("toggle"))
             }
             Action::SetValue(value) => {
                 if Self::has_pattern(handle, element, UIProperty::IsValuePatternAvailable)? {
                     return element
                         .get_pattern::<UIValuePattern>()
-                        .and_then(|p| p.set_value(value))
+                        .map_err(lookup("set_value"))?
+                        .set_value(value)
                         .map_err(fail("set_value"));
                 }
                 if Self::has_pattern(handle, element, UIProperty::IsRangeValuePatternAvailable)? {
@@ -423,7 +462,8 @@ impl Uia {
                     })?;
                     return element
                         .get_pattern::<UIRangeValuePattern>()
-                        .and_then(|p| p.set_value(number))
+                        .map_err(lookup("set_value"))?
+                        .set_value(number)
                         .map_err(fail("set_value"));
                 }
                 Err(ToolError::PatternUnsupported {
@@ -442,7 +482,8 @@ impl Uia {
                 )?;
                 element
                     .get_pattern::<UISelectionItemPattern>()
-                    .and_then(|p| p.select())
+                    .map_err(lookup("select"))?
+                    .select()
                     .map_err(fail("select"))
             }
         }
@@ -462,14 +503,14 @@ impl AccessibilityBackend for Uia {
         };
         let mut spare = NODE_BUDGET;
         for (read, &window) in windows.iter().enumerate() {
-            if Instant::now() >= deadline {
+            if spare == 0 || Instant::now() >= deadline {
                 walk.truncated = true;
                 break;
             }
             // Each window is held to its share of what is left, so a large
             // first window cannot hide the rest of a process's windows from
             // `find` and `wait_for`; what a small one leaves goes on.
-            let share = (spare / (windows.len() - read)).max(1);
+            let share = (spare / (windows.len() - read)).max(1).min(spare);
             walk.budget = share;
             let root = match self
                 .automation
@@ -503,6 +544,9 @@ impl AccessibilityBackend for Uia {
     fn act(&mut self, handle: &str, action: &Action) -> ToolResult<Node> {
         let element = self.element(handle)?;
         Self::perform(handle, &element, action)?;
+        if matches!(action, Action::Focus) {
+            return self.focused(handle, &element);
+        }
         match element.build_updated_cache(&self.single) {
             Ok(fresh) => Ok(self.describe(&fresh)),
             // The action succeeded and took its own element away (a Close or
