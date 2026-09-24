@@ -113,8 +113,7 @@ mod backend {
                     window
                         .current_monitor()
                         .ok()
-                        .and_then(|m| m.scale_factor().ok())
-                        .unwrap_or(1.0),
+                        .and_then(|m| m.scale_factor().ok()),
                 )?;
                 let image = window
                     .capture_image()
@@ -132,18 +131,30 @@ mod backend {
             ShotTarget::Monitor(_) | ShotTarget::Primary => {
                 let monitors =
                     Monitor::all().map_err(|e| ToolError::platform("listing monitors", e))?;
-                let monitor = match target {
-                    ShotTarget::Monitor(i) => monitors.get(i).ok_or_else(|| {
+                let monitor = if let ShotTarget::Monitor(i) = target {
+                    monitors.get(i).ok_or_else(|| {
                         ToolError::NotFound(format!(
                             "no monitor {i}; there are {} (0-based)",
                             monitors.len()
                         ))
-                    })?,
-                    _ => monitors
-                        .iter()
-                        .find(|m| m.is_primary().unwrap_or(false))
-                        .or_else(|| monitors.first())
-                        .ok_or_else(|| ToolError::NotFound("no monitors".into()))?,
+                    })?
+                } else {
+                    // The primary, or an error: another monitor's pixels are
+                    // not an answer to "the primary monitor".
+                    let mut primary = None;
+                    for m in &monitors {
+                        if m.is_primary().map_err(|e| {
+                            ToolError::platform("reading which monitor is primary", e)
+                        })? {
+                            primary = Some(m);
+                            break;
+                        }
+                    }
+                    primary.ok_or_else(|| {
+                        ToolError::NotFound(
+                            "no monitor reports being the primary one; pass monitor".into(),
+                        )
+                    })?
                 };
                 // Coordinates map the pixels back to the desktop; a made-up
                 // origin would send later input to the wrong place.
@@ -154,7 +165,7 @@ mod backend {
                     width: monitor.width().map_err(meta)?,
                     height: monitor.height().map_err(meta)?,
                 };
-                within_pixel_limit(source, monitor.scale_factor().unwrap_or(1.0))?;
+                within_pixel_limit(source, monitor.scale_factor().ok())?;
                 let image = monitor
                     .capture_image()
                     .map_err(|e| ToolError::platform("capturing the monitor", e))?;
@@ -219,9 +230,16 @@ const MAX_CAPTURE_PIXELS: u64 = 8192 * 8192;
 /// pixels there), 2 for a Retina display on macOS, where screen units are
 /// points.
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
-fn within_pixel_limit(source: Rect, scale: f32) -> ToolResult<()> {
+fn within_pixel_limit(source: Rect, scale: Option<f32>) -> ToolResult<()> {
     let scale = if cfg!(target_os = "macos") {
-        f64::from(scale).max(1.0)
+        // Unknown there means the bitmap's size is unknown: refused rather
+        // than guessed at one pixel per point.
+        f64::from(scale.ok_or_else(|| {
+            ToolError::NotSupported(
+                "cannot tell the display's backing scale, so the capture's size is unknown and it is refused".into(),
+            )
+        })?)
+        .max(1.0)
     } else {
         1.0
     };
@@ -323,8 +341,8 @@ mod tests {
             width,
             height,
         };
-        assert!(within_pixel_limit(rect(30_000, 30_000), 1.0).is_err());
-        assert!(within_pixel_limit(rect(8192, 8192), 1.0).is_ok());
+        assert!(within_pixel_limit(rect(30_000, 30_000), Some(1.0)).is_err());
+        assert!(within_pixel_limit(rect(8192, 8192), Some(1.0)).is_ok());
     }
 
     /// A HiDPI capture has more pixels than screen units; the reply says

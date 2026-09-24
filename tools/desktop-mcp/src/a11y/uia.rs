@@ -324,6 +324,12 @@ impl Uia {
     /// shows an owned window (a dialog) both as a top-level window and under
     /// its owner, and it is reported once.
     fn build(&mut self, element: &UIElement, depth: usize, walk: &mut Walk) -> Option<Node> {
+        // The fetch that reached this element can have used up the time:
+        // no further provider call starts past the deadline.
+        if Instant::now() >= walk.deadline {
+            walk.truncated = true;
+            return None;
+        }
         // Spent before anything else: a repeat or a cycle costs its fetch.
         walk.budget = walk.budget.saturating_sub(1);
         let mut key = self.identity(element);
@@ -357,12 +363,15 @@ impl Uia {
         // One more call for a text control's value, charged like any other.
         if node.patterns.contains(&"Value") {
             walk.budget = walk.budget.saturating_sub(1);
-            walk.truncated |= !self.read_value(element, &mut node);
+            walk.truncated |=
+                Instant::now() >= walk.deadline || !self.read_value(element, &mut node);
         }
         // A cut string is not what a search for the whole one would match,
         // and a property the provider failed to report matches nothing.
-        node.unmatchable |= node.is_clipped();
-        walk.truncated |= node.unmatchable;
+        // Only a searched property (name, automation id) cut short keeps the
+        // node from matching; a long value or class name does not.
+        node.unmatchable |= node.searched_clipped();
+        walk.truncated |= node.unmatchable || node.is_clipped();
         walk.bytes = walk.bytes.saturating_sub(node.text_bytes());
         let mut omitted = 0;
         // Past the budget no child is fetched at all, not even the first:
@@ -799,12 +808,10 @@ impl AccessibilityBackend for Uia {
             // The action succeeded and took its own element away (a Close or
             // Delete button, a navigation): that is the action's result, not a
             // failure. Answer with the node as it was just before, marked.
-            Err(e)
-                if matches!(
-                    classify(handle, "reading back", &e),
-                    ToolError::StaleElement(_)
-                ) =>
-            {
+            // Only the provider saying the element is not available is
+            // evidence it went; a disconnect or a failed call (a provider
+            // restarting) leaves the outcome unknown, reported below.
+            Err(e) if e.code() == E_ELEMENT_NOT_AVAILABLE => {
                 // Its identity only: the value and toggle state cached
                 // before the action are not what the action left behind.
                 Ok(Node {

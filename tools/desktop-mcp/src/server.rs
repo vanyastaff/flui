@@ -209,13 +209,14 @@ impl DesktopServer {
                     if d.bind_launched(pid, started) {
                         Ok(())
                     } else {
-                        Err(ToolError::NotSupported(
+                        Err(ToolError::InvalidArgument(
                             "this pid was handed out before for another process, or the OS reports no start time".into(),
                         ))
                     }
                 })
                 .await;
-            if matches!(bound, Err(ToolError::NotSupported(_))) {
+            // Refused for good: stop. Anything else (a full queue) is retried.
+            if matches!(bound, Err(ToolError::InvalidArgument(_))) {
                 break;
             }
             if bound.is_ok() {

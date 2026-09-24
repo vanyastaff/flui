@@ -484,10 +484,7 @@ impl Input {
     pub fn key(&mut self, combo: &KeyCombo, repeat: u32, guard: &mut Guard<'_>) -> ToolResult<()> {
         self.ready()?;
         for done in 0..repeat {
-            // Resolved again each time: the previous press can move focus to
-            // a thread with another keyboard layout.
-            let (key, modifiers) = resolve(combo)?;
-            let pressed = self.press_once(key, &modifiers, guard);
+            let pressed = self.press_once(combo, guard);
             if let Err((cause, sent)) = pressed {
                 let sent = done as usize + usize::from(sent);
                 return Err(partial(cause, sent, repeat as usize, "presses"));
@@ -502,11 +499,14 @@ impl Input {
     /// caller counts as a press sent.
     fn press_once(
         &mut self,
-        key: Key,
-        modifiers: &[Modifier],
+        combo: &KeyCombo,
         guard: &mut Guard<'_>,
     ) -> Result<(), (ToolError, bool)> {
         guard(None).map_err(|e| (e, false))?;
+        // Resolved after that check, on every press: the previous one can
+        // have moved focus to a thread with another keyboard layout.
+        let (key, modifiers) = resolve(combo).map_err(|e| (e, false))?;
+        let modifiers = modifiers.as_slice();
         let mut held = Vec::with_capacity(modifiers.len());
         let mut result = Ok(());
         for &m in modifiers {
@@ -530,6 +530,9 @@ impl Input {
             result = guard(None);
         }
         let mut sent = false;
+        // Whether the key surely went down: only then is the chord a real
+        // shortcut rather than modifiers on their own, which get masked.
+        let mut emitted = false;
         if result.is_ok() {
             // Press and release apart: once the press is in, the key counts
             // as sent even if its release fails (enigo then still tracks it
@@ -542,6 +545,7 @@ impl Input {
             // released regardless, and counted as possibly sent, so a retry
             // does not repeat a shortcut that ran.
             sent = true;
+            emitted = result.is_ok();
             let released = self.enigo.key(key, Direction::Release);
             result = match (result, released) {
                 (Ok(()), Ok(())) => Ok(()),
@@ -567,7 +571,7 @@ impl Input {
         // between makes it an ordinary chord that does nothing; if even that
         // fails, the error says the gesture may have gone out.
         #[cfg(target_os = "windows")]
-        if !sent
+        if !emitted
             && !held.is_empty()
             && self
                 .enigo
@@ -616,7 +620,13 @@ impl Input {
 fn resolve(combo: &KeyCombo) -> ToolResult<(Key, Vec<Modifier>)> {
     #[cfg(target_os = "windows")]
     if let KeyName::Char(c) = combo.key {
-        let (vk, shift) = crate::os::char_key(c).ok_or_else(|| {
+        // With a command modifier the key is a shortcut: the layout's key as
+        // is, Caps Lock left out (ctrl+c must not become ctrl+shift+c).
+        let command = combo
+            .modifiers
+            .iter()
+            .any(|m| !matches!(m, Modifier::Shift));
+        let (vk, shift) = crate::os::char_key(c, command).ok_or_else(|| {
             ToolError::InvalidArgument(format!(
                 "no key types `{c}` on the current keyboard layout; send it with type_text"
             ))

@@ -257,6 +257,21 @@ impl Node {
         .any(|s| s.ends_with('…') && s.chars().count() == CLIPPED_CHARS + 1)
     }
 
+    /// Whether a property a query searches (name, automation id) was cut.
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(
+            dead_code,
+            reason = "checked by the UIA backend, the only accessibility backend built yet"
+        )
+    )]
+    pub fn searched_clipped(&self) -> bool {
+        [&self.name, &self.automation_id]
+            .into_iter()
+            .flatten()
+            .any(|s| s.ends_with('…') && s.chars().count() == CLIPPED_CHARS + 1)
+    }
+
     /// This node without its children, copying nothing below it.
     #[must_use]
     pub fn shallow(&self) -> Self {
@@ -449,6 +464,21 @@ mod tests {
             gone: false,
             unmatchable: false,
         }
+    }
+
+    #[test]
+    fn only_a_clipped_searched_property_makes_a_node_unmatchable() {
+        let cut = format!("{}…", "x".repeat(CLIPPED_CHARS));
+        let mut n = node("1", "Edit", "field", Vec::new());
+        n.value = Some(cut.clone());
+        n.class_name = Some(cut.clone());
+        assert!(n.is_clipped());
+        assert!(!n.searched_clipped());
+        n.automation_id = Some(cut.clone());
+        assert!(n.searched_clipped());
+        n.automation_id = None;
+        n.name = Some(cut);
+        assert!(n.searched_clipped());
     }
 
     fn sample() -> Vec<Node> {

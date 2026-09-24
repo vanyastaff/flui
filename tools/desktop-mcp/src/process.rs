@@ -52,6 +52,8 @@ struct Tracked {
     /// a `kill` of such a pid cannot tell which launch it means.
     returned: std::collections::HashSet<u32>,
     shared: std::collections::HashSet<u32>,
+    /// Pids a `kill` is ending right now.
+    ending: std::collections::HashSet<u32>,
 }
 
 impl Tracked {
@@ -203,9 +205,17 @@ impl Children {
                 "pid {pid} was returned by two launches of this session, so it cannot be told which one to end; the running one is ended when the server exits"
             )));
         }
+        if tracked.ending.contains(&pid) {
+            return Err(ToolError::InvalidArgument(format!(
+                "process {pid} is being ended by another kill; wait for that one"
+            )));
+        }
         if let Some(mut child) = tracked.running.remove(&pid) {
+            tracked.ending.insert(pid);
             drop(tracked);
-            return match end(pid, &mut child) {
+            let outcome = end(pid, &mut child);
+            self.lock().ending.remove(&pid);
+            return match outcome {
                 // Remembered, so a second kill of the same pid says it has
                 // exited rather than that it was never launched.
                 Ok(killed) => {

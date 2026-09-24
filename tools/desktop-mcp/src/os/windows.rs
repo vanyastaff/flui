@@ -429,7 +429,7 @@ pub fn process_windows(pid: u32) -> ToolResult<Vec<u32>> {
 /// as a plain key press: none does, it needs a state this server cannot
 /// hold (Kana, Hankaku), or it is a dead key, which types nothing itself
 /// and changes the key after it.
-pub fn char_key(c: char) -> Option<(u16, u8)> {
+pub fn char_key(c: char, command: bool) -> Option<(u16, u8)> {
     let mut units = [0_u16; 2];
     let [unit] = c.encode_utf16(&mut units) else {
         return None;
@@ -466,7 +466,9 @@ pub fn char_key(c: char) -> Option<(u16, u8)> {
     // The live Caps Lock toggle is part of the state the key meets: with it
     // on, a letter needs the opposite Shift from what `VkKeyScanExW` says.
     // SAFETY: plain value argument.
-    let caps = unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0;
+    // Not for a shortcut: there the physical key counts, whatever Caps
+    // Lock would make it type.
+    let caps = !command && unsafe { GetKeyState(i32::from(VK_CAPITAL.0)) } & 1 != 0;
     // SAFETY: plain value arguments.
     let scan = unsafe { MapVirtualKeyExW(u32::from(vk), MAPVK_VK_TO_VSC, Some(layout)) };
     let types = |shift: u8| {
@@ -539,14 +541,14 @@ pub fn move_pointer(x: i32, y: i32) -> ToolResult<()> {
     };
     // SAFETY: one fully initialized INPUT and its exact size.
     let sent = unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
-    if sent == 1 {
-        Ok(())
-    } else {
-        Err(ToolError::platform(
-            "moving the pointer",
-            "SendInput was blocked (UIPI: the target may run elevated)",
-        ))
+    // The pointer has moved either way (`SetCursorPos` succeeded): a blocked
+    // move event only means the window under it (an elevated one, UIPI)
+    // saw no mouse-move message, and the caller's checks go on from where
+    // the pointer really is.
+    if sent != 1 {
+        tracing::debug!("the mouse-move event after a pointer move was blocked (UIPI)");
     }
+    Ok(())
 }
 
 /// The pointer's current physical position.
