@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-11
 - **Absorbs:** ADR-0026
+- **Superseded in part by:** ADR-0079 (§4's `Actions(Shortcuts(child))` nesting rule)
 
 ## Context
 

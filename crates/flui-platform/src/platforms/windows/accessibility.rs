@@ -163,6 +163,19 @@ impl std::fmt::Debug for WindowsAccessibility {
 
 impl PlatformAccessibility for WindowsAccessibility {
     fn publish(&self, update: TreeUpdate) {
+        if tracing::enabled!(tracing::Level::TRACE) {
+            let nodes: Vec<_> = update
+                .nodes
+                .iter()
+                .map(|(id, node)| (id.0, node.role(), node.children().len()))
+                .collect();
+            tracing::trace!(
+                full = update.tree.is_some(),
+                focus = update.focus.0,
+                ?nodes,
+                "publishing an accessibility update"
+            );
+        }
         // Same retention contract as the AT-SPI bridge: only self-contained
         // updates may answer a late activation — see `BridgeShared`.
         self.shared.retain_if_self_contained(&update);

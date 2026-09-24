@@ -17,22 +17,23 @@
 //!
 //! `LogicalKeySet` (needs a `HardwareKeyboard`-style pressed-set tracker),
 //! `CharacterActivator` (no consumer), a shared `ShortcutManager`, and
-//! `includeSemantics`. The Intent-mapped [`Shortcuts`] resolves its
-//! [`Actions`] chain from **its own position**, not
-//! the focused leaf's context (ADR-0023's resolve-at-own-position divergence) — visible only when an `Actions`
-//! sits between the focused widget and the `Shortcuts`.
+//! `includeSemantics`. The Intent-mapped [`Shortcuts`] resolves its intent at
+//! the **primary focus**, as Flutter does: each `Focus` records the
+//! [`Actions`] chain visible at its position on its node, so an `Actions`
+//! between the focused widget and the `Shortcuts` — a button's activation —
+//! is found (ADR-0079).
 
 use std::any::Any;
 use std::rc::Rc;
 
 use flui_interaction::events::{Key, KeyEvent, NamedKey};
-use flui_interaction::routing::KeyEventResult;
+use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 
 use super::actions::{
-    ActionChainProvider, Actions, Intent, NextFocusAction, NextFocusIntent, PreviousFocusAction,
-    PreviousFocusIntent, resolve,
+    ActionChainProvider, Actions, ActivateIntent, Intent, NextFocusAction, NextFocusIntent,
+    PreviousFocusAction, PreviousFocusIntent, chain_at, resolve,
 };
 use super::focus::Focus;
 
@@ -231,8 +232,12 @@ impl StatelessView for CallbackShortcuts {
 /// (`shortcuts.dart:1004`).
 ///
 /// On a key the focused subtree ignored, the **first** matching activator's
-/// intent resolves to the nearest enclosing enabled action
-/// (`ShortcutManager.handleKeypress`, `:922-938`). That action's
+/// intent resolves to the nearest enabled action enclosing the **primary
+/// focus** (`ShortcutManager.handleKeypress`, `:922-938`, which resolves
+/// against `primaryFocus.context`), so an `Actions` between the focused
+/// widget and this one — a button's activation — takes part. When the focused
+/// node records no chain (no `Focus` widget hosts it), this widget's own
+/// position is used. That action's
 /// [`to_key_event_result`](super::actions::Action::to_key_event_result) decides
 /// the final [`KeyEventResult`] — it is an overridable method, so the action has
 /// the last word. Its default consumes the
@@ -240,25 +245,34 @@ impl StatelessView for CallbackShortcuts {
 /// stopping the bubbling *without* consuming — when the action declined
 /// (`actions.dart:312-314`); an action may override it to decide otherwise. No
 /// match, or no enabled action: the key keeps bubbling.
-#[derive(Clone)]
+#[derive(Clone, StatefulView)]
 pub struct Shortcuts {
-    shortcuts: Vec<(SingleActivator, Rc<dyn Intent>)>, // ADR-0023 — Flutter's `Map<ShortcutActivator, Intent>`; read back only through its own TypeId.
+    bindings: Vec<(SingleActivator, Rc<dyn Intent>)>, // ADR-0023 — Flutter's `Map<ShortcutActivator, Intent>`; read back only through its own TypeId.
     child: BoxedView,
+    /// The node its key handler lives on, when the owner needs to name it.
+    focus_node: Option<Rc<FocusNode>>,
 }
 
 impl Shortcuts {
     /// A shortcut boundary around `child` with no bindings yet.
     pub fn new(child: impl IntoView) -> Self {
         Self {
-            shortcuts: Vec::new(),
+            bindings: Vec::new(),
             child: BoxedView(Box::new(child.into_view())),
+            focus_node: None,
         }
+    }
+
+    /// Host the key handler on `node`, which the caller owns.
+    fn focus_node(mut self, node: Rc<FocusNode>) -> Self {
+        self.focus_node = Some(node);
+        self
     }
 
     /// Bind `activator` to `intent`. Earlier bindings match first.
     #[must_use]
     pub fn shortcut(mut self, activator: SingleActivator, intent: impl Intent) -> Self {
-        self.shortcuts.push((activator, Rc::new(intent)));
+        self.bindings.push((activator, Rc::new(intent)));
         self
     }
 }
@@ -266,32 +280,64 @@ impl Shortcuts {
 impl std::fmt::Debug for Shortcuts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Shortcuts")
-            .field("bindings", &self.shortcuts.len())
+            .field("bindings", &self.bindings.len())
             .finish_non_exhaustive()
     }
 }
 
-impl View for Shortcuts {
-    fn create_element(&self) -> ElementKind {
-        ElementKind::stateless(self)
+/// Presentation-local state behind [`Shortcuts`]: the focus owner whose
+/// primary focus an intent resolves at.
+pub struct ShortcutsState {
+    focus_manager: Option<Rc<flui_interaction::FocusManager>>,
+}
+
+impl std::fmt::Debug for ShortcutsState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShortcutsState")
+            .field("initialized", &self.focus_manager.is_some())
+            .finish()
     }
 }
 
-impl StatelessView for Shortcuts {
+impl StatefulView for Shortcuts {
+    type State = ShortcutsState;
+
+    fn create_state(&self) -> Self::State {
+        ShortcutsState {
+            focus_manager: None,
+        }
+    }
+}
+
+impl ViewState<Shortcuts> for ShortcutsState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.focus_manager = Some(ctx.focus_manager());
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.focus_manager = Some(ctx.focus_manager());
+    }
+
     /// The `Focus(canRequestFocus: false, onKeyEvent: …)` wrapper
-    /// (`shortcuts.dart:1134-1143`). The `Actions` chain is captured from this
-    /// widget's own position (ADR-0023's resolve-at-own-position divergence) with a real dependency, so a
-    /// chain that changes rebuilds this widget and the handler re-captures.
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
-        let shortcuts = self.shortcuts.clone();
-        Focus::new(self.child.clone())
+    /// (`shortcuts.dart:1134-1143`). This widget's own chain is captured with
+    /// a real dependency, as the fallback for a focused node that records
+    /// none; the primary focus's chain is read at key time.
+    fn build(&self, view: &Shortcuts, ctx: &dyn BuildContext) -> impl IntoView {
+        let own_chain = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+        let focus_manager = Rc::clone(
+            self.focus_manager
+                .as_ref()
+                .expect("BUG: Shortcuts built before init_state"),
+        );
+        let shortcuts = view.bindings.clone();
+        let mut focus = Focus::new(view.child.clone());
+        if let Some(node) = &view.focus_node {
+            focus = focus.focus_node(Rc::clone(node));
+        }
+        focus
             .can_request_focus(false)
             .debug_label("Shortcuts")
             .on_key_event(Rc::new(move |event| {
-                let Some(chain) = &chain else {
-                    return KeyEventResult::Ignored;
-                };
                 // `_find` (`shortcuts.dart:892-899`): the FIRST matching
                 // activator decides; an unresolvable intent falls through as
                 // ignored, it does not try later activators (`:922-938`).
@@ -301,8 +347,15 @@ impl StatelessView for Shortcuts {
                 else {
                     return KeyEventResult::Ignored;
                 };
+                let chain = focus_manager
+                    .primary_focus()
+                    .and_then(|focused| chain_at(&focused))
+                    .or_else(|| own_chain.clone());
+                let Some(chain) = chain else {
+                    return KeyEventResult::Ignored;
+                };
                 let intent: &dyn Any = &**intent;
-                match resolve(chain, intent) {
+                match resolve(&chain, intent) {
                     // One call: invoke and read `to_key_event_result` off what
                     // it actually did (`actions.dart:312-314`), so the key
                     // result cannot disagree with the invocation.
@@ -317,10 +370,16 @@ impl StatelessView for Shortcuts {
 // Default focus traversal
 // ============================================================================
 
-/// Installs the standard Tab and Shift+Tab focus traversal bindings for a
-/// subtree.
+/// Installs the standard keyboard bindings for a subtree: Tab and Shift+Tab
+/// move the focus, and Enter, Space and Select activate the focused control
+/// ([`ActivateIntent`]).
 ///
-/// Flutter's `WidgetsApp` supplies these bindings at the application root.
+/// Flutter's `WidgetsApp` supplies these bindings at the application root
+/// (`app.dart:1263-1276`, tag `3.44.0`). Numpad Enter reaches FLUI as the
+/// same logical `Enter`, so one binding covers both; `GameButtonA` has no
+/// logical key in FLUI's key model and is not bound. The arrow-key
+/// directional traversal and `Escape` → dismiss bindings are not installed
+/// yet.
 /// [`FocusRoot`](super::focus::FocusRoot) installs this widget automatically
 /// for every standard FLUI presentation. It remains public for custom
 /// embedders and deliberately isolated subtrees. Each instance binds actions
@@ -344,12 +403,16 @@ impl DefaultFocusTraversal {
 /// Presentation-local state behind [`DefaultFocusTraversal`].
 pub struct DefaultFocusTraversalState {
     focus_owner: Option<Rc<flui_interaction::FocusManager>>,
+    /// The node the bindings' key handler lives on, which the focus owner
+    /// starts a key's walk at while nothing is focused.
+    keys: Rc<FocusNode>,
 }
 
 impl std::fmt::Debug for DefaultFocusTraversalState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DefaultFocusTraversalState")
             .field("initialized", &self.focus_owner.is_some())
+            .field("keys", &self.keys.id())
             .finish()
     }
 }
@@ -358,17 +421,49 @@ impl StatefulView for DefaultFocusTraversal {
     type State = DefaultFocusTraversalState;
 
     fn create_state(&self) -> Self::State {
-        DefaultFocusTraversalState { focus_owner: None }
+        DefaultFocusTraversalState {
+            focus_owner: None,
+            keys: FocusNode::with_debug_label("Shortcuts"),
+        }
+    }
+}
+
+impl DefaultFocusTraversalState {
+    /// Make these bindings where a key starts while nothing is focused, so
+    /// the first Tab into a window with no focus reaches them. A nested
+    /// instance's claim covers this one only while it is mounted.
+    fn claim_unfocused_keys(&mut self, owner: Rc<flui_interaction::FocusManager>) {
+        self.release_unfocused_keys();
+        owner.claim_unfocused_keys(&self.keys);
+        self.focus_owner = Some(owner);
+    }
+
+    /// Withdraw this instance's claim.
+    fn release_unfocused_keys(&self) {
+        if let Some(owner) = &self.focus_owner {
+            owner.release_unfocused_keys(&self.keys);
+        }
     }
 }
 
 impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.focus_owner = Some(ctx.focus_manager());
+        self.claim_unfocused_keys(ctx.focus_manager());
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.focus_owner = Some(ctx.focus_manager());
+        let owner = ctx.focus_manager();
+        if self
+            .focus_owner
+            .as_ref()
+            .is_none_or(|held| !Rc::ptr_eq(held, &owner))
+        {
+            self.claim_unfocused_keys(owner);
+        }
+    }
+
+    fn dispose(&mut self) {
+        self.release_unfocused_keys();
     }
 
     fn build(&self, view: &DefaultFocusTraversal, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -379,11 +474,15 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
             .clone();
         Actions::new(
             Shortcuts::new(view.child.clone())
+                .focus_node(Rc::clone(&self.keys))
                 .shortcut(SingleActivator::named(NamedKey::Tab), NextFocusIntent)
                 .shortcut(
                     SingleActivator::named(NamedKey::Tab).shift(),
                     PreviousFocusIntent,
-                ),
+                )
+                .shortcut(SingleActivator::named(NamedKey::Enter), ActivateIntent)
+                .shortcut(SingleActivator::character(" "), ActivateIntent)
+                .shortcut(SingleActivator::named(NamedKey::Select), ActivateIntent),
         )
         .action(NextFocusAction::new(Rc::clone(&focus_owner)))
         .action(PreviousFocusAction::new(focus_owner))
@@ -728,14 +827,8 @@ mod tab_tests {
     /// matches the `Shortcuts` activator, resolves `NextFocusIntent` through
     /// the enclosing `Actions`, and moves the focus in reading order.
     ///
-    /// Note the nesting the ADR-0026 review made a binding constraint:
-    /// **`Actions` must be OUTSIDE `Shortcuts`** — FLUI's `Shortcuts` resolves
-    /// its action chain from its own position (ADR-0023's resolve-at-own-position divergence), so the Flutter
-    /// habit of `Shortcuts(child: Actions(...))` silently dead-keys Tab.
-    ///
-    /// Red-check: swap the nesting to `Shortcuts::new(Actions::new(...))` —
-    /// the chain resolves to `None`, the handler returns `Ignored`, and the
-    /// focus never moves.
+    /// The traversal actions come from `DefaultFocusTraversal`, which the
+    /// harness's `FocusRoot` installs.
     #[test]
     fn tab_and_shift_tab_move_the_focus_through_the_actions_chain() {
         let scope = FocusScopeNode::with_debug_label("tab-scope");
@@ -799,5 +892,186 @@ mod tab_tests {
             "a Tab that moved nothing is reported unconsumed"
         );
         assert!(only.has_primary_focus(), "and the focus stayed put");
+    }
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use flui_interaction::events::{KeyState, Modifiers};
+    use flui_interaction::routing::FocusNode;
+
+    use super::*;
+    use crate::SizedBox;
+    use crate::interaction::actions::{ActivateIntent, CallbackAction};
+    use crate::testing::harness::mount;
+
+    fn key_down(key: Key) -> KeyEvent {
+        KeyEvent {
+            state: KeyState::Down,
+            key,
+            modifiers: Modifiers::empty(),
+            ..KeyEvent::default()
+        }
+    }
+
+    struct SaveIntent;
+    impl Intent for SaveIntent {}
+
+    /// **An intent resolves at the primary focus** (ADR-0079), as Flutter's
+    /// `ShortcutManager` resolves against `primaryFocus.context`: an `Actions`
+    /// between the focused widget and the `Shortcuts` answers the intent —
+    /// the shape every button's activation has.
+    ///
+    /// Red-check: resolve from the `Shortcuts` widget's own position (drop the
+    /// `chain_at` lookup) — nothing above the `Shortcuts` binds `SaveIntent`,
+    /// so the key is ignored and the action never runs.
+    #[test]
+    fn an_actions_between_the_focus_and_the_shortcuts_answers_the_intent() {
+        let runs = Rc::new(Cell::new(0));
+        let field = FocusNode::with_debug_label("field");
+        let counted = Rc::clone(&runs);
+        let harness = mount(
+            Shortcuts::new(
+                Actions::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
+                    .action(CallbackAction::new(move |_: &SaveIntent| {
+                        counted.set(counted.get() + 1);
+                    })),
+            )
+            .shortcut(SingleActivator::character("s").control(), SaveIntent),
+        );
+        let manager = harness.focus_manager();
+        field.request_focus();
+
+        let ctrl_s = KeyEvent {
+            modifiers: Modifiers::CONTROL,
+            ..key_down(Key::Character("s".into()))
+        };
+        assert!(manager.dispatch_key_event(&ctrl_s), "consumed");
+        assert_eq!(runs.get(), 1, "the action below the Shortcuts ran");
+    }
+
+    /// A focused `FocusScope` node resolves at its own position too: its
+    /// backing node can hold the primary focus, and an `Actions` between it
+    /// and the `Shortcuts` must answer.
+    ///
+    /// Red-check: drop the `record_action_chain` calls from
+    /// `FocusScopeState` — the scope's node has no record, the `Shortcuts`
+    /// falls back to its own position, and the action never runs.
+    #[test]
+    fn a_focused_scope_resolves_intents_at_its_own_position() {
+        use flui_interaction::routing::FocusScopeNode;
+
+        use crate::interaction::focus::FocusScope;
+
+        let runs = Rc::new(Cell::new(0));
+        let scope = FocusScopeNode::with_debug_label("scope");
+        let counted = Rc::clone(&runs);
+        let harness = mount(
+            Shortcuts::new(
+                Actions::new(FocusScope::with_external_node(
+                    Rc::clone(&scope),
+                    SizedBox::new(10.0, 10.0),
+                ))
+                .action(CallbackAction::new(move |_: &SaveIntent| {
+                    counted.set(counted.get() + 1);
+                })),
+            )
+            .shortcut(SingleActivator::character("s").control(), SaveIntent),
+        );
+        let manager = harness.focus_manager();
+        scope.as_focus_node().request_focus();
+        assert!(
+            scope.as_focus_node().has_primary_focus(),
+            "the empty scope holds the focus"
+        );
+
+        let ctrl_s = KeyEvent {
+            modifiers: Modifiers::CONTROL,
+            ..key_down(Key::Character("s".into()))
+        };
+        assert!(manager.dispatch_key_event(&ctrl_s), "consumed");
+        assert_eq!(
+            runs.get(),
+            1,
+            "the action between the scope and the Shortcuts ran"
+        );
+    }
+
+    /// Enter, Space and Select activate the focused control through the
+    /// root bindings — `WidgetsApp`'s `_defaultShortcuts` (`app.dart:1265-1269`,
+    /// tag `3.44.0`) — and an activation key no control claims keeps bubbling.
+    ///
+    /// Red-check: drop the three `ActivateIntent` bindings from
+    /// `DefaultFocusTraversal` — every dispatch is ignored.
+    #[test]
+    fn enter_space_and_select_activate_the_focused_control() {
+        let runs = Rc::new(Cell::new(0));
+        let button = FocusNode::with_debug_label("button");
+        let counted = Rc::clone(&runs);
+        let harness = mount(
+            Actions::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&button)))
+                .action(CallbackAction::new(move |_: &ActivateIntent| {
+                    counted.set(counted.get() + 1);
+                })),
+        );
+        let manager = harness.focus_manager();
+        button.request_focus();
+
+        for key in [
+            Key::Named(NamedKey::Enter),
+            Key::Character(" ".into()),
+            Key::Named(NamedKey::Select),
+        ] {
+            assert!(
+                manager.dispatch_key_event(&key_down(key.clone())),
+                "{key:?} is consumed"
+            );
+        }
+        assert_eq!(runs.get(), 3, "each key activated the control once");
+    }
+
+    /// **The first Tab into a window with nothing focused** reaches the
+    /// default bindings and focuses the first control. Found on a live
+    /// Windows window: the key walk started at the primary focus, there was
+    /// none, and every key was dropped — no control was reachable from the
+    /// keyboard at all.
+    ///
+    /// Red-check: drop `claim_unfocused_keys` from
+    /// `DefaultFocusTraversalState::claim_unfocused_keys` — the Tab is
+    /// ignored and nothing gains focus.
+    #[test]
+    fn the_first_tab_with_nothing_focused_focuses_the_first_control() {
+        let button = FocusNode::with_debug_label("button");
+        let harness = mount(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&button)));
+        let manager = harness.focus_manager();
+        assert!(
+            manager.primary_focus().is_none(),
+            "the window opens with nothing focused"
+        );
+
+        assert!(
+            manager.dispatch_key_event(&key_down(Key::Named(NamedKey::Tab))),
+            "Tab is consumed"
+        );
+        assert!(
+            button.has_primary_focus(),
+            "and it brought the focus to the control"
+        );
+    }
+
+    /// With no control answering `ActivateIntent`, Enter is not swallowed:
+    /// nothing at the root binds an action to it, so the key is reported
+    /// unconsumed and an outer handler (or the platform) still gets it.
+    #[test]
+    fn an_unclaimed_activation_key_is_not_consumed() {
+        let field = FocusNode::with_debug_label("plain");
+        let harness = mount(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)));
+        let manager = harness.focus_manager();
+        field.request_focus();
+
+        assert!(!manager.dispatch_key_event(&key_down(Key::Named(NamedKey::Enter))));
     }
 }

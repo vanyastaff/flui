@@ -194,6 +194,13 @@ impl flui_foundation::Diagnosticable for RenderSemanticsAnnotations {
             self.configuration.is_actions_only(),
             "actions only",
         );
+        // The shape of a `Focus` widget's focus-state node, left out the same
+        // way.
+        builder.add_flag(
+            "focus_state_only",
+            self.configuration.is_focus_state_only(),
+            "focus state only",
+        );
     }
 }
 

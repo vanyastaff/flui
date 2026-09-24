@@ -33,7 +33,7 @@ pub use focus::{FocusChangeCallback, FocusManager, KeyEventCallback};
 pub use focus_scope::{
     FocusAttachment, FocusDetachOutcome, FocusNode, FocusNodeChangeCallback, FocusNodeId,
     FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode, FocusTraversalPolicy,
-    FocusTreeError, KeyEventHandler, KeyEventResult, ReadingOrderPolicy, RectProvider,
+    FocusTreeError, KeyEventHandler, KeyEventResult, NodeContext, ReadingOrderPolicy, RectProvider,
     ResolvedStep, TraversalEdgeBehavior,
 };
 pub use hit_test::{
