@@ -247,8 +247,9 @@ struct ShotMeta {
     height: u32,
     /// The window it captured, held to its identity and place.
     window: Option<(u32, u64, Binding)>,
-    /// The monitor it captured, whose geometry must still be `source`.
-    monitor: Option<ShotTarget>,
+    /// The native monitor actually captured, independent of its current
+    /// position in enumeration or whether it is still primary.
+    monitor: Option<capture::MonitorSnapshot>,
 }
 
 /// How many screenshots stay addressable by handle.
@@ -919,8 +920,7 @@ impl Desktop {
                 Target::Window(hwnd, n) => Some((hwnd, n, b)),
                 Target::Pid(_) => None,
             }),
-            monitor: matches!(direct, ShotTarget::Monitor(_) | ShotTarget::Primary)
-                .then_some(direct),
+            monitor: shot.monitor,
         });
         Ok((shot, id))
     }
@@ -1172,12 +1172,8 @@ impl Desktop {
                         )));
                     }
                 }
-                if let Some(monitor) = meta.monitor
-                    && capture::monitor_geometry(monitor).ok() != Some(meta.source)
-                {
-                    return Err(ToolError::Busy(format!(
-                        "the display captured in screenshot s{shot} has moved or changed mode since; take another"
-                    )));
+                if let Some(monitor) = meta.monitor {
+                    capture::verify_monitor(monitor, capture::monitor_snapshot(monitor.id))?;
                 }
                 // Down to the screen unit the pixel lies in, and never past
                 // the captured rect's far edge (a rounded HiDPI pixel would).

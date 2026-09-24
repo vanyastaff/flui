@@ -9,6 +9,20 @@ to the desktop tool and this report; no framework, CI workflow or publishing cha
 
 ## Repaired failure scenarios
 
+Monitor screenshots retain the native display identifier from the captured monitor,
+alongside its geometry. Pixel-coordinate validation looks up that identifier rather
+than reselecting the current primary monitor or enumeration index. Native display IDs
+are not a hardware lifetime guarantee: unobserved reuse of the same native identifier
+and geometry remains outside this check. Direct element focus requires a readable live
+focusable flag before dispatch; unsupported elements receive a clean refusal without
+an uncertain action effect.
+`cargo xtask check-changed --base 2b0db0919728f82ded1cbd9daaa86dcffaf16a1e`
+passed: 142 tests, six skipped, formatting, strict rustdoc and Windows/macOS clippy.
+`cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only
+--no-capture` passed all three entries. The native static landmark rejects direct focus
+with `action_unsupported`, no effect, and the edit retains focus. Display replacement
+and enumeration reordering are injected tests; no physical display hotplug was run.
+
 PID activation and capture retain the selected window's adopted class rather than
 reading it again after adoption; they also retain the original process start time.
 This prevents a replacement window from being accepted under a retired identity when

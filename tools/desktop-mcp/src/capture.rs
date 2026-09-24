@@ -83,6 +83,45 @@ pub struct Shot {
     pub scale_x: f64,
     /// The same, vertically.
     pub scale_y: f64,
+    /// The actual display captured, independent of primary/index selection.
+    pub monitor: Option<MonitorSnapshot>,
+}
+
+/// Native display identity and its coordinate space at capture time.
+/// Native ids can be recycled by the OS after disconnect; this is not a
+/// physical-device serial number or an attachment-generation guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonitorSnapshot {
+    /// The backend's native display id, not its position in the list.
+    pub id: u32,
+    /// The captured display's origin and size in screen coordinates.
+    pub rect: Rect,
+}
+
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+fn monitor_for_id<T>(
+    monitors: &[T],
+    id: u32,
+    identity: impl Fn(&T) -> Option<u32>,
+) -> ToolResult<&T> {
+    monitors
+        .iter()
+        .find(|monitor| identity(monitor) == Some(id))
+        .ok_or_else(|| ToolError::NotFound("the captured monitor is gone".into()))
+}
+
+/// Refuses pixels from a replaced or reconfigured display, including a
+/// replacement with exactly the same geometry.
+pub fn verify_monitor(
+    expected: MonitorSnapshot,
+    current: ToolResult<MonitorSnapshot>,
+) -> ToolResult<()> {
+    if current.is_ok_and(|current| current == expected) {
+        return Ok(());
+    }
+    Err(ToolError::Busy(
+        "the captured monitor disappeared, changed identity or changed geometry (or cannot be read); take another screenshot".into(),
+    ))
 }
 
 /// What `screenshot` captures.
@@ -101,7 +140,8 @@ mod backend {
     use xcap::{Monitor, Window};
 
     use super::{
-        NativeWindow, Rect, Shot, ShotTarget, ToolError, ToolResult, encode, within_pixel_limit,
+        MonitorSnapshot, NativeWindow, Rect, Shot, ShotTarget, ToolError, ToolResult, encode,
+        monitor_for_id, verify_monitor, within_pixel_limit,
     };
 
     fn describe(w: &Window) -> Option<NativeWindow> {
@@ -121,22 +161,25 @@ mod backend {
         })
     }
 
-    /// A monitor's position and size now, read as `screenshot` reads them.
-    pub fn monitor_geometry(target: ShotTarget) -> ToolResult<Rect> {
-        let monitors = Monitor::all().map_err(|e| ToolError::platform("listing monitors", e))?;
-        let monitor = match target {
-            ShotTarget::Monitor(i) => monitors.get(i),
-            ShotTarget::Primary => monitors.iter().find(|m| m.is_primary().unwrap_or(false)),
-            ShotTarget::Window(_) => None,
-        }
-        .ok_or_else(|| ToolError::NotFound("the monitor is gone".into()))?;
-        let meta = |e| ToolError::platform("reading the monitor's position and size", e);
-        Ok(Rect {
-            x: monitor.x().map_err(meta)?,
-            y: monitor.y().map_err(meta)?,
-            width: monitor.width().map_err(meta)?,
-            height: monitor.height().map_err(meta)?,
+    fn describe_monitor(monitor: &Monitor) -> ToolResult<MonitorSnapshot> {
+        let meta = |e| ToolError::platform("reading the monitor's identity and geometry", e);
+        Ok(MonitorSnapshot {
+            id: monitor.id().map_err(meta)?,
+            rect: Rect {
+                x: monitor.x().map_err(meta)?,
+                y: monitor.y().map_err(meta)?,
+                width: monitor.width().map_err(meta)?,
+                height: monitor.height().map_err(meta)?,
+            },
         })
+    }
+
+    /// Looks up the display actually captured, never the current occupant
+    /// of an enumeration index or the display currently marked primary.
+    pub fn monitor_snapshot(id: u32) -> ToolResult<MonitorSnapshot> {
+        let monitors = Monitor::all().map_err(|e| ToolError::platform("listing monitors", e))?;
+        let monitor = monitor_for_id(&monitors, id, |monitor| monitor.id().ok())?;
+        describe_monitor(monitor)
     }
 
     /// Every top-level window xcap can see, front to back.
@@ -147,7 +190,7 @@ mod backend {
 
     /// Captures `target`, downscaling so neither side exceeds `max_side`.
     pub fn screenshot(target: ShotTarget, max_side: Option<u32>) -> ToolResult<Shot> {
-        let (image, source) = match target {
+        let (image, source, monitor) = match target {
             ShotTarget::Window(id) => {
                 let all = Window::all().map_err(|e| ToolError::platform("listing windows", e))?;
                 let window = all
@@ -198,7 +241,7 @@ mod backend {
                     }
                     Some(_) => {}
                 }
-                (image, info.rect)
+                (image, info.rect, None)
             }
             ShotTarget::Monitor(_) | ShotTarget::Primary => {
                 let monitors =
@@ -230,38 +273,28 @@ mod backend {
                 };
                 // Coordinates map the pixels back to the desktop; a made-up
                 // origin would send later input to the wrong place.
-                let meta = |e| ToolError::platform("reading the monitor's position and size", e);
-                let geometry = || -> ToolResult<Rect> {
-                    Ok(Rect {
-                        x: monitor.x().map_err(meta)?,
-                        y: monitor.y().map_err(meta)?,
-                        width: monitor.width().map_err(meta)?,
-                        height: monitor.height().map_err(meta)?,
-                    })
-                };
-                let source = geometry()?;
+                let captured = describe_monitor(monitor)?;
+                let source = captured.rect;
                 within_pixel_limit(
                     source,
                     monitor.scale_factor().ok(),
                     "capture a window on it instead",
                 )?;
+                verify_monitor(captured, monitor_snapshot(captured.id))?;
                 let image = monitor
                     .capture_image()
                     .map_err(|e| ToolError::platform("capturing the monitor", e))?;
                 // As for a window: the geometry read before describes these
                 // pixels only if the display was not reconfigured meanwhile.
-                if geometry()? != source {
-                    return Err(ToolError::Busy(
-                        "the monitor changed its position, size or mode while it was captured"
-                            .into(),
-                    ));
-                }
-                (image, source)
+                verify_monitor(captured, monitor_snapshot(captured.id))?;
+                (image, source, Some(captured))
             }
         };
         #[cfg(target_os = "windows")]
         super::physical_size_matches(image.dimensions(), source)?;
-        encode(image, source, max_side)
+        let mut shot = encode(image, source, max_side)?;
+        shot.monitor = monitor;
+        Ok(shot)
     }
 }
 
@@ -284,12 +317,12 @@ mod backend {
         Err(unsupported())
     }
 
-    pub fn monitor_geometry(_: ShotTarget) -> ToolResult<super::Rect> {
+    pub fn monitor_snapshot(_: u32) -> ToolResult<super::MonitorSnapshot> {
         Err(unsupported())
     }
 }
 
-pub use backend::{monitor_geometry, screenshot, windows};
+pub use backend::{monitor_snapshot, screenshot, windows};
 
 /// Windows capture is in physical pixels before our explicit downscale.
 /// Cropped pixels cannot be mapped by stretching them over the original rect.
@@ -403,12 +436,67 @@ fn encode(image: RgbaImage, source: Rect, max_side: Option<u32>) -> ToolResult<S
         source,
         scale_x: per_unit(image.width(), source.width),
         scale_y: per_unit(image.height(), source.height),
+        monitor: None,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn monitor_pixels_reject_a_same_geometry_replacement() {
+        let captured = MonitorSnapshot {
+            id: 1,
+            rect: source(),
+        };
+        let replacement = MonitorSnapshot {
+            id: 2,
+            rect: source(),
+        };
+        assert!(
+            verify_monitor(captured, Ok(replacement)).is_err(),
+            "same geometry does not establish monitor identity"
+        );
+        let monitors = [replacement];
+        let current = monitor_for_id(&monitors, captured.id, |monitor| Some(monitor.id)).copied();
+        assert!(
+            verify_monitor(captured, current).is_err(),
+            "a replacement primary or index occupant cannot supply the old image's coordinates"
+        );
+    }
+
+    #[test]
+    fn monitor_pixels_follow_native_identity_after_enumeration_reorders() {
+        let captured = MonitorSnapshot {
+            id: 1,
+            rect: source(),
+        };
+        let other = MonitorSnapshot {
+            id: 2,
+            rect: source(),
+        };
+        for monitors in [[captured, other], [other, captured]] {
+            let current =
+                monitor_for_id(&monitors, captured.id, |monitor| Some(monitor.id)).copied();
+            assert!(verify_monitor(captured, current).is_ok());
+        }
+        let moved = MonitorSnapshot {
+            rect: Rect {
+                x: 999,
+                ..captured.rect
+            },
+            ..captured
+        };
+        assert!(verify_monitor(captured, Ok(moved)).is_err());
+        assert!(
+            verify_monitor(
+                captured,
+                Err(ToolError::platform("reading monitor", "failed"))
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn cropped_pixels_are_not_mistaken_for_a_scaled_physical_capture() {

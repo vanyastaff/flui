@@ -433,6 +433,18 @@ fn native_controls_through_mcp() {
 
     call(&mut client, "focus", json!({"element": edit}));
     state(&mut client, &edit, json!({"focused": true}));
+    let landmark = element(&mut client, &window, "1004");
+    let refused = client.call("focus", json!({"element": landmark}));
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert_eq!(
+        refused["structuredContent"]["error"]["code"], "action_unsupported",
+        "{refused}"
+    );
+    assert!(
+        refused["structuredContent"]["error"]["effect"].is_null(),
+        "{refused}"
+    );
+    state(&mut client, &edit, json!({"focused": true}));
     call(
         &mut client,
         "type_text",

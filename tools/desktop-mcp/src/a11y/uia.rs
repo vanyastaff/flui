@@ -1064,7 +1064,11 @@ impl Uia {
                 },
                 || self.unsupported(handle, element, ActionName::SetValue),
             ),
-            Action::Focus => element.set_focus().map_err(fail("focus")),
+            Action::Focus => perform_focus(
+                || Self::has_pattern(handle, element, UIProperty::IsKeyboardFocusable),
+                || element.set_focus().map_err(fail("focus")),
+                || self.unsupported(handle, element, ActionName::Focus),
+            ),
             Action::Select => {
                 self.require(handle, element, ActionName::Select)?;
                 element
@@ -1075,6 +1079,19 @@ impl Uia {
             }
         }
     }
+}
+
+/// Direct element focus is offered only by a readable, live focusable flag.
+/// Read failures stay distinct from an unsupported action and emit no focus.
+fn perform_focus(
+    focusable: impl FnOnce() -> ToolResult<bool>,
+    focus: impl FnOnce() -> ToolResult<()>,
+    unsupported: impl FnOnce() -> ToolError,
+) -> ToolResult<()> {
+    if !focusable()? {
+        return Err(unsupported());
+    }
+    focus()
 }
 
 /// Readback follows an action that already succeeded. Even its final value
@@ -1893,6 +1910,46 @@ fn classify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_focus_requires_a_live_readable_focusable_flag() {
+        for focusable in [
+            Ok(false),
+            Ok(true),
+            Err(ToolError::platform(
+                "reading focusable",
+                "missing or malformed boolean",
+            )),
+        ] {
+            let expected_code = match &focusable {
+                Ok(true) => None,
+                Ok(false) => Some("action_unsupported"),
+                Err(_) => Some("platform"),
+            };
+            let sent = std::cell::Cell::new(false);
+            let result = perform_focus(
+                || focusable,
+                || {
+                    sent.set(true);
+                    Ok(())
+                },
+                || ToolError::ActionUnsupported {
+                    element: "e1".into(),
+                    action: "focus",
+                    supported: Vec::new(),
+                    unread: Vec::new(),
+                },
+            );
+            assert_eq!(sent.get(), expected_code.is_none());
+            assert_eq!(result.as_ref().err().map(ToolError::code), expected_code);
+            if let Err(error) = result {
+                assert!(
+                    error.payload()["error"].get("effect").is_none(),
+                    "refusal sent no focus request"
+                );
+            }
+        }
+    }
 
     #[test]
     fn readback_rechecks_process_after_the_last_provider_call() {
