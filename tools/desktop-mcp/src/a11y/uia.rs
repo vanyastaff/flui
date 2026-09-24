@@ -14,7 +14,7 @@ use uiautomation::patterns::{
     UIInvokePattern, UIRangeValuePattern, UISelectionItemPattern, UITogglePattern, UIValuePattern,
 };
 use uiautomation::types::{Handle, ToggleState, TreeScope, UIProperty};
-use uiautomation::{UIAutomation, UIElement};
+use uiautomation::{UIAutomation, UIElement, UITreeWalker};
 
 use super::{AccessibilityBackend, Action, ClickPoint, Node};
 use crate::cache::ElementCache;
@@ -46,6 +46,10 @@ const PATTERNS: &[(UIProperty, &str)] = &[
 /// cache's capacity, so every handle a response carries stays resolvable.
 pub const NODE_BUDGET: usize = 5_000;
 
+/// How far past the budget or the depth a node's remaining children are
+/// counted before the count stops being exact.
+const OMITTED_COUNT_CAP: usize = 256;
+
 /// Properties every [`Node`] reads from the cache.
 const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::Name,
@@ -69,14 +73,22 @@ const E_DISCONNECTED: i32 = 0x8001_0108_u32 as i32;
 const E_ELEMENT_NOT_ENABLED: i32 = 0x8004_0200_u32 as i32;
 
 /// UI Automation client state for the session.
-#[derive(Debug)]
 pub struct Uia {
     automation: UIAutomation,
-    /// One level: an element's children with their node properties.
-    children: UICacheRequest,
+    /// The control view, walked one sibling at a time so a node's children
+    /// are fetched only as far as the budget reaches.
+    walker: UITreeWalker,
     single: UICacheRequest,
     elements: ElementCache<Vec<i32>, UIElement>,
     anonymous: i32,
+}
+
+impl std::fmt::Debug for Uia {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Uia")
+            .field("handles", &self.elements.len())
+            .finish_non_exhaustive()
+    }
 }
 
 fn platform(context: &str) -> impl FnOnce(uiautomation::Error) -> ToolError + '_ {
@@ -87,11 +99,11 @@ impl Uia {
     /// Joins this thread to the COM MTA and prepares the cache requests.
     pub fn new() -> Result<Self, uiautomation::Error> {
         let automation = UIAutomation::new()?;
-        let children = node_request(&automation, TreeScope::Children)?;
+        let walker = automation.get_control_view_walker()?;
         let single = node_request(&automation, TreeScope::Element)?;
         Ok(Self {
             automation,
-            children,
+            walker,
             single,
             elements: ElementCache::default(),
             anonymous: 0,
@@ -115,10 +127,12 @@ impl Uia {
         self.elements.get(handle).cloned()
     }
 
-    /// `element` and, level by level, its descendants: one cross-process
-    /// read per level visited, `budget` nodes at most across the whole read.
-    /// A hostile or huge tree is read in bounded time and memory; what the
-    /// depth or the budget left out is counted in `omitted_children`.
+    /// `element` and its descendants, fetched one child at a time through
+    /// the control-view walker, `budget` nodes at most across the whole read.
+    /// Nothing wider than the budget is ever materialized, however many
+    /// children a hostile node claims. Children left out by the depth or the
+    /// budget are counted in `omitted_children`, up to [`OMITTED_COUNT_CAP`]
+    /// (a lower bound past it).
     fn build(
         &mut self,
         element: &UIElement,
@@ -128,18 +142,25 @@ impl Uia {
     ) -> Node {
         *budget = budget.saturating_sub(1);
         let mut node = self.describe(element);
-        let children = element
-            .build_updated_cache(&self.children)
-            .and_then(|with_children| with_children.get_cached_children())
-            .unwrap_or_default();
         let mut omitted = 0;
-        for child in &children {
-            if depth >= max_depth || *budget == 0 {
-                omitted += 1;
-            } else {
+        let mut child = self
+            .walker
+            .get_first_child_build_cache(element, &self.single)
+            .ok();
+        while let Some(current) = child {
+            if depth < max_depth && *budget > 0 {
                 node.children
-                    .push(self.build(child, depth + 1, max_depth, budget));
+                    .push(self.build(&current, depth + 1, max_depth, budget));
+            } else {
+                omitted += 1;
+                if omitted >= OMITTED_COUNT_CAP {
+                    break;
+                }
             }
+            child = self
+                .walker
+                .get_next_sibling_build_cache(&current, &self.single)
+                .ok();
         }
         if omitted > 0 {
             node.omitted_children = Some(omitted);
@@ -377,6 +398,9 @@ impl AccessibilityBackend for Uia {
         let mut roots = Vec::with_capacity(windows.len());
         let mut budget = NODE_BUDGET;
         for &window in windows {
+            if budget == 0 {
+                break;
+            }
             let root = self
                 .automation
                 .element_from_handle_build_cache(hwnd(window), &self.single)

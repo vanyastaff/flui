@@ -99,7 +99,6 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
     }
 
     /// How many handles are live.
-    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.by_handle.len()
     }
