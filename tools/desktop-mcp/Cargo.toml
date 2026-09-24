@@ -33,7 +33,7 @@ schemars = "1.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros", "io-std", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "io-std", "sync", "time", "signal"] }
 # The request cancellation rmcp hands each tool.
 tokio-util = { workspace = true }
 tracing = { workspace = true }

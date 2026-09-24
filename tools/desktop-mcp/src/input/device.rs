@@ -157,7 +157,10 @@ impl Input {
     /// whatever window is in front now.
     #[cfg_attr(
         not(target_os = "windows"),
-        expect(clippy::unused_self, reason = "only Windows opens a menu on a lone Alt")
+        expect(
+            clippy::unused_self,
+            reason = "only Windows opens a menu on a lone Alt"
+        )
     )]
     fn mask_lone_menu_keys(&mut self) {
         #[cfg(target_os = "windows")]

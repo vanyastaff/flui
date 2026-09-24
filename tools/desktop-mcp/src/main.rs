@@ -64,14 +64,25 @@ async fn main() -> anyhow::Result<()> {
         .serve(rmcp::transport::stdio())
         .await
         .context("starting the MCP session")?;
-    let reason = service.waiting().await;
-    tracing::info!(?reason, "MCP session ended");
+    // A host that closes stdin and then sends SIGTERM (or a Ctrl+C at a
+    // terminal) gets the same clean shutdown as a closed session.
+    tokio::select! {
+        reason = service.waiting() => tracing::info!(?reason, "MCP session ended"),
+        () = shutdown_signal() => tracing::info!("shutdown signal received"),
+    }
 
-    // The action running when the client left stops at its next event, the
-    // queue ahead of the release drains, then everything held is released:
-    // exiting with a button or a modifier down would leave it down for the
-    // whole desktop.
+    // The action running when the client left stops at its next event,
+    // queued calls are skipped, then everything held is released: exiting
+    // with a button or a modifier down would leave it down for the whole
+    // desktop. Launched children are ended meanwhile on a thread of their
+    // own, so neither waits for the other.
     desktop::stop_input();
+    let ending = {
+        let children = Arc::clone(&children);
+        std::thread::Builder::new()
+            .name("desktop-shutdown-kill".into())
+            .spawn(move || children.kill_all())
+    };
     let released = tokio::time::timeout(
         SHUTDOWN_WAIT,
         worker.run_at_shutdown(|d| {
@@ -83,6 +94,43 @@ async fn main() -> anyhow::Result<()> {
     if !matches!(released, Ok(Ok(()))) {
         tracing::warn!("could not release held input before exiting: {released:?}");
     }
-    children.kill_all();
+    match ending {
+        Ok(thread) => {
+            if thread.join().is_err() {
+                tracing::warn!("ending launched children panicked");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "could not start ending launched children on a thread ({e}); ending them here"
+            );
+            children.kill_all();
+        }
+    }
     Ok(())
+}
+
+/// Resolves on SIGTERM (Unix) or Ctrl+C; never when neither can be watched.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = term.recv() => {}
+                    _ = tokio::signal::ctrl_c() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        if tokio::signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
 }

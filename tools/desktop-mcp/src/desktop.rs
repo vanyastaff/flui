@@ -227,9 +227,15 @@ struct Issued {
 /// long `type_text` or drag.
 static STOPPING: AtomicBool = AtomicBool::new(false);
 
-/// Makes every input action in progress stop at its next event.
+/// Makes every input action in progress stop at its next event, and every
+/// queued desktop call be skipped.
 pub fn stop_input() {
     STOPPING.store(true, Ordering::SeqCst);
+}
+
+/// Whether shutdown has begun.
+pub fn stopping() -> bool {
+    STOPPING.load(Ordering::SeqCst)
 }
 
 /// Session state on the worker thread.

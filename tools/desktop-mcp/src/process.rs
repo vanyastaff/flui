@@ -59,6 +59,9 @@ struct Tracked {
     launching: usize,
     /// Set by shutdown's `kill_all`: nothing is launched after it.
     closed: bool,
+    /// Killed children not yet reaped (one stuck in uninterruptible IO
+    /// outlives its kill): polled by `reap`, so none is left a zombie.
+    unreaped: Vec<(u32, Child)>,
 }
 
 impl Tracked {
@@ -73,7 +76,15 @@ impl Tracked {
 
     /// Moves the children that exited on their own to `exited`, so a long
     /// session of short-lived launches does not pile up handles or zombies.
+    fn hold_unreaped(&mut self, pid: u32, mut child: Child) {
+        if !matches!(child.try_wait(), Ok(Some(_))) {
+            self.unreaped.push((pid, child));
+        }
+    }
+
     fn reap(&mut self) {
+        self.unreaped
+            .retain_mut(|(_, child)| !matches!(child.try_wait(), Ok(Some(_))));
         let mut done = Vec::new();
         self.running.retain(|&pid, child| match child.try_wait() {
             Ok(None) => true,
@@ -195,9 +206,10 @@ impl Children {
         // server dies hard; a child that cannot join it is ended at once.
         #[cfg(target_os = "windows")]
         if let Err(e) = job.assign(&child) {
+            let pid = child.id();
             let mut child = child;
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = end(pid, &mut child);
+            self.lock().hold_unreaped(pid, child);
             return Err(ToolError::NotSupported(format!(
                 "`{}` started but could not join the kill-on-exit job ({e}), so it was ended",
                 spec.program
@@ -255,6 +267,7 @@ impl Children {
                 // exited rather than that it was never launched.
                 Ok(killed) => {
                     tracked.remember(pid, killed.exit_code);
+                    tracked.hold_unreaped(pid, child);
                     Ok(killed)
                 }
                 // Still running: keep it tracked, so it can be retried and
@@ -332,18 +345,46 @@ impl Children {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .0;
         }
-        let drained: Vec<(u32, Child)> = tracked.running.drain().collect();
+        // Marked as being ended while out of `running`, so a `kill` in
+        // between does not take them for exited.
+        let mut drained: Vec<(u32, Child)> = tracked.running.drain().collect();
+        tracked.ending.extend(drained.iter().map(|&(pid, _)| pid));
         drop(tracked);
-        for (pid, mut child) in drained {
-            match end(pid, &mut child) {
-                Ok(killed) => tracing::info!(?killed, "ended launched child on shutdown"),
+        // Every kill first, then one shared wait: a child stuck in IO does
+        // not hold up the others' kills, nor multiply the shutdown time.
+        let mut failed = Vec::new();
+        drained.retain_mut(|(pid, child)| {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return false;
+            }
+            if let Err(e) = child.kill()
+                && !matches!(child.try_wait(), Ok(Some(_)))
+            {
+                tracing::warn!("could not end launched child {pid} on shutdown: {e}");
+                failed.push(*pid);
+            }
+            true
+        });
+        let until = std::time::Instant::now() + REAP_WAIT;
+        while std::time::Instant::now() < until
+            && drained
+                .iter_mut()
+                .any(|(_, child)| !matches!(child.try_wait(), Ok(Some(_))))
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut tracked = self.lock();
+        for (pid, child) in drained {
+            tracked.ending.remove(&pid);
+            if failed.contains(&pid) {
                 // Kept, so the cleanup on drop tries it once more.
-                Err(e) => {
-                    tracing::warn!("could not end launched child on shutdown: {e}");
-                    self.lock().running.insert(pid, child);
-                }
+                tracked.running.insert(pid, child);
+            } else {
+                tracing::info!(pid, "ended launched child on shutdown");
+                tracked.hold_unreaped(pid, child);
             }
         }
+        self.settled.notify_all();
     }
 }
 
@@ -519,5 +560,40 @@ mod tests {
         assert_eq!(killed.pid, pid);
         assert!(!killed.already_exited, "the kill ended it");
         assert!(!children.contains(pid));
+    }
+
+    /// Shutdown ends every running child, within its bound, and a kill
+    /// afterwards reports the process as ended rather than never launched.
+    #[test]
+    fn kill_all_ends_running_children() {
+        let children = Children::new();
+        let (program, args) = if cfg!(windows) {
+            ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
+        } else {
+            ("sleep", vec!["60".into()])
+        };
+        let pids: Vec<u32> = (0..3)
+            .map(|_| {
+                children
+                    .launch(&LaunchSpec {
+                        program: program.into(),
+                        args: args.clone(),
+                        ..LaunchSpec::default()
+                    })
+                    .expect("BUG: a long-running system program starts")
+                    .0
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        children.kill_all();
+        assert!(
+            started.elapsed() < LAUNCH_SETTLE + REAP_WAIT,
+            "kill_all is bounded"
+        );
+        for pid in pids {
+            assert!(!children.contains(pid), "{pid} was ended");
+            let again = children.kill(pid).expect("BUG: a launched pid is known");
+            assert!(again.already_exited);
+        }
     }
 }

@@ -103,6 +103,11 @@ pub enum ToolError {
         what: String,
     },
 
+    /// Something passing got in the way (a full queue, a window that moved
+    /// during the call); the same call can succeed moments later.
+    #[error("{0}; retry shortly")]
+    Busy(String),
+
     /// The client cancelled the request before it ran; nothing was done.
     #[error("cancelled by the client before it ran; nothing was done")]
     Cancelled,

@@ -81,6 +81,18 @@ impl Worker {
         let job_state = Arc::clone(&state);
         self.jobs
             .try_send(Box::new(move |desktop| {
+                // The client is gone: a queued `set_value` or `invoke` must
+                // not run after it, and the release of held input waits
+                // behind nothing but the call already running.
+                if crate::desktop::stopping() {
+                    if job_state
+                        .compare_exchange(QUEUED, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok()
+                    {
+                        let _ = reply.send(Err(ToolError::Cancelled));
+                    }
+                    return;
+                }
                 let claimed = job_state
                     .compare_exchange(QUEUED, RUNNING, Ordering::SeqCst, Ordering::SeqCst)
                     .is_ok();
@@ -90,9 +102,9 @@ impl Worker {
                 let _ = reply.send(f(desktop));
             }))
             .map_err(|e| match e {
-                mpsc::TrySendError::Full(_) => ToolError::NotSupported(format!(
-                    "busy: {QUEUE} desktop calls are already waiting; retry once they finish"
-                )),
+                mpsc::TrySendError::Full(_) => {
+                    ToolError::Busy(format!("{QUEUE} desktop calls are already waiting"))
+                }
                 mpsc::TrySendError::Disconnected(_) => {
                     ToolError::platform("desktop thread", "it has stopped")
                 }
