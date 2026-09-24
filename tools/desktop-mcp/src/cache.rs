@@ -115,7 +115,7 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
     /// Resolves a handle issued by [`Self::insert`]. One issued and since
     /// evicted answers as gone, not as never issued.
     pub fn get(&self, handle: &str) -> ToolResult<&T> {
-        let n = parse_handle(handle)?;
+        let n = parse_handle(handle, HandleKind::Element)?;
         self.by_handle
             .get(&n)
             .map(|(_, value, _)| value)
@@ -148,21 +148,28 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
     }
 }
 
-fn parse_handle(handle: &str) -> ToolResult<u64> {
-    // An id is `e` and at most 20 digits; anything longer is not one, and is
-    // not echoed back in full.
+/// The number in a session handle of `kind` (`e12`, `w3`, `s2`).
+pub fn parse_handle(handle: &str, kind: HandleKind) -> ToolResult<u64> {
+    let (prefix, example) = match kind {
+        HandleKind::Element => ('e', "e12"),
+        HandleKind::Window => ('w', "w3"),
+        HandleKind::Screenshot => ('s', "s2"),
+        HandleKind::Process => ('p', "p1"),
+    };
+    // An id is the prefix and at most 20 digits; anything longer is not
+    // one, and is not echoed back in full.
     if handle.len() > 21 {
-        return Err(ToolError::InvalidArgument(
-            "that is not an element id; ids look like `e12`".into(),
-        ));
+        return Err(ToolError::InvalidArgument(format!(
+            "that is not a {kind} id; ids look like `{example}`"
+        )));
     }
     handle
         .trim()
-        .strip_prefix('e')
+        .strip_prefix(prefix)
         .and_then(|digits| digits.parse().ok())
         .ok_or_else(|| {
             ToolError::InvalidArgument(format!(
-                "`{handle}` is not an element id; ids look like `e12`"
+                "`{handle}` is not a {kind} id; ids look like `{example}`"
             ))
         })
 }

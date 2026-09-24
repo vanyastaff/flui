@@ -5,7 +5,7 @@ use std::fmt;
 use serde::Serialize;
 
 /// An axis-aligned rectangle in physical screen pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct Rect {
     /// Left edge.
     pub x: i32,

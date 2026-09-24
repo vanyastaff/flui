@@ -110,11 +110,14 @@ pub fn window_at(x: i32, y: i32) -> Option<super::Under> {
 pub fn focus(fg: u32) -> ToolResult<Focus> {
     // SAFETY: no arguments.
     let now = unsafe { GetForegroundWindow() };
+    let taken = || ToolError::NotForeground {
+        target: format!(
+            "the target (native window {fg}), which lost the foreground during the check"
+        ),
+        foreground: foreground_ref(),
+    };
     if id_and_pid(now).map(|(id, _)| id) != Some(fg) {
-        return Err(ToolError::NotForeground {
-            target: format!("window {fg}"),
-            foreground: "another window took the foreground during the check".into(),
-        });
+        return Err(taken());
     }
     // SAFETY: a window handle; a null pid pointer is allowed.
     let thread = unsafe { GetWindowThreadProcessId(now, None) };
@@ -129,13 +132,21 @@ pub fn focus(fg: u32) -> ToolResult<Focus> {
     // get the input, while the focus read describes the old one.
     // SAFETY: no arguments.
     if unsafe { GetForegroundWindow() } != now {
-        return Err(ToolError::NotForeground {
-            target: format!("window {fg}"),
-            foreground: "another window took the foreground during the check".into(),
-        });
+        return Err(taken());
     }
     // No focus window: keys reach the foreground window itself.
     Ok(id_and_pid(info.hwndFocus).map_or(Focus::Foreground, |(_, pid)| Focus::Pid(pid)))
+}
+
+/// The foreground window as an error names it: its process and title, with
+/// no session handle (the session, not the OS layer, issues those).
+pub fn foreground_ref() -> Option<crate::error::WindowRef> {
+    let (id, pid) = foreground()?;
+    Some(crate::error::WindowRef {
+        window: None,
+        pid,
+        title: window_title(id),
+    })
 }
 
 /// How long UI Automation waits for a provider to answer one call, and to

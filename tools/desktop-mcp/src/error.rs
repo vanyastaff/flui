@@ -19,6 +19,8 @@ pub enum HandleKind {
     Element,
     /// A window id (`w3`).
     Window,
+    /// A screenshot id (`s2`).
+    Screenshot,
     /// A pid this session handed out.
     Process,
 }
@@ -28,6 +30,7 @@ impl std::fmt::Display for HandleKind {
         f.write_str(match self {
             Self::Element => "element",
             Self::Window => "window",
+            Self::Screenshot => "screenshot",
             Self::Process => "process",
         })
     }
@@ -53,7 +56,7 @@ pub enum Effect {
     Ran,
     /// Not the action, but something else went out: modifiers tapped on
     /// their own, input held from an earlier call released now.
-    SideEffect,
+    Incidental,
 }
 
 impl Effect {
@@ -62,9 +65,38 @@ impl Effect {
             Self::Partial { .. } => "partial",
             Self::MayHaveRun => "may_have_run",
             Self::Ran => "ran",
-            Self::SideEffect => "side_effect",
+            Self::Incidental => "incidental",
         }
     }
+}
+
+/// A window named in an error: its session handle when this session issued
+/// one, and what the OS says about it either way.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct WindowRef {
+    /// The window's handle (`w3`), when this session has issued one for it.
+    pub window: Option<String>,
+    /// The owning process.
+    pub pid: u32,
+    /// The title, when readable.
+    pub title: Option<String>,
+}
+
+impl std::fmt::Display for WindowRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.window {
+            Some(w) => write!(f, "window {w} of process {}", self.pid)?,
+            None => write!(f, "an unlisted window of process {}", self.pid)?,
+        }
+        if let Some(t) = &self.title {
+            write!(f, " {t:?}")?;
+        }
+        Ok(())
+    }
+}
+
+fn window_or_none(w: Option<&WindowRef>) -> String {
+    w.map_or_else(|| "none".to_owned(), ToString::to_string)
 }
 
 /// Whether the same call can succeed later with nothing changed on the
@@ -147,13 +179,14 @@ pub enum ToolError {
 
     /// Input was refused because the target window is not in front.
     #[error(
-        "refused: the target {target} is not the foreground window (foreground: {foreground}); call activate_window first"
+        "refused: the target {target} is not the foreground window (foreground: {}); call activate_window first",
+        window_or_none(foreground.as_ref())
     )]
     NotForeground {
         /// The window the caller wanted the input to reach.
         target: String,
-        /// The window that would actually have received it.
-        foreground: String,
+        /// The window that would actually have received it, if any.
+        foreground: Option<WindowRef>,
     },
 
     /// The target is in front, but keyboard focus inside it is in another
@@ -172,12 +205,14 @@ pub enum ToolError {
     /// A coordinate input would not land on the target.
     #[error("refused: point ({x}, {y}) is not on the target: {reason}; nothing was sent there")]
     OutsideTarget {
-        /// Point x in physical screen pixels.
+        /// Point x in screen coordinates.
         x: i32,
-        /// Point y in physical screen pixels.
+        /// Point y in screen coordinates.
         y: i32,
         /// What is there instead.
         reason: String,
+        /// The window covering the point, when one does.
+        covered_by: Option<WindowRef>,
     },
 
     /// A wait ran out before the condition held.
@@ -240,7 +275,8 @@ impl HandleKind {
             Self::Element => {
                 "element ids come from accessibility_tree, find or wait_for in this session"
             }
-            Self::Window => "window ids come from list_windows or launch in this session",
+            Self::Window => "window ids come from list_windows or wait_for_window in this session",
+            Self::Screenshot => "screenshot ids come from screenshot in this session",
             Self::Process => "pids come from list_windows or launch in this session",
         }
     }
@@ -250,6 +286,7 @@ impl HandleKind {
         match self {
             Self::Element => "read the tree again for a fresh id",
             Self::Window => "list windows again for a fresh id",
+            Self::Screenshot => "take a new screenshot",
             Self::Process => {
                 "list windows again, or launch again, for the process that is there now"
             }
@@ -387,7 +424,12 @@ impl ToolError {
             Self::FocusElsewhere { target, holder } => {
                 json!({ "target": target, "holder": holder })
             }
-            Self::OutsideTarget { x, y, reason } => json!({ "x": x, "y": y, "reason": reason }),
+            Self::OutsideTarget {
+                x,
+                y,
+                reason,
+                covered_by,
+            } => json!({ "x": x, "y": y, "reason": reason, "covered_by": covered_by }),
             Self::Timeout {
                 timeout_ms,
                 what,
@@ -414,14 +456,20 @@ mod tests {
     fn codes_are_fixed_and_effects_are_data() {
         let err = ToolError::NotForeground {
             target: "window w3".into(),
-            foreground: "window w9".into(),
+            foreground: Some(WindowRef {
+                window: Some("w9".into()),
+                pid: 42,
+                title: Some("Other".into()),
+            }),
         };
         assert_eq!(err.code(), "not_foreground");
         assert_eq!(err.retry(), Retry::Never);
         let payload = err.payload();
         assert_eq!(payload["error"]["code"], "not_foreground");
         assert_eq!(payload["error"]["retry"], "never");
-        assert_eq!(payload["error"]["foreground"], "window w9");
+        assert_eq!(payload["error"]["foreground"]["window"], "w9");
+        assert_eq!(payload["error"]["foreground"]["pid"], 42);
+        assert!(err.to_string().contains("window w9 of process 42"), "{err}");
         assert!(payload["error"].get("effect").is_none());
 
         let partial = err.after(

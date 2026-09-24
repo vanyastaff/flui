@@ -18,35 +18,61 @@ use std::time::Instant;
 
 use uiautomation::core::UICacheRequest;
 use uiautomation::patterns::{
-    UIInvokePattern, UIRangeValuePattern, UISelectionItemPattern, UITogglePattern, UIValuePattern,
+    UIExpandCollapsePattern, UIInvokePattern, UIRangeValuePattern, UIScrollItemPattern,
+    UISelectionItemPattern, UITogglePattern, UIValuePattern,
 };
-use uiautomation::types::{Handle, ToggleState, TreeScope, UIProperty};
+use uiautomation::types::{
+    ControlType, ExpandCollapseState, Handle, ToggleState, TreeScope, UIProperty,
+};
 use uiautomation::{UIAutomation, UIElement, UITreeWalker};
 
-use super::{AccessibilityBackend, Action, ClickPoint, Node, Read};
+use super::{AccessibilityBackend, Action, ActionName, Checked, ClickPoint, Node, Read, Role};
 use crate::cache::ElementCache;
 use crate::error::{Effect, ToolError, ToolResult};
 use crate::geometry::Rect;
 
-/// Pattern-availability properties, and the names the tools report.
-const PATTERNS: &[(UIProperty, &str)] = &[
-    (UIProperty::IsInvokePatternAvailable, "Invoke"),
-    (UIProperty::IsTogglePatternAvailable, "Toggle"),
-    (UIProperty::IsValuePatternAvailable, "Value"),
-    (UIProperty::IsRangeValuePatternAvailable, "RangeValue"),
-    (UIProperty::IsSelectionItemPatternAvailable, "SelectionItem"),
-    (UIProperty::IsSelectionPatternAvailable, "Selection"),
+/// The pattern-availability properties the actions depend on, each with
+/// the action(s) it makes available. `set_value` needs either of two
+/// patterns; `expand` and `collapse` share one, and the element's state says
+/// which of them applies.
+const PATTERNS: &[(UIProperty, &[ActionName])] = &[
+    (UIProperty::IsInvokePatternAvailable, &[ActionName::Invoke]),
+    (UIProperty::IsTogglePatternAvailable, &[ActionName::Toggle]),
+    (UIProperty::IsValuePatternAvailable, &[ActionName::SetValue]),
+    (
+        UIProperty::IsRangeValuePatternAvailable,
+        &[ActionName::SetValue],
+    ),
+    (
+        UIProperty::IsSelectionItemPatternAvailable,
+        &[ActionName::Select],
+    ),
     (
         UIProperty::IsExpandCollapsePatternAvailable,
-        "ExpandCollapse",
+        &[ActionName::Expand, ActionName::Collapse],
     ),
-    (UIProperty::IsScrollPatternAvailable, "Scroll"),
-    (UIProperty::IsScrollItemPatternAvailable, "ScrollItem"),
-    (UIProperty::IsTextPatternAvailable, "Text"),
-    (UIProperty::IsGridPatternAvailable, "Grid"),
-    (UIProperty::IsTablePatternAvailable, "Table"),
-    (UIProperty::IsWindowPatternAvailable, "Window"),
+    (
+        UIProperty::IsScrollItemPatternAvailable,
+        &[ActionName::ScrollIntoView],
+    ),
 ];
+
+/// The property that says whether `action` is available, and the pattern
+/// name UI Automation gives it.
+fn pattern_of(action: ActionName) -> (UIProperty, &'static str) {
+    match action {
+        ActionName::Invoke => (UIProperty::IsInvokePatternAvailable, "Invoke"),
+        ActionName::Toggle => (UIProperty::IsTogglePatternAvailable, "Toggle"),
+        ActionName::SetValue => (UIProperty::IsValuePatternAvailable, "Value"),
+        ActionName::Select => (UIProperty::IsSelectionItemPatternAvailable, "SelectionItem"),
+        ActionName::Focus => (UIProperty::IsKeyboardFocusable, "keyboard focus"),
+        ActionName::Expand | ActionName::Collapse => (
+            UIProperty::IsExpandCollapsePatternAvailable,
+            "ExpandCollapse",
+        ),
+        ActionName::ScrollIntoView => (UIProperty::IsScrollItemPatternAvailable, "ScrollItem"),
+    }
+}
 
 /// How many elements one read (`accessibility_tree`, `find`, a `wait_for`
 /// poll) fetches at most, across all the windows it reads; counting a node's
@@ -90,6 +116,8 @@ const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::IsKeyboardFocusable,
     UIProperty::RangeValueValue,
     UIProperty::ToggleToggleState,
+    UIProperty::ExpandCollapseExpandCollapseState,
+    UIProperty::SelectionItemIsSelected,
     UIProperty::ProcessId,
     UIProperty::IsPassword,
 ];
@@ -393,7 +421,8 @@ impl Uia {
                     .ok()
                     .filter(|&h| h != 0)
             };
-            let held_native = if role(element) == "Window" {
+            let held_native = if element.get_cached_control_type().ok() == Some(ControlType::Window)
+            {
                 self.elements
                     .by_identity(&key)
                     .and_then(|held| native(&held.element))
@@ -419,7 +448,7 @@ impl Uia {
         walk.seen.insert(id.clone());
         let mut node = describe(element, id);
         // One more call for a text control's value, charged like any other.
-        if node.patterns.contains(&"Value") {
+        if node.has_text_value {
             if walk.budget == 0 || Instant::now() >= walk.deadline {
                 walk.truncated = true;
             } else {
@@ -522,7 +551,7 @@ impl Uia {
     /// than counting as "not a password": a value is fetched only when the
     /// element surely is no password field.
     fn read_value(&self, element: &UIElement, node: &mut Node) -> bool {
-        if !node.patterns.contains(&"Value") {
+        if !node.has_text_value {
             return true;
         }
         match cached_flag(element, UIProperty::IsPassword) {
@@ -619,8 +648,8 @@ impl Uia {
         // The same rule as before the action: an element read back must be
         // the one acted on, in the same process.
         let same = held.same_as(fresh, crate::os::process_started(held.pid)) == Some(true);
-        let range_unread = node.patterns.contains(&"RangeValue")
-            && !node.patterns.contains(&"Value")
+        let range_unread = !node.has_text_value
+            && cached_bool(fresh, UIProperty::IsRangeValuePatternAvailable)
             && node.value.is_none();
         if !same {
             return Err(ToolError::platform(
@@ -644,7 +673,7 @@ impl Uia {
         if !self.read_value(fresh, node)
             || node.unmatchable
             || range_unread
-            || (toggled && node.toggle_state.is_none())
+            || (toggled && node.checked.is_none())
         {
             return Err(ToolError::platform(
                 "reading back",
@@ -689,7 +718,7 @@ impl Uia {
                         .after(Effect::MayHaveRun, REQUESTED)
                 })
             };
-            if node.has_keyboard_focus {
+            if node.focused {
                 if let Some(e) = late() {
                     return Err(e);
                 }
@@ -735,38 +764,46 @@ impl Uia {
         )))
     }
 
-    /// The element's patterns, read live, for error messages: the ones it
+    /// The element's actions, read live, for error messages: the ones it
     /// offers, and the ones whose availability could not be read. Stopped
     /// after [`ANCESTOR_DEADLINE`] in all, since each read can take a
     /// provider's whole call timeout; the rest then count as unread.
-    fn live_patterns(element: &UIElement) -> (Vec<&'static str>, Vec<&'static str>) {
+    fn live_actions(element: &UIElement) -> (Vec<&'static str>, Vec<&'static str>) {
         let until = Instant::now() + ANCESTOR_DEADLINE;
         let mut names = Vec::new();
         let mut unread = Vec::new();
-        for &(prop, name) in PATTERNS {
+        let mut note = |actions: &[ActionName], available: Option<bool>| {
+            for action in actions {
+                let list = match available {
+                    Some(true) => &mut names,
+                    Some(false) => continue,
+                    None => &mut unread,
+                };
+                if !list.contains(&action.name()) {
+                    list.push(action.name());
+                }
+            }
+        };
+        for &(prop, actions) in PATTERNS {
             if Instant::now() >= until {
-                unread.push(name);
+                note(actions, None);
                 continue;
             }
-            match element
+            let available = element
                 .get_property_value(prop)
                 .ok()
                 .and_then(|v| of_type(v, VT_BOOL))
-                .and_then(|v| TryInto::<bool>::try_into(v).ok())
-            {
-                Some(true) => names.push(name),
-                Some(false) => {}
-                None => unread.push(name),
-            }
+                .and_then(|v| TryInto::<bool>::try_into(v).ok());
+            note(actions, available);
         }
         (names, unread)
     }
 
-    fn unsupported(handle: &str, element: &UIElement, action: &'static str) -> ToolError {
-        let (supported, unread) = Self::live_patterns(element);
+    fn unsupported(handle: &str, element: &UIElement, action: ActionName) -> ToolError {
+        let (supported, unread) = Self::live_actions(element);
         ToolError::ActionUnsupported {
             element: handle.to_owned(),
-            action,
+            action: action.name(),
             supported,
             unread,
         }
@@ -792,16 +829,12 @@ impl Uia {
             })
     }
 
-    fn require(
-        handle: &str,
-        element: &UIElement,
-        prop: UIProperty,
-        pattern: &'static str,
-    ) -> ToolResult<()> {
-        if Self::has_pattern(handle, element, prop)? {
+    /// Refuses `action` unless its pattern is available, read live.
+    fn require(handle: &str, element: &UIElement, action: ActionName) -> ToolResult<()> {
+        if Self::has_pattern(handle, element, pattern_of(action).0)? {
             Ok(())
         } else {
-            Err(Self::unsupported(handle, element, pattern))
+            Err(Self::unsupported(handle, element, action))
         }
     }
 
@@ -834,12 +867,7 @@ impl Uia {
         };
         match action {
             Action::Invoke => {
-                Self::require(
-                    handle,
-                    element,
-                    UIProperty::IsInvokePatternAvailable,
-                    "Invoke",
-                )?;
+                Self::require(handle, element, ActionName::Invoke)?;
                 element
                     .get_pattern::<UIInvokePattern>()
                     .map_err(lookup("invoke"))?
@@ -847,17 +875,36 @@ impl Uia {
                     .map_err(fail("invoke"))
             }
             Action::Toggle => {
-                Self::require(
-                    handle,
-                    element,
-                    UIProperty::IsTogglePatternAvailable,
-                    "Toggle",
-                )?;
+                Self::require(handle, element, ActionName::Toggle)?;
                 element
                     .get_pattern::<UITogglePattern>()
                     .map_err(lookup("toggle"))?
                     .toggle()
                     .map_err(fail("toggle"))
+            }
+            Action::Expand | Action::Collapse => {
+                let (name, action) = if matches!(action, Action::Expand) {
+                    ("expand", ActionName::Expand)
+                } else {
+                    ("collapse", ActionName::Collapse)
+                };
+                Self::require(handle, element, action)?;
+                let pattern = element
+                    .get_pattern::<UIExpandCollapsePattern>()
+                    .map_err(lookup(name))?;
+                if action == ActionName::Expand {
+                    pattern.expand().map_err(fail(name))
+                } else {
+                    pattern.collapse().map_err(fail(name))
+                }
+            }
+            Action::ScrollIntoView => {
+                Self::require(handle, element, ActionName::ScrollIntoView)?;
+                element
+                    .get_pattern::<UIScrollItemPattern>()
+                    .map_err(lookup("scroll_into_view"))?
+                    .scroll_into_view()
+                    .map_err(fail("scroll_into_view"))
             }
             Action::SetValue(value) => {
                 if Self::has_pattern(handle, element, UIProperty::IsValuePatternAvailable)? {
@@ -888,16 +935,11 @@ impl Uia {
                         .set_value(number)
                         .map_err(fail("set_value"));
                 }
-                Err(Self::unsupported(handle, element, "Value (or RangeValue)"))
+                Err(Self::unsupported(handle, element, ActionName::SetValue))
             }
             Action::Focus => element.set_focus().map_err(fail("focus")),
             Action::Select => {
-                Self::require(
-                    handle,
-                    element,
-                    UIProperty::IsSelectionItemPatternAvailable,
-                    "SelectionItem",
-                )?;
+                Self::require(handle, element, ActionName::Select)?;
                 element
                     .get_pattern::<UISelectionItemPattern>()
                     .map_err(lookup("select"))?
@@ -913,7 +955,13 @@ impl AccessibilityBackend for Uia {
         Ok(())
     }
 
-    fn tree(&mut self, windows: &[u32], max_depth: usize, deadline: Instant) -> ToolResult<Read> {
+    fn tree(
+        &mut self,
+        windows: &[u32],
+        max_depth: usize,
+        max_nodes: usize,
+        deadline: Instant,
+    ) -> ToolResult<Read> {
         self.starts.clear();
         let mut roots = Vec::with_capacity(windows.len());
         let mut walk = Walk {
@@ -924,7 +972,7 @@ impl AccessibilityBackend for Uia {
             seen: HashSet::new(),
             truncated: false,
         };
-        let mut spare = NODE_BUDGET;
+        let mut spare = max_nodes.clamp(1, NODE_BUDGET);
         let mut failed = None;
         for (read, &window) in windows.iter().enumerate() {
             if spare == 0 || walk.bytes == 0 || Instant::now() >= deadline {
@@ -966,7 +1014,10 @@ impl AccessibilityBackend for Uia {
                     continue;
                 }
             };
-            roots.extend(self.build(&root, 0, &mut walk));
+            if let Some(mut node) = self.build(&root, 0, &mut walk) {
+                node.native_window = Some(window);
+                roots.push(node);
+            }
             spare = spare.saturating_sub(share - walk.budget);
         }
         if roots.is_empty() {
@@ -981,6 +1032,41 @@ impl AccessibilityBackend for Uia {
                     "the target's windows closed while they were being read".into(),
                 ));
             }
+        }
+        Ok(Read {
+            roots,
+            truncated: walk.truncated,
+        })
+    }
+
+    fn subtree(
+        &mut self,
+        element: &str,
+        max_depth: usize,
+        max_nodes: usize,
+        deadline: Instant,
+    ) -> ToolResult<Read> {
+        self.starts.clear();
+        let root = self.alive(element)?;
+        // Read fresh: the held object's cache is from the read that issued
+        // it, and a subtree read is asked for because things have changed.
+        let root = root
+            .build_updated_cache(&self.single)
+            .map_err(|e| classify(element, "re-reading it", &e, cached_pid(&root)))?;
+        let mut walk = Walk {
+            max_depth,
+            budget: max_nodes.clamp(1, NODE_BUDGET),
+            bytes: READ_BYTES,
+            deadline,
+            seen: HashSet::new(),
+            truncated: false,
+        };
+        let roots: Vec<Node> = self.build(&root, 0, &mut walk).into_iter().collect();
+        if roots.is_empty() && !walk.truncated {
+            return Err(ToolError::gone_element(
+                element,
+                "it could not be read as a root any more",
+            ));
         }
         Ok(Read {
             roots,
@@ -1022,7 +1108,9 @@ impl AccessibilityBackend for Uia {
                 Ok(Node {
                     gone: true,
                     value: None,
-                    toggle_state: None,
+                    checked: None,
+                    expanded: None,
+                    selected: None,
                     ..describe(&element, handle.to_owned())
                 })
             }
@@ -1087,29 +1175,62 @@ impl AccessibilityBackend for Uia {
 /// A [`Node`] from `element`'s cached properties under handle `id`,
 /// children empty.
 fn describe(element: &UIElement, id: String) -> Node {
-    let patterns: Vec<&'static str> = PATTERNS
-        .iter()
-        .filter(|(prop, _)| cached_bool(element, *prop))
-        .map(|&(_, name)| name)
-        .collect();
+    let offered = |prop| cached_bool(element, prop);
+    let has_text_value = offered(UIProperty::IsValuePatternAvailable);
+    let has_range = offered(UIProperty::IsRangeValuePatternAvailable);
     // A text control's value, or a slider's number when it exposes only
     // RangeValue — what `set_value` writes, so a caller can read it back.
     // A text control's value is read apart ([`Uia::read_value`]); a
     // slider's number is small and comes with the walk.
-    let value = if patterns.contains(&"Value") {
+    let value = if has_text_value {
         None
-    } else if patterns.contains(&"RangeValue") {
+    } else if has_range {
         cached_f64(element, UIProperty::RangeValueValue).map(|number| number.to_string())
     } else {
         None
     };
-    let toggle_state = patterns
-        .contains(&"Toggle")
-        .then(|| cached_i32(element, UIProperty::ToggleToggleState).and_then(toggle_name))
+    let checked = offered(UIProperty::IsTogglePatternAvailable)
+        .then(|| cached_i32(element, UIProperty::ToggleToggleState).and_then(checked_state))
         .flatten();
+    let expanded = offered(UIProperty::IsExpandCollapsePatternAvailable)
+        .then(|| cached_i32(element, UIProperty::ExpandCollapseExpandCollapseState))
+        .flatten()
+        .and_then(expanded_state);
+    let selected = offered(UIProperty::IsSelectionItemPatternAvailable)
+        .then(|| cached_flag(element, UIProperty::SelectionItemIsSelected))
+        .flatten();
+    let focusable = cached_bool(element, UIProperty::IsKeyboardFocusable);
+    let mut actions = Vec::new();
+    for &(prop, offers) in PATTERNS {
+        if !offered(prop) {
+            continue;
+        }
+        for &action in offers {
+            // Which of expand and collapse applies is the element's state;
+            // an element that is neither (a leaf) offers none.
+            let applies = match action {
+                ActionName::Expand => expanded == Some(false),
+                ActionName::Collapse => expanded == Some(true),
+                _ => true,
+            };
+            if applies && !actions.contains(&action) {
+                actions.push(action);
+            }
+        }
+    }
+    if focusable {
+        actions.push(ActionName::Focus);
+    }
+    let (role, native_role) = role(element);
+    let role = if role == Role::TextInput && cached_bool(element, UIProperty::IsPassword) {
+        Role::PasswordInput
+    } else {
+        role
+    };
     Node {
         id,
-        role: role(element),
+        role,
+        native_role,
         name: non_empty(cached_str(element, UIProperty::Name)),
         value,
         automation_id: non_empty(cached_str(element, UIProperty::AutomationId)),
@@ -1118,26 +1239,94 @@ fn describe(element: &UIElement, id: String) -> Node {
             .get_cached_bounding_rectangle()
             .ok()
             .map(|r| Rect::from_ltrb(r.get_left(), r.get_top(), r.get_right(), r.get_bottom())),
-        enabled: cached_bool(element, UIProperty::IsEnabled),
-        has_keyboard_focus: cached_bool(element, UIProperty::HasKeyboardFocus),
-        is_keyboard_focusable: cached_bool(element, UIProperty::IsKeyboardFocusable),
-        toggle_state,
-        patterns,
+        disabled: !cached_bool(element, UIProperty::IsEnabled),
+        focused: cached_bool(element, UIProperty::HasKeyboardFocus),
+        focusable,
+        checked,
+        expanded,
+        selected,
+        actions,
+        window: None,
         children: Vec::new(),
         omitted_children: None,
         gone: false,
         unmatchable: !searchable(element),
+        has_text_value,
+        native_window: None,
     }
 }
 
-/// The element's control type, as `find`'s `role` matches it: the UIA name
-/// (`Button`), or `Custom(<id>)` for an id the `uiautomation` crate does
-/// not name, rather than a failure that would hide the element from search.
-fn role(element: &UIElement) -> String {
+/// The element's role in the tools' vocabulary, and the UI Automation
+/// control type name (`Button`, or `Custom(<id>)` for an id the
+/// `uiautomation` crate does not name, rather than a failure that would
+/// hide the element from search).
+fn role(element: &UIElement) -> (Role, String) {
     match element.get_cached_control_type() {
-        Ok(known) => format!("{known:?}"),
-        Err(_) => cached_i32(element, UIProperty::ControlType)
-            .map_or_else(|| "Unknown".to_owned(), |id| format!("Custom({id})")),
+        Ok(known) => (role_of(known), format!("{known:?}")),
+        Err(_) => (
+            Role::Unknown,
+            cached_i32(element, UIProperty::ControlType)
+                .map_or_else(|| "Unknown".to_owned(), |id| format!("Custom({id})")),
+        ),
+    }
+}
+
+/// UI Automation's control types in the tools' vocabulary. What has no
+/// counterpart there is `Unknown`, with the native name still reported.
+fn role_of(control: ControlType) -> Role {
+    match control {
+        ControlType::Button | ControlType::SplitButton => Role::Button,
+        ControlType::CheckBox => Role::CheckBox,
+        ControlType::RadioButton => Role::RadioButton,
+        ControlType::ComboBox => Role::ComboBox,
+        ControlType::Edit => Role::TextInput,
+        ControlType::Hyperlink => Role::Link,
+        ControlType::Image => Role::Image,
+        ControlType::Text => Role::Label,
+        ControlType::List => Role::List,
+        ControlType::ListItem => Role::ListItem,
+        ControlType::Menu => Role::Menu,
+        ControlType::MenuBar => Role::MenuBar,
+        ControlType::MenuItem => Role::MenuItem,
+        ControlType::ProgressBar => Role::ProgressIndicator,
+        ControlType::ScrollBar => Role::ScrollBar,
+        ControlType::Slider => Role::Slider,
+        ControlType::Spinner => Role::SpinButton,
+        ControlType::StatusBar => Role::Status,
+        ControlType::Tab => Role::TabList,
+        ControlType::TabItem => Role::Tab,
+        ControlType::ToolBar | ControlType::AppBar => Role::Toolbar,
+        ControlType::ToolTip => Role::Tooltip,
+        ControlType::Tree => Role::Tree,
+        ControlType::TreeItem => Role::TreeItem,
+        ControlType::Group | ControlType::Header => Role::Group,
+        ControlType::DataGrid => Role::Grid,
+        ControlType::DataItem => Role::Row,
+        ControlType::HeaderItem => Role::ColumnHeader,
+        ControlType::Table => Role::Table,
+        ControlType::Document => Role::Document,
+        ControlType::Window => Role::Window,
+        ControlType::Pane => Role::Pane,
+        ControlType::TitleBar => Role::TitleBar,
+        ControlType::Separator => Role::Splitter,
+        ControlType::Calendar
+        | ControlType::Custom
+        | ControlType::Thumb
+        | ControlType::SemanticZoom => Role::Unknown,
+    }
+}
+
+/// An expand/collapse state as a flag; a leaf (nothing to expand) is
+/// neither, and an unreadable state is not "collapsed".
+fn expanded_state(state: i32) -> Option<bool> {
+    match state {
+        s if s == ExpandCollapseState::Expanded as i32 => Some(true),
+        s if s == ExpandCollapseState::Collapsed as i32
+            || s == ExpandCollapseState::PartiallyExpanded as i32 =>
+        {
+            Some(false)
+        }
+        _ => None,
     }
 }
 
@@ -1166,8 +1355,13 @@ fn searchable(element: &UIElement) -> bool {
             .all(|&(prop, _)| cached_flag(element, prop).is_some())
         && (!offered(UIProperty::IsTogglePatternAvailable)
             || cached_i32(element, UIProperty::ToggleToggleState)
-                .and_then(toggle_name)
+                .and_then(checked_state)
                 .is_some())
+        && (!offered(UIProperty::IsExpandCollapsePatternAvailable)
+            || cached_i32(element, UIProperty::ExpandCollapseExpandCollapseState)
+                .is_some_and(|s| (0..=3).contains(&s)))
+        && (!offered(UIProperty::IsSelectionItemPatternAvailable)
+            || cached_flag(element, UIProperty::SelectionItemIsSelected).is_some())
         && (!offered(UIProperty::IsRangeValuePatternAvailable)
             || cached_f64(element, UIProperty::RangeValueValue).is_some())
 }
@@ -1326,12 +1520,12 @@ fn clip(s: String) -> String {
 }
 
 /// `None` for a value that is no toggle state: an unreadable state, not
-/// "indeterminate".
-fn toggle_name(state: i32) -> Option<&'static str> {
+/// "mixed".
+fn checked_state(state: i32) -> Option<Checked> {
     match state {
-        s if s == ToggleState::On as i32 => Some("on"),
-        s if s == ToggleState::Off as i32 => Some("off"),
-        s if s == ToggleState::Indeterminate as i32 => Some("indeterminate"),
+        s if s == ToggleState::On as i32 => Some(Checked::True),
+        s if s == ToggleState::Off as i32 => Some(Checked::False),
+        s if s == ToggleState::Indeterminate as i32 => Some(Checked::Mixed),
         _ => None,
     }
 }
@@ -1400,13 +1594,18 @@ mod tests {
     /// unreadable, not "indeterminate".
     #[test]
     fn only_real_toggle_states_are_named() {
-        assert_eq!(toggle_name(ToggleState::On as i32), Some("on"));
-        assert_eq!(toggle_name(ToggleState::Off as i32), Some("off"));
+        assert_eq!(checked_state(ToggleState::On as i32), Some(Checked::True));
+        assert_eq!(checked_state(ToggleState::Off as i32), Some(Checked::False));
         assert_eq!(
-            toggle_name(ToggleState::Indeterminate as i32),
-            Some("indeterminate")
+            checked_state(ToggleState::Indeterminate as i32),
+            Some(Checked::Mixed)
         );
-        assert_eq!(toggle_name(99), None);
+        assert_eq!(checked_state(99), None);
+        assert_eq!(expanded_state(ExpandCollapseState::LeafNode as i32), None);
+        assert_eq!(
+            expanded_state(ExpandCollapseState::PartiallyExpanded as i32),
+            Some(false)
+        );
     }
 
     /// A clipped string keeps no provider-sized buffer behind it.

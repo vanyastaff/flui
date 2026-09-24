@@ -11,10 +11,10 @@ use serde::Serialize;
 use crate::error::{ToolError, ToolResult};
 use crate::geometry::Rect;
 
-/// A top-level window as `list_windows` reports it.
-#[derive(Debug, Clone, Serialize)]
-pub struct WindowInfo {
-    /// Window id (the `HWND` on Windows); pass as `window_id`.
+/// A top-level window as the OS lists it, before the session names it.
+#[derive(Debug, Clone)]
+pub struct NativeWindow {
+    /// The OS's id (the `HWND` on Windows).
     pub id: u32,
     /// Owning process.
     pub pid: u32,
@@ -22,15 +22,45 @@ pub struct WindowInfo {
     pub app_name: String,
     /// Title bar text.
     pub title: String,
-    /// Bounds in physical screen pixels.
+    /// Bounds in screen coordinates.
     pub rect: Rect,
     /// Whether it is minimized.
     pub is_minimized: bool,
     /// Whether it is the foreground window.
     pub is_focused: bool,
-    /// Set when this session cannot target the window, and why.
+}
+
+/// Why a listed window cannot be a target in this session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Untargetable {
+    /// The OS reports no start time for its process, so a later process
+    /// under the same pid could not be told from it.
+    UnidentifiedProcess,
+}
+
+/// A top-level window as `list_windows` reports it.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct Window {
+    /// Session handle (`"w3"`); pass as `window`.
+    pub id: String,
+    /// Owning process; pass as `pid`.
+    pub pid: u32,
+    /// Application name.
+    pub app_name: String,
+    /// Title bar text.
+    pub title: String,
+    /// Bounds in screen coordinates.
+    pub rect: Rect,
+    /// Whether it is minimized.
+    pub is_minimized: bool,
+    /// Whether it is the foreground window.
+    pub is_focused: bool,
+    /// Whether this session accepts it (and its pid) as a safety target.
+    pub targetable: bool,
+    /// Why not, when not.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub not_targetable: Option<String>,
+    pub untargetable_reason: Option<Untargetable>,
 }
 
 /// A captured image, PNG-encoded.
@@ -69,11 +99,11 @@ mod backend {
     use xcap::{Monitor, Window};
 
     use super::{
-        Rect, Shot, ShotTarget, ToolError, ToolResult, WindowInfo, encode, within_pixel_limit,
+        NativeWindow, Rect, Shot, ShotTarget, ToolError, ToolResult, encode, within_pixel_limit,
     };
 
-    fn describe(w: &Window) -> Option<WindowInfo> {
-        Some(WindowInfo {
+    fn describe(w: &Window) -> Option<NativeWindow> {
+        Some(NativeWindow {
             id: w.id().ok()?,
             pid: w.pid().ok()?,
             app_name: w.app_name().unwrap_or_default(),
@@ -86,12 +116,11 @@ mod backend {
             },
             is_minimized: w.is_minimized().unwrap_or(false),
             is_focused: w.is_focused().unwrap_or(false),
-            not_targetable: None,
         })
     }
 
     /// Every top-level window xcap can see, front to back.
-    pub fn windows() -> ToolResult<Vec<WindowInfo>> {
+    pub fn windows() -> ToolResult<Vec<NativeWindow>> {
         let all = Window::all().map_err(|e| ToolError::platform("listing windows", e))?;
         Ok(all.iter().filter_map(describe).collect())
     }
@@ -206,7 +235,7 @@ mod backend {
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod backend {
-    use super::{Shot, ShotTarget, ToolError, ToolResult, WindowInfo};
+    use super::{NativeWindow, Shot, ShotTarget, ToolError, ToolResult};
 
     pub(super) fn unsupported() -> ToolError {
         ToolError::NotSupported(format!(
@@ -215,7 +244,7 @@ mod backend {
         ))
     }
 
-    pub fn windows() -> ToolResult<Vec<WindowInfo>> {
+    pub fn windows() -> ToolResult<Vec<NativeWindow>> {
         Err(unsupported())
     }
 

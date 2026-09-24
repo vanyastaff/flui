@@ -115,7 +115,7 @@ impl Input {
             ))
         });
         Err(cause.after(
-            Effect::SideEffect,
+            Effect::Incidental,
             format!(
                 "{} went to wherever the pointer and focus are now and may have dropped, clicked or opened a menu there; nothing of this call was sent, so look, then retry",
                 released.join(", ")
@@ -720,7 +720,7 @@ impl Input {
                 Ok(()) => ToolError::platform("masking released modifiers", &what),
                 Err(cause) => cause,
             }
-            .after(Effect::SideEffect, what));
+            .after(Effect::Incidental, what));
         }
         // Every release is tried; one that fails is reported even when an
         // earlier failure is the cause, since a modifier left down changes
@@ -739,7 +739,7 @@ impl Input {
                 Ok(()) => ToolError::platform("releasing a modifier", &what),
                 Err(cause) => cause,
             }
-            .after(Effect::SideEffect, what));
+            .after(Effect::Incidental, what));
         }
         // Stopped with modifiers already down: they reached the target and
         // came back up (masked), which the caller is told rather than
@@ -749,7 +749,7 @@ impl Input {
             && let Err(cause) = result
         {
             result = Err(cause.after(
-                Effect::SideEffect,
+                Effect::Incidental,
                 format!(
                     "{went_down:?} went down and were released again without the key; nothing else was sent"
                 ),
@@ -841,9 +841,11 @@ fn owner_changed(owner: LayoutOwner) -> Option<ToolError> {
         ))
     } else {
         Some(ToolError::NotForeground {
-            target: format!("window {}", owner.foreground),
-            foreground: "the foreground or its focused control changed while the key was chosen"
-                .into(),
+            target: format!(
+                "the target (native window {}), whose foreground or focused control changed while the key was chosen",
+                owner.foreground
+            ),
+            foreground: crate::os::foreground_ref(),
         })
     }
 }

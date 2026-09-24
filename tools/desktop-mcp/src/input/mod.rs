@@ -82,11 +82,8 @@ pub fn drag_path(
     to: (i32, i32),
     duration: std::time::Duration,
 ) -> Vec<(i32, i32)> {
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "clamped to at most 200 before the cast"
-    )]
-    let steps = (duration.as_millis() / STEP.as_millis()).clamp(2, 200) as i32;
+    let steps = i32::try_from((duration.as_millis() / STEP.as_millis()).clamp(2, 200))
+        .expect("BUG: at most 200 steps");
     (1..=steps)
         .map(|i| (lerp(from.0, to.0, i, steps), lerp(from.1, to.1, i, steps)))
         .collect()

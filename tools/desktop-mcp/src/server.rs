@@ -1,6 +1,13 @@
 //! The MCP surface: one `#[tool]` per operation, each validating its
 //! arguments and handing the work to the desktop thread.
 //!
+//! Every reply is a typed value with a published output schema, sent as
+//! structured content and, for clients that show only text, as the same
+//! JSON in a text block; `screenshot` alone sends an image and text and no
+//! structured content, since clients that receive structured content drop
+//! the rest. A failure is a tool error whose structured content carries
+//! the code, retry policy and effect ([`ToolError::payload`]).
+//!
 //! Every tool takes the request's cancellation (rmcp hands it over as a
 //! `CancellationToken`): a call cancelled while it waits for the desktop
 //! thread or the process pool never runs, and a waiting loop stops.
@@ -11,29 +18,36 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
+use rmcp::model::{
+    CallToolResult, ContentBlock, Implementation, JsonObject, ServerCapabilities, ServerConfig,
+};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
+use schemars::JsonSchema;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use crate::a11y::{self, Action};
-use crate::error::{ToolError, ToolResult};
+use crate::a11y::{self, Action, Node};
+use crate::capture::Window;
+use crate::desktop::Activated;
+use crate::error::{Retry, ToolError, ToolResult};
 use crate::params::{
-    ActivateParams, Args, ClickParams, DragParams, ElementParams, FindParams, KeyParams,
-    KillParams, LaunchParams, ListWindowsParams, MoveMouseParams, ScreenshotParams, ScrollParams,
-    SetValueParams, Target, TreeParams, TypeTextParams, WaitForParams, required_target,
+    ActivateParams, Args, ButtonArg, ClickParams, DragParams, ElementParams, FindParams, Format,
+    KeyParams, KillParams, LaunchParams, ListWindowsParams, MoveMouseParams, Scope,
+    ScreenshotParams, ScrollParams, SetValueParams, TargetArg, TreeParams, TypeTextParams,
+    WaitForParams, WaitForWindowParams,
 };
 use crate::process::{Children, LaunchSpec};
 use crate::worker::Worker;
 
-/// How often `wait_for` and `launch` re-check.
+/// How often `wait_for` and `wait_for_window` re-check.
 const POLL: Duration = Duration::from_millis(250);
 
 /// The longest one tree read (`accessibility_tree`, `find`) runs before it
 /// returns what it has, marked `truncated`: a slow or hung provider must not
 /// hold the one desktop thread every tool shares. Counted from when the read
-/// starts on that thread, not from when it was queued.
+/// starts on that thread, not from when it was queued; a provider call
+/// already running when it passes finishes first (up to 5 s more).
 const READ_DEADLINE: Duration = Duration::from_secs(10);
 
 /// How many times `launch` tries to bind a started pid while the desktop
@@ -46,35 +60,43 @@ const BIND_WAIT: Duration = Duration::from_secs(10);
 /// The least time one `wait_for` poll reads for.
 const MIN_READ: Duration = Duration::from_secs(1);
 
+/// How long `launch` waits for the OS to start a program.
+const SPAWN_WAIT: Duration = Duration::from_secs(30);
+
 const INSTRUCTIONS: &str = "\
-Drives desktop applications like a person with a screen reader. Coordinates are screen \
-coordinates everywhere (window rects, element rects, input): physical pixels on Windows, \
-points on macOS. A screenshot reports scale_x/scale_y to map its pixels back to them.
+Drives desktop applications like a person with a screen reader. One server per desktop: it \
+shares the one pointer and keyboard with the person at it, and a call the client timed out on \
+still runs, so read before re-sending an action.
 
-Typical loop: list_windows (or launch) -> activate_window -> accessibility_tree / find / \
-screenshot -> invoke / toggle / set_value (preferred: no pointer, works when covered) or \
-click / type_text / key -> read the tree again to confirm.
+Typical loop: list_windows (or launch, then wait_for_window) -> activate_window -> \
+accessibility_tree / find / screenshot -> invoke / toggle / set_value / select / expand \
+(preferred: no pointer, works when covered) or click / type_text / key -> wait_for to confirm \
+the result (an element, its state, or that it is gone).
 
-Safety: always pass window_id or pid to click, drag, scroll, type_text and key. The server \
-then refuses the input unless that window is in front (and, for coordinates, holds the \
-point uncovered; for keys, holds keyboard focus in its own process), so input never lands in \
-another application. Window ids and pids are bound to the process they named when this \
-session handed them out, and refused once that process is gone. Element clicks always \
-require the element's own window to be under the point and its process in front. Popup \
-menus and drop-downs are windows of their own: target them with pid, not window_id. Shell \
-hotkeys (the Windows key, alt+tab, ctrl+esc, the language switch) are refused with a safety \
-target. An error that says part of an action already went out, or that it may have run, \
-means: look before retrying.
+Handles are session-scoped: windows `w3` from list_windows or wait_for_window, elements `e12` \
+from accessibility_tree, find or wait_for, screenshots `s2` from screenshot. The same window or \
+element keeps its handle across reads; one whose window, element or process is gone answers \
+`gone` and is never re-bound. A pid is bound to the process it named when first handed out.
 
-Element ids (e12) are session handles from accessibility_tree, find and wait_for; the same \
-element keeps its id across reads (an id whose element or process is gone answers stale, \
-even if UI Automation reuses its identity). A read visits at most 5000 elements and stops \
-after 10 s; strings longer than 4096 characters end in an ellipsis; a reply with truncated: \
-true did not see the whole tree, so an empty find result then does not mean the element is \
-absent. Accessibility tools use UI Automation and are Windows-only for now. Window listing, \
-screenshots and input work on Windows and macOS; on macOS targeted input is refused for now \
-(the server cannot verify what covers a point or holds keyboard focus there). On Linux none \
-of them is available yet.";
+Safety: click, drag, scroll, type_text and key require a target, `window` or `pid`. The server \
+refuses the input unless that window is in front (and, for coordinates, holds the point \
+uncovered; for keys, holds keyboard focus in its own process), so input never lands in another \
+application, apart from the few milliseconds between the last check and the event. Popup menus \
+and drop-downs are windows of their own: target them with pid. Shell hotkeys (the Windows key, \
+alt+tab, ctrl+esc, the language switch) are refused.
+
+Errors carry a `code` to branch on, `retry` (`never`, `soon`, `when_appears`) and, when part \
+of an action already went out, an `effect` (`partial` with the count, `may_have_run`, `ran`, \
+`incidental`): look before retrying any of those.
+
+Coordinates are screen coordinates everywhere (physical pixels on Windows, points on macOS); \
+pass a screenshot's id with image pixels instead and the server maps them. A read visits at \
+most 5000 elements (500 reported by default; read a subtree with `root`) and stops after 10 s; \
+strings longer than 4096 characters end in an ellipsis; `truncated: true` means the read did \
+not see the whole tree, so an empty find then proves nothing. Accessibility tools use UI \
+Automation and are Windows-only for now; window listing and screenshots work on Windows and \
+macOS; on macOS targeted input is refused for now (the server cannot verify what covers a \
+point or holds keyboard focus there); on Linux none of them is available yet.";
 
 /// The MCP server.
 #[derive(Debug, Clone)]
@@ -84,23 +106,32 @@ pub struct DesktopServer {
     tool_router: ToolRouter<Self>,
 }
 
-/// Wraps a result for the agent: structured JSON on success, a readable
-/// tool error (not a protocol error) on failure.
-fn respond<T: Serialize>(result: ToolResult<T>) -> CallToolResult {
-    match result.and_then(|v| {
-        serde_json::to_value(v).map_err(|e| ToolError::platform("serializing the reply", e))
-    }) {
-        Ok(value) => CallToolResult::structured(value),
-        Err(e) => failure(&e),
-    }
-}
-
-/// A failed call: the readable message as text, and the error's code,
-/// retry policy, fields and effect as structured content.
+/// A failed call, as the client sees it: the readable message as text, and
+/// the error's code, retry policy, fields and effect as structured content.
 fn failure(e: &ToolError) -> CallToolResult {
     let mut result = CallToolResult::error(vec![ContentBlock::text(e.to_string())]);
     result.structured_content = Some(e.payload());
     result
+}
+
+/// A successful call: the value as structured content and as text.
+fn reply<T: Serialize>(value: &T) -> CallToolResult {
+    match serde_json::to_value(value) {
+        Ok(value) => {
+            let mut result = CallToolResult::success(vec![ContentBlock::text(value.to_string())]);
+            result.structured_content = Some(value);
+            result
+        }
+        Err(e) => failure(&ToolError::platform("serializing the reply", e)),
+    }
+}
+
+/// Wraps a result for the agent.
+fn respond<T: Serialize>(result: ToolResult<T>) -> CallToolResult {
+    match result {
+        Ok(value) => reply(&value),
+        Err(e) => failure(&e),
+    }
 }
 
 /// The value of a validation, or the tool error it failed with.
@@ -108,13 +139,239 @@ macro_rules! valid {
     ($result:expr) => {
         match $result {
             Ok(value) => value,
-            Err(e) => return respond::<Value>(Err(e)),
+            Err(e) => return failure(&e),
         }
     };
 }
 
-fn element_reply(result: ToolResult<a11y::Node>) -> CallToolResult {
-    respond(result.map(|node| json!({ "element": node })))
+/// An error as data inside a successful reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ErrorInfo {
+    /// The code, as in a failed call.
+    pub code: &'static str,
+    /// The readable message.
+    pub message: String,
+}
+
+impl ErrorInfo {
+    fn of(e: &ToolError) -> Self {
+        Self {
+            code: e.code(),
+            message: e.to_string(),
+        }
+    }
+}
+
+/// The output schema of a tool whose reply is `T`, widened so a failed call
+/// (whose structured content is `{"error": ...}`) conforms too: a client
+/// validating error results against the schema (the TypeScript SDK does)
+/// must not reject them.
+fn schema<T: JsonSchema>() -> Arc<JsonObject> {
+    let mut root = schemars::schema_for!(T).to_value();
+    let object = root
+        .as_object_mut()
+        .expect("BUG: a struct's schema is an object");
+    let required = object.remove("required").unwrap_or_else(|| json!([]));
+    object.insert("type".into(), json!("object"));
+    let properties = object
+        .entry("properties")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("BUG: properties is an object");
+    properties.insert(
+        "error".into(),
+        json!({
+            "type": "object",
+            "description": "Present on a failed call (isError): the code to branch on, the message, the retry policy and, when part of an action went out, its effect.",
+            "properties": {
+                "code": { "type": "string" },
+                "message": { "type": "string" },
+                "retry": { "type": "string", "enum": ["never", "soon", "when_appears"] },
+                "effect": { "type": "object" }
+            },
+            "required": ["code", "message", "retry"]
+        }),
+    );
+    object.insert(
+        "anyOf".into(),
+        json!([{ "required": required }, { "required": ["error"] }]),
+    );
+    Arc::new(object.clone())
+}
+
+/// A screen point.
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+pub struct Point {
+    /// Screen x.
+    pub x: i32,
+    /// Screen y.
+    pub y: i32,
+}
+
+impl From<(i32, i32)> for Point {
+    fn from((x, y): (i32, i32)) -> Self {
+        Self { x, y }
+    }
+}
+
+/// `list_windows` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WindowsReply {
+    /// Top-level windows, front to back.
+    pub windows: Vec<Window>,
+}
+
+/// `launch` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct LaunchReply {
+    /// The new process; pass to wait_for_window, and as `pid` elsewhere.
+    pub pid: u32,
+    /// Whether the pid is bound as a target in this session. When not
+    /// (`note` says why), target the process's windows by their handles
+    /// from list_windows, or kill it.
+    pub bound: bool,
+    /// Why the pid is not bound, when it is not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// `wait_for_window` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WindowReply {
+    /// The first window the process showed that matches.
+    pub window: Window,
+}
+
+/// How a process ended.
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+pub struct Exit {
+    /// The exit code, when the OS reports one.
+    pub code: Option<i32>,
+}
+
+/// `kill` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct KillReply {
+    /// The process.
+    pub pid: u32,
+    /// Whether it had already exited before the kill.
+    pub already_exited: bool,
+    /// How it ended.
+    pub exited: Exit,
+}
+
+/// `accessibility_tree` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TreeReply {
+    /// The trees as one line per element (`format: outline`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outline: Option<String>,
+    /// The trees as nodes, one per window read (`format: json`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roots: Option<Vec<Node>>,
+    /// Elements reported.
+    pub count: usize,
+    /// Whether the read left anything out (a budget, the depth, a provider
+    /// failing partway): then read a subtree with `root`, or more nodes.
+    pub truncated: bool,
+}
+
+/// `find` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct FindReply {
+    /// The matches, one line each (`format: outline`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outline: Option<String>,
+    /// The matches as nodes without children (`format: json`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matches: Option<Vec<Node>>,
+    /// Matches returned.
+    pub count: usize,
+    /// Matches found in all, when more than `limit`.
+    pub total: usize,
+    /// Whether the read did not see the whole tree: then no match is not
+    /// proof of absence.
+    pub truncated: bool,
+}
+
+/// `wait_for` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct WaitReply {
+    /// The first element matching the condition; absent for a `gone` wait.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element: Option<Node>,
+    /// For a `gone` wait: nothing matches any more.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub gone: bool,
+}
+
+/// The reply of an element action.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ActReply {
+    /// The element afterwards (`gone: true` when the action removed it),
+    /// or absent when its state could not be read back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element: Option<Node>,
+    /// Why the element could not be read back: the action itself ran, so do
+    /// not repeat it; read the tree instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readback_failed: Option<ErrorInfo>,
+}
+
+/// `click` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ClickReply {
+    /// Where the click landed.
+    pub at: Point,
+    /// The button.
+    pub button: ButtonArg,
+    /// Whether it was a double-click.
+    pub double: bool,
+}
+
+/// `move_mouse` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MoveReply {
+    /// Where the pointer was asked to go.
+    pub requested: Point,
+    /// Where it is now, when the OS reports it.
+    pub at: Option<Point>,
+}
+
+/// `drag` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct DragReply {
+    /// Where the button went down.
+    pub from: Point,
+    /// Where it was released.
+    pub to: Point,
+}
+
+/// `scroll` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ScrollReply {
+    /// Where the wheel turned.
+    pub at: Point,
+    /// Horizontal notches sent.
+    pub dx: i32,
+    /// Vertical notches sent.
+    pub dy: i32,
+}
+
+/// `type_text` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct TypedReply {
+    /// Characters typed.
+    pub characters: usize,
+}
+
+/// `key` reply.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct KeyReply {
+    /// The combo, as parsed.
+    pub combo: String,
+    /// How many times it was pressed.
+    pub repeat: u32,
 }
 
 /// Runs blocking process work (spawning, waiting for an exit) off the async
@@ -195,17 +452,13 @@ async fn blocking<T: Send + 'static>(
     }
 }
 
-/// How long `launch` waits for the OS to start a program.
-const SPAWN_WAIT: Duration = Duration::from_secs(30);
-
 /// A bound on the threads one kind of process work may hold at once. Launch
 /// and kill have their own, so launches stuck on unreachable paths never
 /// keep kills from running.
 struct Pool {
     running: std::sync::atomic::AtomicUsize,
     limit: usize,
-    /// The error when full: a launch stays stuck as long as its path does
-    /// (not worth retrying); a kill is over within its reap bound (it is).
+    /// The error when full.
     full: fn(usize) -> ToolError,
 }
 
@@ -287,19 +540,29 @@ impl DesktopServer {
             Ok(_) => tracing::info!(pid, "ended the process of a cancelled launch"),
             Err(e) => tracing::warn!(pid, "could not end the process of a cancelled launch: {e}"),
         }
-        respond::<Value>(Err(ToolError::Cancelled))
+        failure(&ToolError::Cancelled)
     }
 
     async fn act(&self, ct: &CancellationToken, element: String, action: Action) -> CallToolResult {
-        element_reply(self.worker.run(ct, move |d| d.act(&element, &action)).await)
+        respond(
+            self.worker
+                .run(ct, move |d| d.act(&element, &action))
+                .await
+                .map(|outcome| ActReply {
+                    element: outcome.element,
+                    readback_failed: outcome.readback.as_ref().map(ErrorInfo::of),
+                }),
+        )
     }
 }
 
 #[tool_router]
 impl DesktopServer {
     #[tool(
-        description = "List top-level windows: id (pass as window_id), pid, app_name, title, rect, is_minimized, is_focused. Front to back.",
-        annotations(read_only_hint = true)
+        title = "List windows",
+        description = "List top-level windows, front to back: id (a session handle, pass as `window`), pid, app_name, title, rect, is_minimized, is_focused, and targetable with untargetable_reason when this session cannot target it. Handles are stable for the same window; a closed window's handle answers `gone`.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<WindowsReply>()
     )]
     async fn list_windows(
         &self,
@@ -313,11 +576,14 @@ impl DesktopServer {
                 d.list_windows(p.title_contains.as_deref(), p.pid)
             })
             .await;
-        respond(windows.map(|w| json!({ "windows": w })))
+        respond(windows.map(|windows| WindowsReply { windows }))
     }
 
     #[tool(
-        description = "Start a program (stdio discarded). Returns its pid; with wait_for_window_ms (at most 120000), also its first window, or its exit code if it exits first. The server kills every launched process when it exits: on Windows also everything those start, even when the server itself is killed; elsewhere only the launched processes, on a clean exit. A launch the client cancels ends the process it started, since the pid is never delivered."
+        title = "Launch a program",
+        description = "Start a program (stdio discarded) and return its pid, bound as a target in this session. Then wait_for_window to get its window. The server kills every launched process when it exits: on Windows also everything those start, even when the server itself is killed; elsewhere only the launched processes, on a clean exit. A launch the client cancels ends the process it started, since the pid is never delivered.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = true),
+        output_schema = schema::<LaunchReply>()
     )]
     async fn launch(
         &self,
@@ -370,20 +636,18 @@ impl DesktopServer {
         // would otherwise hold the pid back from the caller for good.
         let bind_until = Instant::now() + BIND_WAIT;
         let never = CancellationToken::new();
-        let mut bound = Err(ToolError::Cancelled);
+        let mut bound = Err(ToolError::ShuttingDown);
         for _ in 0..BIND_ATTEMPTS {
             let left = bind_until.saturating_duration_since(Instant::now());
-            let attempt = self
-                .worker
-                .run(&never, move |d| {
-                    if d.bind_launched(pid, started) {
-                        Ok(())
-                    } else {
-                        Err(ToolError::InvalidArgument(
-                            "this pid was handed out before for another process, or the OS reports no start time".into(),
-                        ))
-                    }
-                });
+            let attempt = self.worker.run(&never, move |d| {
+                if d.bind_launched(pid, started) {
+                    Ok(())
+                } else {
+                    Err(ToolError::NotSupported(
+                        "this pid was handed out before for another process, or the OS reports no start time".into(),
+                    ))
+                }
+            });
             bound = tokio::time::timeout(left, attempt)
                 .await
                 .unwrap_or_else(|_| {
@@ -396,145 +660,104 @@ impl DesktopServer {
             }
             // Refused for good, or skipped because the server is stopping:
             // stop. Anything passing (a full queue) is retried.
-            match &bound {
-                Ok(()) => break,
-                Err(e) if e.retry() == crate::error::Retry::Soon => {}
-                Err(_) => break,
+            if !bound.as_ref().is_err_and(|e| e.retry() == Retry::Soon) {
+                break;
             }
             tokio::time::sleep(POLL).await;
         }
         if ct.is_cancelled() {
             return self.void_launch(pid, launch).await;
         }
-        if let Err(e) = bound {
-            // Skipped because the server is stopping, not cancelled by the
-            // client: the process is ended with the rest at shutdown.
-            let why = e.to_string();
-            return respond(Ok(json!({
-                "pid": pid,
-                "window": null,
-                "note": format!("started, but its pid was not bound as a target ({why}); target its windows by window_id from list_windows, or kill it"),
-            })));
-        }
-        let Some(ms) = p.wait_for_window_ms else {
-            return respond(Ok(json!({ "pid": pid })));
-        };
-        if started.is_none() {
-            return respond(Ok(json!({
-                "pid": pid,
-                "window": null,
-                "note": "this OS reports no process start time, so a window under this pid cannot be told from a later process's; find it with list_windows",
-            })));
-        }
-        let deadline = Instant::now() + Duration::from_millis(ms);
+        reply(&LaunchReply {
+            pid,
+            bound: bound.is_ok(),
+            note: bound.err().map(|e| e.to_string()),
+        })
+    }
+
+    #[tool(
+        title = "Wait for a window",
+        description = "Wait until a process this session launched or listed shows a top-level window (optionally one whose title contains a text), polling every 250 ms, and return it with its handle. Some apps (Windows 11 Notepad) hand off to another process: then no window ever appears under this pid, the process exits (`gone`), and list_windows finds the window. Windows only for now.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<WindowReply>()
+    )]
+    async fn wait_for_window(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<WaitForWindowParams>>,
+    ) -> CallToolResult {
+        let p = valid!(p);
+        let (pid, needle, timeout) = valid!(p.validate());
+        let deadline = Instant::now() + timeout;
         loop {
             if let Some(exit) = self.children.exited(pid) {
-                return respond(Ok(json!({
-                    "pid": pid,
-                    "window": null,
-                    "exit_code": exit.code,
-                    "note": "the process exited before it showed a window; if it handed off to another process, find that one with list_windows",
-                })));
+                return failure(&ToolError::Gone {
+                    handle: pid.to_string(),
+                    kind: crate::error::HandleKind::Process,
+                    why: format!(
+                        "it exited{} before showing a window; if it handed off to another process, find that one with list_windows",
+                        exit.code
+                            .map_or(String::new(), |c| format!(" with code {c}"))
+                    ),
+                });
             }
-            // Bounded by what is left of the wait: a lookup still queued
-            // behind other desktop work when the time is up is withdrawn
-            // (one already running finishes; it cannot be stopped halfway).
-            let lookup = ct.child_token();
-            let run = self
-                .worker
-                .run(&lookup, move |d| d.launched_windows(pid, started));
-            tokio::pin!(run);
-            let windows = tokio::select! {
-                windows = &mut run => windows,
-                () = tokio::time::sleep(deadline.saturating_duration_since(Instant::now())) => {
-                    lookup.cancel();
-                    run.await
-                }
-            };
-            // Cancelled while the lookup ran: it finished and answered, but
-            // the reply will not reach the client, so neither does the pid.
-            if ct.is_cancelled() {
-                return self.void_launch(pid, launch).await;
-            }
-            // Withdrawn at the deadline, not by the client (shutdown answers
-            // `ShuttingDown`, not `Cancelled`).
-            if matches!(windows, Err(ToolError::Cancelled)) && lookup.is_cancelled() {
-                return respond(Ok(json!({
-                    "pid": pid,
-                    "window": null,
-                    "note": "no window for this pid within the wait (the desktop was busy with other calls); see list_windows",
-                })));
-            }
+            let windows = self.worker.run(&ct, move |d| d.windows_of(pid)).await;
             match windows {
-                // Gone, and the pid may already be another process's: its
-                // windows are not this launch's.
                 Ok(None) => {
-                    return respond(Ok(json!({
-                        "pid": pid,
-                        "window": null,
-                        "exit_code": self.children.exited(pid).and_then(|exit| exit.code),
-                        "note": "the process exited before it showed a window; if it handed off to another process, find that one with list_windows",
-                    })));
+                    return failure(&ToolError::Gone {
+                        handle: pid.to_string(),
+                        kind: crate::error::HandleKind::Process,
+                        why: "it exited before showing a window; if it handed off to another process, find that one with list_windows".into(),
+                    });
                 }
-                // Its first window still open (one that closed while listed,
-                // a splash screen, was dropped and the wait goes on); one
-                // whose own id cannot be targeted says so, and the pid
-                // reaches it.
-                Ok(Some(w)) if !w.is_empty() => {
-                    let first = w.into_iter().min_by_key(|w| w.not_targetable.is_some());
-                    return respond(Ok(json!({ "pid": pid, "window": first })));
-                }
-                Err(ToolError::Cancelled) => {
-                    return self.void_launch(pid, launch).await;
-                }
-                // Skipped because the server is stopping: the pid still goes
-                // back, and the process is ended with the rest.
-                Err(ToolError::ShuttingDown) => {
-                    return respond(Ok(json!({
-                        "pid": pid,
-                        "window": null,
-                        "note": "the server is shutting down; the process is ended with it",
-                    })));
-                }
-                // The process is running and only this session can end it:
-                // hand back its pid with the reason instead of losing it.
-                Err(e) => {
-                    return respond(Ok(json!({
-                        "pid": pid,
-                        "window": null,
-                        "note": format!("started, but its window cannot be listed: {e}; kill it by pid if needed"),
-                    })));
-                }
-                Ok(Some(_)) if Instant::now() >= deadline => {
-                    return respond(Ok(json!({
-                        "pid": pid,
-                        "window": null,
-                        "note": "no window for this pid yet; it may hand off to another process, see list_windows",
-                    })));
-                }
-                Ok(Some(_)) => {
-                    if pause(
-                        &ct,
-                        POLL.min(deadline.saturating_duration_since(Instant::now())),
-                    )
-                    .await
+                Ok(Some(windows)) => {
+                    let matching: Vec<Window> = windows
+                        .into_iter()
+                        .filter(|w| {
+                            needle
+                                .as_deref()
+                                .is_none_or(|n| a11y::fold(&w.title).contains(n))
+                        })
+                        .collect();
+                    if let Some(window) = matching
+                        .iter()
+                        .find(|w| w.targetable)
+                        .or_else(|| matching.first())
                     {
-                        return self.void_launch(pid, launch).await;
-                    }
-                    if Instant::now() >= deadline {
-                        return respond(Ok(json!({
-                            "pid": pid,
-                            "window": null,
-                            "note": "no window for this pid yet; it may hand off to another process, see list_windows",
-                        })));
+                        return reply(&WindowReply {
+                            window: window.clone(),
+                        });
                     }
                 }
+                Err(e) if e.retry() == Retry::Soon => {}
+                Err(e) => return failure(&e),
+            }
+            if Instant::now() >= deadline {
+                return failure(&ToolError::Timeout {
+                    timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+                    what: match &needle {
+                        Some(n) => format!("a window of process {pid} whose title contains {n:?}"),
+                        None => format!("a window of process {pid}"),
+                    },
+                    summary: "(the process is running; list_windows shows what it has)".into(),
+                });
+            }
+            if pause(
+                &ct,
+                POLL.min(deadline.saturating_duration_since(Instant::now())),
+            )
+            .await
+            {
+                return failure(&ToolError::Cancelled);
             }
         }
     }
 
     #[tool(
-        description = "End a process started by launch in this session (other pids are refused). Ends that process only; what it started itself ends when the server exits (on Windows). Reports already_exited for one that ended on its own or was killed before."
+        title = "Kill a launched process",
+        description = "End a process started by launch in this session (other pids are refused). Ends that process only; what it started itself ends when the server exits (on Windows). Reports already_exited for one that ended on its own or was killed before.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<KillReply>()
     )]
     async fn kill(
         &self,
@@ -551,13 +774,21 @@ impl DesktopServer {
                 move || children.kill(p.pid),
                 |_| {},
             )
-            .await,
+            .await
+            .map(|killed| KillReply {
+                pid: killed.pid,
+                already_exited: killed.already_exited,
+                exited: Exit {
+                    code: killed.exit_code,
+                },
+            }),
         )
     }
 
     #[tool(
-        description = "Capture a window (window_id or pid; covered windows are captured where the OS allows), a monitor (0-based index), or the primary monitor (no target). The image is downscaled to max_side (default 1920, at most 4096) on its longer side. Returns a PNG plus, as structured content, its size, the captured screen rect (source) and scale_x/scale_y (image px per screen unit, measured from the pixels: 2 on a Retina display, below 1 when downscaled): screen x = source.x + image x / scale_x. Refused if the window moved during the capture or no longer belongs to the process it was listed for.",
-        annotations(read_only_hint = true)
+        title = "Take a screenshot",
+        description = "Capture a window (`window` or `pid`; covered windows are captured where the OS allows), a monitor (0-based index), or the primary monitor (no target), downscaled to max_side (default 1920, at most 4096) on its longer side. Returns a PNG and, as text, JSON metadata: id (`s2`; pass it with image-pixel x/y to click, move_mouse, scroll or drag, and the server maps them), width, height, the captured screen rect (source) and scale_x/scale_y (image px per screen unit: screen x = source.x + image x / scale_x). Refused if the window moved during the capture or no longer belongs to the process it was listed for.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false)
     )]
     async fn screenshot(
         &self,
@@ -567,32 +798,34 @@ impl DesktopServer {
         let p = valid!(p);
         let target = valid!(p.target());
         let max_side = p.max_side();
-        let shot = valid!(
+        let (shot, id) = valid!(
             self.worker
                 .run(&ct, move |d| d.screenshot(target, Some(max_side)))
                 .await
         );
         let meta = json!({
+            "id": id,
             "width": shot.width,
             "height": shot.height,
             "source": shot.source,
             "scale_x": shot.scale_x,
             "scale_y": shot.scale_y,
         });
-        let mut result = CallToolResult::success(vec![
+        // No structured content: clients that receive it drop the image.
+        CallToolResult::success(vec![
             ContentBlock::image(
                 base64::engine::general_purpose::STANDARD.encode(&shot.png),
                 "image/png",
             ),
             ContentBlock::text(meta.to_string()),
-        ]);
-        result.structured_content = Some(meta);
-        result
+        ])
     }
 
     #[tool(
-        description = "Read the accessibility tree of a window (window_id) or of all a process's windows and popups (pid), max_depth levels deep (default 30, at most 200). Nodes: id (e12, for later calls), role, name, value, automation_id, class_name, rect, enabled, has_keyboard_focus, is_keyboard_focusable, toggle_state, patterns, children, omitted_children. truncated: true when the read left anything out (a budget, the depth, a provider failing partway).",
-        annotations(read_only_hint = true)
+        title = "Read the accessibility tree",
+        description = "Read the element tree of a window (`window`), of all a process's windows and popups (`pid`), or under one element (`root`), max_depth levels deep (default 30) and max_nodes elements (default 500, at most 5000). Default `format: outline`: one line per element, `- role \"name\" [ref=e12] [state...] [actions=...]`, with `[window=w3]` on each root; `format: json` gives nodes: id, role, native_role, name, value, automation_id, class_name, rect, disabled, focused, focusable, checked, expanded, selected, actions, window, children, omitted_children. truncated: true when the read left anything out.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<TreeReply>()
     )]
     async fn accessibility_tree(
         &self,
@@ -600,19 +833,37 @@ impl DesktopServer {
         Parameters(Args(p)): Parameters<Args<TreeParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
-        let (target, depth) = valid!(p.validate());
+        let (scope, depth, max_nodes, format) = valid!(p.validate());
         let read = self
             .worker
             .run(&ct, move |d| {
-                d.tree(target, depth, Instant::now() + READ_DEADLINE)
+                d.tree(&scope, depth, max_nodes, Instant::now() + READ_DEADLINE)
             })
             .await;
-        respond(read.map(|r| json!({ "roots": r.roots, "truncated": r.truncated })))
+        respond(read.map(|r| {
+            let count = a11y::count(&r.roots);
+            match format {
+                Format::Outline => TreeReply {
+                    outline: Some(a11y::outline(&r.roots)),
+                    roots: None,
+                    count,
+                    truncated: r.truncated,
+                },
+                Format::Json => TreeReply {
+                    outline: None,
+                    roots: Some(r.roots),
+                    count,
+                    truncated: r.truncated,
+                },
+            }
+        }))
     }
 
     #[tool(
-        description = "Find elements in a window or process by name (exact), name_contains (case-insensitive), role (control type, e.g. Button) and/or automation_id; all given criteria must match. Returns a flat list of nodes without children, and truncated: true when the read did not see the whole tree (then no match is not proof of absence).",
-        annotations(read_only_hint = true)
+        title = "Find elements",
+        description = "Find elements in a window, a process or under an element (`root`) by name (exact), name_contains (case-insensitive), role (`button`, `text_input`, ... or the OS's own name) and/or automation_id; all given criteria must match. Returns at most `limit` matches (default 50) as an outline or as nodes without children, and truncated: true when the read did not see the whole tree (then no match is not proof of absence).",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<FindReply>()
     )]
     async fn find(
         &self,
@@ -620,20 +871,41 @@ impl DesktopServer {
         Parameters(Args(p)): Parameters<Args<FindParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
-        let (target, query) = valid!(p.validate());
+        let (scope, query, limit, format) = valid!(p.validate());
         let found = self
             .worker
             .run(&ct, move |d| {
-                d.find(target, &query, Instant::now() + READ_DEADLINE)
+                d.find(&scope, &query, Instant::now() + READ_DEADLINE)
             })
             .await;
-        respond(
-            found.map(|(matches, read)| json!({ "matches": matches, "truncated": read.truncated })),
-        )
+        respond(found.map(|(matches, read)| {
+            let total = matches.len();
+            let matches: Vec<Node> = matches.into_iter().take(limit).collect();
+            let count = matches.len();
+            match format {
+                Format::Outline => FindReply {
+                    outline: Some(a11y::outline(&matches)),
+                    matches: None,
+                    count,
+                    total,
+                    truncated: read.truncated,
+                },
+                Format::Json => FindReply {
+                    outline: None,
+                    matches: Some(matches),
+                    count,
+                    total,
+                    truncated: read.truncated,
+                },
+            }
+        }))
     }
 
     #[tool(
-        description = "Wait until an element matching the criteria (as for find) exists, polling every 250 ms. Returns the first match, or a timeout error listing the last tree seen. With pid, windows that appear or close meanwhile are followed; with window_id, a window that closes ends the wait. The reply can come later than timeout_ms by one read, and by however long other calls hold the desktop thread."
+        title = "Wait for an element or a state",
+        description = "Wait, polling every 250 ms, until an element matching the criteria (as for find, or one `element` by id) exists and is in `state` (checked, expanded, selected, focused, disabled, value, value_contains), or with `gone: true` until no element matches (a dialog closed, an item deleted). Returns the element, or a timeout error with a summary of the last tree seen. With pid, windows that appear or close meanwhile are followed; with window, a window that closes ends the wait as `gone`. The reply can come later than timeout_ms by one read, and by however long other calls hold the desktop thread.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<WaitReply>()
     )]
     async fn wait_for(
         &self,
@@ -641,12 +913,13 @@ impl DesktopServer {
         Parameters(Args(p)): Parameters<Args<WaitForParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
-        let (target, query, timeout) = valid!(p.validate());
-        let deadline = Instant::now() + timeout;
+        let wait = valid!(p.validate());
+        let deadline = Instant::now() + wait.timeout;
         let mut summary = String::from("(no tree read: the target had no window)");
+        let follows = matches!(wait.scope, Scope::Target(TargetArg::Pid(_)));
         loop {
-            let q = query.clone();
-            match self
+            let (scope, query) = (wait.scope.clone(), wait.query.clone());
+            let read = self
                 .worker
                 .run(&ct, move |d| {
                     // Counted from when the read starts, not when it queued,
@@ -654,13 +927,28 @@ impl DesktopServer {
                     // the wait's end reads nothing at all.
                     let now = Instant::now();
                     let read_deadline = deadline.max(now + MIN_READ).min(now + READ_DEADLINE);
-                    d.find(target, &q, read_deadline)
+                    d.find(&scope, &query, read_deadline)
                 })
-                .await
-            {
+                .await;
+            match read {
                 Ok((matches, read)) => {
-                    if let Some(first) = matches.into_iter().next() {
-                        return element_reply(Ok(first));
+                    if wait.gone {
+                        // Nothing matched in a whole read: gone. A cut read
+                        // may have missed it, so it keeps waiting.
+                        if matches.is_empty() && !read.truncated {
+                            return reply(&WaitReply {
+                                element: None,
+                                gone: true,
+                            });
+                        }
+                    } else if let Some(first) = matches
+                        .into_iter()
+                        .find(|n| wait.state.as_ref().is_none_or(|s| s.holds(n)))
+                    {
+                        return reply(&WaitReply {
+                            element: Some(first),
+                            gone: false,
+                        });
                     }
                     summary = a11y::summarize(&read.roots, 60);
                     if read.truncated {
@@ -668,21 +956,27 @@ impl DesktopServer {
                             .push_str("\n(the read was truncated: it did not see the whole tree)");
                     }
                 }
+                // What was waited on to be gone is gone with its window or
+                // its root element.
+                Err(e) if wait.gone && (e.code() == "gone" || e.code() == "not_found") => {
+                    return reply(&WaitReply {
+                        element: None,
+                        gone: true,
+                    });
+                }
                 // A pid with no window yet (a splash screen closed) is worth
                 // waiting for; a window target that closed is not.
-                Err(e)
-                    if e.retry() == crate::error::Retry::WhenAppears
-                        && matches!(target, Target::Pid(_)) => {}
+                Err(e) if e.retry() == Retry::WhenAppears && follows => {}
                 // Passing: a full queue, a window that changed hands mid-read.
-                Err(e) if e.retry() == crate::error::Retry::Soon => {}
-                Err(e) => return respond::<Value>(Err(e)),
+                Err(e) if e.retry() == Retry::Soon => {}
+                Err(e) => return failure(&e),
             }
             if Instant::now() >= deadline {
-                return respond::<Value>(Err(ToolError::Timeout {
-                    timeout_ms: u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
-                    what: query.describe(),
+                return failure(&ToolError::Timeout {
+                    timeout_ms: u64::try_from(wait.timeout.as_millis()).unwrap_or(u64::MAX),
+                    what: wait.describe(),
                     summary,
-                }));
+                });
             }
             if pause(
                 &ct,
@@ -690,13 +984,16 @@ impl DesktopServer {
             )
             .await
             {
-                return respond::<Value>(Err(ToolError::Cancelled));
+                return failure(&ToolError::Cancelled);
             }
         }
     }
 
     #[tool(
-        description = "Invoke (press) an element through its Invoke pattern. No pointer involved; works even when the window is covered. An error that says the action may have run means: read the tree before retrying."
+        title = "Invoke an element",
+        description = "Invoke (press) an element through its accessibility action. No pointer involved; works even when the window is covered. Returns the element afterwards, or readback_failed when the action ran but its state could not be read back (then do not repeat it). An error with effect `may_have_run` means: read the tree before retrying.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema::<ActReply>()
     )]
     async fn invoke(
         &self,
@@ -708,7 +1005,10 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Flip a checkbox/switch through its Toggle pattern. Returns the element with its new toggle_state."
+        title = "Toggle an element",
+        description = "Flip a checkbox or switch through its accessibility action (not idempotent: two calls flip it back). Returns the element with its new `checked`.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema::<ActReply>()
     )]
     async fn toggle(
         &self,
@@ -720,7 +1020,10 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Replace an element's value (at most 100000 characters) through its Value pattern (text fields), or RangeValue (sliders; value must be a number). Returns the element afterwards."
+        title = "Set an element's value",
+        description = "Replace an element's value (at most 100000 characters) through its accessibility action: text fields take the text, sliders a number. Returns the element afterwards.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<ActReply>()
     )]
     async fn set_value(
         &self,
@@ -733,7 +1036,10 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Give an element keyboard focus through the accessibility API. Succeeds once keyboard focus is on the element or inside it; an element that accepts the request but keeps no focus is an error."
+        title = "Focus an element",
+        description = "Give an element keyboard focus through the accessibility API. Succeeds once keyboard focus is on the element or inside it; an element that accepts the request but keeps no focus is an error.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<ActReply>()
     )]
     async fn focus(
         &self,
@@ -745,7 +1051,10 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Select an item (list item, tab, radio button) through its SelectionItem pattern."
+        title = "Select an element",
+        description = "Select an item (list item, tab, radio button) through its accessibility action.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<ActReply>()
     )]
     async fn select(
         &self,
@@ -757,7 +1066,55 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Real mouse click at an element's clickable point (element) or a screen point (x, y). Pass window_id or pid: the click is refused unless that window is in front and holds the point. button: left|right|middle (logical: swapped buttons are honoured); double for a double-click."
+        title = "Expand an element",
+        description = "Open a collapsible element (a combo box, a tree item, a menu) through its accessibility action; then read the tree or find to see what it exposed.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<ActReply>()
+    )]
+    async fn expand(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<ElementParams>>,
+    ) -> CallToolResult {
+        let p = valid!(p);
+        self.act(&ct, p.element, Action::Expand).await
+    }
+
+    #[tool(
+        title = "Collapse an element",
+        description = "Close an expanded element through its accessibility action.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<ActReply>()
+    )]
+    async fn collapse(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<ElementParams>>,
+    ) -> CallToolResult {
+        let p = valid!(p);
+        self.act(&ct, p.element, Action::Collapse).await
+    }
+
+    #[tool(
+        title = "Scroll an element into view",
+        description = "Scroll an element's container until the element is visible, through its accessibility action (no pointer); returns the element with its new rect.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<ActReply>()
+    )]
+    async fn scroll_into_view(
+        &self,
+        ct: CancellationToken,
+        Parameters(Args(p)): Parameters<Args<ElementParams>>,
+    ) -> CallToolResult {
+        let p = valid!(p);
+        self.act(&ct, p.element, Action::ScrollIntoView).await
+    }
+
+    #[tool(
+        title = "Click",
+        description = "Real mouse click at an element's clickable point (`element`), a screen point (`x`, `y`) or a screenshot pixel (`screenshot`, `x`, `y`). Requires `window` or `pid`: refused unless that window is in front and holds the point. button: left|right|middle (logical: swapped buttons are honoured); double for a double-click.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema::<ClickReply>()
     )]
     async fn click(
         &self,
@@ -766,16 +1123,24 @@ impl DesktopServer {
     ) -> CallToolResult {
         let p = valid!(p);
         let (at, target) = valid!(p.validate());
-        let (button, double) = (p.button.into(), p.double);
+        let (button, double) = (p.button, p.double);
         respond(
             self.worker
-                .run(&ct, move |d| d.click(&at, button, double, target))
-                .await,
+                .run(&ct, move |d| d.click(&at, button.into(), double, target))
+                .await
+                .map(|at| ClickReply {
+                    at: at.into(),
+                    button,
+                    double,
+                }),
         )
     }
 
     #[tool(
-        description = "Move the pointer to a screen point (screen coordinates: physical pixels on Windows, points on macOS). Returns where the pointer ended up. Sends no press, so it takes no safety target; refused while a button is still held from a failed release."
+        title = "Move the pointer",
+        description = "Move the pointer to an element, a screen point or a screenshot pixel; returns where it ended up. Sends no press, so it takes no safety target; refused while a button is still held from a failed release.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<MoveReply>()
     )]
     async fn move_mouse(
         &self,
@@ -783,11 +1148,23 @@ impl DesktopServer {
         Parameters(Args(p)): Parameters<Args<MoveMouseParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
-        respond(self.worker.run(&ct, move |d| d.move_mouse(p.x, p.y)).await)
+        let at = valid!(p.validate());
+        respond(
+            self.worker
+                .run(&ct, move |d| d.move_mouse(&at))
+                .await
+                .map(|(requested, at)| MoveReply {
+                    requested: requested.into(),
+                    at: at.map(Into::into),
+                }),
+        )
     }
 
     #[tool(
-        description = "Left-button drag from one screen point to another over duration_ms. Pass window_id or pid: refused unless that window is in front and holds both points and every point between. If that stops holding partway, the button is released at a point verified inside the target where one still verifies; otherwise the release, the one event that must go out, happens where the pointer is, and the error says so."
+        title = "Drag",
+        description = "Left-button drag from one location to another (each an element, a screen point or a screenshot pixel) over duration_ms. Requires `window` or `pid`: refused unless that window is in front and holds every point of the drag, checked before the press and again before each step. If that stops holding partway, the button is released at the last point verified inside the target; otherwise the release, the one event that must go out, happens where the pointer is, and the error says so.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema::<DragReply>()
     )]
     async fn drag(
         &self,
@@ -795,17 +1172,23 @@ impl DesktopServer {
         Parameters(Args(p)): Parameters<Args<DragParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
-        let (target, duration) = valid!(p.validate());
-        let (from, to) = ((p.from.x, p.from.y), (p.to.x, p.to.y));
+        let (from, to, target, duration) = valid!(p.validate());
         respond(
             self.worker
-                .run(&ct, move |d| d.drag(from, to, duration, target))
-                .await,
+                .run(&ct, move |d| d.drag(&from, &to, duration, target))
+                .await
+                .map(|(from, to)| DragReply {
+                    from: from.into(),
+                    to: to.into(),
+                }),
         )
     }
 
     #[tool(
-        description = "Scroll the wheel at a screen point: dy notches (positive = down), dx notches (positive = right), at most 100 each. Pass window_id or pid: refused unless that window is in front and holds the point."
+        title = "Scroll",
+        description = "Turn the wheel over an element, a screen point or a screenshot pixel: dy notches (positive = down), dx notches (positive = right), at most 100 each. Requires `window` or `pid`: refused unless that window is in front and holds the point.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema::<ScrollReply>()
     )]
     async fn scroll(
         &self,
@@ -813,16 +1196,25 @@ impl DesktopServer {
         Parameters(Args(p)): Parameters<Args<ScrollParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
-        let target = valid!(p.validate());
+        let (at, target) = valid!(p.validate());
+        let (dx, dy) = (p.dx, p.dy);
         respond(
             self.worker
-                .run(&ct, move |d| d.scroll(p.x, p.y, p.dx, p.dy, target))
-                .await,
+                .run(&ct, move |d| d.scroll(&at, dx, dy, target))
+                .await
+                .map(|at| ScrollReply {
+                    at: at.into(),
+                    dx,
+                    dy,
+                }),
         )
     }
 
     #[tool(
-        description = "Type text (at most 10000 characters) into the focused control as real keystrokes, layout-independent; a newline is Enter, a tab is Tab. Pass window_id or pid: refused unless that window is in front and holds keyboard focus in its own process. If it stops partway, the error says how many characters went out."
+        title = "Type text",
+        description = "Type text (at most 10000 characters) into the focused control as real keystrokes, layout-independent; a newline is Enter, a tab is Tab. Requires `window` or `pid`: refused unless that window is in front and holds keyboard focus in its own process. If it stops partway, the error's effect says how many characters went out.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema::<TypedReply>()
     )]
     async fn type_text(
         &self,
@@ -834,12 +1226,16 @@ impl DesktopServer {
         respond(
             self.worker
                 .run(&ct, move |d| d.type_text(&p.text, target))
-                .await,
+                .await
+                .map(|characters| TypedReply { characters }),
         )
     }
 
     #[tool(
-        description = "Press a key or combo as real keystrokes: enter, tab, esc, f5, ctrl+shift+s, alt+f4, cmd+q, ctrl+plus (modifiers: ctrl shift alt meta/win/cmd; on Windows a character that needs Shift or AltGr on the layout gets it). repeat presses it N times. Pass window_id or pid: refused unless that window is in front and holds keyboard focus in its own process; shell hotkeys are refused then."
+        title = "Press a key",
+        description = "Press a key or combo as real keystrokes: enter, tab, esc, f5, ctrl+shift+s, alt+f4, cmd+q, ctrl+plus (modifiers: ctrl shift alt meta/win/cmd; on Windows a character that needs Shift or AltGr on the layout gets it). repeat presses it N times. Requires `window` or `pid`: refused unless that window is in front and holds keyboard focus in its own process; shell hotkeys are refused.",
+        annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema::<KeyReply>()
     )]
     async fn key(
         &self,
@@ -848,15 +1244,23 @@ impl DesktopServer {
     ) -> CallToolResult {
         let p = valid!(p);
         let (combo, repeat, target) = valid!(p.validate());
+        let shown = combo.to_string();
         respond(
             self.worker
                 .run(&ct, move |d| d.key(&combo, repeat, target))
-                .await,
+                .await
+                .map(|()| KeyReply {
+                    combo: shown,
+                    repeat,
+                }),
         )
     }
 
     #[tool(
-        description = "Bring a window (window_id) or a process's window (pid) to the foreground, restoring it if minimized. Reports became_foreground: Windows can refuse focus changes, so check it before sending input. Windows only for now."
+        title = "Activate a window",
+        description = "Bring a window (`window`) or a process's window (`pid`) to the foreground, restoring it if minimized. Reports became_foreground: Windows can refuse focus changes, so check it before sending input. Windows only for now.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema::<Activated>()
     )]
     async fn activate_window(
         &self,
@@ -864,7 +1268,7 @@ impl DesktopServer {
         Parameters(Args(p)): Parameters<Args<ActivateParams>>,
     ) -> CallToolResult {
         let p = valid!(p);
-        let target = valid!(required_target(p.window_id, p.pid));
+        let target = valid!(p.validate());
         respond(self.worker.run(&ct, move |d| d.activate(target)).await)
     }
 }
@@ -883,6 +1287,8 @@ impl ServerHandler for DesktopServer {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
+
     use super::*;
 
     #[test]
@@ -898,5 +1304,47 @@ mod tests {
         assert!(ProcessSlot::take(&KILLS).is_ok());
         drop(held);
         assert!(ProcessSlot::take(&LAUNCHES).is_ok());
+    }
+
+    /// An output schema admits the reply and a failure alike, and never
+    /// requires the success fields of a failed call.
+    #[test]
+    fn output_schemas_admit_success_and_failure() {
+        let schema = schema::<KillReply>();
+        let value = Value::Object((*schema).clone());
+        assert_eq!(value["type"], "object");
+        assert!(value["properties"]["pid"].is_object(), "{value}");
+        assert!(value["properties"]["error"].is_object(), "{value}");
+        assert!(value.get("required").is_none(), "{value}");
+        let branches = value["anyOf"].as_array().expect("BUG: anyOf");
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[1]["required"], json!(["error"]));
+        assert!(
+            branches[0]["required"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|f| f == "pid")),
+            "{value}"
+        );
+    }
+
+    /// A failure's structured content is the error envelope; a reply's is
+    /// the value, with the same JSON as text.
+    #[test]
+    fn replies_carry_structured_content_and_text() {
+        let ok = reply(&TypedReply { characters: 3 });
+        assert_eq!(ok.structured_content, Some(json!({ "characters": 3 })));
+        let text = match &ok.content[0] {
+            ContentBlock::Text(t) => t.text.clone(),
+            other => panic!("not text: {other:?}"),
+        };
+        assert_eq!(text, r#"{"characters":3}"#);
+        let bad = failure(&ToolError::Busy("queue".into()));
+        assert_eq!(bad.is_error, Some(true));
+        assert_eq!(
+            bad.structured_content
+                .as_ref()
+                .map(|v| v["error"]["code"].clone()),
+            Some(json!("busy"))
+        );
     }
 }
