@@ -152,11 +152,15 @@ pub fn still_bound(target: Target, bound: Option<u32>, fg: Option<&Foreground>) 
 }
 
 /// Refuses a pid whose process is not the one this session first saw under
-/// it (`then`, its start time): Windows recycles pids, and input must not
-/// follow a pid to an unrelated process. `now` is the start time of the
-/// process holding the pid now, `None` when none does.
+/// it (`then`, its start time): OSes recycle pids, and input must not follow
+/// a pid to an unrelated process. `now` is the start time of the process
+/// holding the pid now, `None` when none does or the OS cannot say. Without
+/// a start time there is no identity to hold the pid to, so it is refused.
 pub fn same_process(pid: u32, then: Option<u64>, now: Option<u64>) -> ToolResult<()> {
     match then {
+        None => Err(ToolError::NotSupported(format!(
+            "process {pid} cannot be told apart from a later process reusing its pid (no start time on this OS, or it has exited), so it is not a safety target; pass window_id"
+        ))),
         Some(then) if now != Some(then) => Err(ToolError::NotFound(format!(
             "process {pid} has exited since this session saw it{}; this session does not re-bind a pid it handed out, so target the new process by window_id",
             if now.is_some() {
@@ -649,7 +653,8 @@ mod tests {
     }
 
     /// A pid held by another process than the one first seen under it, or
-    /// by none, is refused; an OS that reports no start times binds nothing.
+    /// by none, is refused; so is one whose process identity the OS cannot
+    /// report, which could not be told from a reuse.
     #[test]
     fn a_recycled_pid_is_refused() {
         assert!(same_process(7, Some(1), Some(1)).is_ok());
@@ -659,7 +664,9 @@ mod tests {
             same_process(7, Some(1), None).is_err(),
             "the process exited"
         );
-        assert!(same_process(7, None, Some(2)).is_ok());
+
+        let err = same_process(7, None, Some(2)).expect_err("BUG: no identity to hold");
+        assert!(err.to_string().contains("window_id"), "{err}");
     }
 
     /// A point whose window the OS cannot name is refused, not waved

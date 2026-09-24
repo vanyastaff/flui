@@ -101,13 +101,15 @@ impl Children {
         });
         // Joining the job itself is what keeps grandchildren in: a child is
         // then in the job from its creation, before it can start anything.
-        // Refused (a host job that forbids nesting), each child still joins
-        // right after its spawn.
+        // Refused (a host job that forbids nesting), a child would run
+        // outside the job until assigned, long enough to start one that
+        // escapes, so launch is disabled instead.
         #[cfg(target_os = "windows")]
-        if let Ok(job) = &mut job
-            && let Err(e) = job.assign_self()
+        if let Ok(own) = &mut job
+            && let Err(e) = own.assign_self()
         {
-            tracing::warn!("processes the children start may outlive a hard kill: {e}");
+            tracing::warn!("launch is disabled, the server cannot join its kill-on-exit job: {e}");
+            job = Err(e.to_string());
         }
         Self {
             tracked: Mutex::new(Tracked::default()),

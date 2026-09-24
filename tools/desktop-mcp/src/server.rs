@@ -233,7 +233,7 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Read the accessibility tree of a window (window_id) or of all a process's windows and popups (pid). Nodes: id (e12, for later calls), role, name, value, automation_id, class_name, rect, enabled, has_keyboard_focus, is_keyboard_focusable, toggle_state, patterns, children, omitted_children. truncated: true when the read hit its element or time budget.",
+        description = "Read the accessibility tree of a window (window_id) or of all a process's windows and popups (pid). Nodes: id (e12, for later calls), role, name, value, automation_id, class_name, rect, enabled, has_keyboard_focus, is_keyboard_focusable, toggle_state, patterns, children, omitted_children. truncated: true when the read left anything out (a budget, the depth, a provider failing partway).",
         annotations(read_only_hint = true)
     )]
     async fn accessibility_tree(

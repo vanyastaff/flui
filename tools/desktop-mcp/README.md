@@ -78,7 +78,8 @@ while it is captured is refused rather than returned with bounds that no longer 
 A read (`accessibility_tree`, `find`, one `wait_for` poll) fetches at most 5000 elements and
 16 MiB of strings, cuts any one string at 4096 characters (ending in `…`), and stops after
 10 s (a `wait_for` at its own timeout), so a huge, hostile or hung tree cannot hold the
-server; a reply that stopped early says `truncated: true`, and an empty `find` is then no proof
+server; a reply that left anything out (a budget, the depth, a provider failing partway) says
+`truncated: true`, and an empty `find` is then no proof
 the element is absent. A process's reads include its popup menus and drop-downs, which are
 windows of their own; an element that shows up under two windows (an owned dialog) is reported
 once.
@@ -105,8 +106,9 @@ modifier is still released. Otherwise it refuses and sends nothing, so keystroke
 never land in another application.
 
 - A window id is bound to the process that owned it when this session listed it, and a pid to
-  the process that held it when first seen (its start time): Windows recycles both, and a
-  target that now names another process is refused. Neither a later `list_windows` nor
+  the process that held it when first seen (its start time): OSes recycle both, and a
+  target that now names another process is refused. Where the OS reports no start time
+  (macOS, for now) a pid is not accepted as a safety target at all; pass `window_id`. Neither a later `list_windows` nor
   `activate_window` re-binds an id or pid, so a target an agent still holds never comes to name
   a new process; only `launch` binds the pid of the process it just started.
 - A drag that stops partway releases the button (the drop) at a point verified inside the
@@ -141,7 +143,7 @@ sending input.
 | Input (`click`, `key`, …) | yes (enigo; pointer moves via `SetCursorPos`) | built (enigo); type-checked in CI (clippy), never run | not yet |
 | Accessibility tools | yes (UI Automation) | "not supported on this OS yet (UIA only)" | same |
 | `activate_window` | yes | not supported yet | not supported yet |
-| Launched processes ended on server exit (`launch` refuses to start anything without the job on Windows) | yes, with everything they started, also on a hard kill (the server runs in a kill-on-close job) | on a clean exit, direct children only | same |
+| Launched processes ended on server exit (`launch` refuses to start anything on Windows unless the server is in its own kill-on-close job) | yes, with everything they started, also on a hard kill (the server runs in a kill-on-close job) | on a clean exit, direct children only | same |
 
 `kill` ends the launched process itself; what it started ends when the server exits.
 

@@ -183,9 +183,9 @@ impl Input {
         cause: ToolError,
         guard: &mut Guard<'_>,
     ) -> ToolError {
-        let back = self
-            .move_verified(last.0, last.1)
-            .and_then(|()| guard(Some(last)));
+        // Checked before the move: with the button held, a move is itself a
+        // drag, and it must not reach a window that took the foreground.
+        let back = guard(Some(last)).and_then(|()| self.move_verified(last.0, last.1));
         // No key goes out unverified: an Esc after the target lost the
         // foreground would reach whatever took it. The release is the one
         // event that must go out regardless, or the button stays held.

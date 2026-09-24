@@ -185,15 +185,18 @@ impl Uia {
         walk.budget = walk.budget.saturating_sub(1);
         walk.bytes = walk.bytes.saturating_sub(node.text_bytes());
         let mut omitted = 0;
-        let mut child = self
-            .walker
-            .get_first_child_build_cache(element, &self.single)
-            .ok();
+        let mut child = walked(
+            self.walker
+                .get_first_child_build_cache(element, &self.single),
+            walk,
+        );
         while let Some(current) = child {
             let exhausted = walk.exhausted();
             if depth < walk.max_depth && !exhausted {
                 node.children.extend(self.build(&current, depth + 1, walk));
             } else {
+                // Left out by the depth too: what a search did not see.
+                walk.truncated = true;
                 omitted += 1;
                 // Counting what is left out costs a fetch per child too, so
                 // it spends the same budget: an exhausted budget stops the
@@ -203,10 +206,11 @@ impl Uia {
                 }
                 walk.budget -= 1;
             }
-            child = self
-                .walker
-                .get_next_sibling_build_cache(&current, &self.single)
-                .ok();
+            child = walked(
+                self.walker
+                    .get_next_sibling_build_cache(&current, &self.single),
+                walk,
+            );
         }
         if omitted > 0 {
             node.omitted_children = Some(omitted);
@@ -606,6 +610,22 @@ impl AccessibilityBackend for Uia {
             .element_from_handle(hwnd(window))
             .and_then(|e| e.set_focus())
             .map_err(platform("focusing the window through UI Automation"))
+    }
+}
+
+/// The element a walker step reached: `None` at the end of the children,
+/// and also where the provider failed (it disconnected, the element went),
+/// which marks the read truncated rather than passing for the end.
+fn walked(step: uiautomation::Result<UIElement>, walk: &mut Walk) -> Option<UIElement> {
+    match step {
+        Ok(element) => Some(element),
+        // A walker with nowhere to go returns a null element, which
+        // windows-rs reports as an error with no code.
+        Err(e) if e.code() == 0 => None,
+        Err(_) => {
+            walk.truncated = true;
+            None
+        }
     }
 }
 

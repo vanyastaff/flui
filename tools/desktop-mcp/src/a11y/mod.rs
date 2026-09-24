@@ -63,9 +63,9 @@ pub struct Node {
 pub struct Read {
     /// One tree per window read, front to back.
     pub roots: Vec<Node>,
-    /// Whether the read stopped at its element budget or its deadline before
-    /// it saw everything within `max_depth`: then a search that found nothing
-    /// is not proof that nothing matches.
+    /// Whether the read left anything out — at its element, byte or time
+    /// budget, below its depth, or where the provider failed partway: then a
+    /// search that found nothing is not proof that nothing matches.
     pub truncated: bool,
 }
 
