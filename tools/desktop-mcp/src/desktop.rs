@@ -450,14 +450,10 @@ impl Desktop {
             }
             ScreenshotTarget::Direct(t) => (t, None),
             ScreenshotTarget::Pid(pid) => {
-                // A capture sends nothing, so on an OS with no process
-                // identity (macOS) the pid is used as listed; on Windows it
-                // is held to its identity like any other target.
-                let started = match self.bound(Some(Target::Pid(pid))) {
-                    Ok(bound) => bound.started,
-                    Err(ToolError::NotSupported(_)) if !cfg!(target_os = "windows") => None,
-                    Err(e) => return Err(e),
-                };
+                // Held to its identity like any other target: without one
+                // (macOS) a reused pid would capture another application's
+                // window, so the pid is refused and window_id is the way.
+                let started = self.bound(Some(Target::Pid(pid)))?.started;
                 let windows = Self::resolve(Target::Pid(pid))?;
                 let pick = windows
                     .iter()

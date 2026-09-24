@@ -285,14 +285,15 @@ impl Uia {
         }
         // Read live: an object that now reports another kind of element is a
         // replacement, whatever its runtime id says.
+        // One cross-process call for all three, bounded by the call timeout.
+        let fresh = held
+            .element
+            .build_updated_cache(&self.single)
+            .map_err(|_| ToolError::StaleElement(handle.to_owned()))?;
         let live = Kind {
-            control_type: held
-                .element
-                .get_property_value(UIProperty::ControlType)
-                .ok()
-                .and_then(|v| TryInto::<i32>::try_into(v).ok()),
-            automation_id: held.element.get_automation_id().ok(),
-            class_name: held.element.get_classname().ok(),
+            control_type: cached_i32(&fresh, UIProperty::ControlType),
+            automation_id: fresh.get_cached_automation_id().ok(),
+            class_name: fresh.get_cached_classname().ok(),
         };
         if live != held.kind {
             return Err(ToolError::StaleElement(handle.to_owned()));

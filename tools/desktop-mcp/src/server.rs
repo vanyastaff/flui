@@ -120,7 +120,13 @@ async fn blocking<T: Send + 'static>(
     let (reply, result) = tokio::sync::oneshot::channel();
     let job_ct = ct.clone();
     tokio::task::spawn_blocking(move || {
-        if reply.is_closed() || job_ct.is_cancelled() {
+        // Cancelled before it started: say so, rather than drop the reply
+        // and have it read as a panic.
+        if job_ct.is_cancelled() {
+            let _ = reply.send(Err(ToolError::Cancelled));
+            return;
+        }
+        if reply.is_closed() {
             return;
         }
         let _ = reply.send(work());

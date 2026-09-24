@@ -241,11 +241,17 @@ impl Input {
             .button(primary, Direction::Press)
             .map_err(failed("pressing for a drag"))
         {
-            return Err(match self.release_held() {
-                Ok(()) => cause,
-                Err(e) => ToolError::Interrupted {
-                    cause: Box::new(cause),
-                    what: format!(
+            // A press that went out, then released, is a click at the drag's
+            // start: say so either way.
+            let released = self.release_held();
+            return Err(ToolError::Interrupted {
+                cause: Box::new(cause),
+                what: match released {
+                    Ok(()) => format!(
+                        "the press may have gone out and was released, which is a click at ({}, {}); look before retrying",
+                        from.0, from.1
+                    ),
+                    Err(e) => format!(
                         "the press may have gone out and releasing it failed ({e}); the button may still be held"
                     ),
                 },
