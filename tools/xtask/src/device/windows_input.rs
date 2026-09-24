@@ -35,7 +35,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, VIRTUAL_KEY, VK_RETURN, VK_TAB,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetForegroundWindow, SetCursorPos, SetForegroundWindow,
+    GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, SetCursorPos, SetForegroundWindow,
+    WindowFromPoint,
 };
 
 use super::uia::{self, BUTTON, Session, Start, TEXT};
@@ -219,42 +220,72 @@ fn still_foreground(hwnd: HWND) -> bool {
 }
 
 /// A left click at `point`, in physical screen pixels. `false` when the
-/// probe lost the foreground and no press was sent.
+/// probe lost the foreground or the point does not reach its window, and no
+/// press was sent.
 ///
-/// The foreground is checked again immediately before the press, after the
-/// cursor move's settle, since a window can take it in between. A press that
-/// went out is always released, even if the foreground moved meanwhile: a
-/// release carries no action of its own, and withholding it would leave the
-/// button held for whatever the user does next.
+/// Both are checked again immediately before the press, after the cursor
+/// move's settle: a window can take the foreground in between, and being in
+/// front does not make the probe the window under the point — a
+/// non-activating overlay, or the probe having moved, would take the press.
+/// A press that went out is always released ([`release`]).
 fn click(hwnd: HWND, point: POINT) -> anyhow::Result<bool> {
     if !still_foreground(hwnd) {
         return Ok(false);
     }
-    // SAFETY: moves the cursor; `point` is on the probe's window.
+    // SAFETY: moves the cursor only; no window receives input from it.
     unsafe { SetCursorPos(point.x, point.y) }?;
     std::thread::sleep(HOLD);
-    if !still_foreground(hwnd) {
+    if !still_foreground(hwnd) || !hits(hwnd, point) {
         return Ok(false);
     }
     send(&[mouse(MOUSEEVENTF_LEFTDOWN)])?;
     std::thread::sleep(HOLD);
-    send(&[mouse(MOUSEEVENTF_LEFTUP)])?;
+    release(&[mouse(MOUSEEVENTF_LEFTUP)])?;
     std::thread::sleep(HOLD);
     Ok(true)
 }
 
 /// A press and release of `key`. `false` when the probe lost the foreground
-/// and no press was sent; a press that went out is always released, as in
-/// [`click`].
+/// and no press was sent; a press that went out is always released
+/// ([`release`]).
 fn press(hwnd: HWND, key: VIRTUAL_KEY) -> anyhow::Result<bool> {
     if !still_foreground(hwnd) {
         return Ok(false);
     }
     send(&[keyboard(key, KEYBD_EVENT_FLAGS(0))])?;
     std::thread::sleep(HOLD);
-    send(&[keyboard(key, KEYEVENTF_KEYUP)])?;
+    release(&[keyboard(key, KEYEVENTF_KEYUP)])?;
     std::thread::sleep(HOLD);
     Ok(true)
+}
+
+/// Whether `point` hits `hwnd` itself: the top-level window under it, as the
+/// OS hit-tests, is the probe's. Printed when not.
+fn hits(hwnd: HWND, point: POINT) -> bool {
+    // SAFETY: both calls only read window-manager state for a screen point
+    // and a window handle.
+    let root = unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) };
+    if root != hwnd {
+        println!(
+            "CANNOT_VERIFY: ({}, {}) does not hit the probe's window (another window is there); no press was sent",
+            point.x, point.y
+        );
+    }
+    root == hwnd
+}
+
+/// Sends the release of a press that already went out, retrying once: the
+/// release is what keeps a button or key from staying held after the check,
+/// so a transient refusal (a desktop or UIPI change) is not the last word.
+fn release(inputs: &[INPUT]) -> anyhow::Result<()> {
+    send(inputs).or_else(|first| {
+        std::thread::sleep(HOLD);
+        send(inputs).map_err(|second| {
+            anyhow::anyhow!(
+                "releasing a press failed twice ({first}; {second}); it may still be held"
+            )
+        })
+    })
 }
 
 fn mouse(flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS) -> INPUT {
