@@ -62,6 +62,12 @@ flag would gather its subtree into one node. A focus edge changes the flag, not 
 as `Role::Window` when nothing gave it a role (`to_published_node`, both the full and the
 incremental path).
 
+A `FocusScope` publishes no focus semantics of its own, as in Flutter, whose
+`_FocusScopeState.build` adds only `Semantics(explicitChildNodes: true)` (`focus_scope.dart`,
+tag `3.44.0`): when a scope's backing node itself holds the primary focus (an empty scope focused
+explicitly), no node is focused for assistive technology and the root is reported. A scope does
+record its `Actions` chain on its node (decision 2), since shortcuts resolve there.
+
 ## Flutter divergences
 
 - **The unfocused key target.** Flutter's primary focus falls back to the root scope and an
