@@ -410,16 +410,34 @@ impl Input {
     /// Presses and releases `key` apart: once the press is in, a failed
     /// release leaves it tracked as held (enigo keeps it in its held set), so
     /// the next input releases it first, and the error says it went in.
+    ///
+    /// A press that reports failure may still have gone out (an Enter can
+    /// submit a form), so it is released regardless and reported as having
+    /// possibly gone in.
     fn tap(&mut self, key: Key) -> ToolResult<()> {
-        self.enigo
-            .key(key, Direction::Press)
-            .map_err(failed("pressing a key"))?;
-        self.enigo
-            .key(key, Direction::Release)
-            .map_err(|e| ToolError::Interrupted {
+        let pressed = self.enigo.key(key, Direction::Press);
+        let released = self.enigo.key(key, Direction::Release);
+        match (pressed, released) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(e)) => Err(ToolError::Interrupted {
                 cause: Box::new(ToolError::platform("releasing a key", e)),
-                what: format!("{key:?} went in but its release failed; it may still be held until the next input releases it"),
-            })
+                what: format!(
+                    "{key:?} went in but its release failed; it may still be held until the next input releases it"
+                ),
+            }),
+            (Err(e), released) => Err(ToolError::Interrupted {
+                cause: Box::new(ToolError::platform("pressing a key", e)),
+                what: if released.is_ok() {
+                    format!(
+                        "{key:?} may have gone in before its press reported failure, and it was released; look before retrying"
+                    )
+                } else {
+                    format!(
+                        "{key:?} may have gone in and could not be released; it may still be held"
+                    )
+                },
+            }),
+        }
     }
 
     /// Presses the combo `repeat` times: modifiers down in order, key
@@ -457,15 +475,20 @@ impl Input {
         let mut result = Ok(());
         for &m in modifiers {
             let k = modifier_key(m);
-            result = guard(None).and_then(|()| {
-                self.enigo
-                    .key(k, Direction::Press)
-                    .map_err(failed("pressing a modifier"))
-            });
+            result = guard(None);
             if result.is_err() {
                 break;
             }
+            // Counted as held before the press: one reported failed may still
+            // have gone down, and the release below then lifts it too.
             held.push(k);
+            result = self
+                .enigo
+                .key(k, Direction::Press)
+                .map_err(failed("pressing a modifier"));
+            if result.is_err() {
+                break;
+            }
         }
         if result.is_ok() {
             result = guard(None);

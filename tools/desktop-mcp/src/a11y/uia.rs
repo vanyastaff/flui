@@ -222,10 +222,18 @@ impl Uia {
         // answers to the id, and the new element comes from the same process.
         // A provider elsewhere claiming a trusted application's runtime id
         // gets a handle of its own instead of taking over that one.
+        let kind = Kind {
+            control_type: cached_i32(element, UIProperty::ControlType),
+            automation_id: element.get_cached_automation_id().ok(),
+            class_name: element.get_cached_classname().ok(),
+        };
+        // A new element of another kind claiming the id is a collision, not
+        // the same control read again: it gets its own handle.
         if let Identity::Runtime(id) = &key
             && let Some(held) = self.elements.by_identity(&key)
             && (held.pid != pid
                 || held.started != started
+                || held.kind != kind
                 || !crate::os::runtime_id(held.element.as_ref())
                     .is_ok_and(|now| now.as_deref() == Some(id.as_slice())))
         {
@@ -234,11 +242,6 @@ impl Uia {
         let runtime = match &key {
             Identity::Runtime(id) => Some(id.clone()),
             Identity::Anonymous(_) => None,
-        };
-        let kind = Kind {
-            control_type: cached_i32(element, UIProperty::ControlType),
-            automation_id: element.get_cached_automation_id().ok(),
-            class_name: element.get_cached_classname().ok(),
         };
         self.elements.insert(
             key,
