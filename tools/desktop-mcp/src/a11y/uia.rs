@@ -25,7 +25,7 @@ use uiautomation::{UIAutomation, UIElement, UITreeWalker};
 
 use super::{AccessibilityBackend, Action, ClickPoint, Node, Read};
 use crate::cache::ElementCache;
-use crate::error::{ToolError, ToolResult};
+use crate::error::{Effect, ToolError, ToolResult};
 use crate::geometry::Rect;
 
 /// Pattern-availability properties, and the names the tools report.
@@ -294,7 +294,7 @@ impl Uia {
             )));
         };
         if crate::os::process_started(held.pid) != Some(started) {
-            return Err(ToolError::StaleElement(handle.to_owned()));
+            return Err(ToolError::gone_element(handle, "its process has exited"));
         }
         // The object itself must still answer to the id it was issued
         // under: a control destroyed and replaced inside the same running
@@ -310,7 +310,10 @@ impl Uia {
         if !crate::os::runtime_id(held.element.as_ref())
             .is_ok_and(|now| now.as_deref() == Some(id.as_slice()))
         {
-            return Err(ToolError::StaleElement(handle.to_owned()));
+            return Err(ToolError::gone_element(
+                handle,
+                "the application replaced or removed it",
+            ));
         }
         // Read live: an object that now reports another kind of element is a
         // replacement, whatever its runtime id says.
@@ -333,7 +336,10 @@ impl Uia {
                 "re-reading the element",
                 "its kind or process could not be read, so it is not acted on",
             )),
-            _ => Err(ToolError::StaleElement(handle.to_owned())),
+            _ => Err(ToolError::gone_element(
+                handle,
+                "another element of the same process now answers under its identity",
+            )),
         }
     }
 
@@ -634,37 +640,34 @@ impl Uia {
             && !node.patterns.contains(&"Value")
             && node.value.is_none();
         if !same {
-            return Err(ToolError::Interrupted {
-                cause: Box::new(ToolError::platform(
-                    "reading back",
-                    "another element now answers for this one (its window was reused)",
-                )),
-                what: "the action itself succeeded; the element it acted on is gone, so do not repeat it".into(),
-            });
+            return Err(ToolError::platform(
+                "reading back",
+                "another element now answers for this one (its window was reused)",
+            )
+            .after(
+                Effect::Ran,
+                "the action itself succeeded; the element it acted on is gone, so do not repeat it",
+            ));
         }
+        const READBACK: &str = "the action itself succeeded; only reading the element's state afterwards failed, so do not repeat it";
         // The identity read can have used up a caller's deadline: the
         // value read is one more provider call.
         if until.is_some_and(|until| Instant::now() >= until) {
-            return Err(ToolError::Interrupted {
-                cause: Box::new(ToolError::platform(
-                    "reading back",
-                    "the readback ran out of time",
-                )),
-                what: "the action itself succeeded; only reading the element's state afterwards failed, so do not repeat it".into(),
-            });
+            return Err(
+                ToolError::platform("reading back", "the readback ran out of time")
+                    .after(Effect::Ran, READBACK),
+            );
         }
         if !self.read_value(fresh, node)
             || node.unmatchable
             || range_unread
             || (toggled && node.toggle_state.is_none())
         {
-            return Err(ToolError::Interrupted {
-                cause: Box::new(ToolError::platform(
-                    "reading back",
-                    "the element's state could not all be read",
-                )),
-                what: "the action itself succeeded; only reading the element's state afterwards failed, so do not repeat it".into(),
-            });
+            return Err(ToolError::platform(
+                "reading back",
+                "the element's state could not all be read",
+            )
+            .after(Effect::Ran, READBACK));
         }
         // The same element, as it is now: a class name or automation id the
         // action changed is what the next action's check compares against,
@@ -697,25 +700,18 @@ impl Uia {
                     break;
                 }
             }
-            let fresh =
-                element
-                    .build_updated_cache(&self.single)
-                    .map_err(|e| ToolError::Interrupted {
-                        cause: Box::new(classify(handle, "reading back focus", &e)),
-                        what: "focus was requested; only reading back where it landed failed"
-                            .into(),
-                    })?;
+            const REQUESTED: &str =
+                "focus was requested and may have landed; only reading it back failed";
+            let fresh = element.build_updated_cache(&self.single).map_err(|e| {
+                classify(handle, "reading back focus", &e).after(Effect::MayHaveRun, REQUESTED)
+            })?;
             let mut node = describe(&fresh, handle.to_owned());
             // Checked between the provider calls as well: each can take the
             // whole call timeout.
             let late = || {
-                (Instant::now() >= until).then(|| ToolError::Interrupted {
-                    cause: Box::new(ToolError::platform(
-                        "reading back focus",
-                        "the readback ran out of time",
-                    )),
-                    what: "focus was requested and may have landed; only reading it back failed"
-                        .into(),
+                (Instant::now() >= until).then(|| {
+                    ToolError::platform("reading back focus", "the readback ran out of time")
+                        .after(Effect::MayHaveRun, REQUESTED)
                 })
             };
             if node.has_keyboard_focus {
@@ -745,13 +741,14 @@ impl Uia {
             focusable = cached_flag(&fresh, UIProperty::IsKeyboardFocusable);
         }
         if unknown {
-            return Err(ToolError::Interrupted {
-                cause: Box::new(ToolError::platform(
-                    "reading back focus",
-                    "where keyboard focus is could not be read",
-                )),
-                what: "focus was requested; only reading back where it landed failed".into(),
-            });
+            return Err(ToolError::platform(
+                "reading back focus",
+                "where keyboard focus is could not be read",
+            )
+            .after(
+                Effect::MayHaveRun,
+                "focus was requested; only reading back where it landed failed",
+            ));
         }
         Err(ToolError::NotSupported(format!(
             "element `{handle}` accepted focus but keyboard focus is neither on it nor inside it{}; click it or use key tab to move focus",
@@ -763,17 +760,18 @@ impl Uia {
         )))
     }
 
-    /// The element's patterns, read live, for error messages: stopped after
-    /// [`ANCESTOR_DEADLINE`] in all, since each read can take a provider's
-    /// whole call timeout, and marked when cut short.
-    fn live_patterns(element: &UIElement) -> String {
+    /// The element's patterns, read live, for error messages: the ones it
+    /// offers, and the ones whose availability could not be read. Stopped
+    /// after [`ANCESTOR_DEADLINE`] in all, since each read can take a
+    /// provider's whole call timeout; the rest then count as unread.
+    fn live_patterns(element: &UIElement) -> (Vec<&'static str>, Vec<&'static str>) {
         let until = Instant::now() + ANCESTOR_DEADLINE;
         let mut names = Vec::new();
         let mut unread = Vec::new();
         for &(prop, name) in PATTERNS {
             if Instant::now() >= until {
-                names.push("… (not all read)");
-                break;
+                unread.push(name);
+                continue;
             }
             match element
                 .get_property_value(prop)
@@ -786,11 +784,16 @@ impl Uia {
                 None => unread.push(name),
             }
         }
-        let list = names.join(", ");
-        if unread.is_empty() {
-            list
-        } else {
-            format!("{list} (could not read: {})", unread.join(", "))
+        (names, unread)
+    }
+
+    fn unsupported(handle: &str, element: &UIElement, action: &'static str) -> ToolError {
+        let (supported, unread) = Self::live_patterns(element);
+        ToolError::ActionUnsupported {
+            element: handle.to_owned(),
+            action,
+            supported,
+            unread,
         }
     }
 
@@ -823,11 +826,7 @@ impl Uia {
         if Self::has_pattern(handle, element, prop)? {
             Ok(())
         } else {
-            Err(ToolError::PatternUnsupported {
-                element: handle.to_owned(),
-                pattern,
-                supported: Self::live_patterns(element),
-            })
+            Err(Self::unsupported(handle, element, pattern))
         }
     }
 
@@ -841,9 +840,9 @@ impl Uia {
         // refusal. Anything else must be looked at before a retry.
         let fail = |what: &'static str| {
             move |e: uiautomation::Error| match classify(handle, what, &e) {
-                refused @ ToolError::InvalidArgument(_) => refused,
+                refused @ ToolError::Disabled { .. } => refused,
                 cause => {
-                    let what = if matches!(cause, ToolError::StaleElement(_)) {
+                    let detail = if matches!(cause, ToolError::Gone { .. }) {
                         format!(
                             "it went away during {what}, which usually means the action ran; read the tree before retrying"
                         )
@@ -852,10 +851,7 @@ impl Uia {
                             "{what} reached the application and then failed or timed out, so it may have run; read the tree before retrying"
                         )
                     };
-                    ToolError::Interrupted {
-                        cause: Box::new(cause),
-                        what,
-                    }
+                    cause.after(Effect::MayHaveRun, detail)
                 }
             }
         };
@@ -915,11 +911,7 @@ impl Uia {
                         .set_value(number)
                         .map_err(fail("set_value"));
                 }
-                Err(ToolError::PatternUnsupported {
-                    element: handle.to_owned(),
-                    pattern: "Value (or RangeValue)",
-                    supported: Self::live_patterns(element),
-                })
+                Err(Self::unsupported(handle, element, "Value (or RangeValue)"))
             }
             Action::Focus => element.set_focus().map_err(fail("focus")),
             Action::Select => {
@@ -1059,10 +1051,10 @@ impl AccessibilityBackend for Uia {
             }
             // The action itself succeeded; only reading the result failed.
             // Say so, or a retry repeats a destructive action.
-            Err(e) => Err(ToolError::Interrupted {
-                cause: Box::new(classify(handle, "reading back", &e)),
-                what: "the action itself succeeded; only reading the element afterwards failed, so do not repeat it".into(),
-            }),
+            Err(e) => Err(classify(handle, "reading back", &e).after(
+                Effect::Ran,
+                "the action itself succeeded; only reading the element afterwards failed, so do not repeat it",
+            )),
         }
     }
 
@@ -1380,13 +1372,18 @@ fn is_gone(code: i32) -> bool {
     )
 }
 
-/// Maps a UIA failure on `handle` to the error the agent can act on.
-fn classify(handle: &str, what: &str, e: &uiautomation::Error) -> ToolError {
+/// Maps a UIA failure on `handle` during `what` to the error the agent can
+/// act on.
+fn classify(handle: &str, what: &'static str, e: &uiautomation::Error) -> ToolError {
     match e.code() {
-        code if is_gone(code) => ToolError::StaleElement(handle.to_owned()),
-        E_ELEMENT_NOT_ENABLED => ToolError::InvalidArgument(format!(
-            "element `{handle}` is disabled; {what} was not performed"
-        )),
+        code if is_gone(code) => ToolError::gone_element(
+            handle,
+            "the application removed it, or its window or process is gone",
+        ),
+        E_ELEMENT_NOT_ENABLED => ToolError::Disabled {
+            element: handle.to_owned(),
+            action: what,
+        },
         _ => ToolError::platform(format!("{what} on element `{handle}`"), e),
     }
 }

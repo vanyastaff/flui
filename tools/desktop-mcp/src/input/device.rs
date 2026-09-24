@@ -10,7 +10,7 @@ use std::time::Duration;
 use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 
 use super::{Guard, MouseButton, Stroke, partial, strokes};
-use crate::error::{ToolError, ToolResult};
+use crate::error::{Effect, ToolError, ToolResult};
 use crate::keys::{KeyCombo, KeyName, Modifier};
 #[cfg(not(target_os = "windows"))]
 use enigo::Coordinate;
@@ -107,28 +107,24 @@ impl Input {
         if released.is_empty() && still_held.is_empty() {
             return Ok(());
         }
-        let stuck = (!still_held.is_empty()).then(|| {
-            ToolError::NotSupported(format!(
-                "{} still held from an earlier failed release; no input is sent until released",
-                still_held.join(", ")
-            ))
-        });
+        let stuck = (!still_held.is_empty()).then(|| ToolError::InputHeld(still_held.join(", ")));
         if released.is_empty() {
             return Err(stuck.expect("BUG: something was held"));
         }
-        Err(ToolError::Interrupted {
-            cause: Box::new(stuck.unwrap_or_else(|| {
-                ToolError::NotSupported(format!(
-                    "{} held from an earlier failed release {} released first",
-                    released.join(", "),
-                    if released.len() == 1 { "was" } else { "were" }
-                ))
-            })),
-            what: format!(
+        let cause = stuck.unwrap_or_else(|| {
+            ToolError::Busy(format!(
+                "{} held from an earlier failed release {} released first",
+                released.join(", "),
+                if released.len() == 1 { "was" } else { "were" }
+            ))
+        });
+        Err(cause.after(
+            Effect::SideEffect,
+            format!(
                 "{} went to wherever the pointer and focus are now and may have dropped, clicked or opened a menu there; nothing of this call was sent, so look, then retry",
                 released.join(", ")
             ),
-        })
+        ))
     }
 
     /// Releases every button and key this device holds, as far as the OS
@@ -268,14 +264,19 @@ impl Input {
                 .enigo
                 .button(button, Direction::Press)
                 .map_err(failed("pressing the button"));
+            let went = |sent| Effect::Partial {
+                sent,
+                total: clicks,
+                unit: "clicks",
+            };
             if let Err(cause) = pressed {
                 // A press reported failed may still have gone out, and with
                 // the release that follows it that is a whole click: say so,
                 // whether or not the release went through.
                 let released = self.release_held();
-                return Err(ToolError::Interrupted {
-                    cause: Box::new(cause),
-                    what: match released {
+                return Err(cause.after(
+                    went(sent),
+                    match released {
                         Ok(()) => format!(
                             "{sent} of {clicks} clicks completed, and click {} may also have gone through (its press reported failure, then it was released); look before retrying",
                             sent + 1
@@ -285,16 +286,16 @@ impl Input {
                             sent + 1
                         ),
                     },
-                });
+                ));
             }
             if let Err(cause) = self.release_held() {
-                return Err(ToolError::Interrupted {
-                    cause: Box::new(cause),
-                    what: format!(
+                return Err(cause.after(
+                    went(sent + 1),
+                    format!(
                         "click {} of {clicks} was pressed but not released; the button may still be held, and the next input releases it first",
                         sent + 1
                     ),
-                });
+                ));
             }
         }
         Ok(())
@@ -337,9 +338,9 @@ impl Input {
             // A press that went out, then released, is a click at the drag's
             // start: say so either way.
             let released = self.release_held();
-            return Err(ToolError::Interrupted {
-                cause: Box::new(cause),
-                what: match released {
+            return Err(cause.after(
+                Effect::MayHaveRun,
+                match released {
                     Ok(()) => format!(
                         "the press may have gone out and was released, which is a click at ({}, {}); look before retrying",
                         from.0, from.1
@@ -348,13 +349,14 @@ impl Input {
                         "the press may have gone out and releasing it failed ({e}); the button may still be held"
                     ),
                 },
-            });
+            ));
         }
         let steps = (duration.as_millis() / STEP.as_millis()).clamp(2, 200) as i32;
         // The steps are bounded; their interval is not, so a long drag lasts
         // as long as it was asked to.
         let interval = (duration / steps.unsigned_abs()).max(STEP);
         let mut last = from;
+        let mut done = 0;
         let mut moved = Ok(());
         for i in 1..=steps {
             let point = (lerp(from.0, to.0, i, steps), lerp(from.1, to.1, i, steps));
@@ -364,19 +366,29 @@ impl Input {
                 break;
             }
             last = point;
+            done = i;
         }
         if moved.is_ok() {
             moved = guard(Some(to)).and_then(|()| self.ensure_at(to.0, to.1));
         }
         match moved {
-            Ok(()) => self.release_held().map_err(|cause| ToolError::Interrupted {
-                cause: Box::new(cause),
-                what: format!(
-                    "the drag reached ({}, {}) but the button could not be released; it may still be held, so move nothing until it is released",
-                    to.0, to.1
-                ),
+            Ok(()) => self.release_held().map_err(|cause| {
+                cause.after(
+                    Effect::Ran,
+                    format!(
+                        "the drag reached ({}, {}) but the button could not be released; it may still be held, so move nothing until it is released",
+                        to.0, to.1
+                    ),
+                )
             }),
-            Err(cause) => Err(self.abort_drag(last, cause, guard)),
+            Err(cause) => {
+                let went = Effect::Partial {
+                    sent: done.unsigned_abs() as usize,
+                    total: steps.unsigned_abs() as usize,
+                    unit: "drag steps",
+                };
+                Err(self.abort_drag(last, cause, went, guard))
+            }
         }
     }
 
@@ -408,6 +420,7 @@ impl Input {
         &mut self,
         last: (i32, i32),
         cause: ToolError,
+        went: Effect,
         guard: &mut Guard<'_>,
     ) -> ToolError {
         // Checked before the move: with the button held, a move is itself a
@@ -433,10 +446,7 @@ impl Input {
         if let Err(e) = self.release_held() {
             what = format!("{what}; releasing the button failed ({e}), so it may still be held");
         }
-        ToolError::Interrupted {
-            cause: Box::new(cause),
-            what,
-        }
+        cause.after(went, what)
     }
 
     /// Moves to the point, then scrolls `dx`/`dy` wheel notches (positive
@@ -542,15 +552,15 @@ impl Input {
         let released = self.enigo.key(key, Direction::Release);
         match (pressed, released) {
             (Ok(()), Ok(())) => Ok(()),
-            (Ok(()), Err(e)) => Err(ToolError::Interrupted {
-                cause: Box::new(ToolError::platform("releasing a key", e)),
-                what: format!(
+            (Ok(()), Err(e)) => Err(ToolError::platform("releasing a key", e).after(
+                Effect::Ran,
+                format!(
                     "{key:?} went in but its release failed; it may still be held until the next input releases it"
                 ),
-            }),
-            (Err(e), released) => Err(ToolError::Interrupted {
-                cause: Box::new(ToolError::platform("pressing a key", e)),
-                what: if released.is_ok() {
+            )),
+            (Err(e), released) => Err(ToolError::platform("pressing a key", e).after(
+                Effect::MayHaveRun,
+                if released.is_ok() {
                     format!(
                         "{key:?} may have gone in before its press reported failure, and it was released; look before retrying"
                     )
@@ -559,7 +569,7 @@ impl Input {
                         "{key:?} may have gone in and could not be released; it may still be held"
                     )
                 },
-            }),
+            )),
         }
     }
 
@@ -687,19 +697,18 @@ impl Input {
             let released = self.enigo.key(key, Direction::Release);
             result = match (result, released) {
                 (Ok(()), Ok(())) => Ok(()),
-                (Ok(()), Err(e)) => Err(ToolError::platform(
-                    "releasing the key (it may still be held)",
-                    e,
+                (Ok(()), Err(e)) => Err(ToolError::platform("releasing the key", e).after(
+                    Effect::Ran,
+                    "the key went out but its release failed; it may still be held until the next input releases it",
                 )),
-                (Err(cause), released) => Err(ToolError::Interrupted {
-                    cause: Box::new(cause),
-                    what: if released.is_ok() {
-                        "the key may have gone out before its press reported failure, and it was released; look before retrying".into()
+                (Err(cause), released) => Err(cause.after(
+                    Effect::MayHaveRun,
+                    if released.is_ok() {
+                        "the key may have gone out before its press reported failure, and it was released; look before retrying"
                     } else {
                         "the key may have gone out and could not be released; it may still be held"
-                            .into()
                     },
-                }),
+                )),
             };
         }
         // Modifiers released with nothing pressed while they were down are a
@@ -714,12 +723,10 @@ impl Input {
                 "{held:?} were pressed without the key and could not be masked, so releasing them may act as a shortcut of their own (menu bar, Start, language switch); look before retrying"
             );
             result = Err(match result {
-                Ok(()) => ToolError::platform("masking released modifiers", what),
-                Err(cause) => ToolError::Interrupted {
-                    cause: Box::new(cause),
-                    what,
-                },
-            });
+                Ok(()) => ToolError::platform("masking released modifiers", &what),
+                Err(cause) => cause,
+            }
+            .after(Effect::SideEffect, what));
         }
         // Every release is tried; one that fails is reported even when an
         // earlier failure is the cause, since a modifier left down changes
@@ -735,12 +742,10 @@ impl Input {
                 "{stuck:?} could not be released and may still be held; the next input releases them first"
             );
             result = Err(match result {
-                Ok(()) => ToolError::platform("releasing a modifier", what),
-                Err(cause) => ToolError::Interrupted {
-                    cause: Box::new(cause),
-                    what,
-                },
-            });
+                Ok(()) => ToolError::platform("releasing a modifier", &what),
+                Err(cause) => cause,
+            }
+            .after(Effect::SideEffect, what));
         }
         // Stopped with modifiers already down: they reached the target and
         // came back up (masked), which the caller is told rather than
@@ -749,16 +754,12 @@ impl Input {
             && !went_down.is_empty()
             && let Err(cause) = result
         {
-            result = Err(if matches!(cause, ToolError::Interrupted { .. }) {
-                cause
-            } else {
-                ToolError::Interrupted {
-                    cause: Box::new(cause),
-                    what: format!(
-                        "{went_down:?} went down and were released again without the key; nothing else was sent"
-                    ),
-                }
-            });
+            result = Err(cause.after(
+                Effect::SideEffect,
+                format!(
+                    "{went_down:?} went down and were released again without the key; nothing else was sent"
+                ),
+            ));
         }
         result.map_err(|e| (e, sent))
     }

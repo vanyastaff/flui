@@ -91,8 +91,16 @@ fn respond<T: Serialize>(result: ToolResult<T>) -> CallToolResult {
         serde_json::to_value(v).map_err(|e| ToolError::platform("serializing the reply", e))
     }) {
         Ok(value) => CallToolResult::structured(value),
-        Err(e) => CallToolResult::error(vec![ContentBlock::text(e.to_string())]),
+        Err(e) => failure(&e),
     }
+}
+
+/// A failed call: the readable message as text, and the error's code,
+/// retry policy, fields and effect as structured content.
+fn failure(e: &ToolError) -> CallToolResult {
+    let mut result = CallToolResult::error(vec![ContentBlock::text(e.to_string())]);
+    result.structured_content = Some(e.payload());
+    result
 }
 
 /// The value of a validation, or the tool error it failed with.
@@ -204,9 +212,11 @@ struct Pool {
 static LAUNCHES: Pool = Pool {
     running: std::sync::atomic::AtomicUsize::new(0),
     limit: 8,
+    // Passing, if slowly: a stuck spawn is given up on after `SPAWN_WAIT`.
     full: |n| {
-        ToolError::NotSupported(format!(
-            "{n} launches are still starting their programs (stuck on unreachable paths?); launch is unavailable until one finishes"
+        ToolError::Busy(format!(
+            "{n} launches are still starting their programs (stuck on unreachable paths?); each is given up on after {} s",
+            SPAWN_WAIT.as_secs()
         ))
     },
 };
@@ -385,15 +395,11 @@ impl DesktopServer {
                 break;
             }
             // Refused for good, or skipped because the server is stopping:
-            // stop. Anything else (a full queue) is retried.
-            if matches!(
-                bound,
-                Err(ToolError::InvalidArgument(_) | ToolError::Cancelled)
-            ) {
-                break;
-            }
-            if bound.is_ok() {
-                break;
+            // stop. Anything passing (a full queue) is retried.
+            match &bound {
+                Ok(()) => break,
+                Err(e) if e.retry() == crate::error::Retry::Soon => {}
+                Err(_) => break,
             }
             tokio::time::sleep(POLL).await;
         }
@@ -403,11 +409,7 @@ impl DesktopServer {
         if let Err(e) = bound {
             // Skipped because the server is stopping, not cancelled by the
             // client: the process is ended with the rest at shutdown.
-            let why = if matches!(e, ToolError::Cancelled) {
-                "the server is shutting down".to_owned()
-            } else {
-                e.to_string()
-            };
+            let why = e.to_string();
             return respond(Ok(json!({
                 "pid": pid,
                 "window": null,
@@ -454,11 +456,9 @@ impl DesktopServer {
             if ct.is_cancelled() {
                 return self.void_launch(pid, launch).await;
             }
-            // Withdrawn at the deadline, not by the client or shutdown.
-            if matches!(windows, Err(ToolError::Cancelled))
-                && lookup.is_cancelled()
-                && !crate::desktop::stopping()
-            {
+            // Withdrawn at the deadline, not by the client (shutdown answers
+            // `ShuttingDown`, not `Cancelled`).
+            if matches!(windows, Err(ToolError::Cancelled)) && lookup.is_cancelled() {
                 return respond(Ok(json!({
                     "pid": pid,
                     "window": null,
@@ -484,12 +484,12 @@ impl DesktopServer {
                     let first = w.into_iter().min_by_key(|w| w.not_targetable.is_some());
                     return respond(Ok(json!({ "pid": pid, "window": first })));
                 }
-                Err(ToolError::Cancelled) if ct.is_cancelled() => {
+                Err(ToolError::Cancelled) => {
                     return self.void_launch(pid, launch).await;
                 }
                 // Skipped because the server is stopping: the pid still goes
                 // back, and the process is ended with the rest.
-                Err(ToolError::Cancelled) => {
+                Err(ToolError::ShuttingDown) => {
                     return respond(Ok(json!({
                         "pid": pid,
                         "window": null,
@@ -668,12 +668,13 @@ impl DesktopServer {
                             .push_str("\n(the read was truncated: it did not see the whole tree)");
                     }
                 }
-                // A pid with no window yet, or whose window closed while it
-                // was read (a splash screen), is worth waiting for.
-                Err(ToolError::NotFound(_) | ToolError::StaleElement(_))
-                    if matches!(target, Target::Pid(_)) => {}
+                // A pid with no window yet (a splash screen closed) is worth
+                // waiting for; a window target that closed is not.
+                Err(e)
+                    if e.retry() == crate::error::Retry::WhenAppears
+                        && matches!(target, Target::Pid(_)) => {}
                 // Passing: a full queue, a window that changed hands mid-read.
-                Err(ToolError::Busy(_)) => {}
+                Err(e) if e.retry() == crate::error::Retry::Soon => {}
                 Err(e) => return respond::<Value>(Err(e)),
             }
             if Instant::now() >= deadline {
@@ -889,10 +890,9 @@ mod tests {
         let held: Vec<ProcessSlot> = (0..LAUNCHES.limit)
             .map(|_| ProcessSlot::take(&LAUNCHES).expect("BUG: below the bound"))
             .collect();
-        // Not `Busy`: slots held by stuck spawns do not free up by retrying.
         assert!(matches!(
             ProcessSlot::take(&LAUNCHES),
-            Err(ToolError::NotSupported(_))
+            Err(ToolError::Busy(_))
         ));
         // Kills have threads of their own while launches are stuck.
         assert!(ProcessSlot::take(&KILLS).is_ok());

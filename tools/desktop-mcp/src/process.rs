@@ -310,8 +310,8 @@ impl Children {
             None => {}
         }
         if tracked.ending.contains(&pid) {
-            return Err(ToolError::InvalidArgument(format!(
-                "process {pid} is being ended by another kill; wait for that one"
+            return Err(ToolError::Busy(format!(
+                "process {pid} is being ended by another kill"
             )));
         }
         if let Some(mut child) = tracked.running.remove(&pid) {

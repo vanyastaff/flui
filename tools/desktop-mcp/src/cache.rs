@@ -11,7 +11,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 
-use crate::error::{ToolError, ToolResult};
+use crate::error::{HandleKind, ToolError, ToolResult};
 
 /// How many handles stay resolvable. A tree that keeps minting fresh
 /// identities (dynamic content, a `wait_for` polling one) must not grow the
@@ -112,13 +112,34 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
         self.by_key.remove(key);
     }
 
-    /// Resolves a handle issued by [`Self::insert`].
+    /// Resolves a handle issued by [`Self::insert`]. One issued and since
+    /// evicted answers as gone, not as never issued.
     pub fn get(&self, handle: &str) -> ToolResult<&T> {
         let n = parse_handle(handle)?;
         self.by_handle
             .get(&n)
             .map(|(_, value, _)| value)
-            .ok_or_else(|| ToolError::UnknownElement(handle.to_owned()))
+            .ok_or_else(|| self.missing(handle, n))
+    }
+
+    /// Why a parsed handle does not resolve: never issued, or issued and
+    /// dropped since to make room for newer ones.
+    fn missing(&self, handle: &str, n: u64) -> ToolError {
+        if n < self.next {
+            ToolError::Gone {
+                handle: handle.to_owned(),
+                kind: HandleKind::Element,
+                why: format!(
+                    "it was dropped to make room for newer handles (at most {} stay resolvable)",
+                    self.capacity
+                ),
+            }
+        } else {
+            ToolError::UnknownHandle {
+                handle: handle.to_owned(),
+                kind: HandleKind::Element,
+            }
+        }
     }
 
     /// Resolves a handle for an update in place (a held element's state
@@ -132,10 +153,16 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
     )]
     pub fn get_mut(&mut self, handle: &str) -> ToolResult<&mut T> {
         let n = parse_handle(handle)?;
+        if !self.by_handle.contains_key(&n) {
+            return Err(self.missing(handle, n));
+        }
         self.by_handle
             .get_mut(&n)
             .map(|(_, value, _)| value)
-            .ok_or_else(|| ToolError::UnknownElement(handle.to_owned()))
+            .ok_or_else(|| ToolError::UnknownHandle {
+                handle: handle.to_owned(),
+                kind: HandleKind::Element,
+            })
     }
 
     /// How many handles are live.
@@ -190,7 +217,9 @@ mod tests {
     fn unknown_and_malformed_handles_are_distinct_errors() {
         let mut cache = ElementCache::<Vec<i32>, &str>::default();
         cache.insert(vec![1], "a");
-        assert!(matches!(cache.get("e9"), Err(ToolError::UnknownElement(h)) if h == "e9"));
+        assert!(
+            matches!(cache.get("e9"), Err(ToolError::UnknownHandle { handle, .. }) if handle == "e9")
+        );
         for bad in ["", "12", "x1", "e", "e-1", "eabc"] {
             assert!(
                 matches!(cache.get(bad), Err(ToolError::InvalidArgument(_))),
@@ -210,7 +239,10 @@ mod tests {
         let b = cache.insert("b", 2);
         let c = cache.insert("c", 3);
         assert_eq!(cache.len(), 2);
-        assert!(cache.get(&a).is_err(), "the oldest was dropped");
+        assert!(
+            matches!(cache.get(&a), Err(ToolError::Gone { .. })),
+            "the oldest was dropped, and says so rather than 'never issued'"
+        );
         assert_eq!(cache.get(&b).copied().ok(), Some(2));
         assert_eq!(cache.get(&c).copied().ok(), Some(3));
         assert_eq!(cache.insert("b", 20), b, "a kept identity keeps its handle");

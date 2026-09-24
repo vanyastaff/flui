@@ -380,17 +380,15 @@ pub fn send_unicode(c: char) -> Result<(), (ToolError, Option<u16>, bool)> {
             "only the first half of `{c}` went in before the rest was blocked, so the field may hold half a character"
         )
     };
+    let detail = if released {
+        format!("{arrived}; check the text before retrying")
+    } else {
+        format!(
+            "{arrived}, and releasing its last unit failed, so a key may still be held; check the text before retrying"
+        )
+    };
     Err((
-        ToolError::Interrupted {
-            cause: Box::new(blocked),
-            what: if released {
-                format!("{arrived}; check the text before retrying")
-            } else {
-                format!(
-                    "{arrived}, and releasing its last unit failed, so a key may still be held; check the text before retrying"
-                )
-            },
-        },
+        blocked.after(crate::error::Effect::MayHaveRun, detail),
         stuck,
         typed,
     ))

@@ -106,15 +106,15 @@ pub fn partial(
     cause: crate::error::ToolError,
     sent: usize,
     total: usize,
-    unit: &str,
+    unit: &'static str,
 ) -> crate::error::ToolError {
     if sent == 0 {
         return cause;
     }
-    crate::error::ToolError::Interrupted {
-        cause: Box::new(cause),
-        what: format!("{sent} of {total} {unit} had already been sent, so a retry repeats them"),
-    }
+    cause.after(
+        crate::error::Effect::Partial { sent, total, unit },
+        format!("{sent} of {total} {unit} had already been sent, so a retry repeats them"),
+    )
 }
 
 #[cfg(test)]

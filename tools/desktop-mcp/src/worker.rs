@@ -95,7 +95,7 @@ impl Worker {
                 // like a call already running (whose input stops at its next
                 // event).
                 if crate::desktop::stopping() {
-                    let _ = reply.send(Err(ToolError::Cancelled));
+                    let _ = reply.send(Err(ToolError::ShuttingDown));
                     return;
                 }
                 let _ = reply.send(f(desktop));

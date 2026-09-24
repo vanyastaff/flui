@@ -745,7 +745,7 @@ impl Desktop {
         // Shutting down: the action in progress stops at its next event and
         // releases what it holds, instead of the server exiting under it.
         if STOPPING.load(Ordering::SeqCst) {
-            return Err(ToolError::Cancelled);
+            return Err(ToolError::ShuttingDown);
         }
         let Some(target) = target else {
             return Ok(());
@@ -799,7 +799,7 @@ impl Desktop {
                     ))
                 })?;
                 let pid = os::window_pid(window)
-                    .ok_or_else(|| ToolError::StaleElement(handle.clone()))?;
+                    .ok_or_else(|| ToolError::gone_element(handle, "its window has closed"))?;
                 (p.x, p.y, Some((handle.as_str(), window, pid)))
             }
         };
@@ -837,7 +837,7 @@ impl Desktop {
     pub fn move_mouse(&mut self, x: i32, y: i32) -> ToolResult<Value> {
         // Shutting down: no pointer moves once the session has ended.
         if STOPPING.load(Ordering::SeqCst) {
-            return Err(ToolError::Cancelled);
+            return Err(ToolError::ShuttingDown);
         }
         let input = self.input()?;
         // A move with a button still held from a failed release is a drag.
