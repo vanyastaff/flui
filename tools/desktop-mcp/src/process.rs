@@ -127,10 +127,16 @@ impl Children {
     }
 
     /// Starts the program with null stdio and records it.
-    pub fn launch(&self, spec: &LaunchSpec) -> ToolResult<u32> {
+    ///
+    /// Returns the pid and the process's start time, read while this set
+    /// still holds the child, so no later process can have taken the pid.
+    pub fn launch(&self, spec: &LaunchSpec) -> ToolResult<(u32, Option<u64>)> {
         if spec.program.trim().is_empty() {
             return Err(ToolError::InvalidArgument("program is empty".into()));
         }
+        // Reaped before the spawn: exited children still count against the
+        // process limit until reaped, and a full limit would fail the spawn.
+        self.lock().reap();
         let mut command = Command::new(&spec.program);
         command
             .args(&spec.args)
@@ -163,12 +169,12 @@ impl Children {
             )));
         }
         let pid = child.id();
+        let started = crate::os::process_started(pid);
         let mut tracked = self.lock();
-        tracked.reap();
         // A reused pid is a new process: its old exit no longer answers.
         tracked.exited.retain(|&(old, _)| old != pid);
         tracked.running.insert(pid, child);
-        Ok(pid)
+        Ok((pid, started))
     }
 
     /// Kills a child this session launched; one that already exited on its
@@ -177,7 +183,11 @@ impl Children {
         let mut tracked = self.lock();
         if let Some(mut child) = tracked.running.remove(&pid) {
             drop(tracked);
-            return Ok(end(pid, &mut child));
+            return end(pid, &mut child).inspect_err(|_| {
+                // Still running: keep it tracked, so it can be retried and
+                // is ended again at shutdown.
+                self.lock().running.insert(pid, child);
+            });
         }
         let exited = tracked.exited.iter().position(|&(old, _)| old == pid);
         if let Some(at) = exited
@@ -204,8 +214,10 @@ impl Children {
     pub fn kill_all(&self) {
         let drained: Vec<(u32, Child)> = self.lock().running.drain().collect();
         for (pid, mut child) in drained {
-            let killed = end(pid, &mut child);
-            tracing::info!(?killed, "ended launched child on shutdown");
+            match end(pid, &mut child) {
+                Ok(killed) => tracing::info!(?killed, "ended launched child on shutdown"),
+                Err(e) => tracing::warn!("could not end launched child on shutdown: {e}"),
+            }
         }
     }
 }
@@ -216,21 +228,31 @@ impl Drop for Children {
     }
 }
 
-fn end(pid: u32, child: &mut Child) -> Killed {
+/// Ends `child`, waiting for it only once the kill went through: a kill
+/// the OS refused (a helper that changed its credentials) leaves it
+/// running, and waiting would block on it.
+fn end(pid: u32, child: &mut Child) -> ToolResult<Killed> {
+    let exited = |status: std::process::ExitStatus| Killed {
+        pid,
+        already_exited: true,
+        exit_code: status.code(),
+    };
     if let Ok(Some(status)) = child.try_wait() {
-        return Killed {
-            pid,
-            already_exited: true,
-            exit_code: status.code(),
-        };
+        return Ok(exited(status));
     }
-    let _ = child.kill();
+    if let Err(e) = child.kill() {
+        // It may have exited between the two calls.
+        if let Ok(Some(status)) = child.try_wait() {
+            return Ok(exited(status));
+        }
+        return Err(ToolError::platform(format!("ending process {pid}"), e));
+    }
     let status = child.wait().ok();
-    Killed {
+    Ok(Killed {
         pid,
         already_exited: false,
         exit_code: status.and_then(|s| s.code()),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -271,7 +293,8 @@ mod tests {
         };
         let first = children
             .launch(&spec)
-            .expect("BUG: relaunching the test binary works");
+            .expect("BUG: relaunching the test binary works")
+            .0;
         // Wait for `--list` to finish, then launch again: that reaps it.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while children
@@ -285,7 +308,8 @@ mod tests {
         }
         let second = children
             .launch(&spec)
-            .expect("BUG: relaunching the test binary works");
+            .expect("BUG: relaunching the test binary works")
+            .0;
         assert!(!children.contains(first), "the exited child was reaped");
         let killed = children
             .kill(first)
@@ -306,7 +330,8 @@ mod tests {
                 args: vec!["--list".into()],
                 ..LaunchSpec::default()
             })
-            .expect("BUG: relaunching the test binary works");
+            .expect("BUG: relaunching the test binary works")
+            .0;
         assert!(children.contains(pid));
         let killed = children
             .kill(pid)

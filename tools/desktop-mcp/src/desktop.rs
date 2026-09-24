@@ -252,8 +252,10 @@ impl Desktop {
     /// Binds `pid` to the process `launch` just started under it. The one
     /// re-binding there is: this session created that process and hands the
     /// pid out now, so it is the sighting the caller holds.
-    pub fn bind_launched(&mut self, pid: u32) {
-        self.started.insert(pid, os::process_started(pid));
+    /// `started` is read at the spawn, while the launcher still holds the
+    /// child, so it cannot belong to a later process reusing the pid.
+    pub fn bind_launched(&mut self, pid: u32, started: Option<u64>) {
+        self.started.insert(pid, started);
     }
 
     /// Records a window id with its owner, unless the id is already bound.
@@ -303,7 +305,7 @@ impl Desktop {
                 })?;
                 Ok(Binding {
                     window_pid: Some(pid),
-                    started: None,
+                    started: self.started.get(&pid).copied().flatten(),
                 })
             }
             Some(Target::Pid(pid)) => {
@@ -350,7 +352,13 @@ impl Desktop {
             }
             ScreenshotTarget::Direct(t) => (t, None),
             ScreenshotTarget::Pid(pid) => {
-                self.bound(Some(Target::Pid(pid)))?;
+                // A capture sends nothing; where the OS gives no process
+                // identity (macOS) the pid is used as it is, and the owner
+                // check around the capture still applies.
+                match self.bound(Some(Target::Pid(pid))) {
+                    Ok(_) | Err(ToolError::NotSupported(_)) => {}
+                    Err(e) => return Err(e),
+                }
                 let windows = Self::resolve(Target::Pid(pid))?;
                 let pick = windows
                     .iter()
@@ -391,14 +399,7 @@ impl Desktop {
         deadline: Instant,
     ) -> ToolResult<Read> {
         let bound = self.bound(Some(target))?;
-        if let (Target::Window(id), Some(pid)) = (target, bound.window_pid)
-            && let Some(now) = os::window_pid(id)
-            && now != pid
-        {
-            return Err(ToolError::InvalidArgument(format!(
-                "window {id} belonged to process {pid} when listed and now belongs to process {now}; this session does not re-bind it"
-            )));
-        }
+        Self::revalidate(target, bound)?;
         let ids: Vec<u32> = match target {
             Target::Pid(pid) => match os::process_windows(pid)? {
                 Some(ids) if !ids.is_empty() => ids,
@@ -407,7 +408,27 @@ impl Desktop {
             },
             Target::Window(_) => Self::resolve(target)?.iter().map(|w| w.id).collect(),
         };
-        self.a11y.tree(&ids, max_depth, deadline)
+        let read = self.a11y.tree(&ids, max_depth, deadline)?;
+        // Checked again after the read: a window or process recycled while
+        // it was read would otherwise hand out handles in another
+        // application, which `invoke` and `set_value` (no target) act on.
+        Self::revalidate(target, bound)?;
+        let owner = match target {
+            Target::Pid(pid) => Some(pid),
+            Target::Window(_) => bound.window_pid,
+        };
+        if let Some(pid) = owner
+            && let Some((id, now)) = ids.iter().find_map(|&id| {
+                os::window_pid(id)
+                    .filter(|&now| now != pid)
+                    .map(|now| (id, now))
+            })
+        {
+            return Err(ToolError::InvalidArgument(format!(
+                "window {id} changed owner to process {now} while it was read; read again"
+            )));
+        }
+        Ok(read)
     }
 
     /// Elements matching `query` anywhere in a target's windows, and the
@@ -463,13 +484,35 @@ impl Desktop {
         })
     }
 
+    /// Refuses a target that no longer names what it was issued for: a
+    /// window whose owner changed, or a process (the pid's, or the window
+    /// owner's) whose start time changed — Windows can recycle both the
+    /// `HWND` and the pid of an application that exited.
+    fn revalidate(target: Target, bound: Binding) -> ToolResult<()> {
+        let pid = match target {
+            Target::Pid(pid) => Some(pid),
+            Target::Window(id) => {
+                if let (Some(pid), Some(now)) = (bound.window_pid, os::window_pid(id))
+                    && now != pid
+                {
+                    return Err(ToolError::InvalidArgument(format!(
+                        "window {id} belonged to process {pid} when listed and now belongs to process {now}; this session does not re-bind it"
+                    )));
+                }
+                bound.window_pid
+            }
+        };
+        if let (Some(pid), Some(then)) = (pid, bound.started) {
+            same_process(pid, Some(then), os::process_started(pid))?;
+        }
+        Ok(())
+    }
+
     fn check(target: Option<Target>, bound: Binding, points: &[(i32, i32)]) -> ToolResult<()> {
         let Some(target) = target else {
             return Ok(());
         };
-        if let (Target::Pid(pid), Some(then)) = (target, bound.started) {
-            same_process(pid, Some(then), os::process_started(pid))?;
-        }
+        Self::revalidate(target, bound)?;
         let fg = Self::foreground()?;
         still_bound(target, bound.window_pid, fg.as_ref())?;
         if points.is_empty() {

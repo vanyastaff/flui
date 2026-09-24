@@ -90,13 +90,22 @@ fn element_reply(result: ToolResult<a11y::Node>) -> CallToolResult {
 }
 
 /// Runs blocking process work (spawning, waiting for an exit) off the async
-/// runtime's thread, which also carries the stdio transport.
+/// runtime's thread, which also carries the stdio transport. Work whose
+/// request was cancelled before it started does nothing, as on the desktop
+/// thread.
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> ToolResult<T> + Send + 'static,
 ) -> ToolResult<T> {
-    tokio::task::spawn_blocking(work)
+    let (reply, result) = tokio::sync::oneshot::channel();
+    tokio::task::spawn_blocking(move || {
+        if reply.is_closed() {
+            return;
+        }
+        let _ = reply.send(work());
+    });
+    result
         .await
-        .map_err(|e| ToolError::platform("running process work", e))?
+        .map_err(|_| ToolError::platform("running process work", "it panicked"))?
 }
 
 impl DesktopServer {
@@ -145,12 +154,12 @@ impl DesktopServer {
             env: p.env.into_iter().collect(),
         };
         let children = Arc::clone(&self.children);
-        let pid = valid!(blocking(move || children.launch(&spec)).await);
-        // Bind the pid to this process now, before Windows can recycle it.
+        let (pid, started) = valid!(blocking(move || children.launch(&spec)).await);
+        // Bind the pid to the identity read at the spawn.
         let _ = self
             .worker
             .run(move |d| {
-                d.bind_launched(pid);
+                d.bind_launched(pid, started);
                 Ok(())
             })
             .await;

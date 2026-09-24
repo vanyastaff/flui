@@ -109,8 +109,8 @@ pub struct Uia {
     /// are fetched only as far as the budget reaches.
     walker: UITreeWalker,
     single: UICacheRequest,
-    elements: ElementCache<Vec<i32>, UIElement>,
-    anonymous: i32,
+    elements: ElementCache<Identity, UIElement>,
+    anonymous: u64,
 }
 
 impl std::fmt::Debug for Uia {
@@ -147,15 +147,16 @@ impl Uia {
     /// handle, so a held handle never retargets to another control.
     fn register(&mut self, element: &UIElement) -> String {
         let key = match element.get_runtime_id() {
-            Ok(id) if !id.is_empty() => id,
+            Ok(id) if !id.is_empty() => Identity::Runtime(id),
             // No runtime id: a handle that is never shared with another read.
             _ => {
                 self.anonymous += 1;
-                vec![i32::MIN, self.anonymous]
+                Identity::Anonymous(self.anonymous)
             }
         };
-        if let Some(held) = self.elements.by_identity(&key)
-            && !held.get_runtime_id().is_ok_and(|id| id == key)
+        if let Identity::Runtime(id) = &key
+            && let Some(held) = self.elements.by_identity(&key)
+            && !held.get_runtime_id().is_ok_and(|now| now == *id)
         {
             self.elements.retire(&key);
         }
@@ -210,6 +211,11 @@ impl Uia {
                     break;
                 }
                 walk.budget -= 1;
+            }
+            // A spent budget fetches no further sibling either; `exhausted`
+            // marks the rest unread.
+            if walk.exhausted() {
+                break;
             }
             child = walked(
                 self.walker
@@ -646,6 +652,15 @@ fn walked(step: uiautomation::Result<UIElement>, walk: &mut Walk) -> Option<UIEl
             None
         }
     }
+}
+
+/// What an element handle is keyed by. An element without a runtime id
+/// gets an identity of its own that no runtime id can equal, whatever
+/// integers a provider reports.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Identity {
+    Runtime(Vec<i32>),
+    Anonymous(u64),
 }
 
 /// One read's progress: what it may still spend, and what it has emitted.
