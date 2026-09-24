@@ -68,4 +68,8 @@ windows = { workspace = true, features = [
 ] }
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
-windows = { workspace = true, features = ["Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_SystemServices"] }
+windows = { workspace = true, features = [
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemServices",
+] }
