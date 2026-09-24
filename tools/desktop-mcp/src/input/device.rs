@@ -167,23 +167,30 @@ impl Input {
             // Press and release apart, so a press that went out is known:
             // its release is retried, and a failure counts the click as sent
             // with the button possibly still down.
-            let pressed = guard(None)
-                .and_then(|()| self.ensure_at(x, y))
-                .and_then(|()| {
-                    self.held_button = Some(button);
-                    self.enigo
-                        .button(button, Direction::Press)
-                        .map_err(failed("pressing the button"))
-                });
+            // Refused before the press: nothing of this click went out.
+            if let Err(cause) = guard(None).and_then(|()| self.ensure_at(x, y)) {
+                return Err(partial(cause, sent, clicks, "clicks"));
+            }
+            self.held_button = Some(button);
+            let pressed = self
+                .enigo
+                .button(button, Direction::Press)
+                .map_err(failed("pressing the button"));
             if let Err(cause) = pressed {
-                // A press reported failed may still have gone out: release,
-                // and say so if even that fails.
-                return Err(match self.release_held() {
-                    Ok(()) => partial(cause, sent, clicks, "clicks"),
-                    Err(e) => ToolError::Interrupted {
-                        cause: Box::new(cause),
-                        what: format!(
-                            "{sent} of {clicks} clicks completed, the next press may have gone out and releasing it failed ({e}); the button may still be held"
+                // A press reported failed may still have gone out, and with
+                // the release that follows it that is a whole click: say so,
+                // whether or not the release went through.
+                let released = self.release_held();
+                return Err(ToolError::Interrupted {
+                    cause: Box::new(cause),
+                    what: match released {
+                        Ok(()) => format!(
+                            "{sent} of {clicks} clicks completed, and click {} may also have gone through (its press reported failure, then it was released); look before retrying",
+                            sent + 1
+                        ),
+                        Err(e) => format!(
+                            "{sent} of {clicks} clicks completed, click {} may have been pressed and releasing it failed ({e}); the button may still be held",
+                            sent + 1
                         ),
                     },
                 });

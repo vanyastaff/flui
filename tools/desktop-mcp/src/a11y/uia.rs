@@ -118,8 +118,21 @@ struct Held {
     element: UIElement,
     /// The runtime id it was issued under, `None` for an anonymous one.
     runtime: Option<Vec<i32>>,
+    /// What kind of element it was when issued: control type, automation id
+    /// and class name. A runtime id derived from a recycled native window can
+    /// repeat for a replacement in the same process; one of another kind is
+    /// told apart by these.
+    kind: Kind,
     pid: u32,
     started: Option<u64>,
+}
+
+/// An element's kind, the properties that do not change over its life.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Kind {
+    control_type: Option<i32>,
+    automation_id: Option<String>,
+    class_name: Option<String>,
 }
 
 /// UI Automation client state for the session.
@@ -222,11 +235,17 @@ impl Uia {
             Identity::Runtime(id) => Some(id.clone()),
             Identity::Anonymous(_) => None,
         };
+        let kind = Kind {
+            control_type: cached_i32(element, UIProperty::ControlType),
+            automation_id: element.get_cached_automation_id().ok(),
+            class_name: element.get_cached_classname().ok(),
+        };
         self.elements.insert(
             key,
             Held {
                 element: element.clone(),
                 runtime,
+                kind,
                 pid,
                 started,
             },
@@ -262,6 +281,20 @@ impl Uia {
         if !crate::os::runtime_id(held.element.as_ref())
             .is_ok_and(|now| now.as_deref() == Some(id.as_slice()))
         {
+            return Err(ToolError::StaleElement(handle.to_owned()));
+        }
+        // Read live: an object that now reports another kind of element is a
+        // replacement, whatever its runtime id says.
+        let live = Kind {
+            control_type: held
+                .element
+                .get_property_value(UIProperty::ControlType)
+                .ok()
+                .and_then(|v| TryInto::<i32>::try_into(v).ok()),
+            automation_id: held.element.get_automation_id().ok(),
+            class_name: held.element.get_classname().ok(),
+        };
+        if live != held.kind {
             return Err(ToolError::StaleElement(handle.to_owned()));
         }
         Ok(held.element.clone())
