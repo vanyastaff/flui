@@ -689,8 +689,15 @@ impl AccessibilityBackend for Uia {
                 // A root fetch that fails still spent a cross-process call,
                 // so it is charged like one: a process with thousands of
                 // failing windows cannot outrun the budget.
+                // Gone only if the window itself is: an element-not-available
+                // or a disconnect from a window that still exists is a
+                // provider failing, and the read says it is incomplete.
                 Err(e) if is_gone(e.code()) => {
                     spare -= 1;
+                    if crate::os::window_pid(window).is_some() {
+                        walk.truncated = true;
+                        failed.get_or_insert((window, e));
+                    }
                     continue;
                 }
                 // Failing (hung, timed out): the rest is still read, and the

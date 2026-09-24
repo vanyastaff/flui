@@ -406,9 +406,25 @@ pub fn char_key(c: char) -> Option<(u16, u8)> {
     let [unit] = c.encode_utf16(&mut units) else {
         return None;
     };
+    // Layouts are per thread: the one that counts is the thread of the
+    // window holding keyboard focus (an editor thread can use another layout
+    // than its top-level window's), else the foreground window's.
     // SAFETY: a null window yields thread 0, whose layout is the caller's.
-    let layout =
-        unsafe { GetKeyboardLayout(GetWindowThreadProcessId(GetForegroundWindow(), None)) };
+    let foreground_thread = unsafe { GetWindowThreadProcessId(GetForegroundWindow(), None) };
+    let mut info = GUITHREADINFO {
+        cbSize: size_of::<GUITHREADINFO>() as u32,
+        ..GUITHREADINFO::default()
+    };
+    // SAFETY: `info` is a local with its size set, as the call requires.
+    let read = unsafe { GetGUIThreadInfo(foreground_thread, &raw mut info) }.is_ok();
+    let focus_thread = if read && !info.hwndFocus.is_invalid() {
+        // SAFETY: a window handle the call just returned.
+        unsafe { GetWindowThreadProcessId(info.hwndFocus, None) }
+    } else {
+        foreground_thread
+    };
+    // SAFETY: plain value argument.
+    let layout = unsafe { GetKeyboardLayout(focus_thread) };
     // SAFETY: plain value arguments.
     let scan = unsafe { VkKeyScanExW(*unit, layout) };
     let [vk, shift] = scan.to_le_bytes();

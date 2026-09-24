@@ -479,13 +479,27 @@ impl Input {
                 .enigo
                 .key(key, Direction::Press)
                 .map_err(failed("pressing the key"));
-            sent = result.is_ok();
-            if sent {
-                result = self
-                    .enigo
-                    .key(key, Direction::Release)
-                    .map_err(failed("releasing the key (it may still be held)"));
-            }
+            // A press reported failed may still have gone out: it is
+            // released regardless, and counted as possibly sent, so a retry
+            // does not repeat a shortcut that ran.
+            sent = true;
+            let released = self.enigo.key(key, Direction::Release);
+            result = match (result, released) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Ok(()), Err(e)) => Err(ToolError::platform(
+                    "releasing the key (it may still be held)",
+                    e,
+                )),
+                (Err(cause), released) => Err(ToolError::Interrupted {
+                    cause: Box::new(cause),
+                    what: if released.is_ok() {
+                        "the key may have gone out before its press reported failure, and it was released; look before retrying".into()
+                    } else {
+                        "the key may have gone out and could not be released; it may still be held"
+                            .into()
+                    },
+                }),
+            };
         }
         // Alt (or the Windows key) released on its own, with nothing pressed
         // while it was down, opens the menu bar (the Start menu) of whatever
