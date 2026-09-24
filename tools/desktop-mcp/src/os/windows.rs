@@ -256,6 +256,25 @@ pub fn modifiers_down() -> u8 {
         | u8::from(down(VK_LWIN) || down(VK_RWIN)) << 3
 }
 
+/// A key other than a modifier or a mouse button that is down right now,
+/// the user's included: one held and auto-repeating would join a chord
+/// (a held `w` plus an injected Ctrl is Ctrl+W).
+pub fn other_key_down() -> Option<u16> {
+    const MOUSE: [u16; 5] = [0x01, 0x02, 0x04, 0x05, 0x06];
+    // Shift, Ctrl, Alt, both Windows keys, their left and right forms, the
+    // Unicode packet key and the unassigned key the mask taps.
+    const SKIP: [u16; 13] = [
+        0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xE7, 0xE8,
+    ];
+    (0x08_u16..=0xFE)
+        .filter(|vk| !MOUSE.contains(vk) && !SKIP.contains(vk))
+        .find(|&vk| {
+            // SAFETY: plain value argument.
+            let state = unsafe { GetAsyncKeyState(i32::from(vk)) };
+            state < 0
+        })
+}
+
 /// Whether any mouse button is down right now, the user's included.
 pub fn mouse_button_down() -> bool {
     [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2]

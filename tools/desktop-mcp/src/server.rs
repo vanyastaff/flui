@@ -438,6 +438,11 @@ impl DesktopServer {
                 .worker
                 .run(&ct, move |d| d.launched_windows(pid, started))
                 .await;
+            // Cancelled while the lookup ran: it finished and answered, but
+            // the reply will not reach the client, so neither does the pid.
+            if ct.is_cancelled() {
+                return self.void_launch(pid, launch).await;
+            }
             match windows {
                 // Gone, and the pid may already be another process's: its
                 // windows are not this launch's.

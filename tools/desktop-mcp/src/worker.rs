@@ -81,22 +81,21 @@ impl Worker {
         let job_state = Arc::clone(&state);
         self.jobs
             .try_send(Box::new(move |desktop| {
-                // The client is gone: a queued `set_value` or `invoke` must
-                // not run after it, and the release of held input waits
-                // behind nothing but the call already running.
-                if crate::desktop::stopping() {
-                    if job_state
-                        .compare_exchange(QUEUED, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
-                        .is_ok()
-                    {
-                        let _ = reply.send(Err(ToolError::Cancelled));
-                    }
-                    return;
-                }
                 let claimed = job_state
                     .compare_exchange(QUEUED, RUNNING, Ordering::SeqCst, Ordering::SeqCst)
                     .is_ok();
                 if !claimed || reply.is_closed() {
+                    return;
+                }
+                // The client is gone: a queued `set_value` or `invoke` must
+                // not run after it, and the release of held input waits
+                // behind nothing but the call already running. Read once
+                // claimed, immediately before the call on this one thread:
+                // shutdown flagged after this read began after the call did,
+                // like a call already running (whose input stops at its next
+                // event).
+                if crate::desktop::stopping() {
+                    let _ = reply.send(Err(ToolError::Cancelled));
                     return;
                 }
                 let _ = reply.send(f(desktop));

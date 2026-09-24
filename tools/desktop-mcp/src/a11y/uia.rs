@@ -514,11 +514,18 @@ impl Uia {
     ///
     /// A password field's value is withheld by design, not unreadable: it
     /// has none to report, and the read is complete.
+    ///
+    /// An `IsPassword` that is not a readable boolean fails the read rather
+    /// than counting as "not a password": a value is fetched only when the
+    /// element surely is no password field.
     fn read_value(&self, element: &UIElement, node: &mut Node) -> bool {
-        if !node.patterns.contains(&"Value")
-            || cached_flag(element, UIProperty::IsPassword) == Some(true)
-        {
+        if !node.patterns.contains(&"Value") {
             return true;
+        }
+        match cached_flag(element, UIProperty::IsPassword) {
+            Some(true) => return true,
+            None => return false,
+            Some(false) => {}
         }
         let Ok(fresh) = element.build_updated_cache(&self.value) else {
             return false;
@@ -597,6 +604,7 @@ impl Uia {
         fresh: &UIElement,
         node: &mut Node,
         toggled: bool,
+        until: Option<Instant>,
     ) -> ToolResult<()> {
         let held = self.elements.get(handle)?;
         // What identifies the element across an action: its control type,
@@ -621,6 +629,17 @@ impl Uia {
                     "another element now answers for this one (its window was reused)",
                 )),
                 what: "the action itself succeeded; the element it acted on is gone, so do not repeat it".into(),
+            });
+        }
+        // The identity read can have used up a caller's deadline: the
+        // value read is one more provider call.
+        if until.is_some_and(|until| Instant::now() >= until) {
+            return Err(ToolError::Interrupted {
+                cause: Box::new(ToolError::platform(
+                    "reading back",
+                    "the readback ran out of time",
+                )),
+                what: "the action itself succeeded; only reading the element's state afterwards failed, so do not repeat it".into(),
             });
         }
         if !self.read_value(fresh, node)
@@ -683,7 +702,7 @@ impl Uia {
                 if let Some(e) = late() {
                     return Err(e);
                 }
-                self.complete_readback(handle, &fresh, &mut node, false)?;
+                self.complete_readback(handle, &fresh, &mut node, false, Some(until))?;
                 return Ok(node);
             }
             // `None`: where focus is could not be read in time.
@@ -699,7 +718,7 @@ impl Uia {
                 if let Some(e) = late() {
                     return Err(e);
                 }
-                self.complete_readback(handle, &fresh, &mut node, false)?;
+                self.complete_readback(handle, &fresh, &mut node, false, Some(until))?;
                 return Ok(node);
             }
             unknown = inside.is_none();
@@ -998,6 +1017,7 @@ impl AccessibilityBackend for Uia {
                     &fresh,
                     &mut node,
                     matches!(action, Action::Toggle),
+                    None,
                 )?;
                 Ok(node)
             }
@@ -1267,8 +1287,12 @@ fn cached_i32(element: &UIElement, prop: UIProperty) -> Option<i32> {
     cached_of(element, prop, VT_I4).and_then(|v| TryInto::<i32>::try_into(v).ok())
 }
 
+/// A cached number, `None` unless it is a finite one (a slider at `NaN` is
+/// no position).
 fn cached_f64(element: &UIElement, prop: UIProperty) -> Option<f64> {
-    cached_of(element, prop, VT_R8).and_then(|v| TryInto::<f64>::try_into(v).ok())
+    cached_of(element, prop, VT_R8)
+        .and_then(|v| TryInto::<f64>::try_into(v).ok())
+        .filter(|n| n.is_finite())
 }
 
 /// The process id an element reports, `None` unless it is a real one.

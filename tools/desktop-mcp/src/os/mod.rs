@@ -97,6 +97,12 @@ pub fn modifiers_down() -> u8 {
     windows::modifiers_down()
 }
 
+/// A non-modifier key down now, the user's included.
+#[cfg(target_os = "windows")]
+pub fn other_key_down() -> Option<u16> {
+    windows::other_key_down()
+}
+
 /// Whether any mouse button is down now, the user's included.
 #[cfg(target_os = "windows")]
 pub fn mouse_button_down() -> bool {

@@ -228,10 +228,21 @@ impl Children {
         if tracked.closed {
             drop(tracked);
             let mut child = child;
-            let _ = end(pid, &mut child);
-            return Err(ToolError::NotSupported(
-                "the server shut down while this launch ran; the process was ended".into(),
-            ));
+            return Err(match end(pid, &mut child) {
+                Ok(_) => {
+                    self.lock().hold_unreaped(pid, child);
+                    ToolError::NotSupported(
+                        "the server shut down while this launch ran; the process was ended".into(),
+                    )
+                }
+                // Kept, so shutdown's last pass tries it again.
+                Err(e) => {
+                    self.lock().running.insert(pid, child);
+                    ToolError::NotSupported(format!(
+                        "the server shut down while this launch ran, and ending the process failed ({e}); it is tried again as the server exits"
+                    ))
+                }
+            });
         }
         // A reused pid is a new process: its old exit no longer answers, and
         // a kill held for the old launch must not end this one.
@@ -249,12 +260,7 @@ impl Children {
     /// Kills a child this session launched; one that already exited on its
     /// own is reported as such.
     pub fn kill(&self, pid: u32) -> ToolResult<Killed> {
-        if self.lock().shared.contains(&pid) {
-            return Err(ToolError::InvalidArgument(format!(
-                "pid {pid} was returned by two launches of this session, so it cannot be told which one to end; the running one is ended when the server exits"
-            )));
-        }
-        self.end_tracked(pid)
+        self.end_tracked(pid, None)
     }
 
     /// Ends the process launch number `launch` started, for a launch whose
@@ -263,18 +269,30 @@ impl Children {
     /// launch took the pid over, this one's process is gone and the later
     /// one's is left alone.
     pub fn abandon(&self, pid: u32, launch: u64) -> ToolResult<Killed> {
-        if self.lock().launch_of.get(&pid) != Some(&launch) {
-            return Ok(Killed {
-                pid,
-                already_exited: true,
-                exit_code: None,
-            });
-        }
-        self.end_tracked(pid)
+        self.end_tracked(pid, Some(launch))
     }
 
-    fn end_tracked(&self, pid: u32) -> ToolResult<Killed> {
+    /// Ends the child under `pid`: for `kill` (`launch` `None`) unless two
+    /// launches shared the pid, for `abandon` only if it is that launch's.
+    /// Checked under the same lock that takes the child out, so a launch
+    /// that reuses the pid in between is never the one ended.
+    fn end_tracked(&self, pid: u32, launch: Option<u64>) -> ToolResult<Killed> {
         let mut tracked = self.lock();
+        match launch {
+            None if tracked.shared.contains(&pid) => {
+                return Err(ToolError::InvalidArgument(format!(
+                    "pid {pid} was returned by two launches of this session, so it cannot be told which one to end; the running one is ended when the server exits"
+                )));
+            }
+            Some(launch) if tracked.launch_of.get(&pid) != Some(&launch) => {
+                return Ok(Killed {
+                    pid,
+                    already_exited: true,
+                    exit_code: None,
+                });
+            }
+            _ => {}
+        }
         if tracked.ending.contains(&pid) {
             return Err(ToolError::InvalidArgument(format!(
                 "process {pid} is being ended by another kill; wait for that one"

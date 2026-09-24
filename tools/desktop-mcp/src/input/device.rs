@@ -758,10 +758,11 @@ impl Input {
     }
 }
 
-/// Refuses unless the modifiers down on the keyboard are exactly `ours`: one
-/// the user holds would join the keys sent. Our own presses reach the OS's
-/// key state a moment after they are sent, so it is polled briefly before
-/// concluding.
+/// Refuses unless the modifiers down on the keyboard are exactly `ours` and
+/// no other key is down: one the user holds would join the keys sent (a held
+/// Shift makes ctrl+z Redo; an auto-repeating `w` plus our Ctrl is Ctrl+W).
+/// Our own presses and releases reach the OS's key state a moment after they
+/// are sent, so it is polled briefly before concluding.
 #[cfg(target_os = "windows")]
 fn only_modifiers(ours: &[Key]) -> ToolResult<()> {
     let expect = ours.iter().fold(0_u8, |bits, k| {
@@ -773,17 +774,22 @@ fn only_modifiers(ours: &[Key]) -> ToolResult<()> {
             _ => 0,
         }
     });
+    let mut other = None;
     for attempt in 0..10 {
-        if crate::os::modifiers_down() == expect {
+        other = crate::os::other_key_down();
+        if crate::os::modifiers_down() == expect && other.is_none() {
             return Ok(());
         }
         if attempt < 9 {
             thread::sleep(Duration::from_millis(5));
         }
     }
-    Err(ToolError::Busy(
-        "a modifier key (Shift, Ctrl, Alt or Windows) is held down on the keyboard and would join the keys sent".into(),
-    ))
+    Err(ToolError::Busy(match other {
+        Some(vk) => format!(
+            "a key (virtual key 0x{vk:02X}) is held down on the keyboard and would join the keys sent"
+        ),
+        None => "a modifier key (Shift, Ctrl, Alt or Windows) is held down on the keyboard and would join the keys sent".into(),
+    }))
 }
 
 /// Why a key chosen for `owner` must not go out now, if it must not: other

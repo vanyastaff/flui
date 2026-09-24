@@ -172,12 +172,15 @@ mod backend {
                 // Coordinates map the pixels back to the desktop; a made-up
                 // origin would send later input to the wrong place.
                 let meta = |e| ToolError::platform("reading the monitor's position and size", e);
-                let source = Rect {
-                    x: monitor.x().map_err(meta)?,
-                    y: monitor.y().map_err(meta)?,
-                    width: monitor.width().map_err(meta)?,
-                    height: monitor.height().map_err(meta)?,
+                let geometry = || -> ToolResult<Rect> {
+                    Ok(Rect {
+                        x: monitor.x().map_err(meta)?,
+                        y: monitor.y().map_err(meta)?,
+                        width: monitor.width().map_err(meta)?,
+                        height: monitor.height().map_err(meta)?,
+                    })
                 };
+                let source = geometry()?;
                 within_pixel_limit(
                     source,
                     monitor.scale_factor().ok(),
@@ -186,6 +189,14 @@ mod backend {
                 let image = monitor
                     .capture_image()
                     .map_err(|e| ToolError::platform("capturing the monitor", e))?;
+                // As for a window: the geometry read before describes these
+                // pixels only if the display was not reconfigured meanwhile.
+                if geometry()? != source {
+                    return Err(ToolError::Busy(
+                        "the monitor changed its position, size or mode while it was captured"
+                            .into(),
+                    ));
+                }
                 (image, source)
             }
         };
