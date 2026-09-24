@@ -255,9 +255,11 @@ impl Input {
             // its release is retried, and a failure counts the click as sent
             // with the button possibly still down.
             // Refused before the press: nothing of this click went out.
-            if let Err(cause) = guard(None)
+            // The button wait first: it can take a moment, and the target
+            // and position are checked after it, right before the press.
+            if let Err(cause) = no_button_down()
+                .and_then(|()| guard(None))
                 .and_then(|()| self.ensure_at(x, y))
-                .and_then(|()| no_button_down())
             {
                 return Err(partial(cause, sent, clicks, "clicks"));
             }
@@ -318,9 +320,9 @@ impl Input {
         guard(None)?;
         self.move_verified(from.0, from.1)?;
         thread::sleep(STEP);
+        no_button_down()?;
         guard(None)?;
         self.ensure_at(from.0, from.1)?;
-        no_button_down()?;
         // The primary button, as the user set it: with swapped buttons a
         // physical left press is a secondary one.
         let primary = enigo_button(MouseButton::Left);
@@ -765,7 +767,15 @@ impl Input {
 /// Refuses right before a synthetic press while a mouse button the user
 /// holds is down: the press and its release would complete or drop their
 /// gesture. Polled briefly, since this session's own last release (the first
-/// click of a double click) reaches the OS's state a moment late.
+/// click of a double click) reaches the OS's state a moment late. Callers
+/// check the target and position after it, never before.
+#[cfg_attr(
+    not(target_os = "windows"),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "the physical-button read is Windows only for now"
+    )
+)]
 fn no_button_down() -> ToolResult<()> {
     #[cfg(target_os = "windows")]
     {

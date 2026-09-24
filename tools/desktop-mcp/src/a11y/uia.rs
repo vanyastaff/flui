@@ -194,6 +194,9 @@ impl Uia {
             .create_cache_request()
             .and_then(|request| {
                 request.add_property(UIProperty::ValueValue)?;
+                // Read with the value: a control can turn into a password
+                // field between the walk and this read.
+                request.add_property(UIProperty::IsPassword)?;
                 request.set_tree_scope(TreeScope::Element)?;
                 Ok(request)
             })
@@ -532,9 +535,15 @@ impl Uia {
         let Ok(fresh) = element.build_updated_cache(&self.value) else {
             return false;
         };
-        let Some(value) = cached_of(&fresh, UIProperty::ValueValue, VT_BSTR)
-            .and_then(|v| TryInto::<String>::try_into(v).ok())
-        else {
+        // The flag read with the value decides, not the one from before it:
+        // a readable `false` or the value is not consumed.
+        match cached_flag(&fresh, UIProperty::IsPassword) {
+            Some(true) => return true,
+            None => return false,
+            Some(false) => {}
+        }
+        // Read like the other strings: an empty value may come as VT_EMPTY.
+        let Some(value) = cached_str(&fresh, UIProperty::ValueValue) else {
             return false;
         };
         node.value = Some(clip(value));
@@ -601,7 +610,7 @@ impl Uia {
     /// action ran, so the answer is `Interrupted`, not a node with defaulted
     /// or borrowed fields.
     fn complete_readback(
-        &self,
+        &mut self,
         handle: &str,
         fresh: &UIElement,
         node: &mut Node,
@@ -656,6 +665,15 @@ impl Uia {
                 )),
                 what: "the action itself succeeded; only reading the element's state afterwards failed, so do not repeat it".into(),
             });
+        }
+        // The same element, as it is now: a class name or automation id the
+        // action changed is what the next action's check compares against,
+        // or the handle it just returned would read as stale.
+        let kind = self.kind(fresh);
+        if kind.is_some()
+            && let Ok(held) = self.elements.get_mut(handle)
+        {
+            held.kind = kind;
         }
         Ok(())
     }

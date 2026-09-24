@@ -59,6 +59,10 @@ struct Tracked {
     /// `running` came from: a pid a later launch reused names that one.
     launches: u64,
     launch_of: HashMap<u32, u64>,
+    /// Per launch, whether it put its pid in `returned` and in `shared`:
+    /// undone when the launch is abandoned, since its caller never got the
+    /// pid, so a later launch reusing it is not refused as shared.
+    marks: HashMap<u64, (bool, bool)>,
     /// Launches between their spawn and their entry in `running`.
     launching: usize,
     /// Set by shutdown's `kill_all`: nothing is launched after it.
@@ -247,13 +251,13 @@ impl Children {
         // A reused pid is a new process: its old exit no longer answers, and
         // a kill held for the old launch must not end this one.
         tracked.exited.retain(|&(old, _)| old != pid);
-        if !tracked.returned.insert(pid) {
-            tracked.shared.insert(pid);
-        }
+        let first = tracked.returned.insert(pid);
+        let made_shared = !first && tracked.shared.insert(pid);
         tracked.running.insert(pid, child);
         tracked.launches += 1;
         let launch = tracked.launches;
         tracked.launch_of.insert(pid, launch);
+        tracked.marks.insert(launch, (first, made_shared));
         Ok((pid, started, launch))
     }
 
@@ -291,7 +295,19 @@ impl Children {
                     exit_code: None,
                 });
             }
-            _ => {}
+            // Its caller never got the pid: what this launch recorded about
+            // handing it out is undone.
+            Some(launch) => {
+                if let Some((first, made_shared)) = tracked.marks.remove(&launch) {
+                    if first {
+                        tracked.returned.remove(&pid);
+                    }
+                    if made_shared {
+                        tracked.shared.remove(&pid);
+                    }
+                }
+            }
+            None => {}
         }
         if tracked.ending.contains(&pid) {
             return Err(ToolError::InvalidArgument(format!(

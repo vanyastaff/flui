@@ -331,6 +331,11 @@ impl Desktop {
         if let Some(&then) = self.started.get(&pid) {
             return then == started;
         }
+        // Listed before as an unidentifiable process: the pid stays unbound,
+        // or a caller still holding it from that listing would reach this one.
+        if self.unidentified.contains(&pid) {
+            return false;
+        }
         self.started.insert(pid, started);
         true
     }
@@ -361,7 +366,12 @@ impl Desktop {
             started,
             class,
         });
-        if let Some(started) = started {
+        // A pid once listed as unidentifiable stays unbound: a successor
+        // under it with a readable start time is not the process that listing
+        // named, and a caller holding that pid must not reach it.
+        if let Some(started) = started
+            && !self.unidentified.contains(&w.pid)
+        {
             self.started.entry(w.pid).or_insert(started);
         }
         // The same checks `revalidate` makes, so a window listed as

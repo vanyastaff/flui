@@ -121,6 +121,23 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
             .ok_or_else(|| ToolError::UnknownElement(handle.to_owned()))
     }
 
+    /// Resolves a handle for an update in place (a held element's state
+    /// after an action it survived).
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(
+            dead_code,
+            reason = "used by the UIA backend, the only accessibility backend built yet"
+        )
+    )]
+    pub fn get_mut(&mut self, handle: &str) -> ToolResult<&mut T> {
+        let n = parse_handle(handle)?;
+        self.by_handle
+            .get_mut(&n)
+            .map(|(_, value, _)| value)
+            .ok_or_else(|| ToolError::UnknownElement(handle.to_owned()))
+    }
+
     /// How many handles are live.
     pub fn len(&self) -> usize {
         self.by_handle.len()
