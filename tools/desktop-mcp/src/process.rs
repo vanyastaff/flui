@@ -244,18 +244,22 @@ impl Children {
             tracked.ending.insert(pid);
             drop(tracked);
             let outcome = end(pid, &mut child);
-            self.lock().ending.remove(&pid);
+            // The outcome is recorded under the same lock that clears
+            // `ending`: a kill in between would otherwise find the pid
+            // nowhere and call it never launched.
+            let mut tracked = self.lock();
+            tracked.ending.remove(&pid);
             return match outcome {
                 // Remembered, so a second kill of the same pid says it has
                 // exited rather than that it was never launched.
                 Ok(killed) => {
-                    self.lock().remember(pid, killed.exit_code);
+                    tracked.remember(pid, killed.exit_code);
                     Ok(killed)
                 }
                 // Still running: keep it tracked, so it can be retried and
                 // is ended again at shutdown.
                 Err(e) => {
-                    self.lock().running.insert(pid, child);
+                    tracked.running.insert(pid, child);
                     Err(e)
                 }
             };
@@ -265,6 +269,15 @@ impl Children {
                 pid,
                 already_exited: true,
                 exit_code,
+            });
+        }
+        // Launched and neither running nor ending: it exited, and its exit
+        // record was dropped to make room for newer ones.
+        if tracked.returned.contains(&pid) {
+            return Ok(Killed {
+                pid,
+                already_exited: true,
+                exit_code: None,
             });
         }
         Err(ToolError::InvalidArgument(format!(

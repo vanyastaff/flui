@@ -969,7 +969,12 @@ fn role(element: &UIElement) -> String {
 /// value or `false` — a control that reads as disabled because the read
 /// failed would be skipped — so it marks the read incomplete.
 fn searchable(element: &UIElement) -> bool {
+    // The typed reads `describe` makes: a variant of the wrong type is there
+    // but reads as missing, and a missing name would match `name: ""`.
     cached_i32(element, UIProperty::ControlType).is_some()
+        && element.get_cached_name().is_ok()
+        && element.get_cached_automation_id().is_ok()
+        && element.get_cached_classname().is_ok()
         && NODE_PROPERTIES
             .iter()
             .chain(PATTERNS.iter().map(|(prop, _)| prop))

@@ -130,7 +130,7 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
 fn parse_handle(handle: &str) -> ToolResult<u64> {
     // An id is `e` and at most 20 digits; anything longer is not one, and is
     // not echoed back in full.
-    if handle.trim().len() > 21 {
+    if handle.len() > 21 {
         return Err(ToolError::InvalidArgument(
             "that is not an element id; ids look like `e12`".into(),
         ));
@@ -181,6 +181,9 @@ mod tests {
             );
         }
         assert_eq!(cache.get(" e1 ").copied().ok(), Some("a"));
+        // Padding counts: the error never echoes a long value in full.
+        let padded = format!("{}x{}", " ".repeat(10_000), " ".repeat(10_000));
+        assert!(matches!(cache.get(&padded), Err(ToolError::InvalidArgument(m)) if m.len() < 100));
     }
 
     #[test]

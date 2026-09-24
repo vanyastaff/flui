@@ -84,6 +84,15 @@ impl Input {
                     "a mouse button is still held from an earlier failed release ({e}); no input is sent until it is released"
                 ))
             })?;
+            // Released wherever the pointer is now, over whatever window is
+            // there: that can drop or click, so this call stops and says so
+            // rather than going on as if nothing happened.
+            return Err(ToolError::Interrupted {
+                cause: Box::new(ToolError::NotSupported(
+                    "a mouse button held from an earlier failed release was released first".into(),
+                )),
+                what: "the release went to wherever the pointer is now and may have dropped or clicked there; nothing of this call was sent, so look, then retry".into(),
+            });
         }
         for key in self.enigo.held().0 {
             self.enigo.key(key, Direction::Release).map_err(|e| {
