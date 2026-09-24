@@ -121,6 +121,9 @@ never land in another application.
 - Shell hotkeys (the Windows key, `alt+tab`, `ctrl+esc`, `ctrl+shift+esc`; `cmd+tab`,
   `cmd+space` on macOS) reach the shell, not the window in front, so `key` refuses them when a
   target is given.
+- Keys and text also require the window holding keyboard focus inside the target to belong
+  to the target's process: an embedded browser or preview pane of another process with focus
+  refuses them.
 - The pointer position is read back before every press: a move the OS clamped, or a pointer
   someone else moved, refuses the press.
 

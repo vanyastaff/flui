@@ -30,9 +30,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VkKeyScanExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GA_ROOT, GetAncestor, GetCursorPos, GetForegroundWindow, GetWindowRect,
-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SW_RESTORE,
-    SetCursorPos, SetForegroundWindow, ShowWindow, WindowFromPoint,
+    EnumWindows, GA_ROOT, GUITHREADINFO, GetAncestor, GetCursorPos, GetForegroundWindow,
+    GetGUIThreadInfo, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
+    IsWindowVisible, SW_RESTORE, SetCursorPos, SetForegroundWindow, ShowWindow, WindowFromPoint,
 };
 use windows::core::BOOL;
 
@@ -84,6 +84,29 @@ pub fn window_at(x: i32, y: i32) -> Option<super::Under> {
     let (id, pid) = id_and_pid(unsafe { GetAncestor(deepest, GA_ROOT) })?;
     let (_, inner_pid) = id_and_pid(deepest)?;
     Some(super::Under { id, pid, inner_pid })
+}
+
+/// The process owning the window that has keyboard focus in the foreground
+/// window's thread: a child window of another process (an embedded browser,
+/// a preview pane) can hold it inside a top-level window of the target.
+/// `None` when no window there has focus (keys then reach the foreground
+/// window itself).
+pub fn focused_pid() -> ToolResult<Option<u32>> {
+    // SAFETY: no arguments.
+    let fg = unsafe { GetForegroundWindow() };
+    if fg.is_invalid() {
+        return Ok(None);
+    }
+    // SAFETY: a window handle; a null pid pointer is allowed.
+    let thread = unsafe { GetWindowThreadProcessId(fg, None) };
+    let mut info = GUITHREADINFO {
+        cbSize: size_of::<GUITHREADINFO>() as u32,
+        ..GUITHREADINFO::default()
+    };
+    // SAFETY: `info` is a local with its size set, as the call requires.
+    unsafe { GetGUIThreadInfo(thread, &raw mut info) }
+        .map_err(|e| ToolError::platform("reading which window has keyboard focus", e))?;
+    Ok(id_and_pid(info.hwndFocus).map(|(_, pid)| pid))
 }
 
 /// The top-level window `id` belongs to (itself when it is one), by the

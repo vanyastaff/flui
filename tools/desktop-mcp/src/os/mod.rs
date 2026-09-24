@@ -51,6 +51,24 @@ pub fn window_at(x: i32, y: i32) -> Option<Under> {
     }
 }
 
+/// The process of the window holding keyboard focus inside the foreground
+/// window, when the OS reports it (`None`: none has focus, or the OS cannot
+/// say).
+#[cfg_attr(
+    not(target_os = "windows"),
+    expect(clippy::unnecessary_wraps, reason = "only the Windows lookup can fail")
+)]
+pub fn focused_pid() -> ToolResult<Option<u32>> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::focused_pid()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(None)
+    }
+}
+
 /// Window `id`'s bounds, read directly rather than through the window list.
 pub fn window_rect(id: u32) -> Option<Rect> {
     #[cfg(target_os = "windows")]

@@ -107,6 +107,22 @@ pub fn verify(
     Ok(())
 }
 
+/// Refuses keyboard input when the window holding keyboard focus inside the
+/// foreground window (`focused`, its process) belongs to another process
+/// than the foreground window: keystrokes go to that window, an embedded
+/// browser or a preview pane, not to the target that passed [`verify`].
+pub fn verify_focus(foreground: Option<&Foreground>, focused: Option<u32>) -> ToolResult<()> {
+    match (foreground, focused) {
+        (Some(fg), Some(pid)) if pid != fg.pid => Err(ToolError::NotForeground {
+            target: format!("window {} of process {}", fg.id, fg.pid),
+            foreground: format!(
+                "{fg}, but keyboard focus is inside it in a window of process {pid}"
+            ),
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// Refuses a click on an element unless the element's own top-level window
 /// (`window`, of process `pid`) is what the OS reports at the point and its
 /// process owns the foreground. Its window itself need not be in front: a
@@ -408,6 +424,12 @@ impl Desktop {
         };
         let fg = Self::foreground()?;
         still_bound(target, bound, fg.as_ref())?;
+        if points.is_empty() {
+            // Keys and text: they go to the focused window, which must be
+            // the target's process too.
+            verify(target, fg.as_ref(), &[])?;
+            return verify_focus(fg.as_ref(), os::focused_pid()?);
+        }
         let points: Vec<_> = points
             .iter()
             .map(|&(x, y)| ((x, y), os::window_at(x, y)))
@@ -734,6 +756,17 @@ mod tests {
                 .expect_err("BUG: a hosted window of another process takes the click");
             assert!(err.to_string().contains("process 555"), "{err}");
         }
+    }
+
+    /// Keys reach the focused child window: one of another process inside
+    /// the target refuses them; focus in the target's own process, or none,
+    /// admits them.
+    #[test]
+    fn keyboard_focus_in_another_process_is_refused() {
+        let err = verify_focus(Some(&fg()), Some(555)).expect_err("BUG: focus is elsewhere");
+        assert!(err.to_string().contains("process 555"), "{err}");
+        assert!(verify_focus(Some(&fg()), Some(100)).is_ok());
+        assert!(verify_focus(Some(&fg()), None).is_ok());
     }
 
     /// An element in a popup (a menu, a drop-down) is clicked while its
