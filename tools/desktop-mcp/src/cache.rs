@@ -19,12 +19,15 @@ pub const CAPACITY: usize = 20_000;
 /// Maps stable element identities to handles and handles to OS objects.
 #[derive(Debug)]
 pub struct ElementCache<K, T> {
-    by_handle: HashMap<u32, (K, T)>,
+    by_handle: HashMap<u32, (K, T, u64)>,
     by_key: HashMap<K, u32>,
-    /// Handles by first issue, oldest first, for eviction.
-    order: VecDeque<u32>,
+    /// `(handle, touch)` in the order handles were last touched, oldest
+    /// first. An entry is current only while its touch matches the handle's;
+    /// a re-touched handle leaves a stale entry behind, skipped on eviction.
+    order: VecDeque<(u32, u64)>,
     capacity: usize,
     next: u32,
+    touches: u64,
 }
 
 impl<K: Eq + Hash + Clone, T> Default for ElementCache<K, T> {
@@ -42,31 +45,47 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
             order: VecDeque::new(),
             capacity: capacity.max(1),
             next: 1,
+            touches: 0,
         }
     }
 
     /// Records `value` under its identity `key`, returning the handle — the
     /// existing one when the identity was seen before. Past the capacity the
-    /// oldest handle is dropped.
+    /// handle touched longest ago is dropped, so the handles of the read in
+    /// progress (all touched last) stay resolvable.
     pub fn insert(&mut self, key: K, value: T) -> String {
+        self.touches += 1;
+        let touch = self.touches;
         let n = if let Some(&n) = self.by_key.get(&key) {
             n
         } else {
-            while self.order.len() >= self.capacity {
-                let Some(oldest) = self.order.pop_front() else {
+            while self.by_handle.len() >= self.capacity {
+                let Some((oldest, seen)) = self.order.pop_front() else {
                     break;
                 };
-                if let Some((old_key, _)) = self.by_handle.remove(&oldest) {
+                if self
+                    .by_handle
+                    .get(&oldest)
+                    .is_some_and(|(_, _, t)| *t == seen)
+                    && let Some((old_key, _, _)) = self.by_handle.remove(&oldest)
+                {
                     self.by_key.remove(&old_key);
                 }
             }
             let n = self.next;
             self.next += 1;
             self.by_key.insert(key.clone(), n);
-            self.order.push_back(n);
             n
         };
-        self.by_handle.insert(n, (key, value));
+        self.by_handle.insert(n, (key, value, touch));
+        self.order.push_back((n, touch));
+        // Stale entries accumulate as handles are re-touched; drop them once
+        // they outnumber the live ones.
+        if self.order.len() > self.capacity * 2 {
+            let live = &self.by_handle;
+            self.order
+                .retain(|(handle, seen)| live.get(handle).is_some_and(|(_, _, t)| t == seen));
+        }
         format!("e{n}")
     }
 
@@ -75,7 +94,7 @@ impl<K: Eq + Hash + Clone, T> ElementCache<K, T> {
         let n = parse_handle(handle)?;
         self.by_handle
             .get(&n)
-            .map(|(_, value)| value)
+            .map(|(_, value, _)| value)
             .ok_or_else(|| ToolError::UnknownElement(handle.to_owned()))
     }
 
@@ -151,5 +170,19 @@ mod tests {
             a,
             "a dropped identity gets a new one"
         );
+    }
+
+    /// A handle read again is the newest, so eviction takes one not seen
+    /// since: a response never carries a handle its own read evicted.
+    #[test]
+    fn a_re_read_handle_outlives_older_ones() {
+        let mut cache = ElementCache::with_capacity(2);
+        let a = cache.insert("a", 1);
+        let b = cache.insert("b", 2);
+        assert_eq!(cache.insert("a", 10), a, "a re-read keeps its handle");
+        let c = cache.insert("c", 3);
+        assert!(cache.get(&b).is_err(), "b, touched longest ago, went");
+        assert_eq!(cache.get(&a).copied().ok(), Some(10));
+        assert_eq!(cache.get(&c).copied().ok(), Some(3));
     }
 }

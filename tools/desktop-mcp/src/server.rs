@@ -124,7 +124,15 @@ impl DesktopServer {
                 Ok(w) if !w.is_empty() => {
                     return respond(Ok(json!({ "pid": pid, "window": w[0] })));
                 }
-                Err(e) => return respond::<Value>(Err(e)),
+                // The process is running and only this session can end it:
+                // hand back its pid with the reason instead of losing it.
+                Err(e) => {
+                    return respond(Ok(json!({
+                        "pid": pid,
+                        "window": null,
+                        "note": format!("started, but its window cannot be listed: {e}; kill it by pid if needed"),
+                    })));
+                }
                 Ok(_) if Instant::now() >= deadline => {
                     return respond(Ok(json!({
                         "pid": pid,

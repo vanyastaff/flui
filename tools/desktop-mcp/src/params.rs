@@ -199,6 +199,12 @@ impl FindParams {
                 "pass at least one of `name`, `name_contains`, `role`, `automation_id`".into(),
             ));
         }
+        // Every name contains the empty string: it would match everything.
+        if query.name_contains.as_deref() == Some("") {
+            return Err(ToolError::InvalidArgument(
+                "`name_contains` must not be empty".into(),
+            ));
+        }
         Ok((target, query))
     }
 }
@@ -548,6 +554,31 @@ mod tests {
             .expect("BUG: a role is a criterion");
         assert_eq!(target, Target::Window(4));
         assert_eq!(query.role.as_deref(), Some("Button"));
+    }
+
+    /// Every name contains "", so an empty substring would match everything.
+    #[test]
+    fn an_empty_name_contains_is_refused() {
+        assert!(
+            parse::<FindParams>(json!({"pid": 1, "name_contains": ""}))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            parse::<WaitForParams>(json!({"pid": 1, "name_contains": ""}))
+                .validate()
+                .is_err()
+        );
+    }
+
+    /// `i32::MIN` has no `i32` magnitude; it is refused, not wrapped.
+    #[test]
+    fn an_i32_min_scroll_is_refused() {
+        assert!(
+            parse::<ScrollParams>(json!({"x": 0, "y": 0, "dy": i32::MIN}))
+                .validate()
+                .is_err()
+        );
     }
 
     #[test]

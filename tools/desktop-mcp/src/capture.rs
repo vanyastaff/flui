@@ -122,11 +122,14 @@ mod backend {
                         .or_else(|| monitors.first())
                         .ok_or_else(|| ToolError::NotFound("no monitors".into()))?,
                 };
+                // Coordinates map the pixels back to the desktop; a made-up
+                // origin would send later input to the wrong place.
+                let meta = |e| ToolError::platform("reading the monitor's position and size", e);
                 let source = Rect {
-                    x: monitor.x().unwrap_or(0),
-                    y: monitor.y().unwrap_or(0),
-                    width: monitor.width().unwrap_or(0),
-                    height: monitor.height().unwrap_or(0),
+                    x: monitor.x().map_err(meta)?,
+                    y: monitor.y().map_err(meta)?,
+                    width: monitor.width().map_err(meta)?,
+                    height: monitor.height().map_err(meta)?,
                 };
                 let image = monitor
                     .capture_image()

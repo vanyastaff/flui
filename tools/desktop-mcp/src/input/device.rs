@@ -64,6 +64,27 @@ impl Input {
         }
     }
 
+    /// Moves to the point and confirms the pointer is there: the OS clamps a
+    /// move to a screen edge or an active cursor clip while reporting
+    /// success, and a press where the pointer stopped would land on something
+    /// the safety check never looked at.
+    fn move_verified(&mut self, x: i32, y: i32) -> ToolResult<()> {
+        self.move_to(x, y)?;
+        match self.position() {
+            Some(at) if at == (x, y) => Ok(()),
+            Some((ax, ay)) => Err(ToolError::OutsideTarget {
+                x,
+                y,
+                rect: format!(
+                    "the pointer stopped at ({ax}, {ay}) (clamped to a screen edge or a cursor clip); nothing was pressed"
+                ),
+            }),
+            None => Err(ToolError::NotSupported(
+                "the pointer position cannot be read back, so the move is not verified".into(),
+            )),
+        }
+    }
+
     /// Where the pointer is now.
     pub fn position(&self) -> Option<(i32, i32)> {
         crate::os::cursor().or_else(|| self.enigo.location().ok())
@@ -79,11 +100,11 @@ impl Input {
         double: bool,
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
-        self.move_to(x, y)?;
+        self.move_verified(x, y)?;
         thread::sleep(STEP);
         let button = enigo_button(button);
         for _ in 0..if double { 2 } else { 1 } {
-            guard()?;
+            guard(None)?;
             self.enigo
                 .button(button, Direction::Click)
                 .map_err(failed("clicking"))?;
@@ -101,9 +122,9 @@ impl Input {
         duration: Duration,
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
-        self.move_to(from.0, from.1)?;
+        self.move_verified(from.0, from.1)?;
         thread::sleep(STEP);
-        guard()?;
+        guard(None)?;
         self.enigo
             .button(Button::Left, Direction::Press)
             .map_err(failed("pressing for a drag"))?;
@@ -112,8 +133,8 @@ impl Input {
             let x = lerp(from.0, to.0, i, steps);
             let y = lerp(from.1, to.1, i, steps);
             thread::sleep(STEP);
-            guard()?;
-            self.move_to(x, y)
+            guard(Some((x, y)))?;
+            self.move_verified(x, y)
         });
         // Release even if a move failed, so no button stays held.
         let released = self
@@ -133,16 +154,16 @@ impl Input {
         dy: i32,
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
-        self.move_to(x, y)?;
+        self.move_verified(x, y)?;
         thread::sleep(STEP);
         if dy != 0 {
-            guard()?;
+            guard(None)?;
             self.enigo
                 .scroll(dy, Axis::Vertical)
                 .map_err(failed("scrolling"))?;
         }
         if dx != 0 {
-            guard()?;
+            guard(None)?;
             self.enigo
                 .scroll(dx, Axis::Horizontal)
                 .map_err(failed("scrolling"))?;
@@ -161,7 +182,7 @@ impl Input {
         }
         let mut buffer = [0_u8; 4];
         for ch in text.chars() {
-            guard()?;
+            guard(None)?;
             self.enigo
                 .text(ch.encode_utf8(&mut buffer))
                 .map_err(failed("typing text"))?;
@@ -172,28 +193,29 @@ impl Input {
     /// Presses the combo `repeat` times: modifiers down in order, key
     /// clicked, modifiers up in reverse.
     ///
-    /// `guard` runs before each repetition and again before the key itself,
-    /// once the modifiers are down; a failed guard sends no key, releases
-    /// the held modifiers and stops.
+    /// `guard` runs before each repetition, before every modifier press and
+    /// again before the key itself; a failed guard sends nothing more,
+    /// releases the modifiers already held and stops.
     pub fn key(&mut self, combo: &KeyCombo, repeat: u32, guard: &mut Guard<'_>) -> ToolResult<()> {
         let key = enigo_key(combo.key)?;
         for _ in 0..repeat {
-            guard()?;
+            guard(None)?;
             let mut held = Vec::with_capacity(combo.modifiers.len());
             let mut result = Ok(());
             for &m in &combo.modifiers {
                 let k = modifier_key(m);
-                result = self
-                    .enigo
-                    .key(k, Direction::Press)
-                    .map_err(failed("pressing a modifier"));
+                result = guard(None).and_then(|()| {
+                    self.enigo
+                        .key(k, Direction::Press)
+                        .map_err(failed("pressing a modifier"))
+                });
                 if result.is_err() {
                     break;
                 }
                 held.push(k);
             }
             if result.is_ok() {
-                result = guard();
+                result = guard(None);
             }
             if result.is_ok() {
                 result = self

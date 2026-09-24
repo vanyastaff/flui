@@ -13,8 +13,10 @@ pub use device::Input;
 
 /// Runs before each emitted input event and refuses it with an error — how
 /// the server keeps a multi-event action (a repeated key, a drag, typed text)
-/// from reaching a window that took the foreground partway through.
-pub type Guard<'a> = dyn FnMut() -> crate::error::ToolResult<()> + 'a;
+/// from reaching a window that took the foreground partway through. It is
+/// given the screen point the event lands on, when it has one (each step of a
+/// drag), so that point is checked too.
+pub type Guard<'a> = dyn FnMut(Option<(i32, i32)>) -> crate::error::ToolResult<()> + 'a;
 
 /// Which mouse button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

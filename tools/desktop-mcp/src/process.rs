@@ -96,7 +96,11 @@ impl Children {
             tracing::warn!("pid {} is not tied to the job: {e}", child.id());
         }
         let pid = child.id();
-        self.lock().insert(pid, child);
+        let mut children = self.lock();
+        // Reap the children that exited on their own, so a long session of
+        // short-lived launches does not pile up handles or zombies.
+        children.retain(|_, child| matches!(child.try_wait(), Ok(None)));
+        children.insert(pid, child);
         Ok(pid)
     }
 

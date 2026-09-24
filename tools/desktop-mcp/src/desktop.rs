@@ -265,11 +265,15 @@ impl Desktop {
             ClickAt::Point(x, y) => (*x, *y, None),
             ClickAt::Element(handle) => {
                 let p = self.a11y.click_point(handle)?;
-                // The element's own top-level window when the backend knows
-                // it — a sibling window of the same process in front would
-                // otherwise take the click — else its process.
-                let own = p.window.map_or(Target::Pid(p.pid), Target::Window);
-                (p.x, p.y, Some(own))
+                // The element's own top-level window: a sibling window of the
+                // same process in front would take a click checked against the
+                // process alone, so an unknown window is refused, not relaxed.
+                let window = p.window.ok_or_else(|| {
+                    ToolError::NotFound(format!(
+                        "cannot tell which window element `{handle}` belongs to, so it is not clicked; use invoke"
+                    ))
+                })?;
+                (p.x, p.y, Some(Target::Window(window)))
             }
         };
         Self::check(target, &[(x, y)])?;
@@ -278,7 +282,7 @@ impl Desktop {
         if let Some(own) = element_target {
             Self::check(Some(own), &[(x, y)])?;
         }
-        let mut guard = || {
+        let mut guard = |_: Option<(i32, i32)>| {
             Self::check(target, &[(x, y)])?;
             element_target.map_or(Ok(()), |own| Self::check(Some(own), &[(x, y)]))
         };
@@ -308,7 +312,11 @@ impl Desktop {
         target: Option<Target>,
     ) -> ToolResult<Value> {
         Self::check(target, &[from, to])?;
-        let mut guard = || Self::check(target, &[from, to]);
+        let mut guard = |at: Option<(i32, i32)>| {
+            let mut points = vec![from, to];
+            points.extend(at);
+            Self::check(target, &points)
+        };
         self.input()?.drag(from, to, duration, &mut guard)?;
         Ok(json!({ "from": { "x": from.0, "y": from.1 }, "to": { "x": to.0, "y": to.1 } }))
     }
@@ -323,7 +331,7 @@ impl Desktop {
         target: Option<Target>,
     ) -> ToolResult<Value> {
         Self::check(target, &[(x, y)])?;
-        let mut guard = || Self::check(target, &[(x, y)]);
+        let mut guard = |_: Option<(i32, i32)>| Self::check(target, &[(x, y)]);
         self.input()?.scroll(x, y, dx, dy, &mut guard)?;
         Ok(json!({ "at": { "x": x, "y": y }, "dx": dx, "dy": dy }))
     }
@@ -331,7 +339,7 @@ impl Desktop {
     /// Types text into whatever has keyboard focus.
     pub fn type_text(&mut self, text: &str, target: Option<Target>) -> ToolResult<Value> {
         Self::check(target, &[])?;
-        let mut guard = || Self::check(target, &[]);
+        let mut guard = |_: Option<(i32, i32)>| Self::check(target, &[]);
         self.input()?.type_text(text, &mut guard)?;
         Ok(json!({ "typed_chars": text.chars().count() }))
     }
@@ -344,7 +352,7 @@ impl Desktop {
         target: Option<Target>,
     ) -> ToolResult<Value> {
         Self::check(target, &[])?;
-        let mut guard = || Self::check(target, &[]);
+        let mut guard = |_: Option<(i32, i32)>| Self::check(target, &[]);
         self.input()?.key(combo, repeat, &mut guard)?;
         Ok(json!({ "pressed": combo.to_string(), "repeat": repeat }))
     }

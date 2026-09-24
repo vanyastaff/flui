@@ -137,14 +137,33 @@ impl Query {
 }
 
 /// Depth-first matches of `query` in `roots`, children dropped.
+impl Node {
+    /// This node without its children, copying nothing below it.
+    #[must_use]
+    pub fn shallow(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            role: self.role.clone(),
+            name: self.name.clone(),
+            value: self.value.clone(),
+            automation_id: self.automation_id.clone(),
+            class_name: self.class_name.clone(),
+            rect: self.rect,
+            enabled: self.enabled,
+            has_keyboard_focus: self.has_keyboard_focus,
+            is_keyboard_focusable: self.is_keyboard_focusable,
+            toggle_state: self.toggle_state,
+            patterns: self.patterns.clone(),
+            children: Vec::new(),
+            omitted_children: None,
+        }
+    }
+}
+
 pub fn search(roots: &[Node], query: &Query) -> Vec<Node> {
     fn walk(node: &Node, query: &Query, out: &mut Vec<Node>) {
         if query.matches(node) {
-            out.push(Node {
-                children: Vec::new(),
-                omitted_children: None,
-                ..node.clone()
-            });
+            out.push(node.shallow());
         }
         for child in &node.children {
             walk(child, query, out);
@@ -192,8 +211,6 @@ pub struct ClickPoint {
     pub x: i32,
     /// Physical screen y.
     pub y: i32,
-    /// The process that owns the element.
-    pub pid: u32,
     /// The top-level window the element belongs to, when the backend can
     /// tell: a click must land in that window, not a sibling of the process.
     pub window: Option<u32>,

@@ -41,6 +41,11 @@ const PATTERNS: &[(UIProperty, &str)] = &[
     (UIProperty::IsWindowPatternAvailable, "Window"),
 ];
 
+/// How many nodes one read (`accessibility_tree`, `find`, a `wait_for` poll)
+/// visits at most, across all the windows it reads. Well under the element
+/// cache's capacity, so every handle a response carries stays resolvable.
+pub const NODE_BUDGET: usize = 5_000;
+
 /// Properties every [`Node`] reads from the cache.
 const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::Name,
@@ -67,7 +72,8 @@ const E_ELEMENT_NOT_ENABLED: i32 = 0x8004_0200_u32 as i32;
 #[derive(Debug)]
 pub struct Uia {
     automation: UIAutomation,
-    subtree: UICacheRequest,
+    /// One level: an element's children with their node properties.
+    children: UICacheRequest,
     single: UICacheRequest,
     elements: ElementCache<Vec<i32>, UIElement>,
     anonymous: i32,
@@ -81,11 +87,11 @@ impl Uia {
     /// Joins this thread to the COM MTA and prepares the cache requests.
     pub fn new() -> Result<Self, uiautomation::Error> {
         let automation = UIAutomation::new()?;
-        let subtree = node_request(&automation, TreeScope::Subtree)?;
+        let children = node_request(&automation, TreeScope::Children)?;
         let single = node_request(&automation, TreeScope::Element)?;
         Ok(Self {
             automation,
-            subtree,
+            children,
             single,
             elements: ElementCache::default(),
             anonymous: 0,
@@ -109,18 +115,34 @@ impl Uia {
         self.elements.get(handle).cloned()
     }
 
-    fn build(&mut self, element: &UIElement, depth: usize, max_depth: usize) -> Node {
+    /// `element` and, level by level, its descendants: one cross-process
+    /// read per level visited, `budget` nodes at most across the whole read.
+    /// A hostile or huge tree is read in bounded time and memory; what the
+    /// depth or the budget left out is counted in `omitted_children`.
+    fn build(
+        &mut self,
+        element: &UIElement,
+        depth: usize,
+        max_depth: usize,
+        budget: &mut usize,
+    ) -> Node {
+        *budget = budget.saturating_sub(1);
         let mut node = self.describe(element);
-        let children = element.get_cached_children().unwrap_or_default();
-        if depth >= max_depth {
-            if !children.is_empty() {
-                node.omitted_children = Some(children.len());
+        let children = element
+            .build_updated_cache(&self.children)
+            .and_then(|with_children| with_children.get_cached_children())
+            .unwrap_or_default();
+        let mut omitted = 0;
+        for child in &children {
+            if depth >= max_depth || *budget == 0 {
+                omitted += 1;
+            } else {
+                node.children
+                    .push(self.build(child, depth + 1, max_depth, budget));
             }
-        } else {
-            node.children = children
-                .iter()
-                .map(|child| self.build(child, depth + 1, max_depth))
-                .collect();
+        }
+        if omitted > 0 {
+            node.omitted_children = Some(omitted);
         }
         node
     }
@@ -353,14 +375,15 @@ impl Uia {
 impl AccessibilityBackend for Uia {
     fn tree(&mut self, windows: &[u32], max_depth: usize) -> ToolResult<Vec<Node>> {
         let mut roots = Vec::with_capacity(windows.len());
+        let mut budget = NODE_BUDGET;
         for &window in windows {
             let root = self
                 .automation
-                .element_from_handle_build_cache(hwnd(window), &self.subtree)
+                .element_from_handle_build_cache(hwnd(window), &self.single)
                 .map_err(|e| {
                     ToolError::platform(format!("reading the tree of window {window}"), e)
                 })?;
-            roots.push(self.build(&root, 0, max_depth));
+            roots.push(self.build(&root, 0, max_depth, &mut budget));
         }
         Ok(roots)
     }
@@ -387,9 +410,6 @@ impl AccessibilityBackend for Uia {
 
     fn click_point(&mut self, handle: &str) -> ToolResult<ClickPoint> {
         let element = self.element(handle)?;
-        let pid = element
-            .get_process_id()
-            .map_err(|e| classify(handle, "reading its process", &e))?;
         let (x, y) = if let Ok(Some(p)) = element.get_clickable_point() {
             (p.get_x(), p.get_y())
         } else {
@@ -416,7 +436,6 @@ impl AccessibilityBackend for Uia {
         Ok(ClickPoint {
             x,
             y,
-            pid,
             window: self.top_level_window(&element),
         })
     }
