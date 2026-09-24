@@ -47,6 +47,7 @@ pub(super) struct LaneArgs {
     pub(super) cross_platform: bool,
     pub(super) cross_app: bool,
     pub(super) cross_cli: bool,
+    pub(super) cross_desktop_mcp: bool,
     pub(super) cross_ios: bool,
     pub(super) wasm_args: String,
     pub(super) wasm_facade: bool,
@@ -57,7 +58,7 @@ pub(super) struct LaneArgs {
 
 impl LaneArgs {
     /// `(key, value)` in output order; booleans as `true`/`false`.
-    pub(super) fn fields(&self) -> [(&'static str, String); 17] {
+    pub(super) fn fields(&self) -> [(&'static str, String); 18] {
         let b = |v: bool| if v { "true" } else { "false" }.to_owned();
         [
             ("mode", self.mode.clone()),
@@ -71,6 +72,9 @@ impl LaneArgs {
             ("cross_platform", b(self.cross_platform)),
             ("cross_app", b(self.cross_app)),
             ("cross_cli", b(self.cross_cli)),
+            // flui-desktop-mcp's Windows and macOS backends, invisible to the
+            // Linux build: its own cross clippy whenever it is in scope
+            ("cross_desktop_mcp", b(self.cross_desktop_mcp)),
             // the flui-app / flui iOS runner: its clippy needs macOS (xcrun);
             // the facade gates code on iOS too, so either one in scope runs it
             ("cross_ios", b(self.cross_ios)),
@@ -348,6 +352,7 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope) -> anyhow::Result<LaneArgs> 
         cross_platform: has("flui-platform"),
         cross_app: has("flui-app") || has("flui"),
         cross_cli: has("flui-cli"),
+        cross_desktop_mcp: has("flui-desktop-mcp"),
         cross_ios: has("flui-app") || has("flui"),
         wasm_args,
         wasm_facade: has("flui"),

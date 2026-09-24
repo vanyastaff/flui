@@ -98,9 +98,12 @@ impl DesktopServer {
     }
 
     #[tool(
-        description = "Start a program (stdio discarded). Returns its pid; with wait_for_window_ms, also its first window. The server kills every launched process when it exits."
+        description = "Start a program (stdio discarded). Returns its pid; with wait_for_window_ms (at most 120000), also its first window. The server kills every launched process when it exits."
     )]
     async fn launch(&self, Parameters(p): Parameters<LaunchParams>) -> CallToolResult {
+        if let Err(e) = p.validate() {
+            return respond::<Value>(Err(e));
+        }
         let spec = LaunchSpec {
             program: p.program,
             args: p.args,
@@ -114,7 +117,7 @@ impl DesktopServer {
         let Some(ms) = p.wait_for_window_ms else {
             return respond(Ok(json!({ "pid": pid })));
         };
-        let deadline = Instant::now() + Duration::from_millis(ms.min(120_000));
+        let deadline = Instant::now() + Duration::from_millis(ms);
         loop {
             let windows = self
                 .worker

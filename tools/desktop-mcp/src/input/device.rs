@@ -129,10 +129,13 @@ impl Input {
             .button(Button::Left, Direction::Press)
             .map_err(failed("pressing for a drag"))?;
         let steps = (duration.as_millis() / STEP.as_millis()).clamp(2, 200) as i32;
+        // The steps are bounded; their interval is not, so a long drag lasts
+        // as long as it was asked to.
+        let interval = (duration / steps.unsigned_abs()).max(STEP);
         let moved = (1..=steps).try_for_each(|i| {
             let x = lerp(from.0, to.0, i, steps);
             let y = lerp(from.1, to.1, i, steps);
-            thread::sleep(STEP);
+            thread::sleep(interval);
             guard(Some((x, y)))?;
             self.move_verified(x, y)
         });

@@ -76,10 +76,27 @@ pub struct LaunchParams {
     /// Extra environment variables.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// If set, wait up to this many ms for the process to show a window and
-    /// return it. Some apps (Windows 11 Notepad) hand off to another process;
-    /// then no window appears for this pid and list_windows finds it.
+    /// If set, wait up to this many ms (at most 120000) for the process to
+    /// show a window and return it. Some apps (Windows 11 Notepad) hand off to
+    /// another process; then no window appears for this pid and list_windows
+    /// finds it.
     pub wait_for_window_ms: Option<u64>,
+}
+
+/// The longest `launch` waits for a window.
+pub const MAX_LAUNCH_WAIT_MS: u64 = 120_000;
+
+impl LaunchParams {
+    /// Rejects a window wait above [`MAX_LAUNCH_WAIT_MS`] before anything is
+    /// started, rather than shortening it silently.
+    pub fn validate(&self) -> ToolResult<()> {
+        match self.wait_for_window_ms {
+            Some(ms) if ms > MAX_LAUNCH_WAIT_MS => Err(ToolError::InvalidArgument(format!(
+                "wait_for_window_ms {ms} is above {MAX_LAUNCH_WAIT_MS}"
+            ))),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// `kill` arguments.
@@ -554,6 +571,21 @@ mod tests {
             .expect("BUG: a role is a criterion");
         assert_eq!(target, Target::Window(4));
         assert_eq!(query.role.as_deref(), Some("Button"));
+    }
+
+    /// A window wait above the ceiling is refused, not shortened.
+    #[test]
+    fn a_launch_wait_above_the_ceiling_is_refused() {
+        assert!(
+            parse::<LaunchParams>(json!({"program": "x", "wait_for_window_ms": 120_001}))
+                .validate()
+                .is_err()
+        );
+        assert!(
+            parse::<LaunchParams>(json!({"program": "x", "wait_for_window_ms": 120_000}))
+                .validate()
+                .is_ok()
+        );
     }
 
     /// Every name contains "", so an empty substring would match everything.

@@ -228,6 +228,7 @@ mod tests {
             cross_platform: false,
             cross_app: true,
             cross_cli: false,
+            cross_desktop_mcp: false,
             cross_ios: true,
             wasm_args: "-p flui -p flui-material -p flui-web-counter".to_owned(),
             wasm_facade: true,
@@ -244,7 +245,7 @@ mod tests {
         let expected = "mode=packages\nheavy_required=false\nreason=changed: flui-material; plus 2 dependents\n\
              packages=flui flui-material flui-web-counter\npkg_args=-p flui -p flui-material -p flui-web-counter\n\
              test_args=-p flui -p flui-material -p flui-web-counter\nfeatures=--features flui/cupertino,flui/localizations\n\
-             platform=false\ncross_platform=false\ncross_app=true\ncross_cli=false\ncross_ios=true\n\
+             platform=false\ncross_platform=false\ncross_app=true\ncross_cli=false\ncross_desktop_mcp=false\ncross_ios=true\n\
              wasm_args=-p flui -p flui-material -p flui-web-counter\nwasm_facade=true\nhack_args=\n\
              doc_args=-p flui -p flui-material -p flui-web-counter --features flui/testing\n\
              doctest_args=-p flui -p flui-material\n";

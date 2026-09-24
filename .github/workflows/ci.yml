@@ -293,6 +293,7 @@ jobs:
       cross_platform: ${{ steps.scope.outputs.cross_platform }}
       cross_app: ${{ steps.scope.outputs.cross_app }}
       cross_cli: ${{ steps.scope.outputs.cross_cli }}
+      cross_desktop_mcp: ${{ steps.scope.outputs.cross_desktop_mcp }}
       cross_ios: ${{ steps.scope.outputs.cross_ios }}
       wasm_args: ${{ steps.scope.outputs.wasm_args }}
       wasm_facade: ${{ steps.scope.outputs.wasm_facade }}
@@ -452,7 +453,7 @@ jobs:
       # tests) on its own target, for the affected packages only -- the same
       # commands as the heavy `cross-typecheck` job.
       - name: Add cross targets
-        if: needs.plan.outputs.cross_platform == 'true' || needs.plan.outputs.cross_app == 'true' || needs.plan.outputs.cross_cli == 'true'
+        if: needs.plan.outputs.cross_platform == 'true' || needs.plan.outputs.cross_app == 'true' || needs.plan.outputs.cross_cli == 'true' || needs.plan.outputs.cross_desktop_mcp == 'true'
         run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin aarch64-linux-android aarch64-apple-ios
 
       - name: cargo clippy flui-platform backends (windows, macos, android, ios)
@@ -473,6 +474,13 @@ jobs:
       - name: cargo clippy flui-cli (windows)
         if: needs.plan.outputs.cross_cli == 'true'
         run: cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
+      - name: cargo clippy flui-desktop-mcp backends (windows, macos)
+        if: needs.plan.outputs.cross_desktop_mcp == 'true'
+        run: |
+          for target in x86_64-pc-windows-msvc aarch64-apple-darwin; do
+            cargo clippy -p flui-desktop-mcp --locked --all-targets --target "$target" -- -D warnings
+          done
 
       # wasm32-only code in the affected wasm-capable packages -- the
       # heavy `wasm-check` job's clippy pass, narrowed to them.
