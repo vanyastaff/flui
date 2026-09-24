@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use enigo::{Axis, Button, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 
-use super::MouseButton;
+use super::{Guard, MouseButton};
 use crate::error::{ToolError, ToolResult};
 use crate::keys::{KeyCombo, KeyName, Modifier};
 #[cfg(not(target_os = "windows"))]
@@ -69,12 +69,21 @@ impl Input {
         crate::os::cursor().or_else(|| self.enigo.location().ok())
     }
 
-    /// Moves to the point and clicks once or twice.
-    pub fn click(&mut self, x: i32, y: i32, button: MouseButton, double: bool) -> ToolResult<()> {
+    /// Moves to the point and clicks once or twice. `guard` runs before each
+    /// click, so a target that lost the foreground receives no further one.
+    pub fn click(
+        &mut self,
+        x: i32,
+        y: i32,
+        button: MouseButton,
+        double: bool,
+        guard: &mut Guard<'_>,
+    ) -> ToolResult<()> {
         self.move_to(x, y)?;
         thread::sleep(STEP);
         let button = enigo_button(button);
         for _ in 0..if double { 2 } else { 1 } {
+            guard()?;
             self.enigo
                 .button(button, Direction::Click)
                 .map_err(failed("clicking"))?;
@@ -83,9 +92,18 @@ impl Input {
     }
 
     /// Presses at `from`, moves in steps over `duration`, releases at `to`.
-    pub fn drag(&mut self, from: (i32, i32), to: (i32, i32), duration: Duration) -> ToolResult<()> {
+    /// `guard` runs before the press and before every step; a failed guard
+    /// stops the drag, and the button is released either way.
+    pub fn drag(
+        &mut self,
+        from: (i32, i32),
+        to: (i32, i32),
+        duration: Duration,
+        guard: &mut Guard<'_>,
+    ) -> ToolResult<()> {
         self.move_to(from.0, from.1)?;
         thread::sleep(STEP);
+        guard()?;
         self.enigo
             .button(Button::Left, Direction::Press)
             .map_err(failed("pressing for a drag"))?;
@@ -94,6 +112,7 @@ impl Input {
             let x = from.0 + (to.0 - from.0) * i / steps;
             let y = from.1 + (to.1 - from.1) * i / steps;
             thread::sleep(STEP);
+            guard()?;
             self.move_to(x, y)
         });
         // Release even if a move failed, so no button stays held.
@@ -106,15 +125,24 @@ impl Input {
 
     /// Moves to the point, then scrolls `dx`/`dy` wheel notches (positive
     /// is right/down).
-    pub fn scroll(&mut self, x: i32, y: i32, dx: i32, dy: i32) -> ToolResult<()> {
+    pub fn scroll(
+        &mut self,
+        x: i32,
+        y: i32,
+        dx: i32,
+        dy: i32,
+        guard: &mut Guard<'_>,
+    ) -> ToolResult<()> {
         self.move_to(x, y)?;
         thread::sleep(STEP);
         if dy != 0 {
+            guard()?;
             self.enigo
                 .scroll(dy, Axis::Vertical)
                 .map_err(failed("scrolling"))?;
         }
         if dx != 0 {
+            guard()?;
             self.enigo
                 .scroll(dx, Axis::Horizontal)
                 .map_err(failed("scrolling"))?;
@@ -122,21 +150,35 @@ impl Input {
         Ok(())
     }
 
-    /// Types text as characters, independent of the keyboard layout.
-    pub fn type_text(&mut self, text: &str) -> ToolResult<()> {
+    /// Types text as characters, independent of the keyboard layout, one
+    /// character at a time with `guard` before each, so a target that lost
+    /// the foreground receives none of the rest.
+    pub fn type_text(&mut self, text: &str, guard: &mut Guard<'_>) -> ToolResult<()> {
         if text.contains('\0') {
             return Err(ToolError::InvalidArgument(
                 "text must not contain NUL characters".into(),
             ));
         }
-        self.enigo.text(text).map_err(failed("typing text"))
+        let mut buffer = [0_u8; 4];
+        for ch in text.chars() {
+            guard()?;
+            self.enigo
+                .text(ch.encode_utf8(&mut buffer))
+                .map_err(failed("typing text"))?;
+        }
+        Ok(())
     }
 
     /// Presses the combo `repeat` times: modifiers down in order, key
     /// clicked, modifiers up in reverse.
-    pub fn key(&mut self, combo: &KeyCombo, repeat: u32) -> ToolResult<()> {
+    ///
+    /// `guard` runs before each repetition and again before the key itself,
+    /// once the modifiers are down; a failed guard sends no key, releases
+    /// the held modifiers and stops.
+    pub fn key(&mut self, combo: &KeyCombo, repeat: u32, guard: &mut Guard<'_>) -> ToolResult<()> {
         let key = enigo_key(combo.key)?;
         for _ in 0..repeat {
+            guard()?;
             let mut held = Vec::with_capacity(combo.modifiers.len());
             let mut result = Ok(());
             for &m in &combo.modifiers {
@@ -149,6 +191,9 @@ impl Input {
                     break;
                 }
                 held.push(k);
+            }
+            if result.is_ok() {
+                result = guard();
             }
             if result.is_ok() {
                 result = self

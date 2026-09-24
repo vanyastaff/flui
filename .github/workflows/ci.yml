@@ -1576,6 +1576,15 @@ jobs:
       - name: cargo clippy (android backend)
         run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-linux-android -- -D warnings
 
+      # flui-desktop-mcp's real backends (UI Automation, capture, input) sit
+      # behind cfg(windows) / cfg(target_os = "macos"); on this Linux runner
+      # every other gate compiles only its unsupported fallbacks.
+      - name: cargo clippy (desktop-mcp, windows)
+        run: cargo clippy -p flui-desktop-mcp --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
+      - name: cargo clippy (desktop-mcp, macos)
+        run: cargo clippy -p flui-desktop-mcp --locked --all-targets --target aarch64-apple-darwin -- -D warnings
+
       # The native UIKit backend had no lint gate at all before this step.
       # `cargo xtask device ios-sim` (run on a Mac) is the only
       # EXECUTING coverage; this line is the type-check half, matching how the

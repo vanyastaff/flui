@@ -194,6 +194,9 @@ pub struct ClickPoint {
     pub y: i32,
     /// The process that owns the element.
     pub pid: u32,
+    /// The top-level window the element belongs to, when the backend can
+    /// tell: a click must land in that window, not a sibling of the process.
+    pub window: Option<u32>,
 }
 
 /// An OS accessibility API, reached from the one worker thread.

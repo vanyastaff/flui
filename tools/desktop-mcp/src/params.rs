@@ -420,7 +420,7 @@ impl ScrollParams {
                 "pass a non-zero `dx` or `dy`".into(),
             ));
         }
-        if self.dx.abs() > 100 || self.dy.abs() > 100 {
+        if self.dx.unsigned_abs() > 100 || self.dy.unsigned_abs() > 100 {
             return Err(ToolError::InvalidArgument(
                 "scroll at most 100 notches per call".into(),
             ));

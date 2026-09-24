@@ -75,11 +75,19 @@ window that is in front instead, the tree seen before a timeout.
 ## Safety rule for input
 
 `click`, `drag`, `scroll`, `type_text` and `key` take an optional `window_id` or `pid`.
-**Agents should always pass it.** When it is given, the server checks, immediately before
-sending the input, that the target owns the foreground window and that every coordinate lies
-inside that window and is not covered there by another application's window. Otherwise it
+**Agents should always pass it.** When it is given, the server checks that the target owns
+the foreground window and that every coordinate lies inside that window with the target
+itself under it — a `window_id` admits only that window at the point, a `pid` any of the
+process's windows (its own popups). The check runs again before **every** event of a
+multi-event action — each repeat of `key`, each character of `type_text`, each step of
+`drag`, each click of a double click — so a window that takes the foreground partway through
+receives none of the rest; a pressed button or held modifier is still released. Otherwise it
 refuses and sends nothing, so keystrokes and clicks never land in another application. An
-element click always requires the element's own window to be in front, target or not.
+element click always requires the element's own top-level window to be in front and under
+the point, target or not.
+
+The check fails closed: where the OS cannot say which window is under a point (macOS, for
+now), coordinate input with a target is refused rather than sent unverified.
 
 The pattern tools (`invoke`, `toggle`, `set_value`, `focus`, `select`) send no input at all
 and work on covered windows; prefer them where the element supports the pattern.

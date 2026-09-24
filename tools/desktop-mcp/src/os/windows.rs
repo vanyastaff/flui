@@ -15,7 +15,9 @@ use windows::Win32::System::JobObjects::{
     SetInformationJobObject,
 };
 use windows::Win32::UI::HiDpi::{
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, DPI_AWARENESS_PER_MONITOR_AWARE,
+    GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
+    SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput,
@@ -31,8 +33,15 @@ use crate::error::{ToolError, ToolResult};
 /// xcap captures and injected input then share one space on every monitor.
 pub fn init_dpi() -> ToolResult<()> {
     // SAFETY: a predefined context constant; the call only sets process state.
-    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
-        .map_err(|e| ToolError::platform("setting per-monitor DPI awareness", e))
+    let set = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    // A refusal is harmless when the process is already per-monitor aware
+    // (a manifest or a host set it first); anything else is not.
+    // SAFETY: reads this thread's awareness context; no preconditions.
+    let awareness = unsafe { GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext()) };
+    if awareness == DPI_AWARENESS_PER_MONITOR_AWARE {
+        return Ok(());
+    }
+    set.map_err(|e| ToolError::platform("setting per-monitor DPI awareness", e))
 }
 
 fn hwnd(id: u32) -> HWND {

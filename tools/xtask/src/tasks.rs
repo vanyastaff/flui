@@ -134,6 +134,21 @@ fn ios_runner() -> Cmd {
 }
 
 /// flui-cli's Windows paths, which no Linux job compiles.
+/// flui-desktop-mcp's UI Automation, capture and input backends, which sit
+/// behind `cfg(windows)` / `cfg(target_os = "macos")`: on Linux only its
+/// unsupported fallbacks compile.
+fn desktop_mcp_clippy(target: &str) -> Cmd {
+    deny_warnings(Cmd::cargo([
+        "clippy",
+        "-p",
+        "flui-desktop-mcp",
+        "--locked",
+        "--all-targets",
+        "--target",
+        target,
+    ]))
+}
+
 fn cli_windows() -> Cmd {
     deny_warnings(Cmd::cargo([
         "clippy",
@@ -277,7 +292,8 @@ fn lint_plan() -> Vec<Step> {
 /// CI's `cross-typecheck` job: clippy (not check: `cfg(windows)` / `macos` /
 /// `android` code is invisible to every other lint gate, and check-only let
 /// ~100 deny-level violations accumulate unseen) of flui-platform's per-OS
-/// backends, the mobile runners and flui-cli's Windows paths. No link, no
+/// backends, the mobile runners, flui-cli's Windows paths and flui-desktop-mcp's
+/// Windows and macOS backends. No link, no
 /// tests: green means "compiles clean under the workspace lints", nothing more.
 /// The iOS runner needs macOS (CI runs it in `cli-macos`), so it is skipped
 /// with a message elsewhere.
@@ -296,6 +312,8 @@ fn cross_typecheck_plan(host: Host) -> Vec<Step> {
     });
     steps.push(android_runner().into());
     steps.push(cli_windows().into());
+    steps.push(desktop_mcp_clippy(WINDOWS_TARGET).into());
+    steps.push(desktop_mcp_clippy(MACOS_TARGET).into());
     steps
 }
 
@@ -1067,6 +1085,8 @@ mod tests {
             "$ cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-ios -- -D warnings",
             "$ CC_aarch64_linux_android=clang CFLAGS_aarch64_linux_android=--target=aarch64-linux-android21 AR_aarch64_linux_android=ar cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings",
             "$ cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings",
+            "$ cargo clippy -p flui-desktop-mcp --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings",
+            "$ cargo clippy -p flui-desktop-mcp --locked --all-targets --target aarch64-apple-darwin -- -D warnings",
         ];
         let linux = lines(&cross_typecheck_plan(Host::Linux));
         let commands: Vec<&String> = linux.iter().filter(|l| l.starts_with('$')).collect();

@@ -87,9 +87,19 @@ pub fn verify(
                 rect: rect.to_string(),
             });
         }
-        if let Some(under) = under
-            && under.pid != fg.pid
-        {
+        // Fail closed: a point is only sent where the OS confirms what is
+        // under it. A window target admits only that window there; a process
+        // target admits any of the process's windows (its own popups).
+        let Some(under) = under else {
+            return Err(ToolError::NotSupported(format!(
+                "cannot verify what is under ({x}, {y}) on this OS, so no input is sent there"
+            )));
+        };
+        let admitted = match target {
+            Target::Window(id) => under.id == id,
+            Target::Pid(pid) => under.pid == pid,
+        };
+        if !admitted {
             return Err(ToolError::OutsideTarget {
                 x,
                 y,
@@ -248,20 +258,28 @@ impl Desktop {
         double: bool,
         target: Option<Target>,
     ) -> ToolResult<Value> {
-        let (x, y, element_pid) = match at {
+        let (x, y, element_target) = match at {
             ClickAt::Point(x, y) => (*x, *y, None),
             ClickAt::Element(handle) => {
                 let p = self.a11y.click_point(handle)?;
-                (p.x, p.y, Some(p.pid))
+                // The element's own top-level window when the backend knows
+                // it — a sibling window of the same process in front would
+                // otherwise take the click — else its process.
+                let own = p.window.map_or(Target::Pid(p.pid), Target::Window);
+                (p.x, p.y, Some(own))
             }
         };
         Self::check(target, &[(x, y)])?;
-        // An element click always lands in the element's own process: the
-        // point must be in its foreground window, not on whatever covers it.
-        if let Some(pid) = element_pid {
-            Self::check(Some(Target::Pid(pid)), &[(x, y)])?;
+        // An element click always lands on the element: the point must be in
+        // its window, in front, not on whatever covers it.
+        if let Some(own) = element_target {
+            Self::check(Some(own), &[(x, y)])?;
         }
-        self.input()?.click(x, y, button, double)?;
+        let mut guard = || {
+            Self::check(target, &[(x, y)])?;
+            element_target.map_or(Ok(()), |own| Self::check(Some(own), &[(x, y)]))
+        };
+        self.input()?.click(x, y, button, double, &mut guard)?;
         Ok(
             json!({ "clicked": { "x": x, "y": y }, "button": format!("{button:?}").to_lowercase(), "double": double }),
         )
@@ -287,7 +305,8 @@ impl Desktop {
         target: Option<Target>,
     ) -> ToolResult<Value> {
         Self::check(target, &[from, to])?;
-        self.input()?.drag(from, to, duration)?;
+        let mut guard = || Self::check(target, &[from, to]);
+        self.input()?.drag(from, to, duration, &mut guard)?;
         Ok(json!({ "from": { "x": from.0, "y": from.1 }, "to": { "x": to.0, "y": to.1 } }))
     }
 
@@ -301,14 +320,16 @@ impl Desktop {
         target: Option<Target>,
     ) -> ToolResult<Value> {
         Self::check(target, &[(x, y)])?;
-        self.input()?.scroll(x, y, dx, dy)?;
+        let mut guard = || Self::check(target, &[(x, y)]);
+        self.input()?.scroll(x, y, dx, dy, &mut guard)?;
         Ok(json!({ "at": { "x": x, "y": y }, "dx": dx, "dy": dy }))
     }
 
     /// Types text into whatever has keyboard focus.
     pub fn type_text(&mut self, text: &str, target: Option<Target>) -> ToolResult<Value> {
         Self::check(target, &[])?;
-        self.input()?.type_text(text)?;
+        let mut guard = || Self::check(target, &[]);
+        self.input()?.type_text(text, &mut guard)?;
         Ok(json!({ "typed_chars": text.chars().count() }))
     }
 
@@ -320,7 +341,8 @@ impl Desktop {
         target: Option<Target>,
     ) -> ToolResult<Value> {
         Self::check(target, &[])?;
-        self.input()?.key(combo, repeat)?;
+        let mut guard = || Self::check(target, &[]);
+        self.input()?.key(combo, repeat, &mut guard)?;
         Ok(json!({ "pressed": combo.to_string(), "repeat": repeat }))
     }
 
@@ -391,13 +413,41 @@ mod tests {
     #[test]
     fn accepts_the_foreground_target_by_window_or_pid() {
         assert!(verify(Target::Window(10), Some(&fg()), &[]).is_ok());
-        assert!(verify(Target::Pid(100), Some(&fg()), &[((5, 5), None)]).is_ok());
+        let own = Under { id: 10, pid: 100 };
+        assert!(verify(Target::Pid(100), Some(&fg()), &[((5, 5), Some(own))]).is_ok());
+        assert!(verify(Target::Window(10), Some(&fg()), &[((5, 5), Some(own))]).is_ok());
+    }
+
+    /// A point whose window the OS cannot name is refused, not waved
+    /// through: on an OS without hit-testing a covering window would
+    /// otherwise take the input.
+    #[test]
+    fn a_point_with_nothing_known_under_it_fails_closed() {
+        assert!(matches!(
+            verify(Target::Pid(100), Some(&fg()), &[((5, 5), None)]),
+            Err(ToolError::NotSupported(_))
+        ));
+    }
+
+    /// A window target admits only that window at the point: a sibling
+    /// window of the same process in front of it would take the click.
+    #[test]
+    fn a_window_target_refuses_its_processes_other_windows() {
+        let sibling = Under { id: 12, pid: 100 };
+        assert!(matches!(
+            verify(Target::Window(10), Some(&fg()), &[((5, 5), Some(sibling))]),
+            Err(ToolError::OutsideTarget { .. })
+        ));
     }
 
     #[test]
     fn refuses_points_outside_or_covered() {
         assert!(matches!(
-            verify(Target::Pid(100), Some(&fg()), &[((800, 5), None)]),
+            verify(
+                Target::Pid(100),
+                Some(&fg()),
+                &[((800, 5), Some(Under { id: 10, pid: 100 }))]
+            ),
             Err(ToolError::OutsideTarget { .. })
         ));
         let covered = Under { id: 99, pid: 555 };
@@ -412,6 +462,7 @@ mod tests {
     fn unknown_bounds_fail_closed_for_points_only() {
         let no_rect = Foreground { rect: None, ..fg() };
         assert!(verify(Target::Pid(100), Some(&no_rect), &[]).is_ok());
-        assert!(verify(Target::Pid(100), Some(&no_rect), &[((1, 1), None)]).is_err());
+        let own = Under { id: 10, pid: 100 };
+        assert!(verify(Target::Pid(100), Some(&no_rect), &[((1, 1), Some(own))]).is_err());
     }
 }

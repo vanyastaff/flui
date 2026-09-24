@@ -11,6 +11,11 @@ mod device;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub use device::Input;
 
+/// Runs before each emitted input event and refuses it with an error — how
+/// the server keeps a multi-event action (a repeated key, a drag, typed text)
+/// from reaching a window that took the foreground partway through.
+pub type Guard<'a> = dyn FnMut() -> crate::error::ToolResult<()> + 'a;
+
 /// Which mouse button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
@@ -54,6 +59,7 @@ impl Input {
         _: i32,
         _: MouseButton,
         _: bool,
+        _: &mut Guard<'_>,
     ) -> crate::error::ToolResult<()> {
         match *self {}
     }
@@ -64,22 +70,35 @@ impl Input {
         _: (i32, i32),
         _: (i32, i32),
         _: std::time::Duration,
+        _: &mut Guard<'_>,
     ) -> crate::error::ToolResult<()> {
         match *self {}
     }
 
     /// Unreachable: no `Input` exists.
-    pub fn scroll(&mut self, _: i32, _: i32, _: i32, _: i32) -> crate::error::ToolResult<()> {
+    pub fn scroll(
+        &mut self,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: &mut Guard<'_>,
+    ) -> crate::error::ToolResult<()> {
         match *self {}
     }
 
     /// Unreachable: no `Input` exists.
-    pub fn type_text(&mut self, _: &str) -> crate::error::ToolResult<()> {
+    pub fn type_text(&mut self, _: &str, _: &mut Guard<'_>) -> crate::error::ToolResult<()> {
         match *self {}
     }
 
     /// Unreachable: no `Input` exists.
-    pub fn key(&mut self, _: &crate::keys::KeyCombo, _: u32) -> crate::error::ToolResult<()> {
+    pub fn key(
+        &mut self,
+        _: &crate::keys::KeyCombo,
+        _: u32,
+        _: &mut Guard<'_>,
+    ) -> crate::error::ToolResult<()> {
         match *self {}
     }
 }

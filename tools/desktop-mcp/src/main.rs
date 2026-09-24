@@ -43,10 +43,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // Before any window, capture or input call: fixes the coordinate space.
+    // Without per-monitor awareness UIA rects, captures and pointer
+    // coordinates are scaled apart, so a point checked against one window
+    // could be injected over another: refuse to serve rather than guess.
     #[cfg(target_os = "windows")]
-    if let Err(e) = os::init_dpi() {
-        tracing::warn!("{e}; coordinates may be DPI-scaled");
-    }
+    os::init_dpi().context("making the server per-monitor DPI aware")?;
 
     let worker = Worker::spawn().context("starting the desktop thread")?;
     let children = Arc::new(Children::new());

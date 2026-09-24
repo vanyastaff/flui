@@ -52,6 +52,7 @@ const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::HasKeyboardFocus,
     UIProperty::IsKeyboardFocusable,
     UIProperty::ValueValue,
+    UIProperty::RangeValueValue,
     UIProperty::ToggleToggleState,
 ];
 
@@ -132,15 +133,22 @@ impl Uia {
             .filter(|(prop, _)| cached_bool(element, *prop))
             .map(|&(_, name)| name)
             .collect();
-        let value = patterns
-            .contains(&"Value")
-            .then(|| {
-                element
-                    .get_cached_property_value(UIProperty::ValueValue)
-                    .ok()
-                    .and_then(|v| TryInto::<String>::try_into(v).ok())
-            })
-            .flatten();
+        // A text control's value, or a slider's number when it exposes only
+        // RangeValue — what `set_value` writes, so a caller can read it back.
+        let value = if patterns.contains(&"Value") {
+            element
+                .get_cached_property_value(UIProperty::ValueValue)
+                .ok()
+                .and_then(|v| TryInto::<String>::try_into(v).ok())
+        } else if patterns.contains(&"RangeValue") {
+            element
+                .get_cached_property_value(UIProperty::RangeValueValue)
+                .ok()
+                .and_then(|v| TryInto::<f64>::try_into(v).ok())
+                .map(|number| number.to_string())
+        } else {
+            None
+        };
         let toggle_state = patterns
             .contains(&"Toggle")
             .then(|| {
@@ -174,6 +182,24 @@ impl Uia {
         }
     }
 
+    /// The top-level window `element` belongs to: the ancestor whose parent is
+    /// the desktop, as the handle `list_windows` reports. `None` when the walk
+    /// fails or that ancestor has no native window.
+    fn top_level_window(&self, element: &UIElement) -> Option<u32> {
+        let walker = self.automation.get_raw_view_walker().ok()?;
+        let root = self.automation.get_root_element().ok()?;
+        let mut current = element.clone();
+        loop {
+            let parent = walker.get_parent(&current).ok()?;
+            if self.automation.compare_elements(&parent, &root).ok()? {
+                break;
+            }
+            current = parent;
+        }
+        let handle: isize = current.get_native_window_handle().ok()?.into();
+        u32::try_from(handle).ok().filter(|&id| id != 0)
+    }
+
     /// The element's patterns, read live, for error messages.
     fn live_patterns(element: &UIElement) -> String {
         PATTERNS
@@ -190,12 +216,15 @@ impl Uia {
             .join(", ")
     }
 
-    fn has_pattern(element: &UIElement, prop: UIProperty) -> bool {
-        element
+    /// Whether `element` offers the pattern `prop` names, read live. A failed
+    /// read is classified, not taken for "no": an element the application
+    /// removed must answer as stale, so the caller reads a fresh tree instead
+    /// of concluding the action is unsupported.
+    fn has_pattern(handle: &str, element: &UIElement, prop: UIProperty) -> ToolResult<bool> {
+        let value = element
             .get_property_value(prop)
-            .ok()
-            .and_then(|v| TryInto::<bool>::try_into(v).ok())
-            .unwrap_or(false)
+            .map_err(|e| classify(handle, "reading its patterns", &e))?;
+        Ok(TryInto::<bool>::try_into(value).unwrap_or(false))
     }
 
     fn require(
@@ -204,7 +233,7 @@ impl Uia {
         prop: UIProperty,
         pattern: &'static str,
     ) -> ToolResult<()> {
-        if Self::has_pattern(element, prop) {
+        if Self::has_pattern(handle, element, prop)? {
             Ok(())
         } else {
             Err(ToolError::PatternUnsupported {
@@ -243,13 +272,13 @@ impl Uia {
                     .map_err(fail("toggle"))
             }
             Action::SetValue(value) => {
-                if Self::has_pattern(element, UIProperty::IsValuePatternAvailable) {
+                if Self::has_pattern(handle, element, UIProperty::IsValuePatternAvailable)? {
                     return element
                         .get_pattern::<UIValuePattern>()
                         .and_then(|p| p.set_value(value))
                         .map_err(fail("set_value"));
                 }
-                if Self::has_pattern(element, UIProperty::IsRangeValuePatternAvailable) {
+                if Self::has_pattern(handle, element, UIProperty::IsRangeValuePatternAvailable)? {
                     let number: f64 = value.trim().parse().map_err(|_| {
                         ToolError::InvalidArgument(format!(
                             "element `{handle}` takes a number (RangeValue pattern); `{value}` is not one"
@@ -326,7 +355,12 @@ impl AccessibilityBackend for Uia {
             }
             rect.center()
         };
-        Ok(ClickPoint { x, y, pid })
+        Ok(ClickPoint {
+            x,
+            y,
+            pid,
+            window: self.top_level_window(&element),
+        })
     }
 
     fn focus_window(&mut self, window: u32) -> ToolResult<()> {
