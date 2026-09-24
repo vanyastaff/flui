@@ -1,11 +1,16 @@
 # nextest configuration. Read from the workspace root by every `cargo nextest`
-# invocation — the `just test*` recipes and CI alike — so one file governs both.
+# invocation — `cargo xtask test` and CI alike — so one file governs both.
 #
 # Why it exists: a test that hangs (a GPU adapter that never answers, an Xvfb
 # connection that never comes up) used to run until the CI job's own
 # `timeout-minutes` killed the whole job, discarding every other result with
 # it. nextest runs each test in its own process, so it can time out and
 # terminate ONE test and keep reporting the rest.
+
+# `group()` filtersets (the two stages of `cargo xtask test`, below) arrived in
+# 0.9.133; an older nextest stops here with an upgrade hint instead.
+nextest-version = { required = "0.9.133" }
+
 [profile.default]
 # Report a test as SLOW after 60 s and kill it after ten periods (10 min): a
 # bound for a genuinely hung test, well under the CI job's `timeout-minutes`,
@@ -20,17 +25,22 @@ leak-timeout = "1s"
 # generates. The trybuild suites push every compile_fail case through rustc;
 # the flui-cli template tests (`cli_create::generated_*`) build or test a
 # generated project; `flui::facade_consumer` checks external consumer
-# crates against the facade. They own the run's wall-clock: in a cold
-# `just ci` 21 of them took 83-305 s each (2026-09-22, e9a5456d, jobs=6),
+# crates against the facade. They own the run's wall-clock: in a cold local
+# run of the whole suite 21 of them took 83-305 s each (2026-09-22, e9a5456d, jobs=6),
 # and no other test in the workspace reached 20 s.
 #
-# The filter below appears THREE times -- this override and the two
-# profiles after it. Keep them identical: a test missing from the override
-# loses its budget, one missing from a profile silently leaves `just ci`.
+# This override is the one place that names them: it puts them in test group
+# `nested-cargo`, and everything else selects the group, never the filter.
+# `cargo xtask test` runs the suite in two stages, `-E 'not group(nested-cargo)'`
+# then `-E 'group(nested-cargo)'` (`--fast` stops after the first): complements
+# by construction, so no test runs twice or not at all. `cargo nextest
+# show-config test-groups` lists the members. Keep this override first: a test
+# takes its group from the first override that matches it and sets one, so
+# only here is the group exactly this filter.
 #
-# They run in parallel, deliberately without a `max-threads = 1` test group:
-# serializing them was measured slower both cold (713.6 s vs 563.1 s for the
-# 24) and warm (25.9 s vs 13.7 s), 2026-09-22, M1/8 GB, jobs=6.
+# The group names them; it does not limit them (`max-threads = "num-cpus"`
+# below). Serializing them was measured slower both cold (713.6 s vs 563.1 s
+# for the 24) and warm (25.9 s vs 13.7 s), 2026-09-22, M1/8 GB, jobs=6.
 #
 # Budget: 300 s slow, killed after 20 min. Measured on CI's 4-core runner:
 # 64-265 s for a trybuild suite and ~180 s for each template build, varying
@@ -39,16 +49,7 @@ leak-timeout = "1s"
 [[profile.default.overrides]]
 filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | (binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer)'
 slow-timeout = { period = "300s", terminate-after = 4 }
-
-# `just test-ci` runs the suite in two stages: everything else first, then
-# the nested-cargo tests (`just test-nested-cargo`). The split is a partition
-# -- the two profiles' default filters are exact complements -- so the union
-# is the whole suite and no test runs twice or not at all.
-[profile.no-nested-cargo]
-default-filter = 'not (binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | (binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer))'
-
-[profile.nested-cargo]
-default-filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | (binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer)'
+test-group = 'nested-cargo'
 
 # GPU readback tests share one software rasterizer (lavapipe locally, WARP on
 # the CI GPU job), and each builds its own `wgpu::Device`. Submitting from
@@ -66,6 +67,8 @@ default-filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-renderin
 [test-groups]
 gpu-readback = { max-threads = 1 }
 system-clipboard = { max-threads = 1 }
+# Named, not limited: see the nested-cargo override at the top.
+nested-cargo = { max-threads = "num-cpus" }
 
 [[profile.default.overrides]]
 filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(=renderer::tests::sdr_surface_selection_painter_readback_preserves_swatches_and_blending)))'

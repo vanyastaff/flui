@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-18
-- **Related:** [ADR-0047](ADR-0047-unified-execution-services.md) (the execution lanes these lifecycles run on); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (concurrency topology is a sanctioned leapfrog zone — Flutter is not the reference); [Runtime Architecture Execution Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) ("Define durable service lifecycle and graceful application shutdown"); `docs/runtime-contract.toml` (`task-worker-service-lifecycles`)
+- **Related:** [ADR-0047](ADR-0047-unified-execution-services.md) (the execution lanes these lifecycles run on); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (concurrency topology is a sanctioned leapfrog zone — Flutter is not the reference); [Runtime Architecture Execution Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) ("Define durable service lifecycle and graceful application shutdown")
 - **Issue:** [#558](https://github.com/vanyastaff/flui/issues/558) — follows unified execution services (#557)
 
 *Background work is classified by lifetime, and every unit has a named owner and an explicit end: one-shot **tasks** and recurring **workers** are owned by `#[must_use]`, cancel-on-drop handles with deadline-bounded join evidence; application-lifetime **services** are owned by the runtime's registry, declare whether the last window closing stops the app, and are shut down by a staged cancel → bounded-join → evidence pass that runs before the execution pools close. There is no fire-and-forget spawn and no `detach()`.*
@@ -162,4 +162,4 @@ execution slot's reset.
   `CloseRequested` interception seam in the platform close path); journaled recoverable
   state; the widget-tier capability above; wasm32 lifecycles.
 - A breaking reshape of these surfaces when the deferred pieces land is expected and
-  preferred over shims (`experimental` classification in `docs/runtime-contract.toml`).
+  preferred over shims: these surfaces are experimental.

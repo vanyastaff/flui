@@ -63,7 +63,7 @@ tracing-subscriber = { workspace = true, optional = true }
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
 # normally, which cargo permits for dev-dependencies precisely so a lower crate
 # can use the test support built on it.
-# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 criterion = { workspace = true }
 # Enable flui-rendering's `testing` feature for unit tests so the
@@ -127,11 +127,23 @@ signals = []
 # `ElementCore::update_view` is gone — `dispatch_view_update`
 # (TypeId-keyed `Box::downcast::<V>`) is the only path now.
 
-# cargo-shear: suppress false positive for the trybuild compile-fail test input.
-# `tests/ui/column_17_compile_error.rs` is driven by `trybuild_ui.rs` via
-# trybuild; it is not directly `mod`-ed so shear cannot see the reference.
+# Files cargo-shear reports as unlinked although the build uses them:
+# - `tests/ui/*.rs`: trybuild compile-fail inputs driven by `trybuild_ui.rs`,
+#   never `mod`-ed.
+# - the element-tree test modules: rustc resolves a `#[path]` inside the inline
+#   `mod tests` of `src/tree/element_tree.rs` under `src/tree/element_tree/tests/`
+#   (the rule for a non-mod.rs file); shear resolves it elsewhere.
+# - `tests/support/build_owner_lifecycle_recovery.rs`: `include!`d by a test
+#   module of `src/owner/build_owner.rs`, which shear does not follow.
 [package.metadata.cargo-shear]
-ignored-paths = ["tests/ui/*.rs"]
+ignored-paths = [
+    "tests/ui/*.rs",
+    "src/tree/element_tree/activation_recovery_tests.rs",
+    "src/tree/element_tree/orphaned_render_mount_tests.rs",
+    "src/tree/element_tree/update_region_tests.rs",
+    "src/tree/element_tree/tests/replace_child_with_tests.rs",
+    "tests/support/build_owner_lifecycle_recovery.rs",
+]
 
 [[bench]]
 name = "key_storage_shape"
@@ -156,3 +168,6 @@ required-features = ["test-utils"]
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+layer = 5

@@ -81,7 +81,6 @@ pub use flui_semantics as semantics;
 // `objects` module removed: concrete render objects live in the `flui-objects`
 // crate (the flui-objects extraction). flui-rendering now exports
 // only engine primitives (traits, pipeline, protocol, contexts, arena).
-pub mod slivers;
 pub mod storage;
 // Promoted from `cfg(test) pub(crate)` to the `testing` feature so
 // flui-objects' test crate can reach NoopSliver cross-crate when it enables

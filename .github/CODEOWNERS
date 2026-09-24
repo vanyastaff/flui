@@ -1,27 +1,2 @@
-# Default owner for anything not matched below.
+# One maintainer owns everything; review requests go to them.
 * @vanyastaff
-
-# Platform backends (Win32, AppKit, headless)
-/crates/flui-platform/ @vanyastaff
-
-# Engine / rendering / layer / painting (GPU compositor, layout, paint)
-/crates/flui-engine/ @vanyastaff
-/crates/flui-rendering/ @vanyastaff
-/crates/flui-layer/ @vanyastaff
-/crates/flui-painting/ @vanyastaff
-
-# View / widgets / material / cupertino (framework + facade)
-/crates/flui-view/ @vanyastaff
-/crates/flui-widgets/ @vanyastaff
-/crates/flui-material/ @vanyastaff
-/crates/flui-cupertino/ @vanyastaff
-
-# CLI / devtools / build / hot-reload
-/crates/flui-cli/ @vanyastaff
-/crates/flui-devtools/ @vanyastaff
-/crates/flui-hot-reload/ @vanyastaff
-
-# Docs
-/docs/ @vanyastaff
-/AGENTS.md @vanyastaff
-/CONTRIBUTING.md @vanyastaff

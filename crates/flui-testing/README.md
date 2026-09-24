@@ -47,8 +47,9 @@ harness stays put but is built on the machinery here.
 
 **Dependency rule.** Runtime and framework crates may take a *development*
 edge into this crate and nothing more. A normal edge would link the test driver
-into production binaries; `docs/workspace-layers.toml` records the rule and
-`just inventory-check` enforces it.
+into production binaries. `cargo xtask workspace` rejects one from any lower
+layer; at or above this crate's layer, where `flui-widgets` and the facade take
+it only as an optional `testing` dependency, review holds the rule.
 
 ## Documentation
 

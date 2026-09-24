@@ -261,8 +261,6 @@ cargo run -p flui_assets --example assets_basic_usage --features images
 
 This crate achieves **96% compliance** with Rust API Guidelines (106/110 points).
 
-See [API_GUIDELINES_AUDIT.md](API_GUIDELINES_AUDIT.md) for detailed compliance report.
-
 ## Documentation
 
 ### Quick Links
@@ -277,7 +275,7 @@ See [API_GUIDELINES_AUDIT.md](API_GUIDELINES_AUDIT.md) for detailed compliance r
 Licensed under either of:
 
 - Apache License, Version 2.0 ([LICENSE-APACHE](../../LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](../../LICENSE-MIT))
+- MIT License ([LICENSE](../../LICENSE))
 
 at your option.
 

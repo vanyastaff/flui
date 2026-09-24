@@ -59,7 +59,7 @@ fn has_action(bits: u64, action: SemanticsAction) -> bool {
 /// filter (`accesskit_consumer::common_filter`) drops `GenericContainer` nodes
 /// from what an assistive technology sees, so a labelled text that resolved to
 /// it was invisible to VoiceOver — observed on 2026-09-22 through
-/// `just macos-a11y`, where the counter's two `Text`s were absent from the
+/// `cargo xtask device macos-a11y`, where the counter's two `Text`s were absent from the
 /// `AXUIElement` tree while its button was present.
 #[must_use]
 pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
@@ -828,8 +828,8 @@ mod tests {
     /// generic container: AccessKit's consumer filter drops
     /// `GenericContainer` from what an assistive technology sees, so the
     /// old resolution made every plain `Text` invisible to VoiceOver
-    /// (`just macos-a11y`, 2026-09-22). An unlabelled, flagless node stays a
-    /// container, and a label does not override a real flag.
+    /// (`cargo xtask device macos-a11y`, 2026-09-22). An unlabelled, flagless
+    /// node stays a container, and a label does not override a real flag.
     #[test]
     fn a_labelled_flagless_node_is_static_text() {
         let text = SemanticsNodeData {

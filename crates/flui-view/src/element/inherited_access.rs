@@ -48,9 +48,9 @@ pub trait InheritedElementAccess {
     /// How many elements currently depend on this inherited element.
     ///
     /// **Diagnostics only, and deliberately not part of the stable surface** —
-    /// `#[doc(hidden)]`, and classified as such in `docs/runtime-contract.toml`
-    /// rather than left to grow unnoticed. It exists because whether a widget
-    /// took an inherited dependency is a real behavioural property with no
+    /// `#[doc(hidden)]` rather than left to grow into it unnoticed. It exists
+    /// because whether a widget took an inherited dependency is a real
+    /// behavioural property with no
     /// other observer: a widget depending on a `Directionality` it cannot use
     /// rebuilds on every direction change, and rebuild counting CANNOT see the
     /// difference, because changing an inherited value rebuilds the whole

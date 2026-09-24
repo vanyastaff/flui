@@ -8,9 +8,9 @@
 //! paint and present all ran on UIKit with no tree-specific plumbing.
 //!
 //! It is built for the simulator target (`aarch64-apple-ios-sim`), staged into
-//! a minimal `.app`, and launched by `just ios-sim`, which captures the app's
-//! console and asserts on the engine's own frame evidence (`surface frame
-//! submitted and presented`) — the same instrument ADR-0058's pacing
+//! a minimal `.app`, and launched by `cargo xtask device ios-sim`, which
+//! captures the app's console and asserts on the engine's own frame evidence
+//! (`surface frame submitted and presented`) — the same instrument ADR-0058's pacing
 //! measurement used on both platforms.
 //!
 //! No `tracing_subscriber` init here: `run_app` installs the process-wide
@@ -34,5 +34,5 @@ fn main() {
 
 #[cfg(not(target_os = "ios"))]
 fn main() {
-    eprintln!("ios_demo is iOS-only; run it via `just ios-sim`");
+    eprintln!("ios_demo is iOS-only; run it via `cargo xtask device ios-sim`");
 }

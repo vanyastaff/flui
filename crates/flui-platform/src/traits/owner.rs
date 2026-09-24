@@ -53,10 +53,9 @@ use crate::task::Task;
 /// contract.
 ///
 /// ```compile_fail,E0277
-/// // Illustration only (ALT-2): NOT cited as registry evidence — the
-/// // item-position `assert_not_impl_any!` below is. This doctest is
-/// // excluded from every CI gate (`justfile:177` excludes flui-platform's
-/// // doc tests) and is run locally via `cargo test -p flui-platform --doc`.
+/// // Illustration only: the item-position `assert_not_impl_any!` below is
+/// // the compile-time evidence. This doctest runs with the workspace
+/// // doctests (`cargo test --doc`, part of `cargo xtask ci`).
 /// fn assert_send<T: Send>() {}
 /// assert_send::<flui_platform::OwnerPlatform>();
 /// ```
@@ -168,10 +167,9 @@ impl OwnerPlatform {
     }
 }
 
-// Sole registry evidence for the "wrong-thread owner ops are compile
-// errors" acceptance criterion (ALT-2) — expanded by every `cargo check`,
-// including cross-typecheck on win/mac, because `static_assertions` is a
-// real (non-dev) dependency (see Cargo.toml).
+// The evidence that wrong-thread owner ops are compile errors — expanded
+// by every `cargo check`, including cross-typecheck on win/mac, because
+// `static_assertions` is a real (non-dev) dependency (see Cargo.toml).
 assert_not_impl_any!(OwnerPlatform: Send, Sync);
 
 // ============================================================================
@@ -190,9 +188,8 @@ assert_not_impl_any!(OwnerPlatform: Send, Sync);
 /// type is safe to call from any thread, and no owner-affine method is
 /// ever added to it. Minted only by [`OwnerPlatform::shared`].
 ///
-/// The registry (`docs/runtime-contract.toml`) tracks this as the
-/// compile-time-checked half of the owner-platform-capability contract;
-/// `Platform` itself (the trait `dyn` object underneath) remains
+/// This is the compile-time-checked half of the owner-platform capability
+/// (`assert_impl_all!` below); `Platform` itself (the trait `dyn` object underneath) remains
 /// runtime-checked (`OwnerAffinity` debug-asserts) until the owner-thread methods leave `Platform` and split its
 /// owner-affine methods off entirely.
 #[derive(Clone)]
@@ -362,7 +359,7 @@ impl SharedPlatform {
     }
 }
 
-// Sole registry evidence that `SharedPlatform` genuinely is the thread-safe
+// The evidence that `SharedPlatform` genuinely is the thread-safe
 // escape hatch its doc promises — expanded by every `cargo check`, same
 // discipline as `OwnerPlatform`'s `assert_not_impl_any!` above.
 assert_impl_all!(SharedPlatform: Send, Sync, Clone);

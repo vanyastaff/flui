@@ -57,3 +57,6 @@ full = ["serde", "mint", "kurbo"]
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.flui]
+layer = 0

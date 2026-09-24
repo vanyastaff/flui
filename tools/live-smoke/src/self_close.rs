@@ -100,7 +100,7 @@ const EVENT_LOOP_QUITTING_LINE: &str = "Quitting event loop";
 /// orphaned by the frame-closure cycle (window -> callback slot -> frame
 /// closure -> `Arc<window>`) that only a callback-clearing call breaks —
 /// see the memory note `pre-present-hook-pins-the-window-in-a-cycle`.
-/// Before this check existed, `just live-smoke-wayland` asserted only the
+/// Before this check existed, the Wayland live smoke asserted only the
 /// exit code, which stays 0 whether the surface was released in order,
 /// released late, or never released at all (the process's own exit
 /// reclaims the leak either way).

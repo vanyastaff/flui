@@ -3,7 +3,7 @@
 The fifth tree: the accessibility tree assembled from the render tree and
 exported to the platform through AccessKit. Layer rules and the crate's place in
 the workspace DAG live in [`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md) and
-[`docs/workspace-layers.toml`](../../docs/workspace-layers.toml); this file
+this crate's `[package.metadata.flui] layer`; this file
 records the per-decision divergences from the Flutter reference that would
 otherwise read as drift.
 

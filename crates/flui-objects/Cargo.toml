@@ -41,11 +41,10 @@ serde = ["flui-types/serde"]
 
 [dev-dependencies]
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
-# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-objects = { path = ".", features = ["testing"] }
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 insta = { workspace = true }
-flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
 
 [[test]]
@@ -54,3 +53,6 @@ path = "tests/render_object_harness.rs"
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+layer = 4

@@ -6,9 +6,9 @@
 
 The FLUI workspace contains 28 crates plus the `flui` facade, organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
 
-> **Layer assignments here mirror [`workspace-layers.toml`](workspace-layers.toml), which is the authoritative policy.** `scripts/check-workspace-inventory.sh` (`just inventory-check`) validates every **normal** Cargo dependency edge against that file: strictly downward, with an ordered-pair allowlist for same-layer edges, named forbidden pairs, and an acyclicity check that includes projected future edges. See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md) for the contract and [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md) for the target graph. Dev-dependencies are deliberately out of scope — they cross layers freely and Cargo permits cycles among them.
+> **Layer assignments here mirror the manifests, which are the authority.** Each crate declares `[package.metadata.flui] layer = N`; the root `Cargo.toml` names the layers in `[workspace.metadata.flui] layers`. `cargo xtask workspace` checks every **normal** and build dependency between workspace packages: it points to the same layer or lower, never higher, and never at an example or tool (Cargo itself rejects cycles). See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md) for the contract and [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md) for the target graph. Dev-dependencies may point up (tests use `flui-testing`) and Cargo permits cycles among them. A crate can narrow who depends on it: `allowed-dependents` (normal and build edges) and `allowed-dev-dependents` in its `[package.metadata.flui]`, which is how `flui-log` stays composition-only and how no crate but `flui-localizations`, `flui-app` and the facade depends on Material or Cupertino in any form ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)). Examples and tools are applications and may depend on anything.
 
-A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members]` while integration is in progress; the source tree still exists but is not built by default. A crate may be active but omitted from `default-members`; `cargo build --workspace` still includes every active workspace member.
+A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members]` while integration is in progress; the source tree still exists but is not built by default.
 
 ## Layer 0 — Foundation (value types)
 
@@ -32,7 +32,7 @@ These crates compose the rendering and platform substrate largely without knowin
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui-log` | ✅ ACTIVE | Composition-only cross-platform logging backend: desktop `fmt` (optionally hierarchical), Android logcat, Apple unified logging, browser console/performance timeline, behind an explicit subscriber-ownership policy. **Only `flui-app`, `flui-cli`, and the facade may depend on it** — framework crates use `tracing` directly, and `docs/workspace-layers.toml` enforces that mechanically. |
+| `flui-log` | ✅ ACTIVE | Composition-only cross-platform logging backend: desktop `fmt` (optionally hierarchical), Android logcat, Apple unified logging, browser console/performance timeline, behind an explicit subscriber-ownership policy. **No framework crate but `flui-app`, `flui-cli` and the facade may link it** (examples, being applications, may) — framework crates use `tracing` directly, and its manifest's `allowed-dependents` (checked by `cargo xtask workspace`) enforces that mechanically. |
 | `flui-tree` | ✅ ACTIVE | Generic tree abstractions: `TreeRead` / `TreeNav` / `TreeWrite` trio, iterators / slots, arity markers (`Leaf` / `Single` / `Optional` / `Variable`), depth markers. A workspace audit deleted the unused speculative `visitor` / `diff` modules; concrete trees adopt the trio directly. |
 | `flui-platform` | ✅ ACTIVE | Native Win32 / AppKit / Headless backends + `winit` fallback. Sole home of OS-specific code. Loses `BackgroundExecutor`/`PlatformExecutor` when host-injected runtime execution lands. |
 | `flui-scheduler` | ✅ ACTIVE | Frame scheduling, microtasks, task prioritization. Narrows to logical update phases, tickers, callback ordering, and owner-local post-frame behavior; presentation clocks and raster backpressure move to presentation/runtime ownership. |
@@ -99,7 +99,7 @@ Neither design system may depend on `flui-localizations` — that direction is a
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui` | ✅ ACTIVE | The root package / app-author facade. Feature-selective: `material` (default), `cupertino`, `localizations`, `hot-reload`. A module whose feature is off is absent, not empty. Every supported combination is compiled in isolation by `just facade-combos` (run by the CI feature-matrix job), so a combination cannot pass through workspace feature unification. |
+| `flui` | ✅ ACTIVE | The root package / app-author facade. Feature-selective: `material` (default), `cupertino`, `localizations`, `hot-reload`. A module whose feature is off is absent, not empty. Every supported combination is compiled in isolation by `cargo xtask facade-combos` (run by the CI feature-matrix job), so a combination cannot pass through workspace feature unification. |
 
 ## Examples and Tools
 
@@ -130,19 +130,17 @@ cargo build -p flui-app
 
 ## Adding a New Crate
 
-A new crate is a topology change, so it starts with the contract, not the directory. `just inventory-check` fails on any `crates/*` member missing from the policy — that failure is the gate, not a nuisance.
+A new crate is a topology change, so it starts with the contract, not the directory: a crate is a layer, not a feature ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)). A crate created before its second consumer exists freezes a guessed boundary — `flui-runtime`, for example, waits for two entry points driving the same proven core plus a measurable dependency reduction.
 
-1. Check [`workspace-layers.toml`](workspace-layers.toml)'s `[[planned]]` section. If the crate is listed with `status = "gated"`, satisfy the gate first — `flui-runtime`, for example, requires two entry points driving the same proven core plus a measurable dependency reduction ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)). A crate created before its second consumer exists freezes a guessed boundary.
-2. Decide its layer based on what it depends on. Lower-layer crates must not depend on higher-layer ones. If it needs a same-layer edge, that is an `[[same_layer_edge]]` entry with a written rationale, not a default.
-3. Add a `[[member]]` entry to `workspace-layers.toml` with its layer and disposition (`keep` / `rename` / `narrow` / `optionalize` / `deferred-extraction`).
-4. Add the directory under `crates/<flui-name>/` with a standard layout (`Cargo.toml`, `src/lib.rs`, `src/error.rs`).
-5. Add the path to `[workspace.members]` in the root `Cargo.toml`; add it to `default-members` unless the crate is intentionally excluded from default local builds.
-6. There is no separate layer table to maintain: the checked authority is the `[[member]]` entry from step 3 (`workspace-layers.toml`), and the human-readable graph is [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md), updated in step 7. If the crate changes what an agent should read first, extend the decision tables in [`AGENTS.md`](../AGENTS.md).
-7. Update this page (`docs/crates.md`), [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md), and the `active_crates` / `build-layered` inventories in the `justfile`.
+1. Decide its layer from what it depends on: a dependency points to the same layer or lower, never higher.
+2. Add the directory under `crates/<flui-name>/` with a standard layout (`Cargo.toml`, `src/lib.rs`, `src/error.rs`). The manifest inherits the shared `[workspace.package]` keys and the workspace lints, and declares `[package.metadata.flui] layer = N` (plus `wasm = false`, with the reason beside it, if it cannot build for wasm32).
+3. Add the path to `[workspace.members]` in the root `Cargo.toml`.
+4. Run `cargo xtask workspace`. It fails on a crate without a layer, an upward dependency, a manifest that skips the workspace keys or lints, and a test file an `autotests = false` crate never compiles.
+5. Update this page (`docs/crates.md`) and [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md), the human-readable graph. If the crate changes what an agent should read first, extend the decision tables in [`AGENTS.md`](../AGENTS.md).
 
 ## See Also
 
-- [`workspace-layers.toml`](workspace-layers.toml) — the authoritative, CI-checked layer policy
+- Root `Cargo.toml` `[workspace.metadata.flui] layers` — the layer names each crate's `[package.metadata.flui] layer` indexes
 - [ADR-0041](adr/ADR-0041-workspace-topology-contract.md) — the workspace topology contract and its enforcement rules
 - [Foundations](FOUNDATIONS.md) — architecture contract, target crate graph
 - [Roadmap](ROADMAP.md) — construction phases from current to target

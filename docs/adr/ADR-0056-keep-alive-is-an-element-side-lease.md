@@ -55,7 +55,7 @@ through the render tree and back adds a second writer to a struct the logical-in
 stamp already owns.
 
 The dead `KeepAliveParentDataMixin` and both `keep_alive` fields are deleted.
-Semver-safe: absent from `docs/runtime-contract.toml`, and the `flui` facade
+Semver-safe: not part of the public runtime contract, and the `flui` facade
 deliberately does not re-export `flui-rendering`.
 
 ### The channel is a lease, not a notification

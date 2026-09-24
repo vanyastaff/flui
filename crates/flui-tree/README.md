@@ -122,5 +122,5 @@ if let Some(slot) = tree.slot(node_id) {
 ## Related Crates
 
 - [`flui-foundation`](../flui-foundation) — base types (`ElementId`, `Identifier`)
-- [`flui-element`](../flui-element) — Element tree implementation
-- [`flui-rendering`](../flui_rendering) — Render object system
+- [`flui-view`](../flui-view) — Element tree implementation
+- [`flui-rendering`](../flui-rendering) — Render object system

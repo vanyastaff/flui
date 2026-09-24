@@ -14,19 +14,14 @@ categories = ["gui", "graphics", "rendering"]
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
 exclude = ["/ARCHITECTURE.md"]
-# One integration-test binary (`tests/main.rs`, target `layer_it`) instead of
-# one link of the full dependency stack per test file. No root test writes
-# process-global state (`LayerLink::new`'s counter is a benign monotonic
-# atomic), so nothing needs an isolated target.
-autotests = false
 
 [features]
 default = []
 
 # testing: the `crate::testing::inspect` walkers (structure, clip/transform
-# collectors, a Diagnosticable-backed dump). Off by default; enabled for this
-# crate's own dev targets via the self dev-dependency below, and forwarded by
-# downstream crates that want it.
+# collectors, a Diagnosticable-backed dump). Off by default; this crate's unit
+# tests see the module through `cfg(test)`, and downstream crates that want it
+# forward the feature.
 testing = []
 
 [dependencies]
@@ -41,17 +36,12 @@ bitflags = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-# Turns the off-by-default `testing` feature on for this crate's own
-# integration tests.
-# Checkout-only test edge; see docs/workspace-layers.toml release policy.
-flui-layer = { path = ".", features = ["testing"] }
 # Compile-time pins of the raster-boundary auto traits (`Send + Sync` on
 # `Layer`, `LayerTree`, `Scene`, `SceneSnapshot`).
 static_assertions.workspace = true
 
-[[test]]
-name = "layer_it"
-path = "tests/main.rs"
-
 [lints]
 workspace = true
+
+[package.metadata.flui]
+layer = 3

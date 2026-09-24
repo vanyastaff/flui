@@ -40,7 +40,7 @@ use flui_types::{
 };
 
 // The platform-wide window identity: `crate::traits::WindowId` is the single
-// canonical definition (see `docs/runtime-contract.toml`); backends never
+// canonical definition; backends never
 // mint their own WindowId type. Re-exported because `macos::mod` surfaces
 // the window-manager API (including this ID type) as a group.
 pub use crate::traits::WindowId;

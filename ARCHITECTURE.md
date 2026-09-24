@@ -37,7 +37,7 @@ because each corrected a real flaw in the one before it:
    only *add* symbols, never change what an existing name already resolves
    to for code that hasn't opted into the new feature's own symbols.
 3. **Rename (current).** `flui-widgets`' primitive is now
-   [`flui_widgets::RawTextField`](../crates/flui-widgets/src/text/text_field.rs),
+   [`flui_widgets::RawTextField`](crates/flui-widgets/src/text/text_field.rs),
    not `TextField` — a breaking rename, sanctioned pre-1.0. `TextField`
    belongs to `flui_material` alone, unconditionally; `flui::prelude` lists
    it in the material re-export block like every other Material type, with

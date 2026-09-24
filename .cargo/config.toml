@@ -30,13 +30,18 @@
 #
 # `wasm-bindgen-test-runner` must be on PATH and its version must match the
 # LOCKED `wasm-bindgen` exactly, or it refuses with "must exactly match".
-# `just wasm-test` installs the right one by reading Cargo.lock; this line only
-# says which runner to use, so a plain `cargo build --target wasm32-...` is
-# unaffected.
+# `cargo xtask locked-version wasm-bindgen` prints that version, and
+# `cargo xtask doctor full` checks the installed one; this line only says which
+# runner to use, so a plain `cargo build --target wasm32-...` is unaffected.
 runner = "wasm-bindgen-test-runner"
 
 # Android builds go through `cargo ndk`, which sets the NDK linkers itself
 # (docs/getting-started.md).
+
+[alias]
+# Repository automation (tools/xtask), the only task runner: CI gates, change
+# scoping, device checks and weekly tooling. `cargo xtask --help` lists it all.
+xtask = "run --package xtask --locked --quiet --"
 
 # Incremental compilation is governed by `[profile.dev] incremental` in the root
 # `Cargo.toml` (on for local development) and by `CARGO_INCREMENTAL=0` in CI. An

@@ -9,6 +9,4 @@ allow-expect-in-tests = true
 # tests, where printing is how a failure explains itself.
 allow-print-in-tests = true
 
-# MSRV-aware lints (e.g. incompatible_msrv, std_instead_of_core) respect the
-# workspace floor instead of assuming latest stable.
-msrv = "1.98"
+# The MSRV comes from `rust-version` in Cargo.toml; clippy reads it there.

@@ -35,10 +35,11 @@ design document with no code, and a code change with no record, are both incompl
 - Destructive git operations need an explicit go-ahead, because they throw away work that may
   exist nowhere else: `git checkout`, `git reset --hard`, `git stash`, `git push --force`,
   `git branch -D`. Prefer non-destructive alternatives (new branches, new commits, tags).
-- Keep hooks on: they run the same gate CI will, only earlier. `--no-verify`, `--no-gpg-sign`
-  and equivalents are for when the maintainer explicitly asks.
-- `just install-hooks` points git at the checked-in pre-push hook (`just gate`, the non-test half
-  of `just ci`), with a text-only fast path for markdown-only pushes.
+- Keep your own hooks and signing on: `--no-verify`, `--no-gpg-sign` and equivalents are for
+  when the maintainer explicitly asks.
+- The repository ships no git hook: CI's fast lane is the gate. For the answer before a push,
+  `cargo xtask check-changed` runs that lane locally, and `cargo xtask gate` the non-test half of
+  `cargo xtask ci`.
 
 ## Reporting Bugs
 

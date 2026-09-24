@@ -145,5 +145,5 @@ classified at the lane and retained and bounded by the realm — plus the
 engine's own classification table. The wgpu arm that supplies
 `acquired_surface = false` from a real surface-acquisition failure is
 read-reviewed, not executed, for want of a constructible occluded drawable.
-Tracked in `docs/runtime-contract.toml` as
+The runtime contract registry tracked this as
 `frame-disposition-distinguishes-withheld-from-idle`, state `partial`.

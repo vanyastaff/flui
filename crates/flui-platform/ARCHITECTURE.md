@@ -72,7 +72,7 @@ handlers-then-state lock order. Callback, destructor and native/dispatch boundar
 panics use hostile-payload-safe containment; a panicking registration does not
 prevent another pending signal from reaching its replacement or restored slot.
 
-`reopen_probe` and `scripts/check-macos-reopen.py` separate direct delegate
+`reopen_probe` and `tools/device-checks/check-macos-reopen.py` separate direct delegate
 routing from actual LaunchServices reopen AppleEvents. The latter invokes
 `open -a` on the exact running temporary bundle and requires callback and normal
 return in the original PID. These checks cover the platform signal, not a
@@ -81,7 +81,7 @@ Run the native matrix on macOS with an active GUI session:
 
 ```sh
 cargo build -p flui-platform --locked --example reopen_probe
-python3 scripts/check-macos-reopen.py target/debug/examples/reopen_probe
+python3 tools/device-checks/check-macos-reopen.py target/debug/examples/reopen_probe
 ```
 
 ### Headless explicit quit consumes its callback outside platform state
@@ -144,7 +144,7 @@ nonblocking queued tails; if the owner no longer services them, that existing
 fallback can leak native resources and never releases them off-main.
 
 **Verification:** `cargo build -p flui-platform --locked --example exit_policy_probe`
-then `python3 scripts/check-macos-exit.py target/debug/examples/exit_policy_probe`
+then `python3 tools/device-checks/check-macos-exit.py target/debug/examples/exit_policy_probe`
 stages a fresh bundled subprocess per case with an eight-second kill/reap limit.
 Cases require post-return, quit, callback-drop and stack-drop markers, and weak
 NSWindow references must be nil after an explicit autorelease pool drains.
@@ -366,7 +366,7 @@ drops it, which a direct `dispatch_surface_status_change` test cannot see.
 `shared/handlers.rs`'s `surface_status_change_reaches_its_callback_with_the_parameter`
 and `surface_status_change_cleared_from_inside_is_not_resurrected` cover the slot's
 FIFO and lease behavior. The Android arms themselves are **type-checked by
-`just cross-typecheck` and executed by nothing**: no gate on this host runs the
+`cargo xtask cross-typecheck` and executed by nothing**: no gate on this host runs the
 Android backend, so their mapping is an inference from `android-activity`'s
 documented contract, recorded rather than measured.
 
@@ -490,7 +490,7 @@ complement — deleting the deferral branch fails the first, checked by mutation
 with `dispatch_redraw_request`'s body replaced by an unconditional inline send,
 that test fails and the other five in scope still pass), because a bare test
 process cannot construct an NSWindow at all. The behavioural end-to-end pin is
-`examples/frame_pump_probe.rs` (`just macos-frame-pump`): a real visible window
+`examples/frame_pump_probe.rs` (`cargo xtask device macos-frame-pump`): a real visible window
 on the real AppKit run loop, whose frame callback re-arms the way the engine's
 frame does, behind a primer that stops at the first frame so the measurement
 cannot be explained by it. Measured 2026-09-17: 301 frames in 3.010 s (100.0 fps
@@ -562,7 +562,7 @@ non-cadence inputs (zero, negative, NaN, ±infinity) that must be unknown rather
 than an infinite or panicking period — removing the guard makes that third test
 fail inside `Duration::from_secs_f64`, checked by mutation. The live path is
 pinned behaviourally by the same bundled probe that pins the frame pump
-(`just macos-frame-pump`), which reports `FRAME_PUMP_PROBE_REFRESH_PERIOD` from
+(`cargo xtask device macos-frame-pump`), which reports `FRAME_PUMP_PROBE_REFRESH_PERIOD` from
 the real backend on the real display: measured 2026-09-17 as `period_us=10000
 hz=100.0`, matching the independent AppKit probe's `CGDisplayModeGetRefreshRate`
 of 100.000 Hz on the same panel. Like every macOS-gated test here, these run
@@ -662,7 +662,7 @@ range splitting a surrogate pair, past-the-end, empty text, and AppKit's real
 states it distinguishes — unattached, attached-but-idle, composing, and a
 composition that has just ended. It is mutation-checked against the gate a
 reader would first reach for (`!ime_allowed` alone fails it on the
-attached-but-idle case). `just macos-ime` drives the live path from a bundled
+attached-but-idle case). `cargo xtask device macos-ime` drives the live path from a bundled
 `.app` and reports `IME_PROBE_RESULT=PASS` on a real Mac: the inverse pair
 (attached → one `Commit` and no key event; detached → one key event and no
 `ImeEvent`), the `Preedit` → `Commit` sequence with the byte cursor asserted, the
@@ -679,7 +679,7 @@ or a CJK source) remains **not driven**.
 ### iOS binds UIKit through `objc2`, and its loop-exit signal is `applicationWillTerminate:`
 
 **Decision.** The iOS backend (`platforms/ios/`) binds UIKit through `objc2`
-0.6 / `objc2-ui-kit` 0.3 / `objc2-quartz-core` / `objc2-metal` / `block2` /
+0.6 / `objc2-ui-kit` 0.3 / `objc2-quartz-core` / `block2` /
 `dispatch2`, and takes its framework loop-exit signal from
 `applicationWillTerminate:`. ADR-0071 carries the full record.
 
@@ -701,8 +701,8 @@ quit handler from it and the runner runs the teardown.
 
 **Alternatives considered.**
 - *A process-global for the delegate's session state* — rejected: it would add
-  a new entry to the ambient-reach ratchet (`docs/runtime-contract.toml`), and
-  the state is main-thread-only anyway. A thread-local is the owner-affine
+  a new process-global to the runtime's ambient reach, and the state is
+  main-thread-only anyway. A thread-local is the owner-affine
   scope ADR-0027 prefers and matches winit's own `ACTIVE_EVENT_LOOP`.
 - *`UIScene` adoption* — deferred, not dropped. It is the multi-window iPadOS
   feature and would make `UIScreen.mainScreen` (deprecated in the scene era)
@@ -717,11 +717,11 @@ quit handler from it and the runner runs the teardown.
 0.6.4/0.3.2 (already there via `wgpu-hal`), while `winit` 0.30 and
 `accesskit_macos` 0.27 still pull 0.5.2/0.2.2. The duplicate resolves when
 those move (H10 / winit 0.31), not by anything here. A real device is not
-covered — the simulator slice is, via `just ios-sim` — and no CI job boots a
+covered — the simulator slice is, via `cargo xtask device ios-sim` — and no CI job boots a
 simulator; `cross-typecheck` gained an `aarch64-apple-ios` clippy line so a
 broken iOS build is at least loud.
 
-**Replacement coverage.** `just ios-sim` (executing; asserts a Metal device
+**Replacement coverage.** `cargo xtask device ios-sim` (executing; asserts a Metal device
 and a rendered frame from the app's own log, plus a screenshot) for the
 end-to-end path, and three host-run unit tests on `display.rs`'s bounds
 arithmetic. The engine-side portability fix this uncovered —
@@ -733,7 +733,7 @@ adapter caps `max_inter_stage_shader_variables` at 15 where
 
 **Decision.** Both Apple backends bind their platform frameworks through the
 `objc2` family (`objc2`, `objc2-app-kit` for macOS/AppKit, `objc2-ui-kit` for
-iOS/UIKit, `objc2-foundation`, `objc2-quartz-core`, `objc2-metal`) at the
+iOS/UIKit, `objc2-foundation`, `objc2-quartz-core`) at the
 versions `wgpu-hal` already pins. The `cocoa` 0.27 / `objc` 0.2 dependency pair
 and the `build.rs` that existed only for its `cfg` macros are removed from the
 crate; neither appears in `Cargo.lock` any more. ADR-0071 carries the full
@@ -792,7 +792,7 @@ Run the live macOS oracle with a GUI session:
 
 ```sh
 cargo build -p flui-platform --locked --example owner_wake_probe
-python3 scripts/check-owner-wake.py target/debug/examples/owner_wake_probe
+python3 tools/device-checks/check-owner-wake.py target/debug/examples/owner_wake_probe
 ```
 
 External counters assert owner affinity, nonrecursive delivery, shutdown capture
@@ -899,7 +899,7 @@ The iOS protocol probe is reproducible with a dedicated booted simulator:
 
 ```sh
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo build -p flui-platform --example ios_execution_probe --target aarch64-apple-ios-sim --no-default-features
-python3.12 scripts/check-ios-execution.py <UDID> target/aarch64-apple-ios-sim/debug/examples/ios_execution_probe
+python3.12 tools/device-checks/check-ios-execution.py <UDID> target/aarch64-apple-ios-sim/debug/examples/ios_execution_probe
 ```
 
 Use `--case foreground-reentered-background`, `background-reentered-foreground`,

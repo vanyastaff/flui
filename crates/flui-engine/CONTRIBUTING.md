@@ -53,15 +53,15 @@ cargo clippy -p flui-engine --all-targets --locked -- -D warnings
 cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings
 ```
 
-`just clippy` runs both, plus the workspace pass — that is the one to run.
+`cargo xtask lint` runs the workspace pass plus the `testing` one — that is
+the one to run.
 
-**A single test, with its output.** Note that `just test-name` does not pass
-`testing`, so it only reaches the default suite — for a GPU test,
-call cargo directly:
+**A single test, with its output.** Without `--features testing` a filter only
+reaches the default suite — for a GPU test, pass the feature:
 
 ```bash
 # default suite (no GPU):
-just test-name flui-engine <substring-of-test-name>
+cargo test -p flui-engine <substring-of-test-name> -- --nocapture
 
 # GPU suite, with stdout/stderr surfaced:
 cargo test -p flui-engine --features testing <substring> -- --nocapture
@@ -120,18 +120,18 @@ for the harness API.
 ## The gates a change must pass
 
 ```bash
-just ci          # the full local gate
+cargo xtask check-changed   # before a PR: this crate and its dependents
+cargo xtask ci              # the full local gate
 ```
 
 For a change confined to this crate, the parts that matter most:
 
 | Gate | Command | Why it catches *this* crate |
 |---|---|---|
-| clippy, both feature sets | `just clippy` | The GPU-gated code is invisible to the workspace pass |
+| clippy, both feature sets | `cargo xtask lint` | The GPU-gated code is invisible to the workspace pass |
 | engine tests | `cargo nextest run -p flui-engine --features testing` | The readback oracles |
 | docs | `RUSTDOCFLAGS="-D warnings" cargo doc -p flui-engine --no-deps` | Broken intra-doc links; the crate renamed a lot of public surface recently |
 | doc examples | `cargo test -p flui-engine --doc` | Every `///` example in this crate is compile-checked |
-| runtime contract | `just runtime-conformance-check` | The crate-root export manifest is explicit and checked |
 
 ## Invariants that are easy to break by accident
 

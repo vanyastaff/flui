@@ -1,31 +1,23 @@
-# cargo-deny configuration
+# cargo-deny configuration (schema: cargo-deny 0.20)
 # https://embarkstudios.github.io/cargo-deny/
 #
-# Run: cargo deny check
-# Or:  cargo deny check advisories
-#      cargo deny check bans
-#      cargo deny check licenses
-#      cargo deny check sources
+# Run it through `cargo xtask deps`, which passes `--workspace`: the root
+# manifest is the `flui` package, not a virtual manifest, so a bare
+# `cargo deny check` roots the graph at the facade alone and never sees
+# flui-cli, the examples, the tools or flui-assets' `network` feature.
 #
-# Schema: cargo-deny 0.19 (updated from 0.16):
-#   - bans.deny entries now use `crate` key, not `name`.
-#   - [advisories] no longer accepts `vulnerability` / severity keys: in
-#     cargo-deny 0.19 all vulnerability advisories are ALWAYS hard errors
-#     (not configurable). The gate did NOT weaken — vulnerabilities are
-#     strictly enforced by the tool itself.
-#   - `unmaintained` and `unsound` take a scope value ("all" | "workspace"
-#     | "external") rather than a severity string.
+# Vulnerability advisories are always errors; cargo-deny has no key to relax
+# them. `unmaintained` and `unsound` take a scope ("all" | "workspace" |
+# "external"), not a severity.
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Graph - how the dependency graph is built for every check
 # ═══════════════════════════════════════════════════════════════════════════════
 [graph]
-# Audit the union of ALL feature-gated dependency trees, not just defaults —
-# without this, optional features (e.g. flui-assets/network → reqwest) are
-# invisible to the merge-blocking gate. NB: the CLI --all-features flag does
-# NOT reach workspace members' features in this layout; this config key is the
-# working switch (verified by ban-probe: a temporary `deny` on reqwest fails
-# the bans check only once this key is set).
+# Audit the union of ALL feature-gated dependency trees, not just defaults:
+# flui-assets' off-by-default `network` feature is what brings in reqwest and
+# rustls. This key and `--workspace` are both needed; with either alone a
+# temporary `deny` entry for reqwest passes.
 all-features = true
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -34,7 +26,10 @@ all-features = true
 [advisories]
 # Warn on yanked crates (scope: all published versions)
 yanked = "warn"
-# Flag unmaintained crates across the full dependency graph
+# Flag unmaintained crates anywhere in the graph. "workspace" would silence
+# both ignores below (their crates are transitive), and with them every
+# future abandoned crate deep in the text or GPU stack; each of those is ours
+# to route around, so each gets an ignore with its reason instead.
 unmaintained = "all"
 # Flag crates with known unsound APIs
 unsound = "all"
@@ -61,7 +56,8 @@ ignore = [
 [licenses]
 # Confidence threshold for license detection
 confidence-threshold = 0.8
-# List of allowed licenses (SPDX identifiers)
+# List of allowed licenses (SPDX identifiers). An entry no crate uses is
+# reported as `license-not-encountered`, so the list stays what the graph needs.
 allow = [
     # Permissive licenses
     "MIT",
@@ -81,41 +77,32 @@ allow = [
     # Copyleft (weak) - OK for libraries
     "MPL-2.0",
 
-    # Unicode/Font licenses
+    # Unicode data
     "Unicode-3.0",
-    "Unicode-DFS-2016",
-    "OFL-1.1",          # Open Font License
 ]
 # Copyleft licenses that require source disclosure are not in the allow list
-# above, so they are implicitly denied (cargo-deny 0.19 removed the `deny` key;
-# unlisted licenses are rejected by default when `allow` is set).
+# above, so they are implicitly denied (unlisted licenses are rejected when
+# `allow` is set; cargo-deny has no `deny` list).
 
-# Clarifications for crates with non-standard license files
-[[licenses.clarify]]
-crate = "ring"
-expression = "MIT AND ISC AND OpenSSL"
-license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
-
-[[licenses.clarify]]
-crate = "encoding_rs"
-expression = "(Apache-2.0 OR MIT) AND BSD-3-Clause"
-license-files = [{ path = "COPYRIGHT", hash = 0x39f8ad31 }]
-
-[[licenses.clarify]]
-crate = "webpki"
-expression = "ISC"
-license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
+# Allowed for one crate only, not added to `allow`:
+# - webpki-root-certs is Mozilla's root certificate store as data, under
+#   CDLA-Permissive-2.0, a permissive license written for data rather than
+#   code. It comes in through flui-assets' `network` feature (reqwest →
+#   rustls-platform-verifier).
+exceptions = [{ crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] }]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Bans - Crate restrictions and duplicate detection
 # ═══════════════════════════════════════════════════════════════════════════════
 [bans]
-# Warn on multiple versions of the same crate
-multiple-versions = "warn"
+# Duplicate versions are not a gate: almost all are one upstream pinning an
+# older windows-sys, objc2 or syn than another, fixable only upstream, and a
+# warning per duplicate buried the run's result under thousands of lines of
+# inclusion graphs. The weekly nightly-canary job prints
+# `cargo tree --duplicates` as a metric instead.
+multiple-versions = "allow"
 # Allow wildcard dependencies (common in workspace)
 wildcards = "allow"
-# Highlight all duplicates in output
-highlight = "all"
 # Workspace crate handling
 workspace-default-features = "allow"
 external-default-features = "allow"
@@ -130,11 +117,15 @@ deny = [
     { crate = "native-tls" }, # Prefer rustls
 ]
 
-# Skip duplicate checks for specific crates (if unavoidable)
-skip = []
-
-# Tree-skip: skip checking duplicates in specific dependency trees
-skip-tree = []
+# Crates whose job std or core now does (once_cell → OnceLock/LazyLock,
+# cfg-if → cfg_select!, memoffset → offset_of!, ...), judged against the
+# workspace's rust-version. "workspace": only what the workspace's own
+# manifests declare; a crate that arrives transitively is its dependent's to
+# drop. The list is fetched when the check runs: a new entry can fail a
+# commit that passed (ci.yml's `deps` job says why that still blocks), and a
+# failed fetch skips the check rather than failing it.
+[bans.std-replacements]
+scope = "workspace"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Sources - Allowed crate registries and git sources

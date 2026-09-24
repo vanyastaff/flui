@@ -32,7 +32,7 @@ so `publish = false` is not a substitute for designing that closure.
 | Platform behavior | Every platform advertised as beta runs the application, accepts its native input, resizes, suspends/resumes where applicable, and exits cleanly. | Per-platform execution evidence below. Compilation alone cannot certify runtime support. |
 | Developer iteration | Documented reload modes apply edits predictably and state preservation matches their advertised contract. Failed edits can be corrected without corrupting the running application. | Tests and live checks for repeated edits, idle applications, failed builds, state preservation, and shutdown. Publish target-specific limitations. |
 | Agent workflow | An agent can discover the public API, create a UI, inspect structure/semantics, drive an interaction, and assert the result through documented interfaces. | A reproducible consumer example using the existing diagnostics and testing APIs, with meaningful assertions and actionable command failures. |
-| Performance and resilience | Static applications become idle; representative scrolling and editing workloads have recorded frame timing and memory behavior; supported recovery paths work. | Reproducible workload, hardware/OS, build profile, timing distribution, memory measurements, and explicit budgets chosen before acceptance. No invented performance claim. Recorded for macOS in ["Performance and resilience: the representative workload — 2026-09-22"](#performance-and-resilience-the-representative-workload--2026-09-22) (`just macos-workload`); recovery paths are the device-loss and surface-recreation retries, exercised by their unit tests and not yet by a live fault. |
+| Performance and resilience | Static applications become idle; representative scrolling and editing workloads have recorded frame timing and memory behavior; supported recovery paths work. | Reproducible workload, hardware/OS, build profile, timing distribution, memory measurements, and explicit budgets chosen before acceptance. No invented performance claim. Recorded for macOS in ["Performance and resilience: the representative workload — 2026-09-22"](#performance-and-resilience-the-representative-workload--2026-09-22) (`cargo xtask device macos-workload`); recovery paths are the device-loss and surface-recreation retries, exercised by their unit tests and not yet by a live fault. |
 | Distribution | The candidate installs and builds outside this checkout, with its full dependency closure available through the chosen distribution channel. | Package/dependency audit, clean consumer build, licenses, changelog, version/migration notes, and reproducible release instructions. |
 
 The user-facing mental model remains declarative composition over the retained
@@ -116,18 +116,20 @@ on a real OS, not that beta acceptance is complete.
 
 | Platform | Status | Evidence | Published limitations |
 |---|---|---|---|
-| macOS (AppKit, Metal, ARM64) | **beta candidate** | Live operator-equivalent input through real OS channels — `CGEventPost`/`CGHIDEventTap` clicks and `CGWindowListCopyWindowInfo` capture, no accessibility-tree shim (["Live verification through direct OS interaction — 2026-09-20"](#live-verification-through-direct-os-interaction--2026-09-20)); native close/quit/reopen (["Native macOS last-window exit"](#native-macos-last-window-exit), `exit_policy_probe`, `just macos-close-path`); launch-route rendering across direct exec, `open`, and `open -g` (`just macos-launch-render`, cited in the same live-verification section); the deferred-first-reveal fix for the white-window observation, commit `fd9f2938` ("Reveal a macOS window only once its first frame has been presented", `PlatformWindow::reveal_after_first_frame` / `FirstReveal`); IME routing/protocol coverage via the `just macos-ime` script (`ime_probe`, ADR-0069) | The assistive-technology check covers one control through one `AXUIElement` client, not a VoiceOver session (["Accessibility on macOS"](#accessibility-on-macos-the-counter-through-an-assistive-technology--2026-09-22), `just macos-a11y`); no physical Cmd+Q or menu-bar routing, nested modal loops, or foreign-loop embedding (only programmatic quit/terminate paths are proven); `just macos-ime` exercises routing and the `NSTextInputClient` protocol with synthesized key events — no genuine input method runs, so real IME composition is unverified; `open_window`'s `SharedRealm` policy is refused at admission (only `SeparateRealms` has content); a single unattributed first-run flake is recorded in "Live verification" and not reproduced; clipboard and OS suspend/resume are unverified |
-| iOS Simulator (iPhone 16e, iOS 26.2) | **experimental** | Touch input and Home/return state retention via XCUITest, since the backend publishes no accessibility tree (["iOS execution lifecycle foundation"](#ios-execution-lifecycle-foundation), `just ios-input-check`, `scripts/check-ios-input.py`); safe-area inset layout (["iOS safe-area layout"](#ios-safe-area-layout), `just ios-safe-area-check`); scene disconnect/reconnect protocol probe (["UIKit scene ownership"](#uikit-scene-ownership)) | No physical device tested; the oracle is pixels only (no a11y tree, so nothing is read by identifier); no IME or keyboard check; landscape orientation, keyboard occlusion, and other device classes are untested; background execution grants and full multiwindow/background-launch rendering remain unverified; the measured counter bundle was the CLI's 2026-09-19 build, not a fresh build of the current revision; `just ios-sim` (static Material app renders, animated app's pixels change between two screenshots 2 s apart and the process survives) was re-run on 2026-09-22 at `51c8fe63` on an iPhone 17 Pro simulator and passed both arms — the XCUITest touch check was not re-run |
-| Linux (X11 / Wayland) | **experimental** | CI-executed live smoke only: the `live-smoke` job in `.github/workflows/ci.yml` builds `flui`'s `sliver_demo` example and `flui-live-smoke`, then drives a real window with real X11 input under Xvfb (pixel and exit-code checks, occlusion verified against a real cover window), plus a Wayland variant under headless weston for close-path teardown ordering (`live-smoke` / `live-smoke-wayland` recipes in `justfile`; also described in the README under "Resilience that is tested, not assumed") | No operator-equivalent input verification as used on macOS (only the harness's synthetic/scripted input); no IME check; no resident/background lifecycle coverage; native accessibility bridges are not exercised by this job; X11 and Wayland coverage differ in scope (Wayland covers only close-path teardown ordering) |
-| Windows (Win32) | **unverified** | Cross-compiled Clippy only: `just cross-typecheck` runs `cargo clippy -p flui-platform --target x86_64-pc-windows-msvc --features a11y` | No live window, input, lifecycle, or IME verification has been performed on Windows for this candidate; the "Window-independent owner turns" and "Resident main-window validation" sections explicitly note Windows show/worker paths as cross-compilation evidence only |
-| Android (emulator, android-35 arm64) | **experimental** | First emulator run, 2026-09-22, from the CLI's `flui build android` / `flui run --device` work in the peer session (generated counter with `android_main`, `cargo ndk` arm64-v8a debug APK, android-35 google_apis arm64 on Apple Silicon, `-gpu host`, density 420, 1080×2400): first frame ~10 s after launch, the counter visible; two `adb shell input tap 540 1284` on Increment showed «2» on the screenshot taken right after — once the backend handed the framework logical pointer positions (`bf2725be`; before it every touch landed past the viewport's edge, diagnosed through the `28e048f1` first-motion-event trace: `x=540.0 y=1284.0 scale_factor=2.625`). Cross-compiled Clippy for `aarch64-linux-android` in `just cross-typecheck`. | One emulator, one host, debug build, an `adb` tap rather than a finger; no lifecycle (pause/resume/rotate) or keyboard verification; on `-gpu swiftshader_indirect` a debug build produced no first frame in four minutes (process at ~80 % CPU after "Selected GPU: SwiftShader", no errors in logcat) — software rendering is unverified; the debug APK is 406 MB because the `.so` ships uncompressed with full debug info; the automatic-retry surface-recreation backoff (`21af0752`) is host-tested against a scripted backend only, not a real device or emulator failure |
-| Web / WASM | **experimental** | The counter template's widget tree run through `flui::run_app` in a browser (`examples/web_counter`, `just web-counter-build`, WebGPU): rendered, three clicks on Increment advanced 0 → 3, a click with no target changed nothing, no console errors — see ["Web: the counter in a browser"](#web-the-counter-in-a-browser). Compile coverage stays `just wasm-check`. | One browser (the desktop app's Chromium-based pane) on one machine, served from `localhost`; no Firefox/Safari, no WebGL fallback (WebGPU only), no touch, no IME, no resize/visibility lifecycle check, hot-reload has no web runner. The shader uniformity defect this run exposed is fixed and guarded by `scripts/check-wgsl-uniformity.py`, whose rule is structural, not Tint itself. |
+| macOS (AppKit, Metal, ARM64) | **beta candidate** | Live operator-equivalent input through real OS channels — `CGEventPost`/`CGHIDEventTap` clicks and `CGWindowListCopyWindowInfo` capture, no accessibility-tree shim (["Live verification through direct OS interaction — 2026-09-20"](#live-verification-through-direct-os-interaction--2026-09-20)); native close/quit/reopen (["Native macOS last-window exit"](#native-macos-last-window-exit), `exit_policy_probe`, `cargo xtask device macos-close-path`); launch-route rendering across direct exec, `open`, and `open -g` (`cargo xtask device macos-launch-render`, cited in the same live-verification section); the deferred-first-reveal fix for the white-window observation, commit `fd9f2938` ("Reveal a macOS window only once its first frame has been presented", `PlatformWindow::reveal_after_first_frame` / `FirstReveal`); IME routing/protocol coverage via `cargo xtask device macos-ime` (`ime_probe`, ADR-0069) | The assistive-technology check covers one control through one `AXUIElement` client, not a VoiceOver session (["Accessibility on macOS"](#accessibility-on-macos-the-counter-through-an-assistive-technology--2026-09-22), `cargo xtask device macos-a11y`); no physical Cmd+Q or menu-bar routing, nested modal loops, or foreign-loop embedding (only programmatic quit/terminate paths are proven); `cargo xtask device macos-ime` exercises routing and the `NSTextInputClient` protocol with synthesized key events — no genuine input method runs, so real IME composition is unverified; `open_window`'s `SharedRealm` policy is refused at admission (only `SeparateRealms` has content); a single unattributed first-run flake is recorded in "Live verification" and not reproduced; clipboard and OS suspend/resume are unverified |
+| iOS Simulator (iPhone 16e, iOS 26.2) | **experimental** | Touch input and Home/return state retention via XCUITest, since the backend publishes no accessibility tree (["iOS execution lifecycle foundation"](#ios-execution-lifecycle-foundation), `cargo xtask device ios-input-check`, `tools/device-checks/check-ios-input.py`); safe-area inset layout (["iOS safe-area layout"](#ios-safe-area-layout), `cargo xtask device ios-safe-area-check`); scene disconnect/reconnect protocol probe (["UIKit scene ownership"](#uikit-scene-ownership)) | No physical device tested; the oracle is pixels only (no a11y tree, so nothing is read by identifier); no IME or keyboard check; landscape orientation, keyboard occlusion, and other device classes are untested; background execution grants and full multiwindow/background-launch rendering remain unverified; the measured counter bundle was the CLI's 2026-09-19 build, not a fresh build of the current revision; `cargo xtask device ios-sim` (static Material app renders, animated app's pixels change between two screenshots 2 s apart and the process survives) was re-run on 2026-09-22 at `51c8fe63` on an iPhone 17 Pro simulator and passed both arms — the XCUITest touch check was not re-run |
+| Linux (X11 / Wayland) | **experimental** | CI-executed live smoke only: the `live-smoke` job in `.github/workflows/ci.yml` builds `flui`'s `sliver_demo` example and `flui-live-smoke`, then drives a real window with real X11 input under Xvfb (pixel and exit-code checks, occlusion verified against a real cover window), plus a Wayland variant under headless weston for close-path teardown ordering (`cargo xtask live-smoke`, `--wayland` for the second; also described in the README under "Resilience that is tested, not assumed") | No operator-equivalent input verification as used on macOS (only the harness's synthetic/scripted input); no IME check; no resident/background lifecycle coverage; native accessibility bridges are not exercised by this job; X11 and Wayland coverage differ in scope (Wayland covers only close-path teardown ordering) |
+| Windows (Win32) | **unverified** | Cross-compiled Clippy only: `cargo xtask cross-typecheck` runs `cargo clippy -p flui-platform --target x86_64-pc-windows-msvc --features a11y` | No live window, input, lifecycle, or IME verification has been performed on Windows for this candidate; the "Window-independent owner turns" and "Resident main-window validation" sections explicitly note Windows show/worker paths as cross-compilation evidence only |
+| Android (emulator, android-35 arm64) | **experimental** | First emulator run, 2026-09-22, from the CLI's `flui build android` / `flui run --device` work in the peer session (generated counter with `android_main`, `cargo ndk` arm64-v8a debug APK, android-35 google_apis arm64 on Apple Silicon, `-gpu host`, density 420, 1080×2400): first frame ~10 s after launch, the counter visible; two `adb shell input tap 540 1284` on Increment showed «2» on the screenshot taken right after — once the backend handed the framework logical pointer positions (`bf2725be`; before it every touch landed past the viewport's edge, diagnosed through the `28e048f1` first-motion-event trace: `x=540.0 y=1284.0 scale_factor=2.625`). Cross-compiled Clippy for `aarch64-linux-android` in `cargo xtask cross-typecheck`. | One emulator, one host, debug build, an `adb` tap rather than a finger; no lifecycle (pause/resume/rotate) or keyboard verification; on `-gpu swiftshader_indirect` a debug build produced no first frame in four minutes (process at ~80 % CPU after "Selected GPU: SwiftShader", no errors in logcat) — software rendering is unverified; the debug APK is 406 MB because the `.so` ships uncompressed with full debug info; the automatic-retry surface-recreation backoff (`21af0752`) is host-tested against a scripted backend only, not a real device or emulator failure |
+| Web / WASM | **experimental** | The counter template's widget tree run through `flui::run_app` in a browser (`examples/web_counter`, plain `cargo` + `wasm-bindgen`, WebGPU): rendered, three clicks on Increment advanced 0 → 3, a click with no target changed nothing, no console errors — see ["Web: the counter in a browser"](#web-the-counter-in-a-browser). Compile coverage stays `cargo xtask wasm-check`. | One browser (the desktop app's Chromium-based pane) on one machine, served from `localhost`; no Firefox/Safari, no WebGL fallback (WebGPU only), no touch, no IME, no resize/visibility lifecycle check, hot-reload has no web runner. The shader uniformity defect this run exposed is fixed and guarded by `cargo xtask wgsl`, whose rule is structural, not Tint itself. |
 
 ## Verification order
 
-1. Establish a baseline with `just ci`. Record missing tools and skipped checks.
-   Run the additional relevant platform, feature, security, and live checks from
-   [Testing](testing.md) and the `justfile`; `just ci` alone does not cover them.
+1. Establish a baseline with `cargo xtask ci`. Record missing tools and skipped
+   checks (`cargo xtask doctor full` names them). Run the additional relevant
+   platform, feature, security, and live checks from [Testing](testing.md)
+   (`cargo xtask ci-full`, `cargo xtask device <check>`); `cargo xtask ci` alone
+   does not cover them.
 2. Verify the fresh-consumer workflow and correct broken setup instructions or
    generated projects before expanding the catalog.
 3. Build the representative application from public APIs and turn observed
@@ -245,12 +247,18 @@ These observations are an archive audit, not a successful publication dry run.
 
 ## Release inventory and validation boundary
 
-`docs/workspace-layers.toml` records product/support roles alongside the existing
-layer inventory. `just release-inventory` prints the computed package set,
+The release tooling this section records — the release roles and checkout-only
+records in `docs/workspace-layers.toml`, the inventory, package and consumer
+checks, and the publish-order tooling — was removed on 2026-09-23 with the
+justfile and `scripts/`. The runs below are evidence at the revisions they
+name; re-running them before a release needs that tooling rebuilt first.
+
+`docs/workspace-layers.toml` recorded product/support roles alongside the
+layer inventory. The release-inventory command printed the computed package set,
 private packages, dependency paths, and retained dependency cycles. Required
 implementation packages remain registry-distributed support, not separate
-application APIs. `just inventory-check` verifies this policy and exercises
-Cargo normalization using tiny temporary packages; it does not package FLUI.
+application APIs. The inventory check verified this policy and exercised
+Cargo normalization using tiny temporary packages; it did not package FLUI.
 
 The release closure includes optional and target-specific normal/build edges,
 and dev-dependencies that Cargo retains because their resolved declaration has a
@@ -260,7 +268,7 @@ version `0.1.0`, and every internal requirement pins that exact
 cohort version (`=0.1.0`), so a published facade can never resolve a
 sibling from a later cohort.
 
-Twelve backward or self dev declarations are explicitly checkout-only in
+Twelve backward or self dev declarations were explicitly checkout-only in
 `docs/workspace-layers.toml`: six self feature activations, foundation → macros,
 rendering → objects, and interaction/scheduler/view/devtools → testing. Their
 local paths and features are preserved, but Cargo omits these unversioned dev
@@ -282,10 +290,10 @@ packaging and online `cargo publish --dry-run --no-verify`, while a focused
 checkout-only cut passes both. Every fixture archive retains its lockfile,
 including the CLI. These checks never upload packages or change credentials.
 
-`just release-package-check` creates local archives for the computed set in one
-explicit `cargo package --registry crates-io --no-verify` invocation and checks
+The release package check created local archives for the computed set in one
+explicit `cargo package --registry crates-io --no-verify` invocation and checked
 normalized dependencies, including feature activation settings. A dirty preview
-requires explicit `--preview-dirty`; the default requires a clean tree. The
+required explicit `--preview-dirty`; the default required a clean tree. The
 29-package dirty preview and normalized-manifest inspection passed on macOS
 (`/tmp/flui-cycle-real-package-preview-network.log`). The initial restricted run
 failed DNS resolution; the permitted network retry completed successfully.
@@ -294,13 +302,12 @@ This archive preview neither builds nor uploads packages. Archive inclusion
 rules and first-party license-file packaging are now in place: the facade
 declares an anchored `include` list (67 files in its archive instead of 666),
 and every published crate carries `LICENSE`, `LICENSE-APACHE` and `NOTICE`,
-which `verify_archives` requires. Clean consumer verification is
-`just release-consumer-check` (`scripts/release_consumer_check.py`): it
-packages the release set, vendors every third-party dependency with
-`cargo vendor`, installs the archives as a Cargo directory source, generates a
-counter project with `flui create` *without* `--local`, and builds and tests
-it offline; the consumer's lockfile must resolve every `flui-*` package to an
-archive digest.
+which `verify_archives` required. Clean consumer verification was the release
+consumer check: it packaged the release set, vendored every third-party
+dependency with `cargo vendor`, installed the archives as a Cargo directory
+source, generated a counter project with `flui create` *without* `--local`, and
+built and tested it offline; the consumer's lockfile had to resolve every
+`flui-*` package to an archive digest.
 
 First run, 2026-09-21 on the `0.1.0` cut (`/tmp/flui-beta-consumer-check4.log`):
 `cargo vendor` produced a 971 MiB third-party set; all 29 archives installed
@@ -319,10 +326,10 @@ non-local branch pins `flui` to the release git tag rather than a registry
 version, so the check would have built the tag, not the archives, and the
 consumer now ships a lockfile resolved against the live registry
 (`wasm-bindgen-futures 0.4.78` against the vendor set's 0.4.77) that an
-offline build cannot satisfy. The script now rewrites the two git-tag
-dependencies to `flui = { version = "=0.1.0" }` (keeping `features`) and
-drops the generated lockfile before the offline build, so the archives are
-what gets built and the resolution is the vendor set's. Result: 28 archives
+offline build cannot satisfy. The check was changed to rewrite the two
+git-tag dependencies to `flui = { version = "=0.1.0" }` (keeping `features`)
+and drop the generated lockfile before the offline build, so the archives
+were what got built and the resolution was the vendor set's. Result: 28 archives
 installed, the consumer built and its two generated tests passed offline,
 and the lockfile resolved 22 `flui-*` packages to archive digests — PASS.
 
@@ -376,7 +383,7 @@ Clippy, Rust formatting, TOML formatting, and focused spelling checks passed.
 No full-workspace CI result is claimed for these subsequent changes yet.
 
 
-A bounded AppKit close-path probe also passed (`just macos-close-path`,
+A bounded AppKit close-path probe also passed (`cargo xtask device macos-close-path`,
 `/tmp/flui-beta-macos-close-path.log`): programmatic close makes the native handle
 unavailable, invokes the callback, bypasses the veto, and permits immediate
 wrapper drop. The probe uses a non-visible real window and exits the process
@@ -529,7 +536,7 @@ path — but not IME, clipboard, suspension, or any platform other than macOS.
 
 A separate LaunchServices/background launch was recorded here as showing a blank
 window. Re-measured, it does not reproduce, and the cause is now attributed to
-the first-frame race recorded above, not the route. `just macos-launch-render`
+the first-frame race recorded above, not the route. `cargo xtask device macos-launch-render`
 launches one bundled artifact three ways — direct exec, `open`, and `open -g`,
 which does not activate the app — five times each, finds each launch's window by
 owning PID, and photographs it by window number, because a window can hold a
@@ -592,8 +599,8 @@ artifact watcher retains its thread across failed reopen attempts and stops with
 the loop. Windows show has strict cross-compilation evidence; live mode tests are
 macOS-only.
 
-Run `python3.12 -B scripts/check-resident-reopen.py prepare /tmp/flui-resident-probe`,
-then `python3.12 -B scripts/check-resident-reopen.py run /tmp/flui-resident-probe`
+Run `python3.12 -B tools/device-checks/check-resident-reopen.py prepare /tmp/flui-resident-probe`,
+then `python3.12 -B tools/device-checks/check-resident-reopen.py run /tmp/flui-resident-probe`
 with an active macOS GUI and CUA interaction. Add `--windowless` to run the worker
 startup scenario. The driver requires GPU presentation after each initialization,
 input and disposal witnesses, same-process OS reopen and normal return. Failure
@@ -633,7 +640,7 @@ dependency form.
 
 ## Developer iteration: the hot-reload loop, driven
 
-`just macos-hot-reload-loop` (`scripts/check-hot-reload-loop.py`) generates a
+`cargo xtask device macos-hot-reload-loop` (`tools/device-checks/check-hot-reload-loop.py`) generates a
 `--hot-reload` project with the CLI, runs `flui --json run` on it, and drives
 the loop through the CLI's own event stream rather than its narration. The
 first edit changes the worker's label and adds a witness to its build
@@ -676,7 +683,7 @@ this probe.
 `examples/web_counter` is the generated counter template behind a
 `#[wasm_bindgen(start)]` entry point: `flui::run_app` dispatches to the web
 runner on `wasm32`, which mounts the tree into the page's `#flui-canvas` and
-renders through WebGPU. `just web-counter-build` compiles it with plain
+renders through WebGPU. It is compiled with plain
 `cargo build --target wasm32-unknown-unknown --release` and `wasm-bindgen`
 (10.6 MiB of wasm, unoptimised by `wasm-opt`); the page is served with any
 static HTTP server.
@@ -692,10 +699,10 @@ and the arc shader took its angular gradient after a per-instance early
 `return`. Both now compute every derivative unconditionally and choose with
 `select`; the engine's 624 tests including the GPU-gated suite still pass on
 Metal. naga's validator with every flag on accepts the old source, so there
-is no host-side oracle; `scripts/check-wgsl-uniformity.py` is the structural
+is no host-side oracle; `cargo xtask wgsl` is the structural
 stand-in (a derivative-taking call inside a branch or after a conditional
 return is refused), it is red on the old shaders for exactly the two sites the
-browser named, and it runs in `just gate` and CI.
+browser named, and it runs in `cargo xtask checks` and CI.
 
 After the fix the counter rendered — label, `0`, and the Material button —
 three clicks on Increment advanced the count 0 → 1 → 2 → 3, a click on empty
@@ -716,12 +723,12 @@ re-centred, and a click on the re-laid-out button advanced the count.
 
 ## Accessibility on macOS: the counter through an assistive technology — 2026-09-22
 
-`examples/a11y_probe.rs` (`just macos-a11y`, release, `--features
+`examples/a11y_probe.rs` (`cargo xtask device macos-a11y`, release, `--features
 material,a11y`) is the CLI counter template's tree with the facade's new
 `a11y` feature, which forwards `flui-platform`'s AccessKit adapters
 (NSAccessibility / UIA / AT-SPI) — off by default, since the Linux adapter
 carries a D-Bus stack, and until today unreachable from the facade at all.
-`scripts/macos-ax-client.swift` is an `AXUIElement` client, the API every
+`tools/device-checks/macos-ax-client.swift` is an `AXUIElement` client, the API every
 macOS screen reader uses: it reads the window's accessibility tree, finds the
 button by label, performs `AXPress`, and reads the count back as static text.
 No pointer or keyboard event is synthesised anywhere.
@@ -754,7 +761,7 @@ publishes no accessibility tree at all (its row says so).
 
 ## Window lifecycle on macOS: minimize, hide, resize — 2026-09-22
 
-`examples/lifecycle_probe.rs` (`just macos-lifecycle`, release build) runs a
+`examples/lifecycle_probe.rs` (`cargo xtask device macos-lifecycle`, release build) runs a
 Material tree through the ordinary `flui::app::Application` path with a
 free-running `AnimationController` demanding frames, then drives its own
 window from a driver thread through AppKit on the main queue — no operator
@@ -796,14 +803,14 @@ still warns. The run re-done after the change logs no warning.
 
 ## Performance and resilience: the representative workload — 2026-09-22
 
-`examples/workload_probe.rs` (`just macos-workload`, release build) is the
+`examples/workload_probe.rs` (`cargo xtask device macos-workload`, release build) is the
 reproducible workload the row asks for: a `Scaffold` with an `AppBar`, a
 Material `TextField` and a 2,000-row `ListView::builder` of `ListTile`s,
 900×700 logical, driving itself from an `AnimationController` tick — 20 s of
 scrolling at 18 px per frame bouncing between both ends, then 500 characters
 inserted one per frame into the field, then 5 s of enforced idleness — with
 no operator input and no synthetic OS events. The probe prints one JSON
-line per phase; `scripts/check-macos-workload.py` samples RSS every 0.5 s,
+line per phase; `tools/device-checks/check-macos-workload.py` samples RSS every 0.5 s,
 reads the main display's refresh period through CoreGraphics and hands it to
 the probe, and applies the budgets declared in its own header before the
 first run: scroll and type p99 within two display periods, under 1 % of
@@ -820,7 +827,7 @@ Host: MacBook Air (M1), macOS 27.0 (26A428), main display 3440×1440 at
 ADR-0058) every phase presented at a rock-steady **20.0 ms p50 — exactly
 two periods, 50 fps**: scroll 984 frames in 20 s (p90 20.3, p99 24.9, max
 131.7 ms), type 500 frames at p50 20.005 / p99 20.6 ms. The bare platform
-frame pump on the same display (`just macos-frame-pump`) ran 100.2 fps, so
+frame pump on the same display (`cargo xtask device macos-frame-pump`) ran 100.2 fps, so
 the halving was in the rendering path. Setting the latency to 2 and
 re-running: scroll p50 **9.998 ms**, type p50 9.998 ms — the full panel
 rate. The mechanism is the one ADR-0058's per-backend facts had measured on
@@ -885,8 +892,8 @@ direct checks. The run log is `/tmp/flui-ios-counter-final-run.log`.
 Simulator UI automation timed out in that attempt, so real touch input and
 retained displayed counter state after Home/return were unverified **by it**.
 Both are now measured, on that same candidate and on the in-repo Material demo,
-by `just ios-input-check <udid>` (`scripts/check-ios-input.py` driving
-`scripts/ios-input-probe.swift`).
+by `cargo xtask device ios-input-check <udid>` (`tools/device-checks/check-ios-input.py` driving
+`tools/device-checks/ios-input-probe.swift`).
 
 The instrument is XCUITest, because nothing else can put a `UITouch` into the
 application: `xcrun simctl` has no touch subcommand, and driving the Simulator
@@ -1075,7 +1082,7 @@ operates on the same fields and is unaffected.
 
 Live check on the iPhone 16e simulator (`iOS 26.2`, portrait), built from the
 revision carrying this record:
-`python3 -B scripts/check-ios-safe-area.py <UDID> /tmp/flui-ios-safe-area`. The
+`python3 -B tools/device-checks/check-ios-safe-area.py <UDID> /tmp/flui-ios-safe-area`. The
 fixture is a sole-`flui` application whose Stack holds one bare leaf and one
 `SafeArea`-wrapped leaf; it compares both laid-out geometries against the view's
 own `safeAreaInsets`, read inside the running application, so the oracle is the
@@ -1102,9 +1109,9 @@ because the scene policy admits one logical session at a time; so is any
 single-window application on other backends.
 
 Second, the iOS-gated modules are invisible to the host-target lint job, so
-`just cross-typecheck`'s iOS line is their only compile gate. Clean on this
+`cargo xtask cross-typecheck`'s iOS line is their only compile gate. Clean on this
 revision: `cargo clippy -p flui-platform --locked --all-targets --features a11y
 --target aarch64-apple-ios -- -D warnings` (and, for the addressed realm arms,
 `cargo clippy -p flui-app -p flui-platform -p flui-widgets -p flui-cli
---all-targets --locked -- -D warnings`). `just ios-safe-area-check` runs the
+--all-targets --locked -- -D warnings`). `cargo xtask device ios-safe-area-check` runs the
 live check above against a booted simulator.

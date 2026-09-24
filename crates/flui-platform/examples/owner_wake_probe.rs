@@ -1,4 +1,4 @@
-//! Window-independent owner wake probe; run with scripts/check-owner-wake.py.
+//! Window-independent owner wake probe; run with tools/device-checks/check-owner-wake.py.
 #[cfg(target_os = "macos")]
 mod native {
     use flui_platform::{OwnerPlatform, PlatformProxy, ProxySendError, WindowOptions};

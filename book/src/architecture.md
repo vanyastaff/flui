@@ -1,9 +1,9 @@
 # Architecture
 
-The deep architectural material lives in the repository's own `docs/`, where it is checked
-against the source tree by CI (`runtime-conformance-check`, `inventory-check`) and the compiler — this
-page is an index into it, not a restatement, so it can't drift out of sync with what those gates
-actually enforce.
+The deep architectural material lives in the repository's own `docs/`. CI checks its links
+into the source (`cargo xtask docs-links`), and the layer rules it describes are enforced from the
+crate manifests (`cargo xtask workspace`); the prose itself is kept current by review. This page
+is an index into it, not a restatement.
 
 ## Start here
 
@@ -29,10 +29,3 @@ recorded as ADRs under
 page yet; browse the directory by filename (`ADR-NNNN-<slug>.md`) or search the repository for the
 number cited by the code or comment you're reading. An ADR that revises an earlier one carries an
 explicit `Supersedes:`/`Superseded-by:` pair — see AGENTS.md's ADR Policy.
-
-## Runtime contract
-
-[`docs/runtime-contract.toml`](https://github.com/vanyastaff/flui/blob/main/docs/runtime-contract.toml)
-is the checked registry of FLUI's public shipped and planned runtime contracts — it is the
-machine-readable source of truth `runtime-conformance-check` verifies against, and deliberately
-does not depend on the design records above.

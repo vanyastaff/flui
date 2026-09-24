@@ -35,15 +35,20 @@ name = "cargo-flui"
 path = "src/bin/cargo-flui.rs"
 doc = false
 
-# Prebuilt binaries for `cargo binstall flui-cli`: the release workflow
-# (.github/workflows/release.yml) uploads one archive per target to the
-# GitHub release of the `v<version>` tag, with both binaries at its root.
+# Prebuilt binaries for `cargo binstall flui-cli`, matching what the release
+# workflow (.github/workflows/release.yml) uploads to the GitHub release of the
+# `v<version>` tag: `flui-<target>.tar.gz` holding a `flui-<target>/` folder
+# with both binaries, and on Windows `flui-<target>.zip` with them at its
+# root. binstall looks for each binary exactly at `bin-dir` and on a miss
+# falls back to building from source. Change the two files together.
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/flui-{ target }{ archive-suffix }"
-bin-dir = "{ bin }{ binary-ext }"
+pkg-url = "{ repo }/releases/download/v{ version }/flui-{ target }.tar.gz"
+bin-dir = "flui-{ target }/{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/flui-{ target }.zip"
+bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "zip"
 
 [dependencies]
@@ -68,7 +73,7 @@ notify-debouncer-mini = "0.7"
 tokio = { workspace = true, features = ["rt-multi-thread", "time", "signal", "process", "io-util"] }
 
 # CLI framework
-clap = { version = "4.5", features = ["derive"] }
+clap = { workspace = true }
 clap_complete = "4.5"
 
 # Error handling
@@ -81,7 +86,7 @@ serde_json = { workspace = true }
 toml = "1.1"
 
 # Utilities
-which = "8.0"
+which = { workspace = true }
 
 # Terminal drawing (`ui.rs`) and the prompts of `flui create` / `platform
 # remove`. `console` alone draws the bar, the glyphs and the spinner;
@@ -118,3 +123,8 @@ path = "tests/main.rs"
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+layer = 9
+# A host tool: it spawns cargo and serves files (mio, uuid).
+wasm = false

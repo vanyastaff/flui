@@ -28,7 +28,8 @@ loop's exit path (Android); iOS has no "after `run`".
 
 Both Apple backends bind through `objc2` 0.6 and the 0.3 framework crates —
 `objc2-foundation`, `objc2-app-kit` (macOS), `objc2-ui-kit`,
-`objc2-quartz-core`, `objc2-metal` (iOS), plus `block2` and `dispatch2`. These
+`objc2-quartz-core` (iOS), plus `block2` and `dispatch2` (`objc2-metal` reaches the
+tree only through `wgpu-hal`). These
 are the versions `wgpu-hal` already pulls, so no new crate generation enters
 the tree. `objc2-ui-kit` enables one feature per header (~456) by default, so
 the iOS backend sets `default-features = false` and names the classes it
@@ -90,14 +91,14 @@ Native execution state (inactive vs background) is ADR-0072.
   generations remain in the lockfile until those dependencies move.
 - The `OwnerLaneId`/`unsafe impl Send`/`Drop` machinery on macOS is unchanged —
   the migration swapped types, not lifetime rules.
-- iOS runs on the simulator (`just ios-sim`); device builds need signing no CI
+- iOS runs on the simulator (`cargo xtask device ios-sim`); device builds need signing no CI
   runner has, and CI type-checks `aarch64-apple-ios` without executing it.
 - Running iOS for real exposed that `Renderer::required_limits` started from
   desktop defaults the simulator's Metal adapter rejects; requested limits are
   now clamped to the adapter's.
 - The macOS behavior is exercised on a real Mac by the bundled `.app` probes
-  (`just macos-frame-pump`, `macos-close-path`, `macos-ime`,
-  `macos-resize-jitter`); iOS by `just ios-sim`, which asserts from the unified
+  (`cargo xtask device macos-frame-pump`, `macos-close-path`, `macos-ime`,
+  `macos-resize-jitter`); iOS by `cargo xtask device ios-sim`, which asserts from the unified
   log that a Metal device was created and a frame rendered.
 
 ## Alternatives rejected

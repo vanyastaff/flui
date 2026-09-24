@@ -13,7 +13,6 @@ name = "flui_hot_reload_lifecycle_fixture"
 
 [dependencies]
 flui-hot-reload = { path = "../../crates/flui-hot-reload", features = ["app-plugin"] }
-flui-layer = { path = "../../crates/flui-layer" }
 flui-view = { path = "../../crates/flui-view" }
 
 [lints]

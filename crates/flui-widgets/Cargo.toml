@@ -84,8 +84,8 @@ lru = { workspace = true, optional = true }
 # Headless frame driver behind the `testing` feature only: the canonical
 # `testing::LaidOut` harness (shared with flui-material/flui-cupertino test
 # suites) is built on `HeadlessBinding`. Optional + feature-gated so no
-# production graph ever links the test driver (see the sanctioned
-# same-layer edge in docs/workspace-layers.toml).
+# production graph ever links the test driver (a same-layer edge: both
+# crates are layer 6).
 flui-testing = { workspace = true, optional = true }
 # The element-level harness (`testing::harness`) records the IME calls a
 # mounted `EditableText` makes through a `PlatformTextInput` it supplies.
@@ -98,7 +98,7 @@ flui-platform = { path = "../flui-platform", version = "=0.2.0-dev", optional = 
 # `tests/common/mod.rs` is a thin re-export of `flui_widgets::testing`, which
 # only exists on the feature-gated build of the library the test binaries
 # link (the unit-test build reaches it via `cfg(test)` instead).
-# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-widgets = { path = ".", features = ["testing"] }
 # ADR-0074 §8 go/no-go benchmarks (`benches/signals_rebuilds.rs`).
 criterion = { workspace = true }
@@ -197,8 +197,12 @@ workspace = true
 
 # ADR-0074 §8: setState (A) vs signals (B) on the same widget tree — rebuild counts
 # from `BuildOwner::last_frame_build_report`, relayout roots from
-# `PipelineOwner::layout_roots_total`, and pump wall time. `just bench-signals`.
+# `PipelineOwner::layout_roots_total`, and pump wall time:
+# `cargo bench -p flui-widgets --features signals --bench signals_rebuilds -- --noplot`.
 [[bench]]
 name = "signals_rebuilds"
 harness = false
 required-features = ["signals"]
+
+[package.metadata.flui]
+layer = 6

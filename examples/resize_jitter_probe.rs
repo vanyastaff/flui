@@ -51,7 +51,7 @@
 //! floors as the other AppKit probes: AppKit wants a main thread, and libtest
 //! runs `#[test]` bodies on workers; an unbundled `NSWindow` throws
 //! `_CFBundleGetValueForInfoKey`, a foreign NSException Rust cannot catch. Run
-//! it via `just macos-resize-jitter`. On every other target the binary is a
+//! it via `cargo xtask device macos-resize-jitter`. On every other target the binary is a
 //! compile-time no-op `main`.
 //!
 //! **Reporting.** `RESIZE_JITTER_PROBE_RESULT=PASS` requires three things
@@ -132,8 +132,8 @@ mod appkit_resize_jitter_probe {
 
     /// Counts events on [`STALE_TARGET`]. A layer rather than a log scrape
     /// because the verdict below is taken *in-process*: the probe must be able
-    /// to fail on its own, so that `just macos-resize-jitter` asserts one
-    /// marker instead of re-deriving the answer from captured text.
+    /// to fail on its own, so that `cargo xtask device macos-resize-jitter`
+    /// asserts one marker instead of re-deriving the answer from captured text.
     struct StaleSizeLayer(Arc<AtomicUsize>);
 
     impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for StaleSizeLayer {
@@ -413,6 +413,6 @@ fn main() {
 /// Non-macOS build placeholder: this probe needs the AppKit main thread, a
 /// bundle, a real display and the Metal swapchain it measures; on other targets
 /// it exists only so the workspace compiles. Run it with
-/// `just macos-resize-jitter` on a real Mac.
+/// `cargo xtask device macos-resize-jitter` on a real Mac.
 #[cfg(not(target_os = "macos"))]
 fn main() {}

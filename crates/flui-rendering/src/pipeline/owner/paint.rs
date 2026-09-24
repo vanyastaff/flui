@@ -1874,7 +1874,7 @@ mod tests {
     /// `paint_subtree_impl` the run below completes silently and this test fails
     /// for want of a panic — which is the point: the assert is the only thing
     /// standing between a future dynamic boundary and permanent corruption.
-    // The guard is a `debug_assert_eq!`, so `just test-release` compiles it out
+    // The guard is a `debug_assert_eq!`, so a `--release` test run compiles it out
     // and this `#[should_panic]` would fail there for want of a panic. Gated
     // rather than weakened: a release build genuinely has no guard, and saying
     // so is more honest than asserting something that does not run.

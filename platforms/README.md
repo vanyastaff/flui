@@ -4,7 +4,7 @@ This directory contains platform-specific build configurations and native wrappe
 
 ## Overview
 
-FLUI is a cross-platform UI framework built in Rust with **wgpu** for GPU-accelerated rendering. Native windowing lives in `crates/flui-platform` (Win32, AppKit, Android, winit fallback); this directory holds only the host build projects (Xcode, Gradle, CMake) that link the Rust library into a platform app. Build and test commands are the `justfile` recipes — run `just --list`.
+FLUI is a cross-platform UI framework built in Rust with **wgpu** for GPU-accelerated rendering. Native windowing lives in `crates/flui-platform` (Win32, AppKit, Android, winit fallback); this directory holds only the host build projects (Xcode, Gradle, CMake) that link the Rust library into a platform app. Build and test commands are plain `cargo` plus `cargo xtask` — run `cargo xtask --help`.
 
 ## Supported Platforms
 
@@ -14,7 +14,7 @@ FLUI is a cross-platform UI framework built in Rust with **wgpu** for GPU-accele
 | **iOS** | 🟡 Native backend, simulator-verified | Metal | Xcode |
 | **Web** | ✅ Production | WebGPU | wasm-pack |
 | **Windows** | 🚧 Win32 backend, lint-only in CI | DirectX 12 / Vulkan | CMake + MSVC |
-| **Linux** | 🪟 winit fallback | Vulkan | cargo + `just` |
+| **Linux** | 🪟 winit fallback | Vulkan | cargo |
 | **macOS** | ✅ Native AppKit backend | Metal | Xcode |
 
 ## Directory Structure
@@ -82,9 +82,9 @@ cargo build --target aarch64-apple-ios-sim -p flui-app
 cargo build --release
 ```
 
-The macOS native backend's bundled probes are `just macos-frame-pump`,
-`just macos-close-path`, `just macos-ime`, and `just macos-resize-jitter`;
-run `just --list` for the full recipe set.
+The macOS native backend's bundled probes are `cargo xtask device macos-frame-pump`,
+`macos-close-path`, `macos-ime`, and `macos-resize-jitter`; run
+`cargo xtask device --help` for the full set.
 
 ## wgpu Rendering Backends
 
@@ -108,7 +108,7 @@ FLUI uses [wgpu](https://wgpu.rs/) for cross-platform GPU rendering. The backend
 - App lifecycle management
 
 *(Both are now implemented backends; iOS was verified on a simulator via
-`just ios-sim`. A real-device run still needs signing.)*
+`cargo xtask device ios-sim`. A real-device run still needs signing.)*
 
 ### Web (WASM)
 - WebGPU rendering
@@ -181,7 +181,7 @@ When adding platform support or features:
 - **Android**: Primary development platform
 - **Web**: Production ready
 - **macOS**: Native AppKit backend complete; lint-only in CI plus local bundled probes
-- **iOS**: Native UIKit backend, simulator-verified (`just ios-sim`); real-device run needs signing
+- **iOS**: Native UIKit backend, simulator-verified (`cargo xtask device ios-sim`); real-device run needs signing
 - **Windows**: Win32 backend present; flui-platform's suite runs on windows-latest in CI (`platform-windows`); live input/IME verification still open
 - **Linux**: winit fallback in production use; native Wayland/X11 still open
 

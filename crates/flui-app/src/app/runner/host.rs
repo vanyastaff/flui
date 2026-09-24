@@ -480,9 +480,8 @@ mod merge_wake_deadlines_tests {
 /// (no owner-affine method, e.g. `open_window`, is ever added to it; see
 /// its own rustdoc). This
 /// `compile_fail` doctest is CI-run evidence for that fence: `flui-app`
-/// dev/normal-depends on `flui-platform` and its own doc tests DO run under
-/// `just test-doc`, unlike the equivalent illustration inside
-/// `flui-platform` itself (excluded from that gate, `justfile:177`).
+/// dev/normal-depends on `flui-platform`, and its doc tests run in CI's
+/// `doc-test` job and in `cargo xtask ci`.
 ///
 /// ```compile_fail,E0599
 /// use flui_platform::headless_platform;

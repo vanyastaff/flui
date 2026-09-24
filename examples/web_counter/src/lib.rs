@@ -6,7 +6,10 @@
 //! page's `#flui-canvas` (or appends one) and renders through WebGPU. It is
 //! the Web row's executable evidence in `docs/BETA.md`.
 //!
-//! Build: `just web-counter-build`; serve `examples/web_counter/` over HTTP
+//! Build with
+//! `cargo build -p flui-web-counter --release --target wasm32-unknown-unknown`,
+//! then run `wasm-bindgen --target web --out-dir examples/web_counter/pkg` on
+//! the built `flui_web_counter.wasm`; serve `examples/web_counter/` over HTTP
 //! and open `index.html` in a WebGPU-capable browser.
 
 use flui::prelude::*;

@@ -131,7 +131,7 @@ impl Drop for TempPath {
 ///
 /// Resolution order (first hit wins), confirmed by direct probe under both
 /// `cargo nextest run -p flui-hot-reload-lifecycle-fixture` on its own and
-/// `just ci`'s workspace-wide build:
+/// `cargo xtask ci`'s workspace-wide build:
 ///
 /// 1. `target/<profile>/<lib_prefix>flui_hot_reload_lifecycle_fixture<lib_suffix>`
 ///    — cargo uplifts a package's `cdylib` here for a plain `cargo

@@ -63,9 +63,9 @@ the main thread and calls off-thread use undefined behavior. Moving acquisition 
 would delete the point of the lane, so macOS joins wasm and the hot-reload plugin path on the
 inline lane. Reopen condition: a `wgpu-hal` release whose Metal `acquire_texture` no longer messages
 `NSView`/`NSWindow` off the calling thread, or an upstream statement that it is safe, verified in
-the locked version. `scripts/probe-metal-acquire-main-thread.sh` (run advisorily by the weekly
-`latest-deps` job, and reporting the newest published `wgpu-hal` when it is outside the semver range
-it inspected) answers the first disjunct; the second is prose and needs a human to read it. On macOS
+the locked version. Nothing automated watches either disjunct: the first is checked by reading
+Metal's `acquire_texture` in the `wgpu-hal` being adopted, and the second is prose and needs a
+human to read it. On macOS
 the `Occluded` signal decision 3 relies on is produced by that very block, so there the analysis
 describes the inline lane.
 
@@ -198,8 +198,8 @@ equals the current services' generation, and the surface is attached. `SurfaceGe
 rejected outright, replacing web's `Option<Renderer>` with typed data. Caches are invalidated by
 ownership, not keying.
 
-`docs/runtime-contract.toml`'s `surface-generation-single-authority` states the single-*counter*
-rule (one mint site would be false the first time a surface is lost):
+The rule is single-*counter*, not single-mint-site (one mint site would be false the first time
+a surface is lost):
 
 > `SurfaceGeneration` is minted by exactly one counter per raster lane, owned by the raster mailbox
 > and mutated only under its state lock. Both the owner half and the handle half mint through it; no

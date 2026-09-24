@@ -7,7 +7,7 @@ FLUI takes inspiration from Flutter — the three-tree model, the lifecycle orde
 ## Start here
 
 - [README](README.md): status, quick start, why FLUI, hello world, MSRV, license.
-- [Getting started](docs/getting-started.md): platform setup (Windows / macOS / Android NDK / WASM) and the `just` recipes.
+- [Getting started](docs/getting-started.md): platform setup (Windows / macOS / Android NDK / WASM) and the `cargo xtask` commands.
 - [Architecture](docs/architecture.md): the three-tree pipeline in one page.
 - [Foundations](docs/FOUNDATIONS.md): the architecture contract and locked contracts.
 - [Crates](docs/crates.md): the layered crate map and per-crate status.
@@ -66,4 +66,4 @@ A stateless view is `#[derive(Clone, StatelessView)]` plus `impl StatelessView f
 - [AGENTS.md](AGENTS.md): the guide every agent runtime loads — design stance, code navigation, build and CI commands, definition of done.
 - [Roadmap](docs/ROADMAP.md): dependency-ordered phases and what lands next.
 - [Panic policy](docs/PANIC-POLICY.md): `expect("BUG: …")` for invariants, `Result` for everything else.
-- [Contributing](docs/contributing.md): the `just ci` gate to run before any commit.
+- [Contributing](CONTRIBUTING.md): planning a large change, git hygiene; `cargo xtask check-changed` is the pre-PR check.

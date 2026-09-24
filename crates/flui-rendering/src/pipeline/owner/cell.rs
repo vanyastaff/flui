@@ -270,8 +270,8 @@ mod tests {
 
     // ========================================================================
     // Owner-local traversal — full `run_frame` through a `PipelineCell`
-    // checkout (miri coverage: root `AGENTS.md`'s miri-scope line, justfile
-    // `miri` recipe).
+    // checkout (miri coverage: `cargo xtask miri`, whose `pipeline::owner`
+    // filter includes this module).
     // ========================================================================
     //
     // Everything above this point exercises the checkout mechanism in

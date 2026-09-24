@@ -1375,7 +1375,7 @@ fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() {
 ///
 /// Red-check: before the detector published the action, `supports_action`
 /// was false on this node and the count stayed 0 — the live `AXPress` half
-/// of `just macos-a11y` showed exactly that on the generated counter.
+/// of `cargo xtask device macos-a11y` showed exactly that on the generated counter.
 #[test]
 fn a_gesture_detector_tap_is_reachable_through_a_platform_click() {
     let activations = Rc::new(Cell::new(0));

@@ -52,7 +52,7 @@ dpi = "0.1.2"
 # A dev-only edge, and a dev-only CYCLE: flui-testing depends on this crate
 # normally, which cargo permits for dev-dependencies precisely so a lower crate
 # can use the test support built on it.
-# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 static_assertions = { workspace = true }
 # `tracing-subscriber` is a dev-only dependency — the observability tests
@@ -71,7 +71,7 @@ criterion = { workspace = true }
 proptest = "1.5"
 # Bench fixtures use the `make_*_event` test helpers which are gated
 # behind the `testing` feature (they're not part of the release API).
-# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-interaction = { path = ".", features = ["testing"] }
 
 [[test]]
@@ -118,3 +118,6 @@ serde = ["flui-types/serde"]
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+layer = 2

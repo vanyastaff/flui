@@ -1,7 +1,7 @@
 name: CI
 
 # Two lanes, chosen by `plan` (see its comment):
-#   fast lane  an ordinary pull_request: `checks`, `deny`, and `fast-lane`
+#   fast lane  an ordinary pull_request: `checks`, `deps`, and `fast-lane`
 #              (clippy + nextest over the changed crates and their workspace
 #              dependents). Target: a typical PR in under 7 minutes.
 #   heavy lane push to main, merge_group, the nightly schedule,
@@ -10,15 +10,15 @@ name: CI
 #              (`notify-main-red`).
 #
 # Job graph:
-#   checks         — fmt + taplo + typos + inventory + runtime-conformance + toolchain-consistency + panic-policy + actionlint + zizmor (seconds, no compile)
-#   plan           — heavy or fast lane; on a PR, which packages changed (scripts/affected-crates.sh)
+#   checks         — `cargo xtask checks --strict` (markdown links included) + xtask's tests + actionlint + zizmor (builds only xtask)
+#   plan           — heavy or fast lane; on a PR, which packages changed (`cargo xtask affected`)
 #   fast-lane      — fast lane only: clippy + nextest over the affected packages
 #   clippy         — workspace lint with -D warnings
-#   feature-matrix — cargo-hack per-feature clippy (--each-feature --optional-deps, two passes: libs/bins then tests/benches/examples), xilem-style, as a 4-slice matrix: three balanced package groups + the combination checks
-#                    plus a bounded backend-feature-pair powerset for flui-engine, plus every
-#                    supported `flui` facade feature combination compiled in isolation
+#   feature-matrix — `cargo xtask feature-matrix`: cargo-hack per-feature clippy (two passes: libs/bins, then
+#                    tests/benches/examples) in three `--partition` shards, plus every supported `flui` facade
+#                    feature combination built in isolation
 #   wasm-check     — cargo check for the wasm-capable crates + real cdylib link of the two web
-#                    demos + import-surface check against scripts/wasm-import-allowlist.txt
+#                    demos + import-surface check (`cargo xtask wasm-imports`)
 #   cross-typecheck — cargo clippy (no link, no tests) of flui-platform's windows + macos + android backends
 #   cli-macos      — nextest of flui-cli on macos-latest (simctl, Xcode probes, .app staging, termios hot-keys) + clippy of the flui-app iOS runner (needs xcrun)
 #   test           — build + nextest (lib + integration), ubuntu, plus a
@@ -27,9 +27,8 @@ name: CI
 #   platform-windows — flui-platform's suite (Win32 + winit backends) on windows-latest
 #   bench-compile  — criterion benches compile + link
 #   doc            — rustdoc with RUSTDOCFLAGS=-D warnings
-#   deny           — advisories/bans/licenses/sources
+#   deps           — cargo-deny (advisories/bans/licenses/sources) + cargo-shear (unused dependencies)
 #   doc-test       — rustdoc examples executed as tests
-#   msrv           — cargo check on the declared 1.98 MSRV
 #   miri           — UB check on flui-rendering's pipeline owner and
 #                    flui-view's GlobalKey plane (advisory)
 #   ci             — aggregator: designed to be the one status check branch
@@ -38,6 +37,11 @@ name: CI
 #                    (verified: GET /branches/main/protection -> 404), so
 #                    nothing here actually blocks a merge yet; that's a repo-
 #                    settings decision for the maintainer, not this file
+# Toolchain: every job compiles with rust-toolchain.toml's pinned channel;
+# `dtolnay/rust-toolchain@stable` only installs rustup and components, and
+# rustup then overrides to the pin (each job's log says so). `cargo xtask
+# toolchain`, in `checks`, holds `rust-version` to that channel's minor, so
+# every job is also the MSRV build; there is no separate msrv job.
 # Patterns borrowed from linebender/xilem (gated `checks` job, cargo-hack
 # feature matrix, Swatinem cache + taiki-e/install-action for pinned tool
 # versions) and tokio (aggregator `ci` job; nextest as primary runner).
@@ -73,21 +77,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # feature-matrix package groups. Balanced by cargo-hack command count
-  # (`--each-feature --optional-deps` = features + optional deps + the
-  # no-default/all-features pair, per package): 50 / 49 / 58 of 157 as of
-  # 2026-09-03. Every workspace member MUST appear in exactly one group —
-  # each matrix entry asserts the union against `cargo metadata` and fails
-  # on a crate that is missing or duplicated, so adding a crate without
-  # placing it here is loud, not silent. Rebalance with:
-  #   cargo hack clippy --workspace --each-feature --optional-deps --print-command-list \
-  #     | grep -oE -- '--manifest-path [^ ]+' | sort | uniq -c | sort -rn
-  FM_GROUP_1: flui-engine flui-app flui-platform flui-widgets flui-devtools
-  FM_GROUP_2: flui flui-types flui-geometry flui-rendering flui-assets flui-view flui-objects flui-log
-  FM_GROUP_3: flui-interaction flui-hot-reload flui-tree flui-semantics flui-scheduler flui-painting flui-layer flui-foundation flui-cli flui-animation flui-macros flui-testing flui-material flui-localizations flui-cupertino flui-desktop-scene flui-live-smoke flui-web-demo flui-web-server flui-painting-demo flui-hot-reload-lifecycle-fixture hot-reload-counter-host hot-reload-counter-logic hot-reload-counter-types flui-web-counter
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Strict workspace-wide; matches the local `just ci` gate.
+  # Strict workspace-wide; matches the local `cargo xtask ci`.
   #
   # `build.warnings` (Cargo 1.97+) rather than `RUSTFLAGS: -D warnings`:
   # RUSTFLAGS is part of the rustc fingerprint, so every job that needs a
@@ -111,14 +103,15 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────
-  # checks — fast source gate. fmt + inventory + runtime-conformance +
-  # toolchain-consistency + panic-policy + typos + Taplo +
-  # nextest-partition + the
-  # workflow linters (actionlint semantics, zizmor security audit). No
-  # compile. Every
-  # downstream job (clippy, test, doc, bench-compile) depends on this, so a
-  # malformed PR fails in seconds before any workspace build starts.
-  # Ubuntu only — pure source analysis. clippy lives in its own parallel job.
+  # checks — fast source gate: `cargo xtask checks --strict` (fmt, typos,
+  # Taplo, markdown links, workspace layers and manifests, toolchain, WGSL
+  # uniformity, the docs-only allowlist, font assets),
+  # xtask's own tests (which include the fast/heavy lane classification and
+  # the `ci` aggregator's skip rule), and the workflow linters. It builds only
+  # xtask, never the workspace, so a malformed PR fails before any workspace
+  # build starts. It has no `if:`: a docs-only PR, which skips every compile
+  # job, still runs it, and the link check is what such a PR most needs.
+  # Ubuntu only; clippy lives in its own parallel job.
   # ─────────────────────────────────────────────────────────────────────────
   checks:
     name: checks
@@ -129,6 +122,13 @@ jobs:
       # in "Install actionlint" — a literal duplicated in both let the cache
       # key silently outlive a version bump made only in the other spot.
       ACTIONLINT_VERSION: 1.7.12
+      # The same for lychee, plus the SHA-256 of that version's
+      # x86_64-unknown-linux-gnu tarball. 0.24.2 is also lychee-action
+      # v2.9.0's default, which docs.yml runs over the rendered book: bump the
+      # two together. `cargo test -p xtask` pins this line to the version
+      # `cargo xtask doctor` tells a contributor to install.
+      LYCHEE_VERSION: 0.24.2
+      LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -157,10 +157,10 @@ jobs:
       # cargo-install source to swap for a prebuilt fetch. What IS avoidable
       # is re-downloading and re-extracting the same binary on every run —
       # cached by version, so only the first run (or a version bump) pays for
-      # the curl + tar.
-      - name: Cache actionlint
+      # the curl + tar. Saved in "Save actionlint", on main only.
+      - name: Restore actionlint
         id: actionlint-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.local/bin/actionlint
           key: actionlint-${{ runner.os }}-${{ env.ACTIONLINT_VERSION }}
@@ -176,7 +176,31 @@ jobs:
           install -m 0755 actionlint ~/.local/bin/actionlint
           rm -f actionlint actionlint.tar.gz
 
-      - name: Put actionlint on PATH
+      # lychee (the link check in `cargo xtask checks`) comes the same way:
+      # install-action has no manifest for it, and its cargo-binstall fallback
+      # would fetch a binary that no checksum covers. The release tarball is
+      # checked against LYCHEE_SHA256 instead, and cached by version like
+      # actionlint.
+      - name: Restore lychee
+        id: lychee-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.local/bin/lychee
+          key: lychee-${{ runner.os }}-${{ env.LYCHEE_VERSION }}
+
+      - name: Install lychee
+        if: steps.lychee-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.local/bin
+          curl -fsSL -o lychee.tar.gz \
+            "https://github.com/lycheeverse/lychee/releases/download/lychee-v${LYCHEE_VERSION}/lychee-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${LYCHEE_SHA256}  lychee.tar.gz" | sha256sum -c -
+          tar -xzf lychee.tar.gz --strip-components=1 lychee-x86_64-unknown-linux-gnu/lychee
+          install -m 0755 lychee ~/.local/bin/lychee
+          rm -f lychee lychee.tar.gz
+
+      - name: Put actionlint and lychee on PATH
         run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       # Exact match on the first line (`actionlint --version` prints the bare
@@ -188,57 +212,37 @@ jobs:
       - name: Verify actionlint
         run: actionlint --version | head -1 | grep -qx "${ACTIONLINT_VERSION}"
 
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
+      - name: Verify lychee
+        run: lychee --version | grep -qx "lychee ${LYCHEE_VERSION}"
 
-      - name: taplo fmt --check
-        run: taplo fmt --check
+      # Saved on main only, so a pull request cannot seed the cache main
+      # restores, and only once the binary passed its version check above.
+      - name: Save actionlint
+        if: github.ref == 'refs/heads/main' && steps.actionlint-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.local/bin/actionlint
+          key: ${{ steps.actionlint-cache.outputs.cache-primary-key }}
 
-      - name: typos
-        run: typos
+      - name: Save lychee
+        if: github.ref == 'refs/heads/main' && steps.lychee-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.local/bin/lychee
+          key: ${{ steps.lychee-cache.outputs.cache-primary-key }}
 
-      - name: workspace inventory + layer topology drift check
-        run: bash scripts/check-workspace-inventory.sh
+      - name: Rust cache (xtask)
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: xtask
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Runtime contract registry check
-        run: bash scripts/check-runtime-conformance.sh
+      # `--strict`: a missing typos, taplo or lychee is a failure here, not a skip.
+      - name: cargo xtask checks
+        run: cargo xtask checks --strict
 
-      - name: Toolchain consistency check (MSRV agrees with rust-toolchain.toml everywhere it's declared)
-        run: bash scripts/check-toolchain-consistency.sh
-
-      - name: 'panic-policy expect-message convention gate'
-        run: bash scripts/check-panic-policy.sh
-
-      # Browsers' WGSL uniformity analysis rejects a derivative taken inside a
-      # branch; native naga does not, so nothing else in CI can see the class.
-      - name: scripts/check-wgsl-uniformity.py (derivatives in uniform control flow)
-        run: |
-          python3 -B scripts/check-wgsl-uniformity.py --self-test
-          python3 -B scripts/check-wgsl-uniformity.py
-
-      # Keeps the docs-only allowlist (scripts/lib/change_scope.py, which
-      # `plan` uses) honest: fails if any file it treats as skippable is
-      # actually include_str!()'d into compiled/tested content.
-      - name: scripts/check-paths-filter-allowlist.py (docs-only allowlist vs. real include_str! targets)
-        run: python3 -B scripts/check-paths-filter-allowlist.py
-
-      # `just test-ci` runs the suite as two nextest profiles whose default
-      # filters must be exact complements, and the nested-cargo timeout
-      # override must name the same tests; nextest cannot share one filter
-      # string, so .config/nextest.toml spells it three times. This fails when
-      # the copies drift (a drifted test loses its budget or silently drops
-      # out of `just test-ci`). Local mirror: `just text-check`.
-      - name: scripts/check-nextest-partition.py (nested-cargo filter copies agree)
-        run: python3 -B scripts/check-nextest-partition.py
-
-      # The fast/heavy lane machinery: the `ci` aggregator's skip rule
-      # (extracted from this file and run against every lane and mode) and
-      # scripts/lib/change_scope.py's classification. Local mirror:
-      # `just text-check`.
-      - name: scripts/tests (ci aggregator skip rule, change scope)
-        run: |
-          python3 -m pip install --quiet --disable-pip-version-check "pyyaml>=6,<7"
-          python3 -B -m unittest discover -s scripts/tests -p 'test_c[hi]*.py' -v
+      - name: cargo test -p xtask
+        run: cargo test -p xtask --locked
 
       - name: actionlint (workflow semantics)
         run: actionlint
@@ -254,8 +258,8 @@ jobs:
   #          from the API) or changing a heavy-job input: every job
   #          below runs. Otherwise (an ordinary pull_request) only the fast
   #          lane does, and the heavy jobs skip -- expected, see `ci`.
-  #   mode   on a pull_request, from scripts/affected-crates.sh (the same
-  #          script `just check-changed` runs, so CI and local agree):
+  #   mode   on a pull_request, from `cargo xtask affected` (the same
+  #          classification `cargo xtask check-changed` uses):
   #            docs      only documentation changed: nothing compiles
   #            none      only repo tooling changed: `checks` covers it
   #            packages  the changed crates + every workspace crate that
@@ -265,8 +269,8 @@ jobs:
   #                      an unattributable file changed: the whole workspace
   #          Always "full" when `heavy` is.
   # The docs-only allowlist and the full triggers live in
-  # scripts/lib/change_scope.py, once; check-paths-filter-allowlist.py (in
-  # `checks`) proves no compiled include_str!() target falls inside it.
+  # tools/xtask/src/change_scope/, once; `cargo xtask checks` proves no
+  # compiled include_str!() target falls inside it.
   #
   # Skipping is done with job-level `if:` on `plan`'s outputs, NOT with
   # `on.pull_request.paths-ignore`: that would make GitHub never create the
@@ -311,6 +315,12 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
+      - name: Rust cache (xtask)
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: xtask
+          save-if: false
+
       - id: scope
         name: Decide heavy vs fast lane, and the affected packages
         env:
@@ -323,7 +333,7 @@ jobs:
           set -euo pipefail
           FULL_CI_LABEL=false
           if [ "$EVENT" != pull_request ]; then
-            bash scripts/affected-crates.sh --full --format github > scope.txt
+            cargo xtask affected --full --format github > scope.txt
             heavy=true
           else
             # live, not from the payload: `full-ci` re-runs this very run. No
@@ -332,14 +342,14 @@ jobs:
             if grep -qx full-ci <<<"$labels"; then
               FULL_CI_LABEL=true
             fi
-            bash scripts/affected-crates.sh --base "$BASE_SHA" --format github > scope.txt
+            cargo xtask affected --base "$BASE_SHA" --format github > scope.txt
             # heavy when the change feeds only a heavy job (Cargo.lock,
             # toolchain, workflows, a heavy job's script, a shader, feature-
             # gated edges into many dependents) or the PR carries `full-ci`
             heavy=false
             if grep -qx 'heavy_required=true' scope.txt || [ "$FULL_CI_LABEL" = true ]; then
               heavy=true
-              bash scripts/affected-crates.sh --full --format github > scope.txt
+              cargo xtask affected --full --format github > scope.txt
             fi
           fi
           echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
@@ -353,8 +363,8 @@ jobs:
   # crates plus their workspace dependents; `full` mode: the workspace), and
   # flui-platform's headless suite when it is in scope. Target: a typical PR
   # under 7 minutes. The heavy jobs below cover the rest on main, nightly,
-  # on demand and under the `full-ci` label. Local mirror: `just check-changed`
-  # (same script, same arguments).
+  # on demand and under the `full-ci` label. Local mirror:
+  # `cargo xtask check-changed` (same classification, same arguments).
   # ─────────────────────────────────────────────────────────────────────────
   fast-lane:
     name: fast-lane
@@ -404,7 +414,7 @@ jobs:
           echo "packages: ${PACKAGES:-<whole workspace>}"
 
       # Word splitting of the *_ARGS variables is intended: they are cargo
-      # argument lists computed by scripts/affected-crates.sh.
+      # argument lists computed by `cargo xtask affected`.
       - name: cargo clippy (affected packages)
         run: |
           # shellcheck disable=SC2086
@@ -417,9 +427,9 @@ jobs:
         if: needs.plan.outputs.test_args != ''
         run: |
           # shellcheck disable=SC2086
-          cargo nextest run $TEST_ARGS --locked --no-fail-fast --lib --bins --tests $FEATURES
+          cargo nextest run $TEST_ARGS --locked --no-fail-fast --no-tests=pass $FEATURES
 
-      # The heavy `doc` job's rustdoc (doc-strict.sh's flags) over the scope:
+      # The heavy `doc` job's rustdoc (`cargo xtask doc-strict`'s flags) over the scope:
       # a broken intra-doc link is the typical casualty of moving code.
       - name: cargo doc -D warnings (affected packages)
         if: needs.plan.outputs.doc_args != ''
@@ -471,7 +481,7 @@ jobs:
         run: |
           rustup target add wasm32-unknown-unknown
           # shellcheck disable=SC2086
-          cargo clippy $WASM_ARGS --lib --bins --locked --target wasm32-unknown-unknown -- -D warnings
+          cargo clippy $WASM_ARGS --locked --target wasm32-unknown-unknown -- -D warnings
 
       - name: cargo check facade hot-reload feature (wasm32)
         if: needs.plan.outputs.wasm_facade == 'true'
@@ -483,15 +493,18 @@ jobs:
         if: needs.plan.outputs.hack_args != ''
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
-          tool: cargo-hack
+          tool: cargo-hack@0.6.45
 
+      # Both passes run even when the first fails, so one run reports both.
       - name: cargo hack clippy --each-feature (changed manifests)
         if: needs.plan.outputs.hack_args != ''
         run: |
+          rc=0
           # shellcheck disable=SC2086
-          cargo hack clippy $HACK_ARGS --locked --each-feature --optional-deps --keep-going -- -D warnings
+          cargo hack clippy $HACK_ARGS --locked --each-feature --keep-going -- -D warnings || rc=1
           # shellcheck disable=SC2086
-          cargo hack clippy $HACK_ARGS --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
+          cargo hack clippy $HACK_ARGS --locked --each-feature --keep-going --tests --benches --examples -- -D warnings || rc=1
+          exit $rc
 
       - name: Ensure Xvfb + xkbcommon are available (flui-platform)
         if: needs.plan.outputs.platform == 'true'
@@ -667,30 +680,15 @@ jobs:
         if: runner.os == 'Linux'
         run: df -h /
 
-      # Runs BOTH unit (--lib) and integration (tests/) targets — the
-      # integration dirs carry the Core.0/Core.2 exit-gate suites
-      # (flui-rendering 39 files, flui-widgets 63, flui-view 27 as of
-      # 2026-08-04 — recount if this drifts) and were previously never
-      # executed in CI (the invocation was `--lib` only).
-      # Runs fully parallel: nextest gives each test its own process. The
-      # old process-global singletons (`AppBinding`, singleton `Scheduler`)
-      # this used to guard are fully retired — there is no more shared
-      # binding/scheduler state to race on, and the locks that once
-      # serialized it (`SINGLETON_WINDOW_TEST_LOCK`, `SCHEDULER_PHASE_TEST_LOCK`,
-      # `SEMANTICS_TEST_LOCK`) are deleted along with it; each is a
-      # forbidden-pattern ratchet in docs/runtime-contract.toml now, so a
-      # PR cannot reintroduce the pattern by reintroducing the name. Any
-      # genuinely process-global resource that remains (see AGENTS.md's
-      # Testing Quirks) needs its own explicit test-local lock instead.
-      # flui-platform is excluded from this workspace-wide invocation because
-      # of two things this default-feature workspace run cannot give it:
-      # `--all-features` (the winit backend, its actual Linux-runnable
-      # implementation, only compiles under `winit-backend` — invisible to
-      # `default = ["desktop"]`) and a
-      # real X11 connection for the handful of tests that construct
-      # `WinitPlatform` directly. The dedicated step below supplies both and
-      # runs flui-platform's Linux-runnable suite green; see that step's
-      # comment for what remains excluded and why.
+      # Unit and integration targets, fully parallel: nextest gives each test
+      # its own process, so a test that mutates a genuinely process-global
+      # resource needs a lock scoped to its module (AGENTS.md). flui-platform
+      # runs in the dedicated step below, which gives it what this
+      # default-feature run cannot: `--all-features` (its winit backend, the
+      # Linux-runnable implementation, compiles only under `winit-backend`)
+      # and an X11 connection for the tests that construct `WinitPlatform`.
+      # `cargo xtask test` runs the same split locally, with the facade's
+      # non-default catalogs folded in (see its TEST_SCOPE).
       - name: cargo nextest run (lib + integration)
         run: >
           cargo nextest run
@@ -748,6 +746,11 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # insta writes `<name>.snap.new` next to a mismatched snapshot, under CI
+      # too because .config/insta.yaml sets `update: new` (its default writes
+      # nothing when `CI` is set). Upload them so a CI-only snapshot failure
+      # is debuggable without a local repro (same pattern as egui/xilem
+      # snapshot artifacts).
       - name: Upload insta snapshot candidates on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -868,10 +871,6 @@ jobs:
           path: "**/*.snap.new"
           if-no-files-found: ignore
           retention-days: 7
-
-      # insta writes `<name>.snap.new` next to the snapshot on mismatch.
-      # Upload them so a CI-only snapshot failure is debuggable without a
-      # local repro (same pattern as egui/xilem snapshot artifacts).
 
   # ─────────────────────────────────────────────────────────────────────────
   # live-smoke — the real-window smoke suites, split out of `test` for the
@@ -1136,109 +1135,61 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo doc --no-deps (every `testing` feature on)
-        run: bash scripts/doc-strict.sh
+        run: cargo xtask doc-strict
 
   # ─────────────────────────────────────────────────────────────────────────
-  # deny — cargo-deny over advisories/bans/licenses/sources. deny.toml has
-  # been maintained in-repo since the 0.19 schema migration but was never
-  # executed in CI; the first wired run surfaced 4 real advisories (anyhow
-  # unsound downcast_mut, crossbeam-epoch deref, quick-xml DoS pair) — three
-  # fixed by lockfile bumps, the transitive rest carry documented ignores.
-  # Merge-blocking: it was green at wiring time and every ignore is argued.
+  # deps — `cargo xtask deps`: cargo-deny over every workspace member (bans,
+  # licenses and sources against deny.toml, advisories against RustSec) and
+  # cargo-shear (a dependency no code uses, a test-only one declared as a
+  # normal one, a [workspace.dependencies] entry nothing inherits; only a
+  # warning when the dependency is optional or a feature names it). Nothing
+  # compiles but xtask. Two steps, split by what decides the result:
+  #   policy      the commit, and the std-replacement list cargo-deny fetches
+  #               for [bans.std-replacements]: blocking in every lane. A new
+  #               entry in that list can fail a commit that passed, but only
+  #               for a crate a member declares directly, and the fix is
+  #               always ours to make (the std API, or an `ignore` with its
+  #               reason in deny.toml), so it blocks with the rest.
+  #   advisories  the RustSec database as of the run, so a commit that passed
+  #               yesterday can fail today: blocking in the heavy lane (main,
+  #               nightly, the merge queue, and any PR that changes Cargo.lock
+  #               or deny.toml -- see `plan`); on an ordinary PR a new
+  #               advisory is reported without failing unrelated work, and
+  #               the next heavy run on main turns red for it.
   # ─────────────────────────────────────────────────────────────────────────
-  deny:
-    name: deny
+  deps:
+    name: deps
     needs: [checks, plan]
     if: needs.plan.outputs.heavy == 'true' || needs.plan.outputs.mode != 'docs'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # The workflow default is `contents: read` only. The wgpu-bump probe below
-    # reads this PR's changed files, and GitHub documents `pull-requests: read`
-    # for that endpoint — without it both `gh api` calls 403 and the probe
-    # silently reports "nothing changed" on exactly the PRs it exists for.
-    permissions:
-      contents: read
-      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Install cargo-deny
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Install cargo-deny and cargo-shear
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
-          tool: cargo-deny@0.19
+          # cargo-shear 1.13: the newest this install-action release has a
+          # prebuilt binary for; a later pin falls back to compiling it.
+          tool: cargo-deny@0.20,cargo-shear@1.13
 
-      # `cargo deny` has no `--locked` flag (it reads the committed lockfile by
-      # design); passing it exits 2 with "unexpected argument".
-      - name: cargo deny check
-        run: cargo deny check
+      - name: Rust cache (xtask)
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: xtask
+          save-if: false
 
-      # ADR-0045 decision 1 pins macOS to the inline raster lane on an UPSTREAM
-      # fact: wgpu-hal's Metal `acquire_texture` messages AppKit UI objects from
-      # the calling thread. Issue #653 asks for that reopen condition to be
-      # re-read "on each wgpu bump rather than on a schedule -- a dependabot PR
-      # touching wgpu/wgpu-hal is the natural trigger". weekly.yml runs the same
-      # probe on a schedule, which cannot see the bump PR itself; this is the
-      # per-bump trigger, and it lives here because a lockfile move is a
-      # dependency event and this is the dependency job.
-      #
-      # ADVISORY, and it must stay that way. Every direction it can be wrong is
-      # safe: a stale "still there" leaves macOS on the inline lane, which is
-      # slower than necessary and not unsound. Blocking would hand dependabot a
-      # red check it cannot act on -- the probe's own header says the same, and
-      # the second half of the reopen condition (an upstream statement that the
-      # off-thread access is safe) is prose no source predicate can see.
-      #
-      # It runs only when this PR's Cargo.lock actually moves wgpu, so an
-      # ordinary PR pays nothing. When the API cannot show the patch (GitHub
-      # omits it for very large diffs) it RUNS rather than skips: a false run
-      # costs a minute, a false skip is the trigger silently not firing on the
-      # one PR it exists for.
-      - name: wgpu bump — re-read ADR-0045's macOS reopen condition (advisory)
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -uo pipefail
-          # Ask once, and keep the API's own success/failure separate from the
-          # answer. Conflating them is how the previous shape turned a 403 into
-          # a confident "nothing changed" and skipped the very PRs this exists
-          # for -- the failure it was written to avoid.
-          if ! files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename'); then
-            echo "Could not list this PR's files (see the error above) -- probing anyway"
-            echo "rather than reporting a skip we cannot justify."
-          elif ! grep -qx 'Cargo.lock' <<<"$files"; then
-            echo "Cargo.lock untouched by this PR; nothing for the macOS reopen probe to re-read."
-            exit 0
-          elif patch=$(gh api "repos/$REPO/pulls/$PR/files" --paginate \
-                         --jq '.[] | select(.filename=="Cargo.lock") | .patch'); then
-            if [ -z "$patch" ]; then
-              echo "Cargo.lock changed but GitHub returned no patch (diff too large) -- probing anyway."
-            elif ! grep -qi 'wgpu' <<<"$patch"; then
-              echo "Cargo.lock moved but no wgpu entry changed; skipping the macOS reopen probe."
-              exit 0
-            fi
-          else
-            echo "Could not read the Cargo.lock patch -- probing anyway."
-          fi
+      - name: cargo xtask deps --only policy
+        run: cargo xtask deps --strict --only policy
 
-          # Run with the summary suppressed, then surface only news. A run that
-          # reports the status quo on every wgpu bump would train readers to
-          # ignore the one that does not.
-          out=$(env -u GITHUB_STEP_SUMMARY bash scripts/probe-metal-acquire-main-thread.sh 2>&1) || true
-          printf '%s\n' "$out"
-          if grep -qE 'CHANGED|INCONCLUSIVE|Out of this probe.s reach|Could not reach crates.io' <<<"$out"; then
-            {
-              echo "### wgpu moved — ADR-0045's macOS reopen condition needs a human read"
-              echo
-              printf '%s\n' "$out"
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Reopen condition still NOT met on every resolved wgpu-hal; nothing to surface."
-          fi
+      - name: cargo xtask deps --only advisories
+        continue-on-error: ${{ needs.plan.outputs.heavy != 'true' }}
+        run: cargo xtask deps --strict --only advisories
 
   # ─────────────────────────────────────────────────────────────────────────
   # doc-test — run every rustdoc example as a test. nextest does NOT execute
@@ -1273,38 +1224,6 @@ jobs:
         run: cargo test --workspace --locked --doc
 
   # ─────────────────────────────────────────────────────────────────────────
-  # msrv — verify the declared MSRV actually compiles the workspace. Every
-  # other job installs `dtolnay/rust-toolchain@stable`, which OVERRIDES the
-  # committed rust-toolchain.toml pin — so without this job the floor in
-  # `[workspace.package].rust-version` would never be exercised in CI. `check`
-  # (not `test`): MSRV promises "compiles on the floor", behavior is the stable
-  # jobs' concern. Bump procedure lives in rust-toolchain.toml's header.
-  # ─────────────────────────────────────────────────────────────────────────
-  msrv:
-    name: msrv
-    needs: [checks, plan]
-    if: needs.plan.outputs.heavy == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Install Rust 1.98 (declared MSRV)
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
-        with:
-          toolchain: "1.98"
-
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: cargo check --workspace (MSRV)
-        run: cargo check --workspace --all-targets --locked
-
-  # ─────────────────────────────────────────────────────────────────────────
   # miri — undefined-behavior check for the workspace's densest unsafe hot
   # spot: flui-rendering's subtree arena (raw-pointer arena with ~49 unsafe
   # sites). flui-rendering has no wgpu dependency, so miri can execute it;
@@ -1317,8 +1236,8 @@ jobs:
   # picking up `cell.rs`'s PipelineCell checkout tests and two new
   # real-NodePtr walks (an owner-local full run_frame, and a
   # reentrant-layout mid-layout child-request) alongside the original
-  # subtree_arena suite -- see the `miri` recipe's doc-comment in the
-  # justfile for the full breakdown. Measured 55 tests / ~21s wall, in
+  # subtree_arena suite -- see `cargo xtask miri`'s doc comment
+  # (tools/xtask) for the full breakdown. Measured 55 tests / ~21s wall, in
   # budget.
   #
   # SCOPE widened again (ADR-0050): a second invocation runs flui-view's
@@ -1396,11 +1315,19 @@ jobs:
   # `clippy` job compiles the whole workspace under feature unification with
   # default features, which can mask a crate that fails to declare a feature
   # dependency (a sibling crate enables it transitively). cargo-hack checks
-  # each package separately, once per feature plus once per optional dep, so
-  # per-crate feature wiring is actually exercised. Two runs per xilem:
-  # default targets (libs/bins, as downstream users compile them) and
-  # auxiliary targets (tests/benches/examples) — `--all-targets` would compile
-  # libs with dev-dependencies enabled and mask missing feature requirements.
+  # each package separately, once per feature, so per-crate feature wiring is
+  # actually exercised. Two passes per package: libs/bins as downstream users
+  # compile them, then tests/benches/examples. Under resolver v2 a
+  # dev-dependency's features unify only while dev targets build, so a single
+  # `--all-targets` pass would hide a library that compiles only because a
+  # dev-dependency enabled a feature for it.
+  #
+  # The per-feature passes run as cargo-hack `--partition k/3` shards: its
+  # command list splits into contiguous blocks, so the shards cover every
+  # package and feature exactly once with no hand-kept package lists. That
+  # holds only while every shard runs the same cargo-hack, hence the exact
+  # version pin. The commands live in `cargo xtask feature-matrix`, so a local
+  # run and CI cannot drift apart.
   # ─────────────────────────────────────────────────────────────────────────
   feature-matrix:
     name: feature-matrix (${{ matrix.slice }})
@@ -1411,28 +1338,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Three balanced per-feature clippy slices plus the two short
-        # combination checks. Formerly ONE job running the whole workspace
-        # in two passes (libs/bins, then tests/benches/examples): 640 s of
-        # cargo-hack serialised on one runner, 15-16 min wall, the critical
-        # path of the entire workflow once `test` was split. Same commands,
-        # same features, same `-D warnings`, same TWO passes per package —
-        # the passes are not a redundancy to fold away. Under resolver v2,
-        # dev-dependency features unify with normal dependencies only while
-        # dev targets are being built; a single `--all-targets` pass builds
-        # them, so a per-feature LIBRARY configuration could pass on a
-        # feature that a dev-dep (e.g. flui-testing enabling
-        # `flui-rendering/testing`) dragged in, while a downstream consumer
-        # of that library alone would fail. The targetless pass is the one
-        # that sees the library exactly as consumers do. What the split buys
-        # is three runners instead of one, not fewer passes.
-        #
-        # cargo-hack's own `--partition M/N` was measured and rejected:
-        # `--print-command-list --partition 1/2` on flui-engine printed the
-        # FULL 15-command list and 2/2 printed 7, so it is not a clean
-        # partition and could silently double or drop work. Explicit groups
-        # + the completeness guard below are transparent and checkable.
-        slice: [group-1, group-2, group-3, combinations]
+        # `cache` names each entry's cache: slices compile different packages
+        # under different feature sets, so a shared cache would be overwritten
+        # by whichever slice finished last.
+        include:
+          - { slice: "1/3", cache: shard-1 }
+          - { slice: "2/3", cache: shard-2 }
+          - { slice: "3/3", cache: shard-3 }
+          - { slice: combinations, cache: combinations }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1443,116 +1356,38 @@ jobs:
         with:
           components: clippy
 
-      # Each slice compiles a disjoint set of packages under many feature
-      # sets, so every slice gets its OWN cache, fully namespaced by
-      # `prefix-key` — nothing is shared between slices, not even the
-      # registry. A shared key would be overwritten by whichever slice
-      # finished last, discarding the other three's artifacts.
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          prefix-key: v1-rust-feature-matrix-${{ matrix.slice }}
+          prefix-key: v2-rust-feature-matrix-${{ matrix.cache }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
 
-      # `just` carries the facade combination list, so CI and `just
-      # feature-matrix` cannot drift into testing different sets.
-      - name: Install cargo-hack + just
+      - name: Install cargo-hack
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
-          tool: cargo-hack@0.6,just@1
+          tool: cargo-hack@0.6.45
 
-      # The one guard that makes explicit groups safe: the union of the three
-      # groups must equal the workspace, with no package in two groups. Runs
-      # in every slice so a stale group list fails the whole matrix, not one
-      # corner of it.
-      - name: Assert the package groups cover the workspace exactly once
-        run: |
-          python3 - <<'EOF'
-          import json, os, subprocess, sys
-          members = {p["name"] for p in json.loads(subprocess.check_output(
-              ["cargo", "metadata", "--format-version", "1", "--no-deps", "--locked"]))["packages"]}
-          groups = {k: os.environ[k].split() for k in ("FM_GROUP_1", "FM_GROUP_2", "FM_GROUP_3")}
-          listed = [p for g in groups.values() for p in g]
-          dup = sorted({p for p in listed if listed.count(p) > 1})
-          missing = sorted(members - set(listed))
-          unknown = sorted(set(listed) - members)
-          for label, bad in (("in two groups", dup), ("not in any group", missing), ("not a workspace member", unknown)):
-              if bad:
-                  print(f"::error::feature-matrix groups: {label}: {bad}")
-          if dup or missing or unknown:
-              sys.exit(1)
-          print(f"ok: {len(members)} members, each in exactly one group")
-          EOF
-
-      - name: Resolve this slice's package list
-        if: matrix.slice != 'combinations'
-        run: |
-          case "${{ matrix.slice }}" in
-            group-1) pkgs="$FM_GROUP_1" ;;
-            group-2) pkgs="$FM_GROUP_2" ;;
-            group-3) pkgs="$FM_GROUP_3" ;;
-          esac
-          args=""; for p in $pkgs; do args="$args -p $p"; done
-          echo "PKG_ARGS=$args" >> "$GITHUB_ENV"
-
-      # Pass 1 — libs/bins, NO dev targets: the library as its consumers see
-      # it, per feature. This is the pass that catches a feature edge missing
-      # from a normal dependency; see the resolver-v2 note above.
-      - name: cargo hack clippy (libs/bins, per feature)
-        if: matrix.slice != 'combinations'
-        run: |
-          read -ra slice_pkgs <<< "$PKG_ARGS"
-          cargo hack clippy "${slice_pkgs[@]}" --locked --each-feature --optional-deps --keep-going -- -D warnings
-
-      # Pass 2 — tests/benches/examples, per feature: lints the dev targets
-      # themselves (a missing `required-features` on an example, a test that
-      # only compiles under one feature).
-      - name: cargo hack clippy (tests/benches/examples, per feature)
-        if: matrix.slice != 'combinations'
-        run: |
-          read -ra slice_pkgs <<< "$PKG_ARGS"
-          cargo hack clippy "${slice_pkgs[@]}" --locked --each-feature --optional-deps --keep-going --tests --benches --examples -- -D warnings
-
-      # --each-feature can never see a defect that only appears when two
-      # features combine. flui-engine is the one crate where combinations
-      # matter (its backend features are ADDITIVE by design — enabling two
-      # compiles both wgpu backends), so pairwise coverage there is bounded
-      # and meaningful: depth 2 over the six backend-adjacent features is ~22
-      # configurations, minutes not hours. The full workspace powerset stays
-      # deliberately out (2^N explosion for no known failure mode).
-      - name: cargo hack check flui-engine (backend-feature pairs)
-        if: matrix.slice == 'combinations'
-        run: cargo hack check -p flui-engine --locked --feature-powerset --include-features vulkan,metal,dx12,webgpu,gles --depth 2
-
-      # The facade's catalog/localization/hot-reload features are the public
-      # package surface, so each supported combination is compiled ON ITS OWN,
-      # against the `flui` package alone. A `--workspace` build is not evidence
-      # here: workspace feature unification would enable `material` from a
-      # sibling and turn a broken combination green. `--all-targets` is
-      # deliberate — a missing `required-features` on an example or test is
-      # exactly what these builds exist to catch. The `cargo tree` assertions at
-      # the end prove hot reload is *absent* from an ordinary production graph,
-      # not merely unused by it.
-      - name: facade feature combinations (isolated) + hot-reload absence
-        if: matrix.slice == 'combinations'
-        run: just facade-combos
+      - name: cargo xtask feature-matrix --slice ${{ matrix.slice }}
+        run: cargo xtask feature-matrix --slice "$SLICE"
+        env:
+          SLICE: ${{ matrix.slice }}
 
   # ─────────────────────────────────────────────────────────────────────────
-  # wasm-check — the web platform claim, machine-checked. web_demo /
-  # painting_demo are workspace members but were only ever compiled for the
-  # host target; this checks the wasm-capable set under the real
-  # wasm32-unknown-unknown target. The set was verified crate-by-crate before
-  # wiring (29 of 36 packages green, as of 2026-08-04 — `cargo metadata
-  # --no-deps` counts packages, recount if this drifts); the excluded seven
-  # genuinely cannot target wasm today — see NO_WASM_PKGS. A crate that
-  # gains wasm support is REMOVED from the exclude list, never worked around.
-  #
-  # `cargo clippy` as well as `cargo check`: the web backend of flui-platform
-  # is `cfg(target_arch = "wasm32")`-only, so the host clippy job never sees
-  # it — it carried 15 deny-level violations (two bare `unwrap()`s among them)
-  # for as long as this job was check-only. Lib/bin targets only: the crates'
-  # test targets pull native-only dev-deps (tokio) that do not build here.
+  # wasm-check — the web platform claim, machine-checked, in three xtask
+  # steps (tools/xtask/src/tasks/web.rs holds the commands and why):
+  #   wasm-check — check + lib/bin clippy of every package that builds for
+  #                wasm32 (a package opts out with `[package.metadata.flui]
+  #                wasm = false`, a reason beside it), plus the facade's
+  #                hot-reload feature. The clippy pass is the only lint over
+  #                flui-platform's wasm32-only web backend.
+  #   wasm-link  — really links the two web demos and checks their import
+  #                surface against tools/xtask/fixtures/wasm/import-allowlist.txt:
+  #                on wasm32 an undefined symbol becomes an import, not a link
+  #                error.
+  #   wasm-test  — EXECUTES the wasm32 tests on node. Everything before it only
+  #                compiles; swapping `web_time::Instant` for std's stays green
+  #                there and panics at run time (issue #985).
   # ─────────────────────────────────────────────────────────────────────────
   wasm-check:
     name: wasm-check
@@ -1560,17 +1395,6 @@ jobs:
     if: needs.plan.outputs.heavy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      # flui-assets / flui-cli / flui-web-server: mio + uuid
-      # (tokio-net / CLI stack) have no wasm32-unknown-unknown support.
-      # hot-reload-counter-*: dlopen-based hot-reload, host-only by design.
-      NO_WASM_PKGS: >-
-        --exclude flui-assets
-        --exclude flui-cli
-        --exclude flui-web-server
-        --exclude hot-reload-counter-host
-        --exclude hot-reload-counter-logic
-        --exclude hot-reload-counter-types
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1594,51 +1418,20 @@ jobs:
       - name: Add wasm32 target to the pinned toolchain
         run: rustup target add wasm32-unknown-unknown
 
-      - name: cargo check (wasm32)
-        run: cargo check --workspace --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }}
+      - name: cargo xtask wasm-check
+        run: cargo xtask wasm-check
 
-      - name: cargo clippy (wasm32, lib + bin targets)
-        run: cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown ${{ env.NO_WASM_PKGS }} -- -D warnings
+      - name: cargo xtask wasm-link
+        run: cargo xtask wasm-link
 
-      # No dlopen-based runner exists on web, but the public feature must still
-      # be cfg-complete: enabling it cannot expose desktop-only imports.
-      - name: cargo check facade hot-reload feature (wasm32)
-        run: cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload
-
-      # `cargo check` does not link. rust-lld resolves a wasm cdylib for
-      # real — and on wasm32 an undefined symbol does not even fail the link
-      # (it becomes an import), so linking alone is still not the full claim.
-      - name: cargo build (wasm cdylibs — real link)
-        run: cargo build --locked --target wasm32-unknown-unknown -p flui-web-demo -p flui-painting-demo
-
-      - name: Install wasm-tools
-        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
-        with:
-          tool: wasm-tools@1
-
-      # ...which is why the import surface is a committed, reviewed artifact:
-      # any module outside scripts/wasm-import-allowlist.txt (most notably
-      # `env`, the catch-all for accidental native externs) fails here.
-      - name: Check wasm import surface against the allowlist
-        run: >-
-          bash scripts/check-wasm-imports.sh
-          target/wasm32-unknown-unknown/debug/flui_web_demo.wasm
-          target/wasm32-unknown-unknown/debug/flui_painting_demo.wasm
-
-      # Everything above this line COMPILES for wasm32; none of it runs. That
-      # gap is not academic: swap `web_time::Instant` for `std::time::Instant`
-      # in flui-foundation's clock and every step above stays green while the
-      # code panics "time not implemented on this platform" the moment it
-      # executes. These last steps close it (issue #985).
-      #
-      # The runner's version must equal the LOCKED wasm-bindgen exactly or it
-      # refuses to start, so read it from Cargo.lock instead of hardcoding a
-      # version here that a dependabot bump would silently invalidate.
+      # The test runner must equal the LOCKED wasm-bindgen exactly or it
+      # refuses to start. Installing the prebuilt binary here saves
+      # `cargo xtask wasm-test` from compiling it.
       - name: Resolve the locked wasm-bindgen version
         id: wasm_bindgen_version
         run: |
           set -euo pipefail
-          version="$(bash scripts/locked-version.sh wasm-bindgen)"
+          version="$(cargo xtask locked-version wasm-bindgen)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "locked wasm-bindgen: $version"
 
@@ -1647,91 +1440,8 @@ jobs:
         with:
           tool: wasm-bindgen-cli@${{ steps.wasm_bindgen_version.outputs.version }}
 
-      # Hosted on node (already on the runner) via the runner configured in
-      # .cargo/config.toml. A runner that finds no tests still exits 0 and
-      # prints "0 passed", which is indistinguishable from a passing suite, so
-      # the count is asserted rather than trusted.
-      - name: Execute the wasm32 tests
-        env:
-          # Relax the workflow-level deny for THIS STEP ONLY, following the
-          # precedent the miri job sets below.
-          #
-          # Building flui-app's lib-test target for wasm32 is a configuration
-          # nothing ships, and in it ~17 production items have no caller —
-          # `install_*`, `close_*`, `uninstall_platform_realm`, the
-          # `*_for_test` helpers — because their only callers are the test
-          # modules that are `cfg(not(wasm32))` for good reasons (tokio,
-          # desktop teardown, the service lifecycle). That is the expected
-          # shape of a mostly-native crate in a test configuration, not a
-          # defect, and denying it would buy ~17 `expect(dead_code)`
-          # attributes whose only job is to silence a build nobody runs.
-          #
-          # What this does NOT relax: the SHIPPING wasm configuration. The
-          # `cargo clippy (wasm32, lib + bin targets)` step above still runs
-          # under the workflow's deny plus `-D warnings`, and it is green —
-          # verified, not assumed. A genuinely dead item in the code that
-          # ships still fails there.
-          CARGO_BUILD_WARNINGS: warn
-        run: |
-          set -euo pipefail
-          # DISCOVER the participating crates rather than list them: naming
-          # them here means the next crate to add wasm tests is silently never
-          # run, which is the defect these steps exist to fix, one level up.
-          # The opt-in signal is the crate's own wasm32 dev-dependency on
-          # wasm-bindgen-test -- greppable, and where intent is already declared.
-          #
-          # Both target kinds run, because which is possible depends on
-          # visibility: an integration test sees only the public API, while a
-          # `pub(crate)` seam (flui-app's `Backend::Sequential`) is reachable
-          # ONLY from a lib test.
-          #
-          # Branch on each command rather than assigning its output directly:
-          # under `set -e` a failing `cargo test` exits AT THE ASSIGNMENT and
-          # the panic never reaches the log.
-          total=0
-          crates=0
-          # Parsed, not grepped: a substring search also matches a comment, a
-          # normal dependency, or a non-wasm32 target table, so the check would
-          # not match the contract it documents -- silently.
-          for name in $(python3 scripts/wasm-test-crates.py); do
-            dir="crates/$name"
-            crates=$((crates + 1))
-            crate_total=0
-            modes=(lib)
-            [ -f "$dir/tests/wasm32.rs" ] && modes+=(integration)
-            for mode in "${modes[@]}"; do
-              if [ "$mode" = "lib" ]; then
-                args=(--lib)
-              else
-                args=(--test wasm32)
-              fi
-              if ! out="$(cargo test -p "$name" --locked --target wasm32-unknown-unknown "${args[@]}" 2>&1)"; then
-                echo "$out"
-                echo "::error::wasm32 test run failed for $name ($mode)" >&2
-                exit 1
-              fi
-              echo "$out"
-              passed="$(echo "$out" | sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' | tail -1)"
-              crate_total=$((crate_total + ${passed:-0}))
-            done
-            # Per crate, not only in aggregate: a newly opted-in crate with no
-            # executing test contributes 0 while a healthy sibling keeps the
-            # total non-zero, so exactly the crate someone just added is the one
-            # that can be silently inert. Not per target -- a crate legitimately
-            # has only one kind, and a zero there is expected.
-            if [ "$crate_total" -eq 0 ]; then
-              echo "::error::$name opted in but executed no wasm32 assertions -- inert" >&2
-              exit 1
-            fi
-            total=$((total + crate_total))
-          done
-          # A `for` over a glob matching nothing never runs its body and exits 0,
-          # which looks exactly like success.
-          if [ "$crates" -eq 0 ]; then
-            echo "::error::no crate declares a wasm32 wasm-bindgen-test dev-dependency" >&2
-            exit 1
-          fi
-          echo "$total wasm32 assertions executed across $crates crate(s)"
+      - name: cargo xtask wasm-test
+        run: cargo xtask wasm-test
 
   # ─────────────────────────────────────────────────────────────────────────
   # cross-typecheck — flui-platform's per-OS backends, LINTED from Linux.
@@ -1867,7 +1577,7 @@ jobs:
         run: cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-linux-android -- -D warnings
 
       # The native UIKit backend had no lint gate at all before this step.
-      # `just ios-sim` (the `live-smoke`-adjacent job below) is the only
+      # `cargo xtask device ios-sim` (run on a Mac) is the only
       # EXECUTING coverage; this line is the type-check half, matching how the
       # other three native backends are gated.
       - name: cargo clippy (ios backend)
@@ -1920,20 +1630,27 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, fast-lane, fast-lane-ios, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, platform-windows, bench-compile, doc, deny, doc-test, msrv, miri]
+    needs: [checks, plan, fast-lane, fast-lane-ios, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, platform-windows, bench-compile, doc, deps, doc-test, miri]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      # The aggregator reads its own workflow file so it can prove the
-      # `needs` list above is complete. Sparse, credential-free checkout:
-      # only this file is needed.
+      # The aggregator reads its own workflow file so it can prove the `needs`
+      # list above is complete, and builds xtask to do it (cached, so a warm
+      # run is seconds).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: .github/workflows/ci.yml
-          sparse-checkout-cone-mode: false
 
-      # Two rules:
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Rust cache (xtask)
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: xtask
+          save-if: false
+
+      # Two rules (tools/xtask/src/change_scope/aggregator.rs):
       #
       # 1. COMPLETENESS -- every job in this workflow except `ci` itself (and
       #    `notify-main-red`, which runs after it) must appear in `needs`.
@@ -1946,73 +1663,24 @@ jobs:
       #      heavy lane (main, merge queue, nightly, dispatch, `full-ci`):
       #        only fast-lane and fast-lane-ios skip; every heavy job must succeed
       #      ordinary PR, mode packages/full: every heavy job skips,
-      #        fast-lane and deny must succeed, fast-lane-ios too when plan
+      #        fast-lane and deps must succeed, fast-lane-ios too when plan
       #        puts the iOS runner in scope (cross_ios)
       #      ordinary PR, mode none (repo tooling only): heavy + fast-lane skip
-      #      ordinary PR, mode docs: heavy + fast-lane + deny skip
+      #      ordinary PR, mode docs: heavy + fast-lane + deps skip
       #    Any other skip (a drifted `if:`, a cancellation) or a job that ran
       #    where it should have skipped fails the aggregator.
-      # A real YAML parse, not a regex over `key:` lines: a job declared as
-      # `"quoted-key":` or `key: # comment` is valid YAML that a line regex
-      # misses. The runner image ships Python but not PyYAML.
-      - name: Install PyYAML
-        run: python3 -m pip install --quiet --disable-pip-version-check "pyyaml>=6,<7"
-
       - name: Verify every job is gated and exactly the expected jobs skipped
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
             clippy feature-matrix wasm-check cross-typecheck cli-macos test
             test-features live-smoke gpu-test platform-windows bench-compile doc
-            doc-test msrv miri
+            doc-test miri
           HEAVY: ${{ needs.plan.outputs.heavy }}
           MODE: ${{ needs.plan.outputs.mode }}
           CROSS_IOS: ${{ needs.plan.outputs.cross_ios }}
           EVENT: ${{ github.event_name }}
-        run: |
-          python3 - <<'EOF'
-          import json, os, sys, yaml
-          needs = json.loads(os.environ["NEEDS"])
-          heavy_jobs = set(os.environ["HEAVY_JOBS"].split())
-          heavy = os.environ["HEAVY"] == "true"
-          mode = os.environ["MODE"]
-          event = os.environ["EVENT"]
-          with open(".github/workflows/ci.yml", encoding="utf-8") as f:
-              workflow = yaml.safe_load(f)
-          declared = set(workflow["jobs"]) - {"ci", "notify-main-red"}
-          for job, data in sorted(needs.items()):
-              print(f"{job}: {data['result']}")
-          missing = sorted(declared - set(needs))
-          if missing:
-              print(f"::error::jobs declared in ci.yml but absent from the ci aggregator's needs: {missing}")
-          if needs.get("plan", {}).get("result") != "success":
-              expected = None  # without a plan there is no expectation to check against
-          elif heavy:
-              expected = {"fast-lane", "fast-lane-ios"}
-          elif mode in ("packages", "full"):
-              expected = set(heavy_jobs) | ({"fast-lane-ios"} if os.environ.get("CROSS_IOS") != "true" else set())
-          elif mode == "none":
-              expected = heavy_jobs | {"fast-lane", "fast-lane-ios"}
-          elif mode == "docs":
-              expected = heavy_jobs | {"fast-lane", "fast-lane-ios", "deny"}
-          else:
-              expected = None
-          skipped = {j for j, d in needs.items() if d["result"] == "skipped"}
-          bad = {j: d["result"] for j, d in needs.items() if d["result"] not in ("success", "skipped")}
-          if expected is None:
-              bad["_plan"] = f"no usable plan (result={needs.get('plan', {}).get('result')}, mode={mode!r})"
-          else:
-              for j in sorted(skipped - expected):
-                  bad[j] = "skipped, but this plan (heavy=%s mode=%s) requires it to run" % (heavy, mode)
-              for j in sorted(expected - skipped):
-                  if j in needs:
-                      bad[j] = "ran (%s), but this plan skips it: its if: disagrees with plan" % needs[j]["result"]
-          if bad:
-              print(f"::error::jobs not as planned: {bad}")
-          if missing or bad:
-              sys.exit(1)
-          print(f"ok: {len(declared)} jobs, all gated, {len(skipped)} skipped as planned (event={event} heavy={heavy} mode={mode})")
-          EOF
+        run: cargo xtask ci-verify
 
   # ─────────────────────────────────────────────────────────────────────────
   # notify-main-red -- a red `ci` on main or on the nightly run opens (or

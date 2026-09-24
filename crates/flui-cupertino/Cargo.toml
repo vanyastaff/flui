@@ -62,7 +62,6 @@ tracing = { workspace = true }
 # compiles it (the normal dependency above stays featureless, so no
 # production graph links the test driver).
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev", features = ["testing"] }
-flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev", features = ["testing"] }
 flui-testing = { workspace = true }
 # `UpdateScheduler` — a bare `AnimationController` fixture in
@@ -70,7 +69,6 @@ flui-testing = { workspace = true }
 # matching `flui-widgets/tests/visibility.rs`'s identical animation-probe
 # fixture.
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
-parking_lot = { workspace = true }
 
 [lints]
 workspace = true
@@ -78,3 +76,10 @@ workspace = true
 [[test]]
 name = "cupertino_it"
 path = "tests/main.rs"
+
+[package.metadata.flui]
+layer = 7
+# ADR-0028: no other crate depends on a design system in any form, and the
+# two design systems do not depend on each other.
+allowed-dependents = ["flui-localizations", "flui-app", "flui"]
+allowed-dev-dependents = ["flui-localizations", "flui-app", "flui"]

@@ -1691,7 +1691,6 @@ dependencies = [
  "flui-painting",
  "flui-platform",
  "flui-rendering",
- "flui-scheduler",
  "flui-testing",
  "flui-tree",
  "flui-types",
@@ -1704,7 +1703,6 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "pollster",
- "raw-window-handle",
  "tempfile",
  "toml",
  "tracing",
@@ -1812,13 +1810,11 @@ dependencies = [
  "flui-animation",
  "flui-foundation",
  "flui-objects",
- "flui-rendering",
  "flui-scheduler",
  "flui-testing",
  "flui-types",
  "flui-view",
  "flui-widgets",
- "parking_lot",
  "tracing",
 ]
 
@@ -1931,7 +1927,6 @@ name = "flui-hot-reload-lifecycle-fixture"
 version = "0.2.0-dev"
 dependencies = [
  "flui-hot-reload",
- "flui-layer",
  "flui-view",
 ]
 
@@ -1965,7 +1960,6 @@ version = "0.2.0-dev"
 dependencies = [
  "bitflags 2.13.2",
  "flui-foundation",
- "flui-layer",
  "flui-painting",
  "flui-tree",
  "flui-types",
@@ -2042,7 +2036,6 @@ dependencies = [
  "flui-objects",
  "flui-painting",
  "flui-rendering",
- "flui-scheduler",
  "flui-tree",
  "flui-types",
  "insta",
@@ -2060,8 +2053,6 @@ dependencies = [
  "flui-painting",
  "flui-types",
  "parking_lot",
- "serde",
- "serde_json",
  "thiserror 2.0.20",
  "tracing",
  "unicode-script",
@@ -2108,9 +2099,7 @@ dependencies = [
  "libc",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
- "objc2-core-foundation",
  "objc2-foundation 0.3.2",
- "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
  "objc2-ui-kit 0.3.2",
  "parking_lot",
@@ -2240,7 +2229,6 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
- "smallvec",
  "trybuild",
 ]
 
@@ -7023,6 +7011,20 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
+
+[[package]]
+name = "xtask"
+version = "0.2.0-dev"
+dependencies = [
+ "anyhow",
+ "cargo_metadata",
+ "clap",
+ "regex",
+ "serde",
+ "serde_json",
+ "toml",
+ "walkdir",
+]
 
 [[package]]
 name = "yazi"

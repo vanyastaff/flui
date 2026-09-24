@@ -83,12 +83,14 @@ accesskit = { workspace = true }
 # Typed query-failure errors (`A11yQueryError`), per the workspace convention:
 # thiserror in libraries, anyhow only in binaries.
 thiserror = { workspace = true }
-parking_lot = { workspace = true }
 # Reports secondary panics without replacing the first transaction unwind.
 tracing = { workspace = true }
 
 [dev-dependencies]
 static_assertions.workspace = true
+# The shared-state fixtures of tests/async_driver.rs and
+# tests/post_frame_after_layout.rs; the harness itself takes no lock.
+parking_lot = { workspace = true }
 # `inspect::box_geometry` — the canonical committed-geometry accessor the
 # bootstrap contract test asserts against. Dev-only: the harness itself never
 # reads geometry, its consumers do.
@@ -125,3 +127,6 @@ path = "tests/log_capture_global_subscriber.rs"
 [[bench]]
 name = "tree_observer_overhead"
 harness = false
+
+[package.metadata.flui]
+layer = 6

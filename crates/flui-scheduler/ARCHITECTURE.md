@@ -553,7 +553,7 @@ after the fact:
 **One scheduling predicate, not one check per site:**
 `TickerInner::should_schedule_tick` (`state == Active && matches!(slot,
 Ready(_)) && scheduled_callback_id.is_none()`) is Flutter parity —
-[`ticker.dart:270`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
+[`ticker.dart:269`](https://github.com/flutter/flutter/blob/3.44.0/packages/flutter/lib/src/scheduler/ticker.dart#L269)
 `shouldScheduleTick = !muted && isActive && !scheduled` — and is now the
 ONLY scheduling check, shared by `start_inner`, `unmute` (via
 `schedule_tick_if_active`), and the auto-tick tail. Checking the SLOT, not
@@ -1286,7 +1286,7 @@ before this issue); reusing a per-task waker across polls is a distinct
 optimization this change does not make, named here so it is not mistaken
 for a regression.
 
-**Allocation gate, not just a bench:** `just ci` has no bench step, so two
+**Allocation gate, not just a bench:** `cargo xtask ci` has no bench step, so two
 `#[cfg(test)]`-gated oracles carry the CI-run complexity proof:
 `tests/async_driver_ready_index_allocation.rs` (a dedicated-binary,
 counting-`#[global_allocator]` test, following `frame_telemetry_allocation.rs`'s

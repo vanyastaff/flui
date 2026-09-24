@@ -1,4 +1,4 @@
-//! Main-thread AppKit lifecycle cases; scripts/check-macos-exit.py bounds each process.
+//! Main-thread AppKit lifecycle cases; tools/device-checks/check-macos-exit.py bounds each process.
 #[cfg(target_os = "macos")]
 mod native {
     // This native executable verifies AppKit ownership through typed Objective-C handles.

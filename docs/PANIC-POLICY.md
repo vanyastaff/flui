@@ -86,13 +86,6 @@ rg 'panic!\("(?!BUG: )(?!.*try_)' crates/*/src --pcre2   # panics that are neith
 rg '\.unwrap\(\)' crates/*/src                   # should be test-only or allow-tracked
 ```
 
-**Mechanical gate.** `scripts/check-panic-policy.sh` (`just
-panic-policy-check`, wired into `just ci` and the CI `checks` job) enforces
-the `BUG:` prefix on every production `expect()` under `crates/*/src`, and
-the `BUG:`-or-`try_`-twin rule on every production `panic!()` there,
-excluding `#[cfg(test)]`/`#[cfg(any(test, feature = "testing"))]`-gated
-modules, functions, and impls (test-support code is exempt, same as
-`tests/`/`benches/`/`examples/`). It is a per-file, shrink-only ratchet
-against `docs/panic-policy-allowlist.txt`: a file with a non-conforming site
-must be listed there, and a listed file that has been fully burned down must
-be delisted — the script fails either way it drifts.
+`unwrap_used` is the only mechanical part. The `BUG:` prefix on `expect()`
+and the `BUG:`-or-`try_`-twin bar on `panic!()` are conventions that review
+holds, with the searches above as the audit.

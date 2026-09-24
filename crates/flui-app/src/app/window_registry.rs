@@ -8,9 +8,10 @@
 //! through [`PresentationAddress`] only, minted here. Every write path
 //! (`register_window`, `try_register_window`) takes a `&Arc<dyn
 //! PlatformWindow>` and derives the id itself; no caller outside this file
-//! ever names or passes a bare `WindowId`. The mechanical `forbidden_pattern`
-//! scan in `docs/runtime-contract.toml` confines the `WindowId` token itself
-//! to this one file within `crates/flui-app/src`.
+//! ever names or passes a bare `WindowId`: no routing API elsewhere in
+//! `flui-app` accepts or returns one. The exceptions are structural — the
+//! test-only `PlatformWindow` mock restating `fn id(&self) -> WindowId`, and
+//! `AppRuntime::release_redraw_window_for`, which compares a window's own id.
 //!
 //! # Derived-cache invariant
 //!

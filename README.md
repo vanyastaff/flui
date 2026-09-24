@@ -35,7 +35,7 @@ cargo build --workspace
 cargo run --example widgets_gallery
 ```
 
-A [`justfile`](justfile) is provided for common tasks — install [`just`](https://just.systems) and run `just` for the recipe list (`just check`, `just test`, `just clippy`, `just ci`, ...). Raw `cargo` commands always work too.
+Repository tasks beyond plain `cargo` (the CI gates, the change-scoped pre-PR check, the device checks) are `cargo xtask <command>` — `cargo xtask --help` lists them. There is no separate task runner to install; `cargo xtask doctor` names the tools the gates use (cargo-nextest, typos, taplo, lychee, Python 3.10+) and how to install each.
 
 For a step-by-step setup including platform notes (Windows / macOS / Android NDK / WASM), see [`docs/getting-started.md`](docs/getting-started.md).
 
@@ -68,7 +68,7 @@ flui = { path = "…", default-features = false }
 | `a11y` | off | native accessibility: the AccessKit adapters that hand the semantics tree to VoiceOver / Narrator / Orca (off by default because the Linux adapter carries a D-Bus stack) |
 
 A module whose feature is off is *absent*, not empty. Every supported
-combination is compiled in isolation by CI (`just facade-combos`), so a
+combination is compiled in isolation by CI (`cargo xtask facade-combos`), so a
 combination cannot pass only because a sibling crate happened to enable a
 feature. Web and iOS currently have no hot-reload runner integration; enabling
 the additive feature there remains compile-safe but does not install a reload
@@ -79,7 +79,7 @@ driver.
 - **Three-tree pipeline.** Immutable `View` → mutable `Element` → layout/paint `Render`. Build / Layout / Paint phases run on demand only.
 - **Type-safe arity.** Render children parameterized by `Leaf`, `Single`, `Optional`, `Variable` — child-count mismatches become compile-time errors.
 - **GPU-first rendering.** `wgpu` 30 backend with `lyon` tessellation, `cosmic-text` shaping, and an engine-owned glyph atlas for text.
-- **Cross-platform, unevenly verified.** Native Win32 and AppKit backends, headless mode for CI, an Android NDK target, WASM/WebGPU, and a `winit` fallback all build, but how far each has actually been run and checked differs sharply by platform — macOS has live, operator-equivalent input evidence; Windows, Android, and Web/WASM are compile-checked only; Linux and iOS Simulator are experimental. See the [per-platform status table](docs/BETA.md#platform-status--candidate-fd9f2938) before relying on a platform this project has not verified for you.
+- **Cross-platform, unevenly verified.** Native Win32 and AppKit backends, headless mode for CI, an Android NDK target, WASM/WebGPU, and a `winit` fallback all build, but how far each has actually been run and checked differs sharply by platform — macOS has live, operator-equivalent input evidence; Windows, Android, and Web/WASM are compile-checked only; Linux and iOS Simulator are experimental. See the [per-platform status table](docs/BETA.md#platform-status--candidate-this-branch-at-v010-and-after) before relying on a platform this project has not verified for you.
 - **Hot-reload scenes.** `dlopen`-based plugin host (`flui-hot-reload`) for desktop iteration without process restarts.
 - **Strict architecture.** Layered crate DAG with no upward edges. `unsafe` is *not* confined to a fixed crate list — it concentrates wherever a crate touches an FFI or ABI boundary. By unsafe-site count in `src/` (`rg -c '\bunsafe\s+(fn|impl|trait|extern)\b|\bunsafe\s*\{'`, measured 2026-08-04): `flui-platform` (Win32/AppKit/Android FFI) dominates by a wide margin, followed by `flui-rendering` (a miri-audited arena, `subtree_arena.rs`), `flui-hot-reload` (the `dlopen` ABI boundary), and `flui-engine` (wgpu/raw-window-handle FFI); smaller counts exist in `flui-layer`, `flui-foundation`, `flui-types`, `flui-log`, `flui-view`, and `flui-app`. `flui-painting` carries zero unsafe code today. Reviewed at the workspace level — see `docs/PANIC-POLICY.md` and each crate's `ARCHITECTURE.md`.
 
@@ -160,12 +160,11 @@ itself), see `examples/platform_window.rs`. More examples live under
 ## Minimum Supported Rust Version
 
 The MSRV is **Rust 1.98**, declared as `rust-version` in the workspace
-manifest and verified by a dedicated CI job. `rust-toolchain.toml`'s
-`channel` is the separate *development* toolchain pin, not the MSRV itself —
-but under the policy below the two move together in practice, and
-`scripts/check-toolchain-consistency.sh` (part of `just gate`) checks that
-`Cargo.toml`, `clippy.toml`, the `msrv` CI job, and the `flui-cli` project
-templates all agree with it.
+manifest (clippy reads it from there). `rust-toolchain.toml`'s `channel` is
+the *development* toolchain pin; under the policy below the two are the same
+release, so every CI job builds on the MSRV. `cargo xtask toolchain` (part of
+`cargo xtask checks`) checks that `Cargo.toml`, the `flui-cli` project
+templates, this README's badge and `llms.txt` all agree with it.
 
 **Policy:** pre-1.0, the MSRV tracks the latest stable release and is bumped
 within a week of each new stable (Rust ships every 6 weeks); after 1.0 it

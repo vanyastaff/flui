@@ -1,4 +1,8 @@
 //! Project admission uses real Cargo metadata; fixture binaries only print a marker.
+//!
+//! Each fixture builds into its own target directory, never an inherited
+//! `CARGO_TARGET_DIR`: several fixtures are packages named `app`, and in a
+//! shared target dir parallel tests would race to replace one `app` binary.
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use std::path::Path;
@@ -23,6 +27,7 @@ fn run(dir: &Path) -> assert_cmd::Command {
     command
         .current_dir(dir)
         .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TARGET_DIR", dir.join("target"))
         .args(["run", "--release", "--device", "desktop"]);
     command
 }
@@ -145,6 +150,7 @@ fn unavailable_simulator_never_runs_the_host_application() {
     command
         .current_dir(&app)
         .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TARGET_DIR", app.join("target"))
         .timeout(std::time::Duration::from_secs(30))
         .args([
             "run",
@@ -274,6 +280,7 @@ fn sigint_stops_the_dev_loop_and_exits_130() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_flui"))
         .current_dir(&app)
         .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TARGET_DIR", app.join("target"))
         .args(["run", "--device", "desktop", "--json"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -347,6 +354,7 @@ fn sigint_during_run_once_stops_the_app_and_exits_130() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_flui"))
         .current_dir(&app)
         .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TARGET_DIR", app.join("target"))
         .args(["run", "--no-hot-reload", "--device", "desktop", "--json"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -402,6 +410,7 @@ fn unsupported_device_platform_is_refused_honestly() {
     let output = cargo_bin_cmd!("flui")
         .current_dir(&app)
         .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TARGET_DIR", app.join("target"))
         .env("PATH", &cargo_dir)
         .args(["run", "--release", "--device", "emulator-5554"])
         .output()
@@ -436,6 +445,7 @@ fn unknown_browser_device_exits_device_not_found() {
     cargo_bin_cmd!("flui")
         .current_dir(&app)
         .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TARGET_DIR", app.join("target"))
         .args([
             "run",
             "--device",

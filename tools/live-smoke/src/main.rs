@@ -5,10 +5,10 @@
 //!
 //! - **x11** (default): real X11 input under an X server. Run:
 //!   `flui-live-smoke <path-to-app-binary>` (CI: `xvfb-run -a flui-live-smoke
-//!   target/debug/examples/sliver_demo`), or via `just live-smoke`.
+//!   target/debug/examples/sliver_demo`), or via `cargo xtask live-smoke`.
 //! - **wayland**: close-path teardown check under a headless weston
 //!   compositor. Run: `flui-live-smoke <path-to-app-binary> wayland`, or via
-//!   `just live-smoke-wayland`. SKIPs (exit 0, clear message) when `weston`
+//!   `cargo xtask live-smoke --wayland`. SKIPs (exit 0, clear message) when `weston`
 //!   is not on PATH. See `wayland.rs` for why this mode cannot inject input
 //!   the way the X11 harness does, and what it pins instead.
 //!

@@ -2,6 +2,11 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-01
+- **Amended:** 2026-09-23 — the layer graph moved from `docs/workspace-layers.toml` into the
+  manifests (`[package.metadata.flui] layer`), checked by `cargo xtask workspace`. Layer order
+  and Cargo's own cycle check replace the same-layer, forbidden and projected edge lists;
+  `allowed-dependents` / `allowed-dev-dependents` carry the per-crate restrictions (`flui-log`,
+  the design systems); review holds the planned-crate gate.
 - **Related:** ADR-0028 (the design-system rule this generalizes), ADR-0037 (the
   `interaction -> platform` same-layer edge)
 
@@ -23,26 +28,27 @@ navigation, overlays, focus, text editing and the rest of the widget catalog are
 L6, not `flui-navigation`/`flui-overlay` crates. A new crate needs a new layer (or a proven
 second consumer of an existing boundary), not a new feature.
 
-**The layer graph is a policy file, checked against Cargo.** `docs/workspace-layers.toml`
-declares, for every active `crates/*` member and the `flui` facade, its layer and a note
-explaining the placement, plus sanctioned same-layer edges, forbidden edges, projected future
-edges and gated crates. `check-workspace-inventory.sh` enforces against `cargo metadata`:
+**The layer graph lives in the manifests, checked against Cargo.** Every active `crates/*`
+member and the `flui` facade declares `[package.metadata.flui] layer = N`; the root manifest names
+the layers in `[workspace.metadata.flui] layers`, and a crate may narrow who depends on it with
+`allowed-dependents` (normal and build edges) and `allowed-dev-dependents` (`flui-log`, which
+only composition roots link; the design systems, per ADR-0028). `cargo xtask workspace` enforces
+against `cargo metadata`:
 
-1. Every governed member appears exactly once, with a valid layer.
-2. Every in-workspace **normal** edge points at a strictly lower layer, or is a listed
-   same-layer edge.
-3. Forbidden edges fail with the contract text, even where the layer rule would allow them.
-4. The normal-edge graph plus every projected edge stays acyclic.
-5. Nothing under `crates/` depends on an example or tool member.
-6. A gated planned crate may not exist as a workspace member.
+1. Every crate under `crates/` and the facade declares a valid layer.
+2. Every in-workspace **normal** or build edge points to the same layer or lower.
+3. A crate with `allowed-dependents` has no normal or build dependent outside that list, and one
+   with `allowed-dev-dependents` no dev dependent outside it. Examples and tools are applications
+   and are exempt.
+4. Nothing layered depends on an example or tool member.
 
-**Normal edges only.** A dev-dependency is a testing convenience, not an architectural claim,
-and Cargo tolerates dev-dependency cycles a normal edge never could. ADR-0028's design-system
-rule deliberately stays broader (every dependency kind).
+**Normal and build edges carry the layer rule.** A dev-dependency is a testing convenience, not
+an architectural claim, and may point up (four do, all onto test support), unless the target
+restricts them with `allowed-dev-dependents`, as the design systems do (ADR-0028).
 
-**Same-layer edges are ordered pairs.** Allowing `flui-objects -> flui-rendering` never allows
-the reverse. That lets the render catalog share L4 with the render machine while staying
-strictly below `flui-view`.
+**Same-layer edges are allowed; cycles are not.** With `flui-objects -> flui-rendering` in
+place, the reverse closes a cycle Cargo rejects. That lets the render catalog share L4 with the
+render machine while staying strictly below `flui-view`.
 
 | Layer | Crates |
 |---|---|
@@ -58,17 +64,17 @@ strictly below `flui-view`.
 | L9 — Application / tooling | `flui-app`, `flui-devtools`, `flui-cli` |
 | L10 — Facade | `flui` |
 
-`docs/workspace-layers.toml` is the source of truth; this table is its reading at the time of
-writing.
+The manifests are the source of truth; this table is their reading at the time of writing.
 
-**Localization direction is locked.** `flui-material`/`flui-cupertino -> flui-localizations`
-are forbidden edges; the reverse are projected edges, so acyclicity validates the future graph
-before the edges exist.
+**Localization direction is locked.** `flui-localizations` (L8) sits above the design systems
+(L7), so `flui-material`/`flui-cupertino -> flui-localizations` would point up and fail; the
+reverse edges point down when they land.
 
 **No `flui-runtime` without two consumers.** It is recorded as gated. Extraction needs a
 managed entry point and an embedded/host-driven one both driving the same core, a measurable
 dependency reduction for a consumer, and that boundary exercised by both. Until then
-`flui-app` is the private composition root.
+`flui-app` is the private composition root. Review holds this gate; no tool refuses the
+directory.
 
 ## Flutter divergence
 
@@ -77,21 +83,19 @@ widget-tree semantics, not for how a Rust workspace is partitioned.
 
 ## Consequences
 
-- A wrong dependency direction fails the inventory check naming both crates and layers.
-- The policy file is a second place to edit when the graph legitimately changes — the point for
-  a topology contract.
-- Same-layer exemptions are a real loosening: `flui-objects` and `flui-rendering` sharing L4
-  means only the directional exemption, not the layer number, expresses their order.
+- A wrong dependency direction fails `cargo xtask workspace` naming both crates and layers.
+- A new crate declares its layer in its own manifest; there is no second registry to edit.
+- Same-layer edges are a real loosening: `flui-objects` and `flui-rendering` sharing L4
+  means only the existing edge and Cargo's cycle rule, not the layer number, express their order.
 - Splitting a crate by feature is off the table; a large crate is organized by modules.
 
 ## Alternatives rejected
 
 - **Renumber the layers so no same-layer edge is needed.** Shifts every layer above and
-  falsifies existing layer citations; a directional exemption catches the same inversion.
+  falsifies existing layer citations; Cargo's cycle rule catches the same inversion.
 - **Generate the layer assignment from Cargo.** It could never disagree with the real graph,
   so it would catch nothing; the policy must be an independent claim.
-- **`cargo-deny` bans.** Pairwise bans cannot express a layered partial order with directional
-  exemptions and projected edges.
+- **`cargo-deny` bans.** Pairwise bans cannot express a layered partial order.
 - **Check dev-dependencies too.** Legal dev cycles and deliberate cross-layer test wiring would
   produce noise that trains reviewers to add exemptions.
 - **Split `flui-widgets` into feature crates** (navigation, overlay, focus). Features inside

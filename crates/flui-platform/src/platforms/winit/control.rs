@@ -49,11 +49,10 @@ impl std::fmt::Debug for ControlCommand {
     }
 }
 
-/// Failure to enqueue a request on the owner lane. Unchanged vocabulary
-/// (registry evidence pin `runtime-contract.toml`): this is the *admission*
-/// failure (lane full, or the owner is already gone at send time) — a
-/// distinct, narrower concern from the claim-slot reply protocol, which
-/// governs what happens after a request is admitted.
+/// Failure to enqueue a request on the owner lane. Unchanged vocabulary:
+/// this is the *admission* failure (lane full, or the owner is already gone
+/// at send time) — a distinct, narrower concern from the claim-slot reply
+/// protocol, which governs what happens after a request is admitted.
 #[derive(Debug)]
 pub(super) enum ControlSendError {
     Full {

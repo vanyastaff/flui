@@ -1,0 +1,25 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Repository automation for FLUI: CI gates, change scoping, device checks and benchmark collection (`cargo xtask`)"
+
+[dependencies]
+anyhow = { workspace = true }
+cargo_metadata = { workspace = true }
+clap = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+walkdir = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.flui]
+# Repository automation, a host tool.
+wasm = false

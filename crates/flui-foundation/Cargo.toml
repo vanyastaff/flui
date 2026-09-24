@@ -42,7 +42,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
-# Checkout-only test edge; see docs/workspace-layers.toml release policy.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-macros = { path = "../flui-macros" }
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 serde_json = { workspace = true }
@@ -52,14 +52,14 @@ serde_json = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # Executing wasm32 tests. Until this landed the workspace only ever COMPILED for
-# wasm32 (`just wasm-check` is `cargo check` + `cargo clippy`), so every "works on
+# wasm32 (`cargo xtask wasm-check` is `cargo check` + `cargo clippy`), so every "works on
 # the web" claim rested on the linker succeeding -- see issue #985.
 #
 # Pinned exactly, not `"0.3"`. 0.3.78 requires wasm-bindgen 0.2.128, so an
 # unpinned range would bump the workspace lockfile as a side effect of adding a
 # dev-dependency; 0.3.77 is the release that pairs with the locked 0.2.127. The
 # third version in the chain, `wasm-bindgen-cli`, must match the locked
-# wasm-bindgen EXACTLY or the runner refuses to start -- `just wasm-test` and the
+# wasm-bindgen EXACTLY or the runner refuses to start -- `cargo xtask wasm-test` and the
 # CI step both read it out of Cargo.lock rather than hardcoding it, so a
 # dependabot bump moves all three together instead of breaking the runner with a
 # message that reads like a toolchain fault.
@@ -73,3 +73,6 @@ serde = ["dep:serde", "dep:serde_json"]
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.flui]
+layer = 1

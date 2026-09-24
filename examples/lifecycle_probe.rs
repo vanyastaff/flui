@@ -1,5 +1,5 @@
 //! `lifecycle_probe` — a self-driving window-lifecycle probe for
-//! `docs/BETA.md`'s lifecycle rows on macOS (`just macos-lifecycle`).
+//! `docs/BETA.md`'s lifecycle rows on macOS (`cargo xtask device macos-lifecycle`).
 //!
 //! Runs a Material tree through the ordinary `flui::app::Application` path
 //! — the same runner, renderer and realm a generated application gets — and
@@ -48,7 +48,8 @@
 //! # macOS only
 //!
 //! The transitions are AppKit's. On any other host the binary prints a
-//! skip line and exits 0; the `just` recipe does the same without building.
+//! skip line and exits 0; `cargo xtask device macos-lifecycle` does the same
+//! without building.
 
 #[cfg(target_os = "macos")]
 mod probe {

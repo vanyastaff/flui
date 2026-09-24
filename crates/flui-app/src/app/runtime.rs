@@ -142,10 +142,9 @@ impl SharedEngineServices {
         // initialize it explicitly, here, at a known point, rather than
         // leaving it to whichever text-measurement call happens to run
         // first on this thread. The read path stays ambient on layout hot
-        // paths: this is a named exclusion (see this crate's
-        // `ambient_reach` entry in `docs/runtime-contract.toml`), not closed
-        // here -- injecting the font system into every `perform_layout`
-        // text-measurement call is a separate, larger follow-up.
+        // paths: this is a known exclusion, not closed here -- injecting the
+        // font system into every `perform_layout` text-measurement call is a
+        // separate, larger follow-up.
         let _ = flui_painting::shared_font_system();
 
         Self {

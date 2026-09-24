@@ -50,20 +50,20 @@ separate crates or WASM targets with their own build step.
 
 | Example | Run |
 |---|---|
-| **ios_demo** — the Material sample app on the native UIKit backend | `just ios-sim` (simulator-only; every other target compiles a no-op `main`) |
+| **ios_demo** — the Material sample app on the native UIKit backend | `cargo xtask device ios-sim` (simulator-only; every other target compiles a no-op `main`) |
 
 ## Self-driving probes
 
-Used by the `just macos-*` acceptance gates and `docs/BETA.md`'s dated evidence rows — not
+Used by the `cargo xtask device macos-*` acceptance gates and `docs/BETA.md`'s dated evidence rows — not
 interactive demos. Each drives itself (synthesized input, scripted resize/lifecycle
 transitions) and asserts a `*_RESULT=PASS`/`FAIL` marker; macOS-only unless noted.
 
 | Example | Run | What it proves |
 |---|---|---|
-| **lifecycle_probe** | `just macos-lifecycle` | Frame production survives minimize/restore, hide/unhide, resize |
-| **workload_probe** | `just macos-workload` | Scroll/type p99 latency and RSS growth budgets under a representative workload |
-| **a11y_probe** — the generated counter, run for an assistive technology | `just macos-a11y` (`cargo run --example a11y_probe --features material,a11y`) | An AXUIElement client can find and press the button through the accessibility tree |
-| **resize_jitter_probe** | `just macos-resize-jitter` | Swapchain/surface size stays consistent through a live-resize burst |
+| **lifecycle_probe** | `cargo xtask device macos-lifecycle` | Frame production survives minimize/restore, hide/unhide, resize |
+| **workload_probe** | `cargo xtask device macos-workload` | Scroll/type p99 latency and RSS growth budgets under a representative workload |
+| **a11y_probe** — the generated counter, run for an assistive technology | `cargo xtask device macos-a11y` (`cargo run --example a11y_probe --features material,a11y`) | An AXUIElement client can find and press the button through the accessibility tree |
+| **resize_jitter_probe** | `cargo xtask device macos-resize-jitter` | Swapchain/surface size stays consistent through a live-resize burst |
 
 ## Hot reload
 
@@ -76,8 +76,8 @@ transitions) and asserts a `*_RESULT=PASS`/`FAIL` marker; macOS-only unless note
 **desktop_scene** is a `cdylib` plugin, not a binary — there is no `cargo run -p flui-desktop-scene`. It's built in one terminal and loaded by a separate host process in another (full workflow: [`docs/hot-reload.md`](../docs/hot-reload.md#desktop-plugin-workflow)):
 
 ```bash
-# Terminal 1 — rebuild the plugin on change
-just example-desktop-scene
+# Terminal 1 — rebuild the plugin on change (needs cargo-watch)
+cargo watch -w examples/desktop_scene -x "build -p flui-desktop-scene"
 
 # Terminal 2 — run the host with in-process reload (Linux/macOS; see
 # docs/hot-reload.md for the Windows .dll path)
@@ -88,9 +88,9 @@ FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run --example scene_render
 
 | Example | Run |
 |---|---|
-| **web_demo** — Web/WASM platform demo | `just web-demo-build` then `just web-server` |
-| **web_counter** — the counter template through `flui::run_app`, plain `cargo` + `wasm-bindgen` (no `wasm-pack`) | `just web-counter-build` then serve `examples/web_counter/` over HTTP |
-| **painting_demo** — Web/WASM painting + engine demo | `just painting-demo-build` |
+| **web_demo** — Web/WASM platform demo | `cd examples/web_demo && wasm-pack build --target web --out-dir pkg`, then `cargo run -p flui-web-server` |
+| **web_counter** — the counter template through `flui::run_app`, plain `cargo` + `wasm-bindgen` (no `wasm-pack`) | `cargo build -p flui-web-counter --locked --release --target wasm32-unknown-unknown`, then `wasm-bindgen --target web --out-dir examples/web_counter/pkg ${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/flui_web_counter.wasm`; serve `examples/web_counter/` over HTTP |
+| **painting_demo** — Web/WASM painting + engine demo | `cd examples/painting_demo && wasm-pack build --target web --out-dir pkg` |
 
 ## Android
 
@@ -117,16 +117,17 @@ vertical-slice acceptance test's render-tree inspection and layer-snapshot cover
 
 ```bash
 cargo build --examples          # everything that doesn't need a feature
-just example-list               # list every examples/*.rs file (plus the per-target crates)
-just example <name>             # run any examples/*.rs by name
+cargo run --example             # list every example target (the per-target crates are packages)
+cargo run --example <name>      # run one by name
 ```
 
 ## Notes
 
 - Windows-specific examples (`windows11_*`) only compile on Windows.
-- macOS-only probes (`lifecycle_probe`, `workload_probe`, `a11y_probe`, `resize_jitter_probe`,
-  and the `just macos-*` recipes that drive them) skip with a message on other hosts.
+- macOS-only probes (`lifecycle_probe`, `workload_probe`, `a11y_probe`, `resize_jitter_probe`)
+  skip with a message on other hosts, and so do the `cargo xtask device macos-*` checks that
+  drive them (exit 0; `macos-hot-reload-loop` refuses with exit 1).
 - `ios_demo` compiles a no-op `main` on every target except `aarch64-apple-ios-sim`.
 - Examples with `required-features` fail to build under `--no-default-features` without the
   listed feature(s) — that's deliberate: it's the same false signal the isolated feature
-  builds (`just feature-matrix`) exist to catch.
+  builds (`cargo xtask feature-matrix`) exist to catch.

@@ -12,7 +12,7 @@
 //! macOS-only by construction: besides the main-thread floor, unbundled
 //! NSWindow construction throws `_CFBundleGetValueForInfoKey` (a foreign
 //! NSException Rust cannot catch). Run it on a real Mac via
-//! `just macos-close-path`, which stages this example into a minimal `.app`
+//! `cargo xtask device macos-close-path`, which stages this example into a minimal `.app`
 //! (the committed `Info.plist.close_path_probe` clears the bundle floor),
 //! launches it with `RUST_LOG=info`, and asserts exit 0 plus the PASS marker.
 //! On every other target the binary is a compile-time no-op main so the
@@ -166,6 +166,6 @@ fn main() {
 
 /// Non-macOS build placeholder: this probe needs the AppKit main thread and
 /// a bundle to construct a window at all; on other targets it exists only so
-/// the workspace compiles. Run it with `just macos-close-path` on a real Mac.
+/// the workspace compiles. Run it with `cargo xtask device macos-close-path` on a real Mac.
 #[cfg(not(target_os = "macos"))]
 fn main() {}

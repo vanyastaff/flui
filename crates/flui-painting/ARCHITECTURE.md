@@ -67,8 +67,8 @@ engine rasterises what was measured and shapes nothing. The root colour
 rides on the command; a span's own colour is baked into the layout, so a
 span recolour is a layout change and a root recolour is not.
 
-The font system is a `OnceLock<Arc<Mutex<FontState>>>`, named as an ambient
-residual in `docs/runtime-contract.toml`; `AppRuntime` installs it at realm
+The font system is a `OnceLock<Arc<Mutex<FontState>>>`, an ambient residual
+(a process-global the runtime still reaches); `AppRuntime` installs it at realm
 install so first use is not whichever text measurement runs first.
 `SharedFontSystem` is the handle the engine's glyph atlas rasterises from
 (ADR-0016), so a face registered through `register_font` measures and

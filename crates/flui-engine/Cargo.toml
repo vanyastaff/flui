@@ -180,3 +180,11 @@ workspace = true
 # per-target wgpu entries in this manifest apply on docs.rs's linux host.
 features = []
 rustdoc-args = ["--cfg", "docsrs"]
+
+# cargo-shear reports the trybuild compile-fail inputs as unlinked: the
+# `compile_fail` test hands them to rustc by glob, no module declares them.
+[package.metadata.cargo-shear]
+ignored-paths = ["tests/compile_fail/*.rs"]
+
+[package.metadata.flui]
+layer = 4
