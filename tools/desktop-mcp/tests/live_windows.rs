@@ -344,12 +344,12 @@ fn a11y_probe_counter_through_mcp() {
             ((screen - meta["source"][k].as_f64().unwrap_or(0.0)) * meta[s].as_f64().unwrap_or(1.0))
                 .round() as i64
         };
-        let (ix, iy) = (at("x", "width", "scale_x"), at("y", "height", "scale_y"));
+        let (px, py) = (at("x", "width", "scale_x"), at("y", "height", "scale_y"));
         let clicked = ok(
             "click",
             &client.call(
                 "click",
-                json!({ "screenshot": meta["id"], "x": ix, "y": iy, "window": window }),
+                json!({ "screenshot": meta["id"], "x": px, "y": py, "window": window }),
             ),
         );
         show("click by screenshot pixel", &clicked);

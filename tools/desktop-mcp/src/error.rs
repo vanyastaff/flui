@@ -38,6 +38,13 @@ impl std::fmt::Display for HandleKind {
 
 /// What an action left behind before it failed: what a retry must know.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(target_os = "windows", target_os = "macos")),
+    allow(
+        dead_code,
+        reason = "raised by the input device and the UIA backend, not built on this OS"
+    )
+)]
 pub enum Effect {
     /// `sent` of `total` `unit` (characters, presses, clicks, scroll axes)
     /// went out; a retry from the start repeats them.
@@ -152,6 +159,13 @@ pub enum ToolError {
     },
 
     /// The element is disabled, so the action was not performed.
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(
+            dead_code,
+            reason = "raised by the UIA backend, the only accessibility backend built yet"
+        )
+    )]
     #[error("element `{element}` is disabled; {action} was not performed")]
     Disabled {
         /// The element handle.
@@ -161,6 +175,13 @@ pub enum ToolError {
     },
 
     /// The element does not offer the action.
+    #[cfg_attr(
+        not(target_os = "windows"),
+        allow(
+            dead_code,
+            reason = "raised by the UIA backend, the only accessibility backend built yet"
+        )
+    )]
     #[error(
         "element `{element}` does not support {action}; its actions: [{}]{}",
         supported.join(", "),
@@ -245,6 +266,10 @@ pub enum ToolError {
 
     /// A key or button from an earlier call is still down and could not be
     /// released; nothing is sent until it is. The next call tries again.
+    #[cfg_attr(
+        not(any(target_os = "windows", target_os = "macos")),
+        allow(dead_code, reason = "raised by the input device, not built on this OS")
+    )]
     #[error("{0} still held from an earlier failed release; no input is sent until released")]
     InputHeld(String),
 

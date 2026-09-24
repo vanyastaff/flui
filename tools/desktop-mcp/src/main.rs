@@ -7,8 +7,6 @@
 //! stdout carries the MCP protocol; logs go to stderr (`RUST_LOG` filters).
 
 mod a11y;
-// Element handles; only the UIA backend issues them so far.
-#[cfg(any(target_os = "windows", test))]
 mod cache;
 mod capture;
 mod desktop;

@@ -1,4 +1,5 @@
-//! Session-scoped element handles (`"e12"`).
+//! Session-scoped element handles (`"e12"`), and the parsing every kind of
+//! session handle shares.
 //!
 //! Agents address elements by short handles instead of OS objects. A handle
 //! is keyed by the backend's stable identity for the element (UIA's runtime
@@ -7,6 +8,16 @@
 //! identity the OS reuses for a new element after the old one is gone is
 //! retired first ([`ElementCache::retire`]), so the old handle never follows
 //! it to the new element.
+
+// The cache itself is used by the UIA backend, the only accessibility backend
+// built yet; the handle parsing by every OS.
+#![cfg_attr(
+    not(any(target_os = "windows", test)),
+    allow(
+        dead_code,
+        reason = "the element cache is used by the UIA backend only"
+    )
+)]
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
