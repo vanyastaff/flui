@@ -524,12 +524,15 @@ impl ColorFilter {
     }
 
     /// Creates an inverted color filter.
+    ///
+    /// Matrix channels are normalized to `0..=1` (the engine divides by 255
+    /// before applying), so the offset that turns `-c` into `1 - c` is 1.
     #[inline]
     #[must_use]
     pub const fn invert() -> Self {
         ColorFilter::Matrix(ColorMatrix::new([
-            -1.0, 0.0, 0.0, 0.0, 255.0, 0.0, -1.0, 0.0, 0.0, 255.0, 0.0, 0.0, -1.0, 0.0, 255.0,
-            0.0, 0.0, 0.0, 1.0, 0.0,
+            -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
         ]))
     }
 }
@@ -880,5 +883,87 @@ mod tests {
 
         let srgb_to_linear = ColorFilter::srgb_to_linear_gamma();
         assert!(matches!(srgb_to_linear, ColorFilter::SrgbToLinearGamma));
+    }
+
+    /// The prebuilt filters are the `ColorMatrix` constructors, so they work
+    /// in the same normalized units: invert maps 0.2 to 0.8, not to 1.0
+    /// (which a 255 offset clamps every channel to).
+    #[test]
+    fn color_filter_presets_match_their_color_matrices() {
+        use crate::painting::effects::ColorMatrix;
+        let matrix = |f: ColorFilter| match f {
+            ColorFilter::Matrix(m) => m.values,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            matrix(ColorFilter::grayscale()),
+            ColorMatrix::grayscale().values
+        );
+        assert_eq!(matrix(ColorFilter::sepia()), ColorMatrix::sepia().values);
+        assert_eq!(matrix(ColorFilter::invert()), ColorMatrix::invert().values);
+        let inverted = ColorMatrix::new(matrix(ColorFilter::invert())).apply([0.2, 0.4, 0.6, 0.8]);
+        for (got, want) in inverted.iter().zip([0.8, 0.6, 0.4, 0.8]) {
+            assert!((got - want).abs() < 1e-6, "{inverted:?}");
+        }
+        assert_eq!(
+            ColorFilter::matrix([0.5; 20]),
+            ColorFilter::Matrix(ColorMatrix::new([0.5; 20]))
+        );
+        assert!(matches!(
+            ColorFilter::mode(Color::RED, BlendMode::Multiply),
+            ColorFilter::Mode {
+                color: Color::RED,
+                blend_mode: BlendMode::Multiply
+            }
+        ));
+    }
+
+    #[test]
+    fn solid_color_fills_every_pixel() {
+        let image = Image::solid_color(3, 2, Color::rgba(1, 2, 3, 4));
+        assert_eq!(
+            (image.width(), image.height(), image.byte_count()),
+            (3, 2, 24)
+        );
+        assert_eq!(image.data(), [1, 2, 3, 4].repeat(6).as_slice());
+        let clear = Image::transparent(2, 2);
+        assert_eq!(clear.data(), [0; 16].as_slice());
+    }
+
+    #[test]
+    fn aspect_ratio() {
+        assert_eq!(Image::solid_color(6, 3, Color::RED).aspect_ratio(), 2.0);
+        assert_eq!(Image::solid_color(3, 6, Color::RED).aspect_ratio(), 0.5);
+        assert_eq!(Image::from_rgba8(4, 0, Vec::new()).aspect_ratio(), 0.0);
+    }
+
+    /// Images compare by shared pixel storage, not by content: a clone is
+    /// equal, an identical but separately built image is not.
+    #[test]
+    fn equality_is_pixel_buffer_identity() {
+        let a = Image::solid_color(2, 2, Color::RED);
+        let handle = a.clone_handle();
+        assert_eq!(a, handle);
+        assert_eq!(a.data_ptr(), handle.data_ptr());
+        let twin = Image::solid_color(2, 2, Color::RED);
+        assert_ne!(a, twin);
+        assert_ne!(a.data_ptr(), twin.data_ptr());
+        assert_ne!(a.data_ptr(), 0);
+    }
+
+    #[test]
+    fn image_configuration() {
+        let size = Size::new(px(10.0), px(4.0));
+        let config = ImageConfiguration::new()
+            .with_size(size)
+            .with_device_pixel_ratio(2.5)
+            .with_platform("android".to_string());
+        assert_eq!(config.effective_device_pixel_ratio(), 2.5);
+        assert_eq!(config.physical_size(), Some(Size::new(px(25.0), px(10.0))));
+        assert_eq!(config.platform.as_deref(), Some("android"));
+        let plain = ImageConfiguration::new().with_size(size);
+        assert_eq!(plain.effective_device_pixel_ratio(), 1.0);
+        assert_eq!(plain.physical_size(), Some(size));
+        assert_eq!(ImageConfiguration::new().physical_size(), None);
     }
 }
