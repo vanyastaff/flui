@@ -648,19 +648,19 @@ mod tests {
     /// Pre-order; returning false skips that span's children only.
     #[test]
     fn visit_is_pre_order_and_prunes_per_span() {
-        let mut seen = String::new();
+        let mut seen = Vec::new();
         tree().visit(&mut |s| {
-            seen.push_str(s.text().unwrap_or(""));
+            seen.push(s.text().unwrap_or("").to_owned());
             true
         });
-        assert_eq!(seen, "abcd");
+        assert_eq!(seen, ["a", "b", "c", "d"]);
 
-        let mut pruned = String::new();
+        let mut pruned = Vec::new();
         tree().visit(&mut |s| {
-            pruned.push_str(s.text().unwrap_or(""));
+            pruned.push(s.text().unwrap_or("").to_owned());
             s.text() != Some("b")
         });
-        assert_eq!(pruned, "abd");
+        assert_eq!(pruned, ["a", "b", "d"]);
     }
 
     #[test]

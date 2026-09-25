@@ -656,7 +656,7 @@ mod tests {
             font_family: Some("Mono".into()),
             font_family_fallback: vec!["Fallback".into()],
             font_features: vec![FontFeature::disable("kern")],
-            font_variations: vec![FontVariation::new("wdth", 75.0)],
+            font_variations: vec![FontVariation::new("opsz", 12.0)],
             foreground: Some(Color::WHITE),
             background: Some(Color::BLACK),
             shadows: vec![TextShadow::new(Color::RED, 0.0, 0.0, 1.0)],
