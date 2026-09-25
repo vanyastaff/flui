@@ -1683,5 +1683,360 @@ mod tests {
             );
             assert!(Path::polygon(&[]).is_empty());
         }
+
+        /// Every mutation drops the cached bounds, so the next query sees
+        /// the new command.
+        #[test]
+        fn mutations_invalidate_the_cached_bounds() {
+            let edits: [(&str, fn(&mut Path), Rect<Pixels>); 6] = [
+                (
+                    "move_to",
+                    |path| path.move_to(p(20.0, 20.0)),
+                    rect(0.0, 0.0, 20.0, 20.0),
+                ),
+                (
+                    "line_to",
+                    |path| path.line_to(p(-5.0, 3.0)),
+                    rect(-5.0, 0.0, 10.0, 10.0),
+                ),
+                (
+                    "add_rect",
+                    |path| path.add_rect(rect(0.0, 0.0, 30.0, 5.0)),
+                    rect(0.0, 0.0, 30.0, 10.0),
+                ),
+                (
+                    "add_oval",
+                    |path| path.add_oval(rect(-1.0, -1.0, 2.0, 2.0)),
+                    rect(-1.0, -1.0, 10.0, 10.0),
+                ),
+                (
+                    "add_arc",
+                    |path| path.add_arc(rect(0.0, 0.0, 10.0, 40.0), 0.0, 1.0),
+                    rect(0.0, 0.0, 10.0, 40.0),
+                ),
+                ("reset", Path::reset, Rect::ZERO),
+            ];
+            for (name, edit, expected) in edits {
+                let mut path = Path::rectangle(rect(0.0, 0.0, 10.0, 10.0));
+                assert_eq!(path.bounds(), rect(0.0, 0.0, 10.0, 10.0));
+                edit(&mut path);
+                assert_eq!(path.cached_bounds(), None, "{name}");
+                assert_eq!(path.bounds(), expected, "{name}");
+            }
+            assert_eq!(Path::new().cached_bounds(), None);
+            assert_eq!(
+                Path::with_fill_type(PathFillType::EvenOdd).cached_bounds(),
+                None
+            );
+            assert_eq!(
+                Path::circle(p(5.0, 5.0), 3.0).compute_bounds(),
+                rect(2.0, 2.0, 8.0, 8.0)
+            );
+            let triangle = Path::polygon(&[p(0.0, 0.0), p(4.0, 0.0), p(0.0, 4.0)]);
+            assert_eq!(triangle.commands().last(), Some(&PathCommand::Close));
+        }
+
+        /// The quarter arc used below: on the circle of radius 50 about
+        /// (150, 50), from (200, 50) clockwise (y-down) to (150, 100).
+        fn quarter(path: &mut Path) {
+            path.add_arc(
+                rect(100.0, 0.0, 200.0, 100.0),
+                0.0,
+                std::f32::consts::FRAC_PI_2,
+            );
+        }
+
+        fn check(
+            name: &str,
+            build: impl Fn(&mut Path),
+            inside: &[(f32, f32)],
+            outside: &[(f32, f32)],
+        ) {
+            for fill in FILLS {
+                let mut path = Path::with_fill_type(fill);
+                build(&mut path);
+                for &(x, y) in inside {
+                    assert!(
+                        path.contains(p(x, y)),
+                        "{name} {fill:?}: ({x}, {y}) should be inside"
+                    );
+                }
+                for &(x, y) in outside {
+                    assert!(
+                        !path.contains(p(x, y)),
+                        "{name} {fill:?}: ({x}, {y}) should be outside"
+                    );
+                }
+            }
+        }
+
+        /// Whether an arc joins the open contour by a chord or starts its
+        /// own decides the filled shape: a wedge from the joining point, or
+        /// only the segment between the arc and its own chord.
+        #[test]
+        fn an_arc_joins_an_open_contour_and_starts_a_closed_one_fresh() {
+            // Alone, the arc fills the segment cut off by its chord
+            // x + y = 250; (150, 70) lies in the wedge an origin-anchored
+            // contour would add.
+            check(
+                "leading arc",
+                quarter,
+                &[(185.0, 85.0)],
+                &[(150.0, 70.0), (160.0, 60.0)],
+            );
+
+            // From the centre it is a pie slice: the quadrant of the disc.
+            let pie = |path: &mut Path| {
+                path.move_to(p(150.0, 50.0));
+                quarter(path);
+                path.close();
+            };
+            check(
+                "pie",
+                pie,
+                &[(160.0, 60.0), (185.0, 85.0)],
+                &[(140.0, 60.0), (190.0, 95.0)],
+            );
+            let open_pie = |path: &mut Path| {
+                path.move_to(p(150.0, 50.0));
+                quarter(path);
+            };
+            check("open pie", open_pie, &[(160.0, 60.0)], &[(140.0, 60.0)]);
+
+            // After a closed contour the arc starts fresh.
+            let after_close = |path: &mut Path| {
+                path.move_to(p(0.0, 0.0));
+                path.line_to(p(10.0, 0.0));
+                path.line_to(p(0.0, 10.0));
+                path.close();
+                quarter(path);
+            };
+            check(
+                "after close",
+                after_close,
+                &[(2.0, 2.0), (185.0, 85.0)],
+                &[(150.0, 70.0)],
+            );
+
+            // A standalone shape closes the open triangle before it and the
+            // arc after it starts fresh. The triangle's closing edge is its
+            // right side, the only edge (8, 203)'s ray crosses.
+            let open_triangle = |path: &mut Path| {
+                path.move_to(p(10.0, 200.0));
+                path.line_to(p(0.0, 200.0));
+                path.line_to(p(10.0, 210.0));
+            };
+            let shapes: [fn(&mut Path); 2] = [
+                |path| path.add_rect(rect(300.0, 300.0, 310.0, 310.0)),
+                |path| path.add_oval(rect(300.0, 300.0, 310.0, 310.0)),
+            ];
+            for shape in shapes {
+                let after_shape = |path: &mut Path| {
+                    open_triangle(path);
+                    shape(path);
+                    quarter(path);
+                };
+                check(
+                    "after shape",
+                    after_shape,
+                    &[(8.0, 203.0), (305.0, 305.0), (185.0, 85.0)],
+                    // (42, 180) lies in the wedge a chord from the
+                    // triangle to the arc would enclose.
+                    &[(2.0, 208.0), (150.0, 70.0), (42.0, 180.0)],
+                );
+            }
+
+            // So does a move_to: the open triangle is closed before the next
+            // contour begins.
+            let two_open = |path: &mut Path| {
+                open_triangle(path);
+                path.move_to(p(0.0, 300.0));
+                path.line_to(p(10.0, 300.0));
+            };
+            check(
+                "two open contours",
+                two_open,
+                &[(8.0, 203.0)],
+                &[(2.0, 208.0)],
+            );
+            // The implicit close at the end can be the only crossing.
+            let only_the_close = |path: &mut Path| {
+                path.move_to(p(100.0, 0.0));
+                path.line_to(p(0.0, 50.0));
+                path.line_to(p(100.0, 100.0));
+            };
+            check(
+                "closing edge",
+                only_the_close,
+                &[(80.0, 60.0)],
+                &[(10.0, 60.0)],
+            );
+
+            // The chord into the arc counts when it is not level: from
+            // (100, 100) up to the arc start (200, 50).
+            let chord = |path: &mut Path| {
+                path.move_to(p(100.0, 100.0));
+                quarter(path);
+            };
+            check("slanted chord", chord, &[(140.0, 85.0)], &[(105.0, 90.0)]);
+
+            // An arc continues the contour a previous arc left open: the
+            // chord from (150, 100) to (100, 50) cuts off the lower left.
+            let two_arcs = |path: &mut Path| {
+                quarter(path);
+                path.add_arc(
+                    rect(100.0, 0.0, 200.0, 100.0),
+                    std::f32::consts::PI,
+                    std::f32::consts::FRAC_PI_2,
+                );
+            };
+            check("two arcs", two_arcs, &[(145.0, 55.0)], &[(110.0, 80.0)]);
+
+            // Just below the arc start the ray meets only the arc's first
+            // chord.
+            check("first chord", pie, &[(190.0, 53.0)], &[]);
+        }
+
+        /// Standalone shapes add one crossing, or wind once, where they
+        /// contain the point: three overlapping rects are odd, two even,
+        /// and a rect or oval cancels against a square wound the other way.
+        #[test]
+        fn shapes_count_once_per_containment() {
+            let mut three = Path::new();
+            three.add_rect(rect(0.0, 0.0, 30.0, 30.0));
+            three.add_rect(rect(10.0, 10.0, 40.0, 40.0));
+            three.add_rect(rect(20.0, 20.0, 50.0, 50.0));
+            for (fill, in_three, in_two) in [
+                (PathFillType::NonZero, true, true),
+                (PathFillType::EvenOdd, true, false),
+            ] {
+                let path = with(fill, three.clone());
+                assert_eq!(path.contains(p(25.0, 25.0)), in_three, "{fill:?}");
+                assert_eq!(path.contains(p(15.0, 15.0)), in_two, "{fill:?}");
+            }
+
+            // (0,0) -> (0,10) -> (10,10) -> (10,0) winds -1 about (5, 5);
+            // the reverse winds +1.
+            let square = [p(0.0, 0.0), p(0.0, 10.0), p(10.0, 10.0), p(10.0, 0.0)];
+            let reversed = [square[3], square[2], square[1], square[0]];
+            let shapes: [fn(&mut Path); 2] = [
+                |path| path.add_rect(rect(0.0, 0.0, 10.0, 10.0)),
+                |path| path.add_oval(rect(0.0, 0.0, 10.0, 10.0)),
+            ];
+            for shape in shapes {
+                for (points, non_zero) in [(square, false), (reversed, true)] {
+                    for fill in FILLS {
+                        let mut path = Path::polygon(&points);
+                        path.set_fill_type(fill);
+                        shape(&mut path);
+                        let expected = fill == PathFillType::NonZero && non_zero;
+                        assert_eq!(path.contains(p(5.0, 5.0)), expected, "{fill:?} {points:?}");
+                    }
+                }
+            }
+        }
+
+        /// Each corner with any radius gets one arc and each square corner
+        /// none, whichever corner it is and whichever axis is zero.
+        #[test]
+        fn from_rrect_emits_an_arc_exactly_for_each_rounded_corner() {
+            let arcs = |corners: [Radius<Pixels>; 4]| {
+                let [tl, tr, br, bl] = corners;
+                let rrect =
+                    RRect::from_rect_and_corners(rect(0.0, 0.0, 100.0, 60.0), tl, tr, br, bl);
+                Path::from_rrect(rrect)
+                    .commands()
+                    .iter()
+                    .filter(|c| matches!(c, PathCommand::AddArc(..)))
+                    .count()
+            };
+            let zero = Radius::circular(px(0.0));
+            for k in 0..4 {
+                let mut one_square = [Radius::circular(px(8.0)); 4];
+                one_square[k] = zero;
+                assert_eq!(arcs(one_square), 3, "corner {k} square");
+                for radius in [Radius::new(px(6.0), px(0.0)), Radius::new(px(0.0), px(6.0))] {
+                    let mut only = [zero; 4];
+                    only[k] = radius;
+                    assert_eq!(arcs(only), 1, "corner {k} alone with {radius:?}");
+                }
+            }
+        }
+
+        /// A quarter circle bulges past the chamfer between its ends:
+        /// 0.85 r from the corner circle centre, towards the corner, is
+        /// inside the arc but outside the chamfer; 1.15 r is outside both.
+        #[test]
+        fn from_rrect_corners_are_arcs_not_chamfers() {
+            let path = Path::from_rrect(RRect::from_rect_and_corners(
+                rect(0.0, 0.0, 100.0, 60.0),
+                Radius::circular(px(10.0)),
+                Radius::circular(px(12.0)),
+                Radius::circular(px(14.0)),
+                Radius::circular(px(16.0)),
+            ));
+            let s = std::f32::consts::FRAC_1_SQRT_2;
+            // (centre, radius, direction towards the corner)
+            for (c, r, d) in [
+                ((10.0, 10.0), 10.0, (-s, -s)),
+                ((88.0, 12.0), 12.0, (s, -s)),
+                ((86.0, 46.0), 14.0, (s, s)),
+                ((16.0, 44.0), 16.0, (-s, s)),
+            ] {
+                let at = |k: f32| p(c.0 + d.0 * k * r, c.1 + d.1 * k * r);
+                assert!(path.contains(at(0.85)), "{c:?} inside the arc");
+                assert!(!path.contains(at(1.15)), "{c:?} outside the arc");
+            }
+        }
+
+        /// The fewest chords whose sagitta, `r (1 - cos(sweep / 2n))`, is
+        /// within the flattening tolerance; the larger semi-axis of an
+        /// ellipse; one chord for degenerate input; the ceiling for a
+        /// radius too large to resolve.
+        #[test]
+        fn arc_chord_count_is_the_fewest_within_tolerance() {
+            let tol = Path::ARC_FLATTENING_TOLERANCE;
+            let sagitta =
+                |r: f32, sweep: f32, n: usize| r * (1.0 - (sweep / (2.0 * n as f32)).cos());
+            for r in [0.5_f32, 10.0, 100.0, 1000.0] {
+                for sweep in [0.3_f32, std::f32::consts::FRAC_PI_2, std::f32::consts::TAU] {
+                    let circle = rect(0.0, 0.0, 2.0 * r, 2.0 * r);
+                    let n = Path::arc_chord_count(circle, sweep);
+                    assert!(
+                        sagitta(r, sweep, n) <= tol * 1.001,
+                        "r {r} sweep {sweep}: {n} chords"
+                    );
+                    if n > 1 {
+                        assert!(
+                            sagitta(r, sweep, n - 1) > tol,
+                            "r {r} sweep {sweep}: {n} is not the fewest"
+                        );
+                    }
+                    assert_eq!(Path::arc_chord_count(circle, -sweep), n);
+                }
+            }
+            let pi = std::f32::consts::PI;
+            let wide = Path::arc_chord_count(rect(0.0, 0.0, 200.0, 2.0), pi);
+            assert_eq!(
+                wide,
+                Path::arc_chord_count(rect(0.0, 0.0, 200.0, 200.0), pi)
+            );
+            assert_eq!(Path::arc_chord_count(rect(0.0, 0.0, 2.0, 200.0), pi), wide);
+
+            let unit = rect(0.0, 0.0, 2.0, 2.0);
+            assert_eq!(Path::arc_chord_count(rect(0.0, 0.0, 0.0, 0.0), 3.0 * pi), 1);
+            assert_eq!(Path::arc_chord_count(unit, 0.0), 1);
+            assert_eq!(Path::arc_chord_count(unit, f32::NAN), 1);
+            assert_eq!(Path::arc_chord_count(unit, f32::INFINITY), 1);
+            let huge = rect(0.0, 0.0, 2.0e9, 2.0e9);
+            assert_eq!(Path::arc_chord_count(huge, 1.0), Path::MAX_ARC_CHORDS);
+            // Resolvable, but wanting more chords than the ceiling.
+            let wide_turn = rect(0.0, 0.0, 2.0e6, 2.0e6);
+            assert_eq!(
+                Path::arc_chord_count(wide_turn, std::f32::consts::TAU),
+                Path::MAX_ARC_CHORDS
+            );
+            assert_eq!(Path::MAX_ARC_CHORDS, 2048);
+        }
     }
 }
