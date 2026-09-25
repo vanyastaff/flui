@@ -98,8 +98,11 @@ impl SubtreeAnchor {
         *self.published.lock() = Some(id);
     }
 
-    fn clear(&self) {
-        *self.published.lock() = None;
+    fn clear(&self, id: RenderId) {
+        let mut published = self.published.lock();
+        if *published == Some(id) {
+            *published = None;
+        }
     }
 }
 
@@ -151,7 +154,7 @@ impl RenderSubtreeAnchor {
             return;
         }
         if let Some(id) = self.mounted_id {
-            self.anchor.clear();
+            self.anchor.clear(id);
             anchor.publish(id);
         }
         self.anchor = anchor;
@@ -216,8 +219,9 @@ impl RenderBox for RenderSubtreeAnchor {
     /// The retraction. A published id must never outlive the mounted node, or a
     /// caller could resolve a stale subtree and measure a disposed route.
     fn detach(&mut self) {
-        self.anchor.clear();
-        self.mounted_id = None;
+        if let Some(id) = self.mounted_id.take() {
+            self.anchor.clear(id);
+        }
     }
 
     flui_rendering::forward_single_child_box_queries!();

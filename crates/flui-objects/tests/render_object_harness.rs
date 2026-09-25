@@ -15898,3 +15898,18 @@ fn harness_flex_column_rtl_starts_children_at_the_right_edge() {
          the child's 50"
     );
 }
+
+#[test]
+fn harness_subtree_anchor_detach_preserves_replacement_publication() {
+    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::protocol::BoxProtocol;
+    let anchor = SubtreeAnchor::new();
+    let mut owner = PipelineOwner::new();
+    let first = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
+    let second = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
+    assert_eq!(anchor.get(), Some(second));
+    owner.remove_render_object(first);
+    assert_eq!(anchor.get(), Some(second));
+    owner.remove_render_object(second);
+    assert_eq!(anchor.get(), None);
+}

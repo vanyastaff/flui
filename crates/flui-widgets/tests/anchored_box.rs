@@ -69,3 +69,27 @@ fn changing_anchor_republishes_the_same_node_and_preserves_child_state() {
     assert_eq!(new.get(), None);
     assert_eq!(disposes.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn swapping_sibling_anchors_preserves_both_publications() {
+    use flui_view::ViewExt;
+    use flui_widgets::Column;
+    let first = SubtreeAnchor::new();
+    let second = SubtreeAnchor::new();
+    let siblings = |a: SubtreeAnchor, b: SubtreeAnchor| {
+        Column::new(vec![
+            AnchoredBox::new(a, SizedBox::square(10.0)).boxed(),
+            AnchoredBox::new(b, SizedBox::square(10.0)).boxed(),
+        ])
+    };
+    let mut laid = lay_out(siblings(first.clone(), second.clone()), loose(100.0));
+    let x = first.get().expect("first mounted");
+    let y = second.get().expect("second mounted");
+    assert_ne!(x, y);
+    laid.pump_widget(siblings(second.clone(), first.clone()));
+    assert_eq!(second.get(), Some(x));
+    assert_eq!(first.get(), Some(y));
+    laid.pump_widget(siblings(first.clone(), second.clone()));
+    assert_eq!(first.get(), Some(x));
+    assert_eq!(second.get(), Some(y));
+}
