@@ -640,7 +640,10 @@ mod tests {
     /// append, and only when non-empty.
     #[test]
     fn merge() {
-        let base = full();
+        let base = TextStyle {
+            font_family_fallback: vec!["Noto".into()],
+            ..full()
+        };
         assert_eq!(base.merge(&TextStyle::new()), base);
         assert_eq!(TextStyle::new().merge(&base), base);
 

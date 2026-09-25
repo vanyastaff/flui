@@ -1130,5 +1130,9 @@ mod tests {
         assert_eq!((s.miter_limit, s.dash_offset), (10.0, 2.5));
         let d = StrokeOptions::default();
         assert_eq!((d.width, d.miter_limit, d.dash_offset), (1.0, 4.0, 0.0));
+        assert_eq!(
+            (d.cap, d.join, d.dash_pattern),
+            (StrokeCap::Butt, StrokeJoin::Miter, None)
+        );
     }
 }

@@ -325,6 +325,7 @@ mod tests {
         assert!(Border::<Pixels>::none().is_none());
         assert!(Border::<Pixels>::none().is_uniform());
         assert!(Border::all(s).is_uniform() && !Border::all(s).is_none());
+        assert!(BoxBorder::is_uniform(&Border::all(s)));
         for i in 0..4 {
             let mut parts = [Some(s); 4];
             parts[i] = Some(side(2.0));

@@ -291,6 +291,7 @@ fn lerp_oklab_interpolates_alpha() {
     let from = Color::rgba(0, 0, 0, 100);
     let to = Color::rgba(0, 0, 0, 200);
     assert_eq!(Color::lerp_oklab(from, to, 0.5).a, 150);
+    assert_eq!(Color::lerp_oklab(from, to, 0.75).a, 175);
 }
 
 /// The midpoint is the same from either end; red and green differ on all

@@ -231,7 +231,7 @@ proptest! {
 #[case::color_burn(ColorBurn, 153, 204, 170)] // 1 - (1 - .8) / .6 = .667
 #[case::soft_light_dark_source(SoftLight, 51, 153, 116)] // .6 - .6 * .6 * .4 = .456
 #[case::soft_light_light_source(SoftLight, 204, 153, 180)] // .6 + .6 * (sqrt .6 - .6) = .7048
-#[case::soft_light_dark_backdrop(SoftLight, 204, 51, 89)] // .2 + .6 * (.448 - .2) = .3488
+#[case::soft_light_dark_backdrop(SoftLight, 204, 26, 56)] // .102 + .6 * (.3001 - .102) = .2208, where sqrt would give .2324
 fn separable_mode_at_mid_range(
     #[case] mode: BlendMode,
     #[case] cs: u8,
@@ -260,6 +260,19 @@ fn blend_over_matches_flutter_alpha_blend() {
         Color::rgba(3, 3, 3, 10).blend_over(Color::rgba(3, 3, 3, 56)),
         Color::rgba(3, 3, 3, 64)
     );
+    // One step from each fast path: a nearly opaque source still lets the
+    // background through, and only a fully opaque background makes the
+    // result opaque.
+    let white = |a| Color::rgba(255, 255, 255, a);
+    let black = |a| Color::rgba(0, 0, 0, a);
+    assert_eq!(black(254).blend_over(white(255)), Color::rgba(1, 1, 1, 255));
+    assert_eq!(black(1).blend_over(white(255)), Color::rgba(254, 254, 254, 255));
+    assert_eq!(
+        black(64).blend_over(white(254)),
+        Color::rgba(191, 191, 191, 254)
+    );
+    assert_eq!(black(64).blend_over(white(1)), Color::rgba(3, 3, 3, 65));
+    assert_eq!(black(64).blend_over(white(0)), black(64));
 }
 
 /// The non-separable modes at pixels where the chroma matters, derived
@@ -279,6 +292,13 @@ fn non_separable_modes_at_chromatic_pixels() {
     let orange = Color::rgb(255, 128, 0);
     let slate = Color::rgb(77, 102, 128);
     assert_eq!(orange.blend(slate, Hue), Color::rgb(118, 93, 67));
+    // Green is the backdrop's smallest channel here, so its saturation
+    // (.502 - .302 = .2) needs all three: SetSat gives (.2, .1004, 0),
+    // SetLum to .3534 gives (.4341, .3345, .2341).
+    assert_eq!(
+        orange.blend(Color::rgb(102, 77, 128), Hue),
+        Color::rgb(111, 85, 60)
+    );
     assert_eq!(orange.blend(slate, Saturation), Color::rgb(0, 120, 244));
     assert_eq!(
         Color::BLUE.blend(Color::rgb(230, 230, 230), BlendMode::Color),

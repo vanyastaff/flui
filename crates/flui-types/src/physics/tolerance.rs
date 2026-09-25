@@ -218,8 +218,8 @@ mod tests {
     #[test]
     fn scale_scales_every_field() {
         assert_eq!(
-            Tolerance::new(1.0, 2.0, 3.0).scale(2.0),
-            Tolerance::new(2.0, 4.0, 6.0)
+            Tolerance::new(1.0, 2.0, 3.0).scale(3.0),
+            Tolerance::new(3.0, 6.0, 9.0)
         );
     }
 }

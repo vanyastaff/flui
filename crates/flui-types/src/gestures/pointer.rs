@@ -660,7 +660,7 @@ mod tests {
         )
         .with_pressure(0.8, 0.0, 1.0)
         .with_distance(5.0, 10.0)
-        .with_radius(10.0, 5.0, 0.0, 20.0)
+        .with_radius(10.0, 5.0, 2.0, 20.0)
         .with_orientation(0.5)
         .with_tilt(0.3)
         .with_delta(Offset::new(px(2.0), px(3.0)))
@@ -675,7 +675,7 @@ mod tests {
                 data.radius_min,
                 data.radius_max
             ),
-            (10.0, 5.0, 0.0, 20.0)
+            (10.0, 5.0, 2.0, 20.0)
         );
         assert_eq!(data.orientation, 0.5);
         assert_eq!(data.tilt, 0.3);
