@@ -161,18 +161,17 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Fixed
 
-- **Three `flui-types` conversions now match Flutter 3.44**:
-  - `Color::with_opacity` rounds the alpha (`0.5` gives 128, `0.12` gives 31) like
-    `withOpacity`'s `(255 * opacity).round()`; it truncated, so a colour built from an opacity
-    could be one alpha step more transparent than Flutter's.
-  - `Gradient::lerp` (and `LinearGradient`/`RadialGradient`/`SweepGradient::lerp`) interpolates
-    gradients with different colour counts or stops, as `_interpolateColorsAndStops` does: a
-    stop wherever either side has one, coloured by lerping both sides sampled there. It
-    returned `None`, so `BoxDecoration::lerp` between two such gradients painted none for the
-    whole transition. Radii and sweep angles no longer lerp below zero, and a focal point or
-    radius on one side interpolates instead of being dropped.
-  - `FontWeight::from_css` rounds an exact half up at every step (`350` is `W400`), the way
-    `FontWeight.lerp` rounds; `150`, `250` and `350` rounded down while the rest rounded up.
+- **`Color::with_opacity` rounds the alpha** (`flui-types`): `0.5` gives 128 and `0.12` gives
+  31, the nearest of the 256 steps; it truncated, so a colour built from an opacity could be
+  one step more transparent than asked. Flutter's `withOpacity` rounds the same way.
+- **Gradients interpolate across colour counts** (`flui-types`): `Gradient::lerp` and the
+  linear, radial and sweep `lerp`s returned `None` for different colour counts, so
+  `BoxDecoration::lerp` between such gradients painted none for the whole transition. They
+  now put a stop wherever either side has one and lerp both sides sampled there, as Flutter's
+  `_interpolateColorsAndStops` does; radii and sweep angles no longer lerp below zero. A focal
+  point set on one side moves to or from the other gradient's center, so the transition ends
+  on exactly the other gradient (Flutter pulls it toward `Alignment(0, 0)`; see
+  `crates/flui-types/ARCHITECTURE.md`).
 
 - **Where an unanchored segment starts** (`flui-engine`): a `line_to` or curve with no contour
   open began at the line's own end or the curve's first control point. It now starts from

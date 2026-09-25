@@ -310,13 +310,16 @@ impl RadialGradient {
             None,
         )
     }
-
     /// Linearly interpolate between two radial gradients, like Flutter's
     /// `RadialGradient.lerp`. Colours and stops combine as in
-    /// [`LinearGradient::lerp`]; the radii never go below zero; a focal
-    /// point on one side only moves toward or away from `Alignment(0, 0)`
-    /// (Flutter's `AlignmentGeometry.lerp` with a null end), and a missing
-    /// focal radius counts as `0.0`, Flutter's default.
+    /// [`LinearGradient::lerp`], the radii never go below zero, and a
+    /// missing focal radius counts as `0.0`, Flutter's default.
+    ///
+    /// A focal point on one side only moves to or from the other side's
+    /// *center*, because a gradient without a focal point is focused on its
+    /// center: the result at `t = 1` paints exactly like `b`. Flutter lerps
+    /// it toward `Alignment(0, 0)` instead (`AlignmentGeometry.lerp` with a
+    /// null end), which jumps whenever that center is anywhere else.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f32) -> Option<Self> {
         // Flutter returns `a` when both are the same object; equal values
@@ -330,11 +333,11 @@ impl RadialGradient {
             (&b.colors, b.stops.as_deref()),
             t,
         )?;
-        let scaled = |f: Alignment, s: f32| Alignment::new(f.x * s, f.y * s);
+
         let focal = match (a.focal, b.focal) {
             (Some(a_focal), Some(b_focal)) => Some(Alignment::lerp(a_focal, b_focal, t)),
-            (Some(a_focal), None) => Some(scaled(a_focal, 1.0 - t)),
-            (None, Some(b_focal)) => Some(scaled(b_focal, t)),
+            (Some(a_focal), None) => Some(Alignment::lerp(a_focal, b.center, t)),
+            (None, Some(b_focal)) => Some(Alignment::lerp(a.center, b_focal, t)),
             (None, None) => None,
         };
         let focal_radius = match (a.focal_radius, b.focal_radius) {
@@ -654,18 +657,23 @@ mod tests {
         let mid = RadialGradient::lerp(&radial(1.0, [0.0, 0.5], 0.5), &b, 0.5).unwrap();
         assert_eq!(mid.focal_radius, Some(0.375));
 
-        // A focal point on one side scales toward Alignment(0, 0), and a
-        // missing focal radius counts as 0.
+        // A focal point on one side moves to or from the other side's
+        // center (off the origin here, so Flutter's pull toward
+        // Alignment(0, 0) would differ), arriving exactly on it; a missing
+        // focal radius counts as 0.
         let unfocused = RadialGradient {
+            center: Alignment::new(-0.5, 0.5),
             focal: None,
             focal_radius: None,
             ..a.clone()
         };
         let quarter = RadialGradient::lerp(&b, &unfocused, 0.25).unwrap();
-        assert_eq!(quarter.focal, Some(Alignment::new(0.75, 0.75)));
+        assert_eq!(quarter.focal, Some(Alignment::new(0.625, 0.875)));
         assert_eq!(quarter.focal_radius, Some(0.375));
         let three_quarters = RadialGradient::lerp(&unfocused, &b, 0.75).unwrap();
-        assert_eq!(three_quarters.focal, Some(Alignment::new(0.75, 0.75)));
+        assert_eq!(three_quarters.focal, Some(Alignment::new(0.625, 0.875)));
+        let arrived = RadialGradient::lerp(&b, &unfocused, 1.0).unwrap();
+        assert_eq!(arrived.focal, Some(unfocused.center));
         let wider = RadialGradient {
             radius: 2.0,
             ..unfocused.clone()
