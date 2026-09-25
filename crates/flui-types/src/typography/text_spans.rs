@@ -620,4 +620,150 @@ pub enum PlaceholderAlignment {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::Color;
+
+    /// `root("a") -> [b -> [c], d]`, texts chosen so pre-order is "abcd".
+    fn tree() -> TextSpan {
+        TextSpan::new("a")
+            .with_child(TextSpan::new("b").with_child(TextSpan::new("c")))
+            .with_child(TextSpan::new("d"))
+    }
+
+    #[test]
+    fn plain_text_counts_and_structure() {
+        let t = tree();
+        assert_eq!(t.to_plain_text(), "abcd");
+        assert_eq!((t.child_count(), t.total_span_count()), (2, 4));
+        assert!(!t.is_leaf() && t.children[1].is_leaf());
+        assert_eq!(
+            TextSpan::with_children(vec![TextSpan::new("x")]).text(),
+            None
+        );
+        // Bytes, not characters.
+        assert_eq!(TextSpan::new("é").text_length(), 2);
+    }
+
+    /// Pre-order; returning false skips that span's children only.
+    #[test]
+    fn visit_is_pre_order_and_prunes_per_span() {
+        let mut seen = String::new();
+        tree().visit(&mut |s| {
+            seen.push_str(s.text().unwrap_or(""));
+            true
+        });
+        assert_eq!(seen, "abcd");
+
+        let mut pruned = String::new();
+        tree().visit(&mut |s| {
+            pruned.push_str(s.text().unwrap_or(""));
+            s.text() != Some("b")
+        });
+        assert_eq!(pruned, "abd");
+    }
+
+    #[test]
+    fn builders_and_queries() {
+        let style = TextStyle::new().with_font_size(12.0);
+        let span = TextSpan::styled("x", style.clone())
+            .with_semantics_label("label")
+            .with_mouse_cursor(MouseCursor::Pointer);
+        assert_eq!(span.style(), Some(&style));
+        assert_eq!(span.semantics_label.as_deref(), Some("label"));
+        assert_eq!(span.mouse_cursor, Some(MouseCursor::Pointer));
+        assert!(span.has_semantics() && !span.is_interactive());
+        assert_eq!(
+            TextSpan::new("x").with_style(style.clone()).style,
+            Some(style)
+        );
+
+        let tappable = TextSpan::new("x").with_on_tap(|| {});
+        assert!(tappable.is_interactive());
+        assert!(format!("{tappable:?}").contains("<callback>"));
+        // Equality ignores callbacks.
+        assert_eq!(tappable, TextSpan::new("x"));
+    }
+
+    /// Layout equality ignores paint-only style changes but not text,
+    /// structure, a style appearing, or a nested layout change.
+    #[test]
+    fn layout_affecting_eq() {
+        let sized = |size| TextStyle::new().with_font_size(size);
+        let base =
+            TextSpan::styled("a", sized(12.0)).with_child(TextSpan::styled("b", sized(10.0)));
+        let recolored = TextSpan::styled("a", sized(12.0).with_color(Color::RED))
+            .with_child(TextSpan::styled("b", sized(10.0).with_color(Color::BLUE)));
+        assert!(base.layout_affecting_eq(&recolored));
+        assert!(TextSpan::new("a").layout_affecting_eq(&TextSpan::new("a")));
+
+        let other_text =
+            TextSpan::styled("z", sized(12.0)).with_child(TextSpan::styled("b", sized(10.0)));
+        let extra_child = base.clone().with_child(TextSpan::new("c"));
+        let resized =
+            TextSpan::styled("a", sized(14.0)).with_child(TextSpan::styled("b", sized(10.0)));
+        let unstyled = TextSpan::new("a").with_child(TextSpan::styled("b", sized(10.0)));
+        let deep =
+            TextSpan::styled("a", sized(12.0)).with_child(TextSpan::styled("b", sized(11.0)));
+        for changed in [other_text, extra_child, resized, unstyled, deep] {
+            assert!(!base.layout_affecting_eq(&changed), "{changed:?}");
+            assert!(!changed.layout_affecting_eq(&base), "{changed:?}");
+        }
+    }
+
+    #[test]
+    fn inline_span_dispatch() {
+        let style = TextStyle::new().with_font_size(12.0);
+        let text = InlineSpan::new(TextSpan::styled("hi", style.clone()).with_semantics_label("l"));
+        let placeholder =
+            InlineSpan::new(PlaceholderSpan::new(4.0, 2.0, PlaceholderAlignment::Middle));
+        assert_eq!(
+            (text.style(), text.to_plain_text(), text.has_semantics()),
+            (Some(&style), "hi".into(), true)
+        );
+        assert_eq!(
+            (
+                placeholder.style(),
+                placeholder.to_plain_text(),
+                placeholder.has_semantics()
+            ),
+            (None, "\u{FFFC}".into(), false)
+        );
+
+        assert!(text.layout_affecting_eq(&text.clone()));
+        assert!(placeholder.layout_affecting_eq(&placeholder.clone()));
+        assert!(!text.layout_affecting_eq(&placeholder) && !placeholder.layout_affecting_eq(&text));
+        let wider = InlineSpan::new(PlaceholderSpan::new(5.0, 2.0, PlaceholderAlignment::Middle));
+        assert!(!placeholder.layout_affecting_eq(&wider));
+        let resized = InlineSpan::new(TextSpan::styled("hi", style.with_font_size(20.0)));
+        assert!(!text.layout_affecting_eq(&resized));
+    }
+
+    #[test]
+    fn placeholder_geometry() {
+        let p = PlaceholderSpan::new(6.0, 3.0, PlaceholderAlignment::Top)
+            .with_baseline(TextBaseline::Ideographic, 1.5);
+        assert_eq!(
+            (p.width(), p.height(), p.alignment()),
+            (6.0, 3.0, PlaceholderAlignment::Top)
+        );
+        assert_eq!(
+            (p.baseline, p.baseline_offset),
+            (Some(TextBaseline::Ideographic), 1.5)
+        );
+        assert_eq!((p.area(), p.aspect_ratio()), (18.0, 2.0));
+        assert_eq!(
+            PlaceholderSpan::new(6.0, 0.0, PlaceholderAlignment::Top).aspect_ratio(),
+            f64::INFINITY
+        );
+
+        let d = PlaceholderDimensions::new(6.0, 3.0, PlaceholderAlignment::Bottom, None, 0.5);
+        assert_eq!(
+            (d.width(), d.height(), d.alignment()),
+            (6.0, 3.0, PlaceholderAlignment::Bottom)
+        );
+        assert_eq!((d.area(), d.aspect_ratio()), (18.0, 2.0));
+        let flat = PlaceholderDimensions::new(6.0, 0.0, PlaceholderAlignment::Bottom, None, 0.0);
+        assert_eq!(flat.aspect_ratio(), f64::INFINITY);
+    }
+}

@@ -247,3 +247,84 @@ impl TextDecorationConfig {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flags(d: &TextDecoration) -> (bool, bool, bool, bool) {
+        (
+            d.has_underline(),
+            d.has_overline(),
+            d.has_line_through(),
+            d.is_none(),
+        )
+    }
+
+    #[test]
+    fn decoration_flags() {
+        assert_eq!(flags(&TextDecoration::NONE), (false, false, false, true));
+        assert_eq!(
+            flags(&TextDecoration::default()),
+            (false, false, false, true)
+        );
+        assert_eq!(
+            flags(&TextDecoration::UNDERLINE),
+            (true, false, false, false)
+        );
+        assert_eq!(
+            flags(&TextDecoration::OVERLINE),
+            (false, true, false, false)
+        );
+        assert_eq!(
+            flags(&TextDecoration::LINE_THROUGH),
+            (false, false, true, false)
+        );
+        assert_eq!(
+            flags(&TextDecoration::new(0b101)),
+            (true, false, true, false)
+        );
+        let both = TextDecoration::combine(&[TextDecoration::UNDERLINE, TextDecoration::OVERLINE]);
+        assert_eq!(flags(&both), (true, true, false, false));
+        assert_eq!(
+            flags(&TextDecoration::combine(&[])),
+            (false, false, false, true)
+        );
+    }
+
+    #[test]
+    fn height_behavior() {
+        assert_eq!(
+            TextHeightBehavior::default(),
+            TextHeightBehavior::new(true, true)
+        );
+        assert_eq!(
+            TextHeightBehavior::DISABLE_ALL,
+            TextHeightBehavior::new(false, false)
+        );
+        assert_eq!(
+            TextHeightBehavior::DISABLE_FIRST,
+            TextHeightBehavior::new(false, true)
+        );
+        assert_eq!(
+            TextHeightBehavior::DISABLE_LAST,
+            TextHeightBehavior::new(true, false)
+        );
+    }
+
+    #[test]
+    fn decoration_config() {
+        let plain = TextDecorationConfig::default();
+        assert!(plain.decoration.is_none() && plain.color.is_none() && plain.thickness.is_none());
+        assert_eq!(plain.style, TextDecorationStyle::Solid);
+        let config = TextDecorationConfig::new(TextDecoration::UNDERLINE)
+            .with_style(TextDecorationStyle::Wavy)
+            .with_color(Color::RED)
+            .with_thickness(1.5);
+        assert!(config.decoration.has_underline());
+        assert_eq!(
+            (config.style, config.color, config.thickness),
+            (TextDecorationStyle::Wavy, Some(Color::RED), Some(1.5))
+        );
+    }
+}
