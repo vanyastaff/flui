@@ -153,6 +153,7 @@ that fails without the fix. Flutter parity claims were checked against the 3.44.
 | Path contour semantics, bounds cache, chord count (`687b543fb`) | `painting/path.rs`, cargo-gamma | 143 survived | 43 survived (all equivalent or unspecified) |
 | Crate-wide survivors (`e7894e7f1`) | all of flui-types, 5278 mutants, cargo-gamma | 4230 killed / 376 survived (79.9%) | 4464 / 154 (84.6%) |
 | Last test gaps (`e2ea219f0`) | all of flui-types, cargo-gamma | 4464 / 154 | 4480 / 138 (84.9%); the 138 are equivalent or unpinned by choice |
+| Unwired API removed, Path curves added (`18b286638`, `b81ebd1d7`, `7276b1dfa`) | all of flui-types, 4846 mutants, cargo-gamma | 4480 killed, 658 uncovered (84.9%) | 4655 killed / 170 survived, 19 uncovered (96.1%) |
 
 Every mutant the baseline caught stayed caught in each slice (compared by position). Remaining
 survivors in `color.rs` are equivalent (`|` vs `^` on disjoint bits, `<` vs `<=` at unreachable
@@ -224,3 +225,8 @@ boundaries nothing specifies (the direction of a zero initial velocity, exact to
 equality on a spring), and the unwired `CircularNotchedRectangle`. The 658 uncovered mutants
 are `Color32`, `TextScaler`, `CircularNotchedRectangle` and `Path`'s curve arms, which no
 public entry point reaches.
+
+The unwired types were then removed and `Path` gained its curve methods (see the table's last
+row). The curve code adds survivors of one kind only: constants in Wang's formula that make
+the flattening finer than needed, or coarser by less than the bound's slack, which the
+0.15 px containment oracle cannot tell apart.
