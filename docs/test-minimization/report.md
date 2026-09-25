@@ -1,9 +1,9 @@
 # Test-suite minimization: report (Phase 4)
 
-One row per completed module/slice. Mutation score is measured with `cargo mutants`
-(`.cargo/mutants.toml`, nextest tool), scoped to the exact source files each slice touches;
-`caught`/`missed`/`unviable` counts and mutation score are all before-vs-after on that same file
-scope, not the whole crate.
+One row per completed module/slice. The early slices were measured with `cargo mutants` (nextest
+tool) and the later ones with `cargo gamma` (`gamma.toml`, see docs/testing.md's "Mutation
+Testing"). Counts are before-vs-after on the source files the slice
+touches, not the whole crate.
 
 ## flui-types — Point/Rect duplicate-of-property removal (pilot slice)
 
@@ -150,6 +150,8 @@ that fails without the fix. Flutter parity claims were checked against the 3.44.
 | Corners/Edges moved to flui-geometry (`a46d1391e`, `659cf6fc1`) | `corners.rs`, `corner.rs`, `edges.rs` | 53 / 59 | 102 / 10 |
 | Layout and RTL integration files removed (`ca68e2d48`) | `layout/*.rs`, cargo-gamma | 201 killed / 7 survived | 201 / 7, 0 uncovered |
 | Geometry integration files removed (`1b7c1d4b0`) | 9 flui-geometry files, cargo-gamma | 1005 killed (both crates' tests) | 1014 killed (flui-geometry alone) |
+| Path contour semantics, bounds cache, chord count (`687b543fb`) | `painting/path.rs`, cargo-gamma | 143 survived | 43 survived (all equivalent or unspecified) |
+| Crate-wide survivors (`e7894e7f1`) | all of flui-types, 5278 mutants, cargo-gamma | 4230 killed / 376 survived (79.9%) | 4464 / 154 (84.6%) |
 
 Every mutant the baseline caught stayed caught in each slice (compared by position). Remaining
 survivors in `color.rs` are equivalent (`|` vs `^` on disjoint bits, `<` vs `<=` at unreachable
@@ -204,7 +206,7 @@ order of magnitude. Differences worth knowing:
   cannot go; cargo-mutants does.
 - gamma reports `NoCoverage` separately from survivors, which is what made the unique-killer
   checks above cheap: a mutant no remaining test reaches shows up without being run.
-- trybuild tests fail its baseline (they compile examples inside the instrumented tree); skip
-  them with `-- --skip unit_mixing_compile_fail`.
-- It is three weeks old. cargo-mutants stays the reference (`.cargo/mutants.toml`) until gamma
-  has been compared on more scopes.
+- trybuild tests fail its baseline (they compile examples inside the instrumented tree);
+  `gamma.toml` skips them, with the other nested-cargo tests, by name.
+- It is three weeks old. It replaced cargo-mutants as the workspace tool (`gamma.toml`; the
+  `.cargo/mutants.toml` it superseded is gone) after the scopes above agreed.

@@ -1,0 +1,36 @@
+# cargo-gamma configuration: mutation testing, the measure a test suite is
+# judged by here (see docs/testing.md and docs/test-minimization/). Mutation
+# score, not test count or line coverage, is what shows a rewritten or pruned
+# suite still catches what the old one did.
+#
+# cargo-gamma compiles every selected mutant into one instrumented build and
+# switches them on at run time, so a run pays one build instead of one per
+# mutant. Scope a run with `-p <crate>` and `--file <path>`; the report lands
+# in `target/cargo-gamma/` (JSON, HTML, SARIF).
+#
+# Every key is optional and unknown keys are an error; the reference is
+# cargo-gamma's CONFIG.md. List keys here are extended by the command line,
+# scalar keys are overridden by it, and `--no-config` ignores this file.
+
+# The dev host is shared, so a loaded machine can push a fast test binary
+# past a timeout derived from its baseline for reasons unrelated to the
+# mutant.
+minimum-test-timeout = 60.0
+
+# The nested-cargo tests (the `nested-cargo` group in .config/nextest.toml)
+# run rustc or cargo themselves: trybuild's compile-fail fixtures, and the
+# projects flui-cli generates and the facade consumer builds. Inside the
+# instrumented tree they fail the baseline or cost a full compile per mutant,
+# and none of them can see a mutated library body. They are skipped by test
+# name, which works whichever crates a run selects; `exclude-tests` would
+# reject a run whose crates lack the named target.
+cargo-test-args = [
+    "--skip",
+    "trybuild_ui",
+    "--skip",
+    "cli_create::generated_",
+    "--skip",
+    "ordinary_facade_graph_excludes_test_support",
+    "--skip",
+    "external_consumers_can_name_custom_paint_contract",
+]

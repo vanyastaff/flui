@@ -7,7 +7,7 @@
 //! compile-fail suite (`crates/flui-types/tests/unit_mixing_compile_fail.rs`).
 
 #[test]
-fn ui() {
+fn trybuild_ui() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/compile_fail/*.rs");
 }
