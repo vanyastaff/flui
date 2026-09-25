@@ -302,7 +302,11 @@ fn lerp_oklab_midpoint_is_symmetric() {
         (Color::RED, Color::GREEN),
         (Color::BLUE, Color::rgb(255, 200, 0)),
     ] {
-        assert_eq!(Color::lerp_oklab(x, y, 0.5), Color::lerp_oklab(y, x, 0.5), "{x:?} {y:?}");
+        assert_eq!(
+            Color::lerp_oklab(x, y, 0.5),
+            Color::lerp_oklab(y, x, 0.5),
+            "{x:?} {y:?}"
+        );
         assert_ne!(Color::lerp_oklab(x, y, 0.25), Color::lerp_oklab(y, x, 0.25));
     }
 }
