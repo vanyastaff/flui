@@ -1382,4 +1382,14 @@ mod typed_tests {
         assert_eq!(total_owned.width, px(90.0));
         assert_eq!(total_owned.height, px(120.0));
     }
+
+    #[test]
+    fn scale_with_and_unscale() {
+        use crate::{DevicePixels, ScaleFactor, device_px};
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        let device = Size::new(px(10.0), px(4.2)).scale_with(scale);
+        assert_eq!(device, Size::new(device_px(20), device_px(8)));
+        let back = Size::new(device_px(21), device_px(7)).unscale(scale);
+        assert_eq!(back, Size::new(px(10.5), px(3.5)));
+    }
 }

@@ -1157,4 +1157,9 @@ mod tests {
     fn length_default() {
         assert_eq!(Length::default(), Length::Auto);
     }
+
+    #[test]
+    fn rems_unit_one() {
+        assert_eq!(<Rems as crate::traits::Unit>::one(), Rems(1.0));
+    }
 }

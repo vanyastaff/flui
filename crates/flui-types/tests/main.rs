@@ -17,21 +17,5 @@ mod color_blend_tests;
 mod color_operations_tests;
 #[path = "color_property_tests.rs"]
 mod color_property_tests;
-#[path = "device_pixels_geometry_tests.rs"]
-mod device_pixels_geometry_tests;
-#[path = "geometric_calculations_tests.rs"]
-mod geometric_calculations_tests;
-#[path = "geometry_property_tests.rs"]
-mod geometry_property_tests;
-#[path = "rems_unit_tests.rs"]
-mod rems_unit_tests;
-#[path = "scale_conversion_tests.rs"]
-mod scale_conversion_tests;
-#[path = "typed_geometry_integration.rs"]
-mod typed_geometry_integration;
-#[path = "unit_conversions_tests.rs"]
-mod unit_conversions_tests;
 #[path = "unit_mixing_compile_fail.rs"]
 mod unit_mixing_compile_fail;
-#[path = "unit_trait_tests.rs"]
-mod unit_trait_tests;

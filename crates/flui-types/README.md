@@ -177,22 +177,22 @@ cargo bench
 
 ## Testing
 
-Comprehensive test suite with 500+ tests:
+Most tests live next to the code they check; `tests/` holds the colour
+property and blend-algebra suites, compiled into one `types_it` binary, and a
+trybuild check that units cannot be mixed. Geometry types are re-exported from
+`flui-geometry` and tested there.
 
 ```bash
-# Run all tests
-cargo test
+# Everything
+cargo nextest run -p flui-types
 
-# Run specific test suite
-cargo test --test geometry_tests
-cargo test --test color_operations_tests
-cargo test --test rtl_support_tests
-
-# Run with coverage
-cargo tarpaulin --out Html
+# One module, or the integration binary
+cargo nextest run -p flui-types styling::color
+cargo nextest run -p flui-types --test types_it
 ```
 
-Current coverage: **>80%** (constitution requirement met)
+Mutation testing is the measure of these tests' strength; see
+`docs/test-minimization/`.
 
 ## RTL Support
 

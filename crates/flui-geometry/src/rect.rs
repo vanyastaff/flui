@@ -1248,4 +1248,48 @@ mod tests {
         assert_eq!(r.min, Point::ORIGIN);
         assert_eq!(r.max, Point::ORIGIN);
     }
+
+    #[test]
+    fn construction_and_side_by_side_queries() {
+        let ltrb = |l, t, r, b| Rect::from_ltrb(px(l), px(t), px(r), px(b));
+        assert_eq!(
+            Rect::from_ltwh(px(1.0), px(2.0), px(10.0), px(20.0)),
+            ltrb(1.0, 2.0, 11.0, 22.0)
+        );
+        let r = ltrb(0.0, 0.0, 10.0, 10.0);
+        assert_eq!(r.expand(px(2.0)), ltrb(-2.0, -2.0, 12.0, 12.0));
+        assert_eq!(
+            r.union_pt(Point::new(px(-1.0), px(20.0))),
+            ltrb(-1.0, 0.0, 10.0, 20.0)
+        );
+
+        // Touching edges do not overlap.
+        let touching = ltrb(10.0, 0.0, 20.0, 10.0);
+        assert!(!r.overlaps(&touching));
+        assert!(!r.intersects(&touching));
+        assert!(r.intersects(&ltrb(5.0, 5.0, 15.0, 15.0)));
+
+        // Each edge of the intersection comes from whichever side is inner,
+        // in either argument order.
+        let a = ltrb(0.0, 2.0, 10.0, 12.0);
+        let b = ltrb(1.0, 0.0, 11.0, 9.0);
+        assert_eq!(a.intersect(&b), Some(ltrb(1.0, 2.0, 10.0, 9.0)));
+        assert_eq!(b.intersect(&a), Some(ltrb(1.0, 2.0, 10.0, 9.0)));
+    }
+
+    #[test]
+    fn scale_with_and_unscale() {
+        use crate::{DevicePixels, ScaleFactor, device_px};
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        let device = Rect::from_ltrb(px(10.0), px(-4.2), px(12.0), px(3.0)).scale_with(scale);
+        let expect = Rect::from_min_max(
+            Point::new(device_px(20), device_px(-8)),
+            Point::new(device_px(24), device_px(6)),
+        );
+        assert_eq!(device, expect);
+        assert_eq!(
+            expect.unscale(scale),
+            Rect::from_ltrb(px(10.0), px(-4.0), px(12.0), px(3.0))
+        );
+    }
 }

@@ -2051,4 +2051,41 @@ mod tests {
         let device = logical.to_device(scale);
         assert_eq!(device.get(), 125);
     }
+
+    #[test]
+    #[expect(deprecated, reason = "the raw-f32 conversions are still public API")]
+    fn raw_scale_factor_conversions_round_and_divide() {
+        assert_eq!(Pixels(10.3).to_device_pixels(2.0), DevicePixels(21));
+        assert_eq!(
+            Pixels::from_device_pixels(DevicePixels(21), 2.0),
+            Pixels(10.5)
+        );
+        assert_eq!(DevicePixels(21).to_pixels(2.0), Pixels(10.5));
+    }
+
+    #[test]
+    fn unit_identities_and_integer_ops() {
+        use crate::traits::{ApproxEq, IsZero};
+        assert_eq!(<Pixels as Unit>::one(), Pixels(1.0));
+        assert_eq!(<DevicePixels as Unit>::one(), DevicePixels(1));
+        assert_eq!(<Radians as Unit>::one(), Radians(1.0));
+        assert_eq!(Pixels(7.0).clamp(Pixels(0.0), Pixels(5.0)), Pixels(5.0));
+        assert_eq!(Pixels(3.0).clamp(Pixels(0.0), Pixels(5.0)), Pixels(3.0));
+        assert_eq!(DevicePixels(-3).abs(), DevicePixels(3));
+        assert_eq!(DevicePixels(7) / DevicePixels(2), 3);
+        assert_eq!(format!("{:?}", Pixels(2.5)), "2.5px");
+        assert!(DevicePixels(0).is_zero());
+        assert!(!DevicePixels(3).is_zero());
+        assert!(1.0_f32.approx_eq(&1.0));
+        assert!(!1.0_f32.approx_eq(&1.1));
+    }
+
+    #[test]
+    fn radians_degrees_and_turns() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        assert!((Radians::from_degrees(180.0).0 - PI).abs() < 1e-6);
+        assert!((Radians(FRAC_PI_2).to_degrees() - 90.0).abs() < 1e-4);
+        assert!((Radians(-FRAC_PI_2).normalize().0 - 1.5 * PI).abs() < 1e-6);
+        assert_eq!(Radians::from(crate::Percentage(0.25)), Radians(FRAC_PI_2));
+    }
 }
