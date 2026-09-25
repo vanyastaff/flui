@@ -115,13 +115,22 @@ impl std::fmt::Debug for SubtreeAnchor {
 /// into a [`SubtreeAnchor`] for as long as it is mounted.
 ///
 /// See the module docs for why this exists and why `attach`/`detach` are the only
-/// hooks that can do it.
-#[derive(Debug, Clone, Default)]
+/// hooks that establish and retract the mounted identity. Rebinding the anchor
+/// while attached transfers that same identity to the new slot.
+#[derive(Debug, Default)]
 pub struct RenderSubtreeAnchor {
     anchor: SubtreeAnchor,
+    mounted_id: Option<RenderId>,
     /// Whether a child was attached at the last layout — gates hit-testing, so a
     /// childless anchor does not absorb hits.
     has_child: bool,
+}
+
+impl Clone for RenderSubtreeAnchor {
+    fn clone(&self) -> Self {
+        // Mount identity belongs to the inserted object, not its copies.
+        Self::new(self.anchor.clone())
+    }
 }
 
 impl RenderSubtreeAnchor {
@@ -130,8 +139,22 @@ impl RenderSubtreeAnchor {
     pub fn new(anchor: SubtreeAnchor) -> Self {
         Self {
             anchor,
+            mounted_id: None,
             has_child: false,
         }
+    }
+
+    /// Changes the publication slot without replacing the mounted render node.
+    /// An unmounted object publishes nothing until its next attach.
+    pub fn set_anchor(&mut self, anchor: SubtreeAnchor) {
+        if Arc::ptr_eq(&self.anchor.published, &anchor.published) {
+            return;
+        }
+        if let Some(id) = self.mounted_id {
+            self.anchor.clear();
+            anchor.publish(id);
+        }
+        self.anchor = anchor;
     }
 
     /// The anchor this object publishes into.
@@ -186,6 +209,7 @@ impl RenderBox for RenderSubtreeAnchor {
     /// The publication. `RenderInvalidationHandle::id()` is the render object's own id, and
     /// this is the first moment it exists.
     fn attach(&mut self, handle: RenderInvalidationHandle) {
+        self.mounted_id = Some(handle.id());
         self.anchor.publish(handle.id());
     }
 
@@ -193,6 +217,7 @@ impl RenderBox for RenderSubtreeAnchor {
     /// caller could resolve a stale subtree and measure a disposed route.
     fn detach(&mut self) {
         self.anchor.clear();
+        self.mounted_id = None;
     }
 
     flui_rendering::forward_single_child_box_queries!();
