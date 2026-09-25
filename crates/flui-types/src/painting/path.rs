@@ -1486,4 +1486,202 @@ mod tests {
             "a point 5 units outside the same rim stays outside"
         );
     }
+
+    mod geometry_oracles {
+        use super::super::*;
+        use crate::geometry::{Offset, Point, RRect, Radius, px};
+        use proptest::prelude::*;
+
+        fn p(x: f32, y: f32) -> Point<Pixels> {
+            Point::new(px(x), px(y))
+        }
+
+        fn rect(l: f32, t: f32, r: f32, b: f32) -> Rect<Pixels> {
+            Rect::from_ltrb(px(l), px(t), px(r), px(b))
+        }
+
+        fn with(fill: PathFillType, mut path: Path) -> Path {
+            path.set_fill_type(fill);
+            path
+        }
+
+        const FILLS: [PathFillType; 2] = [PathFillType::NonZero, PathFillType::EvenOdd];
+
+        /// Twice the signed area of `abc`.
+        fn cross(a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> f32 {
+            (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+        }
+
+        proptest! {
+            /// A triangle contains exactly the points on the inner side of
+            /// all three edges, under either fill rule and either winding.
+            /// Points within a small band of an edge are skipped: which
+            /// side of the boundary they land on is not specified.
+            #[test]
+            fn triangle_containment_matches_barycentric(
+                v in proptest::array::uniform3((-50.0f32..50.0, -50.0f32..50.0)),
+                q in (-60.0f32..60.0, -60.0f32..60.0),
+            ) {
+                let area = cross(v[0], v[1], v[2]);
+                prop_assume!(area.abs() > 50.0);
+                let d = [cross(v[0], v[1], q), cross(v[1], v[2], q), cross(v[2], v[0], q)];
+                let edge_len = |a: (f32, f32), b: (f32, f32)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+                let lens = [edge_len(v[0], v[1]), edge_len(v[1], v[2]), edge_len(v[2], v[0])];
+                prop_assume!(d.iter().zip(lens).all(|(d, l)| d.abs() / l > 0.01));
+                let inside = d.iter().all(|x| x.signum() == area.signum());
+                let points = v.map(|(x, y)| p(x, y));
+                for fill in FILLS {
+                    let path = with(fill, Path::polygon(&points));
+                    prop_assert_eq!(path.contains(p(q.0, q.1)), inside);
+                }
+            }
+        }
+
+        /// Two squares overlapping in [10, 20]². Wound the same way the
+        /// overlap has winding 2: filled by non-zero, a hole for even-odd.
+        /// Wound oppositely it has winding 0: a hole for both.
+        #[test]
+        fn fill_rules_differ_on_the_overlap() {
+            let square = |path: &mut Path, l: f32, t: f32, s: f32, clockwise: bool| {
+                let mut corners = [p(l, t), p(l + s, t), p(l + s, t + s), p(l, t + s)];
+                if !clockwise {
+                    corners.reverse();
+                }
+                path.move_to(corners[0]);
+                for c in &corners[1..] {
+                    path.line_to(*c);
+                }
+                path.close();
+            };
+            for (same_way, overlap_nonzero) in [(true, true), (false, false)] {
+                for fill in FILLS {
+                    let mut path = Path::with_fill_type(fill);
+                    square(&mut path, 0.0, 0.0, 20.0, true);
+                    square(&mut path, 10.0, 10.0, 20.0, same_way);
+                    let expected_overlap = fill == PathFillType::NonZero && overlap_nonzero;
+                    assert_eq!(
+                        path.contains(p(15.0, 15.0)),
+                        expected_overlap,
+                        "{fill:?} same_way={same_way}"
+                    );
+                    assert!(
+                        path.contains(p(5.0, 5.0)) && path.contains(p(25.0, 25.0)),
+                        "{fill:?}"
+                    );
+                    assert!(
+                        !path.contains(p(25.0, 5.0)) && !path.contains(p(-1.0, 5.0)),
+                        "{fill:?}"
+                    );
+                }
+            }
+        }
+
+        /// Standalone shapes add one to the winding inside them.
+        #[test]
+        fn standalone_shapes_under_both_fill_rules() {
+            for fill in FILLS {
+                let mut path = Path::with_fill_type(fill);
+                path.add_rect(rect(0.0, 0.0, 40.0, 20.0));
+                path.add_oval(rect(30.0, 0.0, 70.0, 20.0));
+                assert!(path.contains(p(5.0, 10.0)), "{fill:?}"); // rect only
+                assert!(path.contains(p(60.0, 10.0)), "{fill:?}"); // oval only
+                assert_eq!(path.contains(p(35.0, 10.0)), fill == PathFillType::NonZero); // both
+                assert!(!path.contains(p(69.0, 1.0)), "{fill:?}"); // oval's box corner
+                assert!(!path.contains(p(80.0, 10.0)), "{fill:?}");
+            }
+            // An oval is its ellipse: in at the rim's inner side, out beyond it.
+            let oval = Path::oval(rect(0.0, 0.0, 40.0, 20.0));
+            assert!(oval.contains(p(38.0, 10.0)) && !oval.contains(p(20.0, 21.0)));
+            let circle = Path::circle(p(10.0, 10.0), 5.0);
+            assert!(circle.contains(p(14.0, 10.0)) && !circle.contains(p(14.0, 14.0)));
+            assert!(Path::rectangle(rect(0.0, 0.0, 4.0, 4.0)).contains(p(3.0, 3.0)));
+            assert!(!Path::new().contains(p(0.0, 0.0)));
+        }
+
+        /// Distinct radii per corner (tl 20, tr 5, br 10, bl 0) on a 100×60
+        /// rect: each corner cuts away exactly its own quarter circle.
+        #[test]
+        fn from_rrect_rounds_each_corner_by_its_own_radius() {
+            let r = |v: f32| Radius::circular(px(v));
+            let rrect = RRect::from_rect_and_corners(
+                rect(0.0, 0.0, 100.0, 60.0),
+                r(20.0),
+                r(5.0),
+                r(10.0),
+                r(0.0),
+            );
+            let path = Path::from_rrect(rrect);
+            for (point, inside) in [
+                ((50.0, 30.0), true),
+                ((4.0, 4.0), false),   // tl: 22.6 from (20, 20)
+                ((10.0, 10.0), true),  // tl: 14.1 from (20, 20)
+                ((99.0, 1.0), false),  // tr: 5.7 from (95, 5)
+                ((96.0, 4.0), true),   // tr: 1.4 from (95, 5)
+                ((99.0, 59.0), false), // br: 12.7 from (90, 50)
+                ((95.0, 55.0), true),  // br: 7.1 from (90, 50)
+                ((1.0, 59.0), true),   // bl: square
+                ((1.0, 30.0), true),   // on the left edge's inner side
+                ((50.0, 1.0), true),   // on the top edge's inner side
+            ] {
+                assert_eq!(path.contains(p(point.0, point.1)), inside, "{point:?}");
+            }
+            assert_eq!(path.compute_bounds(), rect(0.0, 0.0, 100.0, 60.0));
+            // No rounding at all is a plain rectangle.
+            let square = Path::from_rrect(RRect::from_rect(rect(0.0, 0.0, 10.0, 10.0)));
+            assert_eq!(
+                square.commands(),
+                Path::rectangle(rect(0.0, 0.0, 10.0, 10.0)).commands()
+            );
+        }
+
+        #[test]
+        fn bounds_translate_and_reset() {
+            let mut path = Path::polygon(&[p(-5.0, 2.0), p(10.0, -3.0), p(4.0, 8.0)]);
+            let bounds = rect(-5.0, -3.0, 10.0, 8.0);
+            assert_eq!(path.cached_bounds(), None);
+            assert_eq!(path.compute_bounds(), bounds);
+            assert_eq!(path.bounds(), bounds);
+            assert_eq!(path.cached_bounds(), Some(bounds));
+
+            let moved = path.translate(Offset::new(px(10.0), px(20.0)));
+            assert_eq!(moved.compute_bounds(), rect(5.0, 17.0, 20.0, 28.0));
+            assert_eq!(moved.cached_bounds(), None);
+            assert!(moved.contains(p(13.0, 21.0)) && !path.contains(p(13.0, 21.0)));
+            let shapes = {
+                let mut s = Path::new();
+                s.add_rect(rect(0.0, 0.0, 2.0, 2.0));
+                s.add_oval(rect(4.0, 0.0, 6.0, 2.0));
+                s.add_arc(rect(8.0, 0.0, 10.0, 2.0), 0.0, 1.0);
+                s.translate(Offset::new(px(1.0), px(1.0)))
+            };
+            assert_eq!(shapes.compute_bounds(), rect(1.0, 1.0, 11.0, 3.0));
+
+            assert!(!path.is_empty());
+            path.reset();
+            assert!(path.is_empty());
+            assert_eq!(path.cached_bounds(), None);
+            assert_eq!(path.compute_bounds(), Rect::ZERO);
+        }
+
+        #[test]
+        fn fill_type_and_constructors() {
+            assert_eq!(
+                Path::with_fill_type(PathFillType::EvenOdd).fill_type(),
+                PathFillType::EvenOdd
+            );
+            let mut path = Path::new();
+            assert_eq!(path.fill_type(), PathFillType::NonZero);
+            path.set_fill_type(PathFillType::EvenOdd);
+            assert_eq!(path.fill_type(), PathFillType::EvenOdd);
+            assert_eq!(
+                Path::arc(rect(0.0, 0.0, 4.0, 4.0), 0.0, 1.0).compute_bounds(),
+                rect(0.0, 0.0, 4.0, 4.0)
+            );
+            assert_eq!(
+                Path::circle(p(5.0, 5.0), 2.0).compute_bounds(),
+                rect(3.0, 3.0, 7.0, 7.0)
+            );
+            assert!(Path::polygon(&[]).is_empty());
+        }
+    }
 }
