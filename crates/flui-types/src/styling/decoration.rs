@@ -578,6 +578,20 @@ mod tests {
         assert_eq!(mid.box_shadow, Some(vec![shadow(3.0)]));
         assert_eq!(mid.gradient, Some(gradient()));
         assert_eq!(Deco::lerp(&Deco::new(), &Deco::new(), 0.5), Deco::new());
+
+        // Gradients with different colour counts still interpolate, so the
+        // transition paints one throughout instead of none.
+        let three = Gradient::Linear(LinearGradient::horizontal(vec![
+            Color::RED,
+            Color::GREEN,
+            Color::BLUE,
+        ]));
+        let across = Deco::lerp(
+            &Deco::new().set_gradient(Some(gradient())),
+            &Deco::new().set_gradient(Some(three)),
+            0.5,
+        );
+        assert_eq!(across.gradient.map(|g| g.colors().len()), Some(3));
     }
 
     #[test]
