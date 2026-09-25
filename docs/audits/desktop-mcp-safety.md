@@ -10,6 +10,17 @@ by `flui-platform`; no framework behavior, CI workflow or publishing changes.
 
 ## Repaired failure scenarios
 
+UIA role refinement treats both password and dialog discriminants as tri-state values.
+A missing or malformed `IsDialog` yields an unknown, unmatchable role rather than an
+ordinary window, including providers that cannot cache this newer property. The shared
+regression checks real UIA variants, serialization and semantic/native queries for both
+role pairs. A confirmed dialog still accepts its native `Window` query, as the published
+query contract permits. Reintroducing the missing-dialog-as-false fallback makes the
+regression fail; restoring the implementation passes it.
+`cargo xtask check-changed --base 989200b3f` passed: 177 tests, ten skipped, formatting,
+strict rustdoc and Windows/macOS clippy. All six native Windows entries passed. Missing
+provider flags were injected as variants, not produced by a custom live UIA provider.
+
 Launch identity preparation borrows the registry exclusively without modifying it.
 Publication builds the reply, checks cancellation, publishes the child token and commits
 the identity on the desktop worker. Dropping an unpublished preparation leaves no PID

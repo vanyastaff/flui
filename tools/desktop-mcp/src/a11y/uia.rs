@@ -1783,10 +1783,6 @@ fn describe(element: &UIElement, id: String) -> Node {
         }
     }
     let (role, native_role) = role(element);
-    let role = match role {
-        Role::Window if cached_bool(element, UIProperty::IsDialog) => Role::Dialog,
-        role => role,
-    };
     let mut node = Node {
         id,
         role,
@@ -1817,19 +1813,24 @@ fn describe(element: &UIElement, id: String) -> Node {
         native_window: None,
     };
     enabled_state(&mut node, cached_flag(element, UIProperty::IsEnabled));
-    password_role(&mut node, cached_flag(element, UIProperty::IsPassword));
+    refine_role(
+        &mut node,
+        cached_flag(element, UIProperty::IsPassword),
+        cached_flag(element, UIProperty::IsDialog),
+    );
     node
 }
 
-/// Password state distinguishes two roles; an unreadable discriminant is
-/// neither ordinary text input nor password input. Mark the observation
-/// incomplete even when no Value pattern exists to trigger a value read.
-fn password_role(node: &mut Node, password: Option<bool>) {
-    if node.role != Role::TextInput {
-        return;
-    }
-    match password {
-        Some(true) => node.role = Role::PasswordInput,
+/// Role discriminants must be readable before either alternative can be
+/// reported or matched. Unrelated properties do not affect other roles.
+fn refine_role(node: &mut Node, password: Option<bool>, dialog: Option<bool>) {
+    let (flag, alternative) = match node.role {
+        Role::TextInput => (password, Role::PasswordInput),
+        Role::Window => (dialog, Role::Dialog),
+        _ => return,
+    };
+    match flag {
+        Some(true) => node.role = alternative,
         Some(false) => {}
         None => {
             node.role = Role::Unknown;
@@ -2011,10 +2012,10 @@ fn node_request(
     for &(prop, _) in PATTERNS {
         request.add_property(prop)?;
     }
-    // Newer than the rest (Windows 10 1809): without it, no window reads as
-    // a dialog, and nothing else changes.
+    // Newer than the rest (Windows 10 1809): without it, Window controls
+    // cannot be classified as ordinary windows or dialogs.
     if request.add_property(UIProperty::IsDialog).is_err() {
-        tracing::debug!("UI Automation does not know IsDialog; dialogs read as windows");
+        tracing::debug!("UI Automation does not know IsDialog; window roles remain unknown");
     }
     request.set_tree_scope(scope)?;
     request.set_tree_filter(automation.get_control_view_condition()?)?;
@@ -2209,45 +2210,68 @@ mod tests {
     use super::*;
 
     #[test]
-    fn password_role_requires_a_readable_boolean_even_without_a_value_pattern() {
+    fn semantic_roles_require_readable_discriminants_even_without_a_value_pattern() {
         use uiautomation::variants::Variant;
 
-        for (value, expected) in [
-            (None, None),
-            (Some(Variant::from(1_i32)), None),
-            (Some(Variant::from(false)), Some(Role::TextInput)),
-            (Some(Variant::from(true)), Some(Role::PasswordInput)),
+        for (control, native, ordinary, alternative) in [
+            (
+                ControlType::Edit,
+                "Edit",
+                Role::TextInput,
+                Role::PasswordInput,
+            ),
+            (ControlType::Window, "Window", Role::Window, Role::Dialog),
         ] {
-            for has_text_value in [false, true] {
-                let mut node = crate::a11y::tests_node();
-                node.role = role_of(ControlType::Edit);
-                node.native_role = "Edit".into();
-                node.has_text_value = has_text_value;
-                password_role(&mut node, flag_value(value.clone()));
-                assert_eq!(
-                    node.unmatchable,
-                    expected.is_none(),
-                    "an incomplete role must mark the tree read truncated"
-                );
-                let wire = serde_json::to_value(&node).expect("BUG: node serializes");
-                assert_eq!(wire["role"], expected.unwrap_or(Role::Unknown).name());
-                assert_eq!(wire["native_role"], "Edit");
-                for role in [Role::TextInput, Role::PasswordInput] {
-                    let query = crate::a11y::Query {
-                        role: Some(role.name().into()),
+            for (value, expected) in [
+                (None, None),
+                (Some(Variant::from(1_i32)), None),
+                (Some(Variant::from(false)), Some(ordinary)),
+                (Some(Variant::from(true)), Some(alternative)),
+            ] {
+                for has_text_value in [false, true] {
+                    let mut node = crate::a11y::tests_node();
+                    node.role = role_of(control);
+                    node.native_role = native.into();
+                    node.has_text_value = has_text_value;
+                    let flag = flag_value(value.clone());
+                    let (password, dialog) = if ordinary == Role::TextInput {
+                        (flag, None)
+                    } else {
+                        (None, flag)
+                    };
+                    refine_role(&mut node, password, dialog);
+                    assert_eq!(
+                        node.unmatchable,
+                        expected.is_none(),
+                        "an incomplete role must mark the tree read truncated"
+                    );
+                    let wire = serde_json::to_value(&node).expect("BUG: node serializes");
+                    assert_eq!(wire["role"], expected.unwrap_or(Role::Unknown).name());
+                    assert_eq!(wire["native_role"], native);
+                    for role in [ordinary, alternative] {
+                        let query = crate::a11y::Query {
+                            role: Some(role.name().into()),
+                            ..crate::a11y::Query::default()
+                        }
+                        .prepared()
+                        .expect("BUG: valid role query");
+                        // Queries also accept native names: a confirmed
+                        // dialog still has the native control type Window.
+                        let native_window_match =
+                            role == Role::Window && expected == Some(Role::Dialog);
+                        assert_eq!(
+                            query.matches(&node),
+                            expected == Some(role) || native_window_match
+                        );
+                    }
+                    let native_query = crate::a11y::Query {
+                        role: Some(native.into()),
                         ..crate::a11y::Query::default()
                     }
                     .prepared()
-                    .expect("BUG: valid role query");
-                    assert_eq!(query.matches(&node), expected == Some(role));
+                    .expect("BUG: valid native role query");
+                    assert_eq!(native_query.matches(&node), expected.is_some());
                 }
-                let native_query = crate::a11y::Query {
-                    role: Some("Edit".into()),
-                    ..crate::a11y::Query::default()
-                }
-                .prepared()
-                .expect("BUG: valid native role query");
-                assert_eq!(native_query.matches(&node), expected.is_some());
             }
         }
     }
