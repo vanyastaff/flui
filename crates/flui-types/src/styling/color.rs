@@ -273,7 +273,12 @@ impl Color {
 
     #[inline]
     #[cfg_attr(
-        all(feature = "simd", target_arch = "x86_64", not(target_family = "wasm")),
+        all(
+            feature = "simd",
+            any(target_arch = "x86_64", target_arch = "aarch64"),
+            not(target_family = "wasm"),
+            not(test)
+        ),
         expect(
             dead_code,
             reason = "scalar fallback for `lerp`; unused when the SIMD path is compiled in, used on every other target"
@@ -298,7 +303,7 @@ impl Color {
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
     #[cfg_attr(
-        not(feature = "simd"),
+        all(not(feature = "simd"), not(test)),
         expect(
             dead_code,
             reason = "SIMD twin of `lerp_scalar`: compiled on every x86_64 build but only called when the `simd` feature selects it in `lerp`"
@@ -329,7 +334,13 @@ impl Color {
             let mut out = [0.0f32; 4];
             _mm_storeu_ps(out.as_mut_ptr(), result);
 
-            Color::rgba(out[0] as u8, out[1] as u8, out[2] as u8, out[3] as u8)
+            // Round like `lerp_scalar`; a bare `as u8` truncates.
+            Color::rgba(
+                out[0].round() as u8,
+                out[1].round() as u8,
+                out[2].round() as u8,
+                out[3].round() as u8,
+            )
         }
 
         #[cfg(not(target_feature = "sse2"))]
@@ -340,11 +351,14 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
-    #[expect(
-        dead_code,
-        unsafe_code,
-        reason = "SIMD twin of `lerp_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `lerp`; NEON intrinsics require unsafe"
+    #[cfg_attr(
+        all(not(feature = "simd"), not(test)),
+        expect(
+            dead_code,
+            reason = "SIMD twin of `lerp_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `lerp`"
+        )
     )]
+    #[expect(unsafe_code, reason = "NEON intrinsics require unsafe")]
     fn lerp_simd_neon(a: Color, b: Color, t: f32) -> Color {
         // SAFETY: gated on `target_feature = "neon"`, so the intrinsics are
         // available; `vld1q_f32`/`vst1q_f32` load/store 4 f32s from/into live
@@ -369,7 +383,13 @@ impl Color {
             let mut out = [0.0f32; 4];
             vst1q_f32(out.as_mut_ptr(), result);
 
-            Color::rgba(out[0] as u8, out[1] as u8, out[2] as u8, out[3] as u8)
+            // Round like `lerp_scalar`; a bare `as u8` truncates.
+            Color::rgba(
+                out[0].round() as u8,
+                out[1].round() as u8,
+                out[2].round() as u8,
+                out[3].round() as u8,
+            )
         }
 
         #[cfg(not(target_feature = "neon"))]
@@ -540,7 +560,12 @@ impl Color {
 
     #[inline]
     #[cfg_attr(
-        all(feature = "simd", target_arch = "x86_64", not(target_family = "wasm")),
+        all(
+            feature = "simd",
+            any(target_arch = "x86_64", target_arch = "aarch64"),
+            not(target_family = "wasm"),
+            not(test)
+        ),
         expect(
             dead_code,
             reason = "scalar fallback for `blend_over`; unused when the SIMD path is compiled in, used on every other target"
@@ -569,7 +594,7 @@ impl Color {
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
     #[cfg_attr(
-        not(feature = "simd"),
+        all(not(feature = "simd"), not(test)),
         expect(
             dead_code,
             reason = "SIMD twin of `blend_over_scalar`: compiled on every x86_64 build but only called when the `simd` feature selects it in `blend_over`"
@@ -632,11 +657,14 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
-    #[expect(
-        dead_code,
-        unsafe_code,
-        reason = "SIMD twin of `blend_over_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `blend_over`; NEON intrinsics require unsafe"
+    #[cfg_attr(
+        all(not(feature = "simd"), not(test)),
+        expect(
+            dead_code,
+            reason = "SIMD twin of `blend_over_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `blend_over`"
+        )
     )]
+    #[expect(unsafe_code, reason = "NEON intrinsics require unsafe")]
     fn blend_over_simd_neon(&self, background: Color) -> Color {
         // SAFETY: gated on `target_feature = "neon"`, so the intrinsics are
         // available; `vld1q_f32`/`vst1q_f32` load/store 4 f32s from/into live
@@ -1356,6 +1384,53 @@ mod tests {
     use super::*;
     use crate::geometry::ApproxEq;
     use crate::painting::BlendMode;
+
+    // The SIMD twins compile on every x86_64/aarch64 build but `lerp` and
+    // `blend_over` only call them under the `simd` feature, which the default
+    // test run doesn't enable. Checking each twin against its scalar
+    // original keeps them honest without that feature.
+    #[cfg(any(
+        all(target_arch = "x86_64", not(target_family = "wasm")),
+        all(target_arch = "aarch64", not(target_family = "wasm"))
+    ))]
+    mod simd_matches_scalar {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_color() -> impl Strategy<Value = Color> {
+            (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>())
+                .prop_map(|(r, g, b, a)| Color::rgba(r, g, b, a))
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        fn lerp_simd(a: Color, b: Color, t: f32) -> Color {
+            Color::lerp_simd_sse(a, b, t)
+        }
+        #[cfg(target_arch = "aarch64")]
+        fn lerp_simd(a: Color, b: Color, t: f32) -> Color {
+            Color::lerp_simd_neon(a, b, t)
+        }
+        #[cfg(target_arch = "x86_64")]
+        fn blend_over_simd(src: Color, dst: Color) -> Color {
+            src.blend_over_simd_sse(dst)
+        }
+        #[cfg(target_arch = "aarch64")]
+        fn blend_over_simd(src: Color, dst: Color) -> Color {
+            src.blend_over_simd_neon(dst)
+        }
+
+        proptest! {
+            #[test]
+            fn lerp(a in arb_color(), b in arb_color(), t in -0.5f32..=1.5) {
+                prop_assert_eq!(lerp_simd(a, b, t), Color::lerp_scalar(a, b, t));
+            }
+
+            #[test]
+            fn blend_over(src in arb_color(), dst in arb_color()) {
+                prop_assert_eq!(blend_over_simd(src, dst), src.blend_over_scalar(dst));
+            }
+        }
+    }
 
     /// Assert each RGBA channel of `actual` is within `tol` units of `expected`.
     #[track_caller]
