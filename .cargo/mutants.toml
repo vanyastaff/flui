@@ -1,0 +1,18 @@
+# cargo-mutants configuration for the test-minimization effort (see
+# docs/test-minimization/). Mutation score, not test count or coverage, is
+# the source of truth that a consolidated test suite hasn't lost
+# fault-detection strength.
+#
+# Uses nextest (already the workspace's test runner, see .config/nextest.toml)
+# instead of `cargo test` for consistent, per-test-process execution.
+test_tool = "nextest"
+
+# The workspace's own nextest profile already carries slow-test overrides
+# (nested-cargo tests, GPU readback serialization); reuse it rather than
+# re-deriving timeouts here.
+additional_cargo_test_args = ["--profile", "default"]
+
+# Baseline test run + each mutant's test run gets its own generous ceiling.
+# Mutation runs are scoped per-module with `-f` (see docs/testing.md), so this
+# bounds a single mutant's test time, not the whole crate.
+minimum_test_timeout = 60

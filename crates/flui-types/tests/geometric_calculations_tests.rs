@@ -21,32 +21,11 @@ fn test_point_distance_basic() {
     assert_eq!(dist, 5.0); // 3-4-5 triangle
 }
 
-#[test]
-fn test_point_distance_symmetric() {
-    let p1 = Point::new(px(10.0), px(20.0));
-    let p2 = Point::new(px(30.0), px(40.0));
-
-    let dist_12 = p1.distance(p2);
-    let dist_21 = p2.distance(p1);
-
-    assert_eq!(dist_12, dist_21, "Distance must be symmetric");
-}
-
-#[test]
-fn test_point_distance_to_self_is_zero() {
-    let p = Point::new(px(100.0), px(200.0));
-    let dist = p.distance(p);
-    assert_eq!(dist, 0.0);
-}
-
-#[test]
-fn test_point_distance_non_negative() {
-    let p1 = Point::new(px(-50.0), px(-30.0));
-    let p2 = Point::new(px(20.0), px(10.0));
-
-    let dist = p1.distance(p2);
-    assert!(dist >= 0.0, "Distance must be non-negative");
-}
+// test_point_distance_symmetric, test_point_distance_to_self_is_zero and
+// test_point_distance_non_negative were single-example pins of properties
+// already covered, for arbitrary points, by prop_point_distance_symmetric,
+// prop_point_distance_self_is_zero and prop_point_distance_non_negative in
+// tests/geometry_property_tests.rs.
 
 #[test]
 fn test_point_distance_squared() {
@@ -57,20 +36,10 @@ fn test_point_distance_squared() {
     assert_eq!(dist_sq, 25.0); // 3^2 + 4^2 = 25
 }
 
-#[test]
-fn test_point_triangle_inequality() {
-    // For any three points A, B, C: distance(A, B) + distance(B, C) >= distance(A,
-    // C)
-    let a = Point::new(px(0.0), px(0.0));
-    let b = Point::new(px(10.0), px(0.0));
-    let c = Point::new(px(10.0), px(10.0));
-
-    let ab = a.distance(b);
-    let bc = b.distance(c);
-    let ac = a.distance(c);
-
-    assert!(ab + bc >= ac - 0.001, "Triangle inequality violated");
-}
+// test_point_triangle_inequality was a single-example pin of the triangle
+// inequality, already covered for arbitrary points (with a tighter,
+// magnitude-scaled tolerance) by prop_point_triangle_inequality in
+// tests/geometry_property_tests.rs.
 
 // ============================================================================
 // T043: Offset magnitude and normalize
@@ -171,16 +140,9 @@ fn test_rect_intersect_result() {
     assert_eq!(result.bottom(), px(100.0));
 }
 
-#[test]
-fn test_rect_intersect_commutative() {
-    let rect1 = Rect::from_xywh(px(10.0), px(10.0), px(80.0), px(80.0));
-    let rect2 = Rect::from_xywh(px(50.0), px(50.0), px(100.0), px(100.0));
-
-    let int1 = rect1.intersect(&rect2);
-    let int2 = rect2.intersect(&rect1);
-
-    assert_eq!(int1, int2, "Intersection must be commutative");
-}
+// test_rect_intersect_commutative was a single-example pin of commutativity,
+// already covered for arbitrary rects by prop_rect_intersection_commutative
+// in tests/geometry_property_tests.rs.
 
 #[test]
 fn test_rect_intersect_self() {
@@ -222,19 +184,9 @@ fn test_rect_union_basic() {
     assert_eq!(union.bottom(), px(75.0));
 }
 
-#[test]
-fn test_rect_union_contains_both() {
-    let rect1 = Rect::from_xywh(px(10.0), px(10.0), px(20.0), px(20.0));
-    let rect2 = Rect::from_xywh(px(50.0), px(50.0), px(20.0), px(20.0));
-
-    let union = rect1.union(&rect2);
-
-    // Union must contain all corners of both rectangles
-    assert!(union.contains(rect1.top_left()));
-    assert!(union.contains(rect1.bottom_right()));
-    assert!(union.contains(rect2.top_left()));
-    assert!(union.contains(rect2.bottom_right()));
-}
+// test_rect_union_contains_both was a single-example pin of the containment
+// property, already covered for arbitrary rects by prop_rect_union_contains_both
+// in tests/geometry_property_tests.rs.
 
 #[test]
 fn test_rect_union_commutative() {

@@ -328,6 +328,15 @@ criterion = { version = "0.8", default-features = false, features = [
 # that needs deterministic output assertions. Test-only; not compiled in release.
 insta = "1"
 
+# PROPERTY-BASED TESTING - invariant/roundtrip/idempotence properties over
+# generated inputs (test-minimization effort). Test-only; not compiled in release.
+proptest = "1"
+
+# PARAMETERIZED TESTING - #[case] tables replacing near-identical example
+# tests that vary only in input literals (test-minimization effort).
+# Test-only; not compiled in release.
+rstest = "0.27"
+
 # Workspace-wide lints for consistent code quality (Rust 1.74+)
 [workspace.lints.rust]
 unsafe_code = "warn"
