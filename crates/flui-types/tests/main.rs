@@ -15,6 +15,8 @@
 mod color_approx_eq_tests;
 #[path = "color_operations_tests.rs"]
 mod color_operations_tests;
+#[path = "color_property_tests.rs"]
+mod color_property_tests;
 #[path = "corners_tests.rs"]
 mod corners_tests;
 #[path = "device_pixels_geometry_tests.rs"]

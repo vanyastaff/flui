@@ -3,7 +3,8 @@
 //! This module tests per-corner values for rounded rectangles, border radii,
 //! and corner-specific styling.
 
-use flui_types::geometry::{Corners, Radius, px};
+use flui_types::geometry::{Corners, Pixels, Radius, px};
+use rstest::rstest;
 
 // ============================================================================
 // Construction Tests
@@ -24,59 +25,26 @@ fn test_corners_new() {
     assert_eq!(corners.bottom_left, Radius::circular(px(4.0)));
 }
 
-#[test]
-fn test_corners_all() {
+/// `(top_left, top_right, bottom_right, bottom_left)` set-or-zero mask for
+/// each directional constructor.
+#[rstest]
+#[case::all(Corners::<Radius<Pixels>>::all, (true, true, true, true))]
+#[case::top(Corners::<Radius<Pixels>>::top, (true, true, false, false))]
+#[case::bottom(Corners::<Radius<Pixels>>::bottom, (false, false, true, true))]
+#[case::left(Corners::<Radius<Pixels>>::left, (true, false, false, true))]
+#[case::right(Corners::<Radius<Pixels>>::right, (false, true, true, false))]
+fn corners_directional_constructors(
+    #[case] ctor: fn(Radius<Pixels>) -> Corners<Radius<Pixels>>,
+    #[case] mask: (bool, bool, bool, bool),
+) {
     let radius = Radius::circular(px(16.0));
-    let corners = Corners::all(radius);
+    let corners = ctor(radius);
+    let expect = |set: bool| if set { radius } else { Radius::ZERO };
 
-    assert_eq!(corners.top_left, radius);
-    assert_eq!(corners.top_right, radius);
-    assert_eq!(corners.bottom_right, radius);
-    assert_eq!(corners.bottom_left, radius);
-}
-
-#[test]
-fn test_corners_top() {
-    let radius = Radius::circular(px(16.0));
-    let corners = Corners::top(radius);
-
-    assert_eq!(corners.top_left, radius);
-    assert_eq!(corners.top_right, radius);
-    assert_eq!(corners.bottom_right, Radius::ZERO);
-    assert_eq!(corners.bottom_left, Radius::ZERO);
-}
-
-#[test]
-fn test_corners_bottom() {
-    let radius = Radius::circular(px(16.0));
-    let corners = Corners::bottom(radius);
-
-    assert_eq!(corners.top_left, Radius::ZERO);
-    assert_eq!(corners.top_right, Radius::ZERO);
-    assert_eq!(corners.bottom_right, radius);
-    assert_eq!(corners.bottom_left, radius);
-}
-
-#[test]
-fn test_corners_left() {
-    let radius = Radius::circular(px(16.0));
-    let corners = Corners::left(radius);
-
-    assert_eq!(corners.top_left, radius);
-    assert_eq!(corners.top_right, Radius::ZERO);
-    assert_eq!(corners.bottom_right, Radius::ZERO);
-    assert_eq!(corners.bottom_left, radius);
-}
-
-#[test]
-fn test_corners_right() {
-    let radius = Radius::circular(px(16.0));
-    let corners = Corners::right(radius);
-
-    assert_eq!(corners.top_left, Radius::ZERO);
-    assert_eq!(corners.top_right, radius);
-    assert_eq!(corners.bottom_right, radius);
-    assert_eq!(corners.bottom_left, Radius::ZERO);
+    assert_eq!(corners.top_left, expect(mask.0));
+    assert_eq!(corners.top_right, expect(mask.1));
+    assert_eq!(corners.bottom_right, expect(mask.2));
+    assert_eq!(corners.bottom_left, expect(mask.3));
 }
 
 // ============================================================================

@@ -21,12 +21,6 @@ fn test_point_distance_basic() {
     assert_eq!(dist, 5.0); // 3-4-5 triangle
 }
 
-// test_point_distance_symmetric, test_point_distance_to_self_is_zero and
-// test_point_distance_non_negative were single-example pins of properties
-// already covered, for arbitrary points, by prop_point_distance_symmetric,
-// prop_point_distance_self_is_zero and prop_point_distance_non_negative in
-// tests/geometry_property_tests.rs.
-
 #[test]
 fn test_point_distance_squared() {
     let p1 = Point::new(px(0.0), px(0.0));
@@ -35,11 +29,6 @@ fn test_point_distance_squared() {
     let dist_sq = p1.distance_squared(p2);
     assert_eq!(dist_sq, 25.0); // 3^2 + 4^2 = 25
 }
-
-// test_point_triangle_inequality was a single-example pin of the triangle
-// inequality, already covered for arbitrary points (with a tighter,
-// magnitude-scaled tolerance) by prop_point_triangle_inequality in
-// tests/geometry_property_tests.rs.
 
 // ============================================================================
 // T043: Offset magnitude and normalize
@@ -140,10 +129,6 @@ fn test_rect_intersect_result() {
     assert_eq!(result.bottom(), px(100.0));
 }
 
-// test_rect_intersect_commutative was a single-example pin of commutativity,
-// already covered for arbitrary rects by prop_rect_intersection_commutative
-// in tests/geometry_property_tests.rs.
-
 #[test]
 fn test_rect_intersect_self() {
     let rect = Rect::from_xywh(px(10.0), px(10.0), px(50.0), px(50.0));
@@ -183,10 +168,6 @@ fn test_rect_union_basic() {
     assert_eq!(union.right(), px(75.0));
     assert_eq!(union.bottom(), px(75.0));
 }
-
-// test_rect_union_contains_both was a single-example pin of the containment
-// property, already covered for arbitrary rects by prop_rect_union_contains_both
-// in tests/geometry_property_tests.rs.
 
 #[test]
 fn test_rect_union_commutative() {

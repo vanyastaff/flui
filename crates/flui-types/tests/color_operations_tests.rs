@@ -66,27 +66,9 @@ fn test_color_from_hex_rrggbb() {
 }
 
 #[test]
-fn test_color_from_hex_without_hash() {
-    let blue = Color::from_hex("0000FF").unwrap();
-    assert_eq!(blue, Color::rgb(0, 0, 255));
-}
-
-#[test]
 fn test_color_from_hex_aarrggbb() {
     let semi_transparent_red = Color::from_hex("#80FF0000").unwrap();
     assert_eq!(semi_transparent_red, Color::rgba(255, 0, 0, 128));
-}
-
-#[test]
-fn test_color_from_hex_lowercase() {
-    let green = Color::from_hex("#00ff00").unwrap();
-    assert_eq!(green, Color::rgb(0, 255, 0));
-}
-
-#[test]
-fn test_color_from_hex_mixed_case() {
-    let color = Color::from_hex("#AbCdEf").unwrap();
-    assert_eq!(color, Color::rgb(0xAB, 0xCD, 0xEF));
 }
 
 #[test]
@@ -263,28 +245,6 @@ fn test_blend_over_preserves_opacity() {
 // ============================================================================
 
 #[test]
-fn test_lighten_basic() {
-    let color = Color::rgb(100, 100, 100);
-    let lighter = color.lighten(0.2);
-
-    // Should be brighter
-    assert!(lighter.r > color.r);
-    assert!(lighter.g > color.g);
-    assert!(lighter.b > color.b);
-}
-
-#[test]
-fn test_lighten_red() {
-    let red = Color::rgb(200, 0, 0);
-    let lighter = red.lighten(0.1);
-
-    assert!(lighter.r >= red.r);
-    // Lightening should increase other channels too (via HSL)
-    assert!(lighter.g >= red.g);
-    assert!(lighter.b >= red.b);
-}
-
-#[test]
 fn test_lighten_already_white() {
     let white = Color::WHITE;
     let lighter = white.lighten(0.5);
@@ -294,58 +254,12 @@ fn test_lighten_already_white() {
 }
 
 #[test]
-fn test_darken_basic() {
-    let color = Color::rgb(150, 150, 150);
-    let darker = color.darken(0.2);
-
-    // Should be darker
-    assert!(darker.r < color.r);
-    assert!(darker.g < color.g);
-    assert!(darker.b < color.b);
-}
-
-#[test]
-fn test_darken_blue() {
-    let blue = Color::rgb(0, 0, 200);
-    let darker = blue.darken(0.1);
-
-    assert!(darker.b <= blue.b);
-    // Darkening should decrease all channels
-    assert!(darker.r <= blue.r);
-    assert!(darker.g <= blue.g);
-}
-
-#[test]
 fn test_darken_already_black() {
     let black = Color::BLACK;
     let darker = black.darken(0.5);
 
     // Can't darken black further
     assert_eq!(darker, black);
-}
-
-#[test]
-fn test_lighten_darken_effect() {
-    let original = Color::rgb(128, 128, 128);
-    let lighter = original.lighten(0.2);
-    let darker = original.darken(0.2);
-
-    // Verify lighten makes it brighter
-    assert!(
-        lighter.r > original.r || lighter.g > original.g || lighter.b > original.b,
-        "Lighten should increase at least one channel"
-    );
-
-    // Verify darken makes it darker
-    assert!(
-        darker.r < original.r && darker.g < original.g && darker.b < original.b,
-        "Darken should decrease all channels"
-    );
-
-    // Lighter should be brighter than darker
-    assert!(lighter.r > darker.r);
-    assert!(lighter.g > darker.g);
-    assert!(lighter.b > darker.b);
 }
 
 // ============================================================================
@@ -521,13 +435,4 @@ fn test_alpha_blending_stack() {
     // Should have contributions from all layers
     assert!(result2.r > 0); // From red layer
     assert!(result2.b > 0); // From blue layer
-}
-
-#[test]
-fn test_color_to_hex_roundtrip() {
-    let original = Color::rgb(0xAB, 0xCD, 0xEF);
-    let hex = original.to_hex();
-    let parsed = Color::from_hex(&hex).unwrap();
-
-    assert_eq!(parsed, original);
 }

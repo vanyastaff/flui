@@ -57,5 +57,53 @@ here since fixing pre-existing gaps was not requested and would be a separate, l
   `test_vec2_addition_associative` — no matching property test exists yet; each is either a
   genuine one-off (`_self` identity checks) or a good *new* property to add later, not a
   duplicate to remove now.
-- `Color::from_hex` family, `Pixels`/`DevicePixels` scale-conversion ladder, `BoxFit` variants,
-  `flui-material` clusters — scoped for later slices of this module.
+- `flui-material` clusters.
+
+## flui-types — Color hex/lighten/darken, unit conversions, Corners
+
+Mutation runs from here on are scoped with `-F` to the functions the rewritten tests exercise
+(a whole-file run of `color.rs` is ~900 mutants, almost all in blend/SIMD code these tests never
+touch); the baseline side is the same regex applied to the Phase 2 baseline lists.
+
+**Color** (`tests/color_operations_tests.rs` → new `tests/color_property_tests.rs`): nine example
+tests (hex without `#`/lowercase/mixed case, `to_hex` roundtrip, `lighten_basic`/`_red`,
+`darken_basic`/`_blue`, `lighten_darken_effect`) replaced by six properties and one exact
+midpoint test. The anchor cases stay explicit: `#RRGGBB`, `#AARRGGBB`, white/black, the four
+invalid-format errors, already-white/already-black.
+
+| Scope: `Color::{from_hex,from_argb,to_hex,lighten,darken}` | Before | After |
+|---|---:|---:|
+| Caught | 38 | 50 |
+| Missed | 13 | 1 |
+| Unviable | 1 | 1 |
+
+Newly caught: all nine `lighten` arithmetic mutants (the old tests only checked direction, which
+a blend that saturates straight to white also satisfies), three `to_hex` nibble mutants. The
+generator puts `a == 255` in half the cases so `to_hex`'s opaque branch is exercised; uniform
+alpha reached it 1 time in 256, and the first run lost the `to_hex:405` kill because of it.
+
+Remaining missed: `from_hex:142 | → ^` is an equivalent mutant — `(0xFF << 24) | rgb` has
+disjoint bits, so OR and XOR agree for every input.
+
+**Unit conversions** (`tests/unit_conversions_tests.rs`): 40 → 32 tests. Three `rstest` tables
+(`to_device_pixels`, `DevicePixels::to_pixels`, `Rems::to_pixels`) absorb the literal ladders
+and the "real-world" duplicates (retina/mdpi/xxhdpi/125%, rem font sizes); four DevicePixels
+roundtrip examples → one property with a rounding + f32-ULP tolerance; two rem roundtrips → one
+property. The two proportionality tests stay as examples: rounding makes proportionality false
+for arbitrary floats (`px(0.3)`/`px(0.6)` at 1x round to 0 and 1).
+
+**Corners** (`tests/corners_tests.rs`): `all/top/bottom/left/right` → one `rstest` table (count
+unchanged, five copies of the same body removed).
+
+| Scope: units + corners constructors/conversions | Before | After |
+|---|---:|---:|
+| Caught | 16 | 16 |
+| Missed | 0 | 0 |
+
+**Not a candidate after review:** `BoxFit` in `painting/image.rs`. Phase 1 proposed folding its
+tests into one table; read closely, each test targets a different branch of Flutter's
+`applyBoxFit` (cover crops height vs width, fit-width/fit-height contain vs cover branch,
+`None` crop vs no crop, `ScaleDown`'s two-step shrink) and carries the parity note for it. A
+case table would hide which branch a regression broke.
+
+**`types_it`:** 415 → 406 tests, all passing.
