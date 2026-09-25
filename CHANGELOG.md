@@ -23,6 +23,15 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Added
 
+- **`flui-desktop-mcp`** (`tools/desktop-mcp`, ADR-0080): an MCP server over stdio that lets
+  an agent list and capture windows, read the accessibility tree, perform element actions
+  and send real input to any desktop application, with a backend-neutral wire contract —
+  session handles (`w3`, `e12`, `s2`), AccessKit role names with the native role alongside,
+  actions named after the tools, typed replies with output schemas, an outline format for
+  trees, and errors with a fixed `code`, a `retry` policy and an `effect`. Input tools
+  require a safety target (`window` or `pid`) and refuse unless it is in front and holds the
+  point or the keyboard focus. Windows first (UI Automation); window listing and capture
+  build on macOS; Linux not yet.
 - **Realm-scoped signals** (`flui-view` feature `signals`, ADR-0074): `Signal<T>` handles
   (`Copy`, realm-affine, carrying graph id + slot + generation) owned by the realm's
   `Reactive` graph. Reading a signal in `build` registers the element as a reader (the

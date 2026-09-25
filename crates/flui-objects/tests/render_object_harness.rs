@@ -14919,6 +14919,49 @@ fn harness_subtree_anchor_detach_clears_the_published_id() {
     assert!(!anchor.is_anchored());
 }
 
+#[test]
+fn harness_subtree_anchor_rebinds_while_mounted_and_after_detach() {
+    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::protocol::BoxProtocol;
+    let first = SubtreeAnchor::new();
+    let second = SubtreeAnchor::new();
+    let third = SubtreeAnchor::new();
+    let mut object = RenderSubtreeAnchor::new(first.clone());
+    object.set_anchor(second.clone());
+    assert_eq!(first.get(), None);
+    assert_eq!(second.get(), None, "unmounted rebinding must not publish");
+    let mut owner = PipelineOwner::new();
+    let root = owner.insert::<BoxProtocol>(Box::new(object));
+    assert_eq!(second.get(), Some(root));
+    let object = owner
+        .render_tree_mut()
+        .get_mut(root)
+        .and_then(|node| node.downcast_render_object_mut::<RenderSubtreeAnchor>())
+        .expect("BUG: anchor node exists");
+    let mut unmounted_clone = object.clone();
+    unmounted_clone.set_anchor(first.clone());
+    assert_eq!(first.get(), None);
+    assert_eq!(
+        second.get(),
+        Some(root),
+        "cloning must not copy mount ownership"
+    );
+    object.set_anchor(third.clone());
+    assert_eq!(second.get(), None);
+    assert_eq!(third.get(), Some(root));
+    object.set_anchor(third.clone());
+    assert_eq!(third.get(), Some(root), "rebinding the same slot is inert");
+    flui_rendering::traits::RenderBox::detach(object);
+    object.set_anchor(first.clone());
+    assert_eq!(
+        first.get(),
+        None,
+        "detached rebinding must not republish the old id"
+    );
+    assert_eq!(third.get(), None);
+    owner.remove_render_object(root);
+}
+
 /// Re-anchoring updates the published id rather than keeping the first one —
 /// a route rebuilt into a new render node must not hand out the old node's id.
 #[test]
@@ -15854,4 +15897,19 @@ fn harness_flex_column_rtl_starts_children_at_the_right_edge() {
         "right-to-left, cross-axis Start is the RIGHT edge — 300 wide minus \
          the child's 50"
     );
+}
+
+#[test]
+fn harness_subtree_anchor_detach_preserves_replacement_publication() {
+    use flui_rendering::pipeline::PipelineOwner;
+    use flui_rendering::protocol::BoxProtocol;
+    let anchor = SubtreeAnchor::new();
+    let mut owner = PipelineOwner::new();
+    let first = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
+    let second = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
+    assert_eq!(anchor.get(), Some(second));
+    owner.remove_render_object(first);
+    assert_eq!(anchor.get(), Some(second));
+    owner.remove_render_object(second);
+    assert_eq!(anchor.get(), None);
 }

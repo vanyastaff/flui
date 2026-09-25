@@ -6,6 +6,7 @@ mod common;
 
 #[path = "absorb_pointer.rs"]
 mod absorb_pointer;
+mod anchored_box;
 #[path = "animated_builder_swap.rs"]
 mod animated_builder_swap;
 #[path = "animated_size.rs"]

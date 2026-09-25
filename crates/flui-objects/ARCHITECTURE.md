@@ -119,6 +119,22 @@ asserts the label does.
 
 ---
 
+### Subtree anchor rebinding preserves mounted identity
+
+`RenderSubtreeAnchor::set_anchor` transfers its mounted `RenderId` to a new
+`SubtreeAnchor`, clearing the old slot only if it still contains this node's ID.
+Detach uses the same ownership check, so a sibling swapping slots or taking over
+a slot cannot have its publication erased by the previous publisher. Before attach or after detach, rebinding
+publishes nothing. Reusing the same slot is a no-op. This identity-only operation
+does not invalidate geometry or replace the child. `AnchoredBox` calls it during
+render-object updates, so reconciliation preserves child state when its anchor changes.
+This extends FLUI's identity proxy contract; there is no direct Flutter render-object
+counterpart. The `harness_subtree_anchor_rebinds_while_mounted_and_after_detach` test
+covers publication lifetime, and the widgets `anchored_box` regression rebuilds the
+real element tree and checks preserved render IDs and child state.
+
+---
+
 ## Thread safety
 
 No locks. Catalog objects are mutated on the UI realm's layout/paint thread
