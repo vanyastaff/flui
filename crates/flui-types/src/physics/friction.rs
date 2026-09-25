@@ -416,6 +416,14 @@ mod tests {
         assert_approx(s.distance_to_velocity(50.0), 25.0);
         // An unreachable speed answers the whole remaining distance.
         assert_approx(s.distance_to_velocity(150.0), 50.0);
+        // Distances are measured from the start, wherever it is.
+        let shifted = FrictionSimulation::new(2.0, 10.0, 100.0);
+        assert_approx(shifted.distance_to_velocity(50.0), 25.0);
+        assert_approx(shifted.distance_to_velocity(150.0), 50.0);
+        // Done means strictly below the velocity tolerance.
+        let at_tolerance = FrictionSimulation::new(2.0, 0.0, 40.0)
+            .with_tolerance(Tolerance::new(0.001, 40.0, 0.001));
+        assert!(!at_tolerance.is_done(0.0));
     }
 
     #[test]
@@ -467,6 +475,15 @@ mod tests {
         ] {
             assert!(!far.will_hit_boundary());
             assert!(!far.is_done(2.0) && far.is_done(10.0) && !far.is_at_boundary(10.0));
+        }
+
+        // Reaching the boundary exactly counts, in either direction.
+        for velocity in [100.0, -100.0] {
+            let free = FrictionSimulation::new(2.0, 0.0, velocity);
+            let at_rest = BoundedFrictionSimulation::new(2.0, 0.0, velocity, free.final_position());
+            assert!(at_rest.will_hit_boundary(), "{velocity}");
+            let at_t = BoundedFrictionSimulation::new(2.0, 0.0, velocity, free.position(0.3));
+            assert!(at_t.is_at_boundary(0.3), "{velocity}");
         }
 
         let tol = Tolerance::new(0.25, 0.5, 0.75);

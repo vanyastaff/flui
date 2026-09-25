@@ -646,6 +646,8 @@ mod tests {
         assert_eq!(data.pointer, 0);
         assert_eq!(data.device_kind, PointerDeviceKind::Touch);
         assert_eq!(data.delta, Offset::ZERO);
+        assert_eq!((data.platform_data, data.buttons), (0, 0));
+        assert!(!data.obscured && !data.synthesized);
     }
 
     #[test]
@@ -666,7 +668,15 @@ mod tests {
 
         assert_eq!(data.pressure, 0.8);
         assert_eq!(data.distance, 5.0);
-        assert_eq!(data.radius_major, 10.0);
+        assert_eq!(
+            (
+                data.radius_major,
+                data.radius_minor,
+                data.radius_min,
+                data.radius_max
+            ),
+            (10.0, 5.0, 0.0, 20.0)
+        );
         assert_eq!(data.orientation, 0.5);
         assert_eq!(data.tilt, 0.3);
         assert_eq!(data.delta, Offset::new(px(2.0), px(3.0)));

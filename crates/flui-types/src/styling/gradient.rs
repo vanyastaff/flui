@@ -600,15 +600,27 @@ mod tests {
         };
         let mid = RadialGradient::lerp(&a, &unfocused, 0.5).unwrap();
         assert_eq!((mid.focal, mid.focal_radius), (None, None));
+        // Both focal radii non-zero: 0.25 to 0.5.
+        let mid = RadialGradient::lerp(&radial(1.0, [0.0, 0.5], 0.5), &b, 0.5).unwrap();
+        assert_eq!(mid.focal_radius, Some(0.375));
     }
 
     #[test]
     fn sweep_lerp() {
-        let (a, b) = (sweep(0.0, 2.0), sweep(1.0, 4.0));
+        let a = sweep(1.0, 2.0);
+        let b = SweepGradient {
+            stops: Some(vec![0.5, 1.0]),
+            tile_mode: TileMode::Mirror,
+            ..sweep(3.0, 4.0)
+        };
         assert_eq!(SweepGradient::lerp(&a, &b, 0.0), Some(a.clone()));
         assert_eq!(SweepGradient::lerp(&a, &b, 1.0), Some(b.clone()));
         let mid = SweepGradient::lerp(&a, &b, 0.5).unwrap();
-        assert_eq!((mid.start_angle, mid.end_angle), (0.5, 3.0));
+        assert_eq!((mid.start_angle, mid.end_angle), (2.0, 3.0));
+        assert_eq!(mid.stops, Some(vec![0.25, 1.0]));
+        assert_eq!(mid.tile_mode, TileMode::Mirror);
+        let early = SweepGradient::lerp(&a, &b, 0.25).unwrap();
+        assert_eq!(early.tile_mode, TileMode::Repeat);
     }
 
     /// Stops survive only when both sides have the same number; colors
@@ -648,6 +660,20 @@ mod tests {
             ..sweep(0.0, 1.0)
         };
         assert_eq!(SweepGradient::lerp(&sweep(0.0, 1.0), &s3, 0.5), None);
+
+        // Same colours, different stop counts: the stops are dropped.
+        let r = radial(1.0, [0.0, 1.0], 0.0);
+        let r_other = RadialGradient {
+            stops: Some(vec![0.0, 0.5, 1.0]),
+            ..r.clone()
+        };
+        assert_eq!(RadialGradient::lerp(&r, &r_other, 0.5).unwrap().stops, None);
+        let s = sweep(0.0, 1.0);
+        let s_other = SweepGradient {
+            stops: Some(vec![0.0, 0.5, 1.0]),
+            ..s.clone()
+        };
+        assert_eq!(SweepGradient::lerp(&s, &s_other, 0.5).unwrap().stops, None);
     }
 
     #[test]
@@ -705,7 +731,10 @@ mod tests {
             RadialGradient::centered(0.25, c.clone()),
             RadialGradient::new(Alignment::CENTER, 0.25, c.clone(), None, clamp, None, None)
         );
-        assert_eq!(RadialGradient::circular(c.clone()).radius, 0.5);
+        assert_eq!(
+            RadialGradient::circular(c.clone()),
+            RadialGradient::new(Alignment::CENTER, 0.5, c.clone(), None, clamp, None, None)
+        );
         assert_eq!(
             SweepGradient::centered(c.clone()),
             SweepGradient::new(

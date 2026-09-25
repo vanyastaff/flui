@@ -34,6 +34,9 @@ fn rgb_is_opaque_and_rgba_keeps_every_channel() {
 #[case::black("#000000", Color::BLACK)]
 fn from_hex_anchors(#[case] hex: &str, #[case] expected: Color) {
     assert_eq!(Color::from_hex(hex), Ok(expected));
+    // Each anchor is also the canonical form `to_hex` writes: `#`, upper
+    // case, and six digits when opaque.
+    assert_eq!(expected.to_hex(), hex);
 }
 
 #[rstest]

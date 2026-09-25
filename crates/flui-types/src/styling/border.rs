@@ -353,6 +353,26 @@ mod tests {
             (mid.style, mid.stroke_align, mid.color.a),
             (BorderStyle::Solid, 0.5, 0)
         );
+        assert_eq!(BorderSide::lerp(outside, inside, 0.5).stroke_align, 0.5);
+
+        // The endpoints are returned as they are, style change or not.
+        assert_eq!(
+            BorderSide::lerp(BorderSide::none(), red, 0.0),
+            BorderSide::none()
+        );
+        assert_eq!(
+            BorderSide::lerp(red, BorderSide::none(), 1.0),
+            BorderSide::none()
+        );
+        // Two `None` sides stay `None`.
+        let hidden = |w| BorderSide::none().with_width(px(w));
+        assert_eq!(
+            BorderSide::lerp(hidden(2.0), hidden(6.0), 0.5).style,
+            BorderStyle::None
+        );
+        // A width that interpolates below zero gives no border at all.
+        let negative = solid(Color::rgb(0, 0, 0), -4.0);
+        assert_eq!(BorderSide::lerp(negative, a, 0.25), BorderSide::none());
     }
 
     #[test]

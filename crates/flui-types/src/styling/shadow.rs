@@ -602,6 +602,21 @@ mod tests {
             .color,
             Color::rgb(100, 50, 25)
         );
+        // Geometry weights each side by its share of t.
+        let from = Shadow::new(Color::BLACK, Offset::new(px(4.0), px(8.0)), px(4.0));
+        let to = Shadow::new(Color::BLACK, Offset::new(px(8.0), px(0.0)), px(8.0));
+        let quarter = Shadow::lerp(from, to, 0.25);
+        assert_eq!(
+            (quarter.offset, quarter.blur_radius),
+            (Offset::new(px(5.0), px(6.0)), px(5.0))
+        );
+        // A plain shadow becomes an outer box shadow with no spread.
+        let boxed = BoxShadow::from(from);
+        assert_eq!((boxed.spread_radius, boxed.inset), (px(0.0), false));
+        assert_eq!(
+            (boxed.color, boxed.offset, boxed.blur_radius),
+            (from.color, from.offset, from.blur_radius)
+        );
     }
 
     /// Flutter's `radius * 0.57735 + 0.5`.

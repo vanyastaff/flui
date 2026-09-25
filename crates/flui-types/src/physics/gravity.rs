@@ -324,12 +324,42 @@ mod tests {
             GravitySimulation::new(0.0, 4.0, 10.0, 2.0).time_at_end(),
             Some(3.0)
         );
+        // Already at the end counts, on either root: x = t² - 2t and
+        // x = 2t - t² are 0 at t = 0 and again at t = 2.
+        assert_eq!(at(0.0, 0.0, 2.0), Some(0.0));
+        assert_eq!(at(2.0, 0.0, -2.0), Some(0.0));
+        assert_eq!(at(-2.0, 0.0, 2.0), Some(0.0));
+        // A trajectory that only touches the end: 2t - t² peaks at 1.
+        assert_eq!(at(-2.0, 1.0, 2.0), Some(1.0));
+    }
+
+    /// The tolerance bounds are inclusive on every branch, and a particle
+    /// with neither acceleration nor velocity is done only within the
+    /// tolerance of the end, never merely past it.
+    #[test]
+    fn is_done_boundaries() {
+        let tol = Tolerance::new(0.5, 0.001, 0.001);
+        let sim = |a, start, end, v| GravitySimulation::new(a, start, end, v).with_tolerance(tol);
+        // x = t² reaches 9 = 9.5 - 0.5 at t = 3; x = -t² reaches -9.
+        assert!(sim(2.0, 0.0, 9.5, 0.0).is_done(3.0));
+        assert!(sim(-2.0, 0.0, -9.5, 0.0).is_done(3.0));
+        // x = 2t reaches 10 = 10.5 - 0.5 at t = 5; x = -2t reaches -10.
+        assert!(sim(0.0, 0.0, 10.5, 2.0).is_done(5.0));
+        assert!(sim(0.0, 0.0, -10.5, -2.0).is_done(5.0));
+        // x = -t² is at -6 at t = √6: short of -9.5 + 0.5, however the
+        // bound is formed.
+        assert!(!sim(-2.0, 0.0, -9.5, 0.0).is_done(6.0_f32.sqrt()));
+        // At rest: exactly the tolerance away is not done, and being past
+        // the end does not count as arriving.
+        assert!(!sim(0.0, 3.0, 3.5, 0.0).is_done(1.0));
+        assert!(sim(0.0, 3.0, 3.25, 0.0).is_done(1.0));
+        assert!(!sim(0.0, 0.0, -5.0, 0.0).is_done(1.0));
     }
 
     #[test]
     fn accessors_and_validity() {
         let tol = Tolerance::new(0.25, 0.5, 0.75);
-        let sim = GravitySimulation::new(1.0, 2.0, 3.0, 4.0).with_tolerance(tol);
+        let sim = GravitySimulation::new(1.5, 2.0, 3.0, 4.0).with_tolerance(tol);
         assert_eq!(
             (
                 sim.acceleration(),
@@ -337,7 +367,7 @@ mod tests {
                 sim.end(),
                 sim.initial_velocity()
             ),
-            (1.0, 2.0, 3.0, 4.0)
+            (1.5, 2.0, 3.0, 4.0)
         );
         assert_eq!(sim.tolerance(), tol);
         assert_eq!(

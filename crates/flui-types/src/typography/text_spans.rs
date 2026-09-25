@@ -681,8 +681,39 @@ mod tests {
         let tappable = TextSpan::new("x").with_on_tap(|| {});
         assert!(tappable.is_interactive());
         assert!(format!("{tappable:?}").contains("<callback>"));
-        // Equality ignores callbacks.
-        assert_eq!(tappable, TextSpan::new("x"));
+        assert!(!TextSpan::new("x").has_semantics());
+        assert!(!InlineSpan::new(TextSpan::new("x")).has_semantics());
+        assert_eq!(
+            format!("{:?}", TextSpan::new("x")),
+            "TextSpan { text: Some(\"x\"), style: None, children: [], semantics_label: None, \
+             mouse_cursor: None, on_tap: None }"
+        );
+        assert_eq!(
+            TextSpan::with_children(vec![TextSpan::new("x")]).child_count(),
+            1
+        );
+    }
+
+    /// Equality compares every field but the callback: a span differing
+    /// in any one of them is unequal.
+    #[test]
+    fn equality_ignores_only_the_callback() {
+        let base = || {
+            TextSpan::styled("x", TextStyle::new().with_font_size(12.0))
+                .with_child(TextSpan::new("c"))
+                .with_semantics_label("l")
+                .with_mouse_cursor(MouseCursor::Pointer)
+        };
+        assert_eq!(base().with_on_tap(|| {}), base());
+        let mut variants = [base(), base(), base(), base(), base()];
+        variants[0].text = Some("y".into());
+        variants[1].style = None;
+        variants[2].children.clear();
+        variants[3].semantics_label = None;
+        variants[4].mouse_cursor = None;
+        for changed in variants {
+            assert_ne!(changed, base(), "{changed:?}");
+        }
     }
 
     /// Layout equality ignores paint-only style changes but not text,
@@ -765,5 +796,19 @@ mod tests {
         assert_eq!((d.area(), d.aspect_ratio()), (18.0, 2.0));
         let flat = PlaceholderDimensions::new(6.0, 0.0, PlaceholderAlignment::Bottom, None, 0.0);
         assert_eq!(flat.aspect_ratio(), f64::INFINITY);
+        // Zero by zero is still infinite, not NaN.
+        let empty = PlaceholderDimensions::new(0.0, 0.0, PlaceholderAlignment::Bottom, None, 0.0);
+        assert_eq!(empty.aspect_ratio(), f64::INFINITY);
+        let empty = PlaceholderSpan::new(0.0, 0.0, PlaceholderAlignment::Top);
+        assert_eq!(empty.aspect_ratio(), f64::INFINITY);
+        assert_eq!(empty.baseline, None);
+
+        // A placeholder has no children: visiting it visits it once.
+        let mut visits = 0;
+        empty.visit(&mut |_| {
+            visits += 1;
+            true
+        });
+        assert_eq!(visits, 1);
     }
 }

@@ -91,8 +91,7 @@ impl From<Color> for HSLColor {
             60.0 * (((r - g) / delta) + 4.0)
         };
 
-        let hue = if hue < 0.0 { hue + 360.0 } else { hue };
-
+        // `% 6.0` leaves the red sector negative below 0°; `new` wraps it.
         Self::new(hue, saturation, lightness, a)
     }
 }
@@ -209,8 +208,7 @@ impl From<Color> for HSVColor {
             60.0 * (((r - g) / delta) + 4.0)
         };
 
-        let hue = if hue < 0.0 { hue + 360.0 } else { hue };
-
+        // `% 6.0` leaves the red sector negative below 0°; `new` wraps it.
         Self::new(hue, saturation, value, a)
     }
 }
@@ -291,12 +289,16 @@ mod tests {
             );
             assert_eq!((hsv.saturation, hsv.value), (1.0, 1.0));
         }
-        // Grays have no hue or saturation.
-        let gray = HSLColor::from(Color::rgb(128, 128, 128));
-        assert_eq!((gray.hue, gray.saturation), (0.0, 0.0));
-        let gray = HSVColor::from(Color::rgb(128, 128, 128));
-        assert_eq!((gray.hue, gray.saturation), (0.0, 0.0));
-        assert_eq!(HSVColor::from(Color::BLACK).saturation, 0.0);
+        // Grays have no hue or saturation, black and white included, where
+        // the HSL saturation formula would divide zero by zero.
+        for gray in [Color::BLACK, Color::rgb(128, 128, 128), Color::WHITE] {
+            let hsl = HSLColor::from(gray);
+            assert_eq!((hsl.hue, hsl.saturation), (0.0, 0.0), "{gray:?}");
+            assert_eq!(Color::from(hsl), gray);
+            let hsv = HSVColor::from(gray);
+            assert_eq!((hsv.hue, hsv.saturation), (0.0, 0.0), "{gray:?}");
+            assert_eq!(Color::from(hsv), gray);
+        }
     }
 
     /// Hue wraps into `0..360`, the rest clamps into `0..=1`.

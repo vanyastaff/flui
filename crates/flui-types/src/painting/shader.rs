@@ -882,11 +882,22 @@ mod tests {
         /// height, then padding and the first two colors.
         #[test]
         fn radial_layout() {
-            let s = Shader::simple_radial(off(200.0, 100.0), 75.0, vec![Color::RED, Color::BLUE]);
+            let s = Shader::simple_radial(off(200.0, 75.0), 75.0, vec![Color::RED, Color::BLUE]);
             let v = floats(&s.to_mask_uniform_data(bounds()));
-            assert_eq!(v[..4], [0.5, 0.5, 0.5, 0.0]);
+            assert_eq!(v[..4], [0.5, 0.25, 0.5, 0.0]);
             assert_eq!(v[4..8], RED);
             assert_eq!(v[8..12], BLUE);
+            // The simple form is a clamped gradient with no stops or focal.
+            let full = Shader::radial_gradient(
+                off(200.0, 75.0),
+                75.0,
+                vec![Color::RED, Color::BLUE],
+                None,
+                TileMode::Clamp,
+                None,
+                None,
+            );
+            assert_eq!(s, full);
         }
 
         #[test]
@@ -943,8 +954,8 @@ mod tests {
         #[test]
         fn solid_and_image() {
             let v =
-                floats(&Shader::solid(Color::rgba(255, 0, 0, 51)).to_mask_uniform_data(bounds()));
-            assert_eq!(v, [1.0, 0.0, 0.0, 0.2]);
+                floats(&Shader::solid(Color::rgba(255, 102, 0, 51)).to_mask_uniform_data(bounds()));
+            assert_eq!(v, [1.0, 0.4, 0.0, 0.2]);
             let image = Shader::image(ImageShader::new(TileMode::Clamp, TileMode::Repeat));
             assert_eq!(floats(&image.to_mask_uniform_data(bounds())), [1.0; 4]);
         }

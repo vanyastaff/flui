@@ -1688,7 +1688,9 @@ mod tests {
         /// the new command.
         #[test]
         fn mutations_invalidate_the_cached_bounds() {
-            let edits: [(&str, fn(&mut Path), Rect<Pixels>); 6] = [
+            /// A named edit and the bounds it leaves.
+            type Edit = (&'static str, fn(&mut Path), Rect<Pixels>);
+            let edits: [Edit; 6] = [
                 (
                     "move_to",
                     |path| path.move_to(p(20.0, 20.0)),

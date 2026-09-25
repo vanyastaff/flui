@@ -115,6 +115,24 @@ proptest! {
         }
     }
 
+    /// Translucent layers go through the separable composite, and white
+    /// makes `Multiply` return the other layer's colour: over a white
+    /// backdrop it is `SrcOver`, under a white source `DstOver`, both
+    /// computed by the Porter-Duff path instead. They agree to within the
+    /// one unit the two paths may round differently.
+    #[test]
+    fn translucent_multiply_by_white_is_plain_compositing(s in arb_color(), d in arb_color()) {
+        let near = |a: Color, b: Color| {
+            [(a.r, b.r), (a.g, b.g), (a.b, b.b), (a.a, b.a)].iter().all(|(x, y)| x.abs_diff(*y) <= 1)
+        };
+        let white_backdrop = Color::rgba(255, 255, 255, d.a);
+        let (got, want) = (s.blend(white_backdrop, Multiply), s.blend(white_backdrop, SrcOver));
+        prop_assert!(near(got, want), "{:?} over white: {:?} vs {:?}", s, got, want);
+        let white_source = Color::rgba(255, 255, 255, s.a);
+        let (got, want) = (white_source.blend(d, Multiply), white_source.blend(d, DstOver));
+        prop_assert!(near(got, want), "white under {:?}: {:?} vs {:?}", d, got, want);
+    }
+
     /// `Luminosity` and `Color` are the same operation with the layers
     /// swapped: each takes the luminosity of one and the hue and saturation
     /// of the other.

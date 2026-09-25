@@ -594,7 +594,18 @@ mod tests {
     fn constructors_setters_and_complexity() {
         assert_eq!(Deco::default(), Deco::new());
         assert_eq!(Deco::with_color(Color::RED).color, Some(Color::RED));
-        assert_eq!(Deco::with_gradient(gradient()).gradient, Some(gradient()));
+        assert_eq!(
+            Deco::with_gradient(gradient()),
+            Deco::new().set_gradient(Some(gradient()))
+        );
+        let image = DecorationImage::new(Image::solid_color(1, 1, Color::RED));
+        assert_eq!(
+            Deco::with_image(image.clone()),
+            Deco {
+                image: Some(image),
+                ..Deco::new()
+            }
+        );
         let d = Deco::new()
             .set_color(Some(Color::BLUE))
             .set_shape(BoxShape::Circle);

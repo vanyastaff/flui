@@ -513,6 +513,7 @@ mod tests {
             (size(100.0, 0.0), good),
             (good, size(0.0, 50.0)),
             (good, size(100.0, -1.0)),
+            (good, size(100.0, 0.0)),
         ] {
             let fitted = BoxFit::Fill.apply(input, output);
             assert_eq!(
