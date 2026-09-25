@@ -107,3 +107,104 @@ tests into one table; read closely, each test targets a different branch of Flut
 case table would hide which branch a regression broke.
 
 **`types_it`:** 415 → 406 tests, all passing.
+
+## flui-types — mutation-driven pass over the rest of the crate
+
+From here on every slice follows the same loop: run `cargo mutants` over the source files, read
+the surviving mutants, replace example tests with properties, tables or oracle checks that kill
+them, delete what the new tests subsume, and rerun. Where a surviving mutant turned out to be a
+production bug rather than a missing assertion, the bug was fixed in its own commit with a test
+that fails without the fix. Flutter parity claims were checked against the 3.44.0 sources.
+
+### Production bugs found and fixed
+
+| Commit | Defect |
+|---|---|
+| `62aea6d30` | SIMD `Color::lerp` truncated where the scalar path rounds |
+| `080827d0a` | `Color::blend` truncated on un-premultiply: `Src`/`Dst` were not identities (engine CPU image-filter path) |
+| `256244ce7` | `Color::blend_over` differed from Flutter's `alphaBlend`; SIMD and scalar disagreed by one |
+| `334f2dfc7` | `BoxConstraints::normalize` could return `max < min` |
+| `a678d8924` | `CircularNotchedRectangle`'s notch was drawn upside down |
+| `262d5417c` | `TextRange::overlaps` said an empty range overlapped |
+| `b860c549f` | `BorderRadius::horizontal` swapped the bottom corners |
+| `85209157c` | `BorderSide::lerp` darkened toward black and flipped style at 0.5 (Flutter fades) |
+| `673338ca5` | `Border::symmetric` put `vertical` on top/bottom, the reverse of Flutter |
+| `124e00aee` | `Paint::is_opaque` ignored the shader |
+| `59e392a26` | `BoxDecoration::lerp` faded one-sided fields in a V and ended wrong at `t = 1` |
+| `e1d415353` | HSL/HSV → `Color` truncated, so the roundtrip was not exact |
+| `7a241df41` | `FontWeight::from_css` mapped negative weights to `W900` |
+| `4a03e1264` | `Locale` tags dropped the script; Pashto was not RTL |
+| `a5f0fdef6` | Shadow/BoxShadow `lerp_list` faded unpaired shadows' colour (Flutter scales geometry) |
+| `20f23f914` | `ColorFilter::invert` used 255 offsets on normalized channels: every image turned white |
+| `5e15330bd` | `Color::approx_eq` rejected some one-unit differences (f32 subtraction of normalized channels) |
+
+### Mutation results per slice
+
+| Slice (commit) | Scope | Before caught / missed | After caught / missed |
+|---|---|---:|---:|
+| 16 files: gestures, layout enums, BoxFit, simulations, platform (`b7db1024b`) | those files | 111 / 313 | 446 / 12 |
+| Color blend + examples (`07fe2d078`) | `styling/color.rs` | 582 / 298 | 807 / 51 |
+| ColorMatrix (`c1a7aef67`) | `painting/effects.rs` | 150 missed, 94 in `hue_rotate` | directional checks replaced by position/composition/W3C matrix |
+| Path containment (`add1025b6`) | `painting/path.rs` | 138 missed | containment checked against barycentric/geometric oracles |
+| Physics, typography, platform (`aa7bfdee8`) | 8 files, 775 mutants | 459 / 296 | 738 / 17 |
+| Corners/Edges moved to flui-geometry (`a46d1391e`, `659cf6fc1`) | `corners.rs`, `corner.rs`, `edges.rs` | 53 / 59 | 102 / 10 |
+| Layout and RTL integration files removed (`ca68e2d48`) | `layout/*.rs`, cargo-gamma | 201 killed / 7 survived | 201 / 7, 0 uncovered |
+| Geometry integration files removed (`1b7c1d4b0`) | 9 flui-geometry files, cargo-gamma | 1005 killed (both crates' tests) | 1014 killed (flui-geometry alone) |
+
+Every mutant the baseline caught stayed caught in each slice (compared by position). Remaining
+survivors in `color.rs` are equivalent (`|` vs `^` on disjoint bits, `<` vs `<=` at unreachable
+boundaries, NEON code not compiled on x86_64) or gaps in `Color::blend`'s composite path and
+`clip_color`'s guards.
+
+Files that had no tests at all (`gradient.rs`, `text_spans.rs`, `text_decoration.rs`,
+`text_style.rs`, `hsl_hsv.rs`, `paint.rs`, `border.rs`, `border_radius.rs`, `box_border.rs`,
+`table_border.rs`, `shader.rs`, `image.rs`) gained tests, so the crate's test count rose while
+the mutation score rose much faster. Removing the example files that turned out to be
+subsumed then brought it down: `flui-types` went from 656 tests (235 in-source, 421 in
+`types_it`) to 423 (345 and 78), and `flui-geometry` from 245 to 272, 901 to 695 together.
+
+### Equivalent mutants (not worth a test)
+
+- `|` → `^` in `from_hex` / `to_argb`: the OR'd bit ranges are disjoint.
+- `Simulation::tolerance`'s default body.
+- `>` → `>=` in `BoxFit::apply` / `cover_source` at equal aspect ratios: both branches agree.
+- `blend_over_factors`' `out > 0` guard; the NEON twins on x86_64.
+
+### Known limitation
+
+nextest does not run doctests, so a mutant killed only by a doctest is reported as missed.
+
+### Unique-killer checks before deleting a test file
+
+A test file is deleted only after a run shows it kills nothing the remaining tests miss. Two
+runs over the same mutants, one with the file's tests and one without (`-- --skip <module>::`
+for a module of `types_it`, or dropping `--test-package flui-types` for tests of re-exported
+`flui-geometry` code), compared mutant by mutant. Anything killed only with the file present is
+covered by a new targeted test first, and the pair is rerun. This is how `Alignment`'s `Add`/
+`Neg` and `BoxConstraints::deflate` (reached only from `layout_tests.rs`) and 105 `flui-geometry`
+mutants (reached only from the eight geometry files) were found and covered before those files
+went.
+
+### cargo-gamma pilot
+
+[cargo-gamma](https://crates.io/crates/cargo-gamma) 0.2.1 (Microsoft, MIT) compiles every mutant
+into one instrumented build and switches them at run time, instead of rebuilding per mutant.
+
+| Scope | cargo-mutants | cargo-gamma |
+|---|---|---|
+| `corners.rs`, `corner.rs`, `edges.rs`, flui-geometry tests | 28 min, 256 mutants (112 viable), 102 caught / 10 missed | 86 s, 278 generated (134 viable), 122 killed / 12 survived |
+| 9 flui-geometry files, flui-geometry tests | not run (estimated hours) | 133 s, 1961 mutants |
+
+The cargo-mutants time was measured while other runs shared the machine; the gap is still an
+order of magnitude. Differences worth knowing:
+
+- gamma found two real test gaps cargo-mutants cannot: `cond.always_true` on
+  `Edges::clamp_non_negative`'s top and bottom checks (fixed in `659cf6fc1`).
+- gamma does not mutate `const fn` bodies (none in `corner.rs`), where the run-time switch
+  cannot go; cargo-mutants does.
+- gamma reports `NoCoverage` separately from survivors, which is what made the unique-killer
+  checks above cheap: a mutant no remaining test reaches shows up without being run.
+- trybuild tests fail its baseline (they compile examples inside the instrumented tree); skip
+  them with `-- --skip unit_mixing_compile_fail`.
+- It is three weeks old. cargo-mutants stays the reference (`.cargo/mutants.toml`) until gamma
+  has been compared on more scopes.
