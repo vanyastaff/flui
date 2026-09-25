@@ -36,11 +36,6 @@ pub enum PathCommand {
     /// Add a rectangle.
     AddRect(Rect<Pixels>),
 
-    /// Add a circle.
-    ///
-    /// Arguments: center, radius
-    AddCircle(Point<Pixels>, f32),
-
     /// Add an oval (ellipse).
     ///
     /// Arguments: bounding rectangle
@@ -350,6 +345,32 @@ impl Path {
         self.bounds = None;
     }
 
+    /// Adds a quadratic Bézier curve from the current position to `end`,
+    /// pulled toward `control` (Flutter's `quadraticBezierTo`).
+    ///
+    /// Like [`Self::line_to`], with no contour open it starts from the
+    /// current position: the origin on a fresh path, or the start of the
+    /// contour just closed.
+    #[inline]
+    pub fn quadratic_bezier_to(&mut self, control: Point<Pixels>, end: Point<Pixels>) {
+        Arc::make_mut(&mut self.commands).push(PathCommand::QuadraticTo(control, end));
+        self.bounds = None;
+    }
+
+    /// Adds a cubic Bézier curve from the current position to `end`, with
+    /// `control1` shaping its start and `control2` its end (Flutter's
+    /// `cubicTo`). Starts where [`Self::quadratic_bezier_to`] does.
+    #[inline]
+    pub fn cubic_to(
+        &mut self,
+        control1: Point<Pixels>,
+        control2: Point<Pixels>,
+        end: Point<Pixels>,
+    ) {
+        Arc::make_mut(&mut self.commands).push(PathCommand::CubicTo(control1, control2, end));
+        self.bounds = None;
+    }
+
     /// Closes the current subpath with a line back to its starting point.
     #[inline]
     pub fn close(&mut self) {
@@ -489,12 +510,6 @@ impl Path {
                     max_x = max_x.max(r.right().0);
                     max_y = max_y.max(r.bottom().0);
                 }
-                PathCommand::AddCircle(center, radius) => {
-                    min_x = min_x.min(center.x.0 - radius);
-                    min_y = min_y.min(center.y.0 - radius);
-                    max_x = max_x.max(center.x.0 + radius);
-                    max_y = max_y.max(center.y.0 + radius);
-                }
                 PathCommand::Close => {}
             }
         }
@@ -542,9 +557,6 @@ impl Path {
                     PathCommand::CubicTo(c1 + delta, c2 + delta, e + delta)
                 }
                 PathCommand::AddRect(r) => PathCommand::AddRect(r.translate(delta)),
-                PathCommand::AddCircle(center, radius) => {
-                    PathCommand::AddCircle(center + delta, radius)
-                }
                 PathCommand::AddOval(r) => PathCommand::AddOval(r.translate(delta)),
                 PathCommand::AddArc(r, start, sweep) => {
                     PathCommand::AddArc(r.translate(delta), start, sweep)
@@ -632,22 +644,6 @@ impl Path {
                     );
                     // Simple rectangle test
                     if rect.contains(point) {
-                        crossings += 1;
-                    }
-                }
-                PathCommand::AddCircle(center, radius) => {
-                    // Standalone shape — see the `AddRect` arm.
-                    Self::end_open_contour_even_odd(
-                        point,
-                        &mut crossings,
-                        &mut current_pos,
-                        &mut subpath_start,
-                        &mut subpath_open,
-                    );
-                    // Simple circle test
-                    let dx = point.x - center.x;
-                    let dy = point.y - center.y;
-                    if dx.0 * dx.0 + dy.0 * dy.0 <= radius * radius {
                         crossings += 1;
                     }
                 }
@@ -752,22 +748,6 @@ impl Path {
                         &mut subpath_open,
                     );
                     if rect.contains(point) {
-                        winding += 1;
-                    }
-                }
-                PathCommand::AddCircle(center, radius) => {
-                    // Standalone shape ends the open contour — see the
-                    // even-odd walker's `AddRect` arm.
-                    Self::end_open_contour_non_zero(
-                        point,
-                        &mut winding,
-                        &mut current_pos,
-                        &mut subpath_start,
-                        &mut subpath_open,
-                    );
-                    let dx = point.x - center.x;
-                    let dy = point.y - center.y;
-                    if dx.0 * dx.0 + dy.0 * dy.0 <= radius * radius {
                         winding += 1;
                     }
                 }
@@ -1023,7 +1003,53 @@ impl Path {
         winding
     }
 
-    /// Count crossings for quadratic bezier curve (approximated).
+    /// How many chords to flatten a Bézier curve into so no point of it lies
+    /// farther than [`Self::ARC_FLATTENING_TOLERANCE`] from them.
+    ///
+    /// Wang's formula: a degree-`d` curve whose largest second difference of
+    /// control points has length `M` needs `ceil(sqrt(d(d - 1) M / (8 tol)))`
+    /// uniform steps in `t`. It is the bound lyon and Skia flatten by, so the
+    /// hittable curve tracks the painted one; a fixed step count would drift
+    /// from it in proportion to the curve's size. A straight curve (`M = 0`)
+    /// and non-finite input cost one chord; the count saturates at
+    /// [`Self::MAX_ARC_CHORDS`].
+    fn bezier_chord_count(degree: f32, points: &[Point<Pixels>]) -> usize {
+        let largest_second_difference = points
+            .windows(3)
+            .map(|w| {
+                let dx = w[0].x.0 - 2.0 * w[1].x.0 + w[2].x.0;
+                let dy = w[0].y.0 - 2.0 * w[1].y.0 + w[2].y.0;
+                dx.hypot(dy)
+            })
+            .fold(0.0_f32, f32::max);
+        if !largest_second_difference.is_finite() {
+            return 1;
+        }
+        let wanted = (degree * (degree - 1.0) * largest_second_difference
+            / (8.0 * Self::ARC_FLATTENING_TOLERANCE))
+            .sqrt()
+            .ceil();
+        if wanted.is_finite() {
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            // non-negative, clamped
+            let wanted = wanted as usize;
+            wanted.clamp(1, Self::MAX_ARC_CHORDS)
+        } else {
+            Self::MAX_ARC_CHORDS
+        }
+    }
+
+    /// The chords of a curve sampled at `chords` uniform steps of `t`.
+    fn curve_chords(
+        chords: usize,
+        eval: impl Fn(f32) -> Point<Pixels>,
+    ) -> impl Iterator<Item = (Point<Pixels>, Point<Pixels>)> {
+        #[expect(clippy::cast_precision_loss)] // at most MAX_ARC_CHORDS
+        let step = move |i: usize| i as f32 / chords as f32;
+        (1..=chords).map(move |i| (eval(step(i - 1)), eval(step(i))))
+    }
+
+    /// Ray crossings of a quadratic curve, flattened within tolerance.
     #[inline]
     fn count_curve_crossings_quad(
         point: Point<Pixels>,
@@ -1031,26 +1057,13 @@ impl Path {
         p1: Point<Pixels>,
         p2: Point<Pixels>,
     ) -> usize {
-        // Simple approximation: subdivide into 4 line segments
-        let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
-        let mut crossings = 0;
-
-        for i in 0..4 {
-            let t1 = t_values[i];
-            let t2 = t_values[i + 1];
-
-            let start = Self::eval_quadratic(p0, p1, p2, t1);
-            let end = Self::eval_quadratic(p0, p1, p2, t2);
-
-            if Self::ray_intersects_segment(point, start, end) {
-                crossings += 1;
-            }
-        }
-
-        crossings
+        let chords = Self::bezier_chord_count(2.0, &[p0, p1, p2]);
+        Self::curve_chords(chords, |t| Self::eval_quadratic(p0, p1, p2, t))
+            .filter(|&(a, b)| Self::ray_intersects_segment(point, a, b))
+            .count()
     }
 
-    /// Count crossings for cubic bezier curve (approximated).
+    /// Ray crossings of a cubic curve, flattened within tolerance.
     #[inline]
     fn count_curve_crossings_cubic(
         point: Point<Pixels>,
@@ -1059,26 +1072,13 @@ impl Path {
         p2: Point<Pixels>,
         p3: Point<Pixels>,
     ) -> usize {
-        // Simple approximation: subdivide into 8 line segments
-        let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
-        let mut crossings = 0;
-
-        for i in 0..8 {
-            let t1 = t_values[i];
-            let t2 = t_values[i + 1];
-
-            let start = Self::eval_cubic(p0, p1, p2, p3, t1);
-            let end = Self::eval_cubic(p0, p1, p2, p3, t2);
-
-            if Self::ray_intersects_segment(point, start, end) {
-                crossings += 1;
-            }
-        }
-
-        crossings
+        let chords = Self::bezier_chord_count(3.0, &[p0, p1, p2, p3]);
+        Self::curve_chords(chords, |t| Self::eval_cubic(p0, p1, p2, p3, t))
+            .filter(|&(a, b)| Self::ray_intersects_segment(point, a, b))
+            .count()
     }
 
-    /// Winding number for quadratic curve.
+    /// Winding contribution of a quadratic curve, flattened within tolerance.
     #[inline]
     fn curve_winding_quad(
         point: Point<Pixels>,
@@ -1086,23 +1086,13 @@ impl Path {
         p1: Point<Pixels>,
         p2: Point<Pixels>,
     ) -> i32 {
-        let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
-        let mut winding = 0;
-
-        for i in 0..4 {
-            let t1 = t_values[i];
-            let t2 = t_values[i + 1];
-
-            let start = Self::eval_quadratic(p0, p1, p2, t1);
-            let end = Self::eval_quadratic(p0, p1, p2, t2);
-
-            winding += Self::segment_winding(point, start, end);
-        }
-
-        winding
+        let chords = Self::bezier_chord_count(2.0, &[p0, p1, p2]);
+        Self::curve_chords(chords, |t| Self::eval_quadratic(p0, p1, p2, t))
+            .map(|(a, b)| Self::segment_winding(point, a, b))
+            .sum()
     }
 
-    /// Winding number for cubic curve.
+    /// Winding contribution of a cubic curve, flattened within tolerance.
     #[inline]
     fn curve_winding_cubic(
         point: Point<Pixels>,
@@ -1111,20 +1101,10 @@ impl Path {
         p2: Point<Pixels>,
         p3: Point<Pixels>,
     ) -> i32 {
-        let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
-        let mut winding = 0;
-
-        for i in 0..8 {
-            let t1 = t_values[i];
-            let t2 = t_values[i + 1];
-
-            let start = Self::eval_cubic(p0, p1, p2, p3, t1);
-            let end = Self::eval_cubic(p0, p1, p2, p3, t2);
-
-            winding += Self::segment_winding(point, start, end);
-        }
-
-        winding
+        let chords = Self::bezier_chord_count(3.0, &[p0, p1, p2, p3]);
+        Self::curve_chords(chords, |t| Self::eval_cubic(p0, p1, p2, p3, t))
+            .map(|(a, b)| Self::segment_winding(point, a, b))
+            .sum()
     }
 
     /// Evaluate quadratic bezier at parameter t.
@@ -1400,7 +1380,7 @@ mod tests {
     /// A standalone shape ends any open contour, so a following arc starts
     /// its own instead of chording back across the shape.
     ///
-    /// The renderer already behaves this way — every `AddRect`/`AddCircle`/
+    /// The renderer already behaves this way — every `AddRect`/
     /// `AddOval` arm in `flui-engine`'s tessellator ends the builder's
     /// contour and clears `has_begun`. If containment kept the contour open
     /// it would chord from the stale pre-shape position to the arc's start,
@@ -1690,7 +1670,18 @@ mod tests {
         fn mutations_invalidate_the_cached_bounds() {
             /// A named edit and the bounds it leaves.
             type Edit = (&'static str, fn(&mut Path), Rect<Pixels>);
-            let edits: [Edit; 6] = [
+            let edits: [Edit; 8] = [
+                // Curve bounds include the control points (conservative).
+                (
+                    "quadratic_bezier_to",
+                    |path| path.quadratic_bezier_to(p(-4.0, 30.0), p(12.0, 1.0)),
+                    rect(-4.0, 0.0, 12.0, 30.0),
+                ),
+                (
+                    "cubic_to",
+                    |path| path.cubic_to(p(1.0, -6.0), p(15.0, 2.0), p(3.0, 3.0)),
+                    rect(0.0, -6.0, 15.0, 10.0),
+                ),
                 (
                     "move_to",
                     |path| path.move_to(p(20.0, 20.0)),
@@ -2039,6 +2030,72 @@ mod tests {
                 Path::MAX_ARC_CHORDS
             );
             assert_eq!(Path::MAX_ARC_CHORDS, 2048);
+        }
+
+        /// Curves whose control points are evenly spaced in x, so x = w t
+        /// and each curve is the graph of a function of x: the region
+        /// between it and the baseline has an exact inside test.
+        ///
+        /// - quadratic (0, 0), (w/2, h), (w, 0): y = 2 h u (1 - u), u = x / w;
+        /// - cubic (0, 0), (w/3, a), (2w/3, b), (w, 0):
+        ///   y = 3 a u (1 - u)^2 + 3 b u^2 (1 - u).
+        fn under_curve(cubic: bool, w: f32) -> (Path, impl Fn(f32) -> f32) {
+            let (h, a, b) = (w, 1.2 * w, 0.6 * w);
+            let mut path = Path::new();
+            path.move_to(p(0.0, 0.0));
+            if cubic {
+                path.cubic_to(p(w / 3.0, a), p(2.0 * w / 3.0, b), p(w, 0.0));
+            } else {
+                path.quadratic_bezier_to(p(w / 2.0, h), p(w, 0.0));
+            }
+            path.close();
+            let height = move |x: f32| {
+                let u = x / w;
+                if cubic {
+                    3.0 * a * u * (1.0 - u).powi(2) + 3.0 * b * u * u * (1.0 - u)
+                } else {
+                    2.0 * h * u * (1.0 - u)
+                }
+            };
+            (path, height)
+        }
+
+        proptest! {
+            /// Containment matches the exact region at every scale, to
+            /// within half a pixel of the curve: the flattening follows
+            /// the curve's size instead of using a fixed number of chords
+            /// (four chords were three pixels off at w = 100).
+            #[test]
+            fn curve_containment_matches_the_exact_region(
+                cubic in any::<bool>(),
+                scale in prop::sample::select(vec![1.0_f32, 100.0, 1000.0]),
+                u in 0.01_f32..0.99,
+                v in -0.2_f32..1.2,
+            ) {
+                let w = 100.0 * scale;
+                let (path, height) = under_curve(cubic, w);
+                let (x, top) = (u * w, height(u * w));
+                let y = v * top;
+                // Skip the half-pixel band around the curve and the baseline.
+                prop_assume!((y - top).abs() > 0.5 && y.abs() > 0.5);
+                let inside = y > 0.0 && y < top;
+                for fill in FILLS {
+                    prop_assert_eq!(with(fill, path.clone()).contains(p(x, y)), inside, "{:?} ({}, {})", fill, x, y);
+                }
+            }
+        }
+
+        /// One chord for a straight or non-finite curve; the ceiling for a
+        /// curve too large to flatten within the tolerance.
+        #[test]
+        fn bezier_chord_count_edges() {
+            let line = [p(0.0, 0.0), p(5.0, 5.0), p(10.0, 10.0), p(15.0, 15.0)];
+            assert_eq!(Path::bezier_chord_count(2.0, &line[..3]), 1);
+            assert_eq!(Path::bezier_chord_count(3.0, &line), 1);
+            let nan = [p(0.0, 0.0), p(f32::NAN, 0.0), p(1.0, 0.0)];
+            assert_eq!(Path::bezier_chord_count(2.0, &nan), 1);
+            let huge = [p(0.0, 0.0), p(1.0e12, 1.0e12), p(2.0e12, 0.0)];
+            assert_eq!(Path::bezier_chord_count(2.0, &huge), Path::MAX_ARC_CHORDS);
         }
     }
 }

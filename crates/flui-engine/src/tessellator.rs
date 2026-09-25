@@ -990,64 +990,66 @@ impl IntoLyonPath for flui_types::painting::path::Path {
     fn to_lyon_path(&self) -> Path {
         use flui_types::painting::path::PathCommand;
 
+        let lyon_point = |p: &Point<Pixels>| lyon::geom::point(p.x.0, p.y.0);
+        let origin = lyon::geom::point(0.0, 0.0);
+
         let mut builder = Path::builder();
-        let mut _current_pos: Option<Point<Pixels>> = None;
         let mut has_begun = false;
+        // Skia's pen: where a segment drawn with no contour open starts. The
+        // origin at first, the start of a contour once it is closed, and the
+        // origin again after a standalone shape. `Path::contains` walks the
+        // commands with the same pen, so what is drawn is what is hit.
+        let mut pen = origin;
+        let mut contour_start = origin;
 
         for command in self.commands() {
             match command {
                 PathCommand::MoveTo(point) => {
-                    // End previous subpath if exists
                     if has_begun {
                         builder.end(false);
                     }
-                    builder.begin(lyon::geom::point(point.x.0, point.y.0));
-                    _current_pos = Some(*point);
+                    pen = lyon_point(point);
+                    contour_start = pen;
+                    builder.begin(pen);
                     has_begun = true;
                 }
 
                 PathCommand::LineTo(point) => {
-                    // Auto-begin if no move_to was called
-                    if has_begun {
-                        builder.line_to(lyon::geom::point(point.x.0, point.y.0));
-                    } else {
-                        builder.begin(lyon::geom::point(point.x.0, point.y.0));
+                    if !has_begun {
+                        contour_start = pen;
+                        builder.begin(pen);
                         has_begun = true;
                     }
-                    _current_pos = Some(*point);
+                    pen = lyon_point(point);
+                    builder.line_to(pen);
                 }
 
                 PathCommand::QuadraticTo(control, end) => {
                     if !has_begun {
-                        builder.begin(lyon::geom::point(control.x.0, control.y.0));
+                        contour_start = pen;
+                        builder.begin(pen);
                         has_begun = true;
                     }
-                    builder.quadratic_bezier_to(
-                        lyon::geom::point(control.x.0, control.y.0),
-                        lyon::geom::point(end.x.0, end.y.0),
-                    );
-                    _current_pos = Some(*end);
+                    pen = lyon_point(end);
+                    builder.quadratic_bezier_to(lyon_point(control), pen);
                 }
 
                 PathCommand::CubicTo(control1, control2, end) => {
                     if !has_begun {
-                        builder.begin(lyon::geom::point(control1.x.0, control1.y.0));
+                        contour_start = pen;
+                        builder.begin(pen);
                         has_begun = true;
                     }
-                    builder.cubic_bezier_to(
-                        lyon::geom::point(control1.x.0, control1.y.0),
-                        lyon::geom::point(control2.x.0, control2.y.0),
-                        lyon::geom::point(end.x.0, end.y.0),
-                    );
-                    _current_pos = Some(*end);
+                    pen = lyon_point(end);
+                    builder.cubic_bezier_to(lyon_point(control1), lyon_point(control2), pen);
                 }
 
                 PathCommand::Close => {
                     if has_begun {
                         builder.close();
                         has_begun = false;
-                        _current_pos = None;
                     }
+                    pen = contour_start;
                 }
 
                 PathCommand::AddRect(rect) => {
@@ -1060,22 +1062,9 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                     builder.line_to(lyon::geom::point(rect.right().0, rect.bottom().0));
                     builder.line_to(lyon::geom::point(rect.left().0, rect.bottom().0));
                     builder.close();
-                    _current_pos = None;
                     has_begun = false;
-                }
-
-                PathCommand::AddCircle(center, radius) => {
-                    // Start new subpath for circle
-                    if has_begun {
-                        builder.end(false);
-                    }
-                    builder.add_circle(
-                        lyon::geom::point(center.x.0, center.y.0),
-                        *radius,
-                        lyon::path::Winding::Positive,
-                    );
-                    _current_pos = None;
-                    has_begun = false;
+                    pen = origin;
+                    contour_start = origin;
                 }
 
                 PathCommand::AddOval(rect) => {
@@ -1091,8 +1080,9 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         lyon::geom::Angle::radians(0.0),
                         lyon::path::Winding::Positive,
                     );
-                    _current_pos = None;
                     has_begun = false;
+                    pen = origin;
+                    contour_start = origin;
                 }
 
                 PathCommand::AddArc(rect, start_angle, sweep_angle) => {
@@ -1120,6 +1110,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                     if has_begun {
                         builder.line_to(arc_start);
                     } else {
+                        contour_start = arc_start;
                         builder.begin(arc_start);
                         has_begun = true;
                     }
@@ -1128,8 +1119,7 @@ impl IntoLyonPath for flui_types::painting::path::Path {
                         builder.cubic_bezier_to(cubic.ctrl1, cubic.ctrl2, cubic.to);
                     });
 
-                    let arc_end = arc.to();
-                    _current_pos = Some(Point::new(Pixels(arc_end.x), Pixels(arc_end.y)));
+                    pen = arc.to();
                 }
             }
         }
@@ -1149,6 +1139,52 @@ impl IntoLyonPath for flui_types::painting::path::Path {
 mod cpu_tests {
     use super::*;
     use flui_types::geometry::px;
+
+    /// Where each contour of a converted path begins.
+    fn contour_starts(path: &flui_types::painting::path::Path) -> Vec<(f32, f32)> {
+        path.to_lyon_path()
+            .iter()
+            .filter_map(|event| match event {
+                lyon::path::Event::Begin { at } => Some((at.x, at.y)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A segment drawn with no contour open starts from Skia's pen, as
+    /// `Path::contains` assumes: the origin on a fresh path or after a
+    /// standalone shape, the start of the contour just closed after a
+    /// close. It used to start at the curve's control point, or at a line's
+    /// own end.
+    #[test]
+    fn segments_without_an_open_contour_start_from_the_pen() {
+        use flui_types::painting::path::Path as FluiPath;
+        let p = |x: f32, y: f32| Point::new(px(x), px(y));
+
+        let mut curve = FluiPath::new();
+        curve.cubic_to(p(10.0, 40.0), p(30.0, 40.0), p(40.0, 0.0));
+        assert_eq!(contour_starts(&curve), [(0.0, 0.0)]);
+
+        let mut line = FluiPath::new();
+        line.line_to(p(10.0, 10.0));
+        assert_eq!(contour_starts(&line), [(0.0, 0.0)]);
+
+        let mut after_close = FluiPath::new();
+        after_close.move_to(p(5.0, 6.0));
+        after_close.line_to(p(20.0, 6.0));
+        after_close.close();
+        after_close.quadratic_bezier_to(p(30.0, 30.0), p(40.0, 6.0));
+        assert_eq!(contour_starts(&after_close), [(5.0, 6.0), (5.0, 6.0)]);
+
+        let mut after_shape = FluiPath::new();
+        after_shape.move_to(p(5.0, 6.0));
+        after_shape.add_rect(Rect::from_ltrb(px(50.0), px(50.0), px(60.0), px(60.0)));
+        after_shape.line_to(p(10.0, 10.0));
+        assert_eq!(
+            contour_starts(&after_shape),
+            [(5.0, 6.0), (50.0, 50.0), (0.0, 0.0)]
+        );
+    }
 
     /// Worst-case local chord sag and rim-vertex count for a tessellated circle
     /// of `radius`, flattened at the tessellator's current `max_scale`.

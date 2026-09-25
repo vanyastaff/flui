@@ -101,6 +101,12 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   known Thai/Lao/Khmer/Myanmar/Chinese/Japanese segmentation
   limitations.
 
+- **Bézier curves on `Path`** (`flui-types`): `quadratic_bezier_to` and `cubic_to`, Flutter's
+  `quadraticBezierTo`/`cubicTo`. `flui-engine` already tessellated both commands; nothing could
+  create them. Hit testing flattens a curve by Wang's formula to the same 0.1 px tolerance as
+  arcs, instead of a fixed four or eight chords that drifted from the painted curve in
+  proportion to its size.
+
 ### Changed
 
 - **`flui_widgets::TextField` renamed to `RawTextField`** (and
@@ -150,8 +156,15 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
     `text_scale_factor` in `MediaQueryData` and `TextPainter`, and a `dyn` trait cannot be the
     replacement: `MediaQueryData` compares values to decide which dependents rebuild. Flutter's
     nonlinear scaling should come back as a `Copy + PartialEq` value wired from the platform.
+- `PathCommand::AddCircle`: no `Path` method produced it (`Path::circle` adds an oval), and
+  Flutter has no `addCircle`.
 
 ### Fixed
+
+- **Where an unanchored segment starts** (`flui-engine`): a `line_to` or curve with no contour
+  open began at the line's own end or the curve's first control point. It now starts from
+  Skia's pen, as Flutter does and as `Path::contains` already assumed: the origin on a fresh
+  path or after a standalone shape, the start of the contour just closed after a close.
 
 - **`Image::from_rgba8` length check could wrap** (`flui-types`): the expected length
   `width * height * 4` was computed in `u32`, so it panicked on overflow in debug builds and

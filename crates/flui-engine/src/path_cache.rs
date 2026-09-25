@@ -226,10 +226,6 @@ fn hash_command(cmd: &PathCommand, hasher: &mut DefaultHasher) {
         PathCommand::AddRect(r) | PathCommand::AddOval(r) => {
             hash_rect(r, hasher);
         }
-        PathCommand::AddCircle(center, radius) => {
-            hash_point(*center, hasher);
-            radius.to_bits().hash(hasher);
-        }
         PathCommand::AddArc(r, start, sweep) => {
             hash_rect(r, hasher);
             start.to_bits().hash(hasher);
