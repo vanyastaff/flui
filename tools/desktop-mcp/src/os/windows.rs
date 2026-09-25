@@ -484,6 +484,34 @@ pub fn process_started(pid: u32) -> Option<u64> {
     started
 }
 
+/// A missing PID is distinct from a process whose identity is unreadable.
+/// Access denial must never retire a previously issued session handle.
+pub fn process_started_checked(pid: u32) -> ToolResult<Option<u64>> {
+    // SAFETY: plain value arguments; a successful handle is closed below.
+    let process = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
+        Ok(process) => process,
+        Err(error)
+            if error.code()
+                == windows::core::HRESULT::from_win32(
+                    windows::Win32::Foundation::ERROR_INVALID_PARAMETER.0,
+                ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(ToolError::Busy(format!(
+                "the identity of process {pid} could not be read: {error}"
+            )));
+        }
+    };
+    let started = creation_time(process);
+    // SAFETY: the handle opened above, closed once.
+    let _ = unsafe { CloseHandle(process) };
+    started.map(Some).ok_or_else(|| {
+        ToolError::Busy(format!("the start time of process {pid} could not be read"))
+    })
+}
+
 /// The start time of the process a child handle this server holds names:
 /// read through the handle, not the pid, so it is the launched process's
 /// whatever the pid names by now.

@@ -142,6 +142,25 @@ pub fn partial(
     cause.counted(sent, total, unit)
 }
 
+/// Records a preparatory move even when verification or the first semantic
+/// event fails. Existing press uncertainty and progress remain the primary
+/// effect; the pointer event is additional context, not a replacement count.
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+fn after_pointer_move<T>(
+    point: (i32, i32),
+    action: impl FnOnce() -> crate::error::ToolResult<T>,
+) -> crate::error::ToolResult<T> {
+    action().map_err(|cause| {
+        cause.after(
+            crate::error::Effect::Incidental,
+            format!(
+                "a preparatory pointer move toward ({}, {}) reached the OS and may have triggered hover or focus changes; the pointer may have been clamped or moved again; inspect before retrying",
+                point.0, point.1
+            ),
+        )
+    })
+}
+
 /// Always releases a click's button, but advances click progress only after
 /// both halves succeed. A failed release can leave the button down or can
 /// have delivered the click before reporting failure; neither is completion.
@@ -271,6 +290,60 @@ fn press_and_release(
 mod tests {
     use super::*;
     use crate::keys::{KeyName, Modifier};
+
+    #[test]
+    fn a_preparatory_move_is_reported_when_verification_or_the_action_refuses() {
+        use crate::error::{Effect, ToolError};
+        for cause in [
+            ToolError::Busy("the first press guard refused".into()),
+            ToolError::OutsideTarget {
+                x: 20,
+                y: 30,
+                reason: "the pointer was clamped".into(),
+                covered_by: None,
+            },
+        ] {
+            let code = cause.code();
+            let error = after_pointer_move((20, 30), || Err::<(), _>(cause))
+                .expect_err("BUG: the action refused after movement");
+            assert_eq!(error.code(), code);
+            let ToolError::Interrupted { effect, detail, .. } = error else {
+                panic!("the pointer move must be reported");
+            };
+            assert_eq!(effect, Effect::Incidental);
+            assert!(detail.contains("(20, 30)"));
+            assert!(detail.contains("hover or focus"));
+        }
+    }
+
+    #[test]
+    fn a_preparatory_move_keeps_press_uncertainty_and_completed_progress() {
+        use crate::error::{Effect, ToolError};
+        for expected in [
+            Effect::MayHaveRun,
+            Effect::Ran,
+            Effect::Partial {
+                sent: 1,
+                total: 2,
+                unit: "clicks",
+            },
+        ] {
+            let error = after_pointer_move((20, 30), || {
+                Err::<(), _>(
+                    ToolError::Busy("release failed".into())
+                        .after(expected.clone(), "original action detail"),
+                )
+            })
+            .expect_err("BUG: action failure persists");
+            let ToolError::Interrupted { effect, detail, .. } = error else {
+                panic!("the original effect must be kept");
+            };
+            assert_eq!(effect, expected);
+            assert!(detail.contains("original action detail"));
+            assert!(detail.contains("preparatory pointer move"));
+        }
+        assert!(after_pointer_move((20, 30), || Ok(())).is_ok());
+    }
 
     #[test]
     fn drag_refuses_movement_when_a_key_is_pressed_during_the_target_guard() {

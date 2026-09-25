@@ -204,6 +204,21 @@ pub fn window_pid(id: u32) -> Option<u32> {
     }
 }
 
+/// A process start time, confirmed absence, or a transient unreadable identity.
+/// Unlike `process_started`, an unreadable lookup never means the process exited.
+pub fn process_started_checked(pid: u32) -> ToolResult<Option<u64>> {
+    #[cfg(target_os = "windows")]
+    {
+        windows::process_started_checked(pid)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(ToolError::Busy(format!(
+            "the OS cannot read the identity of process {pid}"
+        )))
+    }
+}
+
 /// When process `pid` started, in an OS-specific unit; with the pid, an
 /// identity the OS does not recycle. `None` when the OS cannot say.
 pub fn process_started(pid: u32) -> Option<u64> {

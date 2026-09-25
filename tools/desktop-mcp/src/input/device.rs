@@ -201,6 +201,10 @@ impl Input {
     /// the safety check never looked at.
     fn move_verified(&mut self, x: i32, y: i32) -> ToolResult<()> {
         self.move_to(x, y)?;
+        self.verify_moved(x, y)
+    }
+
+    fn verify_moved(&self, x: i32, y: i32) -> ToolResult<()> {
         match self.position() {
             // Right after our own move: the OS clamped it (a screen edge, a
             // cursor clip), which a retry repeats.
@@ -239,6 +243,23 @@ impl Input {
         crate::os::cursor().or_else(|| self.enigo.location().ok())
     }
 
+    /// Moves before a pointer action, then accounts for that event on every
+    /// later failure, including a clamped move or a refused first press.
+    fn pointer_action(
+        &mut self,
+        point: (i32, i32),
+        guard: &mut Guard<'_>,
+        action: impl FnOnce(&mut Self, &mut Guard<'_>) -> ToolResult<()>,
+    ) -> ToolResult<()> {
+        self.ready()?;
+        guard(None)?;
+        self.move_to(point.0, point.1)?;
+        super::after_pointer_move(point, || {
+            self.verify_moved(point.0, point.1)?;
+            action(self, guard)
+        })
+    }
+
     /// Moves to the point and clicks once or twice. `guard` runs before each
     /// click, so a target that lost the foreground receives no further one.
     pub fn click(
@@ -249,38 +270,35 @@ impl Input {
         double: bool,
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
-        self.ready()?;
-        // Checked before the first move too: a move is an event (hover,
-        // tooltips) and must not reach a window that took the foreground.
-        guard(None)?;
-        self.move_verified(x, y)?;
-        thread::sleep(STEP);
-        let button = enigo_button(button);
-        let clicks = if double { 2 } else { 1 };
-        for sent in 0..clicks {
-            // A completed click needs both press and release. A failed
-            // release leaves this click uncertain, even though its down is
-            // known; only earlier completed clicks contribute to progress.
-            // Refused before the press: nothing of this click went out.
-            // The button wait first: it can take a moment, and the target
-            // and position are checked after it, right before the press.
-            if let Err(cause) = nothing_held().and_then(|()| {
-                super::guarded_input_event(
-                    nothing_held_now,
-                    || guard(None),
-                    || self.ensure_at(x, y),
-                )
-            }) {
-                return Err(partial(cause, sent, clicks, "clicks"));
+        self.pointer_action((x, y), guard, |this, guard| {
+            thread::sleep(STEP);
+            let button = enigo_button(button);
+            let clicks = if double { 2 } else { 1 };
+            for sent in 0..clicks {
+                // A completed click needs both press and release. A failed
+                // release leaves this click uncertain, even though its down is
+                // known; only earlier completed clicks contribute to progress.
+                // Refused before the press: nothing of this click went out.
+                // The button wait first: it can take a moment, and the target
+                // and position are checked after it, right before the press.
+                if let Err(cause) = nothing_held().and_then(|()| {
+                    super::guarded_input_event(
+                        nothing_held_now,
+                        || guard(None),
+                        || this.ensure_at(x, y),
+                    )
+                }) {
+                    return Err(partial(cause, sent, clicks, "clicks"));
+                }
+                this.held_button = Some(button);
+                let pressed = this
+                    .enigo
+                    .button(button, Direction::Press)
+                    .map_err(failed("pressing the button"));
+                super::complete_click(pressed, || this.release_held(), sent, clicks)?;
             }
-            self.held_button = Some(button);
-            let pressed = self
-                .enigo
-                .button(button, Direction::Press)
-                .map_err(failed("pressing the button"));
-            super::complete_click(pressed, || self.release_held(), sent, clicks)?;
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Presses at `from`, moves in steps over `duration`, releases at `to`.
@@ -301,107 +319,106 @@ impl Input {
         duration: Duration,
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
-        self.ready()?;
-        guard(None)?;
-        self.move_verified(from.0, from.1)?;
-        thread::sleep(STEP);
-        nothing_held()?;
-        super::guarded_input_event(
-            nothing_held_now,
-            || guard(None),
-            || self.ensure_at(from.0, from.1),
-        )?;
-        // The primary button, as the user set it: with swapped buttons a
-        // physical left press is a secondary one.
-        let primary = enigo_button(MouseButton::Left);
-        // Marked held before the press: a press that went out but reported
-        // failure is released at once, and by the next call if that fails.
-        self.held_button = Some(primary);
-        if let Err(cause) = self
-            .enigo
-            .button(primary, Direction::Press)
-            .map_err(failed("pressing for a drag"))
-        {
-            // A press that went out, then released, is a click at the drag's
-            // start: say so either way.
-            let released = self.release_held();
-            return Err(cause.after(
-                Effect::MayHaveRun,
-                match released {
-                    Ok(()) => format!(
-                        "the press may have gone out and was released, which is a click at ({}, {}); look before retrying",
-                        from.0, from.1
-                    ),
-                    Err(e) => format!(
-                        "the press may have gone out and releasing it failed ({e}); the button may still be held"
-                    ),
+        self.pointer_action(from, guard, |this, guard| {
+            thread::sleep(STEP);
+            nothing_held()?;
+            super::guarded_input_event(
+                nothing_held_now,
+                || guard(None),
+                || this.ensure_at(from.0, from.1),
+            )?;
+            // The primary button, as the user set it: with swapped buttons a
+            // physical left press is a secondary one.
+            let primary = enigo_button(MouseButton::Left);
+            // Marked held before the press: a press that went out but reported
+            // failure is released at once, and by the next call if that fails.
+            this.held_button = Some(primary);
+            if let Err(cause) = this
+                .enigo
+                .button(primary, Direction::Press)
+                .map_err(failed("pressing for a drag"))
+            {
+                // A press that went out, then released, is a click at the drag's
+                // start: say so either way.
+                let released = this.release_held();
+                return Err(cause.after(
+                    Effect::MayHaveRun,
+                    match released {
+                        Ok(()) => format!(
+                            "the press may have gone out and was released, which is a click at ({}, {}); look before retrying",
+                            from.0, from.1
+                        ),
+                        Err(e) => format!(
+                            "the press may have gone out and releasing it failed ({e}); the button may still be held"
+                        ),
+                    },
+                ));
+            }
+            let path = drag_path(from, to, duration);
+            let steps = u32::try_from(path.len()).expect("BUG: at most 200 steps");
+            // The steps are bounded; their interval is not, so a long drag lasts
+            // as long as it was asked to.
+            let interval = (duration / steps).max(STEP);
+            let mut last = from;
+            let mut done = 0;
+            // SendInput can return before async button state reflects the down.
+            // Only this initial transition gets a bounded settling wait. Once
+            // observed held, a later missing bit means the drag was interrupted.
+            #[cfg(target_os = "windows")]
+            let mut moved = super::settle_owned_button(
+                physical_bit(primary),
+                || {
+                    no_keyboard_input()?;
+                    Ok(crate::os::mouse_buttons_down())
                 },
-            ));
-        }
-        let path = drag_path(from, to, duration);
-        let steps = u32::try_from(path.len()).expect("BUG: at most 200 steps");
-        // The steps are bounded; their interval is not, so a long drag lasts
-        // as long as it was asked to.
-        let interval = (duration / steps).max(STEP);
-        let mut last = from;
-        let mut done = 0;
-        // SendInput can return before async button state reflects the down.
-        // Only this initial transition gets a bounded settling wait. Once
-        // observed held, a later missing bit means the drag was interrupted.
-        #[cfg(target_os = "windows")]
-        let mut moved = super::settle_owned_button(
-            physical_bit(primary),
-            || {
-                no_keyboard_input()?;
-                Ok(crate::os::mouse_buttons_down())
-            },
-            || thread::sleep(Duration::from_millis(5)),
-        );
-        #[cfg(not(target_os = "windows"))]
-        let mut moved = Ok(());
-        let held_button = self.held_button;
-        for point in path {
-            if moved.is_err() {
-                break;
-            }
-            thread::sleep(interval);
-            moved = super::guarded_input_event(
-                || no_drag_interference(held_button),
-                || guard(Some(point)),
-                || self.move_verified(point.0, point.1),
+                || thread::sleep(Duration::from_millis(5)),
             );
-            if moved.is_err() {
-                break;
+            #[cfg(not(target_os = "windows"))]
+            let mut moved = Ok(());
+            let held_button = this.held_button;
+            for point in path {
+                if moved.is_err() {
+                    break;
+                }
+                thread::sleep(interval);
+                moved = super::guarded_input_event(
+                    || no_drag_interference(held_button),
+                    || guard(Some(point)),
+                    || this.move_verified(point.0, point.1),
+                );
+                if moved.is_err() {
+                    break;
+                }
+                last = point;
+                done += 1;
             }
-            last = point;
-            done += 1;
-        }
-        if moved.is_ok() {
-            moved = super::guarded_input_event(
-                || no_drag_interference(held_button),
-                || guard(Some(to)),
-                || self.ensure_at(to.0, to.1),
-            );
-        }
-        match moved {
-            Ok(()) => self.release_held().map_err(|cause| {
-                cause.after(
-                    Effect::Ran,
-                    format!(
-                        "the drag reached ({}, {}) but the button could not be released; it may still be held, so move nothing until it is released",
-                        to.0, to.1
-                    ),
-                )
-            }),
-            Err(cause) => {
-                let went = Effect::Partial {
-                    sent: done,
-                    total: steps as usize,
-                    unit: "drag steps",
-                };
-                Err(self.abort_drag(last, cause, went, guard))
+            if moved.is_ok() {
+                moved = super::guarded_input_event(
+                    || no_drag_interference(held_button),
+                    || guard(Some(to)),
+                    || this.ensure_at(to.0, to.1),
+                );
             }
-        }
+            match moved {
+                Ok(()) => this.release_held().map_err(|cause| {
+                    cause.after(
+                        Effect::Ran,
+                        format!(
+                            "the drag reached ({}, {}) but the button could not be released; it may still be held, so move nothing until it is released",
+                            to.0, to.1
+                        ),
+                    )
+                }),
+                Err(cause) => {
+                    let went = Effect::Partial {
+                        sent: done,
+                        total: steps as usize,
+                        unit: "drag steps",
+                    };
+                    Err(this.abort_drag(last, cause, went, guard))
+                }
+            }
+        })
     }
 
     /// Releases the held mouse button, retrying: a button left held turns
@@ -490,32 +507,29 @@ impl Input {
         dy: i32,
         guard: &mut Guard<'_>,
     ) -> ToolResult<()> {
-        self.ready()?;
-        // Checked before the first move too: a move is an event (hover,
-        // tooltips) and must not reach a window that took the foreground.
-        guard(None)?;
-        self.move_verified(x, y)?;
-        thread::sleep(STEP);
-        let axes = [(dy, Axis::Vertical), (dx, Axis::Horizontal)];
-        let total = axes.iter().filter(|(n, _)| *n != 0).count();
-        for (sent, (notches, axis)) in axes.into_iter().filter(|(n, _)| *n != 0).enumerate() {
-            let scrolled = nothing_held().and_then(|()| {
-                super::guarded_input_event(
-                    nothing_held_now,
-                    || guard(None),
-                    || {
-                        self.ensure_at(x, y)?;
-                        self.enigo
-                            .scroll(notches, axis)
-                            .map_err(failed("scrolling"))
-                    },
-                )
-            });
-            if let Err(cause) = scrolled {
-                return Err(partial(cause, sent, total, "scroll axes"));
+        self.pointer_action((x, y), guard, |this, guard| {
+            thread::sleep(STEP);
+            let axes = [(dy, Axis::Vertical), (dx, Axis::Horizontal)];
+            let total = axes.iter().filter(|(n, _)| *n != 0).count();
+            for (sent, (notches, axis)) in axes.into_iter().filter(|(n, _)| *n != 0).enumerate() {
+                let scrolled = nothing_held().and_then(|()| {
+                    super::guarded_input_event(
+                        nothing_held_now,
+                        || guard(None),
+                        || {
+                            this.ensure_at(x, y)?;
+                            this.enigo
+                                .scroll(notches, axis)
+                                .map_err(failed("scrolling"))
+                        },
+                    )
+                });
+                if let Err(cause) = scrolled {
+                    return Err(partial(cause, sent, total, "scroll axes"));
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     /// Types text one keystroke at a time (see [`strokes`]) with `guard`

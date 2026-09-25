@@ -295,7 +295,7 @@ impl Uia {
         uncertain: &mut bool,
     ) -> String {
         let pid = cached_pid(element).unwrap_or(0);
-        let started = *self
+        let mut started = *self
             .starts
             .entry(pid)
             .or_insert_with(|| crate::os::process_started(pid));
@@ -310,6 +310,24 @@ impl Uia {
         if let Identity::Runtime(id) = &key
             && let Some(held) = self.elements.by_identity(&key)
         {
+            if started.is_none()
+                && held.started.is_some()
+                && held.pid == pid
+                && held.control_type == control_type
+            {
+                if let Ok(current) = crate::os::process_started_checked(pid) {
+                    started = current;
+                } else {
+                    // An unreadable identity is not a replacement. Keep
+                    // the original proxy and binding, but advertise no
+                    // capabilities until a later read verifies it.
+                    *uncertain = true;
+                    return self
+                        .elements
+                        .handle_of(&key)
+                        .expect("BUG: the held identity has an issued handle");
+                }
+            }
             // `Some(true)` keep, `Some(false)` a different element, `None`
             // not known; each provider call only while time is left.
             let verdict = if Instant::now() >= deadline {
@@ -396,7 +414,7 @@ impl Uia {
                 "element `{handle}` came from a process this server could not identify, so it is not acted on; read the tree again"
             )));
         };
-        if crate::os::process_started(held.pid) != Some(started) {
+        if crate::os::process_started_checked(held.pid)? != Some(started) {
             return Err(ToolError::gone_element(handle, "its process has exited"));
         }
         // The object itself must still answer to the id it was issued
@@ -428,7 +446,7 @@ impl Uia {
                     e.code().0,
                     &e,
                     held.started.map(|started| (held.pid, started)),
-                    crate::os::process_started,
+                    crate::os::process_started_checked,
                 ));
             }
         }
@@ -459,8 +477,8 @@ impl Uia {
         match identity_after_refresh(
             started,
             || held.same_as(&fresh, Some(started)),
-            || crate::os::process_started(held.pid),
-        ) {
+            || crate::os::process_started_checked(held.pid),
+        )? {
             Some(true) => Ok(fresh),
             None => Err(ToolError::platform(
                 "re-reading the element",
@@ -544,6 +562,11 @@ impl Uia {
         let mut uncertain = false;
         let id = self.register(key, element, walk.deadline, &mut uncertain);
         walk.truncated |= uncertain;
+        if uncertain {
+            // Retaining a handle is not proof that this fresh snapshot is
+            // its element: even handle-only state waits must not consume it.
+            return None;
+        }
         walk.seen.insert(id.clone());
         let mut node = describe(element, id);
         let actionable = self.elements.get(&node.id).is_ok_and(|held| {
@@ -708,13 +731,14 @@ impl Uia {
             },
             |fresh| {
                 before_call()?;
-                let verdict = held.started.and_then(|started| {
-                    identity_after_refresh(
+                let verdict = match held.started {
+                    Some(started) => identity_after_refresh(
                         started,
                         || held.same_as(fresh, Some(started)),
-                        || crate::os::process_started(held.pid),
-                    )
-                });
+                        || crate::os::process_started_checked(held.pid),
+                    )?,
+                    None => None,
+                };
                 match verdict {
                     Some(true) => Ok(()),
                     Some(false) => Err(ToolError::gone_element(
@@ -830,7 +854,7 @@ impl Uia {
             handle,
             started,
             || self.readback_state(handle, fresh, node, toggled, until),
-            || crate::os::process_started(pid),
+            || crate::os::process_started_checked(pid),
         );
         result.map_err(|error| self.remember_error(handle, error))
     }
@@ -846,7 +870,20 @@ impl Uia {
         let held = self.elements.get(handle)?;
         // The same rule as before the action: an element read back must be
         // the one acted on, in the same process.
-        let same = held.same_as(fresh, crate::os::process_started(held.pid));
+        let same = match held.started {
+            Some(started) => identity_after_refresh(
+                started,
+                || held.same_as(fresh, Some(started)),
+                || crate::os::process_started_checked(held.pid),
+            )
+            .map_err(|error| {
+                error.after(
+                    Effect::Ran,
+                    "the action succeeded; the readback identity could not be checked",
+                )
+            })?,
+            None => None,
+        };
         let range_unread = !node.has_text_value
             && cached_bool(fresh, UIProperty::IsRangeValuePatternAvailable)
             && node.value.is_none();
@@ -1318,10 +1355,20 @@ fn readback_while_current(
     handle: &str,
     started: Option<u64>,
     read: impl FnOnce() -> ToolResult<()>,
-    process_now: impl FnOnce() -> Option<u64>,
+    process_now: impl FnOnce() -> ToolResult<Option<u64>>,
 ) -> ToolResult<()> {
     let result = read();
-    if started.is_none() || process_now() != started {
+    let current = process_now();
+    if result.as_ref().is_err_and(|error| error.code() == "gone") {
+        return result;
+    }
+    let current = current.map_err(|error| {
+        error.after(
+            Effect::Ran,
+            "the action succeeded; its process identity could not be read back",
+        )
+    })?;
+    if started.is_none() || current != started {
         return Err(ToolError::gone_element(
             handle,
             "its process exited or was replaced during readback",
@@ -1334,18 +1381,23 @@ fn readback_while_current(
     result
 }
 
-/// The process identity must be observed after the final provider call:
-/// refreshing a recycled native proxy may outlive the process checked before it.
+/// Preserve conclusive replacement evidence from either observation. An
+/// unreadable process identity alone must not retire an otherwise unchanged
+/// element, and is not proof that it is still safe to use.
 fn identity_after_refresh(
     started: u64,
     refresh: impl FnOnce() -> Option<bool>,
-    process_now: impl FnOnce() -> Option<u64>,
-) -> Option<bool> {
+    process_now: impl FnOnce() -> ToolResult<Option<u64>>,
+) -> ToolResult<Option<bool>> {
     let same = refresh();
-    if process_now() == Some(started) {
-        same
+    let current = process_now();
+    if same == Some(false) {
+        return Ok(Some(false));
+    }
+    if current? == Some(started) {
+        Ok(same)
     } else {
-        Some(false)
+        Ok(Some(false))
     }
 }
 
@@ -2089,7 +2141,7 @@ fn classify(
         e.code(),
         e,
         identity,
-        crate::os::process_started,
+        crate::os::process_started_checked,
     )
 }
 
@@ -2100,9 +2152,10 @@ fn classify_code(
     code: i32,
     e: &dyn std::fmt::Display,
     identity: Option<(u32, u64)>,
-    process_now: impl FnOnce(u32) -> Option<u64>,
+    process_now: impl FnOnce(u32) -> ToolResult<Option<u64>>,
 ) -> ToolError {
-    let gone = identity.is_some_and(|(pid, started)| process_now(pid) != Some(started));
+    let gone = identity
+        .is_some_and(|(pid, started)| process_now(pid).is_ok_and(|now| now != Some(started)));
     match code {
         E_ELEMENT_NOT_AVAILABLE => ToolError::gone_element(handle, "the application removed it"),
         E_INVALID_WINDOW => ToolError::gone_element(handle, "its window has closed"),
@@ -2111,7 +2164,7 @@ fn classify_code(
         }
         _ if is_disconnected(code) => ToolError::platform(
             format!("{what} on element `{handle}`"),
-            "the application's accessibility provider disconnected while the application runs",
+            "the accessibility provider disconnected without confirmed process exit",
         ),
         E_ELEMENT_NOT_ENABLED => ToolError::Disabled {
             element: handle.to_owned(),
@@ -2310,7 +2363,7 @@ mod tests {
                     Some((42, 10)),
                     |pid| {
                         assert_eq!(pid, 42);
-                        observed
+                        Ok(observed)
                     },
                 );
                 assert_eq!(
@@ -2465,7 +2518,7 @@ mod tests {
                             Ok(())
                         }
                     },
-                    || started.get(),
+                    || Ok(started.get()),
                 );
                 let error = result.expect_err("BUG: replacement state is never returned");
                 assert_eq!(error.code(), "gone");
@@ -2478,14 +2531,54 @@ mod tests {
                 ));
             }
         }
-        assert!(readback_while_current("e1", Some(10), || Ok(()), || Some(10)).is_ok());
+        assert!(readback_while_current("e1", Some(10), || Ok(()), || Ok(Some(10))).is_ok());
+    }
+
+    #[test]
+    fn unreadable_process_identity_does_not_erase_conclusive_element_evidence() {
+        let unread = || Err(ToolError::Busy("identity temporarily inaccessible".into()));
+        for same in [Some(true), None] {
+            let error = identity_after_refresh(10, || same, unread)
+                .expect_err("BUG: unreadable is neither current nor gone");
+            assert_eq!(error.code(), "busy");
+        }
+        assert_eq!(
+            identity_after_refresh(10, || Some(false), unread)
+                .expect("BUG: observed replacement remains conclusive"),
+            Some(false)
+        );
+        assert_eq!(
+            identity_after_refresh(10, || None, || Ok(Some(20)))
+                .expect("BUG: process replacement is conclusive"),
+            Some(false)
+        );
+        let error = readback_while_current("e1", Some(10), || Ok(()), unread)
+            .expect_err("BUG: unreadable readback is refused");
+        assert_eq!(error.code(), "busy");
+        assert!(matches!(
+            error,
+            ToolError::Interrupted {
+                effect: Effect::Ran,
+                ..
+            }
+        ));
+        let error = classify_code(
+            "e1",
+            "reading",
+            E_DISCONNECTED,
+            &"disconnected",
+            Some((42, 10)),
+            |_| unread(),
+        );
+        assert_ne!(error.code(), "gone");
     }
 
     #[test]
     fn process_replacement_during_identity_refresh_is_refused() {
         let started = std::cell::Cell::new(Some(10));
         assert_eq!(
-            identity_after_refresh(10, || Some(true), || started.get()),
+            identity_after_refresh(10, || Some(true), || Ok(started.get()))
+                .expect("BUG: readable identity"),
             Some(true)
         );
         for replacement in [Some(20), None] {
@@ -2496,16 +2589,20 @@ mod tests {
                     started.set(replacement);
                     Some(true)
                 },
-                || started.get(),
+                || Ok(started.get()),
             );
             assert_eq!(
-                verdict,
+                verdict.expect("BUG: readable replacement"),
                 Some(false),
                 "a refreshed proxy cannot outlive its original process"
             );
         }
         started.set(Some(10));
-        assert_eq!(identity_after_refresh(10, || None, || started.get()), None);
+        assert_eq!(
+            identity_after_refresh(10, || None, || Ok(started.get()))
+                .expect("BUG: readable process"),
+            None
+        );
     }
 
     #[test]

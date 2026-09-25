@@ -185,7 +185,7 @@ pub fn verify_element(
 /// Refuses a pid whose process is not the one this session first saw under
 /// it (`then`, its start time): OSes recycle pids, and input must not follow
 /// a pid to an unrelated process. `now` is the start time of the process
-/// holding the pid now, `None` when none does or the OS cannot say. Without
+/// holding the pid now, `None` only when its absence was confirmed. Without
 /// a start time there is no identity to hold the pid to, so it is refused.
 pub fn same_process(pid: u32, then: Option<u64>, now: Option<u64>) -> ToolResult<()> {
     match then {
@@ -342,6 +342,15 @@ impl Registry {
         if cfg!(target_os = "windows") && (os::window_pid(w.id) != Some(w.pid) || class.is_none()) {
             return None;
         }
+        Some(self.adopt_observed(w, started, class))
+    }
+
+    fn adopt_observed(
+        &mut self,
+        w: &NativeWindow,
+        started: Option<u64>,
+        class: Option<u64>,
+    ) -> (u64, Option<Untargetable>) {
         let reason = self.observe_process(w.pid, started);
         let n = self.register_window(Issued {
             hwnd: w.id,
@@ -349,14 +358,17 @@ impl Registry {
             started,
             class,
         });
-        Some((n, reason))
+        (n, reason)
     }
 
     /// Targetability follows session history, not only this lookup: a pid
     /// handed out without an identity must never silently bind later.
     fn observe_process(&mut self, pid: u32, started: Option<u64>) -> Option<Untargetable> {
         if started.is_none() {
-            self.unidentified.insert(pid);
+            if !self.started.contains_key(&pid) {
+                self.unidentified.insert(pid);
+            }
+            return Some(Untargetable::UnidentifiedProcess);
         }
         if self.unidentified.contains(&pid) {
             return Some(Untargetable::UnidentifiedProcess);
@@ -379,7 +391,8 @@ impl Registry {
             !self.closed.borrow().contains(n)
                 && self.windows.get(n).is_some_and(|issued| {
                     issued.pid == observed.pid
-                        && issued.started == observed.started
+                        && (issued.started == observed.started
+                            || (issued.started.is_some() && observed.started.is_none()))
                         && (issued.class.is_none()
                             || observed.class.is_none()
                             || issued.class == observed.class)
@@ -553,14 +566,13 @@ impl Registry {
                 Ok((target, issued.binding()))
             }
             TargetArg::Pid(pid) => {
-                let now = os::process_started(pid);
                 let Some(&then) = self.started.get(&pid) else {
                     if self.unidentified.contains(&pid) {
                         return Err(ToolError::NotSupported(format!(
                             "process {pid} cannot be identified (its start time cannot be read), so it is not a safety target"
                         )));
                     }
-                    if now.is_none() && !cfg!(target_os = "windows") {
+                    if !cfg!(target_os = "windows") {
                         // The OS has no start times: the reason to report.
                         same_process(pid, None, None)?;
                     }
@@ -569,7 +581,7 @@ impl Registry {
                         kind: HandleKind::Process,
                     });
                 };
-                same_process(pid, Some(then), now)?;
+                same_process(pid, Some(then), os::process_started_checked(pid)?)?;
                 Ok((
                     Target::Pid(pid),
                     Binding {
@@ -621,13 +633,6 @@ impl Registry {
                     kind: HandleKind::Window,
                     why: why.into(),
                 };
-                if let (Some(then), Some(now)) = (bound.class, os::window_class(hwnd))
-                    && now != then
-                {
-                    return Err(gone(
-                        "the OS reused its native id for another window (its class changed)",
-                    ));
-                }
                 if let Some(pid) = bound.window_pid {
                     match Self::owner_now(hwnd)? {
                         None => return Err(gone("it has closed")),
@@ -639,20 +644,36 @@ impl Registry {
                         Some(_) => {}
                     }
                 }
+                if let Some(then) = bound.class {
+                    match os::window_class(hwnd) {
+                        Some(now) if now != then => {
+                            return Err(gone(
+                                "the OS reused its native id for another window (its class changed)",
+                            ));
+                        }
+                        None => {
+                            return Err(ToolError::Busy(
+                                "the window class could not be read while checking its identity"
+                                    .into(),
+                            ));
+                        }
+                        Some(_) => {}
+                    }
+                }
                 bound.window_pid
             }
         };
         if let (Some(pid), Some(then)) = (pid, bound.started) {
-            same_process(pid, Some(then), os::process_started(pid)).map_err(|error| {
-                match (target, error) {
+            same_process(pid, Some(then), os::process_started_checked(pid)?).map_err(
+                |error| match (target, error) {
                     (Target::Window(_, n), ToolError::Gone { why, .. }) => ToolError::Gone {
                         handle: Self::handle(n),
                         kind: HandleKind::Window,
                         why,
                     },
                     (_, error) => error,
-                }
-            })?;
+                },
+            )?;
         }
         Ok(())
     }
@@ -812,15 +833,15 @@ impl Desktop {
                 kind: HandleKind::Process,
             });
         };
-        let same = || os::process_started(pid) == Some(started);
-        if !same() {
+        let same = || os::process_started_checked(pid).map(|now| now == Some(started));
+        if !same()? {
             return Ok(None);
         }
         let windows: Vec<NativeWindow> = capture::windows()?
             .into_iter()
             .filter(|w| w.pid == pid)
             .collect();
-        if !same() {
+        if !same()? {
             return Ok(None);
         }
         Ok(Some(
@@ -1950,6 +1971,81 @@ mod tests {
             Some(Untargetable::UnidentifiedProcess)
         );
         assert!(registry.bind_launched(300, None).is_err());
+    }
+
+    #[test]
+    fn transient_unreadable_listing_preserves_the_issued_window_and_process() {
+        let mut registry = Registry::default();
+        let native = NativeWindow {
+            id: 7,
+            pid: 100,
+            app_name: "app".into(),
+            title: "window".into(),
+            rect: Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            },
+            is_minimized: false,
+            is_focused: false,
+        };
+        let (handle, reason) = registry.adopt_observed(&native, Some(123), Some(9));
+        assert_eq!(reason, None);
+        let (unread_handle, reason) = registry.adopt_observed(&native, None, Some(9));
+        assert_eq!(unread_handle, handle);
+        assert_eq!(reason, Some(Untargetable::UnidentifiedProcess));
+        assert!(!registry.unidentified.contains(&100));
+        assert_eq!(registry.windows[&handle].started, Some(123));
+        assert!(!registry.closed.borrow().contains(&handle));
+        assert_eq!(
+            registry.adopt_observed(&native, Some(123), Some(9)),
+            (handle, None)
+        );
+        let (replacement, reason) = registry.adopt_observed(&native, Some(456), Some(9));
+        assert_ne!(replacement, handle);
+        assert_eq!(reason, Some(Untargetable::ReusedProcess));
+        assert!(registry.closed.borrow().contains(&handle));
+        assert!(
+            registry
+                .observe(Target::Window(7, handle), || Ok(()))
+                .is_err()
+        );
+        let mut unidentified = Registry::default();
+        unidentified.adopt_observed(&native, None, Some(9));
+        assert_eq!(
+            unidentified.adopt_observed(&native, Some(123), Some(9)).1,
+            Some(Untargetable::UnidentifiedProcess)
+        );
+    }
+
+    #[test]
+    fn transient_process_lookup_refuses_without_retiring_a_window() {
+        let mut registry = Registry::default();
+        let issued = Issued {
+            hwnd: 7,
+            pid: 100,
+            started: Some(123),
+            class: Some(9),
+        };
+        let handle = registry.register_window(issued);
+        let target = Target::Window(7, handle);
+        let error = registry
+            .observe(target, || {
+                let now = Err::<Option<u64>, _>(ToolError::Busy("access denied".into()))?;
+                same_process(100, issued.started, now)
+            })
+            .expect_err("BUG: unreadable identity refuses the operation");
+        assert_eq!(error.code(), "busy");
+        assert!(!registry.closed.borrow().contains(&handle));
+        registry
+            .observe(target, || same_process(100, issued.started, Some(123)))
+            .expect("BUG: the original handle remains valid after recovery");
+        let error = registry
+            .observe(target, || same_process(100, issued.started, Some(456)))
+            .expect_err("BUG: confirmed replacement is gone");
+        assert_eq!(error.code(), "gone");
+        assert!(registry.closed.borrow().contains(&handle));
     }
 
     #[test]

@@ -10,6 +10,26 @@ by `flui-platform`; no framework behavior, CI workflow or publishing changes.
 
 ## Repaired failure scenarios
 
+A temporarily unreadable process start time no longer poisons a known PID binding or
+replaces its window handle. The listing marks that observation untargetable; later input
+must obtain a readable matching identity. Checked Windows identity reads distinguish a
+confirmed missing PID from access denial. UIA validation and readback use that distinction
+too, retaining handles on uncertainty while preserving conclusive replacement evidence.
+A PID first issued without an identity remains permanently unidentified.
+
+Click, scroll and drag account for the preparatory cursor move before checking its
+position or dispatching the requested action. A later refusal reports an incidental
+effect even with zero completed clicks, scroll axes or drag steps. Existing partial,
+uncertain or completed-action effects retain priority over the movement detail.
+`cargo xtask check-changed --base 9d0fab9b44d54fa271a9927313dd2676d4b6394b`
+passed: 173 tests, nine skipped, formatting, strict rustdoc and Windows/macOS clippy.
+All six native Windows entries passed; the new fixture covers click, scroll and drag,
+verifies its own hover-triggered relocation, and latches any unexpected button press or
+wheel event. Removing pointer-effect accounting makes the live test fail on the absent
+`incidental`; removing handle preservation makes the Registry test fail on a changed
+handle. Both mutations were restored. Identity failures use injected observations;
+changing a live Windows process DACL and running the macOS backend were not tested.
+
 Independent reviews traced accessibility preparation/dispatch/readback, complete pointer
 gestures, and process publication/cancellation. UIA actions now prepare their capabilities
 before a shared final identity check; dispatch contains only the mutation. Text values

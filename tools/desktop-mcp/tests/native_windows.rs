@@ -49,6 +49,7 @@ thread_local! {
     static METRICS: Cell<Metrics> = const { Cell::new(Metrics { wheel: 0, down: None, drag: (0, 0) }) };
     static EARLY_RELEASED: Cell<bool> = const { Cell::new(false) };
     static MOVED_DURING_DRAG: Cell<bool> = const { Cell::new(false) };
+    static PREPARATION_BUTTON_DOWN: Cell<bool> = const { Cell::new(false) };
     static CHORD_REPORT: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
 }
 
@@ -100,6 +101,13 @@ unsafe extern "system" fn window_proc(
                 let mut metrics = state.get();
                 metrics.down = Some(point(lparam));
                 state.set(metrics);
+                if std::env::var_os("FLUI_MCP_MOVE_DURING_PREPARATION").is_some() {
+                    PREPARATION_BUTTON_DOWN.with(|pressed| pressed.set(true));
+                    let _ = SetWindowTextW(
+                        window,
+                        w!("MCP Native Fixture unexpected_button_down=true"),
+                    );
+                }
             }),
             WM_MOUSEMOVE
                 if wparam.0 & 1 != 0
@@ -118,8 +126,12 @@ unsafe extern "system" fn window_proc(
                 }
             }
             WM_MOUSEMOVE
-                if wparam.0 & 1 != 0
-                    && std::env::var_os("FLUI_MCP_MOVE_DURING_DRAG").is_some()
+                if ((wparam.0 & 1 != 0
+                    && std::env::var_os("FLUI_MCP_MOVE_DURING_DRAG").is_some())
+                    || (wparam.0 & 0x73 == 0
+                        && std::env::var_os("FLUI_MCP_MOVE_DURING_PREPARATION").is_some()
+                        && point(lparam).0 >= 290
+                        && (220..310).contains(&point(lparam).1)))
                     && !MOVED_DURING_DRAG.with(Cell::get) =>
             {
                 use windows::Win32::UI::WindowsAndMessaging::{
@@ -183,7 +195,9 @@ unsafe extern "system" fn window_proc(
                     metrics.wheel,
                     metrics.drag.0,
                     metrics.drag.1,
-                    if EARLY_RELEASED.with(Cell::get) {
+                    if PREPARATION_BUTTON_DOWN.with(Cell::get) {
+                        " unexpected_button_down=true"
+                    } else if EARLY_RELEASED.with(Cell::get) {
                         " released_early=true"
                     } else {
                         ""
@@ -757,6 +771,75 @@ fn a_native_release_interrupts_the_drag() {
         (x + 100, y + 40)
     );
     call(&mut client, "kill", json!({"pid": pid}));
+}
+
+#[test]
+#[ignore = "moves the real pointer and its owned window during click, scroll and drag preparation"]
+fn pointer_preparation_refusals_report_the_movement_without_sending_the_gesture() {
+    for tool in ["click", "scroll", "drag"] {
+        let (mut client, _) = Client::start();
+        // Restoration must not place the fixture under an already hovering
+        // pointer and trigger its movement before the screenshot is taken.
+        call(&mut client, "move_mouse", json!({"x": 20, "y": 20}));
+        let executable = std::env::current_exe().expect("BUG: test executable path");
+        let launched = call(
+            &mut client,
+            "launch",
+            json!({
+                "program": executable.to_string_lossy(),
+                "args": ["--exact", "native_fixture_process", "--ignored", "--nocapture"],
+                "env": {"FLUI_MCP_NATIVE_FIXTURE": "1", "FLUI_MCP_MOVE_DURING_PREPARATION": "1"}
+            }),
+        );
+        let pid = launched["pid"].as_u64().expect("BUG: child pid");
+        let waited = call(
+            &mut client,
+            "wait_for_window",
+            json!({"pid": pid, "timeout_ms": 15000}),
+        );
+        let window = waited["window"]["id"].as_str().expect("BUG: child window");
+        let activated = call(&mut client, "activate_window", json!({"window": window}));
+        assert_eq!(activated["became_foreground"], true, "{activated}");
+        let x = activated["window"]["rect"]["x"].as_i64().expect("BUG: x");
+        let shot = client.call("screenshot", json!({"window": window}));
+        assert_ne!(shot["isError"], true, "{shot}");
+        let text = shot["content"]
+            .as_array()
+            .expect("BUG: content")
+            .iter()
+            .find(|block| block["type"] == "text")
+            .expect("BUG: metadata");
+        let meta: Value = serde_json::from_str(text["text"].as_str().expect("BUG: metadata text"))
+            .expect("BUG: metadata JSON");
+        assert_eq!(meta["scale_x"], 1.0);
+        assert_eq!(meta["scale_y"], 1.0);
+        let args = match tool {
+            "drag" => json!({
+                "window": window,
+                "from": {"screenshot": meta["id"], "x": 320, "y": 280},
+                "to": {"screenshot": meta["id"], "x": 420, "y": 300},
+                "duration_ms": 500
+            }),
+            "scroll" => json!({
+                "window": window, "screenshot": meta["id"], "x": 320, "y": 280, "dy": 1
+            }),
+            _ => json!({"window": window, "screenshot": meta["id"], "x": 320, "y": 280}),
+        };
+        let result = client.call(tool, args);
+        assert_eq!(result["isError"], true, "{tool}: {result}");
+        let error = &result["structuredContent"]["error"];
+        assert_eq!(error["code"], "gone", "{tool}: {result}");
+        assert_eq!(error["kind"], "screenshot", "{tool}: {result}");
+        assert_eq!(error["effect"]["kind"], "incidental", "{tool}: {result}");
+        assert_eq!(error["retry"], "never", "{tool}: {result}");
+        let listed = call(&mut client, "list_windows", json!({"pid": pid}));
+        assert_eq!(listed["windows"][0]["rect"]["x"], x + 8, "{tool}: {listed}");
+        assert_eq!(
+            listed["windows"][0]["title"], "MCP Native Fixture wheel=0 drag=0,0",
+            "the refused {tool} must send neither a button press nor a wheel event: {listed}"
+        );
+        call(&mut client, "kill", json!({"pid": pid}));
+    }
 }
 
 #[test]
