@@ -45,7 +45,9 @@ pub enum Role {
     Grid,
     Row,
     Cell,
+    GridCell,
     ColumnHeader,
+    RowHeader,
     Table,
     Document,
     Window,
@@ -59,6 +61,23 @@ pub enum Role {
 }
 
 impl Role {
+    /// Distinctions erased by UIA control types in AccessKit's Windows
+    /// adapter (accesskit_windows 0.35.0, node.rs::aria_role). Other ARIA
+    /// values retain the native mapping: for example `group` also describes
+    /// title bars, and must not erase that more specific native role.
+    #[cfg(any(target_os = "windows", test))]
+    pub fn from_aria(value: &str) -> Option<Self> {
+        match value.trim() {
+            "cell" => Some(Self::Cell),
+            "gridcell" => Some(Self::GridCell),
+            "row" => Some(Self::Row),
+            "rowheader" => Some(Self::RowHeader),
+            "columnheader" => Some(Self::ColumnHeader),
+            "switch" => Some(Self::Switch),
+            _ => None,
+        }
+    }
+
     /// The name in the wire form (`check_box`), for messages and outlines.
     pub fn name(self) -> &'static str {
         match self {
@@ -92,7 +111,9 @@ impl Role {
             Self::Grid => "grid",
             Self::Row => "row",
             Self::Cell => "cell",
+            Self::GridCell => "grid_cell",
             Self::ColumnHeader => "column_header",
+            Self::RowHeader => "row_header",
             Self::Table => "table",
             Self::Document => "document",
             Self::Window => "window",
@@ -212,6 +233,26 @@ impl fmt::Display for Checked {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aria_preserves_roles_that_share_native_control_types() {
+        for (aria, role) in [
+            ("cell", Role::Cell),
+            ("gridcell", Role::GridCell),
+            ("row", Role::Row),
+            ("rowheader", Role::RowHeader),
+            ("columnheader", Role::ColumnHeader),
+            ("switch", Role::Switch),
+        ] {
+            assert_eq!(Role::from_aria(aria), Some(role));
+            let wire = serde_json::Value::String(role.name().into());
+            assert_eq!(serde_json::to_value(role).ok(), Some(wire.clone()));
+            assert_eq!(serde_json::from_value::<Role>(wire).ok(), Some(role));
+        }
+        for aria in ["", "group", "region", "vendor-specific"] {
+            assert_eq!(Role::from_aria(aria), None);
+        }
+    }
 
     #[test]
     fn roles_round_trip_through_their_wire_names() {

@@ -69,6 +69,9 @@ struct Tracked {
     /// Killed children not yet reaped (one stuck in uninterruptible IO
     /// outlives its kill): polled by `reap`, so none is left a zombie.
     unreaped: Vec<(u32, Child)>,
+    /// Rejected launches whose termination failed. Never exposed through a
+    /// PID handle: that PID may still name an earlier launch to the client.
+    unpublished: Vec<(u32, Child)>,
 }
 
 impl Tracked {
@@ -248,14 +251,40 @@ impl Children {
                 }
                 // Kept, so shutdown's last pass tries it again.
                 Err(e) => {
-                    self.lock().running.insert(pid, child);
+                    self.lock().unpublished.push((pid, child));
                     tracing::warn!(pid, "ending a process launched during shutdown failed: {e}");
                     ToolError::ShuttingDown
                 }
             });
         }
-        // A reused pid is a new process: its old exit no longer answers, and
-        // a kill held for the old launch must not end this one.
+        // A PID already handed to the client remains that earlier process's
+        // identity. Publishing it again would make kill ambiguous and could
+        // leave the desktop target bound to the earlier process.
+        if tracked.returned.contains_key(&pid) {
+            drop(tracked);
+            let mut child = child;
+            let outcome = end(pid, &mut child);
+            let mut tracked = self.lock();
+            return Err(match outcome {
+                Ok(_) => {
+                    tracked.hold_unreaped(pid, child);
+                    ToolError::InvalidArgument(format!(
+                        "launch reused pid {pid}, which already identifies an earlier process in this session; the new process was ended; start a new session to launch it"
+                    ))
+                }
+                Err(error) => {
+                    tracked.unpublished.push((pid, child));
+                    ToolError::platform(
+                        format!(
+                            "launch reused pid {pid}; the new process was not published and could not be ended"
+                        ),
+                        error,
+                    )
+                }
+            });
+        }
+        // No caller holds this PID. A canceled launch's old bookkeeping
+        // can now be replaced by the newly published process.
         tracked.exited.retain(|&(old, _)| old != pid);
         tracked.running.insert(pid, child);
         tracked.launches += 1;
@@ -442,15 +471,29 @@ impl Children {
         }
         // Marked as being ended while out of `running`, so a `kill` in
         // between does not take them for exited.
-        let mut drained: Vec<(u32, Child)> = tracked.running.drain().collect();
-        tracked.ending.extend(drained.iter().map(|&(pid, _)| pid));
+        let mut drained: Vec<(u32, Child, bool)> = tracked
+            .running
+            .drain()
+            .map(|(pid, child)| (pid, child, true))
+            .collect();
+        drained.extend(
+            tracked
+                .unpublished
+                .drain(..)
+                .map(|(pid, child)| (pid, child, false)),
+        );
+        tracked.ending.extend(
+            drained
+                .iter()
+                .filter_map(|&(pid, _, published)| published.then_some(pid)),
+        );
         drop(tracked);
         // Every kill first, then one shared wait: a child stuck in IO does
         // not hold up the others' kills, nor multiply the shutdown time.
         let mut failed = Vec::new();
         // One that already exited stays in the list, so the pass below
         // clears its `ending` mark like every other's.
-        for (pid, child) in &mut drained {
+        for (pid, child, _) in &mut drained {
             if matches!(child.try_wait(), Ok(Some(_))) {
                 continue;
             }
@@ -465,16 +508,23 @@ impl Children {
         while std::time::Instant::now() < until
             && drained
                 .iter_mut()
-                .any(|(_, child)| !matches!(child.try_wait(), Ok(Some(_))))
+                .any(|(_, child, _)| !matches!(child.try_wait(), Ok(Some(_))))
         {
             std::thread::sleep(Duration::from_millis(20));
         }
         let mut tracked = self.lock();
-        for (pid, child) in drained {
-            tracked.ending.remove(&pid);
+        for (pid, child, published) in drained {
+            if published {
+                tracked.ending.remove(&pid);
+            }
             if failed.contains(&pid) {
-                // Kept, so the cleanup on drop tries it once more.
-                tracked.running.insert(pid, child);
+                // Retry without making rejected launches addressable by a
+                // PID that still belongs to an earlier client-visible one.
+                if published {
+                    tracked.running.insert(pid, child);
+                } else {
+                    tracked.unpublished.push((pid, child));
+                }
             } else {
                 tracing::info!(pid, "ended launched child on shutdown");
                 tracked.hold_unreaped(pid, child);
@@ -611,6 +661,98 @@ mod tests {
         assert!(!tracked.running.contains_key(&pid));
         assert!(tracked.unreaped.is_empty(), "the actual child was reaped");
         assert_eq!(tracked.launching, 0);
+    }
+
+    #[test]
+    fn reused_pid_is_ended_without_replacing_the_previous_claim() {
+        let children = Children::new();
+        let mut reused = 0;
+        let result = children.launch_with(
+            &LaunchSpec {
+                program: if cfg!(windows) { "ping" } else { "sleep" }.into(),
+                args: if cfg!(windows) {
+                    vec!["-n".into(), "60".into(), "127.0.0.1".into()]
+                } else {
+                    vec!["60".into()]
+                },
+                ..LaunchSpec::default()
+            },
+            |command| {
+                let child = command.spawn()?;
+                reused = child.id();
+                // Model an earlier, reaped launch whose PID the OS reused
+                // for this real child. The client still holds its claim.
+                let mut tracked = children.lock();
+                tracked.returned.entry(reused).or_default().insert(42);
+                tracked.launch_of.insert(reused, 42);
+                tracked.start_of.insert(reused, Some(123));
+                tracked.remember(reused, Some(7));
+                Ok(child)
+            },
+        );
+        assert!(
+            matches!(result, Err(ToolError::InvalidArgument(_))),
+            "{result:?}"
+        );
+        let mut tracked = children.lock();
+        tracked.reap();
+        assert!(!tracked.running.contains_key(&reused));
+        assert!(tracked.unreaped.is_empty(), "new child was actually reaped");
+        assert!(tracked.unpublished.is_empty());
+        assert_eq!(tracked.launch_of.get(&reused), Some(&42));
+        assert_eq!(tracked.start_of.get(&reused), Some(&Some(123)));
+        assert_eq!(tracked.returned[&reused].len(), 1);
+        assert_eq!(tracked.launching, 0);
+        drop(tracked);
+        let old = children
+            .kill(reused)
+            .expect("BUG: prior claim remains known");
+        assert!(old.already_exited);
+        assert_eq!(old.exit_code, Some(7));
+        let old = children
+            .abandon(reused, 42)
+            .expect("BUG: old cancellation is safe");
+        assert!(old.already_exited);
+    }
+
+    #[test]
+    fn shutdown_retries_unpublished_children_without_exposing_them() {
+        let children = Children::new();
+        let mut command = Command::new(if cfg!(windows) { "ping" } else { "sleep" });
+        if cfg!(windows) {
+            command.args(["-n", "60", "127.0.0.1"]);
+        } else {
+            command.arg("60");
+        }
+        let child = command
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("BUG: child starts");
+        let pid = child.id();
+        {
+            let mut tracked = children.lock();
+            tracked.returned.entry(pid).or_default().insert(42);
+            tracked.launch_of.insert(pid, 42);
+            tracked.remember(pid, Some(7));
+            // State retained when terminating a rejected launch fails.
+            tracked.unpublished.push((pid, child));
+        }
+        let old = children.kill(pid).expect("BUG: prior claim remains known");
+        assert!(old.already_exited);
+        assert_eq!(old.exit_code, Some(7));
+        assert!(matches!(
+            children.lock().unpublished[0].1.try_wait(),
+            Ok(None)
+        ));
+        children.kill_all();
+        let mut tracked = children.lock();
+        tracked.reap();
+        assert!(tracked.running.is_empty());
+        assert!(tracked.unpublished.is_empty());
+        assert!(
+            tracked.unreaped.is_empty(),
+            "cleanup reaped the unpublished child"
+        );
     }
 
     #[test]

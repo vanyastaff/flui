@@ -1186,6 +1186,51 @@ impl Desktop {
         verify_element(window, pid, fg.as_ref(), (x, y), os::window_at(x, y), &name)
     }
 
+    fn validate_screenshot(registry: &mut Registry, shot: u64) -> ToolResult<()> {
+        let meta = registry.shot(shot)?;
+        // The pixels describe the screen only while what they show
+        // is still where it was.
+        if let Some((hwnd, n, bound)) = meta.window {
+            let identity = registry.revalidate(Target::Window(hwnd, n), bound);
+            registry.validate_shot_source(shot, (), identity)?;
+            let now = os::window_rect(hwnd).or_else(|| {
+                capture::windows()
+                    .ok()?
+                    .into_iter()
+                    .find(|w| w.id == hwnd)
+                    .map(|w| w.rect)
+            });
+            let identity = registry.revalidate(Target::Window(hwnd, n), bound);
+            registry.validate_shot_source(shot, (), identity)?;
+            registry.validate_shot_source(
+                shot,
+                meta.source,
+                now.ok_or_else(|| {
+                    ToolError::platform("reading captured window bounds", "unavailable")
+                }),
+            )?;
+        }
+        if let Some(monitor) = meta.monitor {
+            registry.validate_shot_source(shot, monitor, capture::monitor_snapshot(monitor.id))?;
+        }
+        Ok(())
+    }
+
+    // Retain the original screenshot locations throughout the gesture. Even
+    // recovery must refuse stale pixels; the input layer still releases held
+    // buttons as mandatory cleanup when this guard refuses a rollback move.
+    fn screenshot_locations(
+        locations: &[&Location],
+        mut validate: impl FnMut(u64) -> ToolResult<()>,
+    ) -> ToolResult<()> {
+        for location in locations {
+            if let Location::InScreenshot { shot, .. } = location {
+                validate(*shot)?;
+            }
+        }
+        Ok(())
+    }
+
     /// The screen point a location names, and for an element its own window
     /// and process, which a press on it is checked against.
     fn locate(&mut self, at: &Location) -> ToolResult<(i32, i32, Option<ElementWindow>)> {
@@ -1199,36 +1244,7 @@ impl Desktop {
                         meta.width, meta.height
                     )));
                 }
-                // The pixels describe the screen only while what they show
-                // is still where it was.
-                // Unreadable counts as changed: stale pixels must not aim.
-                if let Some((hwnd, n, bound)) = meta.window {
-                    let identity = self.registry.revalidate(Target::Window(hwnd, n), bound);
-                    self.registry.validate_shot_source(*shot, (), identity)?;
-                    let now = os::window_rect(hwnd).or_else(|| {
-                        capture::windows()
-                            .ok()?
-                            .into_iter()
-                            .find(|w| w.id == hwnd)
-                            .map(|w| w.rect)
-                    });
-                    let identity = self.registry.revalidate(Target::Window(hwnd, n), bound);
-                    self.registry.validate_shot_source(*shot, (), identity)?;
-                    self.registry.validate_shot_source(
-                        *shot,
-                        meta.source,
-                        now.ok_or_else(|| {
-                            ToolError::platform("reading captured window bounds", "unavailable")
-                        }),
-                    )?;
-                }
-                if let Some(monitor) = meta.monitor {
-                    self.registry.validate_shot_source(
-                        *shot,
-                        monitor,
-                        capture::monitor_snapshot(monitor.id),
-                    )?;
-                }
+                Self::validate_screenshot(&mut self.registry, *shot)?;
                 // Down to the screen unit the pixel lies in, and never past
                 // the captured rect's far edge (a rounded HiDPI pixel would).
                 #[expect(
@@ -1342,6 +1358,7 @@ impl Desktop {
             // the fast OS checks last, right before the event, so what they
             // saw is as fresh as it can be.
             Self::element_still_there(a11y.as_mut(), registry, element_window.as_ref(), (x, y))?;
+            Self::screenshot_locations(&[at], |shot| Self::validate_screenshot(registry, shot))?;
             Self::check(registry, target, bound, &[(x, y)])
         };
         guard(None)?;
@@ -1357,9 +1374,15 @@ impl Desktop {
         }
         self.input()?;
         let (x, y, _) = self.locate(at)?;
-        let input = self.input()?;
+        let Self {
+            input, registry, ..
+        } = self;
+        let input = input
+            .as_mut()
+            .map_err(|e| ToolError::NotSupported(e.clone()))?;
         // A move with a button still held from a failed release is a drag.
         input.ready()?;
+        Self::screenshot_locations(&[at], |shot| Self::validate_screenshot(registry, shot))?;
         // Again right before the move: resolving an element's point can take
         // a provider's whole call timeout, and shutdown may have begun.
         if STOPPING.load(Ordering::SeqCst) {
@@ -1384,6 +1407,7 @@ impl Desktop {
         let (target, bound) = self.registry.bound(target)?;
         let (fx, fy, from_element) = self.locate(from)?;
         let (tx, ty, to_element) = self.locate(to)?;
+        let locations = [from, to];
         let (from, to) = ((fx, fy), (tx, ty));
         let mut path = vec![from];
         path.extend(crate::input::drag_path(from, to, duration));
@@ -1398,12 +1422,18 @@ impl Desktop {
         // would act on the target instead.
         let mut guard = |at: Option<(i32, i32)>| {
             if let Some(point) = at {
+                Self::screenshot_locations(&locations, |shot| {
+                    Self::validate_screenshot(registry, shot)
+                })?;
                 return Self::check(registry, target, bound, &[point]);
             }
             // The slow hit-tests first, the fast window checks after both,
             // so what they saw is as fresh as it can be.
             Self::element_hit(a11y.as_mut(), from_element.as_ref(), from)?;
             Self::element_hit(a11y.as_mut(), to_element.as_ref(), to)?;
+            Self::screenshot_locations(&locations, |shot| {
+                Self::validate_screenshot(registry, shot)
+            })?;
             Self::element_window(registry, from_element.as_ref(), from)?;
             Self::element_window(registry, to_element.as_ref(), to)?;
             Self::check(registry, target, bound, &path)
@@ -1433,6 +1463,7 @@ impl Desktop {
         } = self;
         let mut guard = |_: Option<(i32, i32)>| {
             Self::element_still_there(a11y.as_mut(), registry, element.as_ref(), (x, y))?;
+            Self::screenshot_locations(&[at], |shot| Self::validate_screenshot(registry, shot))?;
             Self::check(registry, target, bound, &[(x, y)])
         };
         guard(None)?;
@@ -1680,6 +1711,70 @@ fn activate_while_current<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screenshot_gesture_guard_rechecks_both_origins_and_refuses_stale_recovery() {
+        for changed in [1, 2] {
+            let mut registry = Registry::default();
+            let source = Rect {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            };
+            let meta = ShotMeta {
+                source,
+                scale_x: 1.0,
+                scale_y: 1.0,
+                width: 100,
+                height: 100,
+                window: None,
+                monitor: None,
+            };
+            registry.remember_shot(meta);
+            registry.remember_shot(meta);
+            let from = Location::InScreenshot {
+                shot: 1,
+                x: 10,
+                y: 10,
+            };
+            let to = Location::InScreenshot {
+                shot: 2,
+                x: 20,
+                y: 20,
+            };
+            let locations = [&from, &to];
+            let current = std::cell::Cell::new(source);
+            let mut guard = || {
+                Desktop::screenshot_locations(&locations, |shot| {
+                    let observed = if shot == changed {
+                        current.get()
+                    } else {
+                        source
+                    };
+                    registry.validate_shot_source(shot, source, Ok(observed))
+                })
+            };
+            guard().expect("BUG: original sources allow the press");
+            guard().expect("BUG: unchanged sources allow movement");
+            // Both old points still fall inside the shifted window. Coverage
+            // alone would permit the wrong drop, but provenance must refuse it.
+            current.set(Rect { x: 1, ..source });
+            assert_eq!(
+                guard()
+                    .expect_err("BUG: stale movement or release refused")
+                    .code(),
+                "gone"
+            );
+            current.set(source);
+            assert_eq!(
+                guard()
+                    .expect_err("BUG: rollback cannot revive stale pixels")
+                    .code(),
+                "gone"
+            );
+        }
+    }
 
     #[test]
     fn root_enrichment_keeps_the_original_identity_and_rejects_replacement() {

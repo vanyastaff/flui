@@ -108,6 +108,7 @@ const OMITTED_COUNT_CAP: usize = 256;
 const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::Name,
     UIProperty::ControlType,
+    UIProperty::AriaRole,
     UIProperty::AutomationId,
     UIProperty::ClassName,
     UIProperty::BoundingRectangle,
@@ -362,6 +363,11 @@ impl Uia {
         result
     }
 
+    fn process_identity(&self, handle: &str) -> Option<(u32, u64)> {
+        let held = self.elements.get(handle).ok()?;
+        held.started.map(|started| (held.pid, started))
+    }
+
     fn remember_error(&mut self, handle: &str, error: ToolError) -> ToolError {
         if error.code() == "gone" {
             self.elements.invalidate(handle);
@@ -418,7 +424,8 @@ impl Uia {
                     "re-reading it",
                     e.code().0,
                     &e,
-                    Some(held.pid),
+                    held.started.map(|started| (held.pid, started)),
+                    crate::os::process_started,
                 ));
             }
         }
@@ -436,7 +443,14 @@ impl Uia {
         let fresh = held
             .element
             .build_updated_cache(&self.single)
-            .map_err(|e| classify(handle, "re-reading it", &e, Some(held.pid)))?;
+            .map_err(|e| {
+                classify(
+                    handle,
+                    "re-reading it",
+                    &e,
+                    held.started.map(|started| (held.pid, started)),
+                )
+            })?;
         // Unreadable is not "gone": the element may be there and fine.
         before_call()?;
         match identity_after_refresh(
@@ -673,7 +687,21 @@ impl Uia {
     /// Whether the element UIA hit-tests at `(x, y)` is `element` or one of
     /// its descendants; an error when that cannot be told, which is not a
     /// miss ("covered") either.
-    fn hits_element(&self, x: i32, y: i32, element: &UIElement) -> ToolResult<bool> {
+    fn hits_element(
+        &mut self,
+        handle: &str,
+        x: i32,
+        y: i32,
+        element: &UIElement,
+    ) -> ToolResult<bool> {
+        hit_while_current(
+            self,
+            |this| this.read_hit(x, y, element),
+            |this| this.alive(handle).map(|_| ()),
+        )
+    }
+
+    fn read_hit(&self, x: i32, y: i32, element: &UIElement) -> ToolResult<bool> {
         let unknown = || {
             ToolError::platform(
                 "hit-testing the element",
@@ -827,8 +855,13 @@ impl Uia {
             }
             const REQUESTED: &str = "focus was requested; only reading back where it landed failed";
             let fresh = element.build_updated_cache(&self.single).map_err(|e| {
-                classify(handle, "reading back focus", &e, cached_pid(element))
-                    .after(Effect::Ran, REQUESTED)
+                classify(
+                    handle,
+                    "reading back focus",
+                    &e,
+                    self.process_identity(handle),
+                )
+                .after(Effect::Ran, REQUESTED)
             })?;
             let mut node = describe(&fresh, handle.to_owned());
             // Checked between the provider calls as well: each can take the
@@ -938,10 +971,15 @@ impl Uia {
     /// read is classified, not taken for "no": an element the application
     /// removed must answer as stale, so the caller reads a fresh tree instead
     /// of concluding the action is unsupported.
-    fn has_pattern(handle: &str, element: &UIElement, prop: UIProperty) -> ToolResult<bool> {
-        let value = element
-            .get_property_value(prop)
-            .map_err(|e| classify(handle, "reading its patterns", &e, cached_pid(element)))?;
+    fn has_pattern(&self, handle: &str, element: &UIElement, prop: UIProperty) -> ToolResult<bool> {
+        let value = element.get_property_value(prop).map_err(|e| {
+            classify(
+                handle,
+                "reading its patterns",
+                &e,
+                self.process_identity(handle),
+            )
+        })?;
         // Anything but a boolean is an unreadable answer, not "no": taken
         // for "no", a `set_value` would go to the other pattern.
         of_type(value, VT_BOOL)
@@ -956,7 +994,7 @@ impl Uia {
 
     /// Refuses `action` unless its pattern is available, read live.
     fn require(&self, handle: &str, element: &UIElement, action: ActionName) -> ToolResult<()> {
-        if Self::has_pattern(handle, element, pattern_of(action).0)? {
+        if self.has_pattern(handle, element, pattern_of(action).0)? {
             Ok(())
         } else {
             Err(self.unsupported(handle, element, action))
@@ -964,7 +1002,7 @@ impl Uia {
     }
 
     fn perform(&self, handle: &str, element: &UIElement, action: &Action) -> ToolResult<()> {
-        let pid = cached_pid(element);
+        let pid = self.process_identity(handle);
         let lookup =
             |what: &'static str| move |e: uiautomation::Error| classify(handle, what, &e, pid);
         // The action's own call reached the application, so a failure there
@@ -1053,7 +1091,7 @@ impl Uia {
             Action::SetValue(value) => perform_set_value(
                 handle,
                 value,
-                |prop| Self::has_pattern(handle, element, prop),
+                |prop| self.has_pattern(handle, element, prop),
                 |value| match value {
                     ValueWrite::Text(value) => element
                         .get_pattern::<UIValuePattern>()
@@ -1069,7 +1107,7 @@ impl Uia {
                 || self.unsupported(handle, element, ActionName::SetValue),
             ),
             Action::Focus => perform_focus(
-                || Self::has_pattern(handle, element, UIProperty::IsKeyboardFocusable),
+                || self.has_pattern(handle, element, UIProperty::IsKeyboardFocusable),
                 || element.set_focus().map_err(fail("focus")),
                 || self.unsupported(handle, element, ActionName::Focus),
             ),
@@ -1083,6 +1121,26 @@ impl Uia {
             }
         }
     }
+}
+
+fn hit_while_current<S>(
+    state: &mut S,
+    hit: impl FnOnce(&mut S) -> ToolResult<bool>,
+    check: impl FnOnce(&mut S) -> ToolResult<()>,
+) -> ToolResult<bool> {
+    let result = hit(state);
+    check(state)?;
+    result
+}
+
+fn gone_node(mut node: Node) -> Node {
+    node.gone = true;
+    node.actions.clear();
+    node.value = None;
+    node.checked = None;
+    node.expanded = None;
+    node.selected = None;
+    node
 }
 
 /// Leave time for the root's mandatory final identity check. Spending the
@@ -1424,18 +1482,11 @@ impl AccessibilityBackend for Uia {
                 self.elements.invalidate(handle);
                 // Its identity only: the value and toggle state cached
                 // before the action are not what the action left behind.
-                Ok(Node {
-                    gone: true,
-                    value: None,
-                    checked: None,
-                    expanded: None,
-                    selected: None,
-                    ..describe(&element, handle.to_owned())
-                })
+                Ok(gone_node(describe(&element, handle.to_owned())))
             }
             // The action itself succeeded; only reading the result failed.
             // Say so, or a retry repeats a destructive action.
-            Err(e) => Err(classify(handle, "reading back", &e, cached_pid(&element)).after(
+            Err(e) => Err(classify(handle, "reading back", &e, self.process_identity(handle)).after(
                 Effect::Ran,
                 "the action itself succeeded; only reading the element afterwards failed, so do not repeat it",
             )),
@@ -1445,7 +1496,7 @@ impl AccessibilityBackend for Uia {
 
     fn click_point(&mut self, handle: &str) -> ToolResult<ClickPoint> {
         let element = self.alive(handle)?;
-        let pid = cached_pid(&element);
+        let pid = self.process_identity(handle);
         let point = element.get_clickable_point().map_err(|e| {
             self.remember_error(
                 handle,
@@ -1468,7 +1519,7 @@ impl AccessibilityBackend for Uia {
             // must hit the element itself (or a descendant) — a sibling
             // covering it would otherwise take the click.
             let (x, y) = rect.center();
-            if !self.hits_element(x, y, &element)? {
+            if !self.hits_element(handle, x, y, &element)? {
                 return Err(ToolError::NotFound(format!(
                     "element `{handle}` reports no clickable point and its centre ({x}, {y}) is covered by another element; use invoke, or click a point you have verified"
                 )));
@@ -1484,7 +1535,7 @@ impl AccessibilityBackend for Uia {
 
     fn hits(&mut self, handle: &str, x: i32, y: i32) -> ToolResult<bool> {
         let element = self.alive(handle)?;
-        self.hits_element(x, y, &element)
+        self.hits_element(handle, x, y, &element)
     }
 
     fn focus_window(&mut self, window: u32) -> ToolResult<()> {
@@ -1611,14 +1662,18 @@ fn describe(element: &UIElement, id: String) -> Node {
 /// `uiautomation` crate does not name, rather than a failure that would
 /// hide the element from search).
 fn role(element: &UIElement) -> (Role, String) {
-    match element.get_cached_control_type() {
+    let (fallback, native) = match element.get_cached_control_type() {
         Ok(known) => (role_of(known), format!("{known:?}")),
         Err(_) => (
             Role::Unknown,
             cached_i32(element, UIProperty::ControlType)
                 .map_or_else(|| "Unknown".to_owned(), |id| format!("Custom({id})")),
         ),
-    }
+    };
+    let precise = cached_str(element, UIProperty::AriaRole)
+        .as_deref()
+        .and_then(Role::from_aria);
+    (precise.unwrap_or(fallback), native)
 }
 
 /// UI Automation's control types in the tools' vocabulary. What has no
@@ -1690,6 +1745,7 @@ fn searchable(element: &UIElement) -> bool {
     let offered = |prop| cached_bool(element, prop);
     cached_i32(element, UIProperty::ControlType).is_some()
         && cached_pid(element).is_some()
+        && cached_str(element, UIProperty::AriaRole).is_some()
         && cached_str(element, UIProperty::Name).is_some()
         && cached_str(element, UIProperty::AutomationId).is_some()
         && cached_str(element, UIProperty::ClassName).is_some()
@@ -1906,16 +1962,23 @@ fn is_disconnected(code: i32) -> bool {
 const E_TIMEOUT: i32 = 0x8013_1505_u32 as i32;
 
 /// Maps a UIA failure on `handle` during `what` to the error the agent can
-/// act on. `pid` is the element's process when known: a disconnect from a
-/// process that still runs is the provider failing, so the element is not
-/// reported gone.
+/// act on. The held process identity includes its start time: a disconnect
+/// from that same running process is a provider failure, but a reused pid
+/// belongs to a replacement and the original element is gone.
 fn classify(
     handle: &str,
     what: &'static str,
     e: &uiautomation::Error,
-    pid: Option<u32>,
+    identity: Option<(u32, u64)>,
 ) -> ToolError {
-    classify_code(handle, what, e.code(), e, pid)
+    classify_code(
+        handle,
+        what,
+        e.code(),
+        e,
+        identity,
+        crate::os::process_started,
+    )
 }
 
 /// [`classify`] for a bare HRESULT and its message.
@@ -1924,13 +1987,14 @@ fn classify_code(
     what: &'static str,
     code: i32,
     e: &dyn std::fmt::Display,
-    pid: Option<u32>,
+    identity: Option<(u32, u64)>,
+    process_now: impl FnOnce(u32) -> Option<u64>,
 ) -> ToolError {
-    let running = || pid.is_some_and(|pid| crate::os::process_started(pid).is_some());
+    let gone = identity.is_some_and(|(pid, started)| process_now(pid) != Some(started));
     match code {
         E_ELEMENT_NOT_AVAILABLE => ToolError::gone_element(handle, "the application removed it"),
         E_INVALID_WINDOW => ToolError::gone_element(handle, "its window has closed"),
-        _ if is_disconnected(code) && !running() => {
+        _ if is_disconnected(code) && gone => {
             ToolError::gone_element(handle, "its process has exited")
         }
         _ if is_disconnected(code) => ToolError::platform(
@@ -1955,6 +2019,81 @@ fn classify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hit_test_revalidates_after_successful_and_failed_provider_walks() {
+        for provider_fails in [false, true] {
+            let mut current = true;
+            let result = hit_while_current(
+                &mut current,
+                |current| {
+                    *current = false;
+                    if provider_fails {
+                        Err(ToolError::platform("hit test", "provider disconnected"))
+                    } else {
+                        Ok(true)
+                    }
+                },
+                |current| {
+                    if *current {
+                        Ok(())
+                    } else {
+                        Err(ToolError::gone_element("e1", "replaced during hit test"))
+                    }
+                },
+            );
+            assert!(matches!(result, Err(ToolError::Gone { .. })));
+        }
+        assert!(
+            hit_while_current(&mut (), |()| Ok(true), |()| Ok(()))
+                .expect("BUG: unchanged hit remains valid")
+        );
+    }
+
+    #[test]
+    fn destructive_action_readback_exposes_no_actions_or_old_value() {
+        let mut node = crate::a11y::tests_node();
+        node.actions = vec![ActionName::Invoke, ActionName::Focus];
+        node.value = Some("old value".into());
+        node.checked = Some(Checked::True);
+        let wire = serde_json::to_value(gone_node(node)).expect("BUG: node serializes");
+        assert_eq!(wire["gone"], true);
+        for field in ["actions", "value", "checked", "selected", "expanded"] {
+            assert!(wire.get(field).is_none(), "{field}");
+        }
+    }
+
+    #[test]
+    fn disconnected_provider_is_gone_when_its_process_id_was_reused() {
+        for code in [
+            E_DISCONNECTED,
+            E_SERVER_UNAVAILABLE,
+            E_CALL_FAILED,
+            E_NOT_CONNECTED,
+        ] {
+            for observed in [None, Some(20), Some(10)] {
+                let error = classify_code(
+                    "e1",
+                    "reading",
+                    code,
+                    &"disconnected",
+                    Some((42, 10)),
+                    |pid| {
+                        assert_eq!(pid, 42);
+                        observed
+                    },
+                );
+                assert_eq!(
+                    error.code(),
+                    if observed == Some(10) {
+                        "platform"
+                    } else {
+                        "gone"
+                    }
+                );
+            }
+        }
+    }
 
     #[test]
     fn subtree_budget_preserves_time_to_validate_a_partial_read() {

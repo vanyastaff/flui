@@ -48,6 +48,7 @@ struct Metrics {
 thread_local! {
     static METRICS: Cell<Metrics> = const { Cell::new(Metrics { wheel: 0, down: None, drag: (0, 0) }) };
     static EARLY_RELEASED: Cell<bool> = const { Cell::new(false) };
+    static MOVED_DURING_DRAG: Cell<bool> = const { Cell::new(false) };
     static CHORD_REPORT: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
 }
 
@@ -100,6 +101,30 @@ unsafe extern "system" fn window_proc(
                 metrics.down = Some(point(lparam));
                 state.set(metrics);
             }),
+            WM_MOUSEMOVE
+                if wparam.0 & 1 != 0
+                    && std::env::var_os("FLUI_MCP_MOVE_DURING_DRAG").is_some()
+                    && !MOVED_DURING_DRAG.with(Cell::get) =>
+            {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    GetWindowRect, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+                };
+                let mut rect = windows::Win32::Foundation::RECT::default();
+                if GetWindowRect(window, &raw mut rect).is_ok() {
+                    // Set first: moving our own window can synchronously
+                    // deliver another mouse message to this procedure.
+                    MOVED_DURING_DRAG.with(|moved| moved.set(true));
+                    let _ = SetWindowPos(
+                        window,
+                        None,
+                        rect.left + 8,
+                        rect.top,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER,
+                    );
+                }
+            }
             WM_MOUSEMOVE
                 if wparam.0 & 1 != 0
                     && std::env::var_os("FLUI_MCP_DROP_EARLY").is_some()
@@ -714,6 +739,71 @@ fn a_native_release_interrupts_the_drag() {
     assert_ne!(
         (i64::from(cursor.x), i64::from(cursor.y)),
         (x + 100, y + 40)
+    );
+    call(&mut client, "kill", json!({"pid": pid}));
+}
+
+#[test]
+#[ignore = "moves its owned native window during a real screenshot-based drag"]
+fn a_moving_screenshot_source_interrupts_the_drag() {
+    let (mut client, _) = Client::start();
+    let executable = std::env::current_exe().expect("BUG: test executable path");
+    let launched = call(
+        &mut client,
+        "launch",
+        json!({
+            "program": executable.to_string_lossy(),
+            "args": ["--exact", "native_fixture_process", "--ignored", "--nocapture"],
+            "env": {"FLUI_MCP_NATIVE_FIXTURE": "1", "FLUI_MCP_MOVE_DURING_DRAG": "1"}
+        }),
+    );
+    let pid = launched["pid"].as_u64().expect("BUG: child pid");
+    let waited = call(
+        &mut client,
+        "wait_for_window",
+        json!({"pid": pid, "timeout_ms": 15000}),
+    );
+    let window = waited["window"]["id"].as_str().expect("BUG: child window");
+    let activated = call(&mut client, "activate_window", json!({"window": window}));
+    assert_eq!(activated["became_foreground"], true, "{activated}");
+    let x = activated["window"]["rect"]["x"].as_i64().expect("BUG: x");
+    let y = activated["window"]["rect"]["y"].as_i64().expect("BUG: y");
+    let shot = client.call("screenshot", json!({"window": window}));
+    assert_ne!(shot["isError"], true, "{shot}");
+    let text = shot["content"]
+        .as_array()
+        .expect("BUG: content")
+        .iter()
+        .find(|block| block["type"] == "text")
+        .expect("BUG: metadata");
+    let meta: Value = serde_json::from_str(text["text"].as_str().expect("BUG: metadata text"))
+        .expect("BUG: metadata JSON");
+    assert_eq!(meta["scale_x"], 1.0);
+    assert_eq!(meta["scale_y"], 1.0);
+    let result = client.call(
+        "drag",
+        json!({
+            "window": window, "from": {"x": x + 320, "y": y + 260},
+            "to": {"screenshot": meta["id"], "x": 420, "y": 300}, "duration_ms": 1000
+        }),
+    );
+    assert_eq!(result["isError"], true, "{result}");
+    let error = &result["structuredContent"]["error"];
+    assert_eq!(error["code"], "gone", "{result}");
+    assert_eq!(error["kind"], "screenshot", "{result}");
+    assert_eq!(error["effect"]["kind"], "partial", "{result}");
+    let sent = error["effect"]["sent"].as_u64().expect("BUG: sent count");
+    let total = error["effect"]["total"].as_u64().expect("BUG: total count");
+    assert!(sent < total, "{result}");
+    let listed = call(&mut client, "list_windows", json!({"pid": pid}));
+    assert_eq!(listed["windows"][0]["rect"]["x"], x + 8, "{listed}");
+    let mut cursor = windows::Win32::Foundation::POINT::default();
+    // SAFETY: the output pointer refers to an initialized writable POINT.
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&raw mut cursor) }
+        .expect("BUG: readable cursor");
+    assert_ne!(
+        (i64::from(cursor.x), i64::from(cursor.y)),
+        (x + 420, y + 300)
     );
     call(&mut client, "kill", json!({"pid": pid}));
 }

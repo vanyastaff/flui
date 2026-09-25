@@ -10,6 +10,28 @@ by `flui-platform`; no framework behavior, CI workflow or publishing changes.
 
 ## Repaired failure scenarios
 
+Pointer guards retain screenshot provenance throughout drag steps, release and recovery,
+and recheck it for clicks, scrolling and movement. A native fixture shifts its own window
+eight pixels while its drag button is held: the source is retired, movement stops before
+the endpoint, and the error retains partial effects. UIA hit tests revalidate the issued
+element after provider calls. Disconnect classification compares the issued process start
+time, and terminal gone readbacks expose no stale actions or mutable values.
+
+A later launch that reuses an issued PID is ended and refused before publication; failed
+cleanup retains its child separately so an older PID claim cannot target it. The role
+mapping reads cached `AriaRole` for cell, grid cell, row, row header, column header and
+switch distinctions erased by UIA control types. These mappings were checked against
+`accesskit_windows` 0.35.0's `node.rs` control-type and ARIA-role mappings. Generic ARIA
+group/region values retain the more specific native fallback. Native provider-replacement
+and PID-reuse races are covered by injected checks, not live OS races.
+`cargo xtask check-changed --base 1676caae3633b8b64a933eb4c812dde3d39a5f9d`
+passed: 159 tests, seven skipped, formatting, strict rustdoc and Windows/macOS clippy.
+The native Windows suite passed all four entries. Removing screenshot validation from
+the per-step drag guard made `a_moving_screenshot_source_interrupts_the_drag` fail: the
+drag incorrectly returned success. After restoring that production check, the full native
+suite passed again. ARIA-role coverage checks the mapper and native fallback integration
+through ordinary controls; a custom live AccessKit grid/switch fixture was not run.
+
 Text-only MCP clients receive the same JSON error envelope, including retry policy and
 partial effects, as structured-content clients. Handle-only queries can match a verified
 node despite unrelated incomplete search properties; unread state predicates still fail.
