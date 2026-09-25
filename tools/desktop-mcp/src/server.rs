@@ -106,11 +106,11 @@ pub struct DesktopServer {
     tool_router: ToolRouter<Self>,
 }
 
-/// A failed call, as the client sees it: the readable message as text, and
-/// the error's code, retry policy, fields and effect as structured content.
+/// A failed call: the same error envelope in text and structured content.
 fn failure(e: &ToolError) -> CallToolResult {
-    let mut result = CallToolResult::error(vec![ContentBlock::text(e.to_string())]);
-    result.structured_content = Some(e.payload());
+    let payload = e.payload();
+    let mut result = CallToolResult::error(vec![ContentBlock::text(payload.to_string())]);
+    result.structured_content = Some(payload);
     result
 }
 
@@ -1496,5 +1496,28 @@ mod tests {
                 .map(|v| v["error"]["code"].clone()),
             Some(json!("busy"))
         );
+    }
+
+    #[test]
+    fn text_only_clients_receive_error_codes_and_partial_effects() {
+        let error = ToolError::Busy("input interrupted".into()).after(
+            crate::error::Effect::Partial {
+                sent: 1,
+                total: 2,
+                unit: "clicks",
+            },
+            "one click completed; inspect before retrying",
+        );
+        let result = failure(&error);
+        let ContentBlock::Text(text) = &result.content[0] else {
+            panic!("BUG: failure includes a text envelope");
+        };
+        let payload: Value = serde_json::from_str(&text.text).expect("BUG: error text is JSON");
+        assert_eq!(Some(&payload), result.structured_content.as_ref());
+        assert_eq!(payload["error"]["code"], "busy");
+        assert_eq!(payload["error"]["retry"], "never");
+        assert_eq!(payload["error"]["effect"]["kind"], "partial");
+        assert_eq!(payload["error"]["effect"]["sent"], 1);
+        assert_eq!(payload["error"]["effect"]["total"], 2);
     }
 }

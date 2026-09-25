@@ -249,6 +249,10 @@ job; `launch` refuses without it); work handed to an already running instance, t
 a COM server escapes it. Elsewhere only the launched processes, on a clean exit. `kill` ends
 the launched process itself. A launch the client cancels before the reply is built ends its
 process, since the pid is never delivered.
+On Unix, clean shutdown waits for in-flight launches and kills to settle before exiting.
+A launch blocked in the OS (for example on a network executable) can therefore delay
+shutdown indefinitely. Forced termination does not provide Windows Job-style containment
+on Unix.
 
 ## Platform support
 

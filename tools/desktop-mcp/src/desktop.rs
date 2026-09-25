@@ -683,7 +683,9 @@ impl Registry {
             ToolError::Gone {
                 handle: format!("s{n}"),
                 kind: HandleKind::Screenshot,
-                why: format!("only the last {SHOTS_KEPT} screenshots stay addressable"),
+                why: format!(
+                    "it was invalidated or evicted; only the last {SHOTS_KEPT} screenshots stay addressable"
+                ),
             }
         } else {
             ToolError::UnknownHandle {
@@ -691,6 +693,35 @@ impl Registry {
                 kind: HandleKind::Screenshot,
             }
         })
+    }
+
+    fn retire_shot(&mut self, n: u64, why: &str) -> ToolError {
+        self.shots.retain(|(id, _)| *id != n);
+        ToolError::Gone {
+            handle: format!("s{n}"),
+            kind: HandleKind::Screenshot,
+            why: why.into(),
+        }
+    }
+
+    /// A definite source change invalidates pixels permanently. An unread
+    /// source remains uncertain and does not destroy a usable handle.
+    fn validate_shot_source<T: PartialEq>(
+        &mut self,
+        n: u64,
+        expected: T,
+        current: ToolResult<T>,
+    ) -> ToolResult<()> {
+        self.shot(n)?;
+        match current {
+            Ok(current) if current == expected => Ok(()),
+            Ok(_) | Err(ToolError::NotFound(_) | ToolError::Gone { .. }) => Err(self.retire_shot(
+                n, "the captured source disappeared or changed identity or geometry; take another screenshot",
+            )),
+            Err(error) => Err(ToolError::Busy(format!(
+                "the source of screenshot s{n} cannot currently be verified ({error}); retry the observation"
+            ))),
+        }
     }
 }
 
@@ -970,14 +1001,40 @@ impl Desktop {
             Scope::Target(target) => *target,
         };
         let (target, bound, ids) = self.scoped_windows(target)?;
-        let mut read = read_while_current(
-            || self.registry.revalidate(target, bound),
-            || self.a11y.tree(&ids, max_depth, max_nodes, deadline),
-        )?;
+        let mut held = HashMap::new();
         let owner = match target {
             Target::Pid(pid) => Some(pid),
             Target::Window(_, _) => bound.window_pid,
         };
+        for &hwnd in &ids {
+            if Instant::now() >= deadline {
+                return Err(ToolError::Busy(
+                    "the tree identity snapshot exceeded its read deadline".into(),
+                ));
+            }
+            let native = os_window(hwnd).ok_or_else(|| {
+                ToolError::Busy(
+                    "a tree window disappeared before its identity could be recorded".into(),
+                )
+            })?;
+            if owner != Some(native.pid) {
+                self.registry.revalidate(target, bound)?;
+                return Err(ToolError::Busy(
+                    "a tree window changed owner before it could be read".into(),
+                ));
+            }
+            let (handle, _) = self.registry.adopt(&native).ok_or_else(|| {
+                ToolError::Busy("a tree window disappeared while its identity was recorded".into())
+            })?;
+            held.insert(
+                hwnd,
+                (handle, self.registry.selected_binding(handle, bound)),
+            );
+        }
+        let mut read = read_while_current(
+            || self.registry.revalidate(target, bound),
+            || self.a11y.tree(&ids, max_depth, max_nodes, deadline),
+        )?;
         if let Some(pid) = owner
             && let Some((id, now)) = ids.iter().find_map(|&id| {
                 os::window_pid(id)
@@ -998,26 +1055,14 @@ impl Desktop {
                 })
             });
         }
-        // Each root is named after its window, so a popup or dialog read
-        // under a pid can be targeted by handle afterwards.
-        // The capture list leaves popups out (menus, drop-downs, tooltips),
-        // which the OS enumeration read: those are described from the OS.
-        let all = capture::windows().unwrap_or_default();
-        for root in &mut read.roots {
-            let Some(hwnd) = root.native_window else {
-                continue;
-            };
-            let native = all
-                .iter()
-                .find(|w| w.id == hwnd)
-                .cloned()
-                .or_else(|| os_window(hwnd));
-            if let Some(w) = native
-                && let Some((n, _)) = self.registry.adopt(&w)
-            {
-                root.window = Some(Registry::handle(n));
-            }
-        }
+        // Use only identities held before the read. Looking up current
+        // HWND occupants here could attach a replacement to the old tree.
+        attach_tree_windows(&mut read, &held, |window, identity| {
+            self.registry
+                .revalidate(window, identity)
+                .map_err(|error| selected_window_error(target, error))
+        })?;
+        self.registry.revalidate(target, bound)?;
         Ok(read)
     }
 
@@ -1158,7 +1203,8 @@ impl Desktop {
                 // is still where it was.
                 // Unreadable counts as changed: stale pixels must not aim.
                 if let Some((hwnd, n, bound)) = meta.window {
-                    self.registry.revalidate(Target::Window(hwnd, n), bound)?;
+                    let identity = self.registry.revalidate(Target::Window(hwnd, n), bound);
+                    self.registry.validate_shot_source(*shot, (), identity)?;
                     let now = os::window_rect(hwnd).or_else(|| {
                         capture::windows()
                             .ok()?
@@ -1166,14 +1212,22 @@ impl Desktop {
                             .find(|w| w.id == hwnd)
                             .map(|w| w.rect)
                     });
-                    if now != Some(meta.source) {
-                        return Err(ToolError::Busy(format!(
-                            "window w{n} has moved or resized since screenshot s{shot} (or its bounds cannot be read); take another"
-                        )));
-                    }
+                    let identity = self.registry.revalidate(Target::Window(hwnd, n), bound);
+                    self.registry.validate_shot_source(*shot, (), identity)?;
+                    self.registry.validate_shot_source(
+                        *shot,
+                        meta.source,
+                        now.ok_or_else(|| {
+                            ToolError::platform("reading captured window bounds", "unavailable")
+                        }),
+                    )?;
                 }
                 if let Some(monitor) = meta.monitor {
-                    capture::verify_monitor(monitor, capture::monitor_snapshot(monitor.id))?;
+                    self.registry.validate_shot_source(
+                        *shot,
+                        monitor,
+                        capture::monitor_snapshot(monitor.id),
+                    )?;
                 }
                 // Down to the screen unit the pixel lies in, and never past
                 // the captured rect's far edge (a rounded HiDPI pixel would).
@@ -1492,6 +1546,29 @@ impl Desktop {
     }
 }
 
+/// Root metadata comes from identities held before the provider read,
+/// never from a second enumeration of current native-id occupants.
+fn attach_tree_windows(
+    read: &mut Read,
+    held: &HashMap<u32, (u64, Binding)>,
+    mut validate: impl FnMut(Target, Binding) -> ToolResult<()>,
+) -> ToolResult<()> {
+    for root in &mut read.roots {
+        if let Some(hwnd) = root.native_window {
+            let (handle, _) = held.get(&hwnd).ok_or_else(|| {
+                ToolError::Busy(
+                    "the provider returned a tree window whose original identity is unknown".into(),
+                )
+            })?;
+            root.window = Some(Registry::handle(*handle));
+        }
+    }
+    for (&hwnd, &(handle, binding)) in held {
+        validate(Target::Window(hwnd, handle), binding)?;
+    }
+    Ok(())
+}
+
 /// A pid can select another window on a later call, so losing only its
 /// chosen window is transient. Preserve process disappearance and any
 /// action effects: transient selection does not justify replaying an
@@ -1603,6 +1680,106 @@ fn activate_while_current<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn root_enrichment_keeps_the_original_identity_and_rejects_replacement() {
+        let mut registry = Registry::default();
+        let original = Issued {
+            hwnd: 7,
+            pid: 100,
+            started: Some(123),
+            class: Some(1),
+        };
+        let handle = registry.register_window(original);
+        let held = HashMap::from([(7, (handle, original.binding()))]);
+        let mut node = a11y::tests_node();
+        node.native_window = Some(7);
+        let mut read = Read {
+            roots: vec![node],
+            truncated: false,
+        };
+        attach_tree_windows(&mut read, &held, |target, _| {
+            registry.observe(target, || Ok(()))
+        })
+        .expect("BUG: original identity still exists");
+        assert_eq!(read.roots[0].window, Some(format!("w{handle}")));
+        let replacement = registry.register_window(Issued {
+            pid: 200,
+            class: Some(2),
+            ..original
+        });
+        let result = attach_tree_windows(&mut read, &held, |target, _| {
+            registry.observe(target, || Ok(()))
+        });
+        assert!(
+            result.is_err(),
+            "replacement cannot be attached to the original tree"
+        );
+        assert_ne!(read.roots[0].window, Some(format!("w{replacement}")));
+    }
+
+    #[test]
+    fn a_changed_screenshot_source_never_becomes_valid_again() {
+        let mut registry = Registry::default();
+        let source = Rect {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+        let meta = ShotMeta {
+            source,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            width: 10,
+            height: 10,
+            window: None,
+            monitor: None,
+        };
+        registry.remember_shot(meta);
+        let unread =
+            registry.validate_shot_source(1, source, Err(ToolError::platform("bounds", "unread")));
+        assert_eq!(
+            unread.expect_err("BUG: unread source is refused").code(),
+            "busy"
+        );
+        assert!(registry.validate_shot_source(1, source, Ok(source)).is_ok());
+        let changed = registry.validate_shot_source(1, source, Ok(Rect { x: 1, ..source }));
+        assert_eq!(
+            changed
+                .expect_err("BUG: changed source is retired")
+                .payload()["error"]["kind"],
+            "screenshot"
+        );
+        assert_eq!(
+            registry
+                .validate_shot_source(1, source, Ok(source))
+                .expect_err("BUG: returning to original geometry cannot revive pixels")
+                .code(),
+            "gone"
+        );
+        registry.remember_shot(meta);
+        let monitor = capture::MonitorSnapshot {
+            id: 1,
+            rect: source,
+        };
+        assert!(
+            registry
+                .validate_shot_source(
+                    2,
+                    monitor,
+                    Ok(capture::MonitorSnapshot { id: 2, ..monitor })
+                )
+                .is_err()
+        );
+        assert_eq!(
+            registry
+                .validate_shot_source(2, monitor, Ok(monitor))
+                .expect_err("BUG: returning monitor identity cannot revive pixels")
+                .code(),
+            "gone"
+        );
+    }
 
     #[test]
     fn selection_uses_the_adopted_class_and_keeps_the_original_process_binding() {

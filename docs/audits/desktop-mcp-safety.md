@@ -10,6 +10,28 @@ by `flui-platform`; no framework behavior, CI workflow or publishing changes.
 
 ## Repaired failure scenarios
 
+Text-only MCP clients receive the same JSON error envelope, including retry policy and
+partial effects, as structured-content clients. Handle-only queries can match a verified
+node despite unrelated incomplete search properties; unread state predicates still fail.
+Subtree traversal reserves part of the request for final root validation so a normal
+budget-limited read can return its truncated result. A provider that consumes this reserve
+still produces a validation timeout rather than unchecked data.
+
+Tree roots use window identities recorded before provider traversal and checked again
+after enrichment. Screenshot handles are permanently retired after an observed source
+identity or geometry change, while unreadable observations remain transient. Unix clean
+shutdown waits for in-flight launches to settle; it can wait indefinitely for a stuck OS
+spawn. A regression creates a real child and holds its spawn return beyond the cleanup
+deadline, then verifies cleanup waited and reaped it. Windows retains bounded waiting
+backed by its creation-time Job containment.
+`cargo xtask check-changed --base 854c89d1bf76dfa7ec233b1db6f06b2394cee19c`
+passed: 152 tests, six skipped, formatting, strict rustdoc and Windows/macOS clippy.
+`cargo nextest run -p flui-desktop-mcp --test native_windows --run-ignored only
+--no-capture` passed all three entries. The blocked-spawn regression runs the Unix
+waiting policy with a real Windows child on this host; a real blocked Unix exec was
+not run. Subtree deadline reservation and identity races use deterministic helpers,
+not a deliberately delayed live UIA provider.
+
 Subtree reads revalidate their original root after traversal, including truncated
 results. A confirmed replacement retires handles touched by that walk; an expired
 deadline refuses the result instead of starting another provider call. Nodes whose

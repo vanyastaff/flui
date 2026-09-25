@@ -87,7 +87,8 @@ pub struct Node {
     pub gone: bool,
     /// A searched property was cut or could not be read: its shown value
     /// (an empty name, `Unknown`, a trailing `…`) is not the real one, so the
-    /// node matches no query rather than a wrong one.
+    /// node matches no property query rather than a wrong one. A handle-only
+    /// query still identifies it; state predicates check their own observations.
     #[serde(skip)]
     pub unmatchable: bool,
     /// State properties that were unreadable or clipped, so predicates must
@@ -225,7 +226,12 @@ impl Query {
     /// Whether `node` satisfies every given criterion. Expects a
     /// [`Self::prepared`] query (`name_contains` already lower-cased).
     pub fn matches(&self, node: &Node) -> bool {
-        if node.unmatchable {
+        let handle_only = self.element.is_some()
+            && self.name.is_none()
+            && self.name_contains.is_none()
+            && self.role.is_none()
+            && self.automation_id.is_none();
+        if node.unmatchable && !handle_only {
             return false;
         }
         let name = node.name.as_deref().unwrap_or("");
@@ -721,6 +727,33 @@ mod tests {
         assert!(!query.matches(&unread));
         unread.unmatchable = false;
         assert!(query.matches(&unread));
+    }
+
+    #[test]
+    fn handle_only_queries_can_wait_on_independently_read_state() {
+        let mut node = tests_node();
+        node.unmatchable = true;
+        node.focused = true;
+        let query = Query {
+            element: Some(node.id.clone()),
+            ..Query::default()
+        }
+        .prepared()
+        .expect("BUG: valid handle");
+        let state = crate::params::StateArg {
+            focused: Some(true),
+            ..crate::params::StateArg::default()
+        };
+        let found = search(&[node.clone()], &query);
+        assert_eq!(found.len(), 1);
+        assert!(state.holds(&found[0]));
+        node.unread_states.push("focused");
+        assert!(!state.holds(&search(&[node.clone()], &query)[0]));
+        let named = Query {
+            name: node.name.clone(),
+            ..query
+        };
+        assert!(search(&[node], &named).is_empty());
     }
 
     #[test]

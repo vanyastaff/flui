@@ -1085,6 +1085,16 @@ impl Uia {
     }
 }
 
+/// Leave time for the root's mandatory final identity check. Spending the
+/// whole request on traversal would turn every deadline-limited partial read
+/// into a validation timeout. Short waits reserve proportionately less.
+fn subtree_traversal_deadline(now: Instant, deadline: Instant) -> Instant {
+    let reserve = (deadline.saturating_duration_since(now) / 2).min(
+        std::time::Duration::from_millis(u64::from(crate::os::UIA_TRANSACTION_TIMEOUT_MS)),
+    );
+    deadline.checked_sub(reserve).unwrap_or(now)
+}
+
 /// A definitively replaced root invalidates all handles touched by its walk:
 /// some may have been issued from its replacement before the final check.
 fn finish_subtree(
@@ -1356,7 +1366,7 @@ impl AccessibilityBackend for Uia {
             max_depth,
             budget: max_nodes.clamp(1, NODE_BUDGET),
             bytes: READ_BYTES,
-            deadline,
+            deadline: subtree_traversal_deadline(Instant::now(), deadline),
             seen: HashSet::new(),
             truncated: false,
         };
@@ -1945,6 +1955,30 @@ fn classify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtree_budget_preserves_time_to_validate_a_partial_read() {
+        for millis in [100_u64, 10_000] {
+            let now = Instant::now();
+            let deadline = now + std::time::Duration::from_millis(millis);
+            let traversal = subtree_traversal_deadline(now, deadline);
+            assert!(traversal > now && traversal < deadline);
+            // Traversal stopped on its own budget; the original request
+            // still admits the required final identity validation.
+            let result = finish_subtree(
+                Read {
+                    roots: vec![crate::a11y::tests_node()],
+                    truncated: true,
+                },
+                &HashSet::new(),
+                Ok(()),
+                |_| panic!("a validated partial read preserves its handles"),
+            )
+            .expect("BUG: partial reads retain a final validation budget");
+            assert!(result.truncated);
+            assert_eq!(result.roots.len(), 1);
+        }
+    }
 
     #[test]
     fn subtree_failure_retires_handles_from_a_replaced_root() {

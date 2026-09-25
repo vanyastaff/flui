@@ -146,7 +146,13 @@ fn refusals_carry_a_code_and_a_message() {
     assert_eq!(error["retry"], "never", "{reply}");
     let message = error["message"].as_str().unwrap_or_default();
     assert!(message.contains("safety target"), "{message}");
-    assert_eq!(reply["content"][0]["text"], error["message"]);
+    let text: Value = serde_json::from_str(
+        reply["content"][0]["text"]
+            .as_str()
+            .expect("BUG: text envelope"),
+    )
+    .expect("BUG: text error is JSON");
+    assert_eq!(text, reply["structuredContent"]);
 
     let reply = client.call("kill", serde_json::json!({ "pid": 1 }));
     assert_eq!(reply["isError"], true, "{reply}");

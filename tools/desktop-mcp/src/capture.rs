@@ -102,16 +102,19 @@ pub struct MonitorSnapshot {
 fn monitor_for_id<T>(
     monitors: &[T],
     id: u32,
-    identity: impl Fn(&T) -> Option<u32>,
+    identity: impl Fn(&T) -> ToolResult<u32>,
 ) -> ToolResult<&T> {
-    monitors
-        .iter()
-        .find(|monitor| identity(monitor) == Some(id))
-        .ok_or_else(|| ToolError::NotFound("the captured monitor is gone".into()))
+    for monitor in monitors {
+        if identity(monitor)? == id {
+            return Ok(monitor);
+        }
+    }
+    Err(ToolError::NotFound("the captured monitor is gone".into()))
 }
 
 /// Refuses pixels from a replaced or reconfigured display, including a
 /// replacement with exactly the same geometry.
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
 pub fn verify_monitor(
     expected: MonitorSnapshot,
     current: ToolResult<MonitorSnapshot>,
@@ -178,7 +181,11 @@ mod backend {
     /// of an enumeration index or the display currently marked primary.
     pub fn monitor_snapshot(id: u32) -> ToolResult<MonitorSnapshot> {
         let monitors = Monitor::all().map_err(|e| ToolError::platform("listing monitors", e))?;
-        let monitor = monitor_for_id(&monitors, id, |monitor| monitor.id().ok())?;
+        let monitor = monitor_for_id(&monitors, id, |monitor| {
+            monitor
+                .id()
+                .map_err(|error| ToolError::platform("reading monitor identity", error))
+        })?;
         describe_monitor(monitor)
     }
 
@@ -445,6 +452,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_unread_monitor_identity_is_not_reported_as_disappearance() {
+        let monitors = [MonitorSnapshot {
+            id: 1,
+            rect: source(),
+        }];
+        let result = monitor_for_id(&monitors, 1, |_| {
+            Err(ToolError::platform(
+                "reading monitor identity",
+                "unavailable",
+            ))
+        });
+        assert_eq!(
+            result.expect_err("BUG: unread identity is an error").code(),
+            "platform"
+        );
+        assert!(monitor_for_id(&monitors, 1, |monitor| Ok(monitor.id)).is_ok());
+    }
+
+    #[test]
     fn monitor_pixels_reject_a_same_geometry_replacement() {
         let captured = MonitorSnapshot {
             id: 1,
@@ -459,7 +485,7 @@ mod tests {
             "same geometry does not establish monitor identity"
         );
         let monitors = [replacement];
-        let current = monitor_for_id(&monitors, captured.id, |monitor| Some(monitor.id)).copied();
+        let current = monitor_for_id(&monitors, captured.id, |monitor| Ok(monitor.id)).copied();
         assert!(
             verify_monitor(captured, current).is_err(),
             "a replacement primary or index occupant cannot supply the old image's coordinates"
@@ -477,8 +503,7 @@ mod tests {
             rect: source(),
         };
         for monitors in [[captured, other], [other, captured]] {
-            let current =
-                monitor_for_id(&monitors, captured.id, |monitor| Some(monitor.id)).copied();
+            let current = monitor_for_id(&monitors, captured.id, |monitor| Ok(monitor.id)).copied();
             assert!(verify_monitor(captured, current).is_ok());
         }
         let moved = MonitorSnapshot {

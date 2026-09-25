@@ -173,6 +173,14 @@ impl Children {
     /// still holds the child, so no later process can have taken the pid;
     /// and the launch's number, which [`Self::abandon`] takes.
     pub fn launch(&self, spec: &LaunchSpec) -> ToolResult<(u32, Option<u64>, u64)> {
+        self.launch_with(spec, Command::spawn)
+    }
+
+    fn launch_with(
+        &self,
+        spec: &LaunchSpec,
+        spawn: impl FnOnce(&mut Command) -> std::io::Result<Child>,
+    ) -> ToolResult<(u32, Option<u64>, u64)> {
         if spec.program.trim().is_empty() {
             return Err(ToolError::InvalidArgument("program is empty".into()));
         }
@@ -205,8 +213,7 @@ impl Children {
                 "launch is unavailable: the kill-on-exit job that ends launched processes if the server dies could not be created ({e})"
             ))
         })?;
-        let child = command
-            .spawn()
+        let child = spawn(&mut command)
             .map_err(|e| ToolError::platform(format!("launching `{}`", spec.program), e))?;
         // On Windows the kill-on-exit job is what ends children when the
         // server dies hard; a child that cannot join it is ended at once.
@@ -396,15 +403,30 @@ impl Children {
 
     /// Kills every child. Idempotent.
     pub fn kill_all(&self) {
+        self.kill_all_with_containment(cfg!(target_os = "windows"));
+    }
+
+    fn kill_all_with_containment(&self, contained: bool) {
         let mut tracked = self.lock();
         tracked.closed = true;
         // A spawn still running would record its child after this pass, and
-        // a kill in progress puts back one the OS refused to end: both are
-        // waited for, bounded, since a spawn can hang on a network path.
+        // a kill in progress puts back one the OS refused to end. Windows
+        // can stop waiting because its job contains children from creation.
+        // Unix must keep the server alive until every spawn returns: spawn
+        // can already have created a child while waiting for exec, without
+        // exposing its PID. Exiting then would orphan that child. A stuck
+        // exec can therefore keep clean Unix shutdown waiting indefinitely.
         let until = Instant::now() + LAUNCH_SETTLE;
         while tracked.launching > 0 || !tracked.ending.is_empty() {
             let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
+                if !contained {
+                    tracked = self
+                        .settled
+                        .wait(tracked)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    continue;
+                }
                 tracing::warn!(
                     "{} launches and {} kills still running at shutdown; a launch ends its process if it finishes",
                     tracked.launching,
@@ -462,7 +484,8 @@ impl Children {
     }
 }
 
-/// How long shutdown waits for launches and kills in flight to settle.
+/// How long shutdown waits before relying on Windows job containment.
+/// Elsewhere it keeps waiting: there is no containment for a spawn in flight.
 const LAUNCH_SETTLE: Duration = Duration::from_secs(5);
 
 /// One launch in flight; counted out when dropped, on every path.
@@ -528,6 +551,67 @@ const REAP_WAIT: Duration = Duration::from_secs(2);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Models Unix spawn after it created a child but before exec's result
+    /// lets it return the handle. Cleanup must not return while that child
+    /// is invisible, even after the Windows containment deadline passes.
+    #[test]
+    fn shutdown_waits_for_a_child_hidden_inside_spawn() {
+        use std::sync::{Arc, mpsc};
+
+        let children = Arc::new(Children::new());
+        let (created_tx, created_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let launching = Arc::clone(&children);
+        let launch = std::thread::spawn(move || {
+            launching.launch_with(
+                &LaunchSpec {
+                    program: if cfg!(windows) { "ping" } else { "sleep" }.into(),
+                    args: if cfg!(windows) {
+                        vec!["-n".into(), "60".into(), "127.0.0.1".into()]
+                    } else {
+                        vec!["60".into()]
+                    },
+                    ..LaunchSpec::default()
+                },
+                |command| {
+                    let child = command.spawn()?;
+                    created_tx.send(child.id()).expect("BUG: test receives PID");
+                    resume_rx.recv().expect("BUG: test resumes spawn");
+                    Ok(child)
+                },
+            )
+        });
+        let pid = created_rx.recv().expect("BUG: child starts");
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let cleaning = Arc::clone(&children);
+        let cleanup = std::thread::spawn(move || {
+            // Exercise Unix's real entry point there, and its exact cleanup
+            // policy on Windows too so that host can verify the regression.
+            #[cfg(not(target_os = "windows"))]
+            cleaning.kill_all();
+            #[cfg(target_os = "windows")]
+            cleaning.kill_all_with_containment(false);
+            finished_tx.send(()).expect("BUG: test observes cleanup");
+        });
+        // Observe the production close flag before starting the deadline.
+        while !children.lock().closed {
+            std::thread::yield_now();
+        }
+        let early = finished_rx.recv_timeout(LAUNCH_SETTLE + Duration::from_millis(100));
+        // Always release and join before asserting, including on regression:
+        // the test must not leave its real child or worker behind.
+        resume_tx.send(()).expect("BUG: spawn is waiting");
+        let result = launch.join().expect("BUG: launch worker finishes");
+        cleanup.join().expect("BUG: cleanup worker finishes");
+        assert!(matches!(early, Err(mpsc::RecvTimeoutError::Timeout)));
+        assert!(matches!(result, Err(ToolError::ShuttingDown)));
+        let mut tracked = children.lock();
+        tracked.reap();
+        assert!(!tracked.running.contains_key(&pid));
+        assert!(tracked.unreaped.is_empty(), "the actual child was reaped");
+        assert_eq!(tracked.launching, 0);
+    }
 
     #[test]
     fn nothing_is_launched_after_shutdown() {
