@@ -17,12 +17,8 @@ mod color_blend_tests;
 mod color_operations_tests;
 #[path = "color_property_tests.rs"]
 mod color_property_tests;
-#[path = "corners_tests.rs"]
-mod corners_tests;
 #[path = "device_pixels_geometry_tests.rs"]
 mod device_pixels_geometry_tests;
-#[path = "edge_insets_tests.rs"]
-mod edge_insets_tests;
 #[path = "geometric_calculations_tests.rs"]
 mod geometric_calculations_tests;
 #[path = "geometry_property_tests.rs"]

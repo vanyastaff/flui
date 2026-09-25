@@ -797,3 +797,167 @@ impl<T: Clone> super::traits::Along for Edges<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::traits::{Along, Axis};
+    use crate::{Offset, Pixels, RRect, Radius, Rect, Size, px};
+
+    /// Distinct values in `(top, right, bottom, left)` order.
+    fn distinct() -> Edges<i32> {
+        edges(1, 2, 3, 4)
+    }
+
+    fn px_edges(top: f32, right: f32, bottom: f32, left: f32) -> Edges<Pixels> {
+        Edges::new(px(top), px(right), px(bottom), px(left))
+    }
+
+    #[test]
+    fn constructors_place_each_side() {
+        let e = Edges::new(1, 2, 3, 4);
+        assert_eq!((e.top, e.right, e.bottom, e.left), (1, 2, 3, 4));
+        assert_eq!(e, distinct());
+        assert_eq!(Edges::all(7), edges(7, 7, 7, 7));
+        assert_eq!(Edges::symmetric(1, 2), edges(1, 2, 1, 2));
+        assert_eq!(Edges::horizontal(7), edges(0, 7, 0, 7));
+        assert_eq!(Edges::vertical(7), edges(7, 0, 7, 0));
+        assert_eq!(Edges::only_top(px(7.0)), px_edges(7.0, 0.0, 0.0, 0.0));
+        assert_eq!(Edges::only_right(px(7.0)), px_edges(0.0, 7.0, 0.0, 0.0));
+        assert_eq!(Edges::only_bottom(px(7.0)), px_edges(0.0, 0.0, 7.0, 0.0));
+        assert_eq!(Edges::only_left(px(7.0)), px_edges(0.0, 0.0, 0.0, 7.0));
+        assert_eq!(Edges::<Pixels>::ZERO, Edges::default());
+        assert_eq!(Edges::from(px(7.0)), Edges::all(px(7.0)));
+        assert_eq!(
+            Edges::from((px(1.0), px(2.0))),
+            Edges::symmetric(px(1.0), px(2.0))
+        );
+        assert_eq!(
+            Edges::from((px(1.0), px(2.0), px(3.0), px(4.0))),
+            px_edges(1.0, 2.0, 3.0, 4.0)
+        );
+    }
+
+    #[test]
+    fn totals_and_corner_offsets() {
+        let e = distinct();
+        assert_eq!((e.horizontal_total(), e.vertical_total()), (6, 4));
+        let p = px_edges(1.0, 2.0, 4.0, 8.0);
+        assert_eq!(p.total_size(), Size::new(px(10.0), px(5.0)));
+        assert_eq!(p.top_left(), Offset::new(px(8.0), px(1.0)));
+        assert_eq!(p.bottom_right(), Offset::new(px(2.0), px(4.0)));
+    }
+
+    #[test]
+    fn map_and_predicates_visit_every_side() {
+        let e = distinct();
+        assert_eq!(e.map(|v| v * 10), edges(10, 20, 30, 40));
+        for side in 1..=4 {
+            assert!(e.any(|&v| v == side), "{side}");
+            assert!(!e.all_satisfy(|&v| v != side), "{side}");
+        }
+        assert!(!e.any(|&v| v > 4));
+        assert!(e.all_satisfy(|&v| v > 0));
+    }
+
+    /// One side at a time, so each term of the conjunction decides.
+    #[test]
+    fn zero_and_sign_queries_check_each_side() {
+        assert!(Edges::<Pixels>::ZERO.is_zero());
+        assert!(Edges::<Pixels>::ZERO.is_non_negative());
+        for i in 0..4 {
+            let mut one = [0.0; 4];
+            one[i] = 1.0;
+            assert!(!px_edges(one[0], one[1], one[2], one[3]).is_zero(), "{i}");
+            one[i] = -1.0;
+            let negative = px_edges(one[0], one[1], one[2], one[3]);
+            assert!(!negative.is_non_negative(), "{i}");
+            assert_eq!(negative.clamp_non_negative(), Edges::ZERO, "{i}");
+        }
+        let mixed = px_edges(-1.0, 2.0, -3.0, 4.0);
+        assert_eq!(mixed.clamp_non_negative(), px_edges(0.0, 2.0, 0.0, 4.0));
+    }
+
+    #[test]
+    fn scale_and_flips() {
+        let p = px_edges(1.0, 2.0, 3.0, 4.0);
+        assert_eq!(p.scale(2.0), px_edges(2.0, 4.0, 6.0, 8.0));
+        assert_eq!(p.flip_horizontal(), px_edges(1.0, 4.0, 3.0, 2.0));
+        assert_eq!(p.flip_vertical(), px_edges(3.0, 2.0, 1.0, 4.0));
+    }
+
+    #[test]
+    fn inflate_and_deflate_move_each_side_by_its_inset() {
+        let p = px_edges(1.0, 2.0, 4.0, 8.0);
+        let rect = Rect::from_ltrb(px(10.0), px(20.0), px(110.0), px(220.0));
+        assert_eq!(
+            p.inflate_rect(rect),
+            Rect::from_ltrb(px(2.0), px(19.0), px(112.0), px(224.0))
+        );
+        assert_eq!(
+            p.deflate_rect(rect),
+            Rect::from_ltrb(px(18.0), px(21.0), px(108.0), px(216.0))
+        );
+        assert_eq!(p.deflate_rect(p.inflate_rect(rect)), rect);
+
+        let size = Size::new(px(100.0), px(200.0));
+        assert_eq!(p.inflate_size(size), Size::new(px(110.0), px(205.0)));
+        assert_eq!(p.deflate_size(size), Size::new(px(90.0), px(195.0)));
+    }
+
+    /// Each corner radius moves by the two insets that meet at it, and
+    /// each axis clamps at zero on its own.
+    #[test]
+    fn rrect_radii_follow_their_adjacent_insets() {
+        let p = px_edges(1.0, 2.0, 4.0, 8.0);
+        let rect = Rect::from_ltrb(px(10.0), px(20.0), px(110.0), px(220.0));
+        let r = Radius::circular(px(5.0));
+        let rrect = RRect::from_rect_and_corners(rect, r, r, r, r);
+
+        let out = p.inflate_rrect(rrect);
+        assert_eq!(out.rect, p.inflate_rect(rect));
+        assert_eq!(out.top_left, Radius::new(px(13.0), px(6.0)));
+        assert_eq!(out.top_right, Radius::new(px(7.0), px(6.0)));
+        assert_eq!(out.bottom_right, Radius::new(px(7.0), px(9.0)));
+        assert_eq!(out.bottom_left, Radius::new(px(13.0), px(9.0)));
+
+        let inner = p.deflate_rrect(rrect);
+        assert_eq!(inner.rect, p.deflate_rect(rect));
+        assert_eq!(inner.top_left, Radius::new(px(0.0), px(4.0)));
+        assert_eq!(inner.top_right, Radius::new(px(3.0), px(4.0)));
+        assert_eq!(inner.bottom_right, Radius::new(px(3.0), px(1.0)));
+        assert_eq!(inner.bottom_left, Radius::new(px(0.0), px(1.0)));
+    }
+
+    #[test]
+    fn arithmetic_is_per_side() {
+        let a = distinct();
+        let b = edges(10, 20, 30, 40);
+        assert_eq!(a + b, edges(11, 22, 33, 44));
+        assert_eq!(b - a, edges(9, 18, 27, 36));
+        assert_eq!(a * b, edges(10, 40, 90, 160));
+        let mut c = a;
+        c += b;
+        assert_eq!(c, a + b);
+        c -= a;
+        assert_eq!(c, b);
+        c *= 2;
+        assert_eq!(c, edges(20, 40, 60, 80));
+    }
+
+    /// Horizontal is `(left, right)`, vertical `(top, bottom)`.
+    #[test]
+    fn along_reads_and_replaces_one_axis() {
+        let e = distinct();
+        assert_eq!(e.along(Axis::Horizontal), (4, 2));
+        assert_eq!(e.along(Axis::Vertical), (1, 3));
+        assert_eq!(
+            e.apply_along(Axis::Horizontal, |(l, r)| (l + 10, r + 20)),
+            edges(1, 22, 3, 14)
+        );
+        assert_eq!(
+            e.apply_along(Axis::Vertical, |(t, b)| (t + 10, b + 20)),
+            edges(11, 2, 23, 4)
+        );
+    }
+}
