@@ -266,7 +266,10 @@ fn blend_over_matches_flutter_alpha_blend() {
     let white = |a| Color::rgba(255, 255, 255, a);
     let black = |a| Color::rgba(0, 0, 0, a);
     assert_eq!(black(254).blend_over(white(255)), Color::rgba(1, 1, 1, 255));
-    assert_eq!(black(1).blend_over(white(255)), Color::rgba(254, 254, 254, 255));
+    assert_eq!(
+        black(1).blend_over(white(255)),
+        Color::rgba(254, 254, 254, 255)
+    );
     assert_eq!(
         black(64).blend_over(white(254)),
         Color::rgba(191, 191, 191, 254)

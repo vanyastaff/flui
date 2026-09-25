@@ -5,9 +5,8 @@
 
 /// An RGBA color with four 8-bit channels and straight (unmultiplied) alpha.
 ///
-/// Channels are in sRGB gamma space, matching Flutter's `Color`. For the
-/// packed premultiplied-alpha representation used by the renderer, see
-/// `Color32`.
+/// Channels are in sRGB gamma space, matching Flutter's `Color`. The
+/// renderer premultiplies when it converts a color for the GPU.
 // `Color` is a plain RGBA quadruple of independent `u8` channels — every bit
 // pattern is a valid `Color`. The derived `Deserialize` therefore cannot
 // produce an instance that violates any invariant the `unsafe` SIMD helpers

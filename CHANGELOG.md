@@ -139,6 +139,17 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 - `flui_rendering::slivers`, a public module with no items: the sliver windowing math lives in
   `flui_rendering::virtualization`.
+- Unused public API in `flui-types`, none of it called anywhere in the workspace:
+  - `Color32`, a packed premultiplied colour that `Color`'s docs said the renderer used; it
+    never did (`flui-engine` premultiplies itself when it converts a `Color`).
+  - `NotchedShape`, `CircularNotchedRectangle` and `AutomaticNotchedShape`, for a
+    `BottomAppBar` FLUI does not have. They returned a 16-segment polyline, not Flutter's
+    curved `Path`, and drew the notch upside down until a test found it; the port belongs with
+    `BottomAppBar`, built on `Path::cubic_to`.
+  - `TextScaler` and its linear and clamped implementations. Text scaling is the flat
+    `text_scale_factor` in `MediaQueryData` and `TextPainter`, and a `dyn` trait cannot be the
+    replacement: `MediaQueryData` compares values to decide which dependents rebuild. Flutter's
+    nonlinear scaling should come back as a `Copy + PartialEq` value wired from the platform.
 
 ### Fixed
 
