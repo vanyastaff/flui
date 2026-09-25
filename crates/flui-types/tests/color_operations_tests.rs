@@ -69,7 +69,8 @@ fn lighten_white_and_darken_black_are_fixed_points() {
 
 #[rstest]
 #[case::opaque(1.0, 255)]
-#[case::half(0.5, 127)]
+#[case::half(0.5, 128)] // 127.5, rounded as Flutter's withOpacity does
+#[case::material_disabled(0.12, 31)] // 30.6
 #[case::zero(0.0, 0)]
 #[case::clamped_high(2.0, 255)]
 #[case::clamped_low(-1.0, 0)]

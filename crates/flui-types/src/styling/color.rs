@@ -178,7 +178,9 @@ impl Color {
 
     /// Returns a new color with the specified opacity (0.0-1.0).
     ///
-    /// Values are clamped to the valid range.
+    /// Values are clamped to the valid range, and the alpha rounds to the
+    /// nearest of its 256 steps, as Flutter's `withOpacity` does
+    /// (`(255 * opacity).round()`).
     ///
     /// # Examples
     ///
@@ -188,11 +190,13 @@ impl Color {
     /// let opaque = Color::rgb(255, 0, 0);
     /// let half = opaque.with_opacity(0.5);
     ///
-    /// assert_eq!(half.a, 127); // 0.5 * 255
+    /// assert_eq!(half.a, 128); // 127.5 rounds up
     /// ```
     #[inline]
     pub fn with_opacity(&self, opacity: f32) -> Self {
-        let alpha = (opacity.clamp(0.0, 1.0) * 255.0) as u8;
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        // 0..=255 after the clamp
+        let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         self.with_alpha(alpha)
     }
 
