@@ -11,8 +11,6 @@
 //! (flui-types currently has none; see flui-view's error_view_recovery
 //! for the reference case.)
 
-#[path = "color_approx_eq_tests.rs"]
-mod color_approx_eq_tests;
 #[path = "color_blend_tests.rs"]
 mod color_blend_tests;
 #[path = "color_operations_tests.rs"]

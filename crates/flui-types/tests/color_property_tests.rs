@@ -310,3 +310,57 @@ fn lerp_oklab_midpoint_is_symmetric() {
         assert_ne!(Color::lerp_oklab(x, y, 0.25), Color::lerp_oklab(y, x, 0.25));
     }
 }
+
+/// The largest per-channel difference between two colors, in 8-bit units.
+fn max_channel_distance(a: Color, b: Color) -> u8 {
+    let (x, y) = (a.to_argb().to_be_bytes(), b.to_argb().to_be_bytes());
+    x.iter()
+        .zip(y)
+        .map(|(p, q)| p.abs_diff(q))
+        .max()
+        .unwrap_or(0)
+}
+
+proptest! {
+    /// The default epsilon is one 8-bit unit: colors whose every channel,
+    /// alpha included, is within one unit compare equal, and no others.
+    #[test]
+    fn prop_approx_eq_tolerates_one_unit_per_channel(
+        a in arb_color(),
+        channel in 0usize..4,
+        delta in -3i16..=3,
+    ) {
+        use flui_types::geometry::ApproxEq;
+        let mut bytes = a.to_argb().to_be_bytes();
+        bytes[channel] = (i16::from(bytes[channel]) + delta).clamp(0, 255) as u8;
+        let b = Color::from_argb(u32::from_be_bytes(bytes));
+        prop_assert_eq!(a.approx_eq(&b), max_channel_distance(a, b) <= 1, "{:?} {:?}", a, b);
+        prop_assert_eq!(a.approx_eq_eps(&b, 0.0), a == b);
+        prop_assert!(a.approx_eq_eps(&b, 3.0 / 255.0 + 1e-6));
+    }
+}
+
+/// Every adjacent pair of channel values, in every channel: the pairs a
+/// normalized-float subtraction gets wrong are scattered (3 and 4 is one).
+#[test]
+fn approx_eq_accepts_every_one_unit_step() {
+    use flui_types::geometry::ApproxEq;
+    for channel in 0..4 {
+        for n in 0..255u8 {
+            let at = |v: u8| {
+                let mut bytes = [255, 0, 0, 0];
+                bytes[channel] = v;
+                Color::from_argb(u32::from_be_bytes(bytes))
+            };
+            assert!(
+                at(n).approx_eq(&at(n + 1)),
+                "channel {channel}: {n} vs {}",
+                n + 1
+            );
+            assert!(
+                !at(n).approx_eq_eps(&at(n + 1), 0.0),
+                "channel {channel}: {n}"
+            );
+        }
+    }
+}

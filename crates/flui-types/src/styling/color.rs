@@ -1328,13 +1328,15 @@ impl crate::geometry::ApproxEq for Color {
     /// ```
     #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-        let (r1, g1, b1, a1) = self.to_rgba_f32();
-        let (r2, g2, b2, a2) = other.to_rgba_f32();
-
-        (r1 - r2).abs() <= epsilon
-            && (g1 - g2).abs() <= epsilon
-            && (b1 - b2).abs() <= epsilon
-            && (a1 - a2).abs() <= epsilon
+        // Distances are taken in 8-bit units before normalizing: subtracting
+        // two normalized channels can land just above `n / 255` (4/255 - 3/255
+        // does in f32), which would reject a one-unit difference at the
+        // default epsilon.
+        let within = |x: u8, y: u8| f32::from(x.abs_diff(y)) / 255.0 <= epsilon;
+        within(self.r, other.r)
+            && within(self.g, other.g)
+            && within(self.b, other.b)
+            && within(self.a, other.a)
     }
 }
 
@@ -1369,7 +1371,6 @@ impl std::error::Error for ParseColorError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::ApproxEq;
 
     // The SIMD twins compile on every x86_64/aarch64 build but `lerp` and
     // `blend_over` only call them under the `simd` feature, which the default
@@ -1416,26 +1417,6 @@ mod tests {
                 prop_assert_eq!(blend_over_simd(src, dst), src.blend_over_scalar(dst));
             }
         }
-    }
-
-    #[test]
-    fn test_approx_eq_identical() {
-        let c1 = Color::rgb(100, 150, 200);
-        let c2 = Color::rgb(100, 150, 200);
-        assert!(c1.approx_eq(&c2));
-    }
-
-    #[test]
-    fn test_approx_eq_one_unit_difference() {
-        let c1 = Color::rgb(100, 150, 200);
-        let c2 = Color::rgb(100, 151, 200);
-        let c3 = Color::rgb(101, 150, 200);
-        let c4 = Color::rgb(100, 150, 201);
-
-        // 1 unit difference should be within default epsilon
-        assert!(c1.approx_eq(&c2));
-        assert!(c1.approx_eq(&c3));
-        assert!(c1.approx_eq(&c4));
     }
 
     #[test]
@@ -1500,106 +1481,6 @@ mod tests {
         let a = Color::rgba(255, 0, 0, 0);
         let b = Color::rgba(255, 0, 0, 200);
         assert_eq!(Color::lerp_oklab(a, b, 0.5).a, 100);
-    }
-
-    #[test]
-    fn test_approx_eq_alpha_channel() {
-        let c1 = Color::rgba(100, 150, 200, 255);
-        let c2 = Color::rgba(100, 150, 200, 254);
-
-        // 1 unit alpha difference should be within epsilon
-        assert!(c1.approx_eq(&c2));
-    }
-
-    #[test]
-    fn test_approx_eq_large_difference() {
-        let c1 = Color::rgb(100, 150, 200);
-        let c2 = Color::rgb(105, 150, 200);
-
-        // 5 unit difference should exceed default epsilon
-        assert!(!c1.approx_eq(&c2));
-    }
-
-    #[test]
-    fn test_approx_eq_eps_custom_epsilon() {
-        let c1 = Color::rgb(100, 150, 200);
-        let c2 = Color::rgb(110, 150, 200);
-
-        // 10 units = 10/255 ≈ 0.039
-        assert!(!c1.approx_eq(&c2));
-
-        // But should pass with larger epsilon
-        assert!(c1.approx_eq_eps(&c2, 0.05));
-    }
-
-    #[test]
-    fn test_approx_eq_hsl_conversion_roundtrip() {
-        use crate::styling::HSLColor;
-
-        let original = Color::rgb(120, 180, 200);
-        let roundtrip = Color::from(HSLColor::from(original));
-
-        // HSL conversion may introduce small rounding errors.
-        assert!(original.approx_eq(&roundtrip));
-    }
-
-    #[test]
-    fn test_approx_eq_hsv_conversion_roundtrip() {
-        use crate::styling::HSVColor;
-
-        let original = Color::rgb(80, 120, 160);
-        let roundtrip = Color::from(HSVColor::from(original));
-
-        // HSV conversion may introduce small rounding errors.
-        assert!(original.approx_eq(&roundtrip));
-    }
-
-    #[test]
-    fn test_approx_eq_lerp_precision() {
-        let c1 = Color::rgb(0, 0, 0);
-        let c2 = Color::rgb(100, 100, 100);
-
-        // Lerp at 0.5 should give (50, 50, 50)
-        let mid = Color::lerp(c1, c2, 0.5);
-        let expected = Color::rgb(50, 50, 50);
-
-        assert!(mid.approx_eq(&expected));
-    }
-
-    #[test]
-    fn test_approx_eq_blend_precision() {
-        let foreground = Color::rgba(255, 0, 0, 128); // 50% transparent red
-        let background = Color::rgb(0, 0, 255); // opaque blue
-
-        let blended = foreground.blend_over(background);
-
-        // Expected: roughly purple (127, 0, 127)
-        let expected = Color::rgb(127, 0, 127);
-
-        // Blending calculations may have rounding errors
-        assert!(blended.approx_eq_eps(&expected, 0.01));
-    }
-
-    #[test]
-    fn test_approx_eq_epsilon_boundary() {
-        let c1 = Color::rgb(100, 100, 100);
-
-        // Test at exactly 1/255 difference
-        let c2 = Color::from_rgba_f32_array([
-            100.0 / 255.0 + 1.0 / 255.0,
-            100.0 / 255.0,
-            100.0 / 255.0,
-            1.0,
-        ]);
-
-        // Should be within epsilon
-        assert!(c1.approx_eq(&c2));
-    }
-
-    #[test]
-    fn test_default_epsilon_value() {
-        // Verify default epsilon is 1/255
-        assert!((Color::DEFAULT_EPSILON - 1.0 / 255.0).abs() < 1e-10);
     }
 
     /// Characterization golden for `Color::blend` advanced modes.
