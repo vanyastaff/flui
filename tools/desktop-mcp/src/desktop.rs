@@ -586,9 +586,9 @@ impl Registry {
                         why: "it has closed".into(),
                     });
                 }
-                // On Windows every process has a start time unless it could
-                // not be read: then nothing tells it from a successor.
-                if issued.started.is_none() && cfg!(target_os = "windows") {
+                // Without an owner lifetime, recycled native ids cannot
+                // establish the issued identity on any platform.
+                if issued.started.is_none() {
                     return Err(ToolError::NotSupported(format!(
                         "window w{n} belongs to process {}, which cannot be identified (its start time cannot be read), so it is not a safety target",
                         issued.pid
@@ -976,7 +976,7 @@ impl Desktop {
             ScreenshotTarget::Pid(pid) => {
                 // Held to its identity like any other target: without one
                 // (macOS) a reused pid would capture another application's
-                // window, so the pid is refused and a window handle is the way.
+                // window, so only a monitor screenshot remains available.
                 let (_, bound) = self.registry.bound(TargetArg::Pid(pid))?;
                 let windows = read_while_current(
                     || self.registry.revalidate(Target::Pid(pid), bound),
@@ -1983,6 +1983,27 @@ mod tests {
             "replacement cannot be attached to the original tree"
         );
         assert_ne!(read.roots[0].window, Some(format!("w{replacement}")));
+    }
+
+    #[test]
+    fn windows_without_an_owner_lifetime_are_never_bound() {
+        let mut registry = Registry::default();
+        // The macOS backend currently supplies neither discriminator.
+        let issued = Issued {
+            hwnd: 7,
+            pid: 100,
+            started: None,
+            class: None,
+        };
+        let handle = registry.register_window(issued);
+        for _ in 0..2 {
+            let error = registry
+                .bound(TargetArg::Window(handle))
+                .expect_err("BUG: incomplete identity cannot authorize window operations");
+            assert!(matches!(error, ToolError::NotSupported(_)));
+            // An identical later owner snapshot does not prove it is the same window.
+            assert_eq!(registry.register_window(issued), handle);
+        }
     }
 
     #[test]

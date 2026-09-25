@@ -10,6 +10,17 @@ by `flui-platform`; no framework behavior, CI workflow or publishing changes.
 
 ## Repaired failure scenarios
 
+Window binding now refuses a missing owner start time on every platform. The macOS
+backend supplies neither that lifetime nor a window-class discriminator, so its listed
+handles cannot authorize window capture; monitor capture remains available. Previously
+the Windows-only refusal allowed a recycled CGWindowID with the same owner PID to pass.
+The platform-independent binding test supplies this incomplete identity and exercises
+repeated observations. It runs on Windows and is type-checked for macOS; reverting the
+platform restriction would only be exposed by executing it on macOS, which was not
+available here. `cargo xtask check-changed --base 6df06ac0e` passed: 182 tests, ten skipped,
+formatting, strict rustdoc and Windows/macOS clippy. No live CGWindowID reuse was tested.
+
+
 Fresh value snapshots now replace the earlier text/password role using their own
 tri-state password flag before consuming a value. Direct-window input checks compare
 the bound PID as well as the HWND against both foreground and point observations.

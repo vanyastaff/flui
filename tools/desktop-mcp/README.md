@@ -195,7 +195,8 @@ OS state checks and event delivery are still separate operations.
   something else is `gone`, before every event. A pid this session never handed out is
   `unknown_handle`; a process whose start time the OS cannot report (macOS for now; on
   Windows a protected process) is not a safety target, and `list_windows` says so with
-  `targetable: false`.
+  `targetable: false`. Window-handle operations, including screenshots, also refuse
+  these incomplete identities. On macOS only monitor screenshots are currently available.
 - Keys and text also require the window holding keyboard focus inside the target to belong
   to the target's process: an embedded browser or preview pane of another process with focus
   refuses them (`focus_elsewhere`), with advice to move focus to one of the target's own
@@ -262,7 +263,7 @@ on Unix.
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
-| `list_windows`, `screenshot` | yes (xcap) | built (xcap); type-checked in CI (clippy), never run | not yet |
+| `list_windows`, `screenshot` | yes (xcap) | list and monitor capture built (xcap); window capture refused; type-checked in CI, never run | not yet |
 | Input (`click`, `key`, …) | yes (enigo; pointer moves via `SetCursorPos`) | refused for now: target checks and the physical-button check for `move_mouse` are unavailable; type-checked in CI, never run | not yet |
 | Accessibility tools | yes (UI Automation) | "not supported on this OS yet (UIA only)" | same |
 | `activate_window`, `wait_for_window` | yes | not supported yet | not supported yet |
