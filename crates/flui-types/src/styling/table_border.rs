@@ -203,4 +203,66 @@ mod tests {
         assert!(!border.is_uniform());
         assert!(border.outer_border().is_uniform());
     }
+
+    fn sides(b: &TableBorder) -> [BorderSide<Pixels>; 6] {
+        [
+            b.top,
+            b.right,
+            b.bottom,
+            b.left,
+            b.horizontal_inside,
+            b.vertical_inside,
+        ]
+    }
+
+    #[test]
+    fn new_places_each_side() {
+        let s: [BorderSide<Pixels>; 6] = std::array::from_fn(|i| solid(i as f32 + 1.0));
+        let b = TableBorder::new(s[0], s[1], s[2], s[3], s[4], s[5]);
+        assert_eq!(sides(&b), s);
+        assert_eq!(b.border_radius, BorderRadius::ZERO);
+        let rounded = b.with_border_radius(BorderRadius::circular(px(4.0)));
+        assert_eq!(rounded.border_radius, BorderRadius::circular(px(4.0)));
+        let outer = b.outer_border();
+        assert_eq!(
+            [outer.top, outer.right, outer.bottom, outer.left],
+            [Some(s[0]), Some(s[1]), Some(s[2]), Some(s[3])]
+        );
+    }
+
+    /// Uniform means every side, inside ones included, shares color, width
+    /// and style; any one side differing in any one of them breaks it.
+    #[test]
+    fn is_uniform_checks_every_side_and_attribute() {
+        let base = solid(1.0);
+        assert!(TableBorder::all(base).is_uniform());
+        assert!(TableBorder::NONE.is_uniform());
+        // Neither the radius nor a side's stroke alignment is part of it.
+        assert!(
+            TableBorder::all(base)
+                .with_border_radius(BorderRadius::circular(px(2.0)))
+                .is_uniform()
+        );
+        let variants = [
+            base.with_color(Color::RED),
+            base.with_width(px(2.0)),
+            base.with_style(BorderStyle::None),
+        ];
+        for odd in variants {
+            for i in 0..6 {
+                let mut s = [base; 6];
+                s[i] = odd;
+                let b = TableBorder::new(s[0], s[1], s[2], s[3], s[4], s[5]);
+                assert!(!b.is_uniform(), "side {i}: {odd:?}");
+            }
+        }
+        let mut aligned = [base; 6];
+        aligned[3] = base.with_stroke_alignment(1.0);
+        assert!(
+            TableBorder::new(
+                aligned[0], aligned[1], aligned[2], aligned[3], aligned[4], aligned[5]
+            )
+            .is_uniform()
+        );
+    }
 }
