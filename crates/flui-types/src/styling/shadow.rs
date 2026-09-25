@@ -113,31 +113,20 @@ where
         }
     }
 
-    /// Linearly interpolate between two lists of shadows.
-    ///
-    /// If the lists are different lengths, the shorter list is padded with
-    /// transparent shadows at offset zero with zero blur.
+    /// Linearly interpolate between two lists of shadows (Flutter's
+    /// `Shadow.lerpList`): pairs lerp; a shadow only one list has keeps its
+    /// color and has its geometry scaled by `1 - t` (from `a`) or `t` (from
+    /// `b`).
     #[inline]
     pub fn lerp_list(a: &[Self], b: &[Self], t: f32) -> Vec<Self> {
         let t = t.clamp(0.0, 1.0);
-        let max_len = a.len().max(b.len());
-        let mut result = Vec::with_capacity(max_len);
-
-        for i in 0..max_len {
-            let a_shadow = a.get(i).copied().unwrap_or(Self {
-                color: Color::TRANSPARENT,
-                offset: Offset::new(T::zero(), T::zero()),
-                blur_radius: T::zero(),
-            });
-            let b_shadow = b.get(i).copied().unwrap_or(Self {
-                color: Color::TRANSPARENT,
-                offset: Offset::new(T::zero(), T::zero()),
-                blur_radius: T::zero(),
-            });
-            result.push(Self::lerp(a_shadow, b_shadow, t));
-        }
-
-        result
+        let common = a.len().min(b.len());
+        a.iter()
+            .zip(b)
+            .map(|(a_shadow, b_shadow)| Self::lerp(*a_shadow, *b_shadow, t))
+            .chain(a[common..].iter().map(|extra| extra.scale(1.0 - t)))
+            .chain(b[common..].iter().map(|extra| extra.scale(t)))
+            .collect()
     }
 
     /// Scales the shadow's offset and blur radius by the given factor.
@@ -339,32 +328,20 @@ where
         }
     }
 
-    /// Linearly interpolate between two lists of box shadows.
+    /// Linearly interpolate between two lists of box shadows (Flutter's
+    /// `BoxShadow.lerpList`): pairs lerp; a shadow only one list has keeps
+    /// its color and has its geometry scaled by `1 - t` (from `a`) or `t`
+    /// (from `b`).
     #[inline]
     pub fn lerp_list(a: &[Self], b: &[Self], t: f32) -> Vec<Self> {
         let t = t.clamp(0.0, 1.0);
-        let max_len = a.len().max(b.len());
-        let mut result = Vec::with_capacity(max_len);
-
-        for i in 0..max_len {
-            let a_shadow = a.get(i).copied().unwrap_or(Self {
-                color: Color::TRANSPARENT,
-                offset: Offset::new(T::zero(), T::zero()),
-                blur_radius: T::zero(),
-                spread_radius: T::zero(),
-                inset: false,
-            });
-            let b_shadow = b.get(i).copied().unwrap_or(Self {
-                color: Color::TRANSPARENT,
-                offset: Offset::new(T::zero(), T::zero()),
-                blur_radius: T::zero(),
-                spread_radius: T::zero(),
-                inset: false,
-            });
-            result.push(Self::lerp(a_shadow, b_shadow, t));
-        }
-
-        result
+        let common = a.len().min(b.len());
+        a.iter()
+            .zip(b)
+            .map(|(a_shadow, b_shadow)| Self::lerp(*a_shadow, *b_shadow, t))
+            .chain(a[common..].iter().map(|extra| extra.scale(1.0 - t)))
+            .chain(b[common..].iter().map(|extra| extra.scale(t)))
+            .collect()
     }
 
     /// Scales the shadow's offset, blur radius, and spread radius by the given
@@ -568,5 +545,80 @@ mod tests {
         assert_eq!(box_shadow.offset, Offset::new(px(5.0), px(6.0)));
         assert_eq!(box_shadow.blur_radius, px(7.0));
         assert_eq!(box_shadow.spread_radius, px(0.0));
+    }
+
+    fn boxed(color: Color, v: f32) -> BoxShadow<Pixels> {
+        BoxShadow::new(color, Offset::new(px(v), px(v)), px(v), px(v))
+    }
+
+    fn plain(color: Color, v: f32) -> Shadow<Pixels> {
+        Shadow::new(color, Offset::new(px(v), px(v)), px(v))
+    }
+
+    /// Pairs lerp; a shadow only one list has keeps its color and scales
+    /// by `1 - t` (from `a`) or `t` (from `b`), as Flutter's `lerpList`.
+    #[test]
+    fn lerp_lists_scale_the_unpaired_shadows() {
+        let a = [boxed(Color::BLACK, 0.0), boxed(Color::RED, 8.0)];
+        let b = [boxed(Color::WHITE, 4.0)];
+        let paired = BoxShadow::lerp(a[0], b[0], 0.25);
+        assert_eq!(
+            BoxShadow::lerp_list(&a, &b, 0.25),
+            vec![paired, boxed(Color::RED, 6.0)]
+        );
+        assert_eq!(
+            BoxShadow::lerp_list(&b, &a, 0.25).last(),
+            Some(&boxed(Color::RED, 2.0))
+        );
+        assert_eq!(BoxShadow::lerp_list(&[], &b, 2.0), vec![b[0]]);
+
+        let a = [plain(Color::BLACK, 0.0), plain(Color::RED, 8.0)];
+        let b = [plain(Color::WHITE, 4.0)];
+        assert_eq!(Shadow::lerp_list(&a, &b, 0.25)[1], plain(Color::RED, 6.0));
+        assert_eq!(Shadow::lerp_list(&b, &a, 0.25)[1], plain(Color::RED, 2.0));
+        assert!(Shadow::<Pixels>::lerp_list(&[], &[], 0.5).is_empty());
+    }
+
+    /// `t` clamps, colors lerp, and `inset` switches at exactly 0.5.
+    #[test]
+    fn box_shadow_lerp_endpoints_color_and_inset() {
+        let a = boxed(Color::rgb(0, 0, 0), 0.0);
+        let b = boxed(Color::rgb(200, 100, 50), 4.0).with_inset(true);
+        assert_eq!(BoxShadow::lerp(a, b, -1.0), a);
+        assert_eq!(BoxShadow::lerp(a, b, 2.0), b);
+        let mid = BoxShadow::lerp(a, b, 0.5);
+        assert_eq!((mid.color, mid.inset), (Color::rgb(100, 50, 25), true));
+        assert!(!BoxShadow::lerp(a, b, 0.25).inset);
+        assert_eq!(
+            Shadow::lerp(plain(Color::BLACK, 0.0), plain(Color::WHITE, 4.0), 3.0),
+            plain(Color::WHITE, 4.0)
+        );
+        assert_eq!(
+            Shadow::lerp(
+                plain(Color::rgb(0, 0, 0), 0.0),
+                plain(Color::rgb(200, 100, 50), 4.0),
+                0.5
+            )
+            .color,
+            Color::rgb(100, 50, 25)
+        );
+    }
+
+    /// Flutter's `radius * 0.57735 + 0.5`.
+    #[test]
+    fn blur_sigma_and_quality() {
+        assert!((Shadow::<Pixels>::convert_radius_to_sigma(px(10.0)) - 6.2735).abs() < 1e-4);
+        assert!((plain(Color::BLACK, 10.0).blur_sigma() - 6.2735).abs() < 1e-4);
+        assert!((boxed(Color::BLACK, 10.0).blur_sigma() - 6.2735).abs() < 1e-4);
+        assert_eq!(ShadowQuality::default(), ShadowQuality::Medium);
+        assert_eq!(
+            BoxShadow::<Pixels>::default(),
+            BoxShadow::new(Color::BLACK, Offset::ZERO, px(0.0), px(0.0))
+        );
+        assert_eq!(
+            Shadow::<Pixels>::default(),
+            Shadow::new(Color::BLACK, Offset::ZERO, px(0.0))
+        );
+        assert!(BoxShadow::inner(Color::BLACK, Offset::ZERO, px(1.0), px(1.0)).inset);
     }
 }
