@@ -233,8 +233,11 @@ impl NotchedShape for CircularNotchedRectangle {
             let steps = 16;
             for i in 0..=steps {
                 let angle = std::f32::consts::PI + (i as f32 / steps as f32) * std::f32::consts::PI;
+                // sin is <= 0 over [π, 2π]; subtracting it moves down (y grows
+                // downward), so the arc dips into the host, deepest under the
+                // guest's center, and meets the top edge at both ends.
                 let x = guest_center_x + notch_radius * angle.cos();
-                let y = host.top() + notch_radius * (1.0 + angle.sin());
+                let y = host.top() - notch_radius * angle.sin();
                 path.push(Offset::new(x, y));
             }
 
@@ -298,5 +301,118 @@ impl<T: NotchedShape> NotchedShape for AutomaticNotchedShape<T> {
         });
 
         self.inner.get_outer_path(host, scaled_guest)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `(anti-aliased, saves layer, clips, efficient)` per variant, and the
+    /// `ClipBehavior` -> `Clip` mapping.
+    #[test]
+    fn clip_predicates_and_conversion() {
+        for (behavior, clip, expected) in [
+            (ClipBehavior::None, Clip::None, (false, false, false, true)),
+            (
+                ClipBehavior::HardEdge,
+                Clip::HardEdge,
+                (false, false, true, true),
+            ),
+            (
+                ClipBehavior::AntiAlias,
+                Clip::AntiAlias,
+                (true, false, true, false),
+            ),
+            (
+                ClipBehavior::AntiAliasWithSaveLayer,
+                Clip::AntiAliasWithSaveLayer,
+                (true, true, true, false),
+            ),
+        ] {
+            let got = (
+                clip.is_anti_aliased(),
+                clip.saves_layer(),
+                clip.clips(),
+                clip.is_efficient(),
+            );
+            assert_eq!(got, expected, "{clip:?}");
+            assert_eq!(behavior.to_clip(), clip);
+            assert_eq!(Clip::from(behavior), clip);
+            assert_eq!(
+                (behavior.is_anti_aliased(), behavior.clips()),
+                (expected.0, expected.2)
+            );
+        }
+    }
+
+    fn host() -> Rect<Pixels> {
+        Rect::from_ltrb(px(0.0), px(100.0), px(400.0), px(160.0))
+    }
+
+    #[test]
+    fn notched_rectangle_without_a_guest_is_the_host() {
+        let path = CircularNotchedRectangle::new().get_outer_path(host(), None);
+        let corners = [(0.0, 100.0), (400.0, 100.0), (400.0, 160.0), (0.0, 160.0)];
+        let expected: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| Offset::new(px(x), px(y)))
+            .collect();
+        assert_eq!(path, expected);
+    }
+
+    /// A 40px guest centered on the top edge at x = 200 with the default 4px
+    /// margin cuts a 24px-radius notch: it leaves the top edge at 176, dips
+    /// to 24px below it under the guest's center, and rejoins at 224. A
+    /// guest far from the edge leaves no notch.
+    #[test]
+    fn notch_dips_into_the_host_under_the_guest() {
+        let guest = Rect::from_ltrb(px(180.0), px(80.0), px(220.0), px(120.0));
+        let path = CircularNotchedRectangle::new().get_outer_path(host(), Some(guest));
+        let notch = &path[2..path.len() - 4];
+        let close = |a: Offset<Pixels>, x: f32, y: f32| {
+            (a.dx.0 - x).abs() < 1e-3 && (a.dy.0 - y).abs() < 1e-3
+        };
+        assert!(close(notch[0], 176.0, 100.0), "{:?}", notch[0]);
+        assert!(
+            close(notch[notch.len() / 2], 200.0, 124.0),
+            "{:?}",
+            notch[notch.len() / 2]
+        );
+        assert!(
+            close(notch[notch.len() - 1], 224.0, 100.0),
+            "{:?}",
+            notch[notch.len() - 1]
+        );
+        assert!(
+            notch.iter().all(|p| p.dy.0 >= 100.0 - 1e-3),
+            "notch rises above the edge"
+        );
+
+        let far = Rect::from_ltrb(px(180.0), px(0.0), px(220.0), px(40.0));
+        assert_eq!(
+            CircularNotchedRectangle::new()
+                .get_outer_path(host(), Some(far))
+                .len(),
+            4
+        );
+        assert_eq!(CircularNotchedRectangle::with_margin(9.0).margin, 9.0);
+    }
+
+    /// `AutomaticNotchedShape` scales the guest about its center before
+    /// handing it on.
+    #[test]
+    fn automatic_notched_shape_scales_the_guest() {
+        let guest = Rect::from_ltrb(px(190.0), px(90.0), px(210.0), px(110.0));
+        let doubled = AutomaticNotchedShape::with_scale(CircularNotchedRectangle::new(), 2.0);
+        let direct = CircularNotchedRectangle::new().get_outer_path(
+            host(),
+            Some(Rect::from_ltrb(px(180.0), px(80.0), px(220.0), px(120.0))),
+        );
+        assert_eq!(doubled.get_outer_path(host(), Some(guest)), direct);
+        assert_eq!(
+            AutomaticNotchedShape::new(CircularNotchedRectangle::new()).scale,
+            1.0
+        );
     }
 }
