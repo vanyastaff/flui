@@ -500,3 +500,233 @@ impl GradientTransform for GradientRotation {
         [[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Values are exact in binary so endpoints and midpoints compare exactly.
+    fn two() -> Vec<Color> {
+        vec![Color::rgb(0, 0, 0), Color::rgb(200, 100, 50)]
+    }
+    fn two_b() -> Vec<Color> {
+        vec![Color::rgb(100, 50, 250), Color::rgb(0, 0, 0)]
+    }
+
+    fn linear(colors: Vec<Color>, stops: [f32; 2], tile_mode: TileMode) -> LinearGradient {
+        LinearGradient::new(
+            Alignment::TOP_LEFT,
+            Alignment::CENTER,
+            colors,
+            Some(stops.to_vec()),
+            tile_mode,
+        )
+    }
+
+    fn radial(radius: f32, stops: [f32; 2], focal: f32) -> RadialGradient {
+        RadialGradient::new(
+            Alignment::new(focal, 0.0),
+            radius,
+            if focal == 0.0 { two() } else { two_b() },
+            Some(stops.to_vec()),
+            if focal == 0.0 {
+                TileMode::Clamp
+            } else {
+                TileMode::Mirror
+            },
+            Some(Alignment::new(focal, focal)),
+            Some(focal / 2.0),
+        )
+    }
+
+    fn sweep(start: f32, end: f32) -> SweepGradient {
+        SweepGradient::new(
+            Alignment::CENTER,
+            two(),
+            Some(vec![0.0, 1.0]),
+            TileMode::Repeat,
+            start,
+            end,
+        )
+    }
+
+    #[test]
+    fn linear_lerp() {
+        let a = linear(two(), [0.0, 0.5], TileMode::Clamp);
+        let b = LinearGradient {
+            begin: Alignment::BOTTOM_RIGHT,
+            ..linear(two_b(), [0.5, 1.0], TileMode::Mirror)
+        };
+        assert_eq!(LinearGradient::lerp(&a, &b, 0.0), Some(a.clone()));
+        assert_eq!(LinearGradient::lerp(&a, &b, 1.0), Some(b.clone()));
+        let mid = LinearGradient::lerp(&a, &b, 0.5).unwrap();
+        assert_eq!(mid.begin, Alignment::CENTER);
+        assert_eq!(
+            mid.colors,
+            vec![Color::rgb(50, 25, 125), Color::rgb(100, 50, 25)]
+        );
+        assert_eq!(mid.stops, Some(vec![0.25, 0.75]));
+        // The tile mode switches to `b`'s at exactly t = 0.5.
+        assert_eq!(mid.tile_mode, TileMode::Mirror);
+        assert_eq!(
+            LinearGradient::lerp(&a, &b, 0.25).unwrap().tile_mode,
+            TileMode::Clamp
+        );
+        // t is clamped.
+        assert_eq!(LinearGradient::lerp(&a, &b, 3.0), Some(b.clone()));
+    }
+
+    #[test]
+    fn radial_lerp() {
+        let (a, b) = (radial(1.0, [0.0, 0.5], 0.0), radial(3.0, [0.5, 1.0], 1.0));
+        assert_eq!(RadialGradient::lerp(&a, &b, 0.0), Some(a.clone()));
+        assert_eq!(RadialGradient::lerp(&a, &b, 1.0), Some(b.clone()));
+        let mid = RadialGradient::lerp(&a, &b, 0.5).unwrap();
+        assert_eq!(mid.center, Alignment::new(0.5, 0.0));
+        assert_eq!(mid.radius, 2.0);
+        assert_eq!(mid.stops, Some(vec![0.25, 0.75]));
+        assert_eq!(mid.focal, Some(Alignment::new(0.5, 0.5)));
+        assert_eq!(mid.focal_radius, Some(0.25));
+        assert_eq!(mid.tile_mode, TileMode::Mirror);
+        assert_eq!(
+            RadialGradient::lerp(&a, &b, 0.25).unwrap().tile_mode,
+            TileMode::Clamp
+        );
+        // A focal point or radius on only one side is dropped.
+        let unfocused = RadialGradient {
+            focal: None,
+            focal_radius: None,
+            ..b.clone()
+        };
+        let mid = RadialGradient::lerp(&a, &unfocused, 0.5).unwrap();
+        assert_eq!((mid.focal, mid.focal_radius), (None, None));
+    }
+
+    #[test]
+    fn sweep_lerp() {
+        let (a, b) = (sweep(0.0, 2.0), sweep(1.0, 4.0));
+        assert_eq!(SweepGradient::lerp(&a, &b, 0.0), Some(a.clone()));
+        assert_eq!(SweepGradient::lerp(&a, &b, 1.0), Some(b.clone()));
+        let mid = SweepGradient::lerp(&a, &b, 0.5).unwrap();
+        assert_eq!((mid.start_angle, mid.end_angle), (0.5, 3.0));
+    }
+
+    /// Stops survive only when both sides have the same number; colors
+    /// must match in count or there is no lerp at all.
+    #[test]
+    fn lerp_requires_matching_lengths() {
+        let a = linear(two(), [0.0, 0.5], TileMode::Clamp);
+        let three = linear(vec![Color::BLACK; 3], [0.0, 0.5], TileMode::Clamp);
+        assert_eq!(LinearGradient::lerp(&a, &three, 0.5), None);
+        let other_stops = LinearGradient {
+            stops: Some(vec![0.0, 0.5, 1.0]),
+            ..a.clone()
+        };
+        assert_eq!(
+            LinearGradient::lerp(&a, &other_stops, 0.5).unwrap().stops,
+            None
+        );
+        let no_stops = LinearGradient {
+            stops: None,
+            ..a.clone()
+        };
+        assert_eq!(
+            LinearGradient::lerp(&a, &no_stops, 0.5).unwrap().stops,
+            None
+        );
+
+        let r3 = RadialGradient {
+            colors: vec![Color::BLACK; 3],
+            ..radial(1.0, [0.0, 1.0], 0.0)
+        };
+        assert_eq!(
+            RadialGradient::lerp(&radial(1.0, [0.0, 1.0], 0.0), &r3, 0.5),
+            None
+        );
+        let s3 = SweepGradient {
+            colors: vec![Color::BLACK; 3],
+            ..sweep(0.0, 1.0)
+        };
+        assert_eq!(SweepGradient::lerp(&sweep(0.0, 1.0), &s3, 0.5), None);
+    }
+
+    #[test]
+    fn gradient_dispatch() {
+        let l = Gradient::Linear(linear(two(), [0.0, 0.5], TileMode::Clamp));
+        let r = Gradient::Radial(radial(1.0, [0.0, 0.5], 0.0));
+        let s = Gradient::Sweep(sweep(0.0, 1.0));
+        for g in [&l, &r, &s] {
+            assert_eq!(g.colors(), two().as_slice());
+            assert_eq!(Gradient::lerp(g, g, 0.5).as_ref(), Some(g));
+        }
+        assert_eq!(l.stops(), Some([0.0, 0.5].as_slice()));
+        assert_eq!(r.stops(), Some([0.0, 0.5].as_slice()));
+        assert_eq!(s.stops(), Some([0.0, 1.0].as_slice()));
+        assert_eq!(Gradient::lerp(&l, &r, 0.5), None);
+        assert_eq!(Gradient::lerp(&r, &s, 0.5), None);
+        assert_eq!(Gradient::lerp(&s, &l, 0.5), None);
+    }
+
+    #[test]
+    fn constructors() {
+        let c = two();
+        let geometry = |g: LinearGradient| (g.begin, g.end, g.stops, g.tile_mode);
+        let clamp = TileMode::Clamp;
+        assert_eq!(
+            geometry(LinearGradient::horizontal(c.clone())),
+            (Alignment::CENTER_LEFT, Alignment::CENTER_RIGHT, None, clamp)
+        );
+        assert_eq!(
+            geometry(LinearGradient::vertical(c.clone())),
+            (Alignment::TOP_CENTER, Alignment::BOTTOM_CENTER, None, clamp)
+        );
+        assert_eq!(
+            geometry(LinearGradient::diagonal(c.clone())),
+            (Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT, None, clamp)
+        );
+        let simple = LinearGradient::simple(
+            Color::RED,
+            Color::BLUE,
+            Alignment::TOP_LEFT,
+            Alignment::CENTER,
+        );
+        assert_eq!(
+            simple,
+            LinearGradient::new(
+                Alignment::TOP_LEFT,
+                Alignment::CENTER,
+                vec![Color::RED, Color::BLUE],
+                None,
+                clamp
+            )
+        );
+
+        assert_eq!(
+            RadialGradient::centered(0.25, c.clone()),
+            RadialGradient::new(Alignment::CENTER, 0.25, c.clone(), None, clamp, None, None)
+        );
+        assert_eq!(RadialGradient::circular(c.clone()).radius, 0.5);
+        assert_eq!(
+            SweepGradient::centered(c.clone()),
+            SweepGradient::new(
+                Alignment::CENTER,
+                c,
+                None,
+                clamp,
+                0.0,
+                std::f32::consts::TAU
+            )
+        );
+    }
+
+    #[test]
+    fn rotation_matrix() {
+        let m = GradientRotation::new(std::f32::consts::FRAC_PI_2).transform();
+        let expected = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+        for (row, want) in m.iter().zip(expected) {
+            for (x, w) in row.iter().zip(want) {
+                assert!((x - w).abs() < 1e-6, "{m:?}");
+            }
+        }
+    }
+}
