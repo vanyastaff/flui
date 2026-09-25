@@ -13,6 +13,8 @@
 
 #[path = "color_approx_eq_tests.rs"]
 mod color_approx_eq_tests;
+#[path = "color_blend_tests.rs"]
+mod color_blend_tests;
 #[path = "color_operations_tests.rs"]
 mod color_operations_tests;
 #[path = "color_property_tests.rs"]

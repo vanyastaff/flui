@@ -1370,7 +1370,6 @@ impl std::error::Error for ParseColorError {}
 mod tests {
     use super::*;
     use crate::geometry::ApproxEq;
-    use crate::painting::BlendMode;
 
     // The SIMD twins compile on every x86_64/aarch64 build but `lerp` and
     // `blend_over` only call them under the `simd` feature, which the default
@@ -1417,128 +1416,6 @@ mod tests {
                 prop_assert_eq!(blend_over_simd(src, dst), src.blend_over_scalar(dst));
             }
         }
-    }
-
-    /// Assert each RGBA channel of `actual` is within `tol` units of `expected`.
-    #[track_caller]
-    fn assert_blend_close(actual: Color, expected: Color, tol: i32) {
-        let diff = |a: u8, b: u8| (i32::from(a) - i32::from(b)).abs();
-        assert!(
-            diff(actual.r, expected.r) <= tol
-                && diff(actual.g, expected.g) <= tol
-                && diff(actual.b, expected.b) <= tol
-                && diff(actual.a, expected.a) <= tol,
-            "blend mismatch: actual={actual:?} expected={expected:?} tol={tol}"
-        );
-    }
-
-    #[test]
-    fn blend_srcover_matches_blend_over() {
-        // The general `blend` SrcOver path must agree with the dedicated
-        // (SIMD-accelerated) `blend_over` across opaque, transparent, and
-        // semi-transparent sources.
-        let backdrop = Color::rgba(20, 60, 120, 255);
-        for src in [
-            Color::rgba(255, 0, 0, 255),
-            Color::rgba(255, 0, 0, 0),
-            Color::rgba(0, 200, 50, 128),
-            Color::rgba(255, 255, 255, 64),
-        ] {
-            assert_blend_close(
-                src.blend(backdrop, BlendMode::SrcOver),
-                src.blend_over(backdrop),
-                2,
-            );
-        }
-    }
-
-    #[test]
-    fn blend_porter_duff_basics() {
-        let src = Color::rgba(255, 0, 0, 255);
-        let dst = Color::rgba(0, 0, 255, 255);
-        // Clear drops everything.
-        assert_blend_close(src.blend(dst, BlendMode::Clear), Color::TRANSPARENT, 0);
-        // Src keeps only the source; Dst keeps only the destination.
-        assert_blend_close(src.blend(dst, BlendMode::Src), src, 1);
-        assert_blend_close(src.blend(dst, BlendMode::Dst), dst, 1);
-        // SrcOver with an opaque source fully replaces the destination.
-        assert_blend_close(src.blend(dst, BlendMode::SrcOver), src, 1);
-    }
-
-    #[test]
-    fn blend_srcin_uses_destination_alpha() {
-        // SrcIn keeps the source color but clipped to the destination's alpha
-        // shape — the canonical icon-tint mode.
-        let red = Color::rgba(255, 0, 0, 255);
-        // Over an opaque destination → solid source color.
-        assert_blend_close(
-            red.blend(Color::rgba(0, 0, 255, 255), BlendMode::SrcIn),
-            red,
-            1,
-        );
-        // Over a fully transparent destination → nothing (alpha 0).
-        assert_blend_close(
-            red.blend(Color::rgba(0, 0, 255, 0), BlendMode::SrcIn),
-            Color::TRANSPARENT,
-            1,
-        );
-    }
-
-    #[test]
-    fn blend_modulate_white_is_identity() {
-        // Modulate (premultiplied component product) by white returns the
-        // destination unchanged; by black it returns black.
-        let dst = Color::rgba(100, 150, 200, 255);
-        assert_blend_close(Color::WHITE.blend(dst, BlendMode::Modulate), dst, 1);
-        assert_blend_close(
-            Color::BLACK.blend(dst, BlendMode::Modulate),
-            Color::rgba(0, 0, 0, 255),
-            1,
-        );
-    }
-
-    #[test]
-    fn blend_plus_saturates() {
-        // Plus is additive and clamps at the channel ceiling.
-        let result =
-            Color::rgba(200, 0, 0, 255).blend(Color::rgba(100, 0, 0, 255), BlendMode::Plus);
-        assert_blend_close(result, Color::rgba(255, 0, 0, 255), 1);
-    }
-
-    #[test]
-    fn blend_multiply_opaque_is_channel_product() {
-        // With opaque source and destination the separable composite reduces to
-        // B(cb, cs); for Multiply that is the per-channel product.
-        let result = Color::rgba(255, 128, 0, 255)
-            .blend(Color::rgba(128, 255, 255, 255), BlendMode::Multiply);
-        assert_blend_close(result, Color::rgba(128, 128, 0, 255), 2);
-    }
-
-    #[test]
-    fn blend_difference_opaque() {
-        // Difference = |cb - cs| per channel for opaque inputs.
-        let result =
-            Color::rgba(255, 0, 100, 255).blend(Color::rgba(0, 0, 200, 255), BlendMode::Difference);
-        // |0-255|=255, |0-0|=0, |200-100|=100.
-        assert_blend_close(result, Color::rgba(255, 0, 100, 255), 2);
-    }
-
-    #[test]
-    fn blend_luminosity_takes_source_luma_dest_chroma() {
-        // Luminosity keeps the destination hue/saturation but the source's luma.
-        // A grey source against a saturated destination yields a desaturated-
-        // toward-grey destination at the source's luminosity. Sanity-check that
-        // the output luminosity tracks the grey source rather than the dest.
-        let src = Color::rgba(128, 128, 128, 255);
-        let dst = Color::rgba(200, 50, 50, 255);
-        let result = src.blend(dst, BlendMode::Luminosity);
-        let result_lum =
-            0.3 * result.red_f32() + 0.59 * result.green_f32() + 0.11 * result.blue_f32();
-        // Source luma = 0.502; allow rounding slack.
-        assert!(
-            (result_lum - 0.502).abs() < 0.04,
-            "luminosity blend should adopt the source luma; got {result_lum} from {result:?}"
-        );
     }
 
     #[test]
