@@ -10,6 +10,23 @@ by `flui-platform`; no framework behavior, CI workflow or publishing changes.
 
 ## Repaired failure scenarios
 
+Fresh value snapshots now replace the earlier text/password role using their own
+tri-state password flag before consuming a value. Direct-window input checks compare
+the bound PID as well as the HWND against both foreground and point observations.
+Tree root enrichment validates only roots actually returned by the provider, allowing
+an omitted closed popup without discarding the surviving process tree; the original
+target is still revalidated. A child rejected by the Windows job remains private and
+eligible for shutdown termination retries if the first kill fails, and the error
+reports both failures without claiming successful termination.
+
+`cargo xtask check-changed --base 3676ab0ce` passed: 181 tests, ten skipped,
+formatting, strict rustdoc and Windows/macOS clippy. Six native Windows tests passed.
+New regressions use the production role-consumption, window-check and root-enrichment
+helpers with injected observations; failed containment cleanup uses a real child and
+an injected termination failure, then verifies shutdown reaps it. These are not live
+HWND-reuse, password-provider mutation or Windows Job Object failure experiments.
+
+
 UIA role refinement treats both password and dialog discriminants as tri-state values.
 A missing or malformed `IsDialog` yields an unknown, unmatchable role rather than an
 ordinary window, including providers that cannot cache this newer property. The shared

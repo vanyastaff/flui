@@ -96,15 +96,17 @@ fn covered((x, y): (i32, i32), what: &str, under: Under, name: Namer<'_>) -> Too
 /// the OS says is there (`None` where it cannot say). A window target admits
 /// only that window at a point; a process target any of its windows (its own
 /// popups). Either way the deepest window at the point, the one a click
-/// reaches, must belong to the same process.
-pub fn verify(
+/// reaches, must belong to the same process. Window observations must retain
+/// the bound owner too: the native id can be reused after revalidation.
+fn verify(
     target: Target,
     foreground: Option<&Foreground>,
     points: &[((i32, i32), Option<Under>)],
     name: Namer<'_>,
+    bound: Binding,
 ) -> ToolResult<()> {
     let owns = foreground.is_some_and(|fg| match target {
-        Target::Window(id, _) => fg.id == id,
+        Target::Window(id, _) => fg.id == id && Some(fg.pid) == bound.window_pid,
         Target::Pid(pid) => fg.pid == pid,
     });
     if !owns {
@@ -114,7 +116,7 @@ pub fn verify(
         let under = under_or_refuse(point, under)?;
         let admitted = under.inner_pid == under.pid
             && match target {
-                Target::Window(id, _) => under.id == id,
+                Target::Window(id, _) => under.id == id && Some(under.pid) == bound.window_pid,
                 Target::Pid(pid) => under.pid == pid,
             };
         if !admitted {
@@ -1238,7 +1240,7 @@ impl Desktop {
             // Keys and text: they go to the focused window, which must be
             // the target's process too; the focus is read on the very
             // window just checked.
-            verify(target, fg.as_ref(), &[], &name)?;
+            verify(target, fg.as_ref(), &[], &name, bound)?;
             let focus = match &fg {
                 Some(fg) => os::focus(fg.id)?,
                 None => Focus::Unknown,
@@ -1249,7 +1251,7 @@ impl Desktop {
             .iter()
             .map(|&(x, y)| ((x, y), os::window_at(x, y)))
             .collect();
-        verify(target, fg.as_ref(), &points, &name)
+        verify(target, fg.as_ref(), &points, &name, bound)
     }
 
     fn check_element(
@@ -1673,16 +1675,14 @@ fn attach_tree_windows(
 ) -> ToolResult<()> {
     for root in &mut read.roots {
         if let Some(hwnd) = root.native_window {
-            let (handle, _) = held.get(&hwnd).ok_or_else(|| {
+            let &(handle, binding) = held.get(&hwnd).ok_or_else(|| {
                 ToolError::Busy(
                     "the provider returned a tree window whose original identity is unknown".into(),
                 )
             })?;
-            root.window = Some(Registry::handle(*handle));
+            validate(Target::Window(hwnd, handle), binding)?;
+            root.window = Some(Registry::handle(handle));
         }
-    }
-    for (&hwnd, &(handle, binding)) in held {
-        validate(Target::Window(hwnd, handle), binding)?;
     }
     Ok(())
 }
@@ -1983,6 +1983,40 @@ mod tests {
             "replacement cannot be attached to the original tree"
         );
         assert_ne!(read.roots[0].window, Some(format!("w{replacement}")));
+    }
+
+    #[test]
+    fn root_enrichment_ignores_windows_omitted_by_the_provider() {
+        let original = Issued {
+            hwnd: 7,
+            pid: 100,
+            started: Some(123),
+            class: Some(1),
+        };
+        let held = HashMap::from([(7, (1, original.binding())), (8, (2, original.binding()))]);
+        let mut node = a11y::tests_node();
+        node.native_window = Some(7);
+        let mut read = Read {
+            roots: vec![node],
+            truncated: false,
+        };
+        let mut validated = Vec::new();
+        attach_tree_windows(&mut read, &held, |target, _| {
+            validated.push(target);
+            if matches!(target, Target::Window(8, _)) {
+                return Err(ToolError::Gone {
+                    handle: "w2".into(),
+                    kind: HandleKind::Window,
+                    why: "popup closed during provider traversal".into(),
+                });
+            }
+            Ok(())
+        })
+        .expect("BUG: omitted popup cannot invalidate the surviving root");
+        assert_eq!(validated, vec![Target::Window(7, 1)]);
+        assert_eq!(read.roots[0].window.as_deref(), Some("w1"));
+        read.roots[0].native_window = Some(9);
+        assert!(attach_tree_windows(&mut read, &held, |_, _| Ok(())).is_err());
     }
 
     #[test]
@@ -2594,18 +2628,56 @@ mod tests {
     };
 
     const WINDOW: Target = Target::Window(10, 1);
+    const BOUND: Binding = Binding {
+        window_pid: Some(100),
+        started: Some(1),
+        class: Some(1),
+    };
+
+    #[test]
+    fn a_window_reused_after_binding_is_refused_by_the_final_observations() {
+        // The earlier identity check passed for window 10, owner 100.
+        // The foreground or point lookup then observes the same native id
+        // belonging to 555; comparing the id alone must not admit input.
+        let replacement = Foreground { pid: 555, ..fg() };
+        assert!(matches!(
+            verify(WINDOW, Some(&replacement), &[], &name, BOUND),
+            Err(ToolError::NotForeground { .. })
+        ));
+        let replacement = Under {
+            pid: 555,
+            inner_pid: 555,
+            ..OWN
+        };
+        assert!(matches!(
+            verify(
+                WINDOW,
+                Some(&fg()),
+                &[((5, 5), Some(replacement))],
+                &name,
+                BOUND
+            ),
+            Err(ToolError::OutsideTarget { .. })
+        ));
+        assert!(verify(WINDOW, Some(&fg()), &[((5, 5), Some(OWN))], &name, BOUND).is_ok());
+        assert!(matches!(
+            verify(WINDOW, Some(&fg()), &[], &name, Binding::default()),
+            Err(ToolError::NotForeground { .. })
+        ));
+    }
 
     #[test]
     fn refuses_when_nothing_or_something_else_is_in_front() {
         assert!(matches!(
-            verify(Target::Pid(100), None, &[], &name),
+            verify(Target::Pid(100), None, &[], &name, BOUND),
             Err(ToolError::NotForeground { .. })
         ));
         assert!(matches!(
-            verify(Target::Window(11, 2), Some(&fg()), &[], &name),
+            verify(Target::Window(11, 2), Some(&fg()), &[], &name, BOUND),
             Err(ToolError::NotForeground { .. })
         ));
-        let err = verify(Target::Pid(101), Some(&fg()), &[], &name).expect_err("BUG: refused");
+        let err =
+            verify(Target::Pid(101), Some(&fg()), &[], &name, BOUND).expect_err("BUG: refused");
         assert!(
             matches!(&err, ToolError::NotForeground { foreground: Some(f), .. } if f.window.as_deref() == Some("w1")),
             "the foreground is named by handle: {err}"
@@ -2614,9 +2686,18 @@ mod tests {
 
     #[test]
     fn accepts_the_foreground_target_by_window_or_pid() {
-        assert!(verify(WINDOW, Some(&fg()), &[], &name).is_ok());
-        assert!(verify(Target::Pid(100), Some(&fg()), &[((5, 5), Some(OWN))], &name).is_ok());
-        assert!(verify(WINDOW, Some(&fg()), &[((5, 5), Some(OWN))], &name).is_ok());
+        assert!(verify(WINDOW, Some(&fg()), &[], &name, BOUND).is_ok());
+        assert!(
+            verify(
+                Target::Pid(100),
+                Some(&fg()),
+                &[((5, 5), Some(OWN))],
+                &name,
+                BOUND
+            )
+            .is_ok()
+        );
+        assert!(verify(WINDOW, Some(&fg()), &[((5, 5), Some(OWN))], &name, BOUND).is_ok());
     }
 
     /// A pid held by another process than the one first seen under it, or
@@ -2651,7 +2732,13 @@ mod tests {
     #[test]
     fn a_point_with_nothing_known_under_it_fails_closed() {
         assert!(matches!(
-            verify(Target::Pid(100), Some(&fg()), &[((5, 5), None)], &name),
+            verify(
+                Target::Pid(100),
+                Some(&fg()),
+                &[((5, 5), None)],
+                &name,
+                BOUND
+            ),
             Err(ToolError::OutsideTarget { .. })
         ));
     }
@@ -2662,7 +2749,13 @@ mod tests {
     fn a_window_target_refuses_its_processes_other_windows() {
         let sibling = Under { id: 12, ..OWN };
         assert!(matches!(
-            verify(WINDOW, Some(&fg()), &[((5, 5), Some(sibling))], &name),
+            verify(
+                WINDOW,
+                Some(&fg()),
+                &[((5, 5), Some(sibling))],
+                &name,
+                BOUND
+            ),
             Err(ToolError::OutsideTarget { .. })
         ));
     }
@@ -2679,6 +2772,7 @@ mod tests {
             Some(&fg()),
             &[((5, 5), Some(covered))],
             &name,
+            BOUND,
         )
         .expect_err("BUG: a covered point must be refused");
         assert!(err.to_string().contains("covered"), "{err}");
@@ -2692,7 +2786,8 @@ mod tests {
                 Target::Pid(100),
                 Some(&fg()),
                 &[((5, 5), Some(own_popup))],
-                &name
+                &name,
+                BOUND
             )
             .is_ok()
         );
@@ -2707,7 +2802,7 @@ mod tests {
             ..OWN
         };
         for target in [WINDOW, Target::Pid(100)] {
-            let err = verify(target, Some(&fg()), &[((5, 5), Some(hosted))], &name)
+            let err = verify(target, Some(&fg()), &[((5, 5), Some(hosted))], &name, BOUND)
                 .expect_err("BUG: a hosted window of another process takes the click");
             assert!(err.to_string().contains("process 555"), "{err}");
         }

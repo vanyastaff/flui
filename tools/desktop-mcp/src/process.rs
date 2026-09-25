@@ -225,14 +225,7 @@ impl Children {
         // server dies hard; a child that cannot join it is ended at once.
         #[cfg(target_os = "windows")]
         if let Err(e) = job.assign(&child) {
-            let pid = child.id();
-            let mut child = child;
-            let _ = end(pid, &mut child);
-            self.lock().hold_unreaped(pid, child);
-            return Err(ToolError::NotSupported(format!(
-                "`{}` started but could not join the kill-on-exit job ({e}), so it was ended",
-                spec.program
-            )));
+            return Err(self.reject_uncontained(child, &spec.program, e, end));
         }
         let pid = child.id();
         // Through the child's own handle: the launched process's start time
@@ -297,6 +290,43 @@ impl Children {
         tracked.returned.entry(pid).or_default().insert(launch);
         tracked.pending.insert(pid);
         Ok((pid, started, launch))
+    }
+
+    /// Keeps a rejected child private until cleanup succeeds. A failed kill
+    /// must be retried at shutdown, rather than merely polled for an exit
+    /// that nobody requested successfully.
+    #[cfg(any(target_os = "windows", test))]
+    fn reject_uncontained(
+        &self,
+        mut child: Child,
+        program: &str,
+        assignment_error: impl std::fmt::Display,
+        end_child: impl FnOnce(u32, &mut Child) -> ToolResult<Killed>,
+    ) -> ToolError {
+        let pid = child.id();
+        let detail = match end_child(pid, &mut child) {
+            Ok(killed) => {
+                self.lock().hold_unreaped(pid, child);
+                format!(
+                    "process {pid} started but was not published; {}",
+                    if killed.already_exited {
+                        "it had already exited"
+                    } else {
+                        "termination was requested successfully"
+                    }
+                )
+            }
+            Err(error) => {
+                self.lock().unpublished.push((pid, child));
+                format!(
+                    "process {pid} started but was not published; ending it failed ({error}); it remains tracked for shutdown"
+                )
+            }
+        };
+        ToolError::NotSupported(format!(
+            "`{program}` started but could not join the kill-on-exit job ({assignment_error})"
+        ))
+        .after(crate::error::Effect::Ran, detail)
     }
 
     /// Makes a checked launch addressable by its PID. Until this succeeds,
@@ -644,6 +674,70 @@ const REAP_WAIT: Duration = Duration::from_secs(2);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_containment_cleanup_is_private_and_retried_at_shutdown() {
+        let children = Children::new();
+        let (program, args) = if cfg!(windows) {
+            ("ping", vec!["-n", "60", "127.0.0.1"])
+        } else {
+            ("sleep", vec!["60"])
+        };
+        let child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("BUG: a long-running system program starts");
+        let pid = child.id();
+        let error = children.reject_uncontained(
+            child,
+            program,
+            "injected assignment failure",
+            |_, child| {
+                assert!(child.try_wait().expect("BUG: child is queryable").is_none());
+                Err(ToolError::platform(
+                    "ending child",
+                    "injected termination failure",
+                ))
+            },
+        );
+        let payload = error.payload();
+        assert_eq!(payload["error"]["code"], "not_supported");
+        assert_eq!(payload["error"]["effect"]["kind"], "ran");
+        assert_eq!(payload["error"]["retry"], "never");
+        assert!(error.to_string().contains("injected assignment failure"));
+        assert!(error.to_string().contains("injected termination failure"));
+        assert!(!error.to_string().contains("was ended"));
+        assert!(matches!(
+            children.kill(pid),
+            Err(ToolError::UnknownHandle { .. })
+        ));
+        {
+            let mut tracked = children.lock();
+            assert!(
+                tracked.unreaped.is_empty(),
+                "a failed kill still needs termination"
+            );
+            assert_eq!(tracked.unpublished.len(), 1);
+            assert!(
+                tracked.unpublished[0]
+                    .1
+                    .try_wait()
+                    .expect("BUG: child is queryable")
+                    .is_none()
+            );
+        }
+        children.kill_all();
+        let mut tracked = children.lock();
+        tracked.reap();
+        assert!(
+            tracked.unpublished.is_empty(),
+            "shutdown retried termination"
+        );
+        assert!(tracked.unreaped.is_empty(), "the actual child was reaped");
+    }
 
     #[test]
     fn failed_abandon_retains_cleanup_without_exposing_the_rejected_child() {

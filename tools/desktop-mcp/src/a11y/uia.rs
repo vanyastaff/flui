@@ -753,17 +753,9 @@ impl Uia {
             },
         )
         .and_then(|fresh| {
-            match cached_flag(&fresh, UIProperty::IsPassword) {
-                Some(true) => return Ok(()),
-                None => return Err(unread()),
-                Some(false) => {}
-            }
-            let value = cached_str(&fresh, UIProperty::ValueValue).ok_or_else(unread)?;
-            if value.chars().count() <= MAX_PROPERTY_CHARS {
-                node.unread_states.retain(|state| *state != "value");
-            }
-            node.value = Some(clip(value));
-            Ok(())
+            consume_value_snapshot(node, cached_flag(&fresh, UIProperty::IsPassword), || {
+                cached_str(&fresh, UIProperty::ValueValue)
+            })
         })
     }
 
@@ -1821,6 +1813,41 @@ fn describe(element: &UIElement, id: String) -> Node {
     node
 }
 
+/// Consume the value and its password discriminant as one observation. The
+/// newer flag replaces the earlier role classification before a value can
+/// be exposed; an unreadable flag makes the role unmatchable as well.
+fn consume_value_snapshot(
+    node: &mut Node,
+    password: Option<bool>,
+    value: impl FnOnce() -> Option<String>,
+) -> ToolResult<()> {
+    if matches!(node.role, Role::TextInput | Role::PasswordInput) {
+        node.role = Role::TextInput;
+        refine_role(node, password, None);
+    }
+    node.value = None;
+    if !node.unread_states.contains(&"value") {
+        node.unread_states.push("value");
+    }
+    let unread = || {
+        ToolError::platform(
+            "reading its value",
+            "the value or its password flag could not be read",
+        )
+    };
+    match password {
+        Some(true) => return Ok(()),
+        None => return Err(unread()),
+        Some(false) => {}
+    }
+    let value = value().ok_or_else(unread)?;
+    if value.chars().count() <= MAX_PROPERTY_CHARS {
+        node.unread_states.retain(|state| *state != "value");
+    }
+    node.value = Some(clip(value));
+    Ok(())
+}
+
 /// Role discriminants must be readable before either alternative can be
 /// reported or matched. Unrelated properties do not affect other roles.
 fn refine_role(node: &mut Node, password: Option<bool>, dialog: Option<bool>) {
@@ -2208,6 +2235,49 @@ fn classify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fresh_value_password_flag_replaces_the_earlier_text_role() {
+        use uiautomation::variants::Variant;
+
+        for (fresh_flag, expected_role, readable) in [
+            (Some(Variant::from(true)), Role::PasswordInput, true),
+            (None, Role::Unknown, false),
+            (Some(Variant::from(1_i32)), Role::Unknown, false),
+            (Some(Variant::from(false)), Role::TextInput, true),
+        ] {
+            let mut node = crate::a11y::tests_node();
+            node.role = role_of(ControlType::Edit);
+            node.native_role = "Edit".into();
+            node.has_text_value = true;
+            refine_role(&mut node, Some(false), None);
+            assert_eq!(node.role, Role::TextInput);
+            let value_read = std::cell::Cell::new(false);
+            let result = consume_value_snapshot(&mut node, flag_value(fresh_flag), || {
+                value_read.set(true);
+                Some("new secret".into())
+            });
+            assert_eq!(result.is_ok(), readable);
+            assert_eq!(node.role, expected_role);
+            assert_eq!(node.unmatchable, !readable);
+            assert_eq!(value_read.get(), expected_role == Role::TextInput);
+            let wire = serde_json::to_value(&node).expect("BUG: node serializes");
+            assert_eq!(wire["role"], expected_role.name());
+            assert_eq!(
+                wire.get("value").is_some(),
+                expected_role == Role::TextInput
+            );
+            for role in [Role::TextInput, Role::PasswordInput] {
+                let query = crate::a11y::Query {
+                    role: Some(role.name().into()),
+                    ..crate::a11y::Query::default()
+                }
+                .prepared()
+                .expect("BUG: valid role query");
+                assert_eq!(query.matches(&node), expected_role == role);
+            }
+        }
+    }
 
     #[test]
     fn semantic_roles_require_readable_discriminants_even_without_a_value_pattern() {
