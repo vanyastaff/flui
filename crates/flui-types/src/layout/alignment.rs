@@ -786,4 +786,13 @@ mod tests {
     fn default_is_center() {
         assert_eq!(Alignment::default(), Alignment::CENTER);
     }
+
+    #[test]
+    fn arithmetic_is_per_component() {
+        let a = Alignment::new(0.25, -0.5);
+        let b = Alignment::new(0.5, 0.75);
+        assert_eq!(a + b, Alignment::new(0.75, 0.25));
+        assert_eq!(-a, Alignment::new(-0.25, 0.5));
+        assert_eq!(Alignment::from((0.25, -0.5)), a);
+    }
 }

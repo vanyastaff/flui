@@ -453,4 +453,16 @@ mod tests {
             "BoxConstraints(1 <= w <= 2, 3 <= h <= 4)"
         );
     }
+
+    /// Each bound shrinks by its axis's total inset, floored at zero.
+    #[test]
+    fn deflate_subtracts_the_insets_per_axis() {
+        let insets = crate::geometry::Edges::new(px(1.0), px(2.0), px(4.0), px(8.0));
+        let deflated = c(20.0, 100.0, 30.0, 200.0).deflate(insets);
+        assert_eq!(deflated, c(10.0, 90.0, 25.0, 195.0));
+        assert_eq!(
+            c(5.0, 12.0, 3.0, 7.0).deflate(insets),
+            c(0.0, 2.0, 0.0, 2.0)
+        );
+    }
 }

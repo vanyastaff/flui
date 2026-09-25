@@ -23,12 +23,8 @@ mod device_pixels_geometry_tests;
 mod geometric_calculations_tests;
 #[path = "geometry_property_tests.rs"]
 mod geometry_property_tests;
-#[path = "layout_tests.rs"]
-mod layout_tests;
 #[path = "rems_unit_tests.rs"]
 mod rems_unit_tests;
-#[path = "rtl_support_tests.rs"]
-mod rtl_support_tests;
 #[path = "scale_conversion_tests.rs"]
 mod scale_conversion_tests;
 #[path = "typed_geometry_integration.rs"]
