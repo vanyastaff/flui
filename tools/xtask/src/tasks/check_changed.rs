@@ -14,9 +14,9 @@ use anyhow::{Context, bail};
 
 use super::exec::{Cmd, Host, Runner, Step, installed, installed_targets};
 use super::{
-    ANDROID_TARGET, IOS_TARGET, PLATFORM_TARGETS, WASM_TARGET, WINDOWS_TARGET, android_runner,
-    cli_windows, engine_testing_clippy, hack_passes, ios_runner, platform_clippy,
-    wasm_facade_check,
+    ANDROID_TARGET, IOS_TARGET, MACOS_TARGET, PLATFORM_TARGETS, WASM_TARGET, WINDOWS_TARGET,
+    android_runner, cli_windows, desktop_mcp_clippy, engine_testing_clippy, hack_passes,
+    ios_runner, platform_clippy, wasm_facade_check,
 };
 use crate::change_scope;
 use crate::util::repo_root;
@@ -37,6 +37,7 @@ struct Lane {
     cross_platform: bool,
     cross_app: bool,
     cross_cli: bool,
+    cross_desktop_mcp: bool,
     cross_ios: bool,
     wasm_args: String,
     wasm_facade: bool,
@@ -73,6 +74,7 @@ impl Lane {
             cross_platform: flag("cross_platform", text("cross_platform")?)?,
             cross_app: flag("cross_app", text("cross_app")?)?,
             cross_cli: flag("cross_cli", text("cross_cli")?)?,
+            cross_desktop_mcp: flag("cross_desktop_mcp", text("cross_desktop_mcp")?)?,
             cross_ios: flag("cross_ios", text("cross_ios")?)?,
             wasm_args: text("wasm_args")?,
             wasm_facade: flag("wasm_facade", text("wasm_facade")?)?,
@@ -189,6 +191,17 @@ fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) ->
                 "check-changed: skipped flui-cli on windows (rustup target add {WINDOWS_TARGET}; CI runs it)"
             ))
         });
+    }
+    if lane.cross_desktop_mcp {
+        for target in [WINDOWS_TARGET, MACOS_TARGET] {
+            steps.push(if have(target) {
+                desktop_mcp_clippy(target).into()
+            } else {
+                Step::Note(format!(
+                    "check-changed: skipped flui-desktop-mcp on {target} (rustup target add {target}; CI runs it)"
+                ))
+            });
+        }
     }
     if lane.cross_ios {
         steps.push(if host == Host::MacOs && have(IOS_TARGET) {
@@ -307,6 +320,7 @@ mod tests {
             cross_platform: false,
             cross_app: true,
             cross_cli: false,
+            cross_desktop_mcp: false,
             cross_ios: true,
             wasm_args: "-p flui -p flui-material -p flui-web-counter --lib --bins".to_owned(),
             wasm_facade: true,
@@ -354,12 +368,14 @@ mod tests {
         let mut lane = material();
         lane.cross_platform = true;
         lane.cross_cli = true;
+        lane.cross_desktop_mcp = true;
         lane.platform = true;
         let steps = lines(&plan(&lane, Host::Windows, &BTreeSet::new(), false));
         for expected in [
             "check-changed: skipped flui-platform on aarch64-apple-darwin (rustup target add aarch64-apple-darwin; CI runs it)",
             "check-changed: skipped the android runner (rustup target add aarch64-linux-android; CI runs it)",
             "check-changed: skipped flui-cli on windows (rustup target add x86_64-pc-windows-msvc; CI runs it)",
+            "check-changed: skipped flui-desktop-mcp on aarch64-apple-darwin (rustup target add aarch64-apple-darwin; CI runs it)",
             "check-changed: skipped wasm32 (rustup target add wasm32-unknown-unknown; CI runs it)",
             "check-changed: skipped per-feature clippy of changed manifests (cargo install --locked cargo-hack; CI runs it)",
             "check-changed: flui-platform is in scope, but its suite needs xvfb-run (Linux); CI runs it",
@@ -386,6 +402,12 @@ mod tests {
             &"$ cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings"
                 .to_owned()
         ));
+        for target in ["x86_64-pc-windows-msvc", "aarch64-apple-darwin"] {
+            let line = format!(
+                "$ cargo clippy -p flui-desktop-mcp --locked --all-targets --target {target} -- -D warnings"
+            );
+            assert!(linux.contains(&line), "{line}");
+        }
     }
 
     #[test]

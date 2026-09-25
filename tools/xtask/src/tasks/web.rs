@@ -267,7 +267,7 @@ mod tests {
             .iter()
             .map(ToString::to_string)
             .collect();
-        let excludes = "--exclude flui-assets --exclude flui-cli --exclude flui-web-server --exclude hot-reload-counter-host --exclude hot-reload-counter-logic --exclude hot-reload-counter-types --exclude xtask";
+        let excludes = "--exclude flui-assets --exclude flui-cli --exclude flui-desktop-mcp --exclude flui-web-server --exclude hot-reload-counter-host --exclude hot-reload-counter-logic --exclude hot-reload-counter-types --exclude xtask";
         assert_eq!(
             lines,
             [
