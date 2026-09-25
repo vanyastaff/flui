@@ -59,17 +59,20 @@ impl FontWeight {
 
     /// Converts a CSS numeric weight to the nearest `FontWeight` variant.
     ///
-    /// Values round to the closest hundred, an exact half upward (350 is
-    /// `W400`), the way Flutter's `FontWeight.lerp` rounds with Dart's
-    /// `round()`; out-of-range values clamp to `W100` or `W900`.
+    /// Values round to the closest hundred and clamp to `W100`..=`W900`.
+    /// An exact half goes the way CSS Fonts 4's font matching algorithm
+    /// searches when a weight is missing: lighter below 400, heavier from
+    /// 400 up, so 350 is `W300` and 450 is `W500`. Flutter snaps with a
+    /// plain `round()` in `FontWeight.lerp`, which would send 350 to `W400`,
+    /// away from the direction a browser would pick for a CSS weight.
     #[must_use]
     #[inline]
     pub const fn from_css(value: i32) -> Self {
         match value {
-            i32::MIN..=149 => Self::W100,
-            150..=249 => Self::W200,
-            250..=349 => Self::W300,
-            350..=449 => Self::W400,
+            i32::MIN..=150 => Self::W100,
+            151..=250 => Self::W200,
+            251..=350 => Self::W300,
+            351..=449 => Self::W400,
             450..=549 => Self::W500,
             550..=649 => Self::W600,
             650..=749 => Self::W700,
@@ -462,9 +465,8 @@ mod tests {
         assert_eq!(FontWeight::default(), FontWeight::NORMAL);
     }
 
-    /// Each bucket's edges. Exact halves round up at every step, as Dart's
-    /// `round()` does in Flutter's `FontWeight.lerp` (350 is W400, 550 is
-    /// W600); out of range clamps to either end.
+    /// Each bucket's edges. Exact halves follow CSS font matching: down below
+    /// 400, up from 400 (350 is W300, 450 is W500); out of range clamps.
     #[test]
     fn font_weight_from_css_buckets() {
         use FontWeight::*;
@@ -472,12 +474,12 @@ mod tests {
             (i32::MIN, W100),
             (-5, W100),
             (0, W100),
-            (149, W100),
-            (150, W200),
-            (249, W200),
-            (250, W300),
-            (349, W300),
-            (350, W400),
+            (150, W100),
+            (151, W200),
+            (250, W200),
+            (251, W300),
+            (350, W300),
+            (351, W400),
             (449, W400),
             (450, W500),
             (549, W500),
