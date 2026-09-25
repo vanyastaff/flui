@@ -154,90 +154,49 @@ impl core::fmt::Display for TargetPlatform {
 
 #[cfg(test)]
 mod tests {
-    use super::TargetPlatform;
+    use super::TargetPlatform::{self, *};
 
-    /// Variant coverage: every variant must be reachable via exhaustive
-    /// `match`. Adding a new variant must update this match arm
-    /// intentionally (the `#[non_exhaustive]` attribute does not block
-    /// intra-crate exhaustive matching).
+    /// `(name, mobile, desktop, apple)` for every variant; the match keeps
+    /// the table exhaustive when a variant is added.
     #[test]
-    fn variant_coverage_exhaustive_match() {
-        for variant in [
-            TargetPlatform::iOS,
-            TargetPlatform::Android,
-            TargetPlatform::Linux,
-            TargetPlatform::MacOS,
-            TargetPlatform::Windows,
-            TargetPlatform::Fuchsia,
-            TargetPlatform::Unknown,
-        ] {
-            let tag: u8 = match variant {
-                TargetPlatform::iOS => 0,
-                TargetPlatform::Android => 1,
-                TargetPlatform::Linux => 2,
-                TargetPlatform::MacOS => 3,
-                TargetPlatform::Windows => 4,
-                TargetPlatform::Fuchsia => 5,
-                TargetPlatform::Unknown => 6,
+    fn every_variant() {
+        for p in [iOS, Android, Linux, MacOS, Windows, Fuchsia, Unknown] {
+            let expected = match p {
+                iOS => ("ios", true, false, true),
+                Android => ("android", true, false, false),
+                Linux => ("linux", false, true, false),
+                MacOS => ("macos", false, true, true),
+                Windows => ("windows", false, true, false),
+                Fuchsia => ("fuchsia", false, false, false),
+                Unknown => ("unknown", false, false, false),
             };
-            assert!(tag < 7);
+            assert_eq!(
+                (p.as_str(), p.is_mobile(), p.is_desktop(), p.is_apple()),
+                expected
+            );
+            assert_eq!(p.is_touch_primary(), p.is_mobile());
+            assert_eq!(p.to_string(), p.as_str());
         }
     }
 
     #[test]
-    fn current_returns_known_variant() {
-        let p = TargetPlatform::current();
-        assert!(matches!(
-            p,
-            TargetPlatform::iOS
-                | TargetPlatform::Android
-                | TargetPlatform::Linux
-                | TargetPlatform::MacOS
-                | TargetPlatform::Windows
-                | TargetPlatform::Fuchsia
-                | TargetPlatform::Unknown
-        ));
-    }
-
-    #[test]
-    fn category_predicates() {
-        assert!(TargetPlatform::Android.is_mobile());
-        assert!(TargetPlatform::iOS.is_mobile());
-        assert!(!TargetPlatform::Windows.is_mobile());
-
-        assert!(TargetPlatform::Windows.is_desktop());
-        assert!(TargetPlatform::MacOS.is_desktop());
-        assert!(TargetPlatform::Linux.is_desktop());
-        assert!(!TargetPlatform::Android.is_desktop());
-
-        assert!(TargetPlatform::iOS.is_apple());
-        assert!(TargetPlatform::MacOS.is_apple());
-        assert!(!TargetPlatform::Windows.is_apple());
-
-        assert!(TargetPlatform::Android.is_touch_primary());
-        assert!(!TargetPlatform::Linux.is_touch_primary());
-    }
-
-    #[test]
-    fn as_str_round_trip() {
-        assert_eq!(TargetPlatform::iOS.as_str(), "ios");
-        assert_eq!(TargetPlatform::Android.as_str(), "android");
-        assert_eq!(TargetPlatform::Linux.as_str(), "linux");
-        assert_eq!(TargetPlatform::MacOS.as_str(), "macos");
-        assert_eq!(TargetPlatform::Windows.as_str(), "windows");
-        assert_eq!(TargetPlatform::Fuchsia.as_str(), "fuchsia");
-        assert_eq!(TargetPlatform::Unknown.as_str(), "unknown");
-    }
-
-    #[test]
-    fn display_matches_as_str() {
-        assert_eq!(format!("{}", TargetPlatform::Android), "android");
-        assert_eq!(format!("{}", TargetPlatform::Windows), "windows");
-        assert_eq!(format!("{}", TargetPlatform::Unknown), "unknown");
-    }
-
-    #[test]
-    fn default_matches_current() {
-        assert_eq!(TargetPlatform::default(), TargetPlatform::current());
+    fn current_is_the_compile_target() {
+        let expected = if cfg!(target_os = "android") {
+            Android
+        } else if cfg!(target_os = "ios") {
+            iOS
+        } else if cfg!(target_os = "macos") {
+            MacOS
+        } else if cfg!(target_os = "linux") {
+            Linux
+        } else if cfg!(target_os = "windows") {
+            Windows
+        } else if cfg!(target_os = "fuchsia") {
+            Fuchsia
+        } else {
+            Unknown
+        };
+        assert_eq!(TargetPlatform::current(), expected);
+        assert_eq!(TargetPlatform::default(), expected);
     }
 }

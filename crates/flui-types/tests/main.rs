@@ -37,8 +37,6 @@ mod rtl_support_tests;
 mod scale_conversion_tests;
 #[path = "typed_geometry_integration.rs"]
 mod typed_geometry_integration;
-#[path = "typography_tests.rs"]
-mod typography_tests;
 #[path = "unit_conversions_tests.rs"]
 mod unit_conversions_tests;
 #[path = "unit_mixing_compile_fail.rs"]

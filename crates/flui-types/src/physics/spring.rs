@@ -612,4 +612,141 @@ mod tests {
         assert!(!sim.is_done(0.0), "not done at start");
         assert!(sim.is_done(100.0), "done after sufficient time");
     }
+
+    /// One spring per regime: `c² - 4mk` is negative, exactly zero, positive.
+    fn regimes() -> [(&'static str, SpringDescription); 3] {
+        [
+            ("underdamped", SpringDescription::new(1.0, 100.0, 4.0)),
+            ("critical", SpringDescription::new(1.0, 100.0, 20.0)),
+            ("overdamped", SpringDescription::new(1.0, 100.0, 50.0)),
+        ]
+    }
+
+    fn sim(spring: SpringDescription) -> SpringSimulation {
+        SpringSimulation::new(spring, 3.0, 1.0, -2.0)
+    }
+
+    /// Each closed form starts where it is told to and at the given speed.
+    #[test]
+    fn initial_conditions_hold_in_every_regime() {
+        for (name, spring) in regimes() {
+            let s = sim(spring);
+            assert_approx(s.position(0.0), 3.0, 1e-4);
+            assert_approx(s.velocity(0.0), -2.0, 1e-3);
+            assert!(!s.is_done(0.0), "{name}");
+        }
+    }
+
+    /// `velocity` and `position` are written independently; the first must
+    /// be the derivative of the second, and together they must satisfy the
+    /// equation of motion `m·x'' + c·x' + k·(x - end) = 0`.
+    #[test]
+    fn velocity_is_the_derivative_and_the_motion_is_a_spring() {
+        let h = 1e-3;
+        for (name, spring) in regimes() {
+            let (m, k, c) = (spring.mass, spring.stiffness, spring.damping);
+            let s = sim(spring);
+            for t in [0.05_f32, 0.2, 0.5] {
+                let dx = (s.position(t + h) - s.position(t - h)) / (2.0 * h);
+                assert!(
+                    (dx - s.velocity(t)).abs() < 0.02,
+                    "{name}: x' {dx} vs v {} at {t}",
+                    s.velocity(t)
+                );
+                let a = (s.velocity(t + h) - s.velocity(t - h)) / (2.0 * h);
+                let residual = m * a + c * s.velocity(t) + k * (s.position(t) - 1.0);
+                assert!(residual.abs() < 0.5, "{name}: residual {residual} at {t}");
+            }
+        }
+    }
+
+    /// Every regime settles on `end` and reports itself done there.
+    #[test]
+    fn settles_on_the_end() {
+        for (name, spring) in regimes() {
+            let s = sim(spring);
+            assert_approx(s.position(20.0), 1.0, 1e-3);
+            assert_approx(s.velocity(20.0), 0.0, 1e-3);
+            assert!(s.is_done(20.0), "{name}");
+        }
+        // Done needs both: sitting on the end while still moving is not done.
+        let passing = SpringSimulation::new(SpringDescription::new(1.0, 100.0, 4.0), 1.0, 1.0, 5.0);
+        assert!(!passing.is_done(0.0));
+        let loose = sim(SpringDescription::new(1.0, 100.0, 20.0))
+            .with_tolerance(Tolerance::new(3.0, 3.0, 1.0));
+        assert!(loose.is_done(0.0));
+        assert_eq!(loose.tolerance(), Tolerance::new(3.0, 3.0, 1.0));
+    }
+
+    /// m = 1, k = 100: ω₀ = 10, critical damping 20; c = 4 gives ζ = 0.2
+    /// and ωd = 10·√0.96.
+    #[test]
+    fn description_quantities() {
+        let under = SpringDescription::new(1.0, 100.0, 4.0);
+        assert_approx(under.natural_frequency(), 10.0, 1e-5);
+        assert_approx(under.critical_damping(), 20.0, 1e-5);
+        assert_approx(under.damping_ratio(), 0.2, 1e-6);
+        assert_approx(under.damped_frequency(), 10.0 * 0.96_f32.sqrt(), 1e-4);
+        assert_approx(
+            under.period().unwrap(),
+            std::f32::consts::TAU / (10.0 * 0.96_f32.sqrt()),
+            1e-4,
+        );
+        let over = SpringDescription::new(1.0, 100.0, 50.0);
+        assert_eq!((over.damped_frequency(), over.period()), (0.0, None));
+        let heavy = SpringDescription::new(4.0, 100.0, 4.0);
+        assert_approx(heavy.natural_frequency(), 5.0, 1e-5);
+        assert_approx(heavy.damping_ratio(), 0.1, 1e-6);
+    }
+
+    #[test]
+    fn presets_and_constructors() {
+        assert!(matches!(
+            SpringDescription::bouncy().spring_type(),
+            SpringType::Underdamped
+        ));
+        assert!(matches!(
+            SpringDescription::soft().spring_type(),
+            SpringType::Overdamped
+        ));
+        let stiff = SpringDescription::stiff();
+        assert_approx(stiff.damping_ratio(), 1.0, 1e-5);
+        assert_approx(stiff.damping, 2.0 * 500.0_f32.sqrt(), 1e-4);
+        // Whichever closed form rounding picks for the critical preset, it
+        // still starts right and settles.
+        let s = SpringSimulation::new(stiff, 3.0, 1.0, -2.0);
+        assert_approx(s.position(0.0), 3.0, 1e-3);
+        assert_approx(s.position(5.0), 1.0, 1e-3);
+    }
+
+    #[test]
+    fn accessors_and_validity() {
+        let s = SpringSimulation::new(SpringDescription::new(1.0, 2.0, 3.0), 4.0, 5.0, 6.0);
+        assert_eq!((s.start(), s.end(), s.initial_velocity()), (4.0, 5.0, 6.0));
+        assert_eq!(s.spring().stiffness, 2.0);
+        assert!(s.is_valid() && s.spring().is_valid());
+        assert!(SpringDescription::new(1.0, 2.0, 0.0).is_valid());
+        let nan = f32::NAN;
+        for spring in [
+            SpringDescription::new(0.0, 2.0, 3.0),
+            SpringDescription::new(1.0, 0.0, 3.0),
+            SpringDescription::new(1.0, 2.0, -1.0),
+            SpringDescription::new(f32::INFINITY, 2.0, 3.0),
+            SpringDescription::new(1.0, f32::INFINITY, 3.0),
+            SpringDescription::new(1.0, 2.0, f32::INFINITY),
+        ] {
+            assert!(!spring.is_valid(), "{spring:?}");
+        }
+        let valid = || SpringDescription::new(1.0, 2.0, 3.0);
+        for broken in [
+            SpringSimulation::new(SpringDescription::new(0.0, 2.0, 3.0), 4.0, 5.0, 6.0),
+            SpringSimulation::new(valid(), nan, 5.0, 6.0),
+            SpringSimulation::new(valid(), 4.0, nan, 6.0),
+            SpringSimulation::new(valid(), 4.0, 5.0, nan),
+            SpringSimulation::new(valid(), 4.0, 5.0, 6.0)
+                .with_tolerance(Tolerance::new(-1.0, 0.0, 0.0)),
+        ] {
+            assert!(!broken.is_valid(), "{broken:?}");
+        }
+    }
 }
