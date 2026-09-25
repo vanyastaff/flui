@@ -520,11 +520,15 @@ impl Color {
     // ===== Helper methods for rendering =====
 
     /// Alpha-blends this color over `background` (Porter-Duff "source over",
-    /// straight alpha, gamma space).
+    /// straight alpha, gamma space): Flutter's `Color.alphaBlend`.
     ///
-    /// Fully opaque returns `self` and fully transparent returns
-    /// `background`; other alphas take a SIMD path when the `simd` feature
-    /// and target support are available.
+    /// Follows Flutter's float formulation: the background keeps
+    /// `back = a_bg · (1 − a_fg)` of its alpha, the result's alpha is
+    /// `a_fg + back` (exactly 1 over an opaque background), each channel is
+    /// `(fg · a_fg + bg · back) / alpha`, and channels round to nearest when
+    /// stored as 8 bits. Fully opaque returns `self` and fully transparent
+    /// returns `background`; other alphas take a SIMD path when the `simd`
+    /// feature and target support are available.
     #[must_use]
     #[inline]
     pub fn blend_over(&self, background: Color) -> Color {
@@ -558,6 +562,22 @@ impl Color {
         }
     }
 
+    /// `(a_fg, back, alpha)` for [`Color::blend_over`], or `None` when the
+    /// result is fully transparent. The scalar and SIMD paths share it and
+    /// then perform the same operations in the same order, so they agree
+    /// bit for bit.
+    #[inline]
+    fn blend_over_factors(&self, background: Color) -> Option<(f32, f32, f32)> {
+        let alpha = f32::from(self.a) / 255.0;
+        let inv_alpha = 1.0 - alpha;
+        if background.a == 255 {
+            return Some((alpha, inv_alpha, 1.0));
+        }
+        let back = f32::from(background.a) / 255.0 * inv_alpha;
+        let out = alpha + back;
+        (out > 0.0).then_some((alpha, back, out))
+    }
+
     #[inline]
     #[cfg_attr(
         all(
@@ -572,23 +592,17 @@ impl Color {
         )
     )]
     fn blend_over_scalar(&self, background: Color) -> Color {
-        let alpha_src = self.a as f32 / 255.0;
-        let alpha_dst = background.a as f32 / 255.0;
-        let alpha_out = alpha_src + alpha_dst * (1.0 - alpha_src);
-
-        if alpha_out == 0.0 {
+        let Some((alpha, back, out)) = self.blend_over_factors(background) else {
             return Color::TRANSPARENT;
-        }
-
-        let r = ((self.r as f32 * alpha_src + background.r as f32 * alpha_dst * (1.0 - alpha_src))
-            / alpha_out) as u8;
-        let g = ((self.g as f32 * alpha_src + background.g as f32 * alpha_dst * (1.0 - alpha_src))
-            / alpha_out) as u8;
-        let b = ((self.b as f32 * alpha_src + background.b as f32 * alpha_dst * (1.0 - alpha_src))
-            / alpha_out) as u8;
-        let a = (alpha_out * 255.0) as u8;
-
-        Color::rgba(r, g, b, a)
+        };
+        let channel =
+            |fg: u8, bg: u8| ((f32::from(fg) * alpha + f32::from(bg) * back) / out).round() as u8;
+        Color::rgba(
+            channel(self.r, background.r),
+            channel(self.g, background.g),
+            channel(self.b, background.b),
+            (out * 255.0).round() as u8,
+        )
     }
 
     #[inline]
@@ -609,43 +623,29 @@ impl Color {
         unsafe {
             use std::arch::x86_64::*;
 
-            let alpha_src = self.a as f32 / 255.0;
-            let alpha_dst = background.a as f32 / 255.0;
-            let alpha_out = alpha_src + alpha_dst * (1.0 - alpha_src);
-
-            if alpha_out == 0.0 {
+            let Some((alpha, back, out)) = self.blend_over_factors(background) else {
                 return Color::TRANSPARENT;
-            }
-
-            // Load colors as f32 vectors
-            let src_vec = _mm_set_ps(self.a as f32, self.b as f32, self.g as f32, self.r as f32);
-            let dst_vec = _mm_set_ps(
-                background.a as f32,
+            };
+            let fg = _mm_set_ps(0.0, self.b as f32, self.g as f32, self.r as f32);
+            let bg = _mm_set_ps(
+                0.0,
                 background.b as f32,
                 background.g as f32,
                 background.r as f32,
             );
+            let sum = _mm_add_ps(
+                _mm_mul_ps(fg, _mm_set1_ps(alpha)),
+                _mm_mul_ps(bg, _mm_set1_ps(back)),
+            );
+            let result = _mm_div_ps(sum, _mm_set1_ps(out));
 
-            // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) /
-            // alpha_out
-            let alpha_src_vec = _mm_set1_ps(alpha_src);
-            let alpha_dst_factor = _mm_set1_ps(alpha_dst * (1.0 - alpha_src));
-            let alpha_out_vec = _mm_set1_ps(alpha_out);
-
-            let src_contrib = _mm_mul_ps(src_vec, alpha_src_vec);
-            let dst_contrib = _mm_mul_ps(dst_vec, alpha_dst_factor);
-            let sum = _mm_add_ps(src_contrib, dst_contrib);
-            let result = _mm_div_ps(sum, alpha_out_vec);
-
-            // Convert back to u8
-            let mut out = [0.0f32; 4];
-            _mm_storeu_ps(out.as_mut_ptr(), result);
-
+            let mut o = [0.0f32; 4];
+            _mm_storeu_ps(o.as_mut_ptr(), result);
             Color::rgba(
-                out[0] as u8,
-                out[1] as u8,
-                out[2] as u8,
-                (alpha_out * 255.0) as u8,
+                o[0].round() as u8,
+                o[1].round() as u8,
+                o[2].round() as u8,
+                (out * 255.0).round() as u8,
             )
         }
 
@@ -673,47 +673,32 @@ impl Color {
         unsafe {
             use std::arch::aarch64::*;
 
-            let alpha_src = self.a as f32 / 255.0;
-            let alpha_dst = background.a as f32 / 255.0;
-            let alpha_out = alpha_src + alpha_dst * (1.0 - alpha_src);
-
-            if alpha_out == 0.0 {
+            let Some((alpha, back, out)) = self.blend_over_factors(background) else {
                 return Color::TRANSPARENT;
-            }
-
-            // Load colors as f32 vectors
-            let src_vec =
-                vld1q_f32([self.r as f32, self.g as f32, self.b as f32, self.a as f32].as_ptr());
-            let dst_vec = vld1q_f32(
+            };
+            let fg = vld1q_f32([self.r as f32, self.g as f32, self.b as f32, 0.0].as_ptr());
+            let bg = vld1q_f32(
                 [
                     background.r as f32,
                     background.g as f32,
                     background.b as f32,
-                    background.a as f32,
+                    0.0,
                 ]
                 .as_ptr(),
             );
+            let sum = vaddq_f32(
+                vmulq_f32(fg, vdupq_n_f32(alpha)),
+                vmulq_f32(bg, vdupq_n_f32(back)),
+            );
+            let result = vdivq_f32(sum, vdupq_n_f32(out));
 
-            // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) /
-            // alpha_out
-            let alpha_src_vec = vdupq_n_f32(alpha_src);
-            let alpha_dst_factor = vdupq_n_f32(alpha_dst * (1.0 - alpha_src));
-            let alpha_out_vec = vdupq_n_f32(alpha_out);
-
-            let src_contrib = vmulq_f32(src_vec, alpha_src_vec);
-            let dst_contrib = vmulq_f32(dst_vec, alpha_dst_factor);
-            let sum = vaddq_f32(src_contrib, dst_contrib);
-            let result = vdivq_f32(sum, alpha_out_vec);
-
-            // Convert back to u8
-            let mut out = [0.0f32; 4];
-            vst1q_f32(out.as_mut_ptr(), result);
-
+            let mut o = [0.0f32; 4];
+            vst1q_f32(o.as_mut_ptr(), result);
             Color::rgba(
-                out[0] as u8,
-                out[1] as u8,
-                out[2] as u8,
-                (alpha_out * 255.0) as u8,
+                o[0].round() as u8,
+                o[1].round() as u8,
+                o[2].round() as u8,
+                (out * 255.0).round() as u8,
             )
         }
 
