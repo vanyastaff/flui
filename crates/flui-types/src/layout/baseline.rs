@@ -36,3 +36,15 @@ impl TextBaseline {
         matches!(self, Self::Ideographic)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn predicates() {
+        let (a, i) = (TextBaseline::Alphabetic, TextBaseline::Ideographic);
+        assert_eq!((a.is_alphabetic(), a.is_ideographic()), (true, false));
+        assert_eq!((i.is_alphabetic(), i.is_ideographic()), (false, true));
+    }
+}

@@ -235,3 +235,36 @@ impl BlendMode {
         self.is_porter_duff()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::BlendMode::{self, *};
+
+    const ALL: [BlendMode; 29] = [
+        Clear, Src, Dst, SrcOver, DstOver, SrcIn, DstIn, SrcOut, DstOut, SrcATop, DstATop, Xor,
+        Plus, Modulate, Screen, Overlay, Darken, Lighten, ColorDodge, ColorBurn, HardLight,
+        SoftLight, Difference, Exclusion, Multiply, Hue, Saturation, Color, Luminosity,
+    ];
+
+    /// Each predicate against the set of modes it names. The first 14 of
+    /// `ALL` are the Porter-Duff operators (with `Modulate`), the rest are the
+    /// advanced W3C modes.
+    #[test]
+    fn predicates_over_every_mode() {
+        let lightens = [Screen, Lighten, ColorDodge, Plus];
+        let darkens = [Darken, ColorBurn, Multiply, Modulate];
+        for (i, mode) in ALL.into_iter().enumerate() {
+            let porter_duff = i < 14;
+            assert_eq!(mode.is_porter_duff(), porter_duff, "{mode:?}");
+            assert_eq!(mode.is_compositional(), porter_duff, "{mode:?}");
+            assert_eq!(mode.is_advanced(), !porter_duff, "{mode:?}");
+            assert_eq!(
+                mode.requires_destination(),
+                !matches!(mode, Clear | Src),
+                "{mode:?}"
+            );
+            assert_eq!(mode.can_lighten(), lightens.contains(&mode), "{mode:?}");
+            assert_eq!(mode.can_darken(), darkens.contains(&mode), "{mode:?}");
+        }
+    }
+}

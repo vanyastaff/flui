@@ -94,3 +94,36 @@ impl WrapCrossAlignment {
         matches!(self, WrapCrossAlignment::Center)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `(uses spacing, edge aligned, centered)` per variant.
+    #[test]
+    fn predicates() {
+        use WrapAlignment as W;
+        for (a, expected) in [
+            (W::Start, (false, true, false)),
+            (W::End, (false, true, false)),
+            (W::Center, (false, false, true)),
+            (W::SpaceBetween, (true, false, false)),
+            (W::SpaceAround, (true, false, false)),
+            (W::SpaceEvenly, (true, false, false)),
+        ] {
+            assert_eq!(
+                (a.uses_spacing(), a.is_edge_aligned(), a.is_centered()),
+                expected,
+                "{a:?}"
+            );
+        }
+        use WrapCrossAlignment as C;
+        for (a, expected) in [
+            (C::Start, (true, false)),
+            (C::End, (true, false)),
+            (C::Center, (false, true)),
+        ] {
+            assert_eq!((a.is_edge_aligned(), a.is_centered()), expected, "{a:?}");
+        }
+    }
+}

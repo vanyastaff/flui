@@ -203,3 +203,23 @@ impl ForcePressDetails {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Normalized against `max_pressure` and clamped; no maximum reads as 0.
+    #[test]
+    fn force_press_normalized_pressure() {
+        for ((pressure, max), expected) in
+            [((2.5, 10.0), 0.25), ((20.0, 10.0), 1.0), ((3.0, 0.0), 0.0)]
+        {
+            let details = ForcePressDetails::new(Offset::ZERO, Offset::ZERO, pressure, max);
+            assert_eq!(
+                details.normalized_pressure(),
+                expected,
+                "{pressure} of {max}"
+            );
+        }
+    }
+}

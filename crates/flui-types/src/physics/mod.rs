@@ -156,3 +156,67 @@ impl<S: Simulation> Simulation for ClampedSimulation<S> {
         self.simulation.tolerance()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `position = 10 t`, done at `t >= 5`, with a tolerance that differs
+    /// from the default so delegation is observable.
+    struct Linear;
+
+    impl Simulation for Linear {
+        fn position(&self, time: f32) -> f32 {
+            10.0 * time
+        }
+        fn velocity(&self, _time: f32) -> f32 {
+            10.0
+        }
+        fn is_done(&self, time: f32) -> bool {
+            time >= 5.0
+        }
+        fn tolerance(&self) -> Tolerance {
+            Tolerance::new(0.25, 0.5, 0.75)
+        }
+    }
+
+    fn clamped() -> ClampedSimulation<Linear> {
+        ClampedSimulation::new(Linear, 0.0, 20.0)
+    }
+
+    #[test]
+    fn position_is_clamped_to_the_range() {
+        for (t, position) in [(-1.0, 0.0), (1.0, 10.0), (3.0, 20.0)] {
+            assert_eq!(clamped().position(t), position, "t = {t}");
+        }
+    }
+
+    /// The boundaries are inclusive: sitting exactly on either one counts,
+    /// and the reported velocity drops to zero there.
+    #[test]
+    fn velocity_stops_at_the_boundaries() {
+        for (t, at_boundary) in [
+            (-1.0, true),
+            (0.0, true),
+            (1.0, false),
+            (2.0, true),
+            (3.0, true),
+        ] {
+            let sim = clamped();
+            assert_eq!(sim.is_at_boundary(t), at_boundary, "t = {t}");
+            let velocity = if at_boundary { 0.0 } else { 10.0 };
+            assert_eq!(sim.velocity(t), velocity, "t = {t}");
+        }
+    }
+
+    #[test]
+    fn delegates_is_done_and_tolerance() {
+        let sim = ClampedSimulation::new(Linear, 2.5, 7.5);
+        assert_eq!((sim.min(), sim.max()), (2.5, 7.5));
+        assert!(!sim.is_done(4.0));
+        assert!(sim.is_done(5.0));
+        assert_eq!(sim.tolerance(), Tolerance::new(0.25, 0.5, 0.75));
+        assert_eq!(sim.inner().position(1.0), 10.0);
+        assert_eq!(sim.into_inner().position(1.0), 10.0);
+    }
+}

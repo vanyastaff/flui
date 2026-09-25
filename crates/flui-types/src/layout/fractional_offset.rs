@@ -170,3 +170,66 @@ impl std::ops::Neg for FractionalOffset {
         self.negate()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::Alignment;
+
+    fn xy(f: FractionalOffset) -> (f32, f32) {
+        (f.dx, f.dy)
+    }
+
+    #[test]
+    fn constants_form_the_unit_grid() {
+        let grid = [
+            FractionalOffset::TOP_LEFT,
+            FractionalOffset::TOP_CENTER,
+            FractionalOffset::TOP_RIGHT,
+            FractionalOffset::CENTER_LEFT,
+            FractionalOffset::CENTER,
+            FractionalOffset::CENTER_RIGHT,
+            FractionalOffset::BOTTOM_LEFT,
+            FractionalOffset::BOTTOM_CENTER,
+            FractionalOffset::BOTTOM_RIGHT,
+        ];
+        for (i, f) in grid.into_iter().enumerate() {
+            assert_eq!(xy(f), ((i % 3) as f32 * 0.5, (i / 3) as f32 * 0.5), "#{i}");
+        }
+    }
+
+    /// `[-1, 1]` alignment maps onto `[0, 1]` and back.
+    #[test]
+    fn alignment_conversions() {
+        assert_eq!(
+            xy(FractionalOffset::from_alignment(Alignment::new(0.5, -0.5))),
+            (0.75, 0.25)
+        );
+        let back = FractionalOffset::new(0.25, 1.0).to_alignment();
+        assert_eq!((back.x, back.y), (-0.5, 1.0));
+    }
+
+    #[test]
+    fn arithmetic() {
+        let f = || FractionalOffset::new(0.25, -0.5);
+        assert_eq!(xy(f() + FractionalOffset::new(0.5, 1.0)), (0.75, 0.5));
+        assert_eq!(xy(f() - FractionalOffset::new(0.5, 1.0)), (-0.25, -1.5));
+        assert_eq!(xy(f() * 4.0), (1.0, -2.0));
+        assert_eq!(xy(f() / 0.5), (0.5, -1.0));
+        assert_eq!(xy(-f()), (-0.25, 0.5));
+        assert_eq!(xy(f().negate()), (-0.25, 0.5));
+        let mid = FractionalOffset::lerp(
+            FractionalOffset::new(0.5, 0.25),
+            FractionalOffset::new(1.0, 0.75),
+            0.5,
+        );
+        assert_eq!(xy(mid), (0.75, 0.5));
+    }
+
+    #[test]
+    fn is_finite() {
+        assert!(FractionalOffset::new(0.25, 1.0).is_finite());
+        assert!(!FractionalOffset::new(f32::NAN, 0.0).is_finite());
+        assert!(!FractionalOffset::new(0.0, f32::INFINITY).is_finite());
+    }
+}

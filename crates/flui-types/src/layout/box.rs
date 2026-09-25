@@ -454,48 +454,127 @@ impl FittedSizes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::px;
 
+    fn size(w: f32, h: f32) -> Size<Pixels> {
+        Size::new(px(w), px(h))
+    }
+
+    /// Every predicate for every variant:
+    /// `(clip, keeps aspect, scale, scale up, scale down, fills, leaves space)`.
     #[test]
-    #[inline]
-    fn test_box_fit_properties() {
-        assert!(BoxFit::Cover.may_clip());
-        assert!(!BoxFit::Contain.may_clip());
-        assert!(!BoxFit::Fill.may_clip());
-        assert!(BoxFit::None.may_clip());
-
-        assert!(BoxFit::Contain.maintains_aspect_ratio());
-        assert!(BoxFit::Cover.maintains_aspect_ratio());
-        assert!(!BoxFit::Fill.maintains_aspect_ratio());
-
-        assert!(BoxFit::Contain.may_scale());
-        assert!(!BoxFit::None.may_scale());
+    fn box_fit_predicates() {
+        use BoxFit::*;
+        let table = [
+            (Fill, [false, false, true, true, true, true, false]),
+            (Contain, [false, true, true, true, true, false, true]),
+            (Cover, [true, true, true, true, true, true, false]),
+            (FitWidth, [true, true, true, true, true, true, true]),
+            (FitHeight, [true, true, true, true, true, true, true]),
+            (None, [true, true, false, false, false, false, true]),
+            (ScaleDown, [false, true, true, false, true, false, true]),
+        ];
+        for (fit, expected) in table {
+            let got = [
+                fit.may_clip(),
+                fit.maintains_aspect_ratio(),
+                fit.may_scale(),
+                fit.may_scale_up(),
+                fit.may_scale_down(),
+                fit.fills_target(),
+                fit.may_leave_space(),
+            ];
+            assert_eq!(got, expected, "{fit:?}");
+        }
+        assert_eq!(BoxFit::default(), BoxFit::Contain);
     }
 
     #[test]
-    #[inline]
-    fn test_box_fit_default() {
-        let default = BoxFit::default();
-        assert_eq!(default, BoxFit::Contain);
+    fn box_shape_predicates() {
+        let c = BoxShape::Circle;
+        let r = BoxShape::Rectangle;
+        assert_eq!(
+            (c.is_circle(), c.is_rectangle(), c.requires_clipping()),
+            (true, false, true)
+        );
+        assert_eq!(
+            (r.is_circle(), r.is_rectangle(), r.requires_clipping()),
+            (false, true, false)
+        );
+        assert_eq!(BoxShape::default(), r);
+    }
+
+    /// Any one non-positive dimension, on either side, is degenerate.
+    #[test]
+    fn apply_is_degenerate_on_any_empty_axis() {
+        let good = size(100.0, 50.0);
+        for (input, output) in [
+            (size(0.0, 50.0), good),
+            (size(100.0, 0.0), good),
+            (good, size(0.0, 50.0)),
+            (good, size(100.0, -1.0)),
+        ] {
+            let fitted = BoxFit::Fill.apply(input, output);
+            assert_eq!(
+                fitted,
+                FittedSizes::new(Size::ZERO, Size::ZERO),
+                "{input:?} -> {output:?}"
+            );
+        }
+    }
+
+    /// The branches the square-output cases in `painting::image` can't reach:
+    /// `Contain` with a tall input, `Cover`'s crop against a non-square
+    /// output (where `out.h / out.w != 1`), and `ScaleDown` shrinking a tall
+    /// input through its height step.
+    #[test]
+    fn apply_with_non_square_output_and_tall_input() {
+        let contain = BoxFit::Contain.apply(size(100.0, 200.0), size(300.0, 100.0));
+        assert_eq!(
+            contain,
+            FittedSizes::new(size(100.0, 200.0), size(50.0, 100.0))
+        );
+
+        let cover_wide = BoxFit::Cover.apply(size(400.0, 400.0), size(200.0, 100.0));
+        assert_eq!(
+            cover_wide,
+            FittedSizes::new(size(400.0, 200.0), size(200.0, 100.0))
+        );
+
+        let cover_tall = BoxFit::Cover.apply(size(400.0, 400.0), size(100.0, 200.0));
+        assert_eq!(
+            cover_tall,
+            FittedSizes::new(size(200.0, 400.0), size(100.0, 200.0))
+        );
+
+        let scale_down = BoxFit::ScaleDown.apply(size(100.0, 400.0), size(100.0, 100.0));
+        assert_eq!(
+            scale_down,
+            FittedSizes::new(size(100.0, 400.0), size(25.0, 100.0))
+        );
     }
 
     #[test]
-    #[inline]
-    fn test_box_shape_is_circle() {
-        assert!(BoxShape::Circle.is_circle());
-        assert!(!BoxShape::Rectangle.is_circle());
-    }
+    fn fitted_sizes_queries() {
+        let shrunk = FittedSizes::new(size(200.0, 100.0), size(50.0, 25.0));
+        assert_eq!(shrunk.scale_factor(), 0.25);
+        assert!(shrunk.needs_scaling());
+        assert!(!shrunk.will_clip());
 
-    #[test]
-    #[inline]
-    fn test_box_shape_is_rectangle() {
-        assert!(BoxShape::Rectangle.is_rectangle());
-        assert!(!BoxShape::Circle.is_rectangle());
-    }
+        let unchanged = FittedSizes::new(size(40.0, 30.0), size(40.0, 30.0));
+        assert!(!unchanged.needs_scaling());
+        assert!(!unchanged.will_clip());
+        // A source no wider than epsilon has no meaningful scale.
+        for degenerate in [0.0, EPSILON] {
+            let sizes = FittedSizes::new(size(degenerate, 1.0), size(9.0, 9.0));
+            assert_eq!(sizes.scale_factor(), 1.0, "source width {degenerate}");
+        }
 
-    #[test]
-    #[inline]
-    fn test_box_shape_default() {
-        let default = BoxShape::default();
-        assert_eq!(default, BoxShape::Rectangle);
+        for grown in [size(41.0, 30.0), size(40.0, 31.0)] {
+            assert!(
+                FittedSizes::new(size(40.0, 30.0), grown).will_clip(),
+                "{grown:?}"
+            );
+        }
     }
 }

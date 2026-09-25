@@ -679,11 +679,107 @@ mod tests {
 
     #[test]
     fn canonical_constants_match_quadrant() {
-        assert_eq!(Alignment::TOP_LEFT, Alignment::new(-1.0, -1.0));
-        assert_eq!(Alignment::CENTER, Alignment::new(0.0, 0.0));
-        assert_eq!(Alignment::BOTTOM_RIGHT, Alignment::new(1.0, 1.0));
-        assert_eq!(Alignment::CENTER_LEFT.x, -1.0);
-        assert_eq!(Alignment::TOP_CENTER.y, -1.0);
+        let absolute = [
+            Alignment::TOP_LEFT,
+            Alignment::TOP_CENTER,
+            Alignment::TOP_RIGHT,
+            Alignment::CENTER_LEFT,
+            Alignment::CENTER,
+            Alignment::CENTER_RIGHT,
+            Alignment::BOTTOM_LEFT,
+            Alignment::BOTTOM_CENTER,
+            Alignment::BOTTOM_RIGHT,
+        ];
+        let directional = [
+            AlignmentDirectional::TOP_START,
+            AlignmentDirectional::TOP_CENTER,
+            AlignmentDirectional::TOP_END,
+            AlignmentDirectional::CENTER_START,
+            AlignmentDirectional::CENTER,
+            AlignmentDirectional::CENTER_END,
+            AlignmentDirectional::BOTTOM_START,
+            AlignmentDirectional::BOTTOM_CENTER,
+            AlignmentDirectional::BOTTOM_END,
+        ];
+        // Row-major over y then x, each in -1, 0, 1.
+        for (i, (a, d)) in absolute.iter().zip(directional).enumerate() {
+            let expected = ((i % 3) as f32 - 1.0, (i / 3) as f32 - 1.0);
+            assert_eq!((a.x, a.y), expected, "{a:?}");
+            assert_eq!((d.start, d.y), expected, "{d:?}");
+        }
+    }
+
+    #[test]
+    fn main_axis_size_predicates() {
+        assert!(MainAxisSize::Min.is_min() && !MainAxisSize::Min.is_max());
+        assert!(MainAxisSize::Max.is_max() && !MainAxisSize::Max.is_min());
+    }
+
+    #[test]
+    fn custom_spacing_and_sizing_predicates() {
+        use CrossAxisAlignment as C;
+        use MainAxisAlignment as M;
+        for (m, custom) in [
+            (M::Start, false),
+            (M::End, false),
+            (M::Center, false),
+            (M::SpaceBetween, true),
+            (M::SpaceAround, true),
+            (M::SpaceEvenly, true),
+        ] {
+            let label = format!("{m:?}");
+            assert_eq!(m.requires_custom_spacing(), custom, "{label}");
+        }
+        for (c, custom) in [
+            (C::Start, false),
+            (C::End, false),
+            (C::Center, false),
+            (C::Stretch, true),
+            (C::Baseline, true),
+        ] {
+            let label = format!("{c:?}");
+            assert_eq!(c.requires_custom_sizing(), custom, "{label}");
+        }
+    }
+
+    /// `(leading, between)` for 120px of free space.
+    #[test]
+    fn calculate_spacing() {
+        use MainAxisAlignment as M;
+        for (m, children, expected) in [
+            (M::Start, 3, (0.0, 0.0)),
+            (M::End, 3, (0.0, 0.0)),
+            (M::Center, 3, (0.0, 0.0)),
+            (M::SpaceBetween, 0, (0.0, 0.0)),
+            (M::SpaceBetween, 1, (0.0, 0.0)),
+            (M::SpaceBetween, 3, (0.0, 60.0)),
+            (M::SpaceAround, 0, (0.0, 0.0)),
+            (M::SpaceAround, 3, (20.0, 40.0)),
+            (M::SpaceEvenly, 3, (30.0, 30.0)),
+        ] {
+            let label = format!("{m:?} x {children}");
+            assert_eq!(m.calculate_spacing(120.0, children), expected, "{label}");
+        }
+    }
+
+    #[test]
+    fn directional_resolve_add_and_neg() {
+        let d = AlignmentDirectional::new(0.5, 0.25);
+        assert_eq!(d.resolve(true), Alignment::new(0.5, 0.25));
+        assert_eq!(d.resolve(false), Alignment::new(-0.5, 0.25));
+        assert_eq!(
+            d + AlignmentDirectional::new(0.25, -1.0),
+            AlignmentDirectional::new(0.75, -0.75)
+        );
+        assert_eq!(-d, AlignmentDirectional::new(-0.5, -0.25));
+    }
+
+    #[test]
+    fn geometry_conversions_resolve() {
+        let absolute: AlignmentGeometry = Alignment::new(0.5, 0.25).into();
+        let directional: AlignmentGeometry = AlignmentDirectional::new(0.5, 0.25).into();
+        assert_eq!(absolute.resolve(false), Alignment::new(0.5, 0.25));
+        assert_eq!(directional.resolve(false), Alignment::new(-0.5, 0.25));
     }
 
     #[test]

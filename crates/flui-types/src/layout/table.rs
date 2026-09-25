@@ -121,3 +121,25 @@ pub enum TableCellVerticalAlignment {
     /// cell and every cell in it ends up that tall.
     IntrinsicHeight,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn combinators_keep_argument_order() {
+        let (a, b) = (
+            TableColumnWidth::Fixed(10.0),
+            TableColumnWidth::Fraction(0.5),
+        );
+        assert_eq!(
+            TableColumnWidth::max(a.clone(), b.clone()),
+            TableColumnWidth::Max(Box::new(a.clone()), Box::new(b.clone()))
+        );
+        assert_eq!(
+            TableColumnWidth::min(a.clone(), b.clone()),
+            TableColumnWidth::Min(Box::new(a), Box::new(b))
+        );
+        assert_eq!(TableColumnWidth::default(), TableColumnWidth::Flex(1.0));
+    }
+}

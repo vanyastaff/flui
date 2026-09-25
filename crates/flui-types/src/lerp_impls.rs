@@ -77,4 +77,12 @@ mod tests {
         // t = -0.5 -> r = -50 -> saturates to 0.
         assert_eq!(a.lerp_to(&b, -0.5).r, 0, "undershoot saturates at 0");
     }
+
+    #[test]
+    fn alignment_lerp_to_is_alignment_lerp() {
+        assert_eq!(
+            Alignment::TOP_LEFT.lerp_to(&Alignment::BOTTOM_RIGHT, 0.25),
+            Alignment::new(-0.5, -0.5)
+        );
+    }
 }
