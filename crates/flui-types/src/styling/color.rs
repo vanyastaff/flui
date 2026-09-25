@@ -1023,12 +1023,14 @@ impl Color {
         if out_a <= 0.0 {
             return Color::TRANSPARENT;
         }
-        let unpremul = |channel_pm: f32| ((channel_pm / out_a).clamp(0.0, 1.0) * 255.0) as u8;
+        // Round to nearest, as the GPU's float -> unorm8 conversion does;
+        // truncating made `Src`/`Dst` drift by one on ~13% of translucent inputs.
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         Color::rgba(
-            unpremul(out_r_pm),
-            unpremul(out_g_pm),
-            unpremul(out_b_pm),
-            (out_a.clamp(0.0, 1.0) * 255.0) as u8,
+            to_u8(out_r_pm / out_a),
+            to_u8(out_g_pm / out_a),
+            to_u8(out_b_pm / out_a),
+            to_u8(out_a),
         )
     }
 
