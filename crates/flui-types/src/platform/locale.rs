@@ -192,18 +192,18 @@ impl Locale {
         self.script.as_deref()
     }
 
-    /// Formats this locale as an underscore-separated language tag
-    /// (e.g. `"en_US"`, or just `"en"` when there is no country).
-    ///
-    /// Note: the script code is not included in the output.
+    /// Formats this locale as an underscore-separated language tag:
+    /// `"en"`, `"en_US"`, `"zh_Hans"` or `"zh_Hans_CN"`, which
+    /// [`from_language_tag`](Self::from_language_tag) reads back.
     #[must_use]
     #[inline]
     pub fn to_language_tag(&self) -> String {
-        if let Some(country) = &self.country {
-            format!("{}_{}", self.language, country)
-        } else {
-            self.language.clone()
+        let mut tag = self.language.clone();
+        for subtag in [&self.script, &self.country].into_iter().flatten() {
+            tag.push('_');
+            tag.push_str(subtag);
         }
+        tag
     }
 
     /// Returns `true` if this locale's text direction is left-to-right.
@@ -218,14 +218,15 @@ impl Locale {
     /// Returns `true` if this locale's text direction is right-to-left.
     ///
     /// Determined by the language code against a fixed set of RTL
-    /// languages (Arabic, Hebrew, Persian, Urdu, Yiddish); the script
-    /// code is not consulted.
+    /// languages (Arabic, Persian, Hebrew, Pashto, Urdu, Yiddish); the script
+    /// code is not consulted. Deprecated codes such as `ji` are already
+    /// canonicalized (to `yi`) by construction.
     #[must_use]
     #[inline]
     pub fn is_rtl(&self) -> bool {
         matches!(
             self.language.as_str(),
-            "ar" | "he" | "fa" | "ur" | "yi" | "ji"
+            "ar" | "fa" | "he" | "ps" | "ur" | "yi"
         )
     }
 
@@ -475,6 +476,95 @@ mod tests {
             let json = serde_json::to_string(&original).expect("serialize");
             let round_tripped: Locale = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(round_tripped, original);
+        }
+    }
+
+    mod tags {
+        use super::super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// Every locale prints to a tag that parses back to itself. The
+            /// subtags are drawn so none is deprecated (which would
+            /// canonicalize) and a region is never four letters (which the
+            /// parser reads as a script).
+            #[test]
+            fn tag_roundtrips(
+                language in "[a-h][a-z]{1,2}",
+                script in proptest::option::of("[A-Z][a-z]{3}"),
+                country in proptest::option::of("[A-Z]{2}|[0-9]{3}"),
+            ) {
+                let locale = Locale::with_script(language, country, script);
+                let tag = locale.to_language_tag();
+                prop_assert_eq!(locale.to_string(), tag.clone());
+                prop_assert_eq!(Locale::from_language_tag(&tag), Some(locale.clone()));
+                prop_assert_eq!(Locale::from_language_tag(&tag.replace('_', "-")), Some(locale));
+            }
+        }
+
+        #[test]
+        fn tags_order_language_script_country() {
+            let tag = |l: &Locale| l.to_language_tag();
+            assert_eq!(tag(&Locale::new("en", None::<&str>)), "en");
+            assert_eq!(tag(&Locale::new("en", Some("US"))), "en_US");
+            assert_eq!(
+                tag(&Locale::with_script("zh", None::<&str>, Some("Hans"))),
+                "zh_Hans"
+            );
+            assert_eq!(
+                tag(&Locale::with_script("zh", Some("CN"), Some("Hans"))),
+                "zh_Hans_CN"
+            );
+        }
+
+        #[test]
+        fn parsing() {
+            let parsed = Locale::from_language_tag("zh-Hant-TW").unwrap();
+            assert_eq!(
+                (parsed.language(), parsed.script(), parsed.country()),
+                ("zh", Some("Hant"), Some("TW"))
+            );
+            let region = Locale::from_language_tag("es_419").unwrap();
+            assert_eq!((region.script(), region.country()), (None, Some("419")));
+            assert_eq!(Locale::from_language_tag(""), None);
+            assert_eq!(Locale::from_language_tag("a_b_c_d"), None);
+        }
+
+        #[test]
+        fn direction() {
+            for (language, rtl) in [
+                ("ar", true),
+                ("fa", true),
+                ("he", true),
+                ("ps", true),
+                ("ur", true),
+                ("yi", true),
+                ("ji", true), // canonicalized to yi
+                ("en", false),
+                ("zh", false),
+            ] {
+                let locale = Locale::new(language, None::<&str>);
+                assert_eq!(
+                    (locale.is_rtl(), locale.is_ltr()),
+                    (rtl, !rtl),
+                    "{language}"
+                );
+            }
+        }
+
+        #[test]
+        fn presets() {
+            for (locale, tag) in [
+                (Locale::en_us(), "en_US"),
+                (Locale::en_gb(), "en_GB"),
+                (Locale::es_es(), "es_ES"),
+                (Locale::fr_fr(), "fr_FR"),
+                (Locale::de_de(), "de_DE"),
+                (Locale::zh_cn(), "zh_CN"),
+                (Locale::ja_jp(), "ja_JP"),
+            ] {
+                assert_eq!(locale.to_language_tag(), tag);
+            }
         }
     }
 }
