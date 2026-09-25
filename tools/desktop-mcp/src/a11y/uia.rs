@@ -233,6 +233,9 @@ impl Uia {
             .create_cache_request()
             .and_then(|request| {
                 request.add_property(UIProperty::ValueValue)?;
+                // The value and identity must come from the same refresh.
+                request.add_property(UIProperty::ControlType)?;
+                request.add_property(UIProperty::ProcessId)?;
                 // Read with the value: a control can turn into a password
                 // field between the walk and this read.
                 request.add_property(UIProperty::IsPassword)?;
@@ -553,7 +556,13 @@ impl Uia {
                 walk.truncated = true;
             } else {
                 walk.budget -= 1;
-                walk.truncated |= !self.read_value(element, &mut node);
+                if let Err(error) = self.read_value(element, &mut node, Some(walk.deadline)) {
+                    walk.truncated = true;
+                    if error.code() == "gone" {
+                        self.elements.invalidate(&node.id);
+                        return None;
+                    }
+                }
             }
         }
         // A cut string is not what a search for the whole one would match,
@@ -654,34 +663,84 @@ impl Uia {
     /// An `IsPassword` that is not a readable boolean fails the read rather
     /// than counting as "not a password": a value is fetched only when the
     /// element surely is no password field.
-    fn read_value(&self, element: &UIElement, node: &mut Node) -> bool {
+    fn read_value(
+        &self,
+        element: &UIElement,
+        node: &mut Node,
+        until: Option<Instant>,
+    ) -> ToolResult<()> {
+        let before_call = || {
+            if until.is_some_and(|until| Instant::now() >= until) {
+                Err(ToolError::platform(
+                    "reading its value",
+                    "the read ran out of time",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+        let unread = || {
+            ToolError::platform(
+                "reading its value",
+                "the value or its password flag could not be read",
+            )
+        };
         if !node.has_text_value {
-            return true;
+            return Ok(());
         }
         match cached_flag(element, UIProperty::IsPassword) {
-            Some(true) => return true,
-            None => return false,
+            Some(true) => return Ok(()),
+            None => return Err(unread()),
             Some(false) => {}
         }
-        let Ok(fresh) = element.build_updated_cache(&self.value) else {
-            return false;
-        };
-        // The flag read with the value decides, not the one from before it:
-        // a readable `false` or the value is not consumed.
-        match cached_flag(&fresh, UIProperty::IsPassword) {
-            Some(true) => return true,
-            None => return false,
-            Some(false) => {}
-        }
-        // Read like the other strings: an empty value may come as VT_EMPTY.
-        let Some(value) = cached_str(&fresh, UIProperty::ValueValue) else {
-            return false;
-        };
-        if value.chars().count() <= MAX_PROPERTY_CHARS {
-            node.unread_states.retain(|state| *state != "value");
-        }
-        node.value = Some(clip(value));
-        true
+        let held = self.elements.get(&node.id)?;
+        before_call()?;
+        value_while_current(
+            || {
+                element.build_updated_cache(&self.value).map_err(|error| {
+                    classify(
+                        &node.id,
+                        "reading its value",
+                        &error,
+                        self.process_identity(&node.id),
+                    )
+                })
+            },
+            |fresh| {
+                before_call()?;
+                let verdict = held.started.and_then(|started| {
+                    identity_after_refresh(
+                        started,
+                        || held.same_as(fresh, Some(started)),
+                        || crate::os::process_started(held.pid),
+                    )
+                });
+                match verdict {
+                    Some(true) => Ok(()),
+                    Some(false) => Err(ToolError::gone_element(
+                        &node.id,
+                        "another element answered while its value was read",
+                    )),
+                    None => Err(ToolError::platform(
+                        "reading its value",
+                        "the value's element identity could not be verified",
+                    )),
+                }
+            },
+        )
+        .and_then(|fresh| {
+            match cached_flag(&fresh, UIProperty::IsPassword) {
+                Some(true) => return Ok(()),
+                None => return Err(unread()),
+                Some(false) => {}
+            }
+            let value = cached_str(&fresh, UIProperty::ValueValue).ok_or_else(unread)?;
+            if value.chars().count() <= MAX_PROPERTY_CHARS {
+                node.unread_states.retain(|state| *state != "value");
+            }
+            node.value = Some(clip(value));
+            Ok(())
+        })
     }
 
     /// Whether the element UIA hit-tests at `(x, y)` is `element` or one of
@@ -820,11 +879,9 @@ impl Uia {
                     .after(Effect::Ran, READBACK),
             );
         }
-        if !self.read_value(fresh, node)
-            || node.unmatchable
-            || range_unread
-            || (toggled && node.checked.is_none())
-        {
+        self.read_value(fresh, node, until)
+            .map_err(|error| error.after(Effect::Ran, READBACK))?;
+        if node.unmatchable || range_unread || (toggled && node.checked.is_none()) {
             return Err(ToolError::platform(
                 "reading back",
                 "the element's state could not all be read",
@@ -1001,49 +1058,29 @@ impl Uia {
         }
     }
 
-    fn perform(&self, handle: &str, element: &UIElement, action: &Action) -> ToolResult<()> {
+    fn prepare_action<'a>(
+        &self,
+        handle: &str,
+        element: &UIElement,
+        action: &'a Action,
+    ) -> ToolResult<PreparedAction<'a>> {
         let pid = self.process_identity(handle);
         let lookup =
             |what: &'static str| move |e: uiautomation::Error| classify(handle, what, &e, pid);
-        // The action's own call reached the application, so a failure there
-        // does not mean it did not run: its element going away most often
-        // means it ran and closed its window (an OK or Delete button), and a
-        // timeout that it is still running (a modal dialog it opened keeps
-        // the call from returning). Only a disabled element is a clean
-        // refusal. Anything else must be looked at before a retry.
-        let fail = |what: &'static str| {
-            move |e: uiautomation::Error| match classify(handle, what, &e, pid) {
-                refused @ ToolError::Disabled { .. } => refused,
-                cause => {
-                    let detail = if matches!(cause, ToolError::Gone { .. }) {
-                        format!(
-                            "it went away during {what}, which usually means the action ran; read the tree before retrying"
-                        )
-                    } else {
-                        format!(
-                            "{what} reached the application and then failed or timed out, so it may have run; read the tree before retrying"
-                        )
-                    };
-                    cause.after(Effect::MayHaveRun, detail)
-                }
-            }
-        };
         match action {
             Action::Invoke => {
                 self.require(handle, element, ActionName::Invoke)?;
                 element
                     .get_pattern::<UIInvokePattern>()
-                    .map_err(lookup("invoke"))?
-                    .invoke()
-                    .map_err(fail("invoke"))
+                    .map(PreparedAction::Invoke)
+                    .map_err(lookup("invoke"))
             }
             Action::Toggle => {
                 self.require(handle, element, ActionName::Toggle)?;
                 element
                     .get_pattern::<UITogglePattern>()
-                    .map_err(lookup("toggle"))?
-                    .toggle()
-                    .map_err(fail("toggle"))
+                    .map(PreparedAction::Toggle)
+                    .map_err(lookup("toggle"))
             }
             Action::Expand | Action::Collapse => {
                 let (name, action) = if matches!(action, Action::Expand) {
@@ -1071,11 +1108,11 @@ impl Uia {
                             })
                     },
                     || {
-                        if action == ActionName::Expand {
-                            pattern.expand().map_err(fail(name))
+                        Ok(if action == ActionName::Expand {
+                            PreparedAction::Expand(pattern)
                         } else {
-                            pattern.collapse().map_err(fail(name))
-                        }
+                            PreparedAction::Collapse(pattern)
+                        })
                     },
                     || self.unsupported(handle, element, action),
                 )
@@ -1084,9 +1121,8 @@ impl Uia {
                 self.require(handle, element, ActionName::ScrollIntoView)?;
                 element
                     .get_pattern::<UIScrollItemPattern>()
-                    .map_err(lookup("scroll_into_view"))?
-                    .scroll_into_view()
-                    .map_err(fail("scroll_into_view"))
+                    .map(PreparedAction::ScrollIntoView)
+                    .map_err(lookup("scroll_into_view"))
             }
             Action::SetValue(value) => perform_set_value(
                 handle,
@@ -1095,30 +1131,106 @@ impl Uia {
                 |value| match value {
                     ValueWrite::Text(value) => element
                         .get_pattern::<UIValuePattern>()
-                        .map_err(lookup("set_value"))?
-                        .set_value(value)
-                        .map_err(fail("set_value")),
+                        .map(|pattern| PreparedAction::Text(pattern, value))
+                        .map_err(lookup("set_value")),
                     ValueWrite::Range(number) => element
                         .get_pattern::<UIRangeValuePattern>()
-                        .map_err(lookup("set_value"))?
-                        .set_value(number)
-                        .map_err(fail("set_value")),
+                        .map(|pattern| PreparedAction::Range(pattern, number))
+                        .map_err(lookup("set_value")),
                 },
                 || self.unsupported(handle, element, ActionName::SetValue),
             ),
             Action::Focus => perform_focus(
                 || self.has_pattern(handle, element, UIProperty::IsKeyboardFocusable),
-                || element.set_focus().map_err(fail("focus")),
+                || Ok(PreparedAction::Focus(element.clone())),
                 || self.unsupported(handle, element, ActionName::Focus),
             ),
             Action::Select => {
                 self.require(handle, element, ActionName::Select)?;
                 element
                     .get_pattern::<UISelectionItemPattern>()
-                    .map_err(lookup("select"))?
-                    .select()
-                    .map_err(fail("select"))
+                    .map(PreparedAction::Select)
+                    .map_err(lookup("select"))
             }
+        }
+    }
+
+    fn perform(&self, handle: &str, element: &UIElement, action: &Action) -> ToolResult<()> {
+        dispatch_while_current(
+            || self.prepare_action(handle, element, action),
+            || self.check_alive(handle, None).map(|_| ()),
+            |prepared| {
+                let (what, result) = prepared.dispatch();
+                result.map_err(|error| {
+                    match classify(handle, what, &error, self.process_identity(handle)) {
+                        refused @ ToolError::Disabled { .. } => refused,
+                        cause => cause.after(
+                            Effect::MayHaveRun,
+                            format!("{what} reached the application and then failed or timed out, so it may have run; read the tree before retrying"),
+                        ),
+                    }
+                })
+            },
+        )
+    }
+}
+
+/// A value is consumed only after its refresh's identity is verified. Both
+/// traversal and action readback use this boundary; no second value is fetched.
+fn value_while_current<T>(
+    read: impl FnOnce() -> ToolResult<T>,
+    validate: impl FnOnce(&T) -> ToolResult<()>,
+) -> ToolResult<T> {
+    let value = read()?;
+    validate(&value)?;
+    Ok(value)
+}
+
+/// Finish all provider preparation before the final identity check. Failed
+/// preparation is checked too: replacement is gone, not unsupported on the old
+/// element. Only dispatch can cause effects.
+fn dispatch_while_current<T>(
+    prepare: impl FnOnce() -> ToolResult<T>,
+    validate: impl FnOnce() -> ToolResult<()>,
+    dispatch: impl FnOnce(T) -> ToolResult<()>,
+) -> ToolResult<()> {
+    let prepared = prepare();
+    let current = validate();
+    // An observed removal is final even when the follow-up identity read
+    // itself fails transiently. Keep the evidence that retires this handle.
+    if prepared.as_ref().is_err_and(|error| error.code() == "gone") {
+        return prepared.map(|_| ());
+    }
+    current?;
+    dispatch(prepared?)
+}
+
+/// Acquired capabilities: dispatch performs only the mutation, with no more
+/// property reads or pattern lookups after identity validation.
+enum PreparedAction<'a> {
+    Invoke(UIInvokePattern),
+    Toggle(UITogglePattern),
+    Expand(UIExpandCollapsePattern),
+    Collapse(UIExpandCollapsePattern),
+    ScrollIntoView(UIScrollItemPattern),
+    Text(UIValuePattern, &'a str),
+    Range(UIRangeValuePattern, f64),
+    Focus(UIElement),
+    Select(UISelectionItemPattern),
+}
+
+impl PreparedAction<'_> {
+    fn dispatch(self) -> (&'static str, uiautomation::Result<()>) {
+        match self {
+            Self::Invoke(pattern) => ("invoke", pattern.invoke()),
+            Self::Toggle(pattern) => ("toggle", pattern.toggle()),
+            Self::Expand(pattern) => ("expand", pattern.expand()),
+            Self::Collapse(pattern) => ("collapse", pattern.collapse()),
+            Self::ScrollIntoView(pattern) => ("scroll_into_view", pattern.scroll_into_view()),
+            Self::Text(pattern, value) => ("set_value", pattern.set_value(value)),
+            Self::Range(pattern, value) => ("set_value", pattern.set_value(value)),
+            Self::Focus(element) => ("focus", element.set_focus()),
+            Self::Select(pattern) => ("select", pattern.select()),
         }
     }
 }
@@ -1188,11 +1300,11 @@ fn enabled_state(node: &mut Node, enabled: Option<bool>) {
 
 /// Direct element focus is offered only by a readable, live focusable flag.
 /// Read failures stay distinct from an unsupported action and emit no focus.
-fn perform_focus(
+fn perform_focus<T>(
     focusable: impl FnOnce() -> ToolResult<bool>,
-    focus: impl FnOnce() -> ToolResult<()>,
+    focus: impl FnOnce() -> ToolResult<T>,
     unsupported: impl FnOnce() -> ToolError,
-) -> ToolResult<()> {
+) -> ToolResult<T> {
     if !focusable()? {
         return Err(unsupported());
     }
@@ -1247,12 +1359,12 @@ fn expansion_allows(state: Option<i32>, action: ActionName) -> bool {
     }
 }
 
-fn perform_expansion(
+fn perform_expansion<T>(
     action: ActionName,
     read: impl FnOnce() -> ToolResult<i32>,
-    perform: impl FnOnce() -> ToolResult<()>,
+    perform: impl FnOnce() -> ToolResult<T>,
     unsupported: impl FnOnce() -> ToolError,
-) -> ToolResult<()> {
+) -> ToolResult<T> {
     let state = read()?;
     if !(0..=3).contains(&state) {
         return Err(ToolError::platform(
@@ -1273,13 +1385,13 @@ enum ValueWrite<'a> {
     Range(f64),
 }
 
-fn perform_set_value<'a>(
+fn perform_set_value<'a, T>(
     handle: &str,
     value: &'a str,
     mut flag: impl FnMut(UIProperty) -> ToolResult<bool>,
-    write: impl FnOnce(ValueWrite<'a>) -> ToolResult<()>,
+    write: impl FnOnce(ValueWrite<'a>) -> ToolResult<T>,
     unsupported: impl FnOnce() -> ToolError,
-) -> ToolResult<()> {
+) -> ToolResult<T> {
     if flag(UIProperty::IsValuePatternAvailable)? && !flag(UIProperty::ValueIsReadOnly)? {
         return write(ValueWrite::Text(value));
     }
@@ -2021,6 +2133,124 @@ mod tests {
     use super::*;
 
     #[test]
+    fn replacement_during_preparation_never_reaches_dispatch() {
+        for fails in [false, true] {
+            let current = std::cell::Cell::new(true);
+            let dispatched = std::cell::Cell::new(false);
+            let result = dispatch_while_current(
+                || {
+                    current.set(false);
+                    if fails {
+                        Err(ToolError::platform(
+                            "acquiring a pattern",
+                            "provider disconnected",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                },
+                || {
+                    if current.get() {
+                        Ok(())
+                    } else {
+                        Err(ToolError::gone_element("e1", "replaced during preparation"))
+                    }
+                },
+                |()| {
+                    dispatched.set(true);
+                    Ok(())
+                },
+            );
+            assert!(!dispatched.get());
+            let error = result.expect_err("BUG: replacement must prevent dispatch");
+            assert_eq!(error.code(), "gone");
+            assert!(error.payload()["error"].get("effect").is_none());
+        }
+    }
+
+    #[test]
+    fn conclusive_preparation_removal_survives_unreadable_final_identity() {
+        let validated = std::cell::Cell::new(false);
+        let result = dispatch_while_current(
+            || Err::<(), _>(ToolError::gone_element("e1", "provider reported removal")),
+            || {
+                validated.set(true);
+                Err(ToolError::platform(
+                    "re-reading identity",
+                    "provider timed out",
+                ))
+            },
+            |()| panic!("an observed removal cannot dispatch an action"),
+        );
+        assert!(validated.get(), "the final identity check still runs");
+        let error = result.expect_err("BUG: observed removal remains final");
+        assert_eq!(error.code(), "gone");
+        assert!(error.payload()["error"].get("effect").is_none());
+    }
+
+    #[test]
+    fn unchanged_preparation_dispatches_once_and_preserves_action_effects() {
+        let dispatched = std::cell::Cell::new(0);
+        let result = dispatch_while_current(
+            || Ok(()),
+            || Ok(()),
+            |()| {
+                dispatched.set(dispatched.get() + 1);
+                Err(ToolError::platform("invoke", "timed out")
+                    .after(Effect::MayHaveRun, "invoke reached the provider"))
+            },
+        );
+        assert_eq!(dispatched.get(), 1);
+        assert!(matches!(
+            result,
+            Err(ToolError::Interrupted {
+                effect: Effect::MayHaveRun,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn value_refresh_replacement_is_rejected_before_consumption() {
+        // The original and replacement belong to the same live process;
+        // process-only postchecks cannot distinguish these snapshots.
+        let original = (42, 10, vec![1, 2], 50004);
+        for replacement in [
+            (42, 10, vec![1, 3], 50004),
+            (42, 10, vec![1, 2], 50000),
+            original.clone(),
+        ] {
+            let consumed = std::cell::Cell::new(false);
+            let result = value_while_current(
+                || Ok((replacement.clone(), "replacement value")),
+                |(identity, _)| {
+                    if identity == &original {
+                        Ok(())
+                    } else {
+                        Err(ToolError::gone_element(
+                            "e1",
+                            "replaced during value refresh",
+                        ))
+                    }
+                },
+            )
+            .map(|(_, value)| {
+                consumed.set(true);
+                value
+            });
+            assert_eq!(consumed.get(), replacement == original);
+            if replacement != original {
+                assert_eq!(
+                    result
+                        .expect_err("BUG: replacement value is refused")
+                        .code(),
+                    "gone"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn hit_test_revalidates_after_successful_and_failed_provider_walks() {
         for provider_fails in [false, true] {
             let mut current = true;
@@ -2317,7 +2547,7 @@ mod tests {
             let result = perform_expansion(
                 ActionName::Expand,
                 || read,
-                || panic!("unknown state must not authorize a transition"),
+                || -> ToolResult<()> { panic!("unknown state must not authorize a transition") },
                 unsupported_value,
             );
             assert!(matches!(result, Err(ToolError::Platform { .. })));
@@ -2349,7 +2579,7 @@ mod tests {
                             UIProperty::ValueIsReadOnly | UIProperty::RangeValueIsReadOnly
                         ))
                 },
-                |_| panic!("a read-only provider must not receive a write"),
+                |_| -> ToolResult<()> { panic!("a read-only provider must not receive a write") },
                 unsupported_value,
             );
             assert!(matches!(result, Err(ToolError::ActionUnsupported { .. })));
@@ -2378,7 +2608,9 @@ mod tests {
                         Ok(prop == pattern)
                     }
                 },
-                |_| panic!("an unreadable property must not authorize a write"),
+                |_| -> ToolResult<()> {
+                    panic!("an unreadable property must not authorize a write")
+                },
                 unsupported_value,
             );
             assert!(matches!(result, Err(ToolError::Platform { .. })));
@@ -2422,7 +2654,7 @@ mod tests {
                 "e1",
                 invalid,
                 |prop| Ok(prop == UIProperty::IsRangeValuePatternAvailable),
-                |_| panic!("an invalid range must not reach the provider"),
+                |_| -> ToolResult<()> { panic!("an invalid range must not reach the provider") },
                 unsupported_value,
             );
             assert!(matches!(result, Err(ToolError::InvalidArgument(_))));

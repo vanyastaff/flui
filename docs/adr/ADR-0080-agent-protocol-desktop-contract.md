@@ -95,10 +95,14 @@ read back afterwards is a success with `readback_failed`, not an error.
 Reads take a scope (`window`, `pid`, or `root` for a subtree), `max_depth` and
 `max_nodes`, and say `truncated` when they left anything out. `wait_for` waits for an
 element (by criteria or by handle), for its `state`, or with `gone` for no match.
-`launch` returns once the process is started and its pid bound (a busy desktop thread
-can delay the bind by up to 10 s; past that the reply says `bound: false` and
-`wait_for_window` binds it); `wait_for_window` waits for the window, so a client timeout
-on the window cannot end the application.
+`launch` returns once the process is started and the session has checked that its PID
+has no conflicting earlier identity. A busy desktop thread can delay that check by up
+to 10 s; if it cannot finish, the launch is refused and its child is ended. This replaces
+the earlier `bound: false` fallback for a busy worker: that fallback could publish a PID
+already issued for another process and give `kill` and window tools different meanings
+for the same number. `bound: false` remains available when the registry check succeeds
+but the OS reports no start time. `wait_for_window` waits for the window, so a client
+timeout on the window cannot end an application whose launch succeeded.
 
 ## Consequences
 

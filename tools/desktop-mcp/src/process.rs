@@ -47,6 +47,9 @@ const REMEMBERED_EXITS: usize = 256;
 #[derive(Debug, Default)]
 struct Tracked {
     running: HashMap<u32, Child>,
+    /// Spawned, but not yet admitted by the desktop identity registry.
+    /// Only their launch token can address these children until publication.
+    pending: std::collections::HashSet<u32>,
     /// `(pid, exit code)`, oldest first.
     exited: VecDeque<(u32, Option<i32>)>,
     /// Per pid, the launches that returned it and whose caller may hold it
@@ -292,7 +295,23 @@ impl Children {
         tracked.launch_of.insert(pid, launch);
         tracked.start_of.insert(pid, started);
         tracked.returned.entry(pid).or_default().insert(launch);
+        tracked.pending.insert(pid);
         Ok((pid, started, launch))
+    }
+
+    /// Makes a checked launch addressable by its PID. Until this succeeds,
+    /// only `abandon` can address it, using its private launch token.
+    pub fn publish(&self, pid: u32, launch: u64) -> ToolResult<()> {
+        let mut tracked = self.lock();
+        if tracked.closed {
+            return Err(ToolError::ShuttingDown);
+        }
+        if tracked.launch_of.get(&pid) != Some(&launch) || !tracked.pending.remove(&pid) {
+            return Err(ToolError::InvalidArgument(format!(
+                "launch {launch} no longer owns an unpublished process {pid}"
+            )));
+        }
+        Ok(())
     }
 
     /// Kills a child this session launched; one that already exited on its
@@ -315,8 +334,23 @@ impl Children {
     /// Checked under the same lock that takes the child out, so a launch
     /// that reuses the pid in between is never the one ended.
     fn end_tracked(&self, pid: u32, launch: Option<u64>) -> ToolResult<Killed> {
+        self.end_tracked_with(pid, launch, end)
+    }
+
+    fn end_tracked_with(
+        &self,
+        pid: u32,
+        launch: Option<u64>,
+        end_child: impl FnOnce(u32, &mut Child) -> ToolResult<Killed>,
+    ) -> ToolResult<Killed> {
         let mut tracked = self.lock();
         match launch {
+            None if tracked.pending.contains(&pid) => {
+                return Err(ToolError::UnknownHandle {
+                    handle: pid.to_string(),
+                    kind: crate::error::HandleKind::Process,
+                });
+            }
             None if tracked.returned.get(&pid).is_some_and(|l| l.len() > 1) => {
                 return Err(ToolError::InvalidArgument(format!(
                     "pid {pid} was returned by two launches of this session, so it cannot be told which one to end; the running one is ended when the server exits"
@@ -341,6 +375,7 @@ impl Children {
                         exit_code: None,
                     });
                 }
+                tracked.pending.remove(&pid);
             }
             None => {}
         }
@@ -352,7 +387,7 @@ impl Children {
         if let Some(mut child) = tracked.running.remove(&pid) {
             tracked.ending.insert(pid);
             drop(tracked);
-            let outcome = end(pid, &mut child);
+            let outcome = end_child(pid, &mut child);
             // The outcome is recorded under the same lock that clears
             // `ending`: a kill in between would otherwise find the pid
             // nowhere and call it never launched.
@@ -367,10 +402,15 @@ impl Children {
                     tracked.hold_unreaped(pid, child);
                     Ok(killed)
                 }
-                // Still running: keep it tracked, so it can be retried and
-                // is ended again at shutdown.
+                // Still running: retain it for shutdown. A launch that was
+                // never published must not become addressable by `kill`:
+                // the client may already know this PID as another process.
                 Err(e) => {
-                    tracked.running.insert(pid, child);
+                    if launch.is_some() || !tracked.returned.contains_key(&pid) {
+                        tracked.unpublished.push((pid, child));
+                    } else {
+                        tracked.running.insert(pid, child);
+                    }
                     Err(e)
                 }
             };
@@ -402,7 +442,7 @@ impl Children {
     /// running under `pid`, if it did and one was read.
     pub fn launched_start(&self, pid: u32) -> Option<u64> {
         let tracked = self.lock();
-        if !tracked.running.contains_key(&pid) {
+        if tracked.pending.contains(&pid) || !tracked.running.contains_key(&pid) {
             return None;
         }
         tracked.start_of.get(&pid).copied().flatten()
@@ -412,6 +452,9 @@ impl Children {
     /// while it runs or when it is not this session's.
     pub fn exited(&self, pid: u32) -> Option<Exited> {
         let mut tracked = self.lock();
+        if tracked.pending.contains(&pid) {
+            return None;
+        }
         tracked.reap();
         if tracked.running.contains_key(&pid) {
             return None;
@@ -601,6 +644,51 @@ const REAP_WAIT: Duration = Duration::from_secs(2);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_abandon_retains_cleanup_without_exposing_the_rejected_child() {
+        let children = Children::new();
+        let (program, args) = if cfg!(windows) {
+            ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
+        } else {
+            ("sleep", vec!["60".into()])
+        };
+        let (pid, _, launch) = children
+            .launch(&LaunchSpec {
+                program: program.into(),
+                args,
+                ..LaunchSpec::default()
+            })
+            .expect("BUG: a long-running system program starts");
+        let result = children.end_tracked_with(pid, Some(launch), |_, _| {
+            Err(ToolError::platform(
+                "ending child",
+                "injected termination failure",
+            ))
+        });
+        assert!(result.is_err());
+        assert!(!children.contains(pid));
+        assert!(matches!(
+            children.kill(pid),
+            Err(ToolError::UnknownHandle { .. })
+        ));
+        {
+            let mut tracked = children.lock();
+            assert_eq!(tracked.unpublished.len(), 1);
+            assert!(
+                tracked.unpublished[0]
+                    .1
+                    .try_wait()
+                    .expect("BUG: child is queryable")
+                    .is_none()
+            );
+        }
+        children.kill_all();
+        assert!(
+            children.lock().unpublished.is_empty(),
+            "shutdown retried termination"
+        );
+    }
 
     /// Models Unix spawn after it created a child but before exec's result
     /// lets it return the handle. Cleanup must not return while that child
@@ -803,10 +891,12 @@ mod tests {
             args: vec!["--list".into()],
             ..LaunchSpec::default()
         };
-        let first = children
+        let (first, _, first_launch) = children
             .launch(&spec)
-            .expect("BUG: relaunching the test binary works")
-            .0;
+            .expect("BUG: relaunching the test binary works");
+        children
+            .publish(first, first_launch)
+            .expect("BUG: first launch is published");
         // Wait for `--list` to finish, then launch again: that reaps it.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while children
@@ -818,10 +908,12 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "BUG: `--list` exits");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        let second = children
+        let (second, _, second_launch) = children
             .launch(&spec)
-            .expect("BUG: relaunching the test binary works")
-            .0;
+            .expect("BUG: relaunching the test binary works");
+        children
+            .publish(second, second_launch)
+            .expect("BUG: second launch is published");
         assert!(!children.contains(first), "the exited child was reaped");
         assert_eq!(children.exited(first), Some(Exited { code: Some(0) }));
         let killed = children
@@ -885,6 +977,9 @@ mod tests {
             .expect("BUG: a long-running system program starts");
         // An earlier launch that returned the same pid, whose process exited
         // and was reaped before this one reused the number.
+        children
+            .publish(pid, launch)
+            .expect("BUG: the later launch is published");
         let earlier = launch + 100;
         children
             .lock()
@@ -914,14 +1009,16 @@ mod tests {
         } else {
             ("sleep", vec!["60".into()])
         };
-        let pid = children
+        let (pid, _, launch) = children
             .launch(&LaunchSpec {
                 program: program.into(),
                 args,
                 ..LaunchSpec::default()
             })
-            .expect("BUG: a long-running system program starts")
-            .0;
+            .expect("BUG: a long-running system program starts");
+        children
+            .publish(pid, launch)
+            .expect("BUG: the launch is published");
         assert!(children.contains(pid));
         let killed = children
             .kill(pid)
@@ -943,14 +1040,17 @@ mod tests {
         };
         let pids: Vec<u32> = (0..3)
             .map(|_| {
-                children
+                let (pid, _, launch) = children
                     .launch(&LaunchSpec {
                         program: program.into(),
                         args: args.clone(),
                         ..LaunchSpec::default()
                     })
-                    .expect("BUG: a long-running system program starts")
-                    .0
+                    .expect("BUG: a long-running system program starts");
+                children
+                    .publish(pid, launch)
+                    .expect("BUG: the launch is published");
+                pid
             })
             .collect();
         let started = std::time::Instant::now();

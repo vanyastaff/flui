@@ -94,7 +94,11 @@ window or element keeps its handle across reads; a handle whose window, element 
 is gone answers `gone` and is never re-bound, even when the OS reuses the native id (which
 then gets a fresh handle). A pid is the OS number, bound to the start time of the process it
 named when this session first handed it out (listed or launched), and refused once that
-process is gone. At most 20000 element handles stay resolvable; the last 8 screenshots.
+process is gone. A launch that conflicts with a previously issued PID is refused and its
+child is ended. The same applies if the desktop worker cannot check the session's PID
+history within 10 seconds; `bound: false` is reserved for a completed registry check
+where the OS could not supply a start time. At most 20000 element handles stay resolvable;
+the last 8 screenshots.
 
 ### Elements
 

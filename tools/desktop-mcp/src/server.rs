@@ -296,9 +296,34 @@ pub struct FindReply {
     pub count: usize,
     /// Matches found in all, when more than `limit`.
     pub total: usize,
-    /// Whether the read did not see the whole tree: then no match is not
-    /// proof of absence.
+    /// Whether the read missed part of the tree or `limit` omitted matches:
+    /// then this reply does not contain every possible match.
     pub truncated: bool,
+}
+
+impl FindReply {
+    fn from_matches(matches: Vec<Node>, read: &a11y::Read, limit: usize, format: Format) -> Self {
+        let total = matches.len();
+        let matches: Vec<Node> = matches.into_iter().take(limit).collect();
+        let count = matches.len();
+        let truncated = read.truncated || count < total;
+        match format {
+            Format::Outline => Self {
+                outline: Some(a11y::outline(&matches)),
+                matches: None,
+                count,
+                total,
+                truncated,
+            },
+            Format::Json => Self {
+                outline: None,
+                matches: Some(matches),
+                count,
+                total,
+                truncated,
+            },
+        }
+    }
 }
 
 /// `wait_for` reply.
@@ -582,6 +607,53 @@ impl DesktopServer {
         failure(&ToolError::Cancelled)
     }
 
+    /// Publishes a launch only after the desktop registry checked its PID.
+    /// A failed check, including a timeout, must not return a PID that could
+    /// still identify an earlier process to the session's other tools.
+    async fn finish_launch(
+        &self,
+        pid: u32,
+        launch: u64,
+        binding: ToolResult<bool>,
+    ) -> CallToolResult {
+        let binding = binding.and_then(|bound| {
+            self.children.publish(pid, launch)?;
+            Ok(bound)
+        });
+        match binding {
+            Ok(bound) => reply(&LaunchReply {
+                pid,
+                bound,
+                note: (!bound).then(|| "the OS reports no process start time".into()),
+            }),
+            Err(error) => {
+                let children = Arc::clone(&self.children);
+                let ended = blocking(
+                    &CancellationToken::new(),
+                    None,
+                    None,
+                    move || children.abandon(pid, launch),
+                    |_| {},
+                )
+                .await;
+                let detail = match ended {
+                    Ok(killed) => format!(
+                        "process {pid} started, but its PID could not be published; {}",
+                        if killed.already_exited {
+                            "it had already exited"
+                        } else {
+                            "termination was requested successfully"
+                        }
+                    ),
+                    Err(cleanup) => format!(
+                        "process {pid} started, but its PID could not be published; ending it failed ({cleanup}); it remains tracked for shutdown"
+                    ),
+                };
+                failure(&error.after(crate::error::Effect::Ran, detail))
+            }
+        }
+    }
+
     async fn act(&self, ct: &CancellationToken, element: String, action: Action) -> CallToolResult {
         respond(
             self.worker
@@ -620,7 +692,7 @@ impl DesktopServer {
 
     #[tool(
         title = "Launch a program",
-        description = "Start a program (stdio discarded) and return its pid, bound as a target in this session once the desktop thread is free (`bound`; wait_for_window binds it later when it could not be at once). Then wait_for_window to get its window. The server kills every launched process when it exits: on Windows also everything those start, even when the server itself is killed; elsewhere only the launched processes, on a clean exit. A launch the client cancels ends the process it started, since the pid is never delivered.",
+        description = "Start a program (stdio discarded) and return its pid after checking its session identity. If the desktop thread cannot check it within 10 s, or the pid identifies an earlier process, end the new process and fail. bound is false only when the OS reports no process start time. Then wait_for_window to get its window. The server kills every launched process when it exits: on Windows also everything those start, even when the server itself is killed; elsewhere only the launched processes, on a clean exit. A launch the client cancels ends the process it started, since the pid is never delivered.",
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = true),
         output_schema = schema::<LaunchReply>()
     )]
@@ -668,9 +740,8 @@ impl DesktopServer {
         if ct.is_cancelled() {
             return self.void_launch(pid, launch).await;
         }
-        // Bind the pid to the identity read at the spawn. The process runs
-        // now whatever happens to this request, so this step is not skipped;
-        // a full queue is waited out rather than failing the binding.
+        // Check the pid against every identity the session already issued.
+        // A full queue is retried, but no PID is published without the check.
         // Bounded as a whole: a desktop thread stuck in a platform call
         // would otherwise hold the pid back from the caller for good.
         let bind_until = Instant::now() + BIND_WAIT;
@@ -678,15 +749,9 @@ impl DesktopServer {
         let mut bound = Err(ToolError::ShuttingDown);
         for _ in 0..BIND_ATTEMPTS {
             let left = bind_until.saturating_duration_since(Instant::now());
-            let attempt = self.worker.run(&never, move |d| {
-                if d.bind_launched(pid, started) {
-                    Ok(())
-                } else {
-                    Err(ToolError::NotSupported(
-                        "this pid was handed out before for another process, or the OS reports no start time".into(),
-                    ))
-                }
-            });
+            let attempt = self
+                .worker
+                .run(&never, move |d| d.bind_launched(pid, started));
             bound = tokio::time::timeout(left, attempt)
                 .await
                 .unwrap_or_else(|_| {
@@ -709,11 +774,7 @@ impl DesktopServer {
         if ct.is_cancelled() {
             return self.void_launch(pid, launch).await;
         }
-        reply(&LaunchReply {
-            pid,
-            bound: bound.is_ok(),
-            note: bound.err().map(|e| e.to_string()),
-        })
+        self.finish_launch(pid, launch, bound).await
     }
 
     #[tool(
@@ -751,13 +812,12 @@ impl DesktopServer {
             // Bounded by what is left of the wait: a lookup still queued
             // behind other desktop work when the time is up is withdrawn
             // (one already running finishes; it cannot be stopped halfway).
-            // A pid this session launched but could not bind then (the
-            // desktop thread was busy) is bound now, from the start time
-            // read at the spawn.
+            // Recheck the launched identity against the registry using the
+            // start time read at spawn, never a later process under this PID.
             let started = self.children.launched_start(pid);
             let windows = before_deadline(&self.worker, &ct, deadline, move |d| {
                 if started.is_some() {
-                    d.bind_launched(pid, started);
+                    d.bind_launched(pid, started)?;
                 }
                 d.windows_of(pid)
             })
@@ -931,7 +991,7 @@ impl DesktopServer {
 
     #[tool(
         title = "Find elements",
-        description = "Find elements in a window, a process or under an element (`root`) by name (exact), name_contains (case-insensitive), role (`button`, `text_input`, ... or the OS's own name) and/or automation_id; all given criteria must match. Returns at most `limit` matches (default 50) as an outline or as nodes without children, and truncated: true when the read did not see the whole tree (then no match is not proof of absence).",
+        description = "Find elements in a window, a process or under an element (`root`) by name (exact), name_contains (case-insensitive), role (`button`, `text_input`, ... or the OS's own name) and/or automation_id; all given criteria must match. Returns at most `limit` matches (default 50) as an outline or as nodes without children, and truncated: true when the read did not see the whole tree or the limit omitted matches (then the reply is incomplete; an empty truncated result is not proof of absence).",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema::<FindReply>()
     )]
@@ -948,27 +1008,7 @@ impl DesktopServer {
                 d.find(&scope, &query, Instant::now() + READ_DEADLINE)
             })
             .await;
-        respond(found.map(|(matches, read)| {
-            let total = matches.len();
-            let matches: Vec<Node> = matches.into_iter().take(limit).collect();
-            let count = matches.len();
-            match format {
-                Format::Outline => FindReply {
-                    outline: Some(a11y::outline(&matches)),
-                    matches: None,
-                    count,
-                    total,
-                    truncated: read.truncated,
-                },
-                Format::Json => FindReply {
-                    outline: None,
-                    matches: Some(matches),
-                    count,
-                    total,
-                    truncated: read.truncated,
-                },
-            }
-        }))
+        respond(found.map(|(matches, read)| FindReply::from_matches(matches, &read, limit, format)))
     }
 
     #[tool(
@@ -1360,6 +1400,160 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_launch_becomes_addressable_only_after_identity_checked_publication() {
+        let worker = Worker::spawn().expect("BUG: worker starts");
+        let children = Arc::new(Children::new());
+        let server = DesktopServer::new(worker.clone(), Arc::clone(&children));
+        let (program, args) = if cfg!(windows) {
+            ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
+        } else {
+            ("sleep", vec!["60".into()])
+        };
+        let (pid, started, launch) = children
+            .launch(&LaunchSpec {
+                program: program.into(),
+                args,
+                ..LaunchSpec::default()
+            })
+            .expect("BUG: a long-running system program starts");
+        assert!(matches!(
+            children.kill(pid),
+            Err(ToolError::UnknownHandle { .. })
+        ));
+        assert!(children.launched_start(pid).is_none());
+        assert!(children.exited(pid).is_none());
+        assert!(children.contains(pid), "the pending child is still alive");
+        let binding = worker
+            .run(&CancellationToken::new(), move |desktop| {
+                desktop.bind_launched(pid, started)
+            })
+            .await;
+        let result = server.finish_launch(pid, launch, binding).await;
+        assert_ne!(result.is_error, Some(true));
+        let payload = result
+            .structured_content
+            .expect("BUG: launch has structured content");
+        assert_eq!(payload["pid"], pid);
+        assert_eq!(payload["bound"], started.is_some());
+        assert_eq!(children.launched_start(pid), started);
+        assert!(
+            !children
+                .kill(pid)
+                .expect("BUG: published launch is addressable")
+                .already_exited
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_unpublishable_launch_is_ended_instead_of_returning_a_pid() {
+        let worker = Worker::spawn().expect("BUG: worker starts");
+        let children = Arc::new(Children::new());
+        let server = DesktopServer::new(worker.clone(), Arc::clone(&children));
+        for collision in [true, false] {
+            let (program, args) = if cfg!(windows) {
+                ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
+            } else {
+                ("sleep", vec!["60".into()])
+            };
+            let (pid, started, launch) = children
+                .launch(&LaunchSpec {
+                    program: program.into(),
+                    args,
+                    ..LaunchSpec::default()
+                })
+                .expect("BUG: a long-running system program starts");
+            let binding = if collision {
+                worker
+                    .run(&CancellationToken::new(), move |desktop| {
+                        desktop.bind_launched(pid, Some(u64::MAX))?;
+                        desktop.bind_launched(pid, started)
+                    })
+                    .await
+            } else {
+                Err(ToolError::Busy(
+                    "the desktop thread is still busy with an earlier call".into(),
+                ))
+            };
+            assert!(binding.is_err(), "the registry check did not succeed");
+            let result = server.finish_launch(pid, launch, binding).await;
+            assert_eq!(result.is_error, Some(true));
+            let payload = result
+                .structured_content
+                .expect("BUG: error has structured content");
+            assert!(
+                payload.get("pid").is_none(),
+                "no successful launch was published"
+            );
+            assert_eq!(payload["error"]["effect"]["kind"], "ran");
+            assert_eq!(payload["error"]["retry"], "never");
+            assert!(
+                !children.contains(pid),
+                "the unpublished child was terminated"
+            );
+            assert!(
+                children
+                    .kill(pid)
+                    .expect("BUG: exit is remembered")
+                    .already_exited
+            );
+        }
+    }
+
+    #[test]
+    fn find_replies_report_matches_omitted_by_the_limit() {
+        let matches: Vec<Node> = (1..=51)
+            .map(|id| Node {
+                id: format!("e{id}"),
+                ..a11y::tests_node()
+            })
+            .collect();
+        for format in [Format::Outline, Format::Json] {
+            for (limit, read_truncated, expected_truncated) in
+                [(50, false, true), (51, false, false), (51, true, true)]
+            {
+                let read = a11y::Read {
+                    truncated: read_truncated,
+                    ..a11y::Read::default()
+                };
+                let result = reply(&FindReply::from_matches(
+                    matches.clone(),
+                    &read,
+                    limit,
+                    format,
+                ));
+                let payload = result
+                    .structured_content
+                    .expect("BUG: find has structured content");
+                let ContentBlock::Text(text) = &result.content[0] else {
+                    panic!("BUG: find has text content");
+                };
+                assert_eq!(
+                    serde_json::from_str::<Value>(&text.text).ok(),
+                    Some(payload.clone())
+                );
+                assert_eq!(payload["count"], limit);
+                assert_eq!(payload["total"], 51);
+                assert_eq!(payload["truncated"], expected_truncated);
+                match format {
+                    Format::Outline => {
+                        let outline = payload["outline"].as_str().expect("BUG: outline requested");
+                        assert_eq!(outline.lines().count(), limit);
+                        assert_eq!(outline.contains("[ref=e51]"), limit == 51);
+                    }
+                    Format::Json => {
+                        let nodes = payload["matches"].as_array().expect("BUG: nodes requested");
+                        assert_eq!(nodes.len(), limit);
+                        assert_eq!(
+                            nodes.last().expect("BUG: nonempty matches")["id"],
+                            format!("e{limit}")
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn expired_window_lookup_never_starts() {

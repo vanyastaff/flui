@@ -489,19 +489,30 @@ impl Registry {
     /// read at the spawn, while the launcher still holds the child, so it
     /// cannot belong to a later process reusing the pid. A pid this session
     /// already handed out for another process is not re-bound. Whether the
-    /// pid is bound comes back.
-    fn bind_launched(&mut self, pid: u32, started: Option<u64>) -> bool {
-        let Some(started) = started else {
-            return false;
+    /// pid is bound comes back; an existing conflicting identity refuses
+    /// publication, including one whose start time was unreadable.
+    fn bind_launched(&mut self, pid: u32, started: Option<u64>) -> ToolResult<bool> {
+        let collision = || {
+            ToolError::InvalidArgument(format!(
+                "pid {pid} already identifies an earlier or unidentified process in this session; the new launch cannot publish it"
+            ))
         };
         if let Some(&then) = self.started.get(&pid) {
-            return then == started;
+            return if Some(then) == started {
+                Ok(true)
+            } else {
+                Err(collision())
+            };
         }
         if self.unidentified.contains(&pid) {
-            return false;
+            return Err(collision());
         }
+        let Some(started) = started else {
+            self.unidentified.insert(pid);
+            return Ok(false);
+        };
         self.started.insert(pid, started);
-        true
+        Ok(true)
     }
 
     /// What a target is bound to. A handle never issued is unknown; one
@@ -786,7 +797,7 @@ impl Desktop {
     }
 
     /// Binds a pid `launch` just started; see [`Registry::bind_launched`].
-    pub fn bind_launched(&mut self, pid: u32, started: Option<u64>) -> bool {
+    pub fn bind_launched(&mut self, pid: u32, started: Option<u64>) -> ToolResult<bool> {
         self.registry.bind_launched(pid, started)
     }
 
@@ -1422,9 +1433,14 @@ impl Desktop {
         // would act on the target instead.
         let mut guard = |at: Option<(i32, i32)>| {
             if let Some(point) = at {
+                // Auto-scroll or a layout change can replace the destination
+                // at its cached point while the same window stays in front.
+                // Keep its element identity through movement, drop and recovery.
+                Self::element_hit(a11y.as_mut(), to_element.as_ref(), to)?;
                 Self::screenshot_locations(&locations, |shot| {
                     Self::validate_screenshot(registry, shot)
                 })?;
+                Self::element_window(registry, to_element.as_ref(), to)?;
                 return Self::check(registry, target, bound, &[point]);
             }
             // The slow hit-tests first, the fast window checks after both,
@@ -1916,6 +1932,27 @@ mod tests {
     }
 
     #[test]
+    fn launch_without_a_start_time_reserves_its_pid_and_refuses_prior_identities() {
+        let mut registry = Registry::default();
+        assert!(
+            !registry
+                .bind_launched(100, None)
+                .expect("BUG: a new PID is admissible")
+        );
+        assert!(registry.unidentified.contains(&100));
+        assert!(registry.bind_launched(100, None).is_err());
+        assert!(registry.bind_launched(100, Some(123)).is_err());
+        assert_eq!(registry.observe_process(200, Some(456)), None);
+        assert!(registry.bind_launched(200, None).is_err());
+        assert_eq!(registry.started.get(&200), Some(&456));
+        assert_eq!(
+            registry.observe_process(300, None),
+            Some(Untargetable::UnidentifiedProcess)
+        );
+        assert!(registry.bind_launched(300, None).is_err());
+    }
+
+    #[test]
     fn a_reused_readable_pid_is_not_advertised_as_targetable() {
         let mut registry = Registry::default();
         assert_eq!(registry.observe_process(100, Some(123)), None);
@@ -1923,7 +1960,7 @@ mod tests {
             registry.observe_process(100, Some(456)),
             Some(Untargetable::ReusedProcess)
         );
-        assert!(!registry.bind_launched(100, Some(456)));
+        assert!(registry.bind_launched(100, Some(456)).is_err());
         assert_eq!(registry.started.get(&100), Some(&123));
         assert_eq!(
             same_process(100, registry.started.get(&100).copied(), Some(456))
@@ -2020,7 +2057,7 @@ mod tests {
             registry.observe_process(100, Some(123)),
             Some(Untargetable::UnidentifiedProcess)
         );
-        assert!(!registry.bind_launched(100, Some(123)));
+        assert!(registry.bind_launched(100, Some(123)).is_err());
         assert_eq!(
             registry
                 .bound(TargetArg::Pid(100))
@@ -2029,7 +2066,11 @@ mod tests {
             "not_supported"
         );
         assert_eq!(registry.observe_process(200, Some(456)), None);
-        assert!(registry.bind_launched(200, Some(456)));
+        assert!(
+            registry
+                .bind_launched(200, Some(456))
+                .expect("BUG: the identity matches")
+        );
     }
 
     #[test]

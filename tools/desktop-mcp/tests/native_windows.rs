@@ -103,6 +103,22 @@ unsafe extern "system" fn window_proc(
             }),
             WM_MOUSEMOVE
                 if wparam.0 & 1 != 0
+                    && std::env::var_os("FLUI_MCP_MOVE_DESTINATION").is_some()
+                    && !MOVED_DURING_DRAG.with(Cell::get) =>
+            {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    GetDlgItem, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+                };
+                // Only the named destination moves; its former point remains
+                // inside the same foreground window for the entire gesture.
+                if let Ok(destination) = GetDlgItem(Some(window), 1003) {
+                    MOVED_DURING_DRAG.with(|moved| moved.set(true));
+                    let _ =
+                        SetWindowPos(destination, None, 25, 165, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+                }
+            }
+            WM_MOUSEMOVE
+                if wparam.0 & 1 != 0
                     && std::env::var_os("FLUI_MCP_MOVE_DURING_DRAG").is_some()
                     && !MOVED_DURING_DRAG.with(Cell::get) =>
             {
@@ -805,5 +821,88 @@ fn a_moving_screenshot_source_interrupts_the_drag() {
         (i64::from(cursor.x), i64::from(cursor.y)),
         (x + 420, y + 300)
     );
+    call(&mut client, "kill", json!({"pid": pid}));
+}
+
+#[test]
+#[ignore = "moves its owned destination control during a real element-based drag"]
+fn a_moving_destination_element_interrupts_the_drag() {
+    let (mut client, _) = Client::start();
+    let executable = std::env::current_exe().expect("BUG: test executable path");
+    let launched = call(
+        &mut client,
+        "launch",
+        json!({
+            "program": executable.to_string_lossy(),
+            "args": ["--exact", "native_fixture_process", "--ignored", "--nocapture"],
+            "env": {"FLUI_MCP_NATIVE_FIXTURE": "1", "FLUI_MCP_MOVE_DESTINATION": "1"}
+        }),
+    );
+    let pid = launched["pid"].as_u64().expect("BUG: child pid");
+    let waited = call(
+        &mut client,
+        "wait_for_window",
+        json!({"pid": pid, "timeout_ms": 15000}),
+    );
+    let window = waited["window"]["id"].as_str().expect("BUG: child window");
+    let activated = call(&mut client, "activate_window", json!({"window": window}));
+    assert_eq!(activated["became_foreground"], true, "{activated}");
+    let destination = call(
+        &mut client,
+        "wait_for",
+        json!({"window": window, "automation_id": "1003", "timeout_ms": 5000}),
+    );
+    let checkbox = &destination["element"]["id"];
+    let rect = &destination["element"]["rect"];
+    let old_x = rect["x"].as_i64().expect("BUG: destination x")
+        + rect["width"].as_i64().expect("BUG: destination width") / 2;
+    let old_y = rect["y"].as_i64().expect("BUG: destination y")
+        + rect["height"].as_i64().expect("BUG: destination height") / 2;
+    let x = activated["window"]["rect"]["x"].as_i64().expect("BUG: x") + 320;
+    let y = activated["window"]["rect"]["y"].as_i64().expect("BUG: y") + 260;
+    let result = client.call(
+        "drag",
+        json!({
+            "window": window, "from": {"x": x, "y": y},
+            "to": {"element": checkbox}, "duration_ms": 1000
+        }),
+    );
+    // Observe cleanup before another MCP input can retry a failed release.
+    // SAFETY: GetAsyncKeyState takes only a virtual-key value and reads state.
+    unsafe {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON,
+        };
+        for button in [VK_LBUTTON, VK_RBUTTON] {
+            assert!(
+                GetAsyncKeyState(i32::from(button.0)) >= 0,
+                "the drag must release its physical button before replying: {result}"
+            );
+        }
+    }
+    assert_eq!(result["isError"], true, "{result}");
+    let error = &result["structuredContent"]["error"];
+    assert_eq!(error["code"], "outside_target", "{result}");
+    assert_eq!(error["effect"]["kind"], "partial", "{result}");
+    let sent = error["effect"]["sent"].as_u64().expect("BUG: sent count");
+    let total = error["effect"]["total"].as_u64().expect("BUG: total count");
+    assert!(sent < total, "{result}");
+    let after = call(
+        &mut client,
+        "wait_for",
+        json!({"window": window, "element": checkbox, "timeout_ms": 5000}),
+    );
+    assert_eq!(
+        after["element"]["rect"]["y"].as_i64(),
+        rect["y"].as_i64().map(|y| y + 50),
+        "{after}"
+    );
+    let mut cursor = windows::Win32::Foundation::POINT::default();
+    // SAFETY: the output pointer refers to an initialized writable POINT.
+    unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&raw mut cursor) }
+        .expect("BUG: readable cursor");
+    assert_ne!((i64::from(cursor.x), i64::from(cursor.y)), (old_x, old_y));
+    // Subsequent input must also remain usable after the refused recovery.
+    call(&mut client, "move_mouse", json!({"x": x, "y": y}));
     call(&mut client, "kill", json!({"pid": pid}));
 }

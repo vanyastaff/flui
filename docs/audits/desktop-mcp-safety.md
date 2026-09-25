@@ -10,6 +10,38 @@ by `flui-platform`; no framework behavior, CI workflow or publishing changes.
 
 ## Repaired failure scenarios
 
+Independent reviews traced accessibility preparation/dispatch/readback, complete pointer
+gestures, and process publication/cancellation. UIA actions now prepare their capabilities
+before a shared final identity check; dispatch contains only the mutation. Text values
+are checked against the held element identity using the refreshed value snapshot before
+being consumed by either traversal or action readback. The additional provider identity
+call observes the traversal/readback deadline.
+
+Element-based drags revalidate the original destination at its original point throughout
+movement, final drop and recovery. A native fixture moves that control while leaving its
+parent window fixed, exercising a layout change that a window-only guard cannot detect.
+
+Process creation and publication are separate: pending children cannot be addressed by
+public PID operations before the registry check. A known collision or an unavailable
+registry check refuses publication and ends the child. A failed abandonment retains the
+child separately for shutdown, without exposing it through the colliding PID. The busy
+worker fallback was removed from ADR-0080 because it could bypass this check. `find`
+marks replies truncated when its output limit omits matches as well as when traversal
+was incomplete.
+
+The native destination test passed with direct physical-button state assertions before
+any subsequent MCP input could retry cleanup. Removing destination validation made the
+same test return a successful drag to the stale point and fail. Removing the final
+validation from the production UIA dispatch and value-consumption helpers separately
+made both injected regressions fail. The three mutations were restored before the final
+gate. These UIA tests prove the shared sequencing boundaries; they do not run a native
+provider that deliberately replaces itself during a call.
+`cargo xtask check-changed --base 7c42235d399228e6bdc63cec5e81c6667d5a2c3e`
+passed: 168 tests, eight skipped, formatting, strict rustdoc and Windows/macOS clippy.
+After restoring the mutations, the native Windows suite passed all five entries again.
+Process tests use real children with injected identity collisions and termination failure;
+actual OS PID reuse and macOS runtime execution were not exercised.
+
 Pointer guards retain screenshot provenance throughout drag steps, release and recovery,
 and recheck it for clicks, scrolling and movement. A native fixture shifts its own window
 eight pixels while its drag button is held: the source is retired, movement stops before
