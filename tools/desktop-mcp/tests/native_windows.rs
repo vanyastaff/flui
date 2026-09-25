@@ -24,15 +24,17 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput,
-    SetFocus,
+    GetKeyState, GetKeyboardLayout, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput, SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
+    VK_SHIFT, VkKeyScanExW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BS_AUTOCHECKBOX, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, ES_READONLY,
     GetMessageW, GetSystemMetrics, HMENU, IsDialogMessageW, MSG, PostQuitMessage, RegisterClassW,
     SM_SWAPBUTTON, SetTimer, SetWindowTextW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_TIMER, WNDCLASSW,
-    WS_BORDER, WS_CHILD, WS_MINIMIZE, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
+    WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_SYSKEYDOWN, WM_TIMER, WNDCLASSW, WS_BORDER, WS_CHILD, WS_MINIMIZE, WS_OVERLAPPEDWINDOW,
+    WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -46,6 +48,7 @@ struct Metrics {
 thread_local! {
     static METRICS: Cell<Metrics> = const { Cell::new(Metrics { wheel: 0, down: None, drag: (0, 0) }) };
     static EARLY_RELEASED: Cell<bool> = const { Cell::new(false) };
+    static CHORD_REPORT: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
 }
 
 fn point(lparam: LPARAM) -> (i32, i32) {
@@ -73,6 +76,23 @@ unsafe extern "system" fn window_proc(
             WM_TIMER => {
                 let _ = DestroyWindow(window);
                 return LRESULT(0);
+            }
+            WM_KEYDOWN | WM_SYSKEYDOWN if !matches!(wparam.0, 0x10..=0x12 | 0x5B | 0x5C | 0xA0..=0xA5) =>
+            {
+                // Queue-local key state is the modifier state the target
+                // actually received with this main-key message.
+                let down = |key| GetKeyState(key) < 0;
+                let modifiers = u8::from(down(i32::from(VK_SHIFT.0)))
+                    | u8::from(down(i32::from(VK_CONTROL.0))) << 1
+                    | u8::from(down(i32::from(VK_MENU.0))) << 2
+                    | u8::from(down(i32::from(VK_LWIN.0)) || down(i32::from(VK_RWIN.0))) << 3;
+                let text: Vec<u16> = format!("vk={} modifiers={modifiers}", wparam.0)
+                    .encode_utf16()
+                    .chain(Some(0))
+                    .collect();
+                CHORD_REPORT.with(|report| {
+                    let _ = SetWindowTextW(report.get(), PCWSTR(text.as_ptr()));
+                });
             }
             WM_LBUTTONDOWN => METRICS.with(|state| {
                 let _ = SetFocus(Some(window));
@@ -225,6 +245,57 @@ fn native_fixture_process() {
             None,
         )
         .expect("BUG: pixel landmark control");
+        // Resolve an actual shifted punctuation key on this receiving
+        // thread, independently of MCP's implied-modifier implementation.
+        let layout = GetKeyboardLayout(0);
+        let (character, virtual_key) = ['+', '*', ':', '?', '!', '(', ')']
+            .into_iter()
+            .find_map(|character| {
+                let mapped = VkKeyScanExW(character as u16, layout);
+                let [key, modifiers] = mapped.to_le_bytes();
+                (mapped != -1 && modifiers == 1).then_some((character, key))
+            })
+            .expect("BUG: fixture needs shifted punctuation on its keyboard layout");
+        let combo = if character == '+' {
+            "ctrl+plus".to_owned()
+        } else {
+            format!("ctrl+{character}")
+        };
+        let expected: Vec<u16> = format!("{combo}|vk={virtual_key} modifiers=3")
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            PCWSTR(expected.as_ptr()),
+            WS_CHILD | WS_VISIBLE,
+            25,
+            325,
+            500,
+            20,
+            Some(window),
+            Some(HMENU(1005_usize as *mut core::ffi::c_void)),
+            Some(instance),
+            None,
+        )
+        .expect("BUG: chord mapping label");
+        let report = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("STATIC"),
+            w!("no chord received"),
+            WS_CHILD | WS_VISIBLE,
+            25,
+            350,
+            500,
+            20,
+            Some(window),
+            Some(HMENU(1006_usize as *mut core::ffi::c_void)),
+            Some(instance),
+            None,
+        )
+        .expect("BUG: received chord label");
+        CHORD_REPORT.with(|cell| cell.set(report));
         // A bounded lifetime also covers a containment regression in the server.
         assert_ne!(SetTimer(Some(window), 1, 60_000, None), 0);
         let mut message = MSG::default();
@@ -379,6 +450,62 @@ fn assert_capture_landmark(client: &mut Client, window: &str) {
     }
 }
 
+fn click_checkbox_from_downscaled_capture(client: &mut Client, window: &str, checkbox: &str) {
+    let found = call(
+        client,
+        "wait_for",
+        json!({"window": window, "automation_id": "1003", "timeout_ms": 5000}),
+    );
+    let rect = &found["element"]["rect"];
+    let shot = client.call("screenshot", json!({"window": window, "max_side": 200}));
+    assert_ne!(shot["isError"], true, "{shot}");
+    let text = shot["content"]
+        .as_array()
+        .expect("BUG: content")
+        .iter()
+        .find(|block| block["type"] == "text")
+        .expect("BUG: screenshot metadata");
+    let meta: Value = serde_json::from_str(text["text"].as_str().expect("BUG: metadata text"))
+        .expect("BUG: screenshot JSON");
+    let sx = meta["scale_x"].as_f64().expect("BUG: scale x");
+    let sy = meta["scale_y"].as_f64().expect("BUG: scale y");
+    assert!(
+        sx > 0.0 && sx < 1.0 && sy > 0.0 && sy < 1.0,
+        "must exercise downscaled coordinates: {meta}"
+    );
+    let n = |value: &Value, field: &str| value[field].as_f64().expect("BUG: numeric geometry");
+    let x = ((n(rect, "x") + n(rect, "width") / 2.0 - n(&meta["source"], "x")) * sx).round() as i32;
+    let y =
+        ((n(rect, "y") + n(rect, "height") / 2.0 - n(&meta["source"], "y")) * sy).round() as i32;
+    state(client, checkbox, json!({"checked": false}));
+    call(
+        client,
+        "click",
+        json!({"window": window, "screenshot": meta["id"], "x": x, "y": y}),
+    );
+    state(client, checkbox, json!({"checked": true}));
+}
+
+fn assert_received_shifted_chord(client: &mut Client, window: &str) {
+    let mapping = call(
+        client,
+        "wait_for",
+        json!({"window": window, "automation_id": "1005", "timeout_ms": 5000}),
+    );
+    let description = mapping["element"]["name"]
+        .as_str()
+        .expect("BUG: chord mapping label");
+    let (combo, expected) = description
+        .split_once('|')
+        .expect("BUG: mapping separates request and received chord");
+    call(client, "key", json!({"window": window, "combo": combo}));
+    call(
+        client,
+        "wait_for",
+        json!({"window": window, "automation_id": "1006", "name": expected, "timeout_ms": 5000}),
+    );
+}
+
 #[test]
 #[ignore = "moves real pointer and keyboard on an interactive Windows desktop"]
 fn native_controls_through_mcp() {
@@ -493,6 +620,7 @@ fn native_controls_through_mcp() {
         json!({"window": window, "element": checkbox}),
     );
     state(&mut client, &checkbox, json!({"checked": false}));
+    click_checkbox_from_downscaled_capture(&mut client, &window, &checkbox);
 
     let windows = call(&mut client, "list_windows", json!({"pid": pid}));
     let rect = &windows["windows"][0]["rect"];
@@ -503,6 +631,7 @@ fn native_controls_through_mcp() {
         "click",
         json!({"window": window, "x": x, "y": y}),
     );
+    assert_received_shifted_chord(&mut client, &window);
     call(
         &mut client,
         "scroll",

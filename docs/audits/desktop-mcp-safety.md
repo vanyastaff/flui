@@ -4,10 +4,34 @@ Reviewed PR [#1287](https://github.com/vanyastaff/flui/pull/1287) at
 `d7e728daa6dca68b162cbf825f597dc2ff10fcf7`, including 287 inline review threads
 (four unresolved at that head). The review covered input sequencing and OS guards,
 accessibility traversal and actions, handle lifetimes, capture coordinates, worker
-cancellation, process cleanup, MCP validation and wait deadlines. Changes are confined
-to the desktop tool and this report; no framework, CI workflow or publishing changes.
+cancellation, process cleanup, MCP validation and wait deadlines. Changes concern
+the desktop tool, this report and inheritance of the unchanged `core-graphics` version
+by `flui-platform`; no framework behavior, CI workflow or publishing changes.
 
 ## Repaired failure scenarios
+
+Subtree reads revalidate their original root after traversal, including truncated
+results. A confirmed replacement retires handles touched by that walk; an expired
+deadline refuses the result instead of starting another provider call. Nodes whose
+held identity cannot support actions no longer advertise them. Unknown enabledness
+omits `disabled` while retaining the unread-state marker used by wait predicates.
+`flui-platform` inherits the existing workspace `core-graphics` requirement without
+changing its version; `cargo metadata --locked --no-deps --format-version 1` passed.
+The native fixture now checks a checkbox click through a deliberately downscaled
+200-pixel screenshot and records the received main virtual key and modifier state.
+`native_controls_through_mcp` passed before mutation. Removing screenshot scale division
+made the checkbox assertion fail; separately removing implied modifiers produced
+`vk=187 modifiers=2` instead of `vk=187 modifiers=3` for `ctrl+plus`, and failed the
+target-side assertion. Both production mutations were restored. The fixture derives
+its expected shifted punctuation from its own keyboard layout; this live run used
+the plus mapping. These checks exercise the actual MCP input path.
+`cargo xtask check-changed --base a40ccbc37210b5c2527c8272ba659c80e092046b`
+passed the platform-dependent scope: 7,645 tests, six skipped, clippy, strict rustdoc,
+doctests, desktop Windows/macOS checks and both 53-configuration feature passes.
+Linux's platform suite, iOS and wasm remain CI coverage on this Windows host.
+After restoring both mutations, `cargo nextest run -p flui-desktop-mcp --test
+native_windows --run-ignored only --no-capture` passed all three entries, including
+the strengthened controls scenario and the external drag-release scenario.
 
 Monitor screenshots retain the native display identifier from the captured monitor,
 alongside its geometry. Pixel-coordinate validation looks up that identifier rather

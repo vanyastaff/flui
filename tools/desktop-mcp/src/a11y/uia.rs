@@ -529,6 +529,10 @@ impl Uia {
         walk.truncated |= uncertain;
         walk.seen.insert(id.clone());
         let mut node = describe(element, id);
+        let actionable = self.elements.get(&node.id).is_ok_and(|held| {
+            held.runtime.is_some() && held.started.is_some() && held.control_type.is_some()
+        });
+        constrain_actions(&mut node, actionable);
         // One more call for a text control's value, charged like any other.
         if node.has_text_value {
             if walk.budget == 0 || Instant::now() >= walk.deadline {
@@ -1081,6 +1085,39 @@ impl Uia {
     }
 }
 
+/// A definitively replaced root invalidates all handles touched by its walk:
+/// some may have been issued from its replacement before the final check.
+fn finish_subtree(
+    read: Read,
+    touched: &HashSet<String>,
+    validation: ToolResult<()>,
+    mut invalidate: impl FnMut(&str),
+) -> ToolResult<Read> {
+    if let Err(error) = validation {
+        if error.code() == "gone" {
+            for handle in touched {
+                invalidate(handle);
+            }
+        }
+        return Err(error);
+    }
+    Ok(read)
+}
+
+fn constrain_actions(node: &mut Node, identifiable: bool) {
+    if !identifiable {
+        node.actions.clear();
+    }
+}
+
+/// Unknown enabled state is omitted, not represented as a disabled control.
+fn enabled_state(node: &mut Node, enabled: Option<bool>) {
+    node.disabled = enabled == Some(false);
+    if enabled.is_none() {
+        node.unread_states.push("disabled");
+    }
+}
+
 /// Direct element focus is offered only by a readable, live focusable flag.
 /// Read failures stay distinct from an unsupported action and emit no focus.
 fn perform_focus(
@@ -1324,17 +1361,18 @@ impl AccessibilityBackend for Uia {
             truncated: false,
         };
         let roots: Vec<Node> = self.build(&root, 0, &mut walk).into_iter().collect();
-        if roots.is_empty() && !walk.truncated {
-            self.elements.invalidate(element);
-            return Err(ToolError::gone_element(
-                element,
-                "it could not be read as a root any more",
-            ));
-        }
-        Ok(Read {
-            roots,
-            truncated: walk.truncated,
-        })
+        // Even an incomplete walk can outlive its root. Never return a new
+        // proxy's descendants under the caller's original root handle.
+        let validation = self.alive_until(element, Some(deadline)).map(|_| ());
+        finish_subtree(
+            Read {
+                roots,
+                truncated: walk.truncated,
+            },
+            &walk.seen,
+            validation,
+            |handle| self.elements.invalidate(handle),
+        )
     }
 
     fn act(&mut self, handle: &str, action: &Action) -> ToolResult<Node> {
@@ -1506,13 +1544,8 @@ fn describe(element: &UIElement, id: String) -> Node {
         actions.push(ActionName::Focus);
     }
     let mut unread_states = Vec::new();
-    for (state, property) in [
-        ("disabled", UIProperty::IsEnabled),
-        ("focused", UIProperty::HasKeyboardFocus),
-    ] {
-        if cached_flag(element, property).is_none() {
-            unread_states.push(state);
-        }
+    if cached_flag(element, UIProperty::HasKeyboardFocus).is_none() {
+        unread_states.push("focused");
     }
     for (state, unread) in [
         ("checked", checked.is_none()),
@@ -1530,7 +1563,7 @@ fn describe(element: &UIElement, id: String) -> Node {
         Role::Window if cached_bool(element, UIProperty::IsDialog) => Role::Dialog,
         role => role,
     };
-    Node {
+    let mut node = Node {
         id,
         role,
         native_role,
@@ -1542,7 +1575,7 @@ fn describe(element: &UIElement, id: String) -> Node {
             .get_cached_bounding_rectangle()
             .ok()
             .map(|r| Rect::from_ltrb(r.get_left(), r.get_top(), r.get_right(), r.get_bottom())),
-        disabled: !cached_bool(element, UIProperty::IsEnabled),
+        disabled: false,
         focused: cached_bool(element, UIProperty::HasKeyboardFocus),
         focusable,
         checked,
@@ -1558,7 +1591,9 @@ fn describe(element: &UIElement, id: String) -> Node {
         unread_states,
         has_text_value,
         native_window: None,
-    }
+    };
+    enabled_state(&mut node, cached_flag(element, UIProperty::IsEnabled));
+    node
 }
 
 /// The element's role in the tools' vocabulary, and the UI Automation
@@ -1910,6 +1945,60 @@ fn classify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtree_failure_retires_handles_from_a_replaced_root() {
+        let mut cache = ElementCache::default();
+        let child = cache.insert("child", ());
+        let touched = HashSet::from([child.clone()]);
+        let read = Read {
+            roots: vec![crate::a11y::tests_node()],
+            truncated: true,
+        };
+        let result = finish_subtree(
+            read,
+            &touched,
+            Err(ToolError::gone_element(
+                "e99",
+                "root exited during traversal",
+            )),
+            |handle| cache.invalidate(handle),
+        );
+        assert!(matches!(result, Err(ToolError::Gone { .. })));
+        assert!(matches!(cache.get(&child), Err(ToolError::Gone { .. })));
+        let result = finish_subtree(Read::default(), &HashSet::new(), Ok(()), |_| {
+            panic!("a valid root retires nothing")
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn unidentifiable_nodes_offer_no_actions() {
+        for identifiable in [false, true] {
+            let mut node = crate::a11y::tests_node();
+            node.actions = vec![ActionName::Invoke, ActionName::Focus];
+            constrain_actions(&mut node, identifiable);
+            let wire = serde_json::to_value(&node).expect("BUG: nodes serialize");
+            assert_eq!(wire.get("actions").is_some(), identifiable);
+        }
+    }
+
+    #[test]
+    fn unknown_enabled_state_is_omitted_and_cannot_satisfy_a_wait() {
+        for enabled in [None, Some(false), Some(true)] {
+            let mut node = crate::a11y::tests_node();
+            enabled_state(&mut node, enabled);
+            let wire = serde_json::to_value(&node).expect("BUG: nodes serialize");
+            assert_eq!(wire.get("disabled").is_some(), enabled == Some(false));
+            for disabled in [false, true] {
+                let state = crate::params::StateArg {
+                    disabled: Some(disabled),
+                    ..crate::params::StateArg::default()
+                };
+                assert_eq!(state.holds(&node), enabled == Some(!disabled));
+            }
+        }
+    }
 
     #[test]
     fn direct_focus_requires_a_live_readable_focusable_flag() {
