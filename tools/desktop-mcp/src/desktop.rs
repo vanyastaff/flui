@@ -305,6 +305,36 @@ pub struct Registry {
     next_shot: u64,
 }
 
+/// A checked launch identity. The exclusive registry borrow keeps its
+/// validation current until publication commits, without reserving the PID
+/// when a canceled or failed publication drops this value instead.
+#[derive(Debug)]
+pub struct LaunchBinding<'a> {
+    registry: &'a mut Registry,
+    pid: u32,
+    started: Option<u64>,
+}
+
+impl LaunchBinding<'_> {
+    /// Whether the OS supplied an identity usable as an input target.
+    pub fn bound(&self) -> bool {
+        self.started.is_some()
+    }
+
+    /// Records the identity after its launch reply has been built and its
+    /// process token published. No other registry call can interleave.
+    pub fn commit(self) {
+        match self.started {
+            Some(started) => {
+                self.registry.started.insert(self.pid, started);
+            }
+            None => {
+                self.registry.unidentified.insert(self.pid);
+            }
+        }
+    }
+}
+
 impl Registry {
     fn handle(n: u64) -> String {
         format!("w{n}")
@@ -505,27 +535,33 @@ impl Registry {
     /// pid is bound comes back; an existing conflicting identity refuses
     /// publication, including one whose start time was unreadable.
     fn bind_launched(&mut self, pid: u32, started: Option<u64>) -> ToolResult<bool> {
+        let binding = self.prepare_launch(pid, started)?;
+        let bound = binding.bound();
+        binding.commit();
+        Ok(bound)
+    }
+
+    fn prepare_launch(&mut self, pid: u32, started: Option<u64>) -> ToolResult<LaunchBinding<'_>> {
         let collision = || {
             ToolError::InvalidArgument(format!(
                 "pid {pid} already identifies an earlier or unidentified process in this session; the new launch cannot publish it"
             ))
         };
-        if let Some(&then) = self.started.get(&pid) {
-            return if Some(then) == started {
-                Ok(true)
-            } else {
-                Err(collision())
-            };
+        if self
+            .started
+            .get(&pid)
+            .is_some_and(|&then| Some(then) != started)
+        {
+            return Err(collision());
         }
         if self.unidentified.contains(&pid) {
             return Err(collision());
         }
-        let Some(started) = started else {
-            self.unidentified.insert(pid);
-            return Ok(false);
-        };
-        self.started.insert(pid, started);
-        Ok(true)
+        Ok(LaunchBinding {
+            registry: self,
+            pid,
+            started,
+        })
     }
 
     /// What a target is bound to. A handle never issued is unknown; one
@@ -820,6 +856,15 @@ impl Desktop {
     /// Binds a pid `launch` just started; see [`Registry::bind_launched`].
     pub fn bind_launched(&mut self, pid: u32, started: Option<u64>) -> ToolResult<bool> {
         self.registry.bind_launched(pid, started)
+    }
+
+    /// Checks a launch identity without recording it until publication.
+    pub fn prepare_launch(
+        &mut self,
+        pid: u32,
+        started: Option<u64>,
+    ) -> ToolResult<LaunchBinding<'_>> {
+        self.registry.prepare_launch(pid, started)
     }
 
     /// The windows of the process this session bound `pid` to, or `None`
@@ -1405,15 +1450,20 @@ impl Desktop {
             return Err(ToolError::ShuttingDown);
         }
         self.input()?;
-        let (x, y, _) = self.locate(at)?;
+        let (x, y, element) = self.locate(at)?;
         let Self {
-            input, registry, ..
+            a11y,
+            input,
+            registry,
         } = self;
         let input = input
             .as_mut()
             .map_err(|e| ToolError::NotSupported(e.clone()))?;
         // A move with a button still held from a failed release is a drag.
         input.ready()?;
+        // Resolving a clickable point does not prove it still belongs to the
+        // element: an overlay or reflow may have changed what receives hover.
+        Self::element_still_there(a11y.as_mut(), registry, element.as_ref(), (x, y))?;
         Self::screenshot_locations(&[at], |shot| Self::validate_screenshot(registry, shot))?;
         // Again right before the move: resolving an element's point can take
         // a provider's whole call timeout, and shutdown may have begun.
@@ -1749,6 +1799,91 @@ fn activate_while_current<T>(
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires an idle interactive Windows desktop; a broken guard emits a move at the current cursor"]
+    fn move_mouse_refuses_an_element_replaced_after_point_resolution() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct ReplacedElement {
+            point: a11y::ClickPoint,
+            hit_tested: Rc<Cell<bool>>,
+        }
+
+        impl AccessibilityBackend for ReplacedElement {
+            fn available(&self) -> ToolResult<()> {
+                Ok(())
+            }
+
+            fn validate_handle(&mut self, _: &str) -> ToolResult<()> {
+                panic!("unexpected handle validation")
+            }
+
+            fn invalidate_handle(&mut self, _: &str) {
+                panic!("the fixture's live window disappeared")
+            }
+
+            fn tree(&mut self, _: &[u32], _: usize, _: usize, _: Instant) -> ToolResult<Read> {
+                panic!("unexpected tree read")
+            }
+
+            fn subtree(&mut self, _: &str, _: usize, _: usize, _: Instant) -> ToolResult<Read> {
+                panic!("unexpected subtree read")
+            }
+
+            fn act(&mut self, _: &str, _: &Action) -> ToolResult<Node> {
+                panic!("unexpected accessibility action")
+            }
+
+            fn click_point(&mut self, element: &str) -> ToolResult<a11y::ClickPoint> {
+                assert_eq!(element, "e1");
+                Ok(self.point)
+            }
+
+            fn hits(&mut self, element: &str, x: i32, y: i32) -> ToolResult<bool> {
+                assert_eq!(element, "e1");
+                assert_eq!((x, y), (self.point.x, self.point.y));
+                self.hit_tested.set(true);
+                // A provider returned a clickable point, then a sibling
+                // covered it before the final check. The window still lives.
+                Ok(false)
+            }
+
+            fn focus_window(&mut self, _: u32) -> ToolResult<()> {
+                panic!("unexpected window focus")
+            }
+        }
+
+        assert_eq!(os::mouse_buttons_down(), 0, "the desktop must be idle");
+        let (x, y) = os::cursor().expect("BUG: interactive cursor position");
+        let (window, _) = os::foreground().expect("BUG: interactive foreground window");
+        let hit_tested = Rc::new(Cell::new(false));
+        let mut desktop = Desktop {
+            a11y: Box::new(ReplacedElement {
+                point: a11y::ClickPoint {
+                    x,
+                    y,
+                    window: Some(window),
+                },
+                hit_tested: Rc::clone(&hit_tested),
+            }),
+            input: Input::new(),
+            registry: Registry::default(),
+        };
+        let result = desktop.move_mouse(&Location::Element("e1".into()));
+        assert!(
+            hit_tested.get(),
+            "the actual move path must recheck the element"
+        );
+        assert!(matches!(result, Err(ToolError::OutsideTarget { .. })));
+        assert_eq!(
+            os::cursor(),
+            Some((x, y)),
+            "refusal must not move the pointer"
+        );
+    }
+
     #[test]
     fn screenshot_gesture_guard_rechecks_both_origins_and_refuses_stale_recovery() {
         for changed in [1, 2] {
@@ -1971,6 +2106,38 @@ mod tests {
             Some(Untargetable::UnidentifiedProcess)
         );
         assert!(registry.bind_launched(300, None).is_err());
+    }
+
+    #[test]
+    fn dropping_a_checked_launch_preserves_only_independently_issued_identities() {
+        for started in [Some(123), None] {
+            let mut registry = Registry::default();
+            {
+                let _binding = registry
+                    .prepare_launch(100, started)
+                    .expect("BUG: a new PID is admissible");
+            }
+            assert!(!registry.started.contains_key(&100));
+            assert!(!registry.unidentified.contains(&100));
+            assert!(registry.prepare_launch(100, Some(456)).is_ok());
+
+            registry.observe_process(200, started);
+            if started.is_some() {
+                {
+                    let _binding = registry
+                        .prepare_launch(200, started)
+                        .expect("BUG: same listed identity");
+                }
+                assert_eq!(registry.started.get(&200), started.as_ref());
+            } else {
+                assert!(registry.prepare_launch(200, started).is_err());
+                assert!(registry.unidentified.contains(&200));
+            }
+            assert!(
+                registry.prepare_launch(200, Some(456)).is_err(),
+                "dropping a launch cannot erase an independently listed identity"
+            );
+        }
     }
 
     #[test]

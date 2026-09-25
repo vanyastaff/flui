@@ -10,6 +10,25 @@ by `flui-platform`; no framework behavior, CI workflow or publishing changes.
 
 ## Repaired failure scenarios
 
+Launch identity preparation borrows the registry exclusively without modifying it.
+Publication builds the reply, checks cancellation, publishes the child token and commits
+the identity on the desktop worker. Dropping an unpublished preparation leaves no PID
+reservation; independent identities issued by window listings remain intact. Queue
+deadlines withdraw unstarted publication work instead of allowing a late bind.
+
+Element-based pointer movement retains its resolved element and checks both its hit
+identity and owning window after device preparation. An unreadable UIA password flag
+makes an Edit role unknown and unmatchable, including controls without a Value pattern;
+it is no longer guessed to be an ordinary text input.
+`cargo xtask check-changed --base ad84697f7` passed: 177 tests, ten skipped,
+formatting, strict rustdoc and Windows/macOS clippy. The six native Windows entries and
+an interactive test of the actual `Desktop::move_mouse` path passed. That test supplies
+a fake provider's stale hit result at the current cursor; it does not race a real provider.
+Password-role tests use actual UIA variants and the production query/serialization path.
+Cancellation tests use real children and the production worker publication path.
+Three mutations (eager registry recording, omitted movement validation, and guessed
+password role) each made the corresponding regression fail; the sources were restored.
+
 A temporarily unreadable process start time no longer poisons a known PID binding or
 replaces its window handle. The listing marks that observation untargetable; later input
 must obtain a readable matching identity. Checked Windows identity reads distinguish a

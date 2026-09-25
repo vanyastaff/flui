@@ -549,21 +549,21 @@ async fn pause(ct: &CancellationToken, duration: Duration) -> bool {
     }
 }
 
-/// Withdraw queued reads at their deadline. The worker checks the deadline
+/// Withdraw queued work at its deadline. The worker checks the deadline
 /// too, because its thread may claim the job before the async timer is polled.
-/// A read already running finishes and reports its actual outcome.
+/// Work already running finishes and reports its actual outcome.
 async fn before_deadline<T: Send + 'static>(
     worker: &Worker,
     ct: &CancellationToken,
     deadline: Instant,
-    read: impl FnOnce(&mut crate::desktop::Desktop) -> ToolResult<T> + Send + 'static,
+    work: impl FnOnce(&mut crate::desktop::Desktop) -> ToolResult<T> + Send + 'static,
 ) -> ToolResult<T> {
     let lookup = ct.child_token();
     let run = worker.run(&lookup, move |desktop| {
         if Instant::now() >= deadline {
             return Err(ToolError::Cancelled);
         }
-        read(desktop)
+        work(desktop)
     });
     tokio::pin!(run);
     tokio::select! {
@@ -573,6 +573,38 @@ async fn before_deadline<T: Send + 'static>(
             run.await
         }
     }
+}
+
+/// The publication boundary runs entirely on the desktop worker. Dropping
+/// the checked binding leaves no registry history; only a built reply and
+/// a published child token permit its infallible commit.
+fn publish_launch(
+    desktop: &mut crate::desktop::Desktop,
+    children: &Children,
+    ct: &CancellationToken,
+    launched: (u32, Option<u64>, u64),
+    build_reply: impl FnOnce(&LaunchReply) -> CallToolResult,
+) -> ToolResult<CallToolResult> {
+    let (pid, started, launch) = launched;
+    let binding = desktop.prepare_launch(pid, started)?;
+    let bound = binding.bound();
+    let result = build_reply(&LaunchReply {
+        pid,
+        bound,
+        note: (!bound).then(|| "the OS reports no process start time".into()),
+    });
+    if ct.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
+    if result.is_error == Some(true) {
+        return Err(ToolError::platform(
+            "publishing launch",
+            "the reply could not be built",
+        ));
+    }
+    children.publish(pid, launch)?;
+    binding.commit();
+    Ok(result)
 }
 
 impl DesktopServer {
@@ -614,18 +646,10 @@ impl DesktopServer {
         &self,
         pid: u32,
         launch: u64,
-        binding: ToolResult<bool>,
+        publication: ToolResult<CallToolResult>,
     ) -> CallToolResult {
-        let binding = binding.and_then(|bound| {
-            self.children.publish(pid, launch)?;
-            Ok(bound)
-        });
-        match binding {
-            Ok(bound) => reply(&LaunchReply {
-                pid,
-                bound,
-                note: (!bound).then(|| "the OS reports no process start time".into()),
-            }),
+        match publication {
+            Ok(result) => result,
             Err(error) => {
                 let children = Arc::clone(&self.children);
                 let ended = blocking(
@@ -692,7 +716,7 @@ impl DesktopServer {
 
     #[tool(
         title = "Launch a program",
-        description = "Start a program (stdio discarded) and return its pid after checking its session identity. If the desktop thread cannot check it within 10 s, or the pid identifies an earlier process, end the new process and fail. bound is false only when the OS reports no process start time. Then wait_for_window to get its window. The server kills every launched process when it exits: on Windows also everything those start, even when the server itself is killed; elsewhere only the launched processes, on a clean exit. A launch the client cancels ends the process it started, since the pid is never delivered.",
+        description = "Start a program (stdio discarded) and return its pid after checking its session identity. If the desktop thread cannot check it within 10 s, or the pid identifies an earlier process, end the new process and fail. bound is false only when the OS reports no process start time. Then wait_for_window to get its window. The server kills every launched process when it exits: on Windows also everything those start, even when the server itself is killed; elsewhere only the launched processes, on a clean exit. A launch the client cancels before its reply is built ends the process it started, since the pid is never delivered.",
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = true),
         output_schema = schema::<LaunchReply>()
     )]
@@ -745,20 +769,25 @@ impl DesktopServer {
         // Bounded as a whole: a desktop thread stuck in a platform call
         // would otherwise hold the pid back from the caller for good.
         let bind_until = Instant::now() + BIND_WAIT;
-        let never = CancellationToken::new();
         let mut bound = Err(ToolError::ShuttingDown);
         for _ in 0..BIND_ATTEMPTS {
-            let left = bind_until.saturating_duration_since(Instant::now());
-            let attempt = self
-                .worker
-                .run(&never, move |d| d.bind_launched(pid, started));
-            bound = tokio::time::timeout(left, attempt)
-                .await
-                .unwrap_or_else(|_| {
-                    Err(ToolError::Busy(
-                        "the desktop thread is still busy with an earlier call".into(),
-                    ))
-                });
+            let children = Arc::clone(&self.children);
+            let request_ct = ct.clone();
+            bound = before_deadline(&self.worker, &ct, bind_until, move |desktop| {
+                publish_launch(
+                    desktop,
+                    &children,
+                    &request_ct,
+                    (pid, started, launch),
+                    reply,
+                )
+            })
+            .await;
+            if matches!(bound, Err(ToolError::Cancelled)) && !ct.is_cancelled() {
+                bound = Err(ToolError::Busy(
+                    "the desktop thread is still busy with an earlier call".into(),
+                ));
+            }
             if Instant::now() >= bind_until {
                 break;
             }
@@ -771,9 +800,8 @@ impl DesktopServer {
                 return self.void_launch(pid, launch).await;
             }
         }
-        if ct.is_cancelled() {
-            return self.void_launch(pid, launch).await;
-        }
+        // A successful worker result already built the reply and committed
+        // publication. Later cancellation must not undo its issued identity.
         self.finish_launch(pid, launch, bound).await
     }
 
@@ -1402,6 +1430,142 @@ mod tests {
     use super::*;
 
     #[tokio::test(flavor = "current_thread")]
+    async fn canceled_or_failed_publication_leaves_no_registry_history() {
+        let worker = Worker::spawn().expect("BUG: worker starts");
+        let children = Arc::new(Children::new());
+        let server = DesktopServer::new(worker.clone(), Arc::clone(&children));
+        for cancel in [true, false] {
+            for started in [Some(17), None] {
+                let (program, args) = if cfg!(windows) {
+                    ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
+                } else {
+                    ("sleep", vec!["60".into()])
+                };
+                let (pid, _, launch) = children
+                    .launch(&LaunchSpec {
+                        program: program.into(),
+                        args,
+                        ..LaunchSpec::default()
+                    })
+                    .expect("BUG: long-running child starts");
+                let publishing = Arc::clone(&children);
+                let outcome = worker
+                    .run(&CancellationToken::new(), move |desktop| {
+                        let ct = CancellationToken::new();
+                        let outcome = publish_launch(
+                            desktop,
+                            &publishing,
+                            &ct,
+                            (pid, started, if cancel { launch } else { launch + 1 }),
+                            |value| {
+                                // Cancellation arrives after identity validation,
+                                // while the reply is being built, before commit.
+                                if cancel {
+                                    ct.cancel();
+                                }
+                                reply(value)
+                            },
+                        );
+                        assert!(outcome.is_err());
+                        assert_eq!(
+                            outcome.as_ref().expect_err("BUG: publication fails").code(),
+                            if cancel {
+                                "cancelled"
+                            } else {
+                                "invalid_argument"
+                            }
+                        );
+                        assert!(
+                            desktop.prepare_launch(pid, Some(88)).is_ok(),
+                            "an unpublished identity must not reserve the PID"
+                        );
+                        Ok(outcome)
+                    })
+                    .await
+                    .expect("BUG: worker completes");
+                assert!(matches!(
+                    children.kill(pid),
+                    Err(ToolError::UnknownHandle { .. })
+                ));
+                let result = server.finish_launch(pid, launch, outcome).await;
+                assert_eq!(result.is_error, Some(true));
+                assert!(
+                    !children.contains(pid),
+                    "failed publication cleans up its child"
+                );
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_queued_launch_deadline_cannot_commit_a_late_identity() {
+        use std::future::Future;
+        use std::sync::mpsc;
+        use std::task::{Context, Waker};
+
+        let worker = Worker::spawn().expect("BUG: worker starts");
+        let children = Arc::new(Children::new());
+        let server = DesktopServer::new(worker.clone(), Arc::clone(&children));
+        let (program, args) = if cfg!(windows) {
+            ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
+        } else {
+            ("sleep", vec!["60".into()])
+        };
+        let (pid, started, launch) = children
+            .launch(&LaunchSpec {
+                program: program.into(),
+                args,
+                ..LaunchSpec::default()
+            })
+            .expect("BUG: long-running child starts");
+        let (release, hold) = mpsc::channel();
+        let ct = CancellationToken::new();
+        let mut blocker = std::pin::pin!(worker.run(&ct, move |_| {
+            let _ = hold.recv();
+            Ok(())
+        }));
+        assert!(
+            blocker
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = Arc::clone(&ran);
+        let publishing = Arc::clone(&children);
+        let outcome = before_deadline(
+            &worker,
+            &ct,
+            Instant::now() + Duration::from_millis(20),
+            move |desktop| {
+                observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                publish_launch(
+                    desktop,
+                    &publishing,
+                    &CancellationToken::new(),
+                    (pid, started, launch),
+                    reply,
+                )
+            },
+        )
+        .await;
+        assert!(matches!(outcome, Err(ToolError::Cancelled)));
+        let result = server.finish_launch(pid, launch, outcome).await;
+        assert_eq!(result.is_error, Some(true));
+        release.send(()).expect("BUG: blocker waits");
+        blocker.await.expect("BUG: blocker completes");
+        worker
+            .run(&ct, move |desktop| {
+                assert!(desktop.prepare_launch(pid, Some(u64::MAX)).is_ok());
+                Ok(())
+            })
+            .await
+            .expect("BUG: worker reaches the barrier");
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!children.contains(pid));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn a_launch_becomes_addressable_only_after_identity_checked_publication() {
         let worker = Worker::spawn().expect("BUG: worker starts");
         let children = Arc::new(Children::new());
@@ -1425,11 +1589,23 @@ mod tests {
         assert!(children.launched_start(pid).is_none());
         assert!(children.exited(pid).is_none());
         assert!(children.contains(pid), "the pending child is still alive");
+        let publishing = Arc::clone(&children);
+        let ct = CancellationToken::new();
+        let request_ct = ct.clone();
         let binding = worker
-            .run(&CancellationToken::new(), move |desktop| {
-                desktop.bind_launched(pid, started)
+            .run(&ct, move |desktop| {
+                publish_launch(
+                    desktop,
+                    &publishing,
+                    &request_ct,
+                    (pid, started, launch),
+                    reply,
+                )
             })
             .await;
+        // Cancellation after the worker built the reply must not abandon
+        // an identity that this reply has already published.
+        ct.cancel();
         let result = server.finish_launch(pid, launch, binding).await;
         assert_ne!(result.is_error, Some(true));
         let payload = result
@@ -1465,10 +1641,17 @@ mod tests {
                 })
                 .expect("BUG: a long-running system program starts");
             let binding = if collision {
+                let publishing = Arc::clone(&children);
                 worker
                     .run(&CancellationToken::new(), move |desktop| {
                         desktop.bind_launched(pid, Some(u64::MAX))?;
-                        desktop.bind_launched(pid, started)
+                        publish_launch(
+                            desktop,
+                            &publishing,
+                            &CancellationToken::new(),
+                            (pid, started, launch),
+                            reply,
+                        )
                     })
                     .await
             } else {

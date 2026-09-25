@@ -1784,7 +1784,6 @@ fn describe(element: &UIElement, id: String) -> Node {
     }
     let (role, native_role) = role(element);
     let role = match role {
-        Role::TextInput if cached_bool(element, UIProperty::IsPassword) => Role::PasswordInput,
         Role::Window if cached_bool(element, UIProperty::IsDialog) => Role::Dialog,
         role => role,
     };
@@ -1818,7 +1817,25 @@ fn describe(element: &UIElement, id: String) -> Node {
         native_window: None,
     };
     enabled_state(&mut node, cached_flag(element, UIProperty::IsEnabled));
+    password_role(&mut node, cached_flag(element, UIProperty::IsPassword));
     node
+}
+
+/// Password state distinguishes two roles; an unreadable discriminant is
+/// neither ordinary text input nor password input. Mark the observation
+/// incomplete even when no Value pattern exists to trigger a value read.
+fn password_role(node: &mut Node, password: Option<bool>) {
+    if node.role != Role::TextInput {
+        return;
+    }
+    match password {
+        Some(true) => node.role = Role::PasswordInput,
+        Some(false) => {}
+        None => {
+            node.role = Role::Unknown;
+            node.unmatchable = true;
+        }
+    }
 }
 
 /// The element's role in the tools' vocabulary, and the UI Automation
@@ -2036,7 +2053,13 @@ fn cached_of(
 
 /// A cached boolean, `None` when unreadable or of another type.
 fn cached_flag(element: &UIElement, prop: UIProperty) -> Option<bool> {
-    cached_of(element, prop, VT_BOOL).and_then(|v| TryInto::<bool>::try_into(v).ok())
+    flag_value(element.get_cached_property_value(prop).ok())
+}
+
+fn flag_value(value: Option<uiautomation::variants::Variant>) -> Option<bool> {
+    value
+        .and_then(|value| of_type(value, VT_BOOL))
+        .and_then(|value| TryInto::<bool>::try_into(value).ok())
 }
 
 fn cached_bool(element: &UIElement, prop: UIProperty) -> bool {
@@ -2184,6 +2207,50 @@ fn classify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn password_role_requires_a_readable_boolean_even_without_a_value_pattern() {
+        use uiautomation::variants::Variant;
+
+        for (value, expected) in [
+            (None, None),
+            (Some(Variant::from(1_i32)), None),
+            (Some(Variant::from(false)), Some(Role::TextInput)),
+            (Some(Variant::from(true)), Some(Role::PasswordInput)),
+        ] {
+            for has_text_value in [false, true] {
+                let mut node = crate::a11y::tests_node();
+                node.role = role_of(ControlType::Edit);
+                node.native_role = "Edit".into();
+                node.has_text_value = has_text_value;
+                password_role(&mut node, flag_value(value.clone()));
+                assert_eq!(
+                    node.unmatchable,
+                    expected.is_none(),
+                    "an incomplete role must mark the tree read truncated"
+                );
+                let wire = serde_json::to_value(&node).expect("BUG: node serializes");
+                assert_eq!(wire["role"], expected.unwrap_or(Role::Unknown).name());
+                assert_eq!(wire["native_role"], "Edit");
+                for role in [Role::TextInput, Role::PasswordInput] {
+                    let query = crate::a11y::Query {
+                        role: Some(role.name().into()),
+                        ..crate::a11y::Query::default()
+                    }
+                    .prepared()
+                    .expect("BUG: valid role query");
+                    assert_eq!(query.matches(&node), expected == Some(role));
+                }
+                let native_query = crate::a11y::Query {
+                    role: Some("Edit".into()),
+                    ..crate::a11y::Query::default()
+                }
+                .prepared()
+                .expect("BUG: valid native role query");
+                assert_eq!(native_query.matches(&node), expected.is_some());
+            }
+        }
+    }
 
     #[test]
     fn replacement_during_preparation_never_reaches_dispatch() {
