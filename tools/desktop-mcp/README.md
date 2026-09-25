@@ -125,8 +125,10 @@ The outline is one line per element:
 A read (`accessibility_tree`, `find`, one `wait_for` poll) fetches at most 5000 elements
 (500 reported by `accessibility_tree` unless `max_nodes` says more; read a subtree with
 `root`) and 16 MiB of strings, cuts any one string at 4096 characters (ending in `…`), and
-starts no provider call more than 10 s after it began (a call in flight can take up to 5 s
-more under the configured UI Automation timeout). These are traversal and reply
+starts no traversal call more than 10 s after it began (a call in flight can take up to
+5 s more under the configured UI Automation timeout). A subtree then gets a separate
+15 s allowance to start its three mandatory final identity calls (an admitted call
+can take up to 5 s more); it is returned only if those checks succeed. These are traversal and reply
 budgets, not a hard memory or wall-clock limit: UI Automation marshals native property
 values before Rust can clip them, and a provider call cannot be forcibly interrupted on
 the desktop thread. An oversized native property can exhaust the server
@@ -245,6 +247,10 @@ one with physical input.
 Windows restricts which process may take the foreground. `activate_window` restores and
 raises the window and falls back to UI Automation focus; check `became_foreground` before
 sending input.
+
+Clean shutdown waits for the desktop worker to release held input. After 15 seconds it
+warns and keeps waiting; it does not exit with an unfinished release. A hung provider
+or persistent OS refusal to release input can therefore delay clean shutdown indefinitely.
 
 ## Processes
 

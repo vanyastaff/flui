@@ -157,9 +157,8 @@ impl Worker {
         let job: Job = Box::new(move |desktop| {
             let _ = reply.send(f(desktop));
         });
-        // A plain thread, not the runtime's blocking pool: if the queue stays
-        // full past the caller's timeout, the runtime does not wait for this
-        // send at teardown, and the process still exits.
+        // Queue insertion can block, so keep it off the async runtime.
+        // Shutdown awaits both insertion and the job's completed release.
         let (queued, sent) = oneshot::channel();
         thread::Builder::new()
             .name("desktop-shutdown".into())

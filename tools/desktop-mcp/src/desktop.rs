@@ -855,6 +855,15 @@ impl Desktop {
         }
     }
 
+    /// Shutdown must observe an empty held-input set before it can exit.
+    pub fn release_input_checked(&mut self) -> ToolResult<()> {
+        if let Ok(input) = &mut self.input {
+            input.release_all();
+            input.ready()?;
+        }
+        Ok(())
+    }
+
     /// Binds a pid `launch` just started; see [`Registry::bind_launched`].
     pub fn bind_launched(&mut self, pid: u32, started: Option<u64>) -> ToolResult<bool> {
         self.registry.bind_launched(pid, started)

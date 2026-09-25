@@ -397,17 +397,7 @@ impl Uia {
     }
 
     fn check_alive(&self, handle: &str, deadline: Option<Instant>) -> ToolResult<UIElement> {
-        let before_call = || {
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                Err(ToolError::Timeout {
-                    timeout_ms: 0,
-                    what: format!("revalidating element `{handle}` before reading its subtree"),
-                    summary: String::new(),
-                })
-            } else {
-                Ok(())
-            }
-        };
+        let before_call = || before_identity_call(handle, deadline, Instant::now());
         let held = self.elements.get(handle)?;
         let Some(started) = held.started else {
             return Err(ToolError::NotSupported(format!(
@@ -1284,9 +1274,40 @@ fn gone_node(mut node: Node) -> Node {
     node
 }
 
-/// Leave time for the root's mandatory final identity check. Spending the
-/// whole request on traversal would turn every deadline-limited partial read
-/// into a validation timeout. Short waits reserve proportionately less.
+/// Admit each identity-provider call independently. A call already running
+/// remains bounded by UIA's transaction timeout; it cannot be interrupted.
+fn before_identity_call(handle: &str, deadline: Option<Instant>, now: Instant) -> ToolResult<()> {
+    if deadline.is_some_and(|deadline| now >= deadline) {
+        Err(ToolError::Timeout {
+            timeout_ms: 0,
+            what: format!("revalidating element `{handle}` before reading its subtree"),
+            summary: String::new(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// Final subtree validation is a separate bounded phase: `check_alive`
+/// reads the held runtime ID, refreshes the cache, then reads the fresh
+/// runtime ID. Reserve one transaction timeout for each of those three
+/// calls rather than charging the entire phase to one call's allowance.
+/// Calls start only before this deadline; an admitted call can finish up
+/// to one transaction timeout later. Local scheduling and OS identity
+/// lookups are not a hard wall-clock bound. Failed verification never
+/// publishes the partial tree.
+fn validate_subtree(
+    now: Instant,
+    validate: impl FnOnce(Instant) -> ToolResult<()>,
+) -> ToolResult<()> {
+    let allowance =
+        std::time::Duration::from_millis(3 * u64::from(crate::os::UIA_TRANSACTION_TIMEOUT_MS));
+    validate(now + allowance)
+}
+
+/// Stop traversal early enough that fast final validation commonly fits
+/// within the original request budget. Slow final validation has its own
+/// allowance in `validate_subtree`; this reserve is not its deadline.
 fn subtree_traversal_deadline(now: Instant, deadline: Instant) -> Instant {
     let reserve = (deadline.saturating_duration_since(now) / 2).min(
         std::time::Duration::from_millis(u64::from(crate::os::UIA_TRANSACTION_TIMEOUT_MS)),
@@ -1587,7 +1608,10 @@ impl AccessibilityBackend for Uia {
         let roots: Vec<Node> = self.build(&root, 0, &mut walk).into_iter().collect();
         // Even an incomplete walk can outlive its root. Never return a new
         // proxy's descendants under the caller's original root handle.
-        let validation = self.alive_until(element, Some(deadline)).map(|_| ());
+        let validation = validate_subtree(Instant::now(), |validation_deadline| {
+            self.alive_until(element, Some(validation_deadline))
+                .map(|_| ())
+        });
         finish_subtree(
             Read {
                 roots,
@@ -2540,27 +2564,65 @@ mod tests {
     }
 
     #[test]
-    fn subtree_budget_preserves_time_to_validate_a_partial_read() {
-        for millis in [100_u64, 10_000] {
-            let now = Instant::now();
-            let deadline = now + std::time::Duration::from_millis(millis);
-            let traversal = subtree_traversal_deadline(now, deadline);
-            assert!(traversal > now && traversal < deadline);
-            // Traversal stopped on its own budget; the original request
-            // still admits the required final identity validation.
-            let result = finish_subtree(
-                Read {
-                    roots: vec![crate::a11y::tests_node()],
-                    truncated: true,
-                },
-                &HashSet::new(),
-                Ok(()),
-                |_| panic!("a validated partial read preserves its handles"),
-            )
-            .expect("BUG: partial reads retain a final validation budget");
-            assert!(result.truncated);
-            assert_eq!(result.roots.len(), 1);
-        }
+    fn subtree_validation_budget_covers_all_three_provider_calls() {
+        let request_start = Instant::now();
+        let request_deadline = request_start + std::time::Duration::from_secs(10);
+        let traversal = subtree_traversal_deadline(request_start, request_deadline);
+        assert!(traversal > request_start && traversal < request_deadline);
+        // Traversal's final admitted call consumes the remaining request
+        // budget. Final verification still has time for all three calls.
+        let clock = std::cell::Cell::new(request_deadline);
+        let calls = std::cell::Cell::new(0);
+        let duration =
+            std::time::Duration::from_millis(u64::from(crate::os::UIA_TRANSACTION_TIMEOUT_MS) - 1);
+        let validation = validate_subtree(clock.get(), |deadline| {
+            for _ in 0..3 {
+                before_identity_call("e1", Some(deadline), clock.get())?;
+                calls.set(calls.get() + 1);
+                clock.set(clock.get() + duration);
+            }
+            Ok(())
+        });
+        let read = finish_subtree(
+            Read {
+                roots: vec![crate::a11y::tests_node()],
+                truncated: true,
+            },
+            &HashSet::new(),
+            validation,
+            |_| panic!("verified partial reads preserve their handles"),
+        )
+        .expect("BUG: all three bounded validation calls fit");
+        assert_eq!(calls.get(), 3);
+        assert!(clock.get() > request_deadline + duration);
+        assert!(read.truncated);
+        assert_eq!(read.roots.len(), 1);
+    }
+
+    #[test]
+    fn subtree_validation_deadline_stops_new_calls_and_never_returns_unverified_tree() {
+        let clock = std::cell::Cell::new(Instant::now());
+        let calls = std::cell::Cell::new(0);
+        let validation = validate_subtree(clock.get(), |deadline| {
+            before_identity_call("e1", Some(deadline), clock.get())?;
+            calls.set(calls.get() + 1);
+            // Scheduling delayed the next call beyond the phase budget.
+            clock.set(deadline);
+            before_identity_call("e1", Some(deadline), clock.get())?;
+            calls.set(calls.get() + 1);
+            Ok(())
+        });
+        let result = finish_subtree(
+            Read {
+                roots: vec![crate::a11y::tests_node()],
+                truncated: true,
+            },
+            &HashSet::new(),
+            validation,
+            |_| panic!("a timeout is not proof that an element is gone"),
+        );
+        assert_eq!(calls.get(), 1);
+        assert!(matches!(result, Err(ToolError::Timeout { .. })));
     }
 
     #[test]

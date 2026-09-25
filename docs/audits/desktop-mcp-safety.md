@@ -10,6 +10,23 @@ by `flui-platform`; no framework behavior, CI workflow or publishing changes.
 
 ## Repaired failure scenarios
 
+Shutdown's 15-second timer now warns without dropping the pending release job. The
+worker must confirm that held input is cleared before exit, and failed release attempts
+are retried. Tests exercise a blocked real worker and an injected cleanup failure;
+they do not hold a physical mouse button across a deliberately hung provider. A hung
+provider or persistent native release failure can delay clean shutdown indefinitely.
+
+Subtree verification gets a separate admission window covering three UIA transaction
+timeouts. Every final identity call still checks its deadline, and failed verification
+still refuses the tree. Fake-clock tests execute three slow validation admissions and
+reject starting another after phase expiry. This extends subtree read latency; the
+README documents the separate allowance and in-flight overrun. It does not contain
+native providers that ignore their configured timeouts.
+
+`cargo xtask check-changed --base 30eb0c1ea` passed: 185 tests, ten skipped, formatting,
+strict rustdoc and Windows/macOS clippy.
+
+
 Window binding now refuses a missing owner start time on every platform. The macOS
 backend supplies neither that lifetime nor a window-class discriminator, so its listed
 handles cannot authorize window capture; monitor capture remains available. Previously

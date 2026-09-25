@@ -31,10 +31,9 @@ use crate::process::Children;
 use crate::server::DesktopServer;
 use crate::worker::Worker;
 
-/// How long shutdown waits for the desktop thread to stop the call in
-/// progress and release held input. Input stops at its next event once
-/// shutdown is flagged; the wait covers a UI Automation call running out its
-/// own timeout (5 s) on the way.
+/// How long shutdown waits before warning about delayed input cleanup.
+/// This is not an exit deadline: a provider call may still be holding the
+/// desktop thread while input remains pressed.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(15);
 
 #[tokio::main(flavor = "current_thread")]
@@ -84,17 +83,13 @@ async fn main() -> anyhow::Result<()> {
             .name("desktop-shutdown-kill".into())
             .spawn(move || children.kill_all())
     };
-    let released = tokio::time::timeout(
+    release_input_before_exit(
+        &worker,
         SHUTDOWN_WAIT,
-        worker.run_at_shutdown(|d| {
-            d.release_input();
-            Ok(())
-        }),
+        Duration::from_secs(1),
+        desktop::Desktop::release_input_checked,
     )
     .await;
-    if !matches!(released, Ok(Ok(()))) {
-        tracing::warn!("could not release held input before exiting: {released:?}");
-    }
     match ending {
         Ok(thread) => {
             if thread.join().is_err() {
@@ -117,6 +112,39 @@ async fn main() -> anyhow::Result<()> {
     // ends this process without a signal; the kill-on-exit job ends its
     // children then.)
     std::process::exit(0)
+}
+
+/// Keeps the desktop worker alive until its release job has completed.
+/// A warning never drops an in-flight job, and an unconfirmed result never
+/// permits process exit. A disconnected worker therefore requires external
+/// intervention instead of silently abandoning potentially held input.
+async fn release_input_before_exit<F>(
+    worker: &Worker,
+    warning_after: Duration,
+    retry_after: Duration,
+    release_input: F,
+) where
+    F: Fn(&mut desktop::Desktop) -> error::ToolResult<()> + Clone + Send + 'static,
+{
+    loop {
+        let release = worker.run_at_shutdown(release_input.clone());
+        tokio::pin!(release);
+        let result = if let Ok(result) = tokio::time::timeout(warning_after, &mut release).await {
+            result
+        } else {
+            tracing::warn!(
+                "desktop input cleanup is delayed; waiting for the release job before exiting"
+            );
+            release.await
+        };
+        match result {
+            Ok(()) => return,
+            Err(error) => {
+                tracing::error!(%error, "desktop input cleanup was not confirmed; retrying before exit");
+                tokio::time::sleep(retry_after).await;
+            }
+        }
+    }
 }
 
 /// Stdin that starts shutdown at EOF.
@@ -180,5 +208,120 @@ async fn shutdown_signal() {
             () = watch!(ctrl_break()) => {}
             _ = tokio::signal::ctrl_c() => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::task::{Context, Waker};
+
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_waits_past_its_warning_until_the_worker_can_release_input() {
+        let worker = Worker::spawn().expect("BUG: worker starts");
+        let held = Arc::new(AtomicBool::new(false));
+        let in_flight = Arc::clone(&held);
+        let (release, hold) = mpsc::channel();
+        let (started, running) = mpsc::channel();
+        let ct = CancellationToken::new();
+        let mut blocker = std::pin::pin!(worker.run(&ct, move |_| {
+            in_flight.store(true, Ordering::SeqCst);
+            let _ = started.send(());
+            let _ = hold.recv();
+            in_flight.store(false, Ordering::SeqCst);
+            Ok(())
+        }));
+        assert!(
+            blocker
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        running
+            .recv_timeout(Duration::from_secs(5))
+            .expect("BUG: worker job starts");
+        let mut shutdown = std::pin::pin!(release_input_before_exit(
+            &worker,
+            Duration::ZERO,
+            Duration::from_millis(1),
+            desktop::Desktop::release_input_checked,
+        ));
+        let early = tokio::time::timeout(Duration::from_millis(25), &mut shutdown).await;
+        let still_held = held.load(Ordering::SeqCst);
+        // Always unblock the real worker before asserting, so a regression
+        // cannot leave the test's thread waiting forever.
+        release.send(()).expect("BUG: worker is waiting");
+        blocker.await.expect("BUG: worker job completes");
+        assert!(
+            early.is_err(),
+            "the warning must not permit exit while the worker is occupied"
+        );
+        assert!(
+            still_held,
+            "the in-flight operation was still holding input"
+        );
+        tokio::time::timeout(Duration::from_secs(5), &mut shutdown)
+            .await
+            .expect("BUG: shutdown completes once the worker confirms release");
+        assert!(!held.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shutdown_retries_unconfirmed_release_instead_of_exiting() {
+        let worker = Worker::spawn().expect("BUG: worker starts");
+        let can_release = Arc::new(AtomicBool::new(false));
+        let held = Arc::new(AtomicBool::new(true));
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (failed, observed_failure) = mpsc::channel();
+        let (allowed, holding, calls) = (
+            Arc::clone(&can_release),
+            Arc::clone(&held),
+            Arc::clone(&attempts),
+        );
+        let mut shutdown = std::pin::pin!(release_input_before_exit(
+            &worker,
+            Duration::from_secs(5),
+            Duration::from_millis(1),
+            move |desktop| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                if !allowed.load(Ordering::SeqCst) {
+                    let _ = failed.send(());
+                    return Err(error::ToolError::InputHeld(
+                        "injected release failure".into(),
+                    ));
+                }
+                desktop.release_input_checked()?;
+                holding.store(false, Ordering::SeqCst);
+                Ok(())
+            },
+        ));
+        assert!(
+            shutdown
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending()
+        );
+        observed_failure
+            .recv_timeout(Duration::from_secs(5))
+            .expect("BUG: first release attempt fails");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
+                .await
+                .is_err(),
+            "an unconfirmed release must not permit exit"
+        );
+        assert!(held.load(Ordering::SeqCst));
+        can_release.store(true, Ordering::SeqCst);
+        tokio::time::timeout(Duration::from_secs(5), &mut shutdown)
+            .await
+            .expect("BUG: a later confirmed release permits exit");
+        assert!(!held.load(Ordering::SeqCst));
+        assert!(attempts.load(Ordering::SeqCst) >= 2);
     }
 }
