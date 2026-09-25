@@ -876,6 +876,8 @@ mod tests {
         }
         let mixed = px_edges(-1.0, 2.0, -3.0, 4.0);
         assert_eq!(mixed.clamp_non_negative(), px_edges(0.0, 2.0, 0.0, 4.0));
+        let mirrored = px_edges(1.0, -2.0, 3.0, -4.0);
+        assert_eq!(mirrored.clamp_non_negative(), px_edges(1.0, 0.0, 3.0, 0.0));
     }
 
     #[test]
