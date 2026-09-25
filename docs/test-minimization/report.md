@@ -152,6 +152,7 @@ that fails without the fix. Flutter parity claims were checked against the 3.44.
 | Geometry integration files removed (`1b7c1d4b0`) | 9 flui-geometry files, cargo-gamma | 1005 killed (both crates' tests) | 1014 killed (flui-geometry alone) |
 | Path contour semantics, bounds cache, chord count (`687b543fb`) | `painting/path.rs`, cargo-gamma | 143 survived | 43 survived (all equivalent or unspecified) |
 | Crate-wide survivors (`e7894e7f1`) | all of flui-types, 5278 mutants, cargo-gamma | 4230 killed / 376 survived (79.9%) | 4464 / 154 (84.6%) |
+| Last test gaps (`e2ea219f0`) | all of flui-types, cargo-gamma | 4464 / 154 | 4480 / 138 (84.9%); the 138 are equivalent or unpinned by choice |
 
 Every mutant the baseline caught stayed caught in each slice (compared by position). Remaining
 survivors in `color.rs` are equivalent (`|` vs `^` on disjoint bits, `<` vs `<=` at unreachable
@@ -210,3 +211,16 @@ order of magnitude. Differences worth knowing:
   `gamma.toml` skips them, with the other nested-cargo tests, by name.
 - It is three weeks old. It replaced cargo-mutants as the workspace tool (`gamma.toml`; the
   `.cargo/mutants.toml` it superseded is gone) after the scopes above agreed.
+
+### The 138 survivors left in flui-types
+
+Each was read, not assumed. 44 are in `path.rs` (its commit lists them). 28 change
+`Vec::with_capacity` sizes. About 35 swap `<` and `<=` where both branches give the same value:
+HSL/HSV sector edges, the sRGB transfer thresholds, `BoxFit` at equal aspect ratios, the blend
+helpers at 0, 0.5 and 1, and `clip_color`'s guards, where the scaling is the identity at the
+boundary. The rest are fast paths that return what the general formula would, bodies that
+delegate to `Default` (a mutant there recurses, which cargo-gamma reports as survived), physics
+boundaries nothing specifies (the direction of a zero initial velocity, exact tolerance
+equality on a spring), and the unwired `CircularNotchedRectangle`. The 658 uncovered mutants
+are `Color32`, `TextScaler`, `CircularNotchedRectangle` and `Path`'s curve arms, which no
+public entry point reaches.
