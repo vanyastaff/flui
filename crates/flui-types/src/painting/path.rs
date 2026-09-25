@@ -2032,55 +2032,80 @@ mod tests {
             assert_eq!(Path::MAX_ARC_CHORDS, 2048);
         }
 
-        /// Curves whose control points are evenly spaced in x, so x = w t
+        /// Where the curve regions below sit: off the origin, so no control
+        /// point has a zero coordinate that would hide a term of the
+        /// Bézier polynomial.
+        const OFFSET: (f32, f32) = (37.0, 53.0);
+
+        /// Curves whose control points are evenly spaced in x, so x = w u
         /// and each curve is the graph of a function of x: the region
-        /// between it and the baseline has an exact inside test.
+        /// between it and its baseline has an exact inside test. Returns
+        /// the path and, for `u` in `0..1`, the curve's height and slope.
         ///
-        /// - quadratic (0, 0), (w/2, h), (w, 0): y = 2 h u (1 - u), u = x / w;
+        /// - quadratic (0, 0), (w/2, h), (w, 0): y = 2 h u (1 - u);
         /// - cubic (0, 0), (w/3, a), (2w/3, b), (w, 0):
         ///   y = 3 a u (1 - u)^2 + 3 b u^2 (1 - u).
-        fn under_curve(cubic: bool, w: f32) -> (Path, impl Fn(f32) -> f32) {
+        fn under_curve(cubic: bool, w: f32) -> (Path, impl Fn(f32) -> (f32, f32)) {
             let (h, a, b) = (w, 1.2 * w, 0.6 * w);
+            let at = |x: f32, y: f32| p(OFFSET.0 + x, OFFSET.1 + y);
             let mut path = Path::new();
-            path.move_to(p(0.0, 0.0));
+            path.move_to(at(0.0, 0.0));
             if cubic {
-                path.cubic_to(p(w / 3.0, a), p(2.0 * w / 3.0, b), p(w, 0.0));
+                path.cubic_to(at(w / 3.0, a), at(2.0 * w / 3.0, b), at(w, 0.0));
             } else {
-                path.quadratic_bezier_to(p(w / 2.0, h), p(w, 0.0));
+                path.quadratic_bezier_to(at(w / 2.0, h), at(w, 0.0));
             }
             path.close();
-            let height = move |x: f32| {
-                let u = x / w;
-                if cubic {
-                    3.0 * a * u * (1.0 - u).powi(2) + 3.0 * b * u * u * (1.0 - u)
+            let curve = move |u: f32| {
+                let (height, per_u) = if cubic {
+                    (
+                        3.0 * a * u * (1.0 - u).powi(2) + 3.0 * b * u * u * (1.0 - u),
+                        3.0 * a * ((1.0 - u).powi(2) - 2.0 * u * (1.0 - u))
+                            + 3.0 * b * (2.0 * u * (1.0 - u) - u * u),
+                    )
                 } else {
-                    2.0 * h * u * (1.0 - u)
-                }
+                    (2.0 * h * u * (1.0 - u), 2.0 * h * (1.0 - 2.0 * u))
+                };
+                (height, per_u / w)
             };
-            (path, height)
+            (path, curve)
         }
 
         proptest! {
-            /// Containment matches the exact region at every scale, to
-            /// within half a pixel of the curve: the flattening follows
-            /// the curve's size instead of using a fixed number of chords
-            /// (four chords were three pixels off at w = 100).
+            /// Containment matches the exact region at every scale, down
+            /// to 0.15 px from the curve along its normal: the flattening
+            /// stays within its 0.1 px tolerance however large the curve
+            /// is (four fixed chords were three pixels off at w = 100).
+            /// Half the points are drawn within 3 px of the curve, where
+            /// under-flattening shows; the rest anywhere over the region.
             #[test]
             fn curve_containment_matches_the_exact_region(
                 cubic in any::<bool>(),
                 scale in prop::sample::select(vec![1.0_f32, 100.0, 1000.0]),
-                u in 0.01_f32..0.99,
+                // A third of the samples near each end, where the first and
+                // last chords are.
+                u in prop_oneof![0.001_f32..0.05, 0.01_f32..0.99, 0.95_f32..0.999],
+                near in any::<bool>(),
+                offset in -3.0_f32..3.0,
                 v in -0.2_f32..1.2,
             ) {
                 let w = 100.0 * scale;
-                let (path, height) = under_curve(cubic, w);
-                let (x, top) = (u * w, height(u * w));
-                let y = v * top;
-                // Skip the half-pixel band around the curve and the baseline.
-                prop_assume!((y - top).abs() > 0.5 && y.abs() > 0.5);
+                let (path, curve) = under_curve(cubic, w);
+                let (top, slope) = curve(u);
+                // Vertical distance per unit of distance along the normal.
+                let stretch = slope.hypot(1.0);
+                let y = if near { top + offset * stretch } else { v * top };
+                prop_assume!((y - top).abs() > 0.15 * stretch && y.abs() > 0.15);
                 let inside = y > 0.0 && y < top;
+                let probe = p(OFFSET.0 + u * w, OFFSET.1 + y);
                 for fill in FILLS {
-                    prop_assert_eq!(with(fill, path.clone()).contains(p(x, y)), inside, "{:?} ({}, {})", fill, x, y);
+                    prop_assert_eq!(
+                        with(fill, path.clone()).contains(probe),
+                        inside,
+                        "{:?} {:?}",
+                        fill,
+                        probe
+                    );
                 }
             }
         }
@@ -2092,8 +2117,8 @@ mod tests {
             let line = [p(0.0, 0.0), p(5.0, 5.0), p(10.0, 10.0), p(15.0, 15.0)];
             assert_eq!(Path::bezier_chord_count(2.0, &line[..3]), 1);
             assert_eq!(Path::bezier_chord_count(3.0, &line), 1);
-            let nan = [p(0.0, 0.0), p(f32::NAN, 0.0), p(1.0, 0.0)];
-            assert_eq!(Path::bezier_chord_count(2.0, &nan), 1);
+            let infinite = [p(0.0, 0.0), p(f32::INFINITY, 0.0), p(1.0, 0.0)];
+            assert_eq!(Path::bezier_chord_count(2.0, &infinite), 1);
             let huge = [p(0.0, 0.0), p(1.0e12, 1.0e12), p(2.0e12, 0.0)];
             assert_eq!(Path::bezier_chord_count(2.0, &huge), Path::MAX_ARC_CHORDS);
         }
