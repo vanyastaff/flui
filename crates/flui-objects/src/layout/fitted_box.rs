@@ -82,7 +82,7 @@
 //! to prove `source_offset` is genuinely reachable, not just a field no
 //! call path ever sets to a nonzero value.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{
     Alignment, Matrix4, Offset, Point, Rect, Size,
     geometry::px,

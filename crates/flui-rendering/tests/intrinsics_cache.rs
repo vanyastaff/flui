@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::{Leaf, Variable};
 use flui_objects::RenderConstrainedBox;
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -23,7 +24,6 @@ use flui_rendering::{
     storage::IntrinsicDimension,
     traits::RenderBox,
 };
-use flui_tree::{Leaf, Variable};
 use flui_types::{Size, geometry::px};
 
 use crate::common::BoxedRenderObject;

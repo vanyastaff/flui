@@ -18,7 +18,7 @@
 //!   methods on [`BoxConstraints`] returning real `bool`s; Flutter uses
 //!   `isFinite` checks on raw doubles.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Offset, Pixels, Size, geometry::px};
 
 use flui_rendering::{

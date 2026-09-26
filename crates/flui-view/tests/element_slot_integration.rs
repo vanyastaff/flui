@@ -1,17 +1,13 @@
-//! Integration test confirming `ElementSlot` resolves to the canonical
-//! `flui_tree::IndexedSlot<ElementId>` and round-trips with `Option<ElementId>`
-//! previous-sibling payload semantics.
-//!
-//! Also confirms (audit Finding #3) that co-importing
-//! `flui_view::prelude::*` and `flui_tree::prelude::*` compiles without
-//! `IndexedSlot` ambiguity.
+//! `ElementSlot` is `flui_foundation::IndexedSlot<ElementId>` (an alias, not a
+//! wrapper) and round-trips `Option<ElementId>` previous-sibling payloads.
+//! Co-importing `flui_view::prelude::*` and `flui_foundation::prelude::*`
+//! compiles without an `IndexedSlot` or `ElementId` ambiguity.
 
-use flui_foundation::ElementId;
-use flui_tree::IndexedSlot;
+use flui_foundation::{ElementId, IndexedSlot};
 use flui_view::ElementSlot;
 
 #[test]
-fn element_slot_aliases_to_flui_tree_indexed_slot() {
+fn element_slot_aliases_to_the_foundation_indexed_slot() {
     // ElementSlot is exactly IndexedSlot<ElementId> -- not a wrapper.
     let from_alias: ElementSlot = ElementSlot::first();
     let from_canonical: IndexedSlot<ElementId> = IndexedSlot::<ElementId>::first();
@@ -43,7 +39,7 @@ fn element_slot_round_trips_previous_sibling() {
 
 #[test]
 fn element_slot_preserves_value_semantics() {
-    // IndexedSlot is Copy + Eq + Hash via flui-tree's derives.
+    // IndexedSlot is Copy + Eq + Hash via its derives.
     let slot_a = ElementSlot::new(2, Some(ElementId::new(7)));
     let slot_b = slot_a; // Copy
     assert_eq!(slot_a, slot_b);
@@ -57,11 +53,11 @@ fn element_slot_preserves_value_semantics() {
 }
 
 #[test]
-fn ae8_prelude_co_import_compiles() {
+fn view_and_foundation_preludes_co_import_without_ambiguity() {
     // Importing both preludes must not collide. `IndexedSlot` appears
     // in both -- flui-view's must be the re-export, so there is exactly one
     // type at that name.
-    use flui_tree::prelude::*;
+    use flui_foundation::prelude::*;
     use flui_view::prelude::*;
 
     // Disambiguate `ElementId` (both preludes re-export it from flui-foundation,

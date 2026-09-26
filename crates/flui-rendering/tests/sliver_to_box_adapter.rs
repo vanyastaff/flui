@@ -9,6 +9,7 @@
 //! 3. compose Flutter-parity sliver geometry from the child's main-axis size;
 //! 4. commit the child's paint offset so hit-test/paint use the same source.
 
+use flui_foundation::Leaf;
 use flui_objects::RenderSliverToBoxAdapter;
 use flui_rendering::{
     constraints::{GrowthDirection, SliverConstraints},
@@ -18,7 +19,6 @@ use flui_rendering::{
     testing::inspect,
     traits::RenderBox,
 };
-use flui_tree::Leaf;
 use flui_types::{Offset, Rect, Size, geometry::px};
 
 use crate::common::{
@@ -140,12 +140,12 @@ fn sliver_to_box_adapter_reverse_growth_hit_tests_box_child_right_way_up() {
 impl flui_foundation::Diagnosticable for SliverHost {}
 
 impl RenderBox for SliverHost {
-    type Arity = flui_tree::Variable;
+    type Arity = flui_foundation::Variable;
     type ParentData = BoxParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut BoxLayoutContext<'_, flui_tree::Variable, Self::ParentData>,
+        ctx: &mut BoxLayoutContext<'_, flui_foundation::Variable, Self::ParentData>,
     ) -> Size {
         if ctx.child_count() > 0 {
             let _ = ctx.layout_sliver_child(0, self.constraints);
@@ -155,7 +155,7 @@ impl RenderBox for SliverHost {
 
     fn hit_test(
         &self,
-        ctx: &mut BoxHitTestContext<'_, flui_tree::Variable, Self::ParentData>,
+        ctx: &mut BoxHitTestContext<'_, flui_foundation::Variable, Self::ParentData>,
     ) -> bool {
         ctx.hit_test_child(0, ctx.offset())
     }

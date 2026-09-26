@@ -23,8 +23,8 @@
 use std::sync::Arc;
 
 use flui_foundation::ListenerId;
+use flui_foundation::Single;
 use flui_painting::Canvas;
-use flui_tree::Single;
 use flui_types::{Offset, Pixels, Size};
 
 use flui_rendering::{

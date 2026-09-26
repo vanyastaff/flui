@@ -50,7 +50,7 @@ impl DirectionProbe {
 }
 
 impl RenderSliver for DirectionProbe {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::SliverParentData;
 
     fn perform_layout(

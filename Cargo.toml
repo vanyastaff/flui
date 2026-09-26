@@ -635,7 +635,6 @@ flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev" }
 flui-animation = { path = "crates/flui-animation", version = "=0.2.0-dev" }
 flui-app = { path = "crates/flui-app", version = "=0.2.0-dev" }
 flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev", optional = true }
-flui-tree = { path = "crates/flui-tree", version = "=0.2.0-dev" }
 flui-painting = { path = "crates/flui-painting", version = "=0.2.0-dev" }
 flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev" }
 flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
@@ -649,9 +648,6 @@ toml.workspace = true
 # `tests/facade_consumer.rs` reads `cargo metadata`'s `target_directory` so its
 # nested consumer builds follow a relocated `CARGO_TARGET_DIR`.
 cargo_metadata.workspace = true
-# === Foundation Layer ===
-# flui-tree = { path = "crates/flui-tree" }
-
 # === Core Layer ===
 flui-layer = { path = "crates/flui-layer", version = "=0.2.0-dev" }
 # === Rendering Layer (colored_box_app / animated_box_app examples; "testing"

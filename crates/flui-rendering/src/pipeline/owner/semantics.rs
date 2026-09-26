@@ -1091,14 +1091,14 @@ mod tests {
     impl flui_foundation::Diagnosticable for ClippingBox {}
 
     impl crate::traits::RenderBox for ClippingBox {
-        type Arity = flui_tree::Variable;
+        type Arity = flui_foundation::Variable;
         type ParentData = crate::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut crate::context::BoxLayoutContext<
                 '_,
-                flui_tree::Variable,
+                flui_foundation::Variable,
                 crate::parent_data::BoxParentData,
             >,
         ) -> Size {

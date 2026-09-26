@@ -27,6 +27,7 @@
 
 use std::sync::Arc;
 
+use flui_foundation::Leaf;
 use flui_objects::RenderSliverGrid;
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
@@ -37,7 +38,6 @@ use flui_rendering::{
     testing::{inspect, sliver as sliver_presets},
     traits::RenderBox,
 };
-use flui_tree::Leaf;
 use flui_types::{Offset, Rect, Size, geometry::px};
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject, sliver_geometry};
@@ -86,12 +86,12 @@ struct SliverHost {
 impl flui_foundation::Diagnosticable for SliverHost {}
 
 impl RenderBox for SliverHost {
-    type Arity = flui_tree::Variable;
+    type Arity = flui_foundation::Variable;
     type ParentData = BoxParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut BoxLayoutContext<'_, flui_tree::Variable, Self::ParentData>,
+        ctx: &mut BoxLayoutContext<'_, flui_foundation::Variable, Self::ParentData>,
     ) -> Size {
         if ctx.child_count() > 0 {
             let _ = ctx.layout_sliver_child(0, self.constraints);
@@ -101,7 +101,7 @@ impl RenderBox for SliverHost {
 
     fn hit_test(
         &self,
-        ctx: &mut BoxHitTestContext<'_, flui_tree::Variable, Self::ParentData>,
+        ctx: &mut BoxHitTestContext<'_, flui_foundation::Variable, Self::ParentData>,
     ) -> bool {
         ctx.hit_test_child_at_layout_offset(0)
     }
