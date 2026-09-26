@@ -37,8 +37,8 @@
 //! gate both on `child != null`. A childless leader is a coordinate anchor,
 //! not a visual effect, so it still needs its own compositor layer.
 
+use flui_foundation::Single;
 use flui_rendering::layer::LayerLink;
-use flui_tree::Single;
 use flui_types::Offset;
 
 use flui_rendering::{

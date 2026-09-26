@@ -27,7 +27,6 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
-flui-tree = { path = "../flui-tree", version = "=0.2.0-dev" }
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 tracing = { workspace = true }
 parking_lot = { workspace = true }

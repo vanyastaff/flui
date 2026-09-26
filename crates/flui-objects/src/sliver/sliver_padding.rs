@@ -35,7 +35,7 @@
 //!   `cache_offset`) so helpers can be `&self`-free pure functions and
 //!   remain test-friendly.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Axis, EdgeInsets, Offset, Pixels, geometry::px, layout::AxisDirection};
 
 use flui_rendering::{

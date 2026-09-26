@@ -47,6 +47,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::Diagnosticable;
+use flui_foundation::Single;
 use flui_objects::{RenderColoredBox, RenderFlex};
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -57,7 +58,6 @@ use flui_rendering::{
     testing::{box_node, tree},
     traits::RenderBox,
 };
-use flui_tree::Single;
 use flui_types::{Size, geometry::px};
 
 // ============================================================================

@@ -121,10 +121,10 @@ use std::{
 use flui_animation::{
     Animatable, Animation, AnimationController, ArcCurve, CurvedAnimation, Curves, FloatTween,
 };
+use flui_foundation::Single;
 use flui_foundation::{
     Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, Listenable, ListenerId,
 };
-use flui_tree::Single;
 use flui_types::{geometry::px, layout::Axis};
 
 use flui_rendering::{

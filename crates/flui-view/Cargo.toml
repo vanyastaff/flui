@@ -22,7 +22,6 @@ autotests = false
 [dependencies]
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-macros = { workspace = true }
-flui-tree = { path = "../flui-tree", version = "=0.2.0-dev" }
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 # Owner-routed interaction targets/dispatch handles (ADR-0027).

@@ -55,7 +55,7 @@
 use std::sync::Arc;
 
 use flui_foundation::ListenerId;
-use flui_tree::Variable;
+use flui_foundation::Variable;
 use flui_types::{Matrix4, Offset, Pixels, Point, Rect, Size, painting::Clip};
 
 use flui_rendering::{

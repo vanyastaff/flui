@@ -1,6 +1,6 @@
 //! RenderFlex - lays out children in a row or column.
 
-use flui_tree::Variable;
+use flui_foundation::Variable;
 use flui_types::typography::TextDirection;
 use flui_types::{Offset, Pixels, Size, geometry::px};
 

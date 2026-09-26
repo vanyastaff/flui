@@ -398,7 +398,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 mod tests {
     use std::sync::Arc;
 
-    use flui_tree::Leaf;
+    use flui_foundation::Leaf;
     use flui_types::{Color, Point, Rect, Size, geometry::px};
 
     use super::*;

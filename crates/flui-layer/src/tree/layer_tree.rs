@@ -200,6 +200,12 @@ impl LayerTree {
 
     fn push(&mut self, mut node: LayerNode, parent: Option<LayerId>) -> LayerId {
         let id = id_at(self.nodes.len());
+        // `lowest_common_ancestor` relies on this: ids are minted in insertion
+        // order and a parent is always inserted first.
+        debug_assert!(
+            parent.is_none_or(|parent| parent < id),
+            "BUG: a layer's parent must have a smaller id than the layer"
+        );
         node.parent = parent;
         if let Layer::Leader(leader) = &node.layer {
             debug_assert!(
@@ -267,9 +273,54 @@ impl LayerTree {
             .map(|(slot, node)| (id_at(slot), node))
     }
 
-    /// Every id, in insertion order.
-    pub(crate) fn ids(&self) -> impl Iterator<Item = LayerId> + '_ {
-        (0..self.nodes.len()).map(id_at)
+    /// `start`, then each parent up to the root; empty for an id this tree
+    /// did not mint.
+    pub(crate) fn ancestors(&self, start: LayerId) -> impl Iterator<Item = LayerId> + '_ {
+        std::iter::successors(self.contains(start).then_some(start), |&id| self.parent(id))
+    }
+
+    /// The deepest node that is `a` or an ancestor of it and `b` or an
+    /// ancestor of it; `None` if either id is not a node of this tree.
+    ///
+    /// O(depth), no allocation. A parent is always pushed before its child,
+    /// so its id is smaller: the larger of two different ids is never an
+    /// ancestor of the smaller, and stepping it up to its parent keeps the
+    /// common ancestor unchanged until the two meet. The root has the
+    /// smallest id, so it is never the one stepped.
+    pub(crate) fn lowest_common_ancestor(&self, a: LayerId, b: LayerId) -> Option<LayerId> {
+        if !self.contains(a) || !self.contains(b) {
+            return None;
+        }
+        let (mut a, mut b) = (a, b);
+        while a != b {
+            if a > b {
+                a = self.parent(a)?;
+            } else {
+                b = self.parent(b)?;
+            }
+        }
+        Some(a)
+    }
+
+    /// `root` and every descendant in pre-order, children in paint order,
+    /// each with its depth below `root`; empty for an unknown `root`.
+    ///
+    /// The walk keeps its own stack, so a deep chain costs no Rust stack. The
+    /// tree is append-only and cannot hold a cycle (see the module docs), so
+    /// it needs no visited set.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn descendants(&self, root: LayerId) -> impl Iterator<Item = (LayerId, usize)> + '_ {
+        let mut stack: Vec<(LayerId, usize)> = Vec::new();
+        if self.contains(root) {
+            stack.push((root, 0));
+        }
+        std::iter::from_fn(move || {
+            let (id, depth) = stack.pop()?;
+            if let Some(children) = self.children(id) {
+                stack.extend(children.iter().rev().map(|&child| (child, depth + 1)));
+            }
+            Some((id, depth))
+        })
     }
 }
 
@@ -296,7 +347,80 @@ mod tests {
         assert_eq!(tree.len(), 3);
         assert!(tree.contains(b));
         assert!(!tree.contains(LayerId::new(4)));
-        assert_eq!(tree.ids().collect::<Vec<_>>(), vec![root, a, b]);
+        assert_eq!(
+            tree.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            vec![root, a, b]
+        );
+    }
+
+    /// `root → a → c` and `root → b`, pushed in that order.
+    fn cousins() -> (LayerTree, [LayerId; 4]) {
+        let mut tree = LayerTree::new(offset());
+        let root = tree.root();
+        let a = tree.push_child(root, offset());
+        let b = tree.push_child(root, offset());
+        let c = tree.push_child(a, offset());
+        (tree, [root, a, b, c])
+    }
+
+    #[test]
+    fn ancestors_run_from_the_node_to_the_root_inclusive() {
+        let (tree, [root, a, _, c]) = cousins();
+        assert_eq!(tree.ancestors(c).collect::<Vec<_>>(), vec![c, a, root]);
+        assert_eq!(tree.ancestors(LayerId::new(999)).count(), 0);
+    }
+
+    #[test]
+    fn lowest_common_ancestor_of_cousins_is_their_shared_ancestor() {
+        let (tree, [root, _, b, c]) = cousins();
+        assert_eq!(tree.lowest_common_ancestor(c, b), Some(root));
+        assert_eq!(tree.lowest_common_ancestor(b, c), Some(root));
+    }
+
+    #[test]
+    fn lowest_common_ancestor_of_a_node_and_its_ancestor_is_the_ancestor() {
+        let (tree, [_, a, _, c]) = cousins();
+        assert_eq!(tree.lowest_common_ancestor(c, a), Some(a));
+        assert_eq!(tree.lowest_common_ancestor(a, c), Some(a));
+        assert_eq!(tree.lowest_common_ancestor(a, a), Some(a));
+    }
+
+    #[test]
+    fn lowest_common_ancestor_with_an_unknown_id_is_none() {
+        let (tree, [_, _, _, c]) = cousins();
+        let unknown = LayerId::new(999);
+        assert_eq!(tree.lowest_common_ancestor(c, unknown), None);
+        assert_eq!(tree.lowest_common_ancestor(unknown, unknown), None);
+    }
+
+    #[test]
+    fn descendants_are_pre_order_with_depth_and_siblings_in_paint_order() {
+        let (tree, [root, a, b, c]) = cousins();
+        assert_eq!(
+            tree.descendants(root).collect::<Vec<_>>(),
+            vec![(root, 0), (a, 1), (c, 2), (b, 1)]
+        );
+        assert_eq!(
+            tree.descendants(a).collect::<Vec<_>>(),
+            vec![(a, 0), (c, 1)]
+        );
+        assert_eq!(tree.descendants(LayerId::new(999)).count(), 0);
+    }
+
+    #[test]
+    fn descendants_of_a_deep_chain_use_no_rust_stack() {
+        const DEPTH: usize = 100_000;
+        let mut tree = LayerTree::new(offset());
+        let mut tip = tree.root();
+        for _ in 1..DEPTH {
+            tip = tree.push_child(tip, offset());
+        }
+        assert_eq!(tree.descendants(tree.root()).count(), DEPTH);
+        assert_eq!(tree.ancestors(tip).count(), DEPTH);
+        assert_eq!(
+            tree.lowest_common_ancestor(tip, tree.root()),
+            Some(tree.root())
+        );
     }
 
     #[test]

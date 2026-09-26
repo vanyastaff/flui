@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use flui_foundation::Diagnosticable;
-use flui_tree::Variable;
+use flui_foundation::Variable;
 use flui_types::{
     Offset, Pixels, Point, Rect, Size,
     geometry::px,

@@ -374,12 +374,12 @@ fn a_clean_node_that_misses_the_cache_still_lays_out_for_either_benign_reason() 
 #[test]
 fn non_leaf_perform_layout_panic_surfaces_as_poisoned() {
     use flui_foundation::Diagnosticable;
+    use flui_foundation::Single;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext},
         hit_testing::HitTestBehavior,
         traits::RenderBox,
     };
-    use flui_tree::Single;
 
     /// A non-leaf user widget that panics inside `perform_layout`.
     /// Single arity so it requires a child (i.e., goes through the
@@ -536,13 +536,13 @@ fn descendant_err_preserves_parent_needs_layout() {
 /// masking the protocol-mismatch bug class.
 #[test]
 fn sliver_node_surfaces_as_protocol_mismatch() {
+    use flui_foundation::Leaf;
     use flui_rendering::{
         constraints::SliverGeometry,
         context::{SliverHitTestContext, SliverLayoutContext},
         protocol::SliverProtocol,
         traits::RenderSliver,
     };
-    use flui_tree::Leaf;
 
     /// Minimal sliver render-object stub for the test fixture — never
     /// laid out (the test triggers the protocol-mismatch error path

@@ -54,9 +54,11 @@ reused across frames. FLUI builds a fresh tree per frame, so the tree needs exac
 primitive: `LayerTree::push_child(parent, node)`, which mints the child's id in the call that links
 it. A fresh id has no descendants, so a cycle or a doubly-parented node cannot be expressed; there
 is no `remove`, no re-parenting, no node-level link setter, no `&mut` reach into a node, and no
-`TreeWrite` impl. Consequences:
+generic tree-write trait. Consequences:
 `flui-engine`'s walk has no cycle guard, inserts are O(1) with no ancestor check, and ids never
-alias (nothing is ever freed). `LayerId` stays a plain 1-based index; a generational id is only
+alias (nothing is ever freed). A parent is always pushed before its child, so its id is smaller;
+`LayerTree::lowest_common_ancestor` steps the larger id up until the two meet, in O(depth) with no
+allocation. `LayerId` stays a plain 1-based index; a generational id is only
 needed if a holder ever outlives the frame that minted it (none does today).
 
 Flutter keeps "which leader has this link" on `LayerLink.leader`. FLUI's link is a `Copy` token,

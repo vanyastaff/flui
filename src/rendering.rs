@@ -5,6 +5,7 @@
 //! invalidation use the same types as built-in widgets. Arena storage and the
 //! GPU compositor remain implementation details outside this authoring module.
 
+pub use flui_foundation::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
 pub use flui_rendering::RenderUpdateImpact;
 pub use flui_rendering::constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
 pub use flui_rendering::context::{
@@ -33,4 +34,3 @@ pub use flui_rendering::{
     forward_single_child_box_hit_test, forward_single_child_box_layout,
     forward_single_child_box_queries, forward_single_child_intrinsics,
 };
-pub use flui_tree::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};

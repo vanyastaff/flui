@@ -20,7 +20,7 @@
 //!   share the same transparent-proxy layout/paint pipeline so the
 //!   `hit_test` body is the *only* place the semantic differs.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::Offset;
 
 use flui_rendering::{context::BoxHitTestContext, parent_data::BoxParentData, traits::RenderBox};

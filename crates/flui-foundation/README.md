@@ -353,7 +353,6 @@ at your option.
 ## Related Crates
 
 - [`flui-types`](../flui-types): Basic geometry and mathematical types
-- [`flui-tree`](../flui-tree): Tree abstractions and visitor patterns
 - [`flui-view`](../flui-view): View/Element trees, GlobalKey, ObjectKey
 - [`flui_rendering`](../flui-rendering): Render tree and layout
 - [`flui_app`](../flui-app): Application framework

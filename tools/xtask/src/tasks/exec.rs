@@ -362,10 +362,10 @@ mod tests {
         let cmd = Cmd::cargo(["nextest", "run"])
             .split("-p flui -p flui-material")
             .split("")
-            .split(" --features  flui/cupertino,flui/localizations ");
+            .split(" --features  flui/cupertino ");
         assert_eq!(
             cmd.to_string(),
-            "cargo nextest run -p flui -p flui-material --features flui/cupertino,flui/localizations"
+            "cargo nextest run -p flui -p flui-material --features flui/cupertino"
         );
     }
 

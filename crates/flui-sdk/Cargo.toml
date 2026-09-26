@@ -43,7 +43,7 @@ flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 # facade.
 flui = { path = "../..", default-features = false }
 
-# Tier K, order 6: above every spine crate it re-exports (`flui-view` 1,
+# Tier K, order 5: above every spine crate it re-exports (`flui-view` 1,
 # `flui-widgets` 3) and below the hosts. Evolving (ADR-0081 §3): its own
 # `0.N` version, and a surface that may break on any train. Layer 6 is the
 # widget catalog's, the highest layer it depends on.
@@ -51,4 +51,4 @@ flui = { path = "../..", default-features = false }
 layer = 6
 tier = "K"
 tier-kind = "evolving"
-order = 6
+order = 5
