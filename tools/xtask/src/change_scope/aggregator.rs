@@ -22,6 +22,13 @@
 //!    cancellation) or a job that ran where it should have skipped fails the
 //!    aggregator; so does a job no lane runs, because it can only skip.
 //!
+//! 3. THE EVENT'S FLOOR -- a run on `main` (`push`, `merge_group`) must take
+//!    `full` or `extended`, a nightly or manual run (`schedule`,
+//!    `workflow_dispatch`) must take `extended`. Rule 2 trusts `plan`'s lane;
+//!    this rule checks it against the event outside `Lane::decide`, so a
+//!    regression that maps `push` to a narrow lane cannot skip every heavy
+//!    job with a green `ci` on `main`.
+//!
 //! A regression here either lets a job silently skip (red main that looks
 //! green) or fails every PR.
 
@@ -197,6 +204,17 @@ fn repr(s: &str) -> String {
     }
 }
 
+/// The lanes a run of `event` may take, or `None` when any lane may (a pull
+/// request narrows by its diff; an event ci.yml does not trigger on fails in
+/// `plan` before it reaches this rule).
+fn lanes_allowed(event: &str) -> Option<&'static [&'static str]> {
+    match event {
+        "push" | "merge_group" => Some(&["full", "extended"]),
+        "schedule" | "workflow_dispatch" => Some(&["extended"]),
+        _ => None,
+    }
+}
+
 /// The jobs `plan`'s lane runs, or `None` when there is no usable plan.
 fn planned_runs(plan: &Plan<'_>, lanes: &LaneJobs) -> Option<BTreeSet<String>> {
     if plan.result != Some("success") {
@@ -260,6 +278,18 @@ pub(super) fn verify(
         .filter(|(_, r)| !matches!(r.as_str(), "success" | "skipped"))
         .map(|(j, r)| (j.clone(), r.clone()))
         .collect();
+    if let Some(allowed) = lanes_allowed(event)
+        && !allowed.contains(&plan.lane)
+    {
+        bad.insert(
+            "_plan".to_owned(),
+            format!(
+                "event={event} must take lane {}, but plan chose lane={}",
+                allowed.join(" or "),
+                repr(plan.lane)
+            ),
+        );
+    }
     match planned_runs(plan, lanes) {
         None => {
             let result = plan.result.map_or_else(|| "None".to_owned(), str::to_owned);
@@ -736,6 +766,74 @@ mod tests {
         };
         let (ok, log) = verify(&gated, &needs, &w.lanes, &plan, "schedule");
         assert!(!ok && log.contains("'new-job': 'ran (success)"), "{log}");
+    }
+
+    #[test]
+    fn a_narrow_lane_on_main_or_nightly_is_red() {
+        // every job the narrow lane skips did skip, so rule 2 alone is green:
+        // only the event's floor catches a plan that under-ran main
+        let w = workflow();
+        let whole: Vec<String> = w
+            .lanes
+            .wide
+            .iter()
+            .chain(&w.lanes.full)
+            .chain(&w.lanes.extended)
+            .cloned()
+            .chain(names(&["fast-lane-ios", "standalone"]))
+            .collect();
+        let fast = skipping(&whole);
+        green(&run("fast"), &fast);
+        for event in ["push", "merge_group"] {
+            red(
+                &Run {
+                    event,
+                    ..run("fast")
+                },
+                &fast,
+                &format!(
+                    "event={event} must take lane full or extended, but plan chose lane='fast'"
+                ),
+            );
+        }
+        let wide = skipping(
+            &not_whole_workspace()
+                .into_iter()
+                .chain(w.lanes.full.iter().cloned())
+                .chain(w.lanes.extended.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
+        red(
+            &Run {
+                event: "push",
+                ..run("wide")
+            },
+            &wide,
+            "lane='wide'",
+        );
+        let full = skipping(
+            &not_whole_workspace()
+                .into_iter()
+                .chain(w.lanes.extended.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
+        green(
+            &Run {
+                event: "merge_group",
+                ..run("full")
+            },
+            &full,
+        );
+        for event in ["schedule", "workflow_dispatch"] {
+            red(
+                &Run {
+                    event,
+                    ..run("full")
+                },
+                &full,
+                &format!("event={event} must take lane extended, but plan chose lane='full'"),
+            );
+        }
     }
 
     #[test]
