@@ -17,9 +17,10 @@
 //! `--check` validates every fragment and `CHANGELOG.md` itself: exactly one
 //! `## [Unreleased]`, and only the six known `###` headings in its region, each
 //! once. Each finding is a `path:line: rule: message` line; the rule ids are
-//! the ones [`self_test`] pins. With no flag the command validates, then puts
-//! each section's bullets at the top of that section of the region (fragments
-//! in file-name order, a missing section created in canonical position), writes
+//! the ones [`self_test`] pins. The bare command is `--check`: the one that
+//! changes the tree has to be asked for. `--write` validates, then puts each
+//! section's bullets at the top of that section of the region (fragments in
+//! file-name order, a missing section created in canonical position), writes
 //! `CHANGELOG.md` and removes the fragments; `--dry-run` prints the new region
 //! and writes nothing.
 //!
@@ -64,14 +65,18 @@ const SECTIONS: [&str; 6] = [
 /// Arguments for `cargo xtask changelog`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct ChangelogArgs {
-    /// Validate the fragments and CHANGELOG.md; write nothing.
-    #[arg(long, conflicts_with = "dry_run")]
+    /// Validate the fragments and CHANGELOG.md; write nothing (also what the
+    /// bare command does).
+    #[arg(long, conflicts_with_all = ["dry_run", "write"])]
     check: bool,
     /// Print the Unreleased region the merge would write; write nothing.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "write")]
     dry_run: bool,
+    /// Merge the fragments into CHANGELOG.md and delete them (release time).
+    #[arg(long)]
+    write: bool,
     /// Run the rules over the planted fixtures instead of the repository.
-    #[arg(long, conflicts_with_all = ["check", "dry_run"])]
+    #[arg(long, conflicts_with_all = ["check", "dry_run", "write"])]
     self_test: bool,
 }
 
@@ -161,7 +166,7 @@ fn run(root: &Path, args: &ChangelogArgs) -> anyhow::Result<ExitCode> {
         );
         return Ok(ExitCode::FAILURE);
     }
-    if args.check {
+    if !args.write && !args.dry_run {
         println!(
             "changelog: {} fragment(s) and {CHANGELOG} ok",
             fragments.len()

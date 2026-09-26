@@ -49,7 +49,7 @@ design document with no code, and a code change with no record, are both incompl
   `cargo xtask changelog --check` (part of `cargo xtask checks`) enforces them.
 - Docs-only, tooling-only and CI-only changes need no fragment, and no gate requires one.
 - At release: `cargo xtask changelog --dry-run` to read the merged `## [Unreleased]` region,
-  then `cargo xtask changelog` to write it and remove the fragments, then commit. Renaming
+  then `cargo xtask changelog --write` to write it and remove the fragments, then commit. Renaming
   `[Unreleased]` to the version stays a manual edit.
 - A pull request that already edits `CHANGELOG.md` directly can land as it is; the merge never
   touches existing lines.

@@ -412,11 +412,13 @@ impl Drop for Scratch {
     }
 }
 
-fn args(check: bool, dry_run: bool) -> ChangelogArgs {
-    ChangelogArgs {
-        check,
-        dry_run,
-        self_test: false,
+/// `cargo xtask changelog <flags>`, parsed as the command line parses it.
+fn args(flags: &[&str]) -> ChangelogArgs {
+    use clap::Parser as _;
+    let argv = ["xtask", "changelog"].iter().chain(flags);
+    match crate::Cli::try_parse_from(argv).expect("parses").command {
+        crate::Command::Changelog(args) => args,
+        other => panic!("parsed as {other:?}"),
     }
 }
 
@@ -431,7 +433,7 @@ fn the_merge_writes_the_changelog_and_removes_the_fragments() {
         ],
     );
     assert_eq!(
-        run(&scratch.0, &args(false, false)).expect("runs"),
+        run(&scratch.0, &args(&["--write"])).expect("runs"),
         ExitCode::SUCCESS
     );
     assert_eq!(
@@ -445,22 +447,30 @@ fn the_merge_writes_the_changelog_and_removes_the_fragments() {
     // a second run finds nothing to merge and changes nothing
     let merged = scratch.changelog();
     assert_eq!(
-        run(&scratch.0, &args(false, false)).expect("runs"),
+        run(&scratch.0, &args(&["--write"])).expect("runs"),
         ExitCode::SUCCESS
     );
     assert_eq!(scratch.changelog(), merged);
 }
 
 #[test]
-fn check_and_dry_run_write_nothing() {
+fn only_write_changes_the_tree() {
     let scratch = Scratch::new("read-only", &[("a.md", "### Added\n\n- a\n")]);
-    for (check, dry_run) in [(true, false), (false, true)] {
+    for flags in [&[][..], &["--check"], &["--dry-run"]] {
         assert_eq!(
-            run(&scratch.0, &args(check, dry_run)).expect("runs"),
+            run(&scratch.0, &args(flags)).expect("runs"),
             ExitCode::SUCCESS
         );
         assert_eq!(scratch.changelog(), CHANGELOG_FIXTURE);
-        assert_eq!(scratch.fragments(), ["a.md"]);
+        assert_eq!(scratch.fragments(), ["a.md"], "{flags:?}");
+    }
+    // the modes exclude each other
+    for flags in [["--write", "--check"], ["--write", "--dry-run"]] {
+        let argv = ["xtask", "changelog"].iter().chain(&flags);
+        assert!(
+            <crate::Cli as clap::Parser>::try_parse_from(argv).is_err(),
+            "{flags:?}"
+        );
     }
 }
 
@@ -474,7 +484,7 @@ fn an_invalid_fragment_stops_the_merge() {
         ],
     );
     assert_eq!(
-        run(&scratch.0, &args(false, false)).expect("runs"),
+        run(&scratch.0, &args(&["--write"])).expect("runs"),
         ExitCode::FAILURE
     );
     assert_eq!(scratch.changelog(), CHANGELOG_FIXTURE);

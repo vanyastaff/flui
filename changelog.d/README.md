@@ -1,7 +1,7 @@
 # Changelog fragments
 
 A change a consumer would notice adds one file here instead of editing
-[`CHANGELOG.md`](/CHANGELOG.md). At release time `cargo xtask changelog` merges every fragment
+[`CHANGELOG.md`](/CHANGELOG.md). At release time `cargo xtask changelog --write` merges every fragment
 into the `## [Unreleased]` region of `CHANGELOG.md` and removes the fragments, so two pull
 requests never edit the same lines.
 
@@ -41,8 +41,8 @@ target changes once fragments are merged.
 
 ## Checks and release
 
-`cargo xtask changelog --check` validates every fragment and `CHANGELOG.md`; it runs in
-`cargo xtask checks`. At release, `cargo xtask changelog --dry-run` prints the merged region,
-`cargo xtask changelog` writes it and removes the fragments, and the release commit carries
-both. Within one release, fragments merge in file-name order, each section's new bullets above
+`cargo xtask changelog` (or `--check`) validates every fragment and `CHANGELOG.md` and writes
+nothing; it runs in `cargo xtask checks`. At release, `cargo xtask changelog --dry-run` prints the
+merged region, `cargo xtask changelog --write` writes it and deletes the fragments, and the
+release commit carries both. Within one release, fragments merge in file-name order, each section's new bullets above
 the ones already there.

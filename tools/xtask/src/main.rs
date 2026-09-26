@@ -116,7 +116,7 @@ enum Command {
     FileLength(file_length::FileLengthArgs),
     /// Check for process markers outside the archival roots (ADR-0078 §4).
     Markers(markers::MarkersArgs),
-    /// Merge changelog.d fragments into CHANGELOG.md; --check validates them.
+    /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
     Changelog(changelog::ChangelogArgs),
     /// List missing tools for `ci` / `ci-full`.
     Doctor(doctor::DoctorArgs),

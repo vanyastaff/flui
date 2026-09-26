@@ -12,7 +12,7 @@ match. Fine-grained phase history lives in
 [`docs/archive/ROADMAP-TRACKER.md`](docs/archive/ROADMAP-TRACKER.md); this file records the
 repo-consumer-visible summary.
 Unreleased entries arrive as fragments under [`changelog.d/`](changelog.d/README.md), merged
-here by `cargo xtask changelog` at release time.
+here by `cargo xtask changelog --write` at release time.
 
 ## [Unreleased]
 

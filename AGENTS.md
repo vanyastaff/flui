@@ -83,7 +83,7 @@ crate you're changing before changing it.
   `Refs #N`; `Closes`/`Fixes #N` only when merging should close it (GitHub's linker ignores
   negation around it). A consumer-visible change adds `changelog.d/<branch-slug>.md` (a
   `### Added|Changed|Deprecated|Removed|Fixed|Security` header and bullets) instead of editing
-  `CHANGELOG.md`; `cargo xtask changelog` merges fragments at release.
+  `CHANGELOG.md`; `cargo xtask changelog --write` merges fragments at release.
 - **Red main:** fix forward within the hour, or revert. A red CI run on main or nightly opens a
   "CI is red on main" issue; close it once main is green.
 - **Leave these alone unless the task is about them:** `.github/workflows/` (it is the merge
