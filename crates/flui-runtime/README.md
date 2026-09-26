@@ -14,7 +14,7 @@ Applications depend on `flui`, and hosts on `flui-app`.
 - `execution`: the host loop's background execution services (ADR-0047) —
   the compute and IO lanes, bounded admission, staged shutdown, and the
   host-injection seam `flui-app` re-exports. Only `flui-app` may depend on
-  this crate, so no library crate can reach the pools.
+  this crate, so no other workspace crate can reach the pools.
 - `held_input`: the bounded pointer input a presentation retains while it has
   no committed tree, and the replay that delivers it once one exists.
 - `performance_stats`: the rolling frame-time window a presentation's

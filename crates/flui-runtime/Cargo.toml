@@ -90,16 +90,18 @@ all-features = true
 # above `flui-view` (1), `flui-testing` (2), `flui-widgets` (3) and
 # `flui-localizations` (4), because the realm it will own drives a widget
 # tree; `flui-app` (tier H) is its only normal dependent. Internal: it is not
-# an embedder API (ADR-0027 §9). Layer 6 is the widget catalog's: its future
-# `flui-widgets` edge allows layers 6 to 9 (`flui-app` is 9), and 6 is the
-# lowest of them.
+# an embedder API (ADR-0027 §9), except the execution host-injection seam that
+# `flui-app` re-exports (ADR-0089 §1). Layer 6 is the widget catalog's: its
+# future `flui-widgets` edge allows layers 6 to 9 (`flui-app` is 9), and 6 is
+# the lowest of them.
 [package.metadata.flui]
 layer = 6
 tier = "K"
 tier-kind = "internal"
 order = 5
-# ADR-0047: no library crate can reach the execution services' pools. They are
-# `pub` here only so the host can construct them, so the host is the one crate
-# allowed a normal edge; ADR-0083 §4 adds `flui-testing` when the test driver
-# runs the real frame. Dev edges are not restricted.
+# ADR-0047: only a host crate constructs the execution services, and no other
+# workspace crate reaches their pools. They are `pub` here only so the host can
+# construct them, so the hosts are the crates allowed a normal edge; ADR-0083 §4
+# adds `flui-testing`, the host of the headless test loop, when its driver runs
+# the real frame. Dev edges are not restricted.
 allowed-dependents = ["flui-app"]

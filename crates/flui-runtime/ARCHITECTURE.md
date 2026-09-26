@@ -22,9 +22,11 @@ lists them and what each waits on.
   `allowed-dependents = ["flui-app"]` makes `flui-app` the only crate allowed a
   normal edge, checked by `cargo xtask workspace` (and pinned by its
   `the_runtime_admits_only_the_host_as_a_normal_dependent`). That rule is what
-  keeps ADR-0047's "no library crate can reach the pools" true now that
-  `ExecutionServices` is `pub`; ADR-0083 §4 adds `flui-testing` when the test
-  driver runs the real frame. Dev edges are not restricted.
+  keeps ADR-0047's invariant true now that `ExecutionServices` is `pub`: only
+  a host crate, one of the runtime's `allowed-dependents`, constructs the
+  services, and no other workspace crate reaches the pools. ADR-0083 §4 adds
+  `flui-testing` to that list when the test driver runs the real frame, as a
+  host of its own headless loop. Dev edges are not restricted.
 - **The execution host-injection seam carries the Stable promise.**
   `HostExecutors`, `HostComputePool`, `HostIoPool`, `ComputeJob`, `IoFuture`,
   `SpawnError` and `DeterministicExecutors` are defined in `execution` but
