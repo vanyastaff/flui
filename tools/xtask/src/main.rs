@@ -15,6 +15,7 @@ mod doc_strict;
 mod docs_links;
 mod doctor;
 mod fonts;
+mod module_dag;
 mod toolchain;
 mod wasm;
 mod wgsl;
@@ -77,6 +78,8 @@ enum Command {
     Device(device::DeviceArgs),
     /// Check crate layers, manifests, test reachability and ADR numbers.
     Workspace(workspace::WorkspaceArgs),
+    /// Check the declared import direction between a crate's top-level modules.
+    ModuleDag(module_dag::ModuleDagArgs),
     /// Print the packages a change touches (CI fast lane, `check-changed`).
     Affected(change_scope::AffectedArgs),
     /// Check that no include_str! target is classified as docs-only.
@@ -134,6 +137,7 @@ fn main() -> ExitCode {
         Command::CleanNested(args) => tasks::clean_nested(&args),
         Command::Device(args) => device::device(&args),
         Command::Workspace(args) => workspace::workspace(&args),
+        Command::ModuleDag(args) => module_dag::module_dag(&args),
         Command::Affected(args) => change_scope::affected(&args),
         Command::PathsFilter(args) => change_scope::paths_filter(&args),
         Command::CiVerify(args) => change_scope::ci_verify(&args),

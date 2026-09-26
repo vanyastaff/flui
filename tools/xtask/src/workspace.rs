@@ -28,6 +28,9 @@
 //!   wasm-check and the fast lane leave it out. Any other key in
 //!   `[package.metadata.flui]`, or a mistyped value, is an error rather than a
 //!   silently ignored setting.
+//! - **Modules.** `modules` must be a table; `cargo xtask module-dag` reads
+//!   and checks what is in it (the import direction between a crate's
+//!   top-level modules).
 //! - **Manifests.** Crates inherit the shared `[workspace.package]` keys and the
 //!   workspace lints; examples and tools are `publish = false`.
 //! - **Unreachable tests.** Under `autotests = false` a new `tests/*.rs` file is
@@ -110,7 +113,7 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
 }
 
 /// The keys a member's `[package.metadata.flui]` may set.
-const FLUI_KEYS: [&str; 8] = [
+const FLUI_KEYS: [&str; 9] = [
     "tier",
     "tier-kind",
     "order",
@@ -119,6 +122,7 @@ const FLUI_KEYS: [&str; 8] = [
     "allowed-dependents",
     "allowed-dev-dependents",
     "wasm",
+    "modules",
 ];
 
 /// A workspace package as the checks see it, before its
@@ -245,6 +249,10 @@ impl Members {
             }
             if !(flui["wasm"].is_null() || flui["wasm"].is_boolean()) {
                 bail!("{rel}: `wasm` must be `true` or `false`");
+            }
+            // Its keys are `cargo xtask module-dag`'s to read and check.
+            if !(flui["modules"].is_null() || flui["modules"].is_object()) {
+                bail!("{rel}: `modules` must be a table");
             }
             let layer = match &flui["layer"] {
                 Json::Null => None,
@@ -642,7 +650,7 @@ fn check_unique_adr_numbers(root: &Path, findings: &mut Vec<String>) -> anyhow::
 }
 
 /// `path` relative to `root`, `/`-separated.
-fn relative(root: &Path, path: &Path) -> anyhow::Result<String> {
+pub(crate) fn relative(root: &Path, path: &Path) -> anyhow::Result<String> {
     let path = normalize(path);
     let rel = path
         .strip_prefix(normalize(root))

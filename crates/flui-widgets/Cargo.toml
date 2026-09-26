@@ -209,3 +209,58 @@ layer = 6
 tier = "K"
 tier-kind = "internal"
 order = 3
+
+[package.metadata.flui.modules]
+# The top-level modules of src/lib.rs, bottom to top (`cargo xtask module-dag`). Production code
+# names a module only in a lower layer; modules in one layer name none of each other. "*" alone in
+# a layer stands for every top-level module not named elsewhere, unchecked among themselves.
+# `#[cfg(test)]` code is exempt, as dev-dependencies are between crates.
+layers = [
+    [
+        "support",
+        "localization",
+        "widget_state",
+        "anchored_box",
+    ],
+    [
+        "layout",
+        "paint",
+        "clip",
+        "semantics",
+        "stack",
+        "wrap",
+        "physical_model",
+        "image",
+        "container",
+        "value_listenable_builder",
+        "async_builders",
+    ],
+    [
+        "flex",
+        "transitions",
+        "overlay",
+    ],
+    [
+        "animated",
+    ],
+    [
+        "interaction",
+    ],
+    [
+        "text",
+        "scroll",
+        "navigator",
+    ],
+    [
+        "icon",
+        "app",
+    ],
+    [
+        "testing",
+    ],
+]
+# Modules of `use` items only: a path through them counts as a path to what they re-export.
+transparent = ["prelude", "__private"]
+# A refused edge, legal until the change in the ADR named by `exit` removes it:
+# { from = "<module>", to = "<module>", exit = "ADR-NNNN", since = "YYYY-MM-DD", reason = "..." }
+exceptions = []

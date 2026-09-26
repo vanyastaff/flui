@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
-use crate::{change_scope, docs_links, fonts, toolchain, wgsl, workspace};
+use crate::{change_scope, docs_links, fonts, module_dag, toolchain, wgsl, workspace};
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
 #[derive(Debug, Clone, Copy)]
@@ -97,7 +97,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 8] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 10] {
     [
         (
             if strict {
@@ -111,6 +111,10 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 8] {
             workspace::workspace(&parsed(args)?)
         }),
         ("workspace", |args| workspace::workspace(&parsed(args)?)),
+        ("module-dag --self-test", |args| {
+            module_dag::module_dag(&parsed(args)?)
+        }),
+        ("module-dag", |args| module_dag::module_dag(&parsed(args)?)),
         ("toolchain", |args| toolchain::toolchain(&parsed(args)?)),
         ("wgsl --self-test", |args| wgsl::wgsl(&parsed(args)?)),
         ("wgsl", |args| wgsl::wgsl(&parsed(args)?)),
@@ -157,6 +161,8 @@ mod tests {
                 "docs-links",
                 "workspace --self-test",
                 "workspace",
+                "module-dag --self-test",
+                "module-dag",
                 "toolchain",
                 "wgsl --self-test",
                 "wgsl",
