@@ -525,8 +525,8 @@ Stable facade, which contradicts itself.
 
 **Decision.** A separate tier-K crate, host-free, versioned `0.N` and bumped on every train,
 published in the same run as the train. Two parts: whole-module re-exports of the Stable closure
-at the facade's paths (type identity preserved), and named Evolving modules (`paint`, `pipeline`,
-`hooks`, `gpu`). The facade does not re-export it. A one-train guard, `links = "flui_train"` on a
+at the facade's paths (type identity preserved), and named Evolving modules (`pipeline`, `hooks`,
+`gpu`). The facade does not re-export it. A one-train guard, `links = "flui_train"` on a
 low crate everything on the train depends on, makes the resolver pick one train. If the Evolving
 surface exceeds about 30 items beyond the hooks, the decision is reviewed.
 

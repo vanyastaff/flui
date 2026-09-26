@@ -141,8 +141,10 @@ parallel rule is added.
 - **Stable closure:** whole modules re-exported at the facade's paths
   (`pub use flui_x as x`), with no wrappers or newtypes, so `flui_sdk::m::T` and `flui::m::T` are
   the same type.
-- **Evolving part:** only the named modules `paint`, `pipeline`, `hooks` and `gpu`. A package's
-  exposure to them is `grep flui_sdk::(paint|pipeline|hooks|gpu)`.
+- **Evolving part:** only the named modules `pipeline`, `hooks` and `gpu`. Evolving painting and
+  rendering items go in `pipeline`; there is no Evolving `paint` module, because `painting` is the
+  Stable path the facade already uses. A package's exposure to them is
+  `grep -E 'flui_sdk::(pipeline|hooks|gpu)::'`.
 - The facade neither depends on nor re-exports `flui-sdk`. An experimental facade module, if one
   is ever needed, is gated by `--cfg flui_unstable`, not by a Cargo feature, which feature
   unification would leak.

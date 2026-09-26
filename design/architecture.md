@@ -389,8 +389,9 @@ paths, and three Evolving items in `pipeline`, measured from what Material and C
   difference in every build.
 - Two parts. The **Stable closure**: whole-module re-exports at the same paths as the facade
   (`pub use flui_x as x`), no wrappers, so `flui_sdk::m::T` and `flui::m::T` are one type, and a
-  test says so. The **Evolving** part: only the named modules `paint`, `pipeline`, `hooks` and
-  `gpu`; a package's exposure to them is a grep for `flui_sdk::(paint|pipeline|hooks|gpu)`.
+  test says so. The **Evolving** part: only the named modules `pipeline`, `hooks` and `gpu`
+  (Evolving painting items go in `pipeline`, since `painting` is the facade's Stable path); a
+  package's exposure to them is a grep for `flui_sdk::(pipeline|hooks|gpu)::`.
 - `0.N`, bumped on every train, published by the same run as the core, patches included.
 - **One train per graph.** `links = "flui_train"` with a trivial build script sits in one low crate
   every train crate depends on (`flui-foundation`). Without it, an app on `flui = "1"` and a
