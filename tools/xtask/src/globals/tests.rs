@@ -602,7 +602,7 @@ fn immutable_class_refuses_interior_mutable_types() {
 
 #[test]
 fn counter_and_diagnostic_classes_check_their_shapes() {
-    let source = r"
+    let source = r#"
         use std::sync::{Once, atomic::{AtomicBool, AtomicU64, Ordering::Relaxed}};
         static ESCAPED: AtomicU64 = AtomicU64::new(1);
         static RESET: AtomicU64 = AtomicU64::new(1);
@@ -613,8 +613,27 @@ fn counter_and_diagnostic_classes_check_their_shapes() {
         #[cfg(debug_assertions)]
         static SEEN: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
         static STATE: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
-    ";
+        #[cfg(all(debug_assertions, unix))]
+        static DEBUG_UNIX: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        #[cfg(not(debug_assertions))]
+        static RELEASE: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        #[cfg(any(debug_assertions, feature = "x"))]
+        static EITHER: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+    "#;
     let fits = |class, item| allowlist::class_problem(class, &defs_of(source, item)).is_none();
+    assert!(fits(Class::Diagnostic, "DEBUG_UNIX"));
+    assert!(!fits(Class::Diagnostic, "RELEASE"), "release-only state");
+    assert!(!fits(Class::Diagnostic, "EITHER"), "on with the feature");
+    // a file's own `#![cfg(debug_assertions)]` holds for its items
+    let defs = scan(&[
+        ("src/lib.rs", "mod dbg;"),
+        (
+            "src/dbg.rs",
+            "#![cfg(debug_assertions)] static D: std::sync::Mutex<u8> = std::sync::Mutex::new(0);",
+        ),
+    ])
+    .expect("the files scan");
+    assert!(allowlist::class_problem(Class::Diagnostic, &defs).is_none());
     assert!(fits(Class::Counter, "ESCAPED"));
     assert!(!fits(Class::Counter, "RESET"));
     assert!(!fits(Class::Counter, "STATE"));
