@@ -19,7 +19,7 @@ permissions: {}
 
 jobs:
   rerun-ci:
-    name: re-run CI on the extended lane
+    name: rerun-ci
     if: github.event.label.name == 'full-ci'
     runs-on: ubuntu-latest
     # The wait below allows 25 minutes for a cancelled run to finish.
