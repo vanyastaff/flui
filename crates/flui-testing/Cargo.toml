@@ -13,7 +13,7 @@ categories = ["gui"]
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
-exclude = ["/benches/"]
+exclude = ["/benches/", "/perf/"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 2
 # separate binaries). See the `[[test]] name = "flui_testing_it"` target below.
@@ -111,6 +111,11 @@ criterion = { workspace = true }
 # feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
 # API, so the deterministic deadline test runs against the public surface.
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+# The perf scenarios (tests/perf.rs) mount a real widget tree: a lazy
+# `ListView`, a `Text`, the presentation scopes. A dev edge pointing up the
+# tiers, which `cargo xtask workspace` permits; without the `testing` feature,
+# so building this crate alone forms no optional-dependency cycle.
+flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 
 [[test]]
 name = "flui_testing_it"
@@ -123,6 +128,13 @@ path = "tests/main.rs"
 [[test]]
 name = "log_capture_global_subscriber"
 path = "tests/log_capture_global_subscriber.rs"
+
+# Own target, per the ambient-state note above: the perf scenarios pin the
+# process-global font system and read `FLUI_PERF_OUT` from the environment.
+# `cargo xtask perf` runs exactly this target.
+[[test]]
+name = "perf"
+path = "tests/perf.rs"
 
 [[bench]]
 name = "tree_observer_overhead"
