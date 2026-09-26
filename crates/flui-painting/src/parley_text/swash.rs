@@ -4,7 +4,7 @@ use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Angle, Format, Transform, Vector};
 
-use super::key::ParleyGlyphKey;
+use super::key::{ParleyGlyphKey, Synthesis};
 use super::registry::FontRegistry;
 use crate::text_layout::{GlyphContent, GlyphImage, GlyphRasterizer};
 
@@ -73,6 +73,10 @@ impl GlyphRasterizer for SwashRasterizer {
         if !size.is_finite() || size <= 0.0 {
             return None;
         }
+        let synthesis = key.synthesis();
+        if synthesis.skew_degrees.unsigned_abs() > Synthesis::MAX_SKEW_DEGREES {
+            return None;
+        }
         let face = self.fonts.face(key.face())?;
         let coords: &[i16] = match key.variation() {
             None => &[],
@@ -87,7 +91,6 @@ impl GlyphRasterizer for SwashRasterizer {
             .hint(key.hinted())
             .normalized_coords(coords.iter())
             .build();
-        let synthesis = key.synthesis();
         // swash moves each outline point by the strength on each side, so the
         // outline grows by twice it in total.
         let embolden = if synthesis.embolden {
@@ -230,6 +233,31 @@ mod tests {
         for size in [0.0, -0.0, -12.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let key = ParleyGlyphKey::new(FACE, gid, size, SubpixelBin::Zero);
             assert_eq!(rasterizer.rasterize(key), None, "size {size}");
+        }
+    }
+
+    /// A near-vertical shear would ask swash for a bitmap millions of pixels
+    /// wide; past the bound the key is not drawn, up to it it is.
+    #[test]
+    fn a_skew_past_the_bound_is_not_placed() {
+        let mut rasterizer = rasterizer();
+        let gid = glyph(&rasterizer, 'H');
+        let skewed = |skew_degrees| {
+            ParleyGlyphKey::new(FACE, gid, 20.0, SubpixelBin::Zero).with_synthesis(Synthesis {
+                embolden: false,
+                skew_degrees,
+            })
+        };
+        for degrees in [46, 89, 90, 127, -46, -90, -128] {
+            assert_eq!(
+                rasterizer.rasterize(skewed(degrees)),
+                None,
+                "{degrees} degrees"
+            );
+        }
+        for degrees in [45, -45] {
+            let image = rasterizer.rasterize(skewed(degrees)).expect("draws");
+            assert!(image.width < 64, "{degrees} degrees: a bounded bitmap");
         }
     }
 

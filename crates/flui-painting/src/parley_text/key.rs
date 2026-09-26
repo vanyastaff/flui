@@ -130,8 +130,16 @@ impl SubpixelBin {
 pub struct Synthesis {
     /// Synthetic bold (painting ARCHITECTURE, mapping decision 10).
     pub embolden: bool,
-    /// Synthetic oblique angle in whole degrees; `0` for none.
+    /// Synthetic oblique angle in whole degrees; `0` for none. A key skewed
+    /// past [`Self::MAX_SKEW_DEGREES`] either way is not rasterized.
     pub skew_degrees: i8,
+}
+
+impl Synthesis {
+    /// The steepest skew a rasterizer draws. Near 90° the shear's tangent
+    /// grows without bound, and so would the bitmap; cosmic-text's fake
+    /// italic is 14°.
+    pub const MAX_SKEW_DEGREES: u8 = 45;
 }
 
 /// Identifies one rasterized bitmap (ADR-0092 §5). Names no shaper and no

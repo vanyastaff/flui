@@ -98,8 +98,10 @@ pub struct GlyphImage {
 /// - `data.len() == width * height * content.bytes_per_texel()`.
 /// - An empty glyph (a space) is `Some` with zero `width` or `height`.
 /// - `None`: this rasterizer cannot draw the key (an unknown face or
-///   variation, a size that is not finite and positive). The atlas does not
-///   place the glyph and asks again on its next use.
+///   variation, a size that is not finite and positive, synthesis outside
+///   the rasterizer's bounds such as a skew steeper than
+///   `Synthesis::MAX_SKEW_DEGREES`). The atlas does not place the glyph and
+///   asks again on its next use.
 pub trait GlyphRasterizer {
     /// Identifies one bitmap.
     type Key: Copy + Eq + core::hash::Hash + core::fmt::Debug;
