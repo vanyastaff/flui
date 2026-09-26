@@ -33,15 +33,14 @@ use flui_view::prelude::*;
 use parking_lot::Mutex;
 
 use flui_widgets::__test_access::{
-    NavigatorProbe as _, OverlayProbe as _, RouteBindingSlotProbe as _, RouteLifecycle,
-    SimpleRouteProbe as _,
+    NavigatorProbe as _, OverlayProbe as _, RouteLifecycle, SimpleRouteProbe as _,
+    ZeroDurationRoute,
 };
 use flui_widgets::SizedBox;
 use flui_widgets::animated::VsyncScope;
 use flui_widgets::navigator::{
     GeneratedRoute, NamedRouteError, Navigator, NavigatorHandle, NavigatorRoute, PageRoute,
-    PushCompletion, Route, RouteBindingSlot, RouteContentBuilder, RouteRequest, RouteSettings,
-    SimpleRoute,
+    PushCompletion, Route, RouteContentBuilder, RouteRequest, RouteSettings, SimpleRoute,
 };
 
 use crate::common::harness::{Harness, mount};
@@ -663,68 +662,20 @@ fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 // THE ROUTE-ANIMATION SEAM
 // ============================================================================
 
-/// A zero-duration transition route: it parks in `Pushing`, then completes its
-/// entrance from inside `did_push` — i.e. inside the flush that pushed it — and
-/// finalizes itself from inside `did_pop`.
-///
-/// This is the shape `TransitionRoute` will have, minus the
+/// A zero-duration transition route named `name`, recording each build in
+/// `built`: it parks in `Pushing`, completes its entrance from inside
+/// `did_push` — i.e. inside the flush that pushed it — and finalizes itself
+/// from inside `did_pop`. The shape `TransitionRoute` has, minus the
 /// `AnimationController`.
-struct ZeroDurationRoute {
-    settings: RouteSettings,
-    builder: RouteContentBuilder,
-    binding: RouteBindingSlot,
-}
-
-impl ZeroDurationRoute {
-    fn new(built: &Built, name: &'static str) -> Self {
-        let built = built.clone();
-        Self {
-            settings: RouteSettings::named(name),
-            builder: Rc::new(move |_ctx| {
-                built.0.lock().push(name);
-                SizedBox::new(10.0, 10.0).into_view().boxed()
-            }),
-            binding: RouteBindingSlot::new(),
-        }
-    }
-}
-
-impl Route for ZeroDurationRoute {
-    type Output = i32;
-
-    fn settings(&self) -> &RouteSettings {
-        &self.settings
-    }
-
-    /// `TransitionRoute.finishedWhenPopped => controller.isDismissed` — false
-    /// while the exit transition runs, so disposal defers to `finalize()`.
-    fn finished_when_popped(&self) -> bool {
-        false
-    }
-
-    fn did_push(&mut self) -> PushCompletion {
-        // The future is already resolved by the time it is handed out — the
-        // zero-duration shape. `NavigatorShared::apply` registers a
-        // continuation on the future once the push's own flush releases the
-        // history lock, and that continuation raises `PushCompleted`
-        // (ADR-0064) — a route has no seam to raise it directly.
-        PushCompletion::Animating(flui_scheduler::TickerFuture::complete())
-    }
-
-    fn did_pop(&mut self) -> bool {
-        self.binding.finalize();
-        true
-    }
-}
-
-impl NavigatorRoute for ZeroDurationRoute {
-    fn content_builder(&self) -> RouteContentBuilder {
-        Rc::clone(&self.builder)
-    }
-
-    fn binding_slot(&self) -> Option<&RouteBindingSlot> {
-        Some(&self.binding)
-    }
+fn zero_duration_route(built: &Built, name: &'static str) -> ZeroDurationRoute {
+    let built = built.clone();
+    ZeroDurationRoute::new(
+        RouteSettings::named(name),
+        Rc::new(move |_ctx| {
+            built.0.lock().push(name);
+            SizedBox::new(10.0, 10.0).into_view().boxed()
+        }),
+    )
 }
 
 /// The seam, end to end, through a real `Navigator` and `Overlay`.
@@ -747,7 +698,7 @@ fn bound_zero_duration_route_settles_lifecycle_and_overlay() {
     let built = Built::default();
     let (handle, mut harness) = navigator_with(&built);
 
-    let result = handle.push(ZeroDurationRoute::new(&built, "animated"));
+    let result = handle.push(zero_duration_route(&built, "animated"));
     harness.tick();
 
     assert!(built.contains("animated"), "the pushed route built");

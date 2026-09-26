@@ -10,23 +10,34 @@
 //! transition and modal routes. This module is the one place those items are
 //! nameable from outside the crate:
 //!
-//! - **probe traits** add read-only (or test-driving) methods to public types
-//!   without widening their inherent API;
+//! - **probe traits** add methods to public types without widening their
+//!   inherent API;
 //! - **re-exports** name private types raised to `pub` at their definition,
-//!   inside private modules, so nothing else reaches them.
+//!   inside private modules, so nothing else reaches them;
+//! - **test types** ([`ZeroDurationRoute`]) stand in for a capability that
+//!   must not be reachable on its own.
+//!
+//! Not every entry is a read. Some drive state the navigator normally drives
+//! itself — `NavigatorProbe::pop_paced`, `ModalHandle::set_offstage` and
+//! `set_maintain_state`, `HeroHandle::start_flight` and `end_flight`,
+//! `LocalHistoryHandle::add` — and a re-exported type brings all of its `pub`
+//! methods along. None of that is public API: a crate that imports this
+//! module is outside its contract.
 //!
 //! An entry leaves when its tests assert through public API instead — for the
 //! navigator internals that is the Router conformance suite (ADR-0093). The
 //! module is deleted when it is empty. `tests::lists_exactly_the_temporary_entries`
-//! pins the list, so adding an entry is a reviewed edit.
+//! pins every name and probe method, and refuses a glob, a module re-export or
+//! any other kind of `pub` item, so adding to the surface is a reviewed edit.
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::Curve;
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::pipeline::PipelineCell;
-use flui_scheduler::LocalPostFrameHandle;
+use flui_scheduler::{LocalPostFrameHandle, TickerFuture};
 
 pub use crate::navigator::back_gesture::{BackGestureController, BackGestureRuntime};
 pub use crate::navigator::binding::{TransitionGroup, TransitionPeer};
@@ -42,7 +53,8 @@ pub use crate::navigator::subtree::RouteSubtree;
 pub use crate::navigator::transition_route::{TransitionHandle, TransitionRoute};
 
 use crate::navigator::{
-    HeroController, NavigatorHandle, PageRoute, PopupRoute, RouteBindingSlot, RouteId, SimpleRoute,
+    HeroController, NavigatorHandle, NavigatorRoute, PageRoute, PopupRoute, PushCompletion, Route,
+    RouteBindingSlot, RouteContentBuilder, RouteId, RouteSettings, SimpleRoute,
 };
 use crate::overlay::{InsertPosition, OverlayEntry, OverlayEntryId, OverlayHandle};
 use crate::text::TextEditingController;
@@ -139,18 +151,78 @@ impl NavigatorProbe for NavigatorHandle {
     }
 }
 
-/// The navigator capability behind a public [`RouteBindingSlot`], for a
-/// hand-written test route. `RouteBinding` itself stays unnameable.
-pub trait RouteBindingSlotProbe {
-    /// Raise `finalize()` on the bound route; a no-op on an unbound slot.
-    fn finalize(&self);
+/// A zero-duration transition route: it parks in `Pushing`, completes its
+/// entrance with an already-resolved future, and finalizes itself from
+/// `did_pop` — inside the flush that popped it.
+///
+/// It exists so the route-animation seam can be driven end to end without
+/// making the capability behind a [`RouteBindingSlot`] reachable: the route
+/// finalizes only itself, and only when the navigator pops it. `RouteBinding`
+/// stays unnameable and a slot still has no accessor outside the crate.
+pub struct ZeroDurationRoute {
+    settings: RouteSettings,
+    builder: RouteContentBuilder,
+    binding: RouteBindingSlot,
 }
 
-impl RouteBindingSlotProbe for RouteBindingSlot {
-    fn finalize(&self) {
-        if let Some(binding) = self.get() {
+impl ZeroDurationRoute {
+    /// A route named by `settings` whose content `builder` builds.
+    #[must_use]
+    pub fn new(settings: RouteSettings, builder: RouteContentBuilder) -> Self {
+        Self {
+            settings,
+            builder,
+            binding: RouteBindingSlot::new(),
+        }
+    }
+}
+
+impl std::fmt::Debug for ZeroDurationRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZeroDurationRoute")
+            .field("settings", &self.settings)
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Route for ZeroDurationRoute {
+    type Output = i32;
+
+    fn settings(&self) -> &RouteSettings {
+        &self.settings
+    }
+
+    /// `TransitionRoute.finishedWhenPopped => controller.isDismissed` — false
+    /// while the exit transition runs, so disposal defers to `finalize()`.
+    fn finished_when_popped(&self) -> bool {
+        false
+    }
+
+    fn did_push(&mut self) -> PushCompletion {
+        // The future is already resolved by the time it is handed out — the
+        // zero-duration shape. `NavigatorShared::apply` registers a
+        // continuation on the future once the push's own flush releases the
+        // history lock, and that continuation raises `PushCompleted`
+        // (ADR-0064) — a route has no seam to raise it directly.
+        PushCompletion::Animating(TickerFuture::complete())
+    }
+
+    fn did_pop(&mut self) -> bool {
+        if let Some(binding) = self.binding.get() {
             binding.finalize();
         }
+        true
+    }
+}
+
+impl NavigatorRoute for ZeroDurationRoute {
+    fn content_builder(&self) -> RouteContentBuilder {
+        Rc::clone(&self.builder)
+    }
+
+    fn binding_slot(&self) -> Option<&RouteBindingSlot> {
+        Some(&self.binding)
     }
 }
 
@@ -403,10 +475,6 @@ mod tests {
         ),
         ("PageRouteProbe", "the modal behind a PageRoute"),
         (
-            "RouteBindingSlotProbe",
-            "finalize from a hand-written test route",
-        ),
-        (
             "RouteLifecycle",
             "the route-stack state a navigator test asserts on",
         ),
@@ -436,41 +504,217 @@ mod tests {
             "TransitionRoute",
             "the private route ModalRoute is built on",
         ),
+        (
+            "ZeroDurationRoute",
+            "drives the route-animation seam without exposing RouteBinding",
+        ),
     ];
 
-    /// The re-exported types and the probe traits, exactly: adding an entry
-    /// means adding it (with its reason) to [`ENTRIES`], which review sees.
-    /// The module is also `#[doc(hidden)]`, so it never enters the rendered
-    /// API.
+    /// The methods the probe traits and test types add, as `Owner::method`.
+    /// The re-exported types carry their own `pub` methods, which are pinned
+    /// at their definitions, not here.
+    const METHODS: [&str; 37] = [
+        "HeroControllerProbe::flights",
+        "HeroControllerProbe::manifests",
+        "HeroControllerProbe::measurements",
+        "HeroControllerProbe::navigator",
+        "HeroControllerProbe::scheduled_count",
+        "NavigatorProbe::entry_of",
+        "NavigatorProbe::hero_observer_count",
+        "NavigatorProbe::is_current",
+        "NavigatorProbe::local_post_frame_handle",
+        "NavigatorProbe::overlay",
+        "NavigatorProbe::pop_gesture_enabled",
+        "NavigatorProbe::pop_paced",
+        "NavigatorProbe::render_tree",
+        "NavigatorProbe::route_modal",
+        "NavigatorProbe::route_peer",
+        "NavigatorProbe::route_state",
+        "NavigatorProbe::route_subtree",
+        "NavigatorProbe::route_subtree_parts",
+        "NavigatorProbe::tracked_entry_count",
+        "NavigatorProbe::tracked_subtree_count",
+        "OverlayEntryProbe::element_id",
+        "OverlayEntryProbe::id",
+        "OverlayEntryProbe::is_mounted",
+        "OverlayEntryProbe::maintain_state",
+        "OverlayEntryProbe::opaque",
+        "OverlayEntryProbe::with_maintain_state",
+        "OverlayEntryProbe::with_opaque",
+        "OverlayProbe::entry_ids",
+        "OverlayProbe::insert_all",
+        "OverlayProbe::is_same",
+        "OverlayProbe::len",
+        "PageRouteProbe::modal_handle",
+        "RouteProbe::transition_handle",
+        "SimpleRouteProbe::handling_pop_internally",
+        "SimpleRouteProbe::refusing_pop",
+        "TextEditingControllerProbe::listener_count",
+        "ZeroDurationRoute::new",
+    ];
+
+    /// What kind of column-0 block a line sits in.
+    enum Block {
+        /// A `pub trait`: every `fn` is surface.
+        Trait,
+        /// An inherent `impl`: every `pub fn` is surface, any other `pub`
+        /// item is refused.
+        Inherent,
+        /// A `pub struct` body: a `pub` field is refused.
+        Struct,
+        /// A trait `impl` or anything else: its methods belong to the trait.
+        Other,
+    }
+
+    fn ident(rest: &str) -> String {
+        rest.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// The leaves of one `pub use` path, or `Err` for anything the pin could
+    /// not list by name: a glob, a rename, a nested group, or a lowercase
+    /// leaf (a module or a function).
+    fn use_leaves(path: &str) -> Result<Vec<String>, ()> {
+        let path = path.trim().trim_end_matches(';').trim();
+        if path.contains('*') || path.contains(" as ") {
+            return Err(());
+        }
+        let leaves: Vec<&str> = match path.find('{') {
+            Some(open) => {
+                let inner = &path[open + 1..path.rfind('}').ok_or(())?];
+                if inner.contains('{') {
+                    return Err(());
+                }
+                inner
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect()
+            }
+            None => vec![path.rsplit("::").next().ok_or(())?],
+        };
+        leaves
+            .into_iter()
+            .map(|leaf| {
+                if !leaf.contains("::") && leaf.starts_with(char::is_uppercase) {
+                    Ok(leaf.to_owned())
+                } else {
+                    Err(())
+                }
+            })
+            .collect()
+    }
+
+    /// Everything `source` (this module's text) makes nameable from outside
+    /// the crate, sorted: each re-exported leaf, `pub trait` and `pub struct`
+    /// by name, each trait method and inherent `pub fn` as `Owner::method`.
+    /// `Err` names the first line that exports something else.
+    fn surface(source: &str) -> Result<Vec<String>, String> {
+        let mut names = Vec::new();
+        let mut block: Option<(String, Block)> = None;
+        let mut lines = source.lines().map(str::trim_end);
+        while let Some(line) = lines.next() {
+            if line == "mod tests {" {
+                break;
+            }
+            if let Some((owner, kind)) = &block {
+                if line == "}" || line == "};" {
+                    block = None;
+                    continue;
+                }
+                let item = line.trim_start();
+                match kind {
+                    Block::Trait => {
+                        if let Some(rest) = item.strip_prefix("fn ") {
+                            names.push(format!("{owner}::{}", ident(rest)));
+                        }
+                    }
+                    Block::Inherent => {
+                        if let Some(rest) = item.strip_prefix("pub fn ") {
+                            names.push(format!("{owner}::{}", ident(rest)));
+                        } else if item.starts_with("pub ") {
+                            return Err(line.to_owned());
+                        }
+                    }
+                    Block::Struct => {
+                        if item.starts_with("pub ") {
+                            return Err(line.to_owned());
+                        }
+                    }
+                    Block::Other => {}
+                }
+                continue;
+            }
+            let opens = line.ends_with('{');
+            if let Some(rest) = line.strip_prefix("pub use ") {
+                let mut path = rest.to_owned();
+                while !path.ends_with(';') {
+                    let next = lines.next().ok_or_else(|| line.to_owned())?;
+                    path.push(' ');
+                    path.push_str(next.trim());
+                }
+                names.extend(use_leaves(&path).map_err(|()| line.to_owned())?);
+            } else if let Some(rest) = line.strip_prefix("pub trait ") {
+                names.push(ident(rest));
+                if opens {
+                    block = Some((ident(rest), Block::Trait));
+                }
+            } else if let Some(rest) = line.strip_prefix("pub struct ") {
+                names.push(ident(rest));
+                if opens {
+                    block = Some((ident(rest), Block::Struct));
+                }
+            } else if line.starts_with("pub ") {
+                return Err(line.to_owned());
+            } else if opens && line.starts_with("impl") {
+                let head = line.trim_start_matches("impl").trim_start();
+                let head = if head.starts_with('<') {
+                    head.split_once("> ").map_or(head, |(_, rest)| rest)
+                } else {
+                    head
+                };
+                block = Some(if head.contains(" for ") {
+                    (String::new(), Block::Other)
+                } else {
+                    (ident(head), Block::Inherent)
+                });
+            } else if opens {
+                block = Some((String::new(), Block::Other));
+            }
+        }
+        names.sort_unstable();
+        Ok(names)
+    }
+
+    /// The module's whole outside surface, exactly: adding a re-export, a
+    /// probe trait, a test type or a method on either means adding it to
+    /// [`ENTRIES`] (with its reason) or [`METHODS`], which review sees; a
+    /// glob, a module re-export, a rename or a `pub` item of another kind is
+    /// refused outright. The module is also `#[doc(hidden)]`, so it never
+    /// enters the rendered API.
     ///
-    /// Red-check: add a `pub use` here or a new `pub trait`, or drop the
-    /// `#[doc(hidden)]` above `pub mod __test_access;` in `lib.rs`.
+    /// Red-check: add a `pub use` here, a new `pub trait`, or a method on a
+    /// probe trait; or drop the `#[doc(hidden)]` above `pub mod __test_access;`
+    /// in `lib.rs`. `surface_refuses_what_the_pin_cannot_name` plants the
+    /// shapes the pin refuses.
     #[test]
     fn lists_exactly_the_temporary_entries() {
         const SOURCE: &str = include_str!("__test_access.rs");
         const LIB: &str = include_str!("lib.rs");
 
-        let mut found: Vec<&str> = crate::navigator::export_guard::exported_identifiers(SOURCE)
-            .into_iter()
-            .filter(|token| token.starts_with(char::is_uppercase))
+        let mut expected: Vec<String> = ENTRIES
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .chain(METHODS.iter().map(|m| (*m).to_owned()))
             .collect();
-        found.extend(
-            SOURCE
-                .lines()
-                .filter_map(|line| line.strip_prefix("pub trait "))
-                .filter_map(|rest| {
-                    rest.split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                        .next()
-                }),
-        );
-        found.sort_unstable();
-
-        let mut expected: Vec<&str> = ENTRIES.iter().map(|(name, _)| *name).collect();
         expected.sort_unstable();
         assert_eq!(
-            found, expected,
-            "__test_access's entries changed: update ENTRIES with the reason, \
-             or assert through public API instead"
+            surface(SOURCE),
+            Ok(expected),
+            "__test_access's surface changed: update ENTRIES (with the reason) \
+             or METHODS, or assert through public API instead"
         );
         assert!(
             ENTRIES.iter().all(|(_, reason)| !reason.is_empty()),
@@ -487,5 +731,53 @@ mod tests {
             Some("#[doc(hidden)]"),
             "the module stays out of the rendered API"
         );
+    }
+
+    /// Each shape an export can take that the pin cannot list by name is
+    /// refused, and a new probe method or re-exported type shows up in the
+    /// surface, so the exact comparison above fails on it.
+    #[test]
+    fn surface_refuses_what_the_pin_cannot_name() {
+        let refused = [
+            "pub use crate::navigator::hero::*;",
+            "pub use crate::navigator::local_history;",
+            "pub use crate::navigator::back_gesture::convert_to_logical;",
+            "pub use crate::navigator::hero::HeroTag as Tag;",
+            "pub use crate::navigator::{hero::HeroTag};",
+            "pub fn finalize(route: RouteId) {}",
+            "pub type Rh = crate::navigator::transition_route::TransitionHandle;",
+            "pub const LIMIT: usize = 1;",
+            "pub static LIMIT: usize = 1;",
+            "pub mod inner {}",
+            "pub enum Kind {}",
+            "pub struct Open {\n    pub binding: RouteBindingSlot,\n}",
+            "pub struct Open;\nimpl Open {\n    pub const LIMIT: usize = 1;\n}",
+        ];
+        for plant in refused {
+            assert!(surface(plant).is_err(), "not refused: {plant}");
+        }
+
+        let listed = [
+            (
+                "pub use crate::navigator::hero::{\n    HeroHandle,\n    HeroTag,\n};",
+                vec!["HeroHandle", "HeroTag"],
+            ),
+            (
+                "pub trait Probe {\n    fn read(&self) -> usize;\n    fn write(\n        &self,\n    );\n}",
+                vec!["Probe", "Probe::read", "Probe::write"],
+            ),
+            (
+                "pub struct Route {\n    binding: RouteBindingSlot,\n}\n\
+                 impl Route {\n    pub fn new() -> Self {}\n    fn private(&self) {}\n}\n\
+                 impl<T: Send> Probe for Route {\n    fn read(&self) -> usize {}\n}",
+                vec!["Route", "Route::new"],
+            ),
+        ];
+        for (plant, names) in listed {
+            assert_eq!(
+                surface(plant),
+                Ok(names.into_iter().map(String::from).collect())
+            );
+        }
     }
 }
