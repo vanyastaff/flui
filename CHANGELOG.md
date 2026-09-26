@@ -145,7 +145,9 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   window that is already destroyed. An off-owner `open_window` returns
   `OpenWindowError::Backend` instead of tripping a debug assertion. A window-event or
   keyboard-layout handler replaced from inside its own call now keeps the replacement; the old
-  handler used to be restored over it. Signatures keep `+ Send`.
+  handler used to be restored over it. Signatures keep `+ Send`. `WindowsWindow::new` is no
+  longer public: a window is opened through `WindowsPlatform::open_window`, the owner-thread
+  gate, which hands it the platform's handler set.
 
 - **`flui_widgets::TextField` renamed to `RawTextField`** (and
   `TextFieldState` to `RawTextFieldState`) — a breaking rename, sanctioned

@@ -154,11 +154,13 @@ impl std::fmt::Debug for WindowsWindow {
 }
 
 impl WindowsWindow {
-    /// Create a new Windows window
+    /// Create a new Windows window. Crate-internal: windows are opened
+    /// through `WindowsPlatform::open_window`, which refuses a call off the
+    /// owner thread and hands over the platform's own handler set.
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
-    pub fn new(
+    pub(super) fn new(
         options: WindowOptions,
         windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
         handlers: Rc<RefCell<PlatformHandlers>>,
