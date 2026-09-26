@@ -425,6 +425,20 @@ cosmic-text type
 (`the_engine_does_not_shape`); `etagere` stays behind `glyph_atlas.rs` the
 way `lyon` stays behind `tessellator.rs`.
 
+`GlyphAtlas<R: GlyphRasterizer = SharedFontSystem>` is generic over where
+bitmaps come from: it hashes `R::Key` and owns `R`, taking it by `&mut` on a
+miss and on a grow. Production names the default; `flui_painting`'s
+`SwashRasterizer` (behind its `parley` feature, a dev-dependency here) is the
+rasterizer ADR-0092 §10 step 3 switches to. Because a rasterizer is a seam,
+the atlas guards the upload rather than trusting it: an image whose data
+length is not `width × height × bytes_per_texel` is not placed (warned), and
+a grow re-uploads a re-rasterized glyph only if it has the size and content
+kind its slot was given, leaving the slot blank and warning once otherwise.
+Either would otherwise fail wgpu's copy validation, which panics under the
+default error handler. The cosmic-text path always passes both checks
+(`a_bitmap_that_changes_on_grow_is_not_uploaded`,
+`an_image_whose_data_does_not_match_its_size_is_not_placed`).
+
 ---
 
 ## Open items

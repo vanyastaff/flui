@@ -129,6 +129,10 @@ wgsl_bindgen = { workspace = true }
 regex = { workspace = true }
 
 [dev-dependencies]
+# The atlas tests drive `GlyphAtlas<SwashRasterizer>`, the Parley path's
+# rasterizer (ADR-0092 §10 step 1). Checkout-only test edge: versionless, so
+# Cargo drops it from the published manifest.
+flui-painting = { path = "../flui-painting", features = ["parley"] }
 pollster = { workspace = true }
 criterion = { workspace = true }
 # PNG encoding for GPU readback frame dumps (`wgpu::readback_dump` test
