@@ -3,7 +3,7 @@
 //! The signal carries admission and scheduling state only; the owner-turn
 //! callback waits between turns in a [`TurnSlot`] passed to
 //! [`OwnerSignal::register_in`] and [`OwnerSignal::drive_in`]. A backend
-//! that keeps an [`OwnerTurnSlot`] in owner-only state therefore never has
+//! that keeps an `OwnerTurnSlot` (Windows only) in owner-only state therefore never has
 //! its callback dropped by whichever thread closes or drops the last
 //! `Arc<OwnerSignal>`. Backends not yet converted use the signal's own
 //! shared slot through [`OwnerSignal::register`] and [`OwnerSignal::drive`].
