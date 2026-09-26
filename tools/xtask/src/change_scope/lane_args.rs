@@ -633,12 +633,12 @@ mod tests {
             a.ci_test_args,
             "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests \
              --features flui/cupertino,flui/localizations \
-             -E package(flui)|package(flui-material)|package(flui-web-counter)"
+             -E package(flui)|package(flui-material)|package(flui-sdk)|package(flui-web-counter)"
         );
         // check-changed keeps the scoped build
         assert_eq!(
             a.test_args,
-            "-p flui -p flui-material -p flui-web-counter --lib --bins --tests"
+            "-p flui -p flui-material -p flui-sdk -p flui-web-counter --lib --bins --tests"
         );
     }
 
@@ -741,7 +741,8 @@ mod tests {
     #[test]
     fn doctests_cover_the_scopes_library_packages() {
         let a = args(&["crates/flui-material/src/lib.rs"]);
-        assert_eq!(a.doctest_args, "-p flui -p flui-material");
+        // flui-sdk is in scope through its dev-dependency on the facade
+        assert_eq!(a.doctest_args, "-p flui -p flui-material -p flui-sdk");
         // flui-web-counter is in scope but has no rlib: `cargo test --doc -p` would reject it
         assert!(a.packages.contains("flui-web-counter"));
         assert!(!a.doctest_args.contains("flui-web-counter"));
