@@ -783,8 +783,6 @@ fn the_seeded_reach_exceptions_are_the_known_debt() {
         .collect();
     let exit = |adr: &str| Warrant::Exit(adr.to_owned());
     let expected: BTreeSet<(String, String, Warrant)> = [
-        ("flui-interaction", "flui-platform", exit("ADR-0082")),
-        ("flui-widgets", "flui-platform", exit("ADR-0082")),
         ("flui-engine", "wgpu", Warrant::Grant("ADR-0081".to_owned())),
         ("flui-hot-reload", "windows", exit("ADR-0094")),
         ("flui-hot-reload", "android_log-sys", exit("ADR-0094")),

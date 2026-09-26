@@ -576,10 +576,10 @@ macOS, version `0.2.0`. The crate count is a reported fact, not a target.
 **Alternatives rejected.** Only forbidding wgpu (already zero today, so it proves nothing);
 driving every count to zero in B0; keeping the crate count.
 
-**Evidence.** Today the K set is red only through two direct edges to `flui-platform`: from
-`flui-interaction`, and from `flui-widgets` under its `testing` feature
-(`crates/flui-widgets/Cargo.toml:94`, turned on by the facade's `testing` feature,
-`Cargo.toml:592`). Both move to `flui-platform-api` in D1's first step, so B0 closes with it. `jni` reaches tier K through `reqwest →
+**Evidence.** At review the K set was red only through two direct edges to `flui-platform`:
+from `flui-interaction`, and from `flui-widgets` under its `testing` feature (turned on by the
+facade's `testing` feature). D1's first step moved both to `flui-platform-api` before
+`cargo xtask reach` landed, so the gate's first run needed no `flui-platform` entry. `jni` reaches tier K through `reqwest →
 rustls-platform-verifier` under `network-images`, which is why generic FFI crates are allowlisted
 with reasons rather than forbidden.
 

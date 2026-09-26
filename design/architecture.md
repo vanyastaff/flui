@@ -176,9 +176,9 @@ Rules:
   `network-images` feature. Packages get the same set plus the OS crates by glob. Each root build
   (the facade's feature combinations, each facade feature alone, each crate at its defaults and
   with all features) is resolved on its own; a `reach-exceptions` entry excuses the paths through
-  its crate and goes stale when it excuses nothing. Five are seeded: `flui-interaction` and
-  `flui-widgets` → `flui-platform` (exit ADR-0082), `flui-hot-reload` → `windows` and
-  `android_log-sys` (exit ADR-0094), and `flui-engine` → `wgpu` (a grant). The three hot-reload
+  its crate and goes stale when it excuses nothing. Three are seeded: `flui-hot-reload` →
+  `windows` and `android_log-sys` (exit ADR-0094), and `flui-engine` → `wgpu` (a grant). None
+  names `flui-platform`: ADR-0082's trait move landed before the gate. The three hot-reload
   `cargo tree` facts are reach facts now.
 - **Core names no official crate.** No core crate depends on an `official` crate in any form,
   optional and dev included. The exceptions are named, each with a reason and an exit
@@ -1132,7 +1132,7 @@ does not cover each gate they add.
 | Invariant | Gate | Today |
 |---|---|---|
 | Tier direction and in-tier order | `cargo xtask workspace` (tiers) | 11 numbered layers |
-| Transitive absence | `cargo xtask reach` over `cargo metadata`, all facade feature combinations | implemented, green with five seeded `reach-exceptions` (two exit with ADR-0082) |
+| Transitive absence | `cargo xtask reach` over `cargo metadata`, all facade feature combinations | implemented, green with three seeded `reach-exceptions`, none for `flui-platform` |
 | Core names no official crate | `cargo xtask workspace` | facade `material` and `hot-reload` features |
 | No new process global | `cargo xtask globals`: syn scan of every `static` (atomics included) and `thread_local!`, `#[cfg(test)]` excluded | no gate |
 | Module direction inside flui-widgets | `cargo xtask module-dag -p flui-widgets` | promised, absent |
