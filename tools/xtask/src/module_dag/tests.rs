@@ -579,18 +579,26 @@ fn an_unattributable_crate_path_is_reported() {
             ("low", "crate::Either", "unattributed"),
         ])
     );
-    // declaring `crate` makes the root's own items a node
+    // the root is no node: its own code, which names `high` here, is not
+    // scanned, so declaring it in a layer would pass an upward edge unseen
     assert_eq!(
         identities(
-            r#"layers = [["low"], ["high", "other", "crate"]]"#,
+            r#"layers = [["low", "crate"], ["high", "other"]]"#,
             &[
-                lib,
+                (
+                    "lib.rs",
+                    "pub mod low;\npub mod high;\npub mod other;\n\
+                     pub fn helper() -> high::High { high::High }\n",
+                ),
                 ("low.rs", "pub fn f() { crate::helper(); }\n"),
-                ("high.rs", ""),
+                ("high.rs", "pub struct High;\n"),
                 ("other.rs", ""),
             ],
         ),
-        set(&[("low", "crate", "refused")])
+        set(&[
+            ("crate", "", "unknown"),
+            ("low", "crate::helper", "unattributed"),
+        ])
     );
 }
 
