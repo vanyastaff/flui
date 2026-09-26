@@ -232,7 +232,7 @@ impl UiRealm {
     }
 
     /// The presentation keyboard input currently routes to
-    /// ([`FocusCoordinator`]) — for the isolation suite proving
+    /// (`FocusCoordinator`) — for the isolation suite proving
     /// `WindowFocus` events move it.
     #[cfg(any(test, feature = "test-support"))]
     #[must_use]

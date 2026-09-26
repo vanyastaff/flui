@@ -23,7 +23,7 @@ impl UiRealm {
     /// The realm automatically wraps `view` in a [`VsyncScope`] backed by
     /// [`Self::vsync`] and a [`GestureArenaScope`] backed by this
     /// presentation's gesture arena before handing it to the element tree
-    /// (see [`Self::attach_root_widget_entered`]'s body) — every implicitly-
+    /// (see `Self::attach_root_widget_entered`'s body) — every implicitly-
     /// animated widget and every `GestureDetector` below the root joins this
     /// realm's own registry/arena with no app-author boilerplate. Never
     /// mount a second `VsyncScope`/`GestureArenaScope` at the root with a
