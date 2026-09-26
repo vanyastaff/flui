@@ -3,11 +3,12 @@
 - **Status:** Proposed. The ADRs this folder relies on (ADR-0081 to ADR-0097) are `Proposed`,
   except two accepted in part on 2026-09-26. ADR-0081: its tiers, `order`, direction rule,
   `edge-exceptions` and `tier-kind` declarations are implemented and checked by
-  `cargo xtask workspace`, and its reach facts (§2) by `cargo xtask reach`. ADR-0082:
-  `flui-platform-api` exists and holds the capability traits and the window and input
-  vocabulary, and only `flui-app` depends on `flui-platform`. Nothing else described here is
-  implemented. The owner answered the open questions on 2026-09-25; the ADRs and this folder
-  carry those answers.
+  `cargo xtask workspace`. Its reach facts (§2) are implemented and checked by
+  `cargo xtask reach` but stay Proposed until the owner decides the three points ADR-0081's
+  status names. ADR-0082: `flui-platform-api` exists and holds the capability traits and the
+  window and input vocabulary, and only `flui-app` depends on `flui-platform`. Nothing else
+  described here is implemented. The owner answered the open questions on 2026-09-25; the ADRs
+  and this folder carry those answers.
 - **Date:** 2026-09-25
 - **Baseline:** `main` at `cab06137d`
 
