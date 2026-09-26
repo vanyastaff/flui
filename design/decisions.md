@@ -874,8 +874,10 @@ Re-checking the reports against the worktree found these; the ADRs should state 
 form.
 
 - `crates/flui-app/src/app/runner/realm_dispatch.rs` is 7,149 lines, but the test module starts at
-  line 1692 (`mod realm_dispatch_tests`); production code is about 1,690 lines. Moving the tests
-  out satisfies the file-length ratchet; the file does not need to be "dissolved".
+  line 1692 (`mod realm_dispatch_tests`); production code is about 1,690 lines. The file-length
+  gate counts production lines only, so the file is already within the limit and needs no move;
+  it does not need to be "dissolved" either. The one file over the limit is
+  `crates/flui-scheduler/src/scheduler.rs` (3569 production lines by the gate's own scan).
 - The pin count is 145 in `crates/*/Cargo.toml` and 172 including the root manifest. Both reports
   are right for their scope; a record must state which scope it counts.
 - The runtime-contract ratchet did not "vanish": `cf46dfe20` (#1283) deleted it on purpose,

@@ -146,8 +146,9 @@ are cases where the raw research, or the code, disagrees with the reports.
 1. **`realm_dispatch.rs`.** The architecture report and owner decision 4 treat its 7,149
    lines as runtime logic smeared into one file. About 1,690 are production code (section 1).
    [app_runtime_scheduler][m-app] ("mostly tests") is right; [plan_alignment][m-plan]
-   ("production code with no inline tests") is wrong. Moving the tests out fixes the
-   file-length problem without splitting the file.
+   ("production code with no inline tests") is wrong. The file-length gate excludes test-only
+   code, so the file is within the limit as it stands; the one file over it is
+   `crates/flui-scheduler/src/scheduler.rs`.
 2. **Rebuild weight.** Owner decision 5 and the architecture report count engine and widgets
    lines including tests and comments. [engine_painting_text][m-engine] counts about 18.8k
    executable lines in the engine, and the widgets crate carries 14.3k lines in test files
