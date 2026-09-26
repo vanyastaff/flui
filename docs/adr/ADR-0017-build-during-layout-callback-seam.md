@@ -201,8 +201,8 @@ what a superseding record would need.
 - 5 `PipelineCell` sites routed through the scope.
 
 **Results.** `layout_passes` from `FrameReport`, reproduced by the reviewer. Configurations:
-A = callback on, D = callback on with both rules below off, B = callback off with the rules,
-C = `main`.
+A = callback on with both rules, D = callback on with both rules below off, B = callback off
+with the rules, C = `main`.
 
 | Scenario | A | D | B | C |
 |---|---|---|---|---|

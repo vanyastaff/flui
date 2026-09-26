@@ -306,7 +306,7 @@ Two unrun hypotheses: the old image is unloaded before the realm drops its views
 
 | Claim | Check | ADR |
 |---|---|---|
-| Subsecond works on Windows and Android, and patches reach code through `Box<dyn ElementBase>` vtables created before the patch | Windows run 2026-09-26: fails with stock dx; with a dx fix, logic edits keep state; macOS and Android not run | ADR-0094 |
+| Subsecond works on Windows and Android, and patches reach code through `Box<dyn ElementBase>` vtables created before the patch | Windows run 2026-09-26: fails with stock dx; with a dx fix, logic edits keep state; vtable reach: only calls the hook wraps (6 of 33 build calls per pass); macOS and Android not run | ADR-0094 |
 | rustdoc-JSON, cargo-public-api and cargo-semver-checks need nightly | run each on the pinned toolchain | ADR-0089, ADR-0081 |
 | The size N of the Stable closure | cargo-public-api spike before it is promised | ADR-0081 |
 | Mismatched `=` pins through a real registry give a resolver error, not E0308 | registry test (only a directory-source probe ran) | ADR-0088 |
