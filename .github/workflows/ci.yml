@@ -845,13 +845,16 @@ jobs:
       # `image::decode_cache`): those tests only compile under their own
       # feature, so they need their own explicit run too, or they are as
       # CI-dead as the sync path was before this block existed.
+      #
+      # One run with every one of those features on: they are additive, so
+      # each test the separate runs selected still compiles, and one feature
+      # resolution builds the shared crates once instead of once per run.
       - name: cargo nextest run (flui-assets full, flui-widgets images)
-        run: |
-          cargo nextest run -p flui-assets --locked --features full
-          cargo nextest run -p flui-widgets --locked --features images --test image
-          cargo nextest run -p flui-widgets --locked --features asset-images --lib
-          cargo nextest run -p flui-widgets --locked --features asset-images --test image_async
-          cargo nextest run -p flui-widgets --locked --features network-images --test image_network
+        run: >
+          cargo nextest run
+          -p flui-assets -p flui-widgets
+          --locked --no-fail-fast
+          --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images
 
       # The facade's non-default catalogs (`tests/cupertino_demo.rs`, the
       # smoke test's localizations assertions) need no run here: the `test`

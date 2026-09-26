@@ -330,41 +330,17 @@ fn test_features_plan() -> Vec<Step> {
     let nextest =
         |args: &[&str]| Step::from(Cmd::cargo(["nextest", "run"]).args(args.iter().copied()));
     vec![
-        nextest(&["-p", "flui-assets", "--locked", "--features", "full"]),
+        // one feature resolution for both crates: the features are additive,
+        // so every test a per-feature run would select still compiles
         nextest(&[
+            "-p",
+            "flui-assets",
             "-p",
             "flui-widgets",
             "--locked",
+            "--no-fail-fast",
             "--features",
-            "images",
-            "--test",
-            "image",
-        ]),
-        nextest(&[
-            "-p",
-            "flui-widgets",
-            "--locked",
-            "--features",
-            "asset-images",
-            "--lib",
-        ]),
-        nextest(&[
-            "-p",
-            "flui-widgets",
-            "--locked",
-            "--features",
-            "asset-images",
-            "--test",
-            "image_async",
-        ]),
-        nextest(&[
-            "-p",
-            "flui-widgets",
-            "--locked",
-            "--features",
-            "network-images",
-            "--test",
-            "image_network",
+            "flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images",
         ]),
         nextest(&[
             "-p",
@@ -1111,11 +1087,7 @@ mod tests {
         assert_eq!(
             lines(&test_features_plan()),
             [
-                "$ cargo nextest run -p flui-assets --locked --features full",
-                "$ cargo nextest run -p flui-widgets --locked --features images --test image",
-                "$ cargo nextest run -p flui-widgets --locked --features asset-images --lib",
-                "$ cargo nextest run -p flui-widgets --locked --features asset-images --test image_async",
-                "$ cargo nextest run -p flui-widgets --locked --features network-images --test image_network",
+                "$ cargo nextest run -p flui-assets -p flui-widgets --locked --no-fail-fast --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images",
                 "$ cargo nextest run -p flui-view -p flui-testing -p flui-widgets -p flui-app --features flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals --locked --no-fail-fast",
             ]
         );

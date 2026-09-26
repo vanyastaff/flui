@@ -87,8 +87,16 @@ jobs:
       - name: cargo build --workspace
         run: cargo build --workspace --all-targets
 
+      # `cargo xtask test`'s scope (TEST_SCOPE in tools/xtask/src/tasks.rs),
+      # spelled out: the `cargo xtask` alias passes `--locked`, which the
+      # fresh lockfile above would fail.
       - name: cargo nextest run (lib + integration)
-        run: cargo nextest run --workspace --exclude flui-platform --no-fail-fast
+        run: >
+          cargo nextest run
+          --workspace --exclude flui-platform
+          --lib --bins --tests
+          --features flui/cupertino,flui/localizations
+          --no-fail-fast
 
   bench:
     name: bench (criterion numbers, trend artifact)
