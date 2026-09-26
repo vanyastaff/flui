@@ -13,7 +13,7 @@ use flui_interaction::routing::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform_api::Clipboard as _;
 use flui_widgets::{
-    CallbackShortcuts, EditableText, Focus, SingleActivator, TextEditingController,
+    Actions, CallbackAction, EditableText, Focus, PasteTextIntent, TextEditingController,
 };
 
 /// The platform's command modifier, as `DefaultFocusTraversal` binds it.
@@ -129,7 +129,9 @@ fn paste_replaces_the_selection_and_drops_line_breaks() {
 }
 
 /// A field disabled after it was focused takes no paste: disabling releases
-/// its focus, so the chord never reaches it, and its action is disabled too.
+/// its focus, so the chord never reaches it. (The action's own `enabled`
+/// check guards a dispatch that reaches the node anyway; the key path offers
+/// no way to reach a disabled field, so this test does not exercise it.)
 #[test]
 fn paste_into_a_disabled_field_changes_nothing() {
     let controller = TextEditingController::with_text("keep");
@@ -149,34 +151,62 @@ fn paste_into_a_disabled_field_changes_nothing() {
     assert_eq!(controller.text(), "keep");
 }
 
-/// With no text field focused the clipboard bindings resolve nothing, so an
-/// app's own Ctrl/Cmd+C shortcut still fires.
+/// With no text field focused the default clipboard bindings resolve to no
+/// enabled action, so the chord is left unconsumed and keeps bubbling past
+/// the focus root to whatever else binds it.
+///
+/// Fails if `DefaultFocusTraversal` consumed a clipboard chord no focused
+/// widget answers.
 #[test]
-fn ctrl_c_with_no_text_field_focused_still_reaches_an_app_callback_shortcut() {
-    let fired = Rc::new(Cell::new(0));
-    let counter = Rc::clone(&fired);
+fn ctrl_c_with_no_text_field_focused_is_left_unconsumed() {
     let focus_node = FocusNode::with_debug_label("plain focus");
     let harness = crate::common::harness::mount(
-        CallbackShortcuts::new(
-            Focus::new(flui_widgets::SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&focus_node)),
-        )
-        .binding(
-            if cfg!(any(target_os = "macos", target_os = "ios")) {
-                SingleActivator::character("c").meta()
-            } else {
-                SingleActivator::character("c").control()
-            },
-            move || counter.set(counter.get() + 1),
-        ),
+        Focus::new(flui_widgets::SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&focus_node)),
     );
     focus_node.request_focus();
+    assert!(focus_node.has_primary_focus(), "precondition: focused");
+
+    for key in ["c", "x", "v"] {
+        let consumed = harness
+            .focus_manager()
+            .dispatch_key_event(&chord(key, command()));
+        assert!(!consumed, "{key}: nothing answers the chord");
+    }
+}
+
+/// `EditableText`'s clipboard actions are the nearest declaration of their
+/// intents, so an ancestor `Actions` mapping for the same intent never
+/// replaces them (no `Action.overridable`).
+///
+/// Fails if the field's actions were resolved after the ancestor chain: the
+/// ancestor's callback would count the paste and the field stay unchanged.
+#[test]
+fn an_ancestor_paste_action_does_not_replace_the_fields_own() {
+    let ancestor_pastes = Rc::new(Cell::new(0));
+    let counter = Rc::clone(&ancestor_pastes);
+    let controller = TextEditingController::with_text("ab");
+    let focus_node = FocusNode::with_debug_label("overridden field");
+    let harness = crate::common::harness::mount(
+        Actions::new(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ))
+        .action(CallbackAction::new(move |_: &PasteTextIntent| {
+            counter.set(counter.get() + 1);
+        })),
+    );
+    focus_node.request_focus();
+    assert!(focus_node.has_primary_focus(), "precondition: focused");
+    controller.set_caret_byte_offset(2);
+    harness.clipboard().write_text("c".to_owned());
 
     let consumed = harness
         .focus_manager()
-        .dispatch_key_event(&chord("c", command()));
+        .dispatch_key_event(&chord("v", command()));
 
     assert!(consumed);
-    assert_eq!(fired.get(), 1);
+    assert_eq!(controller.text(), "abc", "the field's own paste ran");
+    assert_eq!(ancestor_pastes.get(), 0, "the ancestor mapping did not");
 }
 
 /// `EditableText` is a text field to assistive technology: a text-input node

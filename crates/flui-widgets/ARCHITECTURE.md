@@ -1755,7 +1755,7 @@ node, and with no text field focused nothing does, so the chord keeps
 bubbling. **Tests:** `interaction::shortcuts::tests::clipboard_activators_map_every_platform`,
 `tests/editable_text_clipboard.rs`
 (`copy_then_paste_round_trips_text_in_an_editable_text`,
-`ctrl_c_with_no_text_field_focused_still_reaches_an_app_callback_shortcut`).
+`ctrl_c_with_no_text_field_focused_is_left_unconsumed`).
 
 ### 27. `EditableText`'s clipboard actions win over ancestor bindings
 
@@ -1765,9 +1765,9 @@ bubbling. **Tests:** `interaction::shortcuts::tests::clipboard_activators_map_ev
 **Choice:** `EditableText` layers its actions over the chain at its position
 and records the result on its node, so they are the nearest declaration of
 the two intent types and an ancestor mapping never replaces them. There is no
-`_makeOverridable`. **Test:** `copy_then_paste_round_trips_text_in_an_editable_text`
-(the root `Actions` above declares no clipboard mapping, and the field's own
-answers).
+`_makeOverridable`. **Test:** `an_ancestor_paste_action_does_not_replace_the_fields_own`
+(an ancestor `CallbackAction<PasteTextIntent>` is never invoked, and the
+field's own paste runs).
 
 ### 28. Paste drops `\r` as well as `\n`
 
