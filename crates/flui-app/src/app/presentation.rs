@@ -23,7 +23,7 @@ use super::performance_stats::PerformanceStats;
 use flui_platform::traits::PlatformAccessibility;
 #[cfg(test)]
 use flui_platform_api::PlatformTextInput;
-use flui_platform_api::{CursorError, CursorIcon, PlatformWindow};
+use flui_platform_api::{Clipboard, CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 #[cfg(test)]
@@ -87,6 +87,16 @@ pub(crate) struct RealmCapabilities<'a> {
     /// [`SemanticsActionRequest`] and resolves at the next Idle drain —
     /// never on the adapter's own thread.
     pub(crate) command_sender: super::ui_realm::UiCommandSender,
+    /// The realm's platform clipboard, handed to widgets through
+    /// `LifecycleContext::clipboard_handle`.
+    pub(crate) clipboard: Arc<dyn Clipboard>,
+}
+
+/// A fresh headless platform's clipboard, for a test realm.
+#[cfg(test)]
+pub(crate) fn test_clipboard() -> Arc<dyn Clipboard> {
+    use flui_platform::Platform as _;
+    flui_platform::HeadlessPlatform::new().clipboard()
 }
 
 /// The window a presentation is built on, with the accessibility bridge its
@@ -572,6 +582,9 @@ impl PresentationState {
             owner.set_local_post_frame_handle(capabilities.local_post_frame_handle);
             owner.set_interaction_dispatch_handle(capabilities.interaction_dispatch_handle.clone());
             owner.set_text_input_handle(text_input.handle());
+            owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(
+                capabilities.clipboard,
+            ));
             // Paired here, the one place holding both halves: the realm's
             // dispatch ticket (identity) and THIS presentation's pipeline
             // (the tree). A realm may host several presentations, each with

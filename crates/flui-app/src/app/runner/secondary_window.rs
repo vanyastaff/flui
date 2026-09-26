@@ -977,6 +977,7 @@ fn finish_open_secondary_window(
                 super::presentation_window(Arc::clone(&host)),
                 scale_factor,
                 runtime_needs_redraw_handle(),
+                super::host::runtime_clipboard(),
             )
             .map_err(mount_error)?;
             ui_realm.set_frame_failure_detail(frame_failure_detail);
@@ -1605,5 +1606,139 @@ impl flui_view::StatelessView for SecondaryContentStub {
 impl flui_view::View for SecondaryContentStub {
     fn create_element(&self) -> flui_view::element::ElementKind {
         flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+#[cfg(all(
+    test,
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+mod clipboard_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use flui_platform::Platform as _;
+    use flui_view::{BuildContext, IntoView, LifecycleContext, StatefulView, View, ViewState};
+
+    use super::super::host::{OwnerHostClearGuard, install_owner_platform};
+    use super::super::realm_dispatch::teardown_platform_realm;
+    use super::*;
+    use crate::app::raster_test_support::TestRasterBackend;
+
+    /// Writes `text` through the clipboard handle its `init_state` acquires.
+    #[derive(Clone)]
+    struct ClipboardProbe {
+        text: &'static str,
+    }
+
+    struct ClipboardProbeState {
+        text: &'static str,
+    }
+
+    impl StatefulView for ClipboardProbe {
+        type State = ClipboardProbeState;
+
+        fn create_state(&self) -> Self::State {
+            ClipboardProbeState { text: self.text }
+        }
+    }
+
+    impl ViewState<ClipboardProbe> for ClipboardProbeState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            ctx.clipboard_handle()
+                .expect("a realm always hands its widgets a clipboard")
+                .write_text(self.text);
+        }
+
+        fn build(&self, _view: &ClipboardProbe, _ctx: &dyn BuildContext) -> impl IntoView {
+            flui_widgets::SizedBox::new(1.0, 1.0)
+        }
+    }
+
+    impl View for ClipboardProbe {
+        fn create_element(&self) -> flui_view::element::ElementKind {
+            flui_view::element::ElementKind::stateful(self)
+        }
+    }
+
+    /// Attach `probe` to `presentation` of the dispatched realm and run one
+    /// frame, so its `init_state` runs.
+    fn mount_and_frame(
+        dispatcher: RealmDispatcher,
+        presentation: flui_foundation::PresentationId,
+        probe: ClipboardProbe,
+    ) {
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |realm| {
+                realm
+                    .attach_root_widget_to_for_test(presentation, &probe)
+                    .expect("probe attaches");
+                let mut backend = TestRasterBackend::always_presents();
+                let _presented = realm.render_frame_entered(&mut backend);
+            })),
+        )
+        .expect("frame dispatches");
+    }
+
+    #[test]
+    fn every_runner_built_realm_hands_its_widgets_the_platform_clipboard() {
+        let _clear = OwnerHostClearGuard::arm();
+        let platform = flui_platform::HeadlessPlatform::new();
+        let clipboard = platform.clipboard();
+        let opened = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&opened);
+        let platform: Box<dyn flui_platform::Platform> = Box::new(platform);
+        platform
+            .run(Box::new(move |owner| {
+                install_owner_platform(owner).expect("install owner");
+                for policy in [WindowPolicy::SeparateRealms, WindowPolicy::SharedRealm] {
+                    let opened = open_secondary_window_impl(AppConfig::default(), policy)
+                        .expect("open admitted")
+                        .expect("the headless platform opens synchronously");
+                    sink.borrow_mut().push(opened);
+                }
+                Ok(())
+            }))
+            .expect("headless run");
+
+        let opened = opened.take();
+        let (separate, _) = opened[0].clone();
+        let (shared, _) = opened[1].clone();
+        assert_eq!(
+            separate.address.realm_id, shared.address.realm_id,
+            "precondition: the shared window is a second presentation of the first realm"
+        );
+
+        mount_and_frame(
+            separate,
+            separate.address.presentation_id,
+            ClipboardProbe { text: "realm" },
+        );
+        assert_eq!(
+            clipboard.read_text().as_deref(),
+            Some("realm"),
+            "a realm the runner builds hands its widgets the platform clipboard"
+        );
+
+        mount_and_frame(
+            shared,
+            shared.address.presentation_id,
+            ClipboardProbe {
+                text: "presentation",
+            },
+        );
+        assert_eq!(
+            clipboard.read_text().as_deref(),
+            Some("presentation"),
+            "a presentation added to a realm hands its widgets the same clipboard"
+        );
+
+        for (_, window) in opened {
+            window.close();
+        }
+        teardown_platform_realm();
     }
 }

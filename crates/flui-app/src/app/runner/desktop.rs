@@ -128,6 +128,7 @@ where
         presentation_window,
         scale_factor,
         runtime_needs_redraw_handle(),
+        super::host::runtime_clipboard(),
     ) {
         Ok(realm) => realm,
         Err(e) => {

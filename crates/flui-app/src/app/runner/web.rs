@@ -62,10 +62,9 @@ where
                 .expect("BUG: bootstrap_web runs only after install_owner_platform")
         }
 
-        // 0. Wire the platform clipboard (ADR-0038 §9).
-        let clipboard = owner_platform_installed(|owner| owner.shared().clipboard());
-        APP_RUNTIME.with(|slot| slot.borrow().set_platform_clipboard(clipboard));
-
+        // 0. The platform clipboard (ADR-0038 §9) was installed with the
+        // owner platform; the realm below takes it through `runtime_clipboard`.
+        //
         // 1. Open window (creates canvas). `Ready` is guaranteed inside
         // `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
@@ -120,6 +119,7 @@ where
             presentation_window,
             scale_factor,
             runtime_needs_redraw_handle(),
+            super::host::runtime_clipboard(),
         ) {
             Ok(realm) => realm,
             Err(error) => {

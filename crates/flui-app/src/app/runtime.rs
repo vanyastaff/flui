@@ -163,6 +163,9 @@ pub(crate) struct RealmServices {
     pub(crate) local_post_frame: LocalPostFrameLane,
     pub(crate) async_driver: AsyncDriver,
     pub(crate) scheduler: UpdateScheduler,
+    /// The platform clipboard every presentation of this realm hands its
+    /// widgets (`LifecycleContext::clipboard_handle`).
+    pub(crate) clipboard: Arc<dyn Clipboard>,
 }
 
 impl RealmServices {
@@ -172,12 +175,16 @@ impl RealmServices {
     /// process-global scheduler — each realm gets its OWN strong root, torn
     /// down when the realm drops, none of them taking a process-host
     /// parameter any more (the retired `AppBinding` is gone).
-    pub(crate) fn construct() -> Self {
+    ///
+    /// `clipboard` is the platform clipboard the realm's presentations hand
+    /// their widgets; a realm always has one.
+    pub(crate) fn construct(clipboard: Arc<dyn Clipboard>) -> Self {
         let scheduler = UpdateScheduler::new();
         Self {
             local_post_frame: scheduler.new_local_post_frame_lane(),
             async_driver: scheduler.async_driver().clone(),
             scheduler,
+            clipboard,
         }
     }
 }
@@ -1628,16 +1635,9 @@ impl AppRuntime {
         let _prev = self.platform_clipboard.lock().take();
     }
 
-    /// Access the installed platform clipboard, if any.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- a Clipboard capability \
-                      through BuildContext is future wiring; kept for parity \
-                      with the retired AppBinding::clipboard accessor"
-        )
-    )]
+    /// Access the installed platform clipboard, if any. Every runner reads it
+    /// through `runner::host::runtime_clipboard` to hand each realm it builds
+    /// the platform clipboard.
     pub(super) fn clipboard(&self) -> Option<Arc<dyn Clipboard>> {
         let clipboard = self.platform_clipboard.lock().clone();
         if clipboard.is_none() {

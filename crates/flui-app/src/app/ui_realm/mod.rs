@@ -204,6 +204,17 @@ pub(crate) struct UiRealm {
     /// render-retry path all need this, exactly as the retired
     /// `AppBinding::wake_frame` did).
     wake: Arc<dyn Fn() + Send + Sync>,
+    /// The platform clipboard this realm's presentations hand their widgets:
+    /// the initial one at construction, every later one through
+    /// [`Self::assemble_presentation`].
+    #[cfg_attr(
+        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
+        expect(
+            dead_code,
+            reason = "read only by assemble_presentation, itself desktop-only"
+        )
+    )]
+    clipboard: Arc<dyn flui_platform::traits::Clipboard>,
     /// Test-only injectable clock, stored as the f64 bits in a u64 atomic
     /// (rather than an `Option<f64>`/`Cell<f64>`) so [`Self::now_secs`] can
     /// read it with a single relaxed load; `0u64` is the "not set" sentinel
