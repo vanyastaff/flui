@@ -191,3 +191,6 @@ layer = 4
 tier = "R"
 tier-kind = "internal"
 order = 4
+reach-exceptions = [
+    { to = "wgpu", grant = "ADR-0081", reason = "the one R crate that may reach wgpu, and through it wgpu-hal's `windows` (DX12)" },
+]

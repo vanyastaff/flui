@@ -1,8 +1,5 @@
 //! `cargo xtask facade-combos`: every supported feature combination of the
-//! `flui` facade, compiled on its own, and hot reload's absence from an
-//! ordinary production graph.
-
-use anyhow::bail;
+//! `flui` facade, compiled on its own.
 
 use super::deny_warnings;
 use super::exec::{Cmd, Runner};
@@ -13,8 +10,9 @@ use super::exec::{Cmd, Runner};
 /// proves nothing here, since feature unification would enable `material`
 /// from a sibling and turn a broken combination green. `--all-targets` is
 /// deliberate: a missing `required-features` on an example or test is exactly
-/// the wiring these builds exist to catch.
-const COMBOS: [&str; 15] = [
+/// the wiring these builds exist to catch. `cargo xtask reach` resolves the
+/// facade under the same selections.
+pub(crate) const COMBOS: [&str; 15] = [
     "--no-default-features",
     "--no-default-features --features material",
     "--no-default-features --features cupertino",
@@ -32,66 +30,6 @@ const COMBOS: [&str; 15] = [
     "",
 ];
 
-/// A fact about a dependency graph, read from `cargo tree`.
-#[derive(Debug, Clone, Copy)]
-struct TreeFact {
-    /// What is being established.
-    what: &'static str,
-    /// The `cargo tree` arguments.
-    args: &'static [&'static str],
-    /// The text the output must contain, or must not.
-    needle: &'static str,
-    present: bool,
-    /// The failure, when the output says otherwise.
-    failure: &'static str,
-}
-
-/// Hot reload must be absent from an ordinary production graph, not merely
-/// unused by it; the feature must bring it in; and the first-party host, the
-/// executable contract for `flui run`, must enable flui-app's feature (a
-/// direct dependency on flui-hot-reload does not).
-const TREE_FACTS: [TreeFact; 3] = [
-    TreeFact {
-        what: "flui-hot-reload must be absent from flui-app's default graph",
-        args: &["tree", "-p", "flui-app", "--locked", "-e", "normal"],
-        needle: "flui-hot-reload",
-        present: false,
-        failure: "flui-hot-reload is in flui-app's default normal dependency graph",
-    },
-    TreeFact {
-        what: "the hot-reload feature must bring in flui-hot-reload",
-        args: &[
-            "tree",
-            "-p",
-            "flui-app",
-            "--locked",
-            "-e",
-            "normal",
-            "--features",
-            "hot-reload",
-        ],
-        needle: "flui-hot-reload",
-        present: true,
-        failure: "the hot-reload feature did not bring in flui-hot-reload",
-    },
-    TreeFact {
-        what: "hot-reload-counter-host must enable flui-app/hot-reload",
-        args: &[
-            "tree",
-            "-p",
-            "hot-reload-counter-host",
-            "--locked",
-            "-e",
-            "features",
-            "-i",
-            "flui-app",
-        ],
-        needle: r#"flui-app feature "hot-reload""#,
-        present: true,
-        failure: "hot-reload-counter-host does not enable flui-app/hot-reload",
-    },
-];
-
 /// One clippy per entry of [`COMBOS`].
 fn clippy_plan() -> Vec<Cmd> {
     COMBOS
@@ -104,27 +42,10 @@ fn clippy_plan() -> Vec<Cmd> {
         .collect()
 }
 
-/// Whether `output` bears `fact` out.
-fn holds(fact: &TreeFact, output: &str) -> bool {
-    output.contains(fact.needle) == fact.present
-}
-
 /// `cargo xtask facade-combos`, stopping at the first failure.
 pub(super) fn run(runner: Runner) -> anyhow::Result<()> {
     for cmd in clippy_plan() {
         runner.run(&cmd)?;
-    }
-    for fact in &TREE_FACTS {
-        println!("facade-combos: {}", fact.what);
-        let cmd = Cmd::cargo(fact.args);
-        println!("$ {cmd}");
-        if runner.dry_run {
-            continue;
-        }
-        // a failed `cargo tree` establishes nothing either way
-        if !holds(fact, &cmd.stdout()?) {
-            bail!("{}", fact.failure);
-        }
     }
     Ok(())
 }
@@ -156,25 +77,5 @@ mod tests {
         );
         let distinct: std::collections::BTreeSet<&str> = COMBOS.into_iter().collect();
         assert_eq!(distinct.len(), COMBOS.len());
-    }
-
-    #[test]
-    fn tree_facts_read_the_output_both_ways() {
-        let [absent, brought_in, host] = TREE_FACTS;
-        let with = "flui-app v0.1.0\n└── flui-hot-reload v0.1.0\n";
-        let without = "flui-app v0.1.0\n└── flui-view v0.1.0\n";
-        assert!(holds(&absent, without));
-        assert!(!holds(&absent, with));
-        assert!(holds(&brought_in, with));
-        assert!(!holds(&brought_in, without));
-        assert!(holds(
-            &host,
-            "flui-app feature \"hot-reload\"\n└── hot-reload-counter-host v0.1.0\n"
-        ));
-        assert!(!holds(&host, "flui-app feature \"default\"\n"));
-        assert_eq!(
-            Cmd::cargo(host.args).to_string(),
-            "cargo tree -p hot-reload-counter-host --locked -e features -i flui-app"
-        );
     }
 }

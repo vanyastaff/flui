@@ -353,33 +353,49 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
     findings
 }
 
-/// Each `edge-exceptions` exit names an ADR that exists under `docs/adr`.
-pub(super) fn check_exception_citations(
-    root: &Path,
-    members: &Members,
-    findings: &mut Vec<String>,
-) {
+/// Each `edge-exceptions` exit and each `reach-exceptions` exit or grant
+/// names an ADR that exists under `docs/adr`; a reach warrant must also be an
+/// `ADR-NNNN` number (an edge exit's format is `check_tiers`'s finding).
+pub(super) fn check_adr_citations(root: &Path, members: &Members, findings: &mut Vec<String>) {
     let files: Vec<String> = std::fs::read_dir(root.join("docs").join("adr"))
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .collect();
+    let exists = |adr: &str| {
+        let prefix = format!("{adr}-");
+        let exact = format!("{adr}.md");
+        files
+            .iter()
+            .any(|file| file.starts_with(&prefix) || *file == exact)
+    };
     for member in members.iter() {
         for entry in &member.edge_exceptions {
             if !ADR_NUMBER.is_match(&entry.exit) {
                 continue; // reported by `check_tiers`
             }
-            let prefix = format!("{}-", entry.exit);
-            let exact = format!("{}.md", entry.exit);
-            if !files
-                .iter()
-                .any(|file| file.starts_with(&prefix) || *file == exact)
-            {
+            if !exists(&entry.exit) {
                 findings.push(format!(
                     "{}'s `edge-exceptions` entry for {} names {}, which has no file under \
                      docs/adr",
                     member.name, entry.to, entry.exit
+                ));
+            }
+        }
+        for entry in &member.reach_exceptions {
+            let (key, adr) = (entry.warrant.key(), entry.warrant.adr());
+            if !ADR_NUMBER.is_match(adr) {
+                findings.push(format!(
+                    "{}'s `reach-exceptions` entry for {} names {key} \"{adr}\", which is not \
+                     an `ADR-NNNN` number",
+                    member.name, entry.to
+                ));
+            } else if !exists(adr) {
+                findings.push(format!(
+                    "{}'s `reach-exceptions` entry for {} names {adr}, which has no file under \
+                     docs/adr",
+                    member.name, entry.to
                 ));
             }
         }

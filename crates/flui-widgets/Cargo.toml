@@ -212,3 +212,6 @@ order = 3
 edge-exceptions = [
     { to = "flui-platform", exit = "ADR-0082", reason = "the `testing` harness's headless platform" },
 ]
+reach-exceptions = [
+    { to = "flui-platform", exit = "ADR-0082", reason = "the `testing` harness's headless platform" },
+]

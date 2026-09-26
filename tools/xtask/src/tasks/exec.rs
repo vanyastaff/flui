@@ -105,20 +105,6 @@ impl Cmd {
         Ok(())
     }
 
-    /// Runs it with stdout captured and stderr inherited; a non-zero exit is
-    /// an error naming it.
-    pub(super) fn stdout(&self) -> anyhow::Result<String> {
-        let output = self
-            .command()
-            .stderr(Stdio::inherit())
-            .output()
-            .with_context(|| format!("running `{self}`"))?;
-        if !output.status.success() {
-            bail!("`{self}` failed ({})", output.status);
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-    }
-
     /// Runs it with stdout and stderr merged into one stream, echoed as it
     /// arrives and also returned, with whether it succeeded: for a caller that
     /// reads the output and must still show all of it when the command fails.
