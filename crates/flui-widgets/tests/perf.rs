@@ -244,10 +244,6 @@ fn perf_idle_ten_seconds_produces_no_frames() {
 fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     let mut app = mount();
     let band = app.render_nodes();
-    assert!(
-        band < 400,
-        "sanity: the mount built only a band of the 10 000 rows, got {band} render nodes"
-    );
 
     app.position.set_pixels(HEIGHT);
     // Two frames: a lazy band that first appears is built after that frame's
@@ -255,6 +251,10 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     let report = app.pump_many(2);
     record("list_10k_scroll_one_screen", &report);
 
+    assert!(
+        band < 400,
+        "sanity: the mount built only a band of the 10 000 rows, got {band} render nodes"
+    );
     let visible_rows = ((HEIGHT - LABEL_HEIGHT) / ROW_HEIGHT) as u64;
     let laid_out = counter(&report, "nodes_laid_out");
     assert!(

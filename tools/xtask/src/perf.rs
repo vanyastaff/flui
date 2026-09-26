@@ -152,36 +152,51 @@ pub(crate) fn perf(args: &PerfArgs) -> anyhow::Result<ExitCode> {
     }
     std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
 
-    run_scenarios(&root, &out)?;
-    let current = read_records(&out)?;
+    let scenarios_passed = run_scenarios(&root, &out)?;
+    report(&root, &out, mode, scenarios_passed)
+}
+
+/// Turns the records the scenarios wrote under `out` into the verdict.
+///
+/// A scenario writes its record before it asserts, so a run whose budget
+/// assertion broke still has numbers: they are written to `current.toml` and
+/// printed against the baseline before the run fails. A failed run never
+/// blesses.
+fn report(root: &Path, out: &Path, mode: Mode, scenarios_passed: bool) -> anyhow::Result<ExitCode> {
+    let current = read_records(out)?;
     if current.is_empty() {
+        if !scenarios_passed {
+            bail!("the perf scenarios failed before recording anything; a budget assertion broke");
+        }
         bail!(
             "the perf scenarios reported nothing under {}; is FLUI_PERF_OUT read?",
             out.display()
         );
     }
-    std::fs::write(out.join("current.toml"), render(&current)?)
-        .with_context(|| format!("writing {}", out.join("current.toml").display()))?;
+    let current_path = out.join("current.toml");
+    std::fs::write(&current_path, render(&current)?)
+        .with_context(|| format!("writing {}", current_path.display()))?;
 
-    let baseline_path = root.join(BASELINE);
+    if !scenarios_passed {
+        // The baseline is context here, not the verdict: an unreadable one
+        // must not hide the numbers the failure is about.
+        print_table(&load_baseline(root).unwrap_or_default(), &current);
+        bail!(
+            "the perf scenarios failed; a budget assertion broke. The table above \
+             is what they recorded, also in {}",
+            current_path.display()
+        );
+    }
+
     if mode == Mode::Bless {
+        let baseline_path = root.join(BASELINE);
         std::fs::write(&baseline_path, render(&current)?)
             .with_context(|| format!("writing {}", baseline_path.display()))?;
         println!("perf: blessed {BASELINE} ({} scenarios)", current.len());
         return Ok(ExitCode::SUCCESS);
     }
 
-    let baseline = if baseline_path.exists() {
-        parse(
-            &std::fs::read_to_string(&baseline_path)
-                .with_context(|| format!("reading {}", baseline_path.display()))?,
-        )
-        .with_context(|| format!("parsing {BASELINE}"))?
-    } else {
-        println!("perf: no baseline at {BASELINE}; run `cargo xtask perf --bless`");
-        Counts::new()
-    };
-
+    let baseline = load_baseline(root)?;
     print_table(&baseline, &current);
     let findings = compare(&baseline, &current);
     for finding in &findings {
@@ -190,9 +205,25 @@ pub(crate) fn perf(args: &PerfArgs) -> anyhow::Result<ExitCode> {
     Ok(outcome(mode, findings.len()))
 }
 
-/// Runs the scenarios with `FLUI_PERF_OUT=out`. A failing test is always
-/// fatal: a budget assertion broke, and the ordinary suite fails on it too.
-fn run_scenarios(root: &Path, out: &Path) -> anyhow::Result<()> {
+/// The checked-in baseline, or no scenarios when there is none yet.
+fn load_baseline(root: &Path) -> anyhow::Result<Counts> {
+    let baseline_path = root.join(BASELINE);
+    if !baseline_path.exists() {
+        println!("perf: no baseline at {BASELINE}; run `cargo xtask perf --bless`");
+        return Ok(Counts::new());
+    }
+    parse(
+        &std::fs::read_to_string(&baseline_path)
+            .with_context(|| format!("reading {}", baseline_path.display()))?,
+    )
+    .with_context(|| format!("parsing {BASELINE}"))
+}
+
+/// Runs the scenarios with `FLUI_PERF_OUT=out` and returns whether every one
+/// passed. A failing test is always fatal to the run — a budget assertion
+/// broke, and the ordinary suite fails on it too — but only after [`report`]
+/// has shown what the scenarios recorded.
+fn run_scenarios(root: &Path, out: &Path) -> anyhow::Result<bool> {
     let mut cargo = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     cargo
         .current_dir(root)
@@ -213,9 +244,9 @@ fn run_scenarios(root: &Path, out: &Path) -> anyhow::Result<()> {
         .status()
         .context("running the perf scenarios (is cargo-nextest installed?)")?;
     if !status.success() {
-        bail!("the perf scenarios failed ({status}); a budget assertion broke");
+        println!("perf: the scenarios failed ({status})");
     }
-    Ok(())
+    Ok(status.success())
 }
 
 /// Reads every `<scenario>.toml` the scenarios wrote.
@@ -522,6 +553,43 @@ mod tests {
     fn check_mode_exits_nonzero_with_findings() {
         assert_eq!(outcome(Mode::Check, 1), ExitCode::FAILURE);
         assert_eq!(outcome(Mode::Check, 0), ExitCode::SUCCESS);
+    }
+
+    /// A fresh, empty directory under the system temp dir for one test.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("xtask-perf-{name}-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).expect("clear scratch dir");
+        }
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    #[test]
+    fn a_failed_run_still_writes_its_records_and_never_blesses() {
+        let root = scratch("failed-root");
+        let out = scratch("failed-out");
+        std::fs::write(
+            out.join("text_change.toml"),
+            "[text_change]\nnodes_laid_out = 4\n",
+        )
+        .expect("plant a record");
+
+        let result = report(&root, &out, Mode::Bless, false);
+
+        assert!(result.is_err(), "a failed run fails: {result:?}");
+        let written = std::fs::read_to_string(out.join("current.toml"))
+            .expect("the failed run's records are in current.toml");
+        assert_eq!(
+            parse(&written).expect("parses"),
+            one("text_change", "nodes_laid_out", 4)
+        );
+        assert!(
+            !root.join(BASELINE).exists(),
+            "a failed run must not bless its numbers"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     #[test]
