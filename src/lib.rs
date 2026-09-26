@@ -271,8 +271,8 @@ pub mod prelude {
         IconButton, InkWell, ListTile, Material, MaterialApp, NavigationBar, NavigationDestination,
         OutlinedButton, Radio, Scaffold, ScaffoldMessenger, ScaffoldMessengerHandle,
         ScaffoldMessengerScope, SnackBar, Switch, Tab, TabBar, TabBarView, TabController,
-        TextButton, TextField, TextTheme, Theme, ThemeData, ThemeMode, VerticalDivider,
-        show_dialog,
+        TextButton, TextField, TextFormField, TextTheme, Theme, ThemeData, ThemeMode,
+        VerticalDivider, show_dialog,
     };
     pub use flui_widgets::prelude::*;
 }
