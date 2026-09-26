@@ -190,6 +190,15 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   - `SignalError::TypeMismatch` is new: a handle of the wrong `T` is a typed error instead of
     a `BUG:` panic. `SignalError` no longer derives through `thiserror`; its `Display` text is
     unchanged.
+- **Crate deletions (ADR-0081): where the items went.**
+
+  | Old path | New path |
+  |---|---|
+  | `flui::localizations::{GlobalWidgetsLocalizations, GlobalWidgetsLocalizationsDelegate, RTL_LANGUAGES}` | `flui::widgets::…` (no feature needed) |
+  | `flui_localizations::BoxedLocalizationsDelegate` | `flui_widgets::BoxedLocalizationsDelegate` (unchanged; the old crate re-exported it) |
+
+  The facade's `localizations` feature is empty and deprecated; it is removed once nothing
+  names it.
 - **`flui_widgets::TextField` renamed to `RawTextField`** (and
   `TextFieldState` to `RawTextFieldState`) — a breaking rename, sanctioned
   pre-1.0. `flui::prelude`'s `TextField` now names `flui_material::TextField`
@@ -224,6 +233,8 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Removed
 
+- **`flui-localizations`** (ADR-0081). It held no translated strings; its RTL table and
+  delegate moved to `flui_widgets::localization` (see Changed for the path table).
 - `flui_rendering::slivers`, a public module with no items: the sliver windowing math lives in
   `flui_rendering::virtualization`.
 - Unused public API in `flui-types`, none of it called anywhere in the workspace:

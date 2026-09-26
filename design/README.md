@@ -8,16 +8,16 @@
   status names. ADR-0082: `flui-platform-api` exists and holds the capability traits and the
   window and input vocabulary, and only `flui-app` depends on `flui-platform`; its `Send`
   removal is still Proposed, but Win32 has done its first step (owner-only callbacks, off-owner
-  registration refused). ADR-0095: the `flui-protocol` crate exists and holds `SemanticsRole`,
-  `SemanticsAction` and the ADR-0080 wire vocabulary. ADR-0097: `cargo xtask globals` gates
-  process-global state against the seeded `globals` entries in each manifest. ADR-0083:
-  `flui-runtime` exists (tier K, internal, above `flui-widgets`) and holds the held-input lane,
-  the semantics host and the commit epoch; the realm core has not moved yet. The module-DAG gate
-  for flui-widgets is implemented as `cargo xtask module-dag`. The phase counters and
-  `cargo xtask perf` with its baseline are implemented, non-blocking
-  ([architecture.md](architecture.md), budgets). Nothing else described here is implemented.
-  The owner answered the open questions on 2026-09-25; the ADRs and this folder carry those
-  answers.
+  registration refused). ADR-0081's deletion of `flui-localizations` landed on 2026-09-26.
+  ADR-0095: the `flui-protocol` crate exists and holds `SemanticsRole`, `SemanticsAction` and
+  the ADR-0080 wire vocabulary. ADR-0097: `cargo xtask globals` gates process-global state
+  against the seeded `globals` entries in each manifest. ADR-0083: `flui-runtime` exists (tier
+  K, internal, above `flui-widgets`) and holds the held-input lane, the semantics host and the
+  commit epoch; the realm core has not moved yet. The module-DAG gate for flui-widgets is
+  implemented as `cargo xtask module-dag`. The phase counters and `cargo xtask perf` with its
+  baseline are implemented, non-blocking ([architecture.md](architecture.md), budgets).
+  Nothing else described here is implemented. The owner answered the open questions on
+  2026-09-25; the ADRs and this folder carry those answers.
 - **Date:** 2026-09-25
 - **Baseline:** `main` at `cab06137d`
 

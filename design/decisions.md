@@ -783,7 +783,7 @@ the default was "no later than the H3 freeze".
 #### A5. `flui-tree` and `flui-localizations` are deleted
 
 Both crates are deleted (#10); [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md)
-records it in its tier table. Confirmed.
+records it in its tier table. Confirmed. Implemented for `flui-localizations` on 2026-09-26.
 
 #### A6. Every push is URL-addressable
 

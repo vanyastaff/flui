@@ -253,7 +253,7 @@ inline test modules are large.
 | flui-hot-reload | 6, 2.9k | pkg / official | **Rewrite over Subsecond** as an official package | The dlopen design carries a documented residual risk; the three-crate template and its examples go only after the Subsecond spike ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). It links the `windows` crate directly today (`crates/flui-hot-reload/Cargo.toml:47`), which the package reach set forbids; the rewrite removes it. |
 | flui-material | 7, 26.9k | pkg / official | Official package on `flui-sdk` | 14 exact internal pins today (`grep -c '=0.2.0-dev' crates/flui-material/Cargo.toml`). Moves to `packages/flui-material` in the same change that ports it to `flui-sdk`; gains `flui_material::prelude`. |
 | flui-cupertino | 7, 4.3k | pkg / official | Official package on `flui-sdk` | Same; gains focus and keyboard activation from the Raw primitives. |
-| flui-localizations | 8, 0.3k | — | **Delete** (owner-confirmed, recorded in ADR-0081) | 281 lines in a layer of its own. The RTL table moves to `flui_widgets::localization`, strings to the packages, ICU4X to `flui-i18n` (H1). |
+| flui-localizations | 8, 0.3k | — | **Deleted 2026-09-26** (ADR-0081) | 281 lines in a layer of its own, with no translated strings. The RTL table and delegate moved to `flui_widgets::localization`; nothing went to the packages; ICU4X goes to `flui-i18n` (H1). |
 | flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Realm, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the one trampoline cell (`APP_RUNTIME`, `crates/flui-app/src/app/runner/host.rs:25-47`). `realm_dispatch.rs` is 7,149 lines, but production code ends at line 1690 and the rest is one test module (`crates/flui-app/src/app/runner/realm_dispatch.rs:1691-1692`): the file-length gate counts production lines only, so it is within the limit and needs neither a move nor dissolving. |
 | flui-cli | 9, 18.6k | H / tool | Keep, own version | `mcp`, `devtools`, `test --golden --accept` with per-test NDJSON, `catalog`; absorbs `tools/web-server`. |
 | flui-devtools | 9, 2.5k | pkg / official | Official package | The in-process protocol server. It does not merge with `flui-protocol`: schema and server stay apart. |
@@ -1221,7 +1221,7 @@ as an optional, desktop-only, dev-only convenience:
 | Delete or merge | Replace with |
 |---|---|
 | `flui-tree` (the trait trio) | markers in `flui-foundation`, inherent methods |
-| `flui-localizations` | a widgets module, strings in packages, `flui-i18n` (ICU4X, H1) |
+| `flui-localizations` (done 2026-09-26) | a widgets module; strings, when there are any, in packages; `flui-i18n` (ICU4X, H1) |
 | `ElementBuildContext`, `__private`, `ListenerRegistry`, `ViewId`, the second `Window` family in `flui-platform/src/window.rs`, `PlatformEmbedder`, `PlatformCapabilities`, `LinuxPlatform`, dead features, `BuildContext::reactive()` | — |
 | physics, the second `BoxConstraints` and `MaterialColors` in types; GPUI-era vocabulary in geometry | their owners in animation and rendering |
 | `HeadlessBinding::pump_frame` | the runtime transaction under a manual clock |
