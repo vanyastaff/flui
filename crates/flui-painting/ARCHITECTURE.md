@@ -101,7 +101,9 @@ registry refuses it instead of drawing its own instance at the same index. It dr
 as the cosmic-text path with the same sources, format and offsets, so for
 the same face bytes, glyph, size and bin the two draw identical bitmaps;
 `tests/parley_oracle.rs` checks that bit for bit on Parley-shaped Latin,
-host complex scripts and colour emoji. The key has no vertical bin because
+Cyrillic and Greek (Roboto) and icon glyphs (Material Icons), on vendored
+faces only so the result does not depend on the host. Complex scripts and
+colour emoji have no vendored face and are not compared there. The key has no vertical bin because
 cosmic-text truncates a glyph's row before binning, so its vertical bin is
 always zero.
 

@@ -2,12 +2,11 @@
 //! (ADR-0092 §10 step 1).
 //!
 //! Parley shapes each sample on a test-local `FontContext` with no host
-//! discovery; the faces come from the bundled Roboto and from host fonts found
-//! through `cosmic_text::fontdb`. Every distinct key is rasterized by
-//! [`SwashRasterizer`] and by the reference: cosmic-text's `SwashCache`, as
-//! `SharedFontSystem::rasterize` drives it, on a font system local to the test
-//! and fed the same face bytes, glyph, size and bin. Nothing here touches the
-//! process-wide font system.
+//! discovery, over one face the repository vendors, so the run is the same on
+//! every host. Every distinct key is rasterized by [`SwashRasterizer`] and by
+//! the reference: cosmic-text's `SwashCache`, as `SharedFontSystem::rasterize`
+//! drives it, on a font system local to the test and fed the same face bytes,
+//! glyph, size and bin. Nothing here touches the process-wide font system.
 
 #![allow(clippy::unwrap_used, clippy::print_stdout, reason = "test")]
 
@@ -26,41 +25,50 @@ use parley::style::{FontFamily, FontFamilyName, StyleProperty};
 use parley::{FontContext, FontData, Layout, LayoutContext};
 
 const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
+const MATERIAL_ICONS: &[u8] = include_bytes!("../assets/fonts/MaterialIcons-Regular.ttf");
 const LATIN: &str = "The quick brown fox jumps over the lazy dog 0123456789";
 const SIZES: [f32; 3] = [13.0, 18.0, 32.0];
 const ORIGINS: [f32; 4] = [0.0, 0.25, 0.5, 0.75];
 
-/// A host script: its sample, and whether its face must carry colour tables.
-struct HostScript {
+/// A script the oracle compares, on the vendored face that covers it.
+struct Sample {
     name: &'static str,
+    face: &'static [u8],
     text: &'static str,
-    color: bool,
 }
 
-/// The complex scripts of which the host must carry at least one.
-const COMPLEX_SCRIPTS: [&str; 3] = ["arabic", "devanagari", "hebrew"];
+const SAMPLES: [Sample; 4] = [
+    Sample {
+        name: "latin",
+        face: ROBOTO,
+        text: LATIN,
+    },
+    Sample {
+        name: "cyrillic",
+        face: ROBOTO,
+        text: "Съешь же ещё этих мягких французских булок",
+    },
+    Sample {
+        name: "greek",
+        face: ROBOTO,
+        text: "Ξεσκεπάζω την ψυχοφθόρα βδελυγμία",
+    },
+    Sample {
+        name: "icons",
+        // Private-use codepoints: home, search, close, add, settings.
+        face: MATERIAL_ICONS,
+        text: "\u{e88a} \u{e8b6} \u{e5cd} \u{e145} \u{e8b8}",
+    },
+];
 
-const HOST_SCRIPTS: [HostScript; 4] = [
-    HostScript {
-        name: "arabic",
-        text: "مرحبا بالعالم هذا نص عربي",
-        color: false,
-    },
-    HostScript {
-        name: "devanagari",
-        text: "नमस्ते दुनिया यह हिंदी पाठ है",
-        color: false,
-    },
-    HostScript {
-        name: "hebrew",
-        text: "שלום עולם זה טקסט בעברית",
-        color: false,
-    },
-    HostScript {
-        name: "emoji",
-        text: "👍 🎉 😀 🚀",
-        color: true,
-    },
+/// Scripts no vendored face covers, and so the oracle does not compare.
+/// Host fonts would cover some of them, but make the result depend on what
+/// the host ships.
+const UNCOVERED: [(&str, &str); 4] = [
+    ("arabic", "no vendored face carries Arabic"),
+    ("devanagari", "no vendored face carries Devanagari"),
+    ("hebrew", "no vendored face carries Hebrew"),
+    ("emoji", "no vendored face carries colour glyphs"),
 ];
 
 /// A test-local Parley context: fontique's shared collection, no host scan.
@@ -252,7 +260,7 @@ impl Reference {
         let image = self
             .cache
             .get_image_uncached(&mut self.system, cache_key)
-            .expect("the reference rasterizes");
+            .unwrap_or_else(|| panic!("the reference rasterizes {key:?}"));
         Ok(GlyphImage {
             left: image.placement.left,
             top: image.placement.top,
@@ -297,51 +305,22 @@ fn padded(coords: &[i16], font: &FontData) -> Vec<i16> {
     out
 }
 
-/// A host face whose charmap covers `script`'s sample (spaces aside), picked
-/// by family name so the choice is stable on a host; `None` if the host has
-/// none.
-///
-/// A static face is preferred over a variable one: Parley may place a
-/// variable face at coordinates cosmic-text would not, and the reference
-/// skips those keys.
-fn host_face(db: &fontdb::Database, script: &HostScript) -> Option<(String, Vec<u8>)> {
-    let mut candidates: Vec<(&str, fontdb::ID)> = db
-        .faces()
-        .filter_map(|face| Some((face.families.first()?.0.as_str(), face.id)))
-        .collect();
-    candidates.sort_unstable();
-    let pick = |allow_variable: bool| {
-        candidates.iter().find_map(|(family, id)| {
-            db.with_face_data(*id, |data, index| {
-                let face = swash::FontRef::from_index(data, usize::try_from(index).ok()?)?;
-                let charmap = face.charmap();
-                let covers = script
-                    .text
-                    .chars()
-                    .filter(|c| !c.is_whitespace())
-                    .all(|c| charmap.map(c) != 0);
-                let has = |tag: &[u8; 4]| {
-                    swash::TableProvider::table_by_tag(&face, u32::from_be_bytes(*tag)).is_some()
-                };
-                let colored = [b"COLR", b"CBDT", b"sbix"].into_iter().any(has);
-                let variable = has(b"fvar");
-                (covers
-                    && (colored || !script.color)
-                    && (allow_variable || !variable)
-                    && index == 0)
-                    .then(|| ((*family).to_owned(), data.to_vec()))
-            })
-            .flatten()
-        })
-    };
-    pick(false).or_else(|| pick(true))
+/// The characters of `sample` (spaces aside) its face does not map.
+fn unmapped(sample: &Sample) -> Vec<char> {
+    let charmap = swash::FontRef::from_index(sample.face, 0)
+        .expect("a vendored face")
+        .charmap();
+    sample
+        .text
+        .chars()
+        .filter(|c| !c.is_whitespace() && charmap.map(*c) == 0)
+        .collect()
 }
 
 #[derive(Default)]
 struct Report {
     unique: usize,
     swash_exact: usize,
-    color: usize,
     skipped: HashMap<String, usize>,
 }
 
@@ -371,7 +350,6 @@ fn compare(shaper: &mut Shaper, family: &str, text: &str) -> Report {
                 } else {
                     println!("differs: {:?}", placed.key);
                 }
-                report.color += usize::from(expected.content == GlyphContent::Color);
             }
         }
     }
@@ -380,55 +358,33 @@ fn compare(shaper: &mut Shaper, family: &str, text: &str) -> Report {
 
 /// swash on Parley's keys draws exactly what cosmic-text's scaler draws.
 ///
-/// Latin is the bundled Roboto and always runs. Of Arabic, Devanagari and
-/// Hebrew at least one must be on the host; emoji runs when the host has a
-/// colour face.
+/// Every sample runs on its vendored face alone, in a collection of its own,
+/// so no host font and no other sample's face can take part in shaping.
+/// Scripts without a vendored face are named as skipped, not compared.
 #[test]
 fn swash_matches_cosmic_text_bit_for_bit() {
-    let mut shaper = Shaper::new();
-    let roboto = shaper.register(ROBOTO.to_vec());
-    let mut db = fontdb::Database::new();
-    db.load_system_fonts();
-
-    let mut scripts = vec![("latin".to_owned(), roboto, LATIN, false)];
-    for script in &HOST_SCRIPTS {
-        match host_face(&db, script) {
-            Some((family, bytes)) => {
-                let registered = shaper.register(bytes);
-                println!(
-                    "{}: host face {family} (registered as {registered})",
-                    script.name
-                );
-                scripts.push((
-                    script.name.to_owned(),
-                    registered,
-                    script.text,
-                    script.color,
-                ));
-            }
-            None => println!("{}: no host face covers the sample", script.name),
-        }
+    for (name, reason) in UNCOVERED {
+        println!("{name}: skipped, {reason}");
     }
-    assert!(
-        scripts
-            .iter()
-            .any(|(name, ..)| COMPLEX_SCRIPTS.contains(&name.as_str())),
-        "no host font covers any of {COMPLEX_SCRIPTS:?}; install one (DejaVu Sans, \
-         which Linux images ship with fontconfig, covers Arabic and Hebrew)"
-    );
-
     println!(
-        "{:<11} {:>7} {:>12} {:>6}  skipped",
-        "script", "unique", "swash_exact", "color"
+        "{:<11} {:>7} {:>12}  skipped",
+        "script", "unique", "swash_exact"
     );
-    for (name, family, text, color) in &scripts {
-        let report = compare(&mut shaper, family, text);
+    for sample in &SAMPLES {
+        let name = sample.name;
+        assert_eq!(
+            unmapped(sample),
+            Vec::<char>::new(),
+            "{name}: the vendored face maps the sample"
+        );
+        let mut shaper = Shaper::new();
+        let family = shaper.register(sample.face.to_vec());
+        let report = compare(&mut shaper, &family, sample.text);
         println!(
-            "{:<11} {:>7} {:>12} {:>6}  {:?}",
+            "{:<11} {:>7} {:>12}  {:?}",
             name,
             report.unique,
             format!("{}/{}", report.swash_exact, report.unique),
-            report.color,
             report.skipped
         );
         assert!(report.unique > 0, "{name}: something was compared");
@@ -436,12 +392,6 @@ fn swash_matches_cosmic_text_bit_for_bit() {
             report.swash_exact, report.unique,
             "{name}: swash is bit-identical"
         );
-        if *color {
-            assert!(
-                report.color > 0,
-                "{name}: colour glyphs rasterize as colour"
-            );
-        }
     }
 }
 
