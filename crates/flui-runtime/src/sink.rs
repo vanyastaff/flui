@@ -76,8 +76,9 @@ pub enum SubmitVerdict {
 /// same realm-side classification arms via [`SubmitVerdict`], so the
 /// retry/telemetry semantics cannot drift between them.
 ///
-/// The trait is object-safe: a realm drives it as `&mut dyn FrameSink`
-/// (ADR-0083 §1).
+/// The trait is object-safe: the realm is generic over its sink today, and
+/// will drive it as `&mut dyn FrameSink` through the proposed `Realm::pump`
+/// (ADR-0083).
 pub trait FrameSink {
     /// Physical surface size in pixels, as layout's root constraints input.
     fn surface_size(&mut self) -> (u32, u32);

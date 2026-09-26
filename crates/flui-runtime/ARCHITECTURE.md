@@ -45,7 +45,9 @@ lists them and what each waits on.
 - **The frame sink is the host's, the verdict is the realm's.** A host
   implements `sink::FrameSink`; the realm reads its `SubmitVerdict` and
   classifies retry, device loss and not-shown (ADR-0068). The trait stays
-  object-safe, because the realm drives it as `&mut dyn FrameSink`
+  object-safe: the realm is generic over its sink today
+  (`render_frame_with_sink<S: FrameSink>` in `flui-app`), and will drive it as
+  `&mut dyn FrameSink` through the proposed `Realm::pump` (ADR-0083)
   (pinned by `sink::tests::a_host_sink_is_driven_through_dyn_frame_sink`).
   `SubmitVerdict` stays exhaustive, never `#[non_exhaustive]`: a new variant
   must make the compiler name the realm's match site in `flui-app`, and a
