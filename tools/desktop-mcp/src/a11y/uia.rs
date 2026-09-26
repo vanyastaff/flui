@@ -26,7 +26,9 @@ use uiautomation::types::{
 };
 use uiautomation::{UIAutomation, UIElement, UITreeWalker};
 
-use super::{AccessibilityBackend, Action, ActionName, Checked, ClickPoint, Node, Read, Role};
+use super::{
+    AccessibilityBackend, Action, ActionName, Checked, ClickPoint, Node, Read, Role, role_from_aria,
+};
 use crate::cache::ElementCache;
 use crate::error::{Effect, ToolError, ToolResult};
 use crate::geometry::Rect;
@@ -58,9 +60,13 @@ const PATTERNS: &[(UIProperty, &[ActionName])] = &[
 ];
 
 /// The property that says whether `action` is available, and the pattern
-/// name UI Automation gives it.
-fn pattern_of(action: ActionName) -> (UIProperty, &'static str) {
-    match action {
+/// name UI Automation gives it; `None` for an action this backend has no
+/// pattern for, which the callers report as unsupported.
+///
+/// `ActionName` is `#[non_exhaustive]`, so this match cannot be the check that
+/// every action has a pattern; `every_action_name_has_a_uia_pattern` is.
+fn pattern_of(action: ActionName) -> Option<(UIProperty, &'static str)> {
+    Some(match action {
         ActionName::Invoke => (UIProperty::IsInvokePatternAvailable, "Invoke"),
         ActionName::Toggle => (UIProperty::IsTogglePatternAvailable, "Toggle"),
         ActionName::SetValue => (UIProperty::IsValuePatternAvailable, "Value"),
@@ -71,7 +77,8 @@ fn pattern_of(action: ActionName) -> (UIProperty, &'static str) {
             "ExpandCollapse",
         ),
         ActionName::ScrollIntoView => (UIProperty::IsScrollItemPatternAvailable, "ScrollItem"),
-    }
+        _ => return None,
+    })
 }
 
 /// How many elements one read (`accessibility_tree`, `find`, a `wait_for`
@@ -1016,19 +1023,7 @@ impl Uia {
             ),
             _ => (
                 Vec::new(),
-                [
-                    ActionName::Invoke,
-                    ActionName::Toggle,
-                    ActionName::SetValue,
-                    ActionName::Select,
-                    ActionName::Focus,
-                    ActionName::Expand,
-                    ActionName::Collapse,
-                    ActionName::ScrollIntoView,
-                ]
-                .iter()
-                .map(|a| a.name())
-                .collect(),
+                ActionName::ALL.iter().map(|a| a.name()).collect(),
             ),
         }
     }
@@ -1070,7 +1065,10 @@ impl Uia {
 
     /// Refuses `action` unless its pattern is available, read live.
     fn require(&self, handle: &str, element: &UIElement, action: ActionName) -> ToolResult<()> {
-        if self.has_pattern(handle, element, pattern_of(action).0)? {
+        let Some((pattern, _)) = pattern_of(action) else {
+            return Err(self.unsupported(handle, element, action));
+        };
+        if self.has_pattern(handle, element, pattern)? {
             Ok(())
         } else {
             Err(self.unsupported(handle, element, action))
@@ -1905,7 +1903,7 @@ fn role(element: &UIElement) -> (Role, String) {
     };
     let precise = cached_str(element, UIProperty::AriaRole)
         .as_deref()
-        .and_then(Role::from_aria);
+        .and_then(role_from_aria);
     (precise.unwrap_or(fallback), native)
 }
 
@@ -2259,6 +2257,19 @@ fn classify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every tool in the wire vocabulary has a pattern here, so none answers
+    /// `action_unsupported` on an element that offers it. `pattern_of` ends in
+    /// a wildcard (the vocabulary is `#[non_exhaustive]`), so this is the pin.
+    #[test]
+    fn every_action_name_has_a_uia_pattern() {
+        for &action in ActionName::ALL {
+            assert!(
+                pattern_of(action).is_some(),
+                "`{action}` has no UIA pattern"
+            );
+        }
+    }
 
     #[test]
     fn fresh_value_password_flag_replaces_the_earlier_text_role() {
