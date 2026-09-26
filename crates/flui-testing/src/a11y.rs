@@ -465,6 +465,12 @@ pub enum InvokeActionError {
 /// Named so a reader does not infer from this silence that production is silent
 /// too.
 ///
+/// **No expanded-state guard.** `Expand` and `Collapse` route to the node's tap
+/// handler ([`semantics_action_for`]), which toggles it. The Windows adapter
+/// that emits them refuses a transition to the state the node already has; this
+/// helper does not, so a `Collapse` sent here to a collapsed node runs the tap
+/// handler and expands it. Send only the transition the node advertises.
+///
 /// # Errors
 ///
 /// [`InvokeActionError::MalformedNodeIdentity`] when `request.target_node` is

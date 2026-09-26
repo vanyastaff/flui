@@ -32,6 +32,10 @@ flui-tree = { path = "../flui-tree", version = "=0.2.0-dev" }
 # Types - geometry, semantics types
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 
+# The semantics vocabulary (`SemanticsRole`, `SemanticsAction`), shared with
+# tests, devtools and agents; re-exported from `role` and `action`.
+flui-protocol = { workspace = true }
+
 # Accessibility tree model: this crate owns the translation from its own
 # semantics tree into the shape platform adapters and UI-testing harnesses
 # both consume.
