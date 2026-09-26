@@ -1,6 +1,6 @@
 //! Windows window implementation
 
-use std::{collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, EdgeInsets, Pixels, Point, Size, device_px, px};
@@ -161,7 +161,7 @@ impl WindowsWindow {
     pub fn new(
         options: WindowOptions,
         windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
-        handlers: Arc<Mutex<PlatformHandlers>>,
+        handlers: Rc<RefCell<PlatformHandlers>>,
         config: crate::config::WindowConfiguration,
     ) -> Result<Arc<Self>, OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
@@ -286,7 +286,7 @@ impl WindowsWindow {
             let context = Box::new(WindowContext {
                 window_id,
                 identity,
-                handlers: handlers.clone(),
+                handlers,
                 callbacks: WindowCallbacks::new(),
                 scale_factor: std::cell::Cell::new(scale_factor),
                 mode: std::cell::Cell::new(WindowMode::Normal),
@@ -2220,7 +2220,7 @@ mod tests {
         };
 
         let windows_map = Arc::new(Mutex::new(HashMap::new()));
-        let handlers = Arc::new(Mutex::new(PlatformHandlers::default()));
+        let handlers = Rc::new(RefCell::new(PlatformHandlers::default()));
         let config = crate::config::WindowConfiguration::default();
         let result = WindowsWindow::new(options, windows_map, handlers, config);
 
