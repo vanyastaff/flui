@@ -97,7 +97,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 8] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 9] {
     [
         (
             if strict {
@@ -122,6 +122,7 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 8] {
         ("font-assets --package-list", |args| {
             fonts::font_assets(&parsed(args)?)
         }),
+        ("perf --self-test", |args| crate::perf::perf(&parsed(args)?)),
     ]
 }
 
@@ -162,6 +163,7 @@ mod tests {
                 "wgsl",
                 "paths-filter",
                 "font-assets --package-list",
+                "perf --self-test",
             ]
         );
         assert_eq!(lines(true)[0], "docs-links --strict");

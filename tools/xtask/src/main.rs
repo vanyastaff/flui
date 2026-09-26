@@ -15,6 +15,7 @@ mod doc_strict;
 mod docs_links;
 mod doctor;
 mod fonts;
+mod perf;
 mod toolchain;
 mod wasm;
 mod wgsl;
@@ -103,6 +104,8 @@ enum Command {
     Doctor(doctor::DoctorArgs),
     /// Collect benchmark results.
     BenchCollect(bench::BenchCollectArgs),
+    /// Run the counted perf scenarios and compare them with the baseline.
+    Perf(perf::PerfArgs),
 }
 
 fn main() -> ExitCode {
@@ -147,6 +150,7 @@ fn main() -> ExitCode {
         Command::FontAssets(args) => fonts::font_assets(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
+        Command::Perf(args) => perf::perf(&args),
     };
     match result {
         Ok(code) => code,

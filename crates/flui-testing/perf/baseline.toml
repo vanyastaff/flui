@@ -1,0 +1,50 @@
+# Written by `cargo xtask perf --bless`; counts, not timings.
+# One table per scenario of crates/flui-testing/tests/perf.rs.
+
+[full_reassemble]
+builds_run = 274
+elements_rebuilt = 148
+frames_produced = 1
+layers_produced = 86
+layers_reused = 0
+layout_passes = 2
+layout_roots = 134
+nodes_laid_out = 136
+nodes_painted = 133
+semantics_nodes_updated = 41
+
+[idle_10s]
+builds_run = 0
+elements_rebuilt = 0
+frames_produced = 0
+layers_produced = 0
+layers_reused = 0
+layout_passes = 0
+layout_roots = 0
+nodes_laid_out = 0
+nodes_painted = 0
+semantics_nodes_updated = 0
+
+[list_10k_scroll_one_screen]
+builds_run = 126
+elements_rebuilt = 126
+frames_produced = 1
+layers_produced = 111
+layers_reused = 25
+layout_passes = 2
+layout_roots = 128
+nodes_laid_out = 132
+nodes_painted = 133
+semantics_nodes_updated = 80
+
+[text_change]
+builds_run = 3
+elements_rebuilt = 3
+frames_produced = 1
+layers_produced = 44
+layers_reused = 42
+layout_passes = 1
+layout_roots = 1
+nodes_laid_out = 3
+nodes_painted = 7
+semantics_nodes_updated = 1
