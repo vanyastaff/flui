@@ -225,9 +225,9 @@ script gates already run in CI, so style and anything they catch is not worth a 
 - **Manifests and workflows:** shared dependencies go through `[workspace.dependencies]`;
   features stay additive and every optional dependency sits behind a `dep:` feature; a new crate
   declares its `[package.metadata.flui]` `tier`, `tier-kind`, `order` and `layer`, and
-  `wasm = false` if it cannot build for wasm32. In workflows: actions pinned to a full SHA, `--locked` on every cargo call, caches saved only on
-  `main`, a job's name equals its key, and a new job is listed in the `ci` aggregator's `needs`
-  (a heavy one also in `HEAVY_JOBS`).
+  `wasm = false` if it cannot build for wasm32. In workflows: actions pinned to a full SHA,
+  `--locked` on every cargo call, caches saved only on `main`, a job's name equals its key, and a
+  new job is listed in the `ci` aggregator's `needs` (a heavy one also in `HEAVY_JOBS`).
 - **Registries and exemptions** (`RENDER_OBJECT_TYPES`, `docs/ROADMAP.md`, a `deny.toml` skip, a
   `typos.toml` word, an `#[expect]`): check that each entry matches the code in the same PR and
   that a new exemption states its reason.

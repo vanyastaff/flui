@@ -91,11 +91,11 @@ members = [
 # unless the dependent lists it in `edge-exceptions` with the ADR that removes
 # it; nothing with a tier depends on a `tool`. Dev-dependencies are free.
 tiers = [
-    "V",   # values: geometry, types, macros, foundation
+    "V",   # values: geometry, types, macros, foundation; tree until it is deleted
     "C",   # contracts: the platform API and protocol crates, when they exist
     "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
     "R",   # render machine: layer, rendering, objects, engine
-    "K",   # spine and runtime: view, testing, widgets
+    "K",   # spine and runtime: view, testing, widgets; localizations until it is deleted
     "H",   # hosts: platform backends, app runners, the CLI, the facade
     "pkg", # official packages: material, cupertino, devtools, hot reload
 ]

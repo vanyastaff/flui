@@ -4,9 +4,10 @@
   `edge-exceptions`) and the `tier-kind` declarations of §3. §2 (reach), the kind rules of §3
   (core never names official, the forward allowlist), §4 and §5 remain Proposed.
 - **Date:** 2026-09-25
-- **Supersedes in part (on acceptance):** [ADR-0041](ADR-0041-workspace-topology-contract.md)
-  (the numbered layer table, "a crate is a layer" as the only reason for a crate, and the
-  "Localization direction is locked" paragraph). The manifest-as-source rule, the
+- **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md) through the
+  accepted §1 (the numbered layer table, "a crate is a layer" as the only reason for a crate, and
+  the "Localization direction is locked" paragraph, which end when the `layer` key is removed;
+  until then tiers are checked beside layers). The manifest-as-source rule, the
   `allowed-dependents`/`allowed-dev-dependents` mechanism, the dev-edge exemption and the
   rejected alternatives stand. ADR-0041's "No `flui-runtime` without two consumers" paragraph
   is superseded separately by [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md).
