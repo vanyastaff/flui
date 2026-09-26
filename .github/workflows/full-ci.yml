@@ -2,13 +2,14 @@ name: full-ci label
 
 # Adding the `full-ci` label to a pull request re-runs that PR's own CI run
 # (ci.yml, `pull_request` event), now. The re-run is another attempt of the
-# same run, so its heavy result replaces the fast-lane one in the very `ci`
-# check branch protection reads -- a separately dispatched run would attach
-# to the branch head instead and leave the fast `ci` result standing. `plan`
-# reads the label from the API, not from the replayed event payload, and so
-# picks the heavy lane. ci.yml does not listen to `labeled` itself: a run for
-# an unrelated label would post another `ci` check on the same commit. Later
-# pushes to a labelled PR take the heavy lane in ci.yml directly.
+# same run, so its extended-lane result replaces the earlier one in the very
+# `ci` check branch protection reads -- a separately dispatched run would
+# attach to the branch head instead and leave the earlier `ci` result
+# standing. `plan` reads the label from the API, not from the replayed event
+# payload, and so picks the extended lane (every job, the nightly-only
+# platform jobs included). ci.yml does not listen to `labeled` itself: a run
+# for an unrelated label would post another `ci` check on the same commit.
+# Later pushes to a labelled PR take the extended lane in ci.yml directly.
 
 on:
   pull_request:
@@ -18,19 +19,20 @@ permissions: {}
 
 jobs:
   rerun-ci:
-    name: re-run CI on the heavy lane
+    name: re-run CI on the extended lane
     if: github.event.label.name == 'full-ci'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The wait below allows 25 minutes for a cancelled run to finish.
+    timeout-minutes: 30
     permissions:
       actions: write
     steps:
       # A fork PR's token is read-only here, so it cannot re-run anything.
-      # Say so instead of silently leaving the PR on its fast-lane result.
+      # Say so instead of silently leaving the PR on its earlier result.
       - name: Refuse a fork pull request
         if: github.event.pull_request.head.repo.full_name != github.repository
         run: |
-          echo "::error::full-ci cannot re-run CI for a fork PR with this token: re-run the PR's CI workflow from its Checks tab (plan reads the label live and takes the heavy lane)"
+          echo "::error::full-ci cannot re-run CI for a fork PR with this token: re-run the PR's CI workflow from its Checks tab (plan reads the label live and takes the extended lane)"
           exit 1
 
       - name: Re-run this PR's CI run
@@ -43,18 +45,41 @@ jobs:
           run=$(gh run list --workflow ci.yml --event pull_request --commit "$HEAD_SHA" --limit 1 \
             --json databaseId,status --jq '.[0] | select(.) | "\(.databaseId) \(.status)"')
           if [ -z "$run" ]; then
-            echo "no CI run for $HEAD_SHA yet: when it starts, plan reads the label and takes the heavy lane"
+            echo "no CI run for $HEAD_SHA yet: when it starts, plan reads the label and takes the extended lane"
             exit 0
           fi
           id=${run%% *}
           status=${run#* }
-          # A run still in progress cannot be re-run: stop it first.
+          # A run still in progress cannot be re-run: stop it first, and wait
+          # until GitHub reports it completed (a cancelled run can take
+          # minutes to wind its jobs down).
           if [ "$status" != completed ]; then
             gh run cancel "$id" || true
-            for _ in $(seq 60); do
-              [ "$(gh run view "$id" --json status --jq .status)" = completed ] && break
+            finished=false
+            deadline=$((SECONDS + 25 * 60))
+            while [ "$SECONDS" -lt "$deadline" ]; do
+              if [ "$(gh run view "$id" --json status --jq .status)" = completed ]; then
+                finished=true
+                break
+              fi
               sleep 5
             done
+            if [ "$finished" != true ]; then
+              echo "::error::run $id did not finish cancelling in 25 min; re-run it from the PR's Checks tab"
+              exit 1
+            fi
           fi
-          gh run rerun "$id"
-          echo "re-running CI run $id for $HEAD_SHA on the heavy lane"
+          # Just after the cancellation completes GitHub can still answer
+          # "This workflow is already running": retry three times, 10 s apart.
+          for attempt in 1 2 3 4; do
+            if gh run rerun "$id"; then
+              echo "re-running CI run $id for $HEAD_SHA on the extended lane"
+              exit 0
+            fi
+            if [ "$attempt" -lt 4 ]; then
+              echo "gh run rerun failed (attempt $attempt of 4); retrying in 10 s"
+              sleep 10
+            fi
+          done
+          echo "::error::could not re-run CI run $id; re-run it from the PR's Checks tab"
+          exit 1

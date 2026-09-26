@@ -189,13 +189,14 @@ pub(crate) fn paths_filter(_args: &PathsFilterArgs) -> anyhow::Result<ExitCode> 
 /// Arguments for `cargo xtask ci-verify`, the `ci` aggregator job's check.
 ///
 /// Its inputs come from the environment the job sets: `NEEDS` (the
-/// `toJSON(needs)` of every gated job), `HEAVY_JOBS`, `HEAVY`, `MODE`,
-/// `CROSS_IOS`, `EVENT`.
+/// `toJSON(needs)` of every gated job), `LANE`, `CROSS_IOS`, `STANDALONE`,
+/// `EVENT`, and the lane lists `HEAVY_JOBS` (the `wide` lane's jobs),
+/// `FULL_JOBS` and `EXTENDED_JOBS`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct CiVerifyArgs {}
 
 /// `cargo xtask ci-verify`: every ci.yml job is gated by the `ci` aggregator,
-/// and exactly the jobs `plan` expects to skip skipped (see [`aggregator`]).
+/// and exactly the jobs `plan`'s lane skips skipped (see [`aggregator`]).
 pub(crate) fn ci_verify(_args: &CiVerifyArgs) -> anyhow::Result<ExitCode> {
     #[derive(serde::Deserialize)]
     struct Need {
@@ -207,21 +208,25 @@ pub(crate) fn ci_verify(_args: &CiVerifyArgs) -> anyhow::Result<ExitCode> {
         serde_json::from_str(&env("NEEDS")?).context("parsing NEEDS")?;
     let needs: BTreeMap<String, String> =
         needs.into_iter().map(|(job, n)| (job, n.result)).collect();
-    let heavy_jobs: BTreeSet<String> = env("HEAVY_JOBS")?
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect();
-    let (mode, event) = (env("MODE")?, env("EVENT")?);
+    let list = |name: &str| -> anyhow::Result<BTreeSet<String>> {
+        Ok(env(name)?.split_whitespace().map(str::to_owned).collect())
+    };
+    let lanes = aggregator::LaneJobs {
+        wide: list("HEAVY_JOBS")?,
+        full: list("FULL_JOBS")?,
+        extended: list("EXTENDED_JOBS")?,
+    };
+    let (lane, event) = (env("LANE")?, env("EVENT")?);
     let plan = aggregator::Plan {
         result: needs.get("plan").map(String::as_str),
-        heavy: env("HEAVY")? == "true",
-        mode: &mode,
+        lane: &lane,
         cross_ios: std::env::var("CROSS_IOS").is_ok_and(|v| v == "true"),
+        standalone: std::env::var("STANDALONE").is_ok_and(|v| !v.trim().is_empty()),
     };
     let ci_yml = classify::read_normalised(&repo_root().join(".github/workflows/ci.yml"))
         .context("reading .github/workflows/ci.yml")?;
     let declared = aggregator::gated_jobs(&aggregator::parse_jobs(&ci_yml)?);
-    let (ok, log) = aggregator::verify(&declared, &needs, &heavy_jobs, &plan, &event);
+    let (ok, log) = aggregator::verify(&declared, &needs, &lanes, &plan, &event);
     print!("{log}");
     Ok(if ok {
         ExitCode::SUCCESS

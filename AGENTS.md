@@ -72,10 +72,11 @@ crate you're changing before changing it.
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
   `cargo xtask check-changed` green first; CI is the proof. Before asking for review, review the
   branch against `main` yourself and list only what would block the merge: file and line, why it
-  is wrong, how to show it fails. Risky PRs get the `full-ci` label. Use
+  is wrong, how to show it fails. Risky PRs get the `full-ci` label (it runs the extended
+  lane: every job, the nightly-only platform jobs included). Use
   `Refs #N`; `Closes`/`Fixes #N` only when merging should close it (GitHub's linker ignores
   negation around it).
-- **Red main:** fix forward within the hour, or revert. A red heavy run on main or nightly opens a
+- **Red main:** fix forward within the hour, or revert. A red CI run on main or nightly opens a
   "CI is red on main" issue; close it once main is green.
 - **Leave these alone unless the task is about them:** `.github/workflows/` (it is the merge
   path, and a change there decides what every other PR must pass); `docs/archive/` (a
@@ -227,7 +228,8 @@ script gates already run in CI, so style and anything they catch is not worth a 
   declares its `[package.metadata.flui]` `tier`, `tier-kind`, `order` and `layer`, and
   `wasm = false` if it cannot build for wasm32. In workflows: actions pinned to a full SHA,
   `--locked` on every cargo call, caches saved only on `main`, a job's name equals its key, and a
-  new job is listed in the `ci` aggregator's `needs` (a heavy one also in `HEAVY_JOBS`).
+  new job is listed in the `ci` aggregator's `needs` (a lane-gated one also in `HEAVY_JOBS`,
+  `FULL_JOBS` or `EXTENDED_JOBS`, matching its `if:`).
 - **Registries and exemptions** (`RENDER_OBJECT_TYPES`, `docs/ROADMAP.md`, a `deny.toml` skip, a
   `typos.toml` word, an `#[expect]`): check that each entry matches the code in the same PR and
   that a new exemption states its reason.

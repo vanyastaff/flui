@@ -24,6 +24,8 @@ use anyhow::{Context, bail};
 use regex::Regex;
 use serde::Deserialize;
 
+use super::aggregator::WIDE_CONDITION;
+
 /// Documentation: a change made only of these compiles nothing.
 ///
 /// Crate `README.md` files are deliberately NOT here: several are pulled into
@@ -168,7 +170,7 @@ fn kebab_case(variant: &str) -> String {
 
 /// Repo files the wide lane's jobs run but `checks` does not, read from ci.yml,
 /// as patterns for [`matches()`]: for each `cargo xtask <command>` a job gated
-/// on the wide lane runs, the module implementing it (from
+/// on the wide lane (`if:` [`WIDE_CONDITION`]) runs, the module implementing it (from
 /// the dispatch in `xtask_main`, xtask's `main.rs`) plus the xtask entry point,
 /// helpers and manifest every command runs through. A command the dispatch
 /// does not name makes all of `tools/xtask/` an input. A command a YAML
@@ -186,9 +188,10 @@ pub(super) fn heavy_job_inputs(ci_yml: &str, xtask_main: Option<&str>) -> BTreeS
         })
         .unwrap_or_default();
 
+    let gate = format!("\n    if: {WIDE_CONDITION}\n");
     let mut found = BTreeSet::new();
     for job in jobs(ci_yml) {
-        if !job.contains("if: needs.plan.outputs.heavy == 'true'") {
+        if !job.contains(&gate) {
             continue;
         }
         let lines = job
@@ -809,7 +812,10 @@ pub(super) mod tests {
             repo().ci_yml.as_deref().expect("ci.yml"),
             repo().xtask_main.as_deref(),
         );
-        assert!(!inputs.is_empty(), "the heavy jobs run no xtask command?");
+        assert!(
+            !inputs.is_empty(),
+            "the wide lane's jobs run no xtask command?"
+        );
         for path in inputs.iter().filter(|p| !p.contains('*')) {
             assert!(scope(&[path]).heavy_required, "{path}");
         }
@@ -817,14 +823,18 @@ pub(super) mod tests {
 
     #[test]
     fn heavy_job_inputs_from_a_workflow() {
-        let ci = "on: push\njobs:\n  checks:\n    runs-on: x\n    steps:\n      - run: cargo xtask checks\n\
-                  \x20 doc:\n    if: needs.plan.outputs.heavy == 'true'\n    steps:\n\
-                  \x20     # see cargo xtask device ios-sim\n\
-                  \x20     - run: cargo xtask doc-strict --all\n      - run: cargo xtask not-a-command\n";
+        let ci = format!(
+            "on: push\njobs:\n  checks:\n    runs-on: x\n    steps:\n      - run: cargo xtask checks\n\
+             \x20 doc:\n    if: {WIDE_CONDITION}\n    steps:\n\
+             \x20     # see cargo xtask device ios-sim\n\
+             \x20     - run: cargo xtask doc-strict --all\n      - run: cargo xtask not-a-command\n\
+             \x20 platform:\n    if: {}\n    steps:\n      - run: cargo xtask device windows-a11y\n",
+            super::super::aggregator::FULL_CONDITION
+        );
         let main = "match c {\n    Command::Checks(args) => tasks::checks(&args),\n    \
                     Command::DocStrict(args) => doc_strict::doc_strict(&args),\n    \
                     Command::Device(args) => device::device(&args),\n}\n";
-        let inputs = heavy_job_inputs(ci, Some(main));
+        let inputs = heavy_job_inputs(&ci, Some(main));
         let expected = [
             "tools/xtask/**",
             "tools/xtask/Cargo.toml",
@@ -841,8 +851,9 @@ pub(super) mod tests {
             "tools/xtask/src/doc_strict/flags.rs",
             &expected
         ));
-        // a job not gated on the heavy lane contributes nothing, nor does a
-        // command a comment merely mentions
+        // a job not gated on the wide lane (checks, or a platform job only
+        // `full` runs) contributes nothing, nor does a command a comment
+        // merely mentions
         assert!(!inputs.contains("tools/xtask/src/tasks.rs"));
         assert!(!inputs.contains("tools/xtask/src/device.rs"));
         assert_eq!(kebab_case("WasmTestCrates"), "wasm-test-crates");

@@ -800,7 +800,7 @@ pub(crate) fn deps_tools() -> impl Iterator<Item = (&'static str, &'static str)>
 /// its advisories, and `cargo shear --locked` (`--format github` under GitHub
 /// Actions). Every step runs; exit 1 if any failed. CI's `deps` job runs
 /// `--only policy` and `--only advisories` as two steps, the second blocking
-/// only in the heavy lane.
+/// only in the `wide`, `full` and `extended` lanes.
 pub(crate) fn deps(args: &DepsArgs) -> anyhow::Result<ExitCode> {
     done(deps::run(args.run.runner(), args.only, args.strict))
 }
