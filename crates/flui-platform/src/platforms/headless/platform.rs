@@ -14,6 +14,7 @@ use std::{
 
 use cursor_icon::CursorIcon;
 use flui_foundation::{ClaimSlot, claim_slot};
+use flui_platform_api::InMemoryClipboard;
 use flui_types::{
     HapticFeedback,
     geometry::{Bounds, DevicePixels, Pixels, Point, Size},
@@ -75,7 +76,7 @@ struct HeadlessState {
     owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
-    clipboard: Arc<MockClipboard>,
+    clipboard: Arc<InMemoryClipboard>,
     active_window: Option<WindowId>,
     is_running: bool,
     windows: Vec<MockWindow>,
@@ -111,7 +112,7 @@ impl HeadlessPlatform {
             owner_signal: Weak::new(),
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
-            clipboard: Arc::new(MockClipboard::new()),
+            clipboard: Arc::new(InMemoryClipboard::new()),
             active_window: None,
             is_running: false,
             windows: Vec::new(),
@@ -1633,29 +1634,6 @@ impl PlatformExecutor for TestExecutor {
     }
 }
 
-/// Mock clipboard with in-memory storage
-struct MockClipboard {
-    content: Mutex<Option<String>>,
-}
-
-impl MockClipboard {
-    fn new() -> Self {
-        Self {
-            content: Mutex::new(None),
-        }
-    }
-}
-
-impl Clipboard for MockClipboard {
-    fn read_text(&self) -> Option<String> {
-        self.content.lock().clone()
-    }
-
-    fn write_text(&self, text: String) {
-        *self.content.lock() = Some(text);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1991,12 +1969,12 @@ mod tests {
     }
 
     #[test]
-    fn test_mock_clipboard() {
-        let clipboard = MockClipboard::new();
-        assert_eq!(clipboard.read_text(), None);
+    fn headless_clipboard_is_one_shared_store() {
+        let platform = HeadlessPlatform::new();
+        assert_eq!(platform.clipboard().read_text(), None);
 
-        clipboard.write_text("test".to_string());
-        assert_eq!(clipboard.read_text(), Some("test".to_string()));
+        platform.clipboard().write_text("test".to_string());
+        assert_eq!(platform.clipboard().read_text(), Some("test".to_string()));
     }
 
     #[test]
