@@ -267,6 +267,26 @@ reconciliation stream observed by tools is the production one, not a test-only r
 **Divergence.** Flutter exposes rebuild tracking only in debug mode through the devtools
 protocol; FLUI's stream is typed and zero-cost when nothing subscribes.
 
+### A GlobalKey read inside its own presentation's frame resolves to nothing
+
+**Rule.** `GlobalKey::current_element` and `with_current_state` return `None` (and log a warning)
+when called from inside the frame of the binding that hosts the key: from `build`, a lifecycle
+hook, `dispose`, or a layout-builder build, all of which run while `WidgetsBinding` holds its own
+state lock. The registry closures take that lock with a non-blocking recursive read and report
+`RegistryBusy` when it is held; the realm composite skips a busy member and keeps trying the
+others, so keys held by other presentations of the realm resolve normally. The binding is
+`!Send` (pinned by a static assertion), so a held lock can only mean re-entry on the owner
+thread. Before this rule such a read blocked on its own thread forever.
+
+**Divergence.** Flutter's `GlobalKey.currentElement`/`currentState` (`framework.dart:3163-3170`)
+return the element during build. FLUI returns nothing for keys of the presentation whose frame is
+running. The exit is to serve those reads from the frame's own tree once the realm owns the
+binding by value (ADR-0083). Pinned by
+`global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking`,
+`global_key_in_a_sibling_binding_resolves_during_this_bindings_frame` and
+`global_key_lookup_from_dispose_during_detach_returns_instead_of_deadlocking` (`binding.rs`), and
+through the realm by `ui_realm/tests/global_key_lookup_during_frame.rs` in `flui-app`.
+
 ### Not adopted
 
 A branded `Cx<'build>` token (its role is taken by the `BuildContext`/`LifecycleContext` split,

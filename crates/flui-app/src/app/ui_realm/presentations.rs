@@ -336,6 +336,12 @@ impl UiRealm {
     /// while that exact presentation's registry is mid-teardown has no
     /// principled answer anyway — the key is about to be unregistered by
     /// the same call regardless of what a lookup returns for it right now.
+    ///
+    /// The exclusion is now redundant: a binding's registry no longer blocks
+    /// on its own held lock but reports itself busy, and the composite skips
+    /// a busy member (`flui-view`'s `key::registry`, "Re-entrancy"). Closing
+    /// can therefore go through [`Self::enter`], and this method can be
+    /// deleted along with the comment in `realm_dispatch.rs` that cites it.
     fn enter_for_close<R>(&self, closing: PresentationId, f: impl FnOnce(&Self) -> R) -> R {
         self.interaction_lane.enter(|| {
             let composite = GlobalKeyRegistryComposite::assemble(

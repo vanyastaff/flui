@@ -105,9 +105,32 @@ impl<T: 'static> GlobalKey<T> {
     /// [`ViewKey::key_hash`] and then decide membership with
     /// [`ViewKey::key_eq`], because `Box<dyn ViewKey>` has no blanket
     /// `Hash + Eq` to hand a `HashMap` directly.
+    ///
+    /// # During a frame
+    ///
+    /// Called from inside the frame of the presentation that hosts the key
+    /// (from `build`, a lifecycle hook, `dispose`, or a layout-builder build),
+    /// this returns `None`, and logs a warning, instead of the element Flutter
+    /// would return: that presentation's tree is locked for the frame and is
+    /// not read re-entrantly. Keys held by other presentations of the realm
+    /// resolve normally.
     #[must_use]
     pub fn current_element(&self) -> Option<ElementId> {
-        crate::key::registry::with_registry(|registry| registry.lookup_element(self)).flatten()
+        match crate::key::registry::with_registry(|registry| registry.lookup_element(self)) {
+            None => None,
+            Some(Ok(id)) => id,
+            Some(Err(crate::key::registry::RegistryBusy)) => {
+                self.warn_read_during_own_frame();
+                None
+            }
+        }
+    }
+
+    fn warn_read_during_own_frame(&self) {
+        tracing::warn!(
+            key = ?self,
+            "GlobalKey read during its own presentation's frame resolves to None"
+        );
     }
 
     /// Run `f` against the current state of the element registered under
@@ -134,6 +157,12 @@ impl<T: 'static> GlobalKey<T> {
     /// a runtime-type check. We surface a closure-callback variant so
     /// the read-lock on the element tree drops before the caller does
     /// anything substantial with the value.
+    ///
+    /// # During a frame
+    ///
+    /// Like [`Self::current_element`], this returns `None` without calling
+    /// `f` when called from inside the frame of the presentation that hosts
+    /// the key; keys held by other presentations resolve normally.
     #[must_use]
     pub fn with_current_state<R>(&self, f: impl FnOnce(&T) -> R) -> Option<R>
     where
@@ -141,21 +170,23 @@ impl<T: 'static> GlobalKey<T> {
     {
         let element_id = self.current_element()?;
 
-        // `with_registry` yields `Option<...>` itself (None when no
-        // realm/fixture handle is active), `with_element` yields another
-        // `Option<...>` (None when the id is no longer in the tree),
-        // and the inner closure also yields `Option<R>` (None when
-        // the state downcast fails). Triple-Option flattens to one
-        // `Option<R>` via two flatten() / one ? chain.
-        crate::key::registry::with_registry(|registry| {
+        // `with_registry` yields `None` when no realm/fixture handle is
+        // active; `with_element` yields `Err` when the owning binding is busy
+        // and `Ok(None)` when the id is no longer in the tree; the inner
+        // closure yields `None` when the state downcast fails.
+        let visited = crate::key::registry::with_registry(|registry| {
             registry.with_element(element_id, |element: &dyn ElementBase| {
                 let state_any = element.state_as_any()?;
                 let typed = state_any.downcast_ref::<T>()?;
                 Some(f(typed))
             })
-        })
-        .flatten() // peel the with_registry None layer
-        .flatten() // peel the with_element None layer
+        })?;
+        if let Ok(result) = visited {
+            result.flatten()
+        } else {
+            self.warn_read_during_own_frame();
+            None
+        }
     }
 }
 

@@ -133,12 +133,13 @@ mod test_only_global_key_registry {
         let owner_for_lookup = Arc::clone(owner);
         let tree_for_visit = Arc::clone(tree);
         let handle = GlobalKeyRegistryHandle::new(
-            move |key| owner_for_lookup.read().element_for_global_key(key),
+            move |key| Ok(owner_for_lookup.read().element_for_global_key(key)),
             move |id, f| {
                 let tree = tree_for_visit.read();
                 if let Some(node) = tree.get(id) {
                     f(node.element());
                 }
+                Ok(())
             },
         );
         let _ = install_registry(handle);

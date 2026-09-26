@@ -393,7 +393,8 @@ impl DrawerHandle {
     /// Opens the start-side drawer, closing the end-side drawer first if it
     /// is open. Flutter parity: `ScaffoldState.openDrawer`.
     ///
-    /// A no-op if no [`crate::Scaffold::drawer`] is mounted — the
+    /// A no-op if no [`crate::Scaffold::drawer`] is mounted, or when called
+    /// from inside the frame of the presentation that hosts it — the
     /// [`GlobalKey`] simply resolves to nothing.
     pub fn open_drawer(&self) {
         if self.is_end_drawer_open() {
