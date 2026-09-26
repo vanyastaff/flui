@@ -208,28 +208,6 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   - `SignalError::TypeMismatch` is new: a handle of the wrong `T` is a typed error instead of
     a `BUG:` panic. `SignalError` no longer derives through `thiserror`; its `Display` text is
     unchanged.
-- **Crate deletions (ADR-0081): where the items went.**
-
-  | Old path | New path |
-  |---|---|
-  | `flui::localizations::{GlobalWidgetsLocalizations, GlobalWidgetsLocalizationsDelegate, RTL_LANGUAGES}` | `flui::widgets::…` (no feature needed) |
-  | `flui_localizations::BoxedLocalizationsDelegate` | `flui_widgets::BoxedLocalizationsDelegate` (unchanged; the old crate re-exported it) |
-  | `flui_tree::{Arity, Leaf, Optional, Single, Exact, AtLeast, Range, Variable, Never}` | `flui_foundation::…` (`flui::rendering::*` is unchanged) |
-  | `flui_tree::IndexedSlot` | `flui_foundation::IndexedSlot` (`flui_view::IndexedSlot` is unchanged) |
-  | `use flui_tree::TreeWrite; tree.remove(id)` on a `SemanticsTree` | `tree.remove(id)`: `SemanticsTree::remove` is inherent |
-  | `TreeWrite::insert` on a `RenderTree` | `RenderTree::insert` (inherent) |
-
-  `flui_semantics::prelude` no longer re-exports `TreeNav`/`TreeRead`.
-
-  The `TreeNav` walks (`ancestors`, `descendants`, `siblings`, `child_count`, `has_children`,
-  `lowest_common_ancestor`, …) are no longer public on `LayerTree`, `RenderTree` or
-  `SemanticsTree`, and have no public replacement. Each tree keeps its public `get`, `parent`,
-  `children`, `contains`, `len` and `iter` (`RenderTree` also `depth`), which a caller can
-  walk; `LayerTree`'s `ancestors`/`lowest_common_ancestor` and `SemanticsTree`'s ancestry check
-  are crate-private.
-
-  The facade's `localizations` feature is empty and deprecated; it is removed once nothing
-  names it.
 - **`flui_widgets::TextField` renamed to `RawTextField`** (and
   `TextFieldState` to `RawTextFieldState`) — a breaking rename, sanctioned
   pre-1.0. `flui::prelude`'s `TextField` now names `flui_material::TextField`
@@ -271,13 +249,6 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Removed
 
-- **`flui-localizations`** (ADR-0081). It held no translated strings; its RTL table and
-  delegate moved to `flui_widgets::localization` (see Changed for the path table).
-- **`flui-tree`** (ADR-0081). The `TreeRead`/`TreeNav`/`TreeWrite` traits had no generic
-  consumer and became inherent methods on the trees that used them; the arity markers and
-  `IndexedSlot` moved to `flui-foundation`. `Depth`, `AtomicDepth`, `DepthAware`, `Slot`,
-  `SlotBuilder`, `SlotIter`, `TreeError`, `ArityError` and the tree iterators had no user and
-  are gone.
 - `PlatformWindow::as_winit` (`flui-platform`, `winit-backend` feature): nothing called it, and
   the window contract names no winit type (ADR-0082 §1).
 
