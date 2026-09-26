@@ -345,19 +345,26 @@ fn a_path_inside_a_macro_invocation_is_an_edge() {
 
 #[test]
 fn a_crate_path_in_a_macro_rules_body_is_an_edge_of_the_defining_module() {
+    let found = findings(
+        TWO,
+        &[
+            TWO_LIB,
+            (
+                "low.rs",
+                "macro_rules! make { ($ty:ident) => { $crate::high::$ty::new() }; }\n",
+            ),
+            ("high.rs", "pub struct High;\n"),
+        ],
+    );
     assert_eq!(
-        identities(
-            TWO,
-            &[
-                TWO_LIB,
-                (
-                    "low.rs",
-                    "macro_rules! make { ($ty:ident) => { $crate::high::$ty::new() }; }\n",
-                ),
-                ("high.rs", "pub struct High;\n"),
-            ],
-        ),
+        found.iter().map(Finding::identity).collect::<BTreeSet<_>>(),
         set(&[("low", "high", "refused")])
+    );
+    // the site reads as written, `$crate` and all
+    let message = found[0].to_string();
+    assert!(
+        message.contains("c/src/low.rs:1 `$crate::high`"),
+        "{message}"
     );
 }
 
