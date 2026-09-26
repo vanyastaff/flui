@@ -10,6 +10,9 @@
 - **Superseded in part by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) — tiers
   are checked beside layers; the layer table, "a crate is a layer" as the only reason, and
   "Localization direction is locked" end when the `layer` key is removed.
+- **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (L1 gains
+  `flui-platform-api`; the `interaction -> platform` edge becomes `interaction -> platform-api`,
+  and `flui-platform` allows only `flui-app` as a dependent)
 - **Related:** ADR-0028 (the design-system rule this generalizes), ADR-0037 (the
   `interaction -> platform` same-layer edge)
 
