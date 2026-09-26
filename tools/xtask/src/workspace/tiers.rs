@@ -1,4 +1,5 @@
-//! The tier rule (ADR-0081 §1) and the `tier-kind` declarations (§3).
+//! The tier rule (ADR-0081 §1), the `tier-kind` declarations (§3) and the
+//! train guard (ADR-0088 §5).
 //!
 //! The rule itself is pure over [`Members`], so `--self-test` runs it on a
 //! built-in graph without cargo or a disk; only the exit citations of
@@ -93,7 +94,18 @@ pub(super) enum Finding {
         to: String,
         exit: String,
     },
+    /// [`TRAIN_GUARD`] does not declare `links = "flui_train"`.
+    NoTrainGuard { name: String, rel: String },
+    /// A member other than [`TRAIN_GUARD`] declares `links = "flui_train"`.
+    SecondTrainGuard { name: String, rel: String },
 }
+
+/// The crate that carries the train guard (ADR-0088 §5): every train depends
+/// on it, the facade and `flui-sdk` included.
+pub(super) const TRAIN_GUARD: &str = "flui-foundation";
+
+/// The `links` value of the train guard.
+pub(super) const TRAIN_LINKS: &str = "flui_train";
 
 /// A crate and where it sits.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +135,10 @@ impl Finding {
             Self::OnTool { from, to } => (from.clone(), to.clone(), "on tool"),
             Self::Stale { from, to } => (from.clone(), to.clone(), "stale exception"),
             Self::BadExit { from, to, .. } => (from.clone(), to.clone(), "bad exit"),
+            Self::NoTrainGuard { name, .. } => (name.clone(), TRAIN_LINKS.to_owned(), "no guard"),
+            Self::SecondTrainGuard { name, .. } => {
+                (name.clone(), TRAIN_LINKS.to_owned(), "second guard")
+            }
         }
     }
 }
@@ -181,6 +197,16 @@ impl fmt::Display for Finding {
                 f,
                 "{from}'s `edge-exceptions` entry for {to} names exit \"{exit}\", which is not \
                  an `ADR-NNNN` number"
+            ),
+            Self::NoTrainGuard { rel, .. } => write!(
+                f,
+                "{rel} must declare `links = \"{TRAIN_LINKS}\"` (with a build script): it is the \
+                 train guard every FLUI train depends on (ADR-0088 §5)"
+            ),
+            Self::SecondTrainGuard { rel, .. } => write!(
+                f,
+                "{rel} declares `links = \"{TRAIN_LINKS}\"`, which only {TRAIN_GUARD} carries: \
+                 the guard is the one crate every train shares (ADR-0088 §5)"
             ),
         }
     }
@@ -349,6 +375,24 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
     findings
 }
 
+/// The train guard (ADR-0088 §5): [`TRAIN_GUARD`], when it is a member,
+/// declares `links = "flui_train"`, and no other member does. A workspace
+/// without the guard crate is not reported here; `cargo xtask reach` requires
+/// it in the SDK's and the facade's builds.
+pub(super) fn check_train_guard(members: &Members) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for member in members.iter() {
+        let guards = member.links.as_deref() == Some(TRAIN_LINKS);
+        let (name, rel) = (member.name.clone(), member.rel.clone());
+        if member.name == TRAIN_GUARD && !guards {
+            findings.push(Finding::NoTrainGuard { name, rel });
+        } else if member.name != TRAIN_GUARD && guards {
+            findings.push(Finding::SecondTrainGuard { name, rel });
+        }
+    }
+    findings
+}
+
 /// Each `edge-exceptions` exit and each `reach-exceptions` exit or grant
 /// names an ADR that exists under `docs/adr`; a reach warrant must also be an
 /// `ADR-NNNN` number (an edge exit's format is `check_tiers`'s finding).
@@ -397,6 +441,7 @@ fn node(rel: &str, flui: &Json, deps: &[(&str, DependencyKind)]) -> Node {
         name,
         rel: rel.to_owned(),
         flui: flui.clone(),
+        links: None,
         deps: deps
             .iter()
             .map(|&(name, kind)| Dep {
@@ -448,8 +493,16 @@ fn self_test_members() -> Members {
         .remove("tier-kind");
     let (pkg_rel, pkg) = krate("pkg1", "pkg", 1, "official");
     let (pkg2_rel, pkg2) = krate("pkg2", "pkg", 2, "official");
+    let guard = |mut node: Node| {
+        node.links = Some(TRAIN_LINKS.to_owned());
+        node
+    };
 
     let nodes = vec![
+        // silent: the train guard where it belongs
+        guard(crate_node(TRAIN_GUARD, "V", 4, &[])),
+        // planted: a second crate with the guard's `links`
+        guard(crate_node("v-guard", "V", 5, &[])),
         crate_node("v1", "V", 1, &[]),
         // planted: a second crate at V order 1
         crate_node("v-dup", "V", 1, &[]),
@@ -487,7 +540,8 @@ fn self_test_members() -> Members {
 }
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 8] = [
+const EXPECTED: [(&str, &str, &str); 9] = [
+    ("v-guard", TRAIN_LINKS, "second guard"),
     ("v-dup", "v1", "duplicate order"),
     ("v2", "t1", "on tool"),
     ("v-nokind", "tier-kind", "missing"),
@@ -505,8 +559,10 @@ pub(super) fn self_test_diff() -> (Vec<Identity>, Vec<Identity>) {
     let tiers: Vec<String> = ["V", "C", "S", "R", "K", "H", "pkg"]
         .map(str::to_owned)
         .into();
-    let seen: BTreeSet<Identity> = check_tiers(&self_test_members(), &tiers)
+    let members = self_test_members();
+    let seen: BTreeSet<Identity> = check_tiers(&members, &tiers)
         .iter()
+        .chain(&check_train_guard(&members))
         .map(Finding::identity)
         .collect();
     let expected: BTreeSet<Identity> = EXPECTED

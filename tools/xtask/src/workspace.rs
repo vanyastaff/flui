@@ -37,14 +37,18 @@
 //!   and checks what is in it (the import direction between a crate's
 //!   top-level modules).
 //! - **Manifests.** Crates inherit the shared `[workspace.package]` keys and the
-//!   workspace lints; examples and tools are `publish = false`.
+//!   workspace lints, except that a `tier-kind = "evolving"` crate sets its own
+//!   `0.N` version (ADR-0088 §4); examples and tools are `publish = false`.
+//! - **Train guard** (ADR-0088 §5). `flui-foundation` declares
+//!   `links = "flui_train"`, and no other member does.
 //! - **Unreachable tests.** Under `autotests = false` a new `tests/*.rs` file is
 //!   silently never compiled unless a `[[test]]` target declares or mounts it;
 //!   that went unnoticed for eleven days across five crates once.
 //! - **ADR numbers** are unique, because code and docs cite them.
 //!
-//! `--self-test` runs the tier rule over a built-in graph with planted
-//! violations and fails unless it reports exactly those (ADR-0078 §4).
+//! `--self-test` runs the tier rule and the train guard over a built-in graph
+//! with planted violations and fails unless it reports exactly those
+//! (ADR-0078 §4).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -101,6 +105,7 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
     findings.extend(
         tiers::check_tiers(&members, &tier_names)
             .iter()
+            .chain(&tiers::check_train_guard(&members))
             .map(ToString::to_string),
     );
     tiers::check_adr_citations(root, &members, &mut findings);
@@ -145,6 +150,8 @@ struct Node {
     rel: String,
     /// `[package.metadata.flui]`, `null` when absent.
     flui: Json,
+    /// `[package] links`, when declared.
+    links: Option<String>,
     deps: Vec<Dep>,
 }
 
@@ -208,6 +215,8 @@ struct Member {
     name: String,
     /// Manifest path relative to the repository root, `/`-separated.
     rel: String,
+    /// `[package] links`, when declared: only the train guard sets it.
+    links: Option<String>,
     deps: Vec<Dep>,
     /// `[package.metadata.flui] tier`, when declared.
     tier: Option<String>,
@@ -265,6 +274,7 @@ impl Members {
                     name: package.name.to_string(),
                     rel: relative(root, package.manifest_path.as_std_path())?,
                     flui: package.metadata["flui"].clone(),
+                    links: package.links.clone(),
                     deps: package
                         .dependencies
                         .iter()
@@ -288,6 +298,7 @@ impl Members {
             name,
             rel,
             flui,
+            links,
             deps,
         } in nodes
         {
@@ -341,6 +352,7 @@ impl Members {
                 allowed_dev_dependents,
                 name,
                 rel,
+                links,
                 deps,
             });
         }
@@ -600,7 +612,14 @@ fn check_manifests(
         } else {
             &INHERITED[..]
         };
+        let evolving = member.tier_kind.as_deref() == Some(EVOLVING);
+        if evolving {
+            check_evolving_version(&member.rel, package.get("version"), findings);
+        }
         for key in inherited {
+            if evolving && *key == "version" {
+                continue;
+            }
             if !inherits_workspace(package.get(*key)) {
                 findings.push(format!(
                     "{} must inherit `{key}.workspace = true`",
@@ -625,6 +644,29 @@ fn check_manifests(
         }
     }
     Ok(())
+}
+
+/// The `tier-kind` of a crate that versions apart from the train.
+const EVOLVING: &str = "evolving";
+
+/// An evolving crate carries its own `0.N` version, bumped on every train
+/// (ADR-0088 §4): inheriting the workspace version would tie its semver to
+/// the Stable facade's, and a major above 0 would promise what an evolving
+/// surface does not.
+fn check_evolving_version(rel: &str, version: Option<&Toml>, findings: &mut Vec<String>) {
+    match version {
+        Some(Toml::String(version)) => {
+            if version.split('.').next() != Some("0") {
+                findings.push(format!(
+                    "{rel} is evolving: its version is `0.N` (ADR-0088 §4), not `{version}`"
+                ));
+            }
+        }
+        _ => findings.push(format!(
+            "{rel} is evolving: it sets its own `version = \"0.N…\"` instead of inheriting the \
+             workspace version (ADR-0088 §4)"
+        )),
+    }
 }
 
 fn inherits_workspace(value: Option<&Toml>) -> bool {

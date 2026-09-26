@@ -326,6 +326,177 @@ fn manifests_inherit_the_workspace_keys_and_lints() {
 }
 
 #[test]
+fn an_evolving_crate_sets_its_own_zero_major_version() {
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "tier-kind = \"internal\"",
+        "tier-kind = \"evolving\"",
+    );
+    // inheriting the train's version is refused
+    assert_one(
+        &fixture.findings(),
+        "crates/a/Cargo.toml is evolving: it sets its own `version",
+    );
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "version.workspace = true",
+        "version = \"1.0.0\"",
+    );
+    assert_one(
+        &fixture.findings(),
+        "crates/a/Cargo.toml is evolving: its version is `0.N` (ADR-0088 §4), not `1.0.0`",
+    );
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "version = \"1.0.0\"",
+        "version = \"0.1.0-dev\"",
+    );
+    assert_eq!(fixture.findings(), Vec::<String>::new());
+}
+
+#[test]
+fn an_internal_crate_with_its_own_version_is_still_reported() {
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "version.workspace = true",
+        "version = \"0.1.0-dev\"",
+    );
+    assert_one(
+        &fixture.findings(),
+        "crates/a/Cargo.toml must inherit `version.workspace = true`",
+    );
+}
+
+/// Adds `crates/<name>` at tier Low with `links = "<links>"` and the build
+/// script Cargo requires beside it.
+fn write_linking_crate(fixture: &Fixture, name: &str, order: u64, links: &str) {
+    fixture.write_crate(name, 0, "Low", order, "");
+    fixture.edit(
+        &format!("crates/{name}/Cargo.toml"),
+        "repository.workspace = true\n",
+        &format!("repository.workspace = true\nlinks = \"{links}\"\n"),
+    );
+    fixture.write(&format!("crates/{name}/build.rs"), "fn main() {}\n");
+    fixture.edit(
+        "Cargo.toml",
+        "members = [",
+        &format!("members = [\"crates/{name}\", "),
+    );
+}
+
+#[test]
+fn only_flui_foundation_carries_the_train_guard() {
+    let fixture = Fixture::new();
+    write_linking_crate(&fixture, "flui-foundation", 2, "flui_train");
+    assert_eq!(fixture.findings(), Vec::<String>::new());
+    write_linking_crate(&fixture, "c", 3, "flui_train");
+    assert_one(
+        &fixture.findings(),
+        "crates/c/Cargo.toml declares `links = \"flui_train\"`, which only flui-foundation \
+         carries",
+    );
+
+    let fixture = Fixture::new();
+    write_linking_crate(&fixture, "flui-foundation", 2, "something_else");
+    assert_one(
+        &fixture.findings(),
+        "crates/flui-foundation/Cargo.toml must declare `links = \"flui_train\"`",
+    );
+}
+
+/// Cargo's error for a second package with the guard's `links` value.
+const TWO_TRAINS: &str = "links to the native library `flui_train`";
+
+/// A fixture outside any workspace: an application that depends on an SDK
+/// built on `flui-foundation` 0.2.0 and a facade built on 0.3.0, each copy
+/// declaring `links` when `links` is given. Returns the `cargo metadata
+/// --offline` result, which resolves the graph.
+fn resolve_two_trains(dir: &Path, links: Option<&str>) -> std::process::Output {
+    let write = |rel: &str, text: &str| {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().expect("BUG: fixture paths have a parent"))
+            .expect("create fixture directory");
+        std::fs::write(path, text).expect("write fixture file");
+    };
+    let links_line = links.map_or_else(String::new, |links| format!("links = \"{links}\"\n"));
+    for (dir, version) in [("foundation-2", "0.2.0"), ("foundation-3", "0.3.0")] {
+        write(
+            &format!("{dir}/Cargo.toml"),
+            &format!(
+                "[package]\nname = \"flui-foundation\"\nversion = \"{version}\"\n\
+                 edition = \"2024\"\n{links_line}"
+            ),
+        );
+        write(&format!("{dir}/build.rs"), "fn main() {}\n");
+        write(&format!("{dir}/src/lib.rs"), "");
+    }
+    for (name, foundation) in [("sdk", "foundation-2"), ("facade", "foundation-3")] {
+        write(
+            &format!("{name}/Cargo.toml"),
+            &format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+                 [dependencies]\nflui-foundation = {{ path = \"../{foundation}\" }}\n"
+            ),
+        );
+        write(&format!("{name}/src/lib.rs"), "");
+    }
+    // The application is its own workspace; the packages it names sit beside
+    // it, outside the workspace directory, so none of them is a member.
+    write(
+        "app/Cargo.toml",
+        "[workspace]\n\n[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+         [dependencies]\nsdk = { path = \"../sdk\" }\nfacade = { path = \"../facade\" }\n",
+    );
+    write("app/src/main.rs", "fn main() {}\n");
+    std::process::Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+        .args(["metadata", "--offline", "--format-version", "1"])
+        .current_dir(dir.join("app"))
+        .output()
+        .expect("run cargo metadata")
+}
+
+/// ADR-0088 §5 with this repository's own `links` value: two trains in one
+/// graph fail in the resolver. The control without `links` resolves both
+/// copies side by side, which is the precondition for E0308 at the first
+/// type that crosses between them.
+#[test]
+fn two_trains_refuse_to_resolve() {
+    let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on this repository");
+    let links = metadata
+        .workspace_packages()
+        .into_iter()
+        .find(|package| package.name.as_str() == "flui-foundation")
+        .expect("flui-foundation is a member")
+        .links
+        .clone();
+    assert_eq!(links.as_deref(), Some("flui_train"));
+
+    // A scratch directory with no workspace manifest above the packages.
+    let fixture = Fixture::new();
+    std::fs::remove_file(fixture.root().join("Cargo.toml")).expect("remove the root manifest");
+    let dir = fixture.root().join("trains");
+    let refused = resolve_two_trains(&dir.join("guarded"), links.as_deref());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "two trains resolved: {stderr}");
+    assert!(stderr.contains(TWO_TRAINS), "{stderr}");
+
+    let control = resolve_two_trains(&dir.join("unguarded"), None);
+    let stderr = String::from_utf8_lossy(&control.stderr);
+    assert!(control.status.success(), "{stderr}");
+    let resolved: serde_json::Value =
+        serde_json::from_slice(&control.stdout).expect("cargo metadata prints JSON");
+    let copies = resolved["packages"]
+        .as_array()
+        .expect("packages")
+        .iter()
+        .filter(|package| package["name"] == "flui-foundation")
+        .count();
+    assert_eq!(copies, 2, "the control holds both trains");
+}
+
+#[test]
 fn a_test_file_no_target_reaches_is_reported() {
     let fixture = Fixture::new();
     fixture.edit(
