@@ -10,6 +10,10 @@
 //!   finding, so the list only shrinks. Nothing with a tier depends on a
 //!   `tier-kind = "tool"` package. Examples and tools declare only
 //!   `tier-kind = "tool"`. Dev-dependencies may point anywhere.
+//! - **Reach declarations** (ADR-0081 §2). `reach-forbid` and
+//!   `reach-exceptions` are read here, and each exception's `exit` or `grant`
+//!   must cite an ADR with a file under `docs/adr`; what they mean over the
+//!   resolved graph is `cargo xtask reach` ([`mod@reach`]).
 //! - **Layers** (ADR-0041), checked beside the tiers until the `layer` key is
 //!   removed. Each crate under `crates/` and the facade declare
 //!   `[package.metadata.flui] layer`; the names live in the root manifest's
@@ -51,7 +55,10 @@ use toml::{Table, Value as Toml};
 
 use crate::util;
 
+mod reach;
 mod tiers;
+
+pub(crate) use reach::{ReachArgs, reach};
 
 /// Arguments for `cargo xtask workspace`.
 #[derive(Debug, clap::Args)]
@@ -92,7 +99,7 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
             .iter()
             .map(ToString::to_string),
     );
-    tiers::check_exception_citations(root, &members, &mut findings);
+    tiers::check_adr_citations(root, &members, &mut findings);
     let (layers, edges) = check_layers(&members, &metadata.workspace_metadata, &mut findings)?;
     check_manifests(root, &members, &mut findings)?;
     check_unique_adr_numbers(root, &mut findings)?;
@@ -110,11 +117,13 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
 }
 
 /// The keys a member's `[package.metadata.flui]` may set.
-const FLUI_KEYS: [&str; 8] = [
+const FLUI_KEYS: [&str; 10] = [
     "tier",
     "tier-kind",
     "order",
     "edge-exceptions",
+    "reach-forbid",
+    "reach-exceptions",
     "layer",
     "allowed-dependents",
     "allowed-dev-dependents",
@@ -151,6 +160,43 @@ struct EdgeException {
     reason: String,
 }
 
+/// What admits a `reach-exceptions` entry: the ADR whose change removes the
+/// path, or the ADR that permits it for good.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Warrant {
+    /// Debt: the named ADR removes the path.
+    Exit(String),
+    /// A standing permission the named ADR gives.
+    Grant(String),
+}
+
+impl Warrant {
+    /// The ADR number, whichever kind.
+    pub(super) fn adr(&self) -> &str {
+        match self {
+            Self::Exit(adr) | Self::Grant(adr) => adr,
+        }
+    }
+
+    /// The manifest key: `exit` or `grant`.
+    pub(super) fn key(&self) -> &'static str {
+        match self {
+            Self::Exit(_) => "exit",
+            Self::Grant(_) => "grant",
+        }
+    }
+}
+
+/// A dependent's permission for every path that runs through it and then
+/// enters a package named `to`, which `cargo xtask reach` would otherwise
+/// report (ADR-0081 §2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ReachException {
+    pub(super) to: String,
+    pub(super) warrant: Warrant,
+    pub(super) reason: String,
+}
+
 /// A workspace member, with what the checks read from it.
 struct Member {
     name: String,
@@ -165,6 +211,11 @@ struct Member {
     order: Option<u64>,
     /// `[package.metadata.flui] edge-exceptions`.
     edge_exceptions: Vec<EdgeException>,
+    /// `[package.metadata.flui] reach-forbid`: names or `*` globs added to
+    /// the tier's forbidden set.
+    reach_forbid: Vec<String>,
+    /// `[package.metadata.flui] reach-exceptions`.
+    reach_exceptions: Vec<ReachException>,
     /// `[package.metadata.flui] layer`, when declared.
     layer: Option<usize>,
     /// `[package.metadata.flui] allowed-dependents`: the crates allowed a
@@ -271,6 +322,10 @@ impl Members {
                 tier_kind: string(&flui, "tier-kind", &rel)?,
                 order,
                 edge_exceptions: edge_exceptions(&flui, &rel)?,
+                reach_forbid: package_names(&flui, "reach-forbid", &rel)?
+                    .map(|names| names.into_iter().collect())
+                    .unwrap_or_default(),
+                reach_exceptions: reach_exceptions(&flui, &rel)?,
                 layer,
                 allowed_dependents,
                 allowed_dev_dependents,
@@ -357,6 +412,45 @@ fn edge_exceptions(flui: &Json, rel: &str) -> anyhow::Result<Vec<EdgeException>>
             })
             .collect(),
     }
+}
+
+/// `reach-exceptions = [{ to = "…", exit | grant = "ADR-NNNN", reason = "…" }, …]`,
+/// with exactly one of `exit` and `grant`, and no `to` named twice.
+fn reach_exceptions(flui: &Json, rel: &str) -> anyhow::Result<Vec<ReachException>> {
+    let malformed = || {
+        format!(
+            "{rel}: `reach-exceptions` must be a list of `{{ to = \"<package>\", exit = \
+             \"ADR-NNNN\", reason = \"<text>\" }}`, with `grant` in place of `exit` for a \
+             standing permission"
+        )
+    };
+    let entries = match &flui["reach-exceptions"] {
+        Json::Null => return Ok(Vec::new()),
+        value => value.as_array().with_context(malformed)?,
+    };
+    let mut out: Vec<ReachException> = Vec::new();
+    for entry in entries {
+        let table = entry.as_object().with_context(malformed)?;
+        if table.len() != 3 {
+            bail!(malformed());
+        }
+        let field = |key: &str| table.get(key).and_then(Json::as_str).map(str::to_owned);
+        let warrant = match (field("exit"), field("grant")) {
+            (Some(adr), None) => Warrant::Exit(adr),
+            (None, Some(adr)) => Warrant::Grant(adr),
+            _ => bail!(malformed()),
+        };
+        let to = field("to").with_context(malformed)?;
+        if out.iter().any(|seen| seen.to == to) {
+            bail!("{rel}: `reach-exceptions` names {to} twice");
+        }
+        out.push(ReachException {
+            to,
+            warrant,
+            reason: field("reason").with_context(malformed)?,
+        });
+    }
+    Ok(out)
 }
 
 /// Layer direction and allowed dependents. Returns the number of named layers

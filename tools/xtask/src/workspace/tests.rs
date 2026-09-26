@@ -663,6 +663,38 @@ fn an_edge_exception_citing_a_missing_adr_is_reported() {
 }
 
 #[test]
+fn a_reach_exception_citing_a_missing_adr_is_reported() {
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "order = 1",
+        "order = 1\nreach-exceptions = [{ to = \"winit\", exit = \"ADR-0999\", reason = \"test\" }]",
+    );
+    assert_one(
+        &fixture.findings(),
+        "a's `reach-exceptions` entry for winit names ADR-0999, which has no file under docs/adr",
+    );
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "exit = \"ADR-0999\"",
+        "grant = \"0001\"",
+    );
+    assert_one(
+        &fixture.findings(),
+        "a's `reach-exceptions` entry for winit names grant \"0001\", which is not an `ADR-NNNN` \
+         number",
+    );
+    fixture.edit("crates/a/Cargo.toml", "\"0001\"", "\"ADR-0001\"");
+    assert_eq!(fixture.findings(), Vec::<String>::new());
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "reach-exceptions = [{",
+        "reach-forbid = [\"tokio\"]\nreach-exceptions = [{",
+    );
+    assert_eq!(fixture.findings(), Vec::<String>::new());
+}
+
+#[test]
 fn the_self_test_reports_exactly_the_planted_findings() {
     let (missed, extra) = super::tiers::self_test_diff();
     assert!(

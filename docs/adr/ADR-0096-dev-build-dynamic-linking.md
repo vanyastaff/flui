@@ -113,8 +113,8 @@ when all of these hold:
   in a Windows CI job that the `ci` aggregator gates.
 - The facade refuses a release build with the feature
   (`compile_error!` under `all(feature = "dynamic-linking", not(debug_assertions))`).
-- A reach fact (ADR-0081 §2, where today's `TREE_FACTS` at `tools/xtask/src/tasks/facade.rs:53`
-  move) states that `flui-dylib` is absent from the facade's normal graph under default
+- A reach fact (ADR-0081 §2, beside the hot-reload facts in `tools/xtask/src/workspace/reach.rs`)
+  states that `flui-dylib` is absent from the facade's normal graph under default
   features.
 
 ### 5. Hot reload is not a dynamic-linking concern

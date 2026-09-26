@@ -261,7 +261,9 @@ draft claimed the semver promise "drops from 28 crates to 3".
 
 **Decision.** Layers become tiers (V, C, S, R, K, H, packages) with a declared order inside each
 tier, `tier-kind = stable | evolving | internal | official | tool`, and forbid-reach facts that
-generalize today's `TREE_FACTS` (`tools/xtask/src/tasks/facade.rs:53`). Stable crates: `flui`,
+generalize the three hot-reload `cargo tree` facts (implemented in part: tiers, `order` and
+`tier-kind` in `cargo xtask workspace`, the forbid-reach facts in `cargo xtask reach`; the kind
+rules are not). Stable crates: `flui`,
 `flui-platform-api`, `flui-protocol`; Evolving: `flui-sdk`. The frozen surface is "three crates,
 N items", where N is the transitive closure of public types in the Stable modules, measured before
 it is promised.
@@ -574,10 +576,10 @@ macOS, version `0.2.0`. The crate count is a reported fact, not a target.
 **Alternatives rejected.** Only forbidding wgpu (already zero today, so it proves nothing);
 driving every count to zero in B0; keeping the crate count.
 
-**Evidence.** Today the K set is red only through two direct edges to `flui-platform`: from
-`flui-interaction`, and from `flui-widgets` under its `testing` feature
-(`crates/flui-widgets/Cargo.toml:94`, turned on by the facade's `testing` feature,
-`Cargo.toml:592`). Both move to `flui-platform-api` in D1's first step, so B0 closes with it. `jni` reaches tier K through `reqwest →
+**Evidence.** At review the K set was red only through two direct edges to `flui-platform`:
+from `flui-interaction`, and from `flui-widgets` under its `testing` feature (turned on by the
+facade's `testing` feature). D1's first step moved both to `flui-platform-api` before
+`cargo xtask reach` landed, so the gate's first run needed no `flui-platform` entry. `jni` reaches tier K through `reqwest →
 rustls-platform-verifier` under `network-images`, which is why generic FFI crates are allowlisted
 with reasons rather than forbidden.
 

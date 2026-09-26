@@ -418,9 +418,9 @@ built.
   - The facade refuses a release build with it:
     `#[cfg(all(feature = "dynamic-linking", not(debug_assertions)))] compile_error!(…)`. Any gate
     that builds the facade in release with `--all-features` then has to leave this feature out.
-  - A reach fact (ADR-0081 §2, where today's `TREE_FACTS` at `tools/xtask/src/tasks/facade.rs:53`
-    move) states that `flui-dylib` is absent from the facade's default normal graph, as
-    `TREE_FACTS` already states for `flui-hot-reload`.
+  - A reach fact (ADR-0081 §2, beside the hot-reload facts in `tools/xtask/src/workspace/reach.rs`)
+    states that `flui-dylib` is absent from the facade's default normal graph, as a fact already
+    states for `flui-hot-reload` in `flui-app`'s.
   - The feature is not part of any Stable surface; it adds no `pub` item.
 - **Gate.** A `cargo xtask` command builds `flui-dylib` on Windows with every facade feature in
   the profile the template uses, reads the export table (the `object` crate is already in the

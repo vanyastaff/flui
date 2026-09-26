@@ -119,6 +119,71 @@ layers = [
     "Facade",                          # 10
 ]
 
+# What no crate of a tier may reach in any root build, over normal and build
+# edges on every target (ADR-0081 §2), checked by `cargo xtask reach`. A tier's
+# set is its `extends` set plus `forbid`; H has no table and
+# forbids nothing. A pattern is a package name or a `*` glob over the whole
+# name. A crate adds names with `reach-forbid` and is excused only by its own
+# `reach-exceptions` entry, which covers the paths that run through it.
+[workspace.metadata.flui.reach]
+# Generic FFI crates name no windowing backend, so no pattern matches them.
+# They arrive through reqwest -> rustls-platform-verifier
+# (flui-widgets/network-images) and through common crates.
+generic-ffi = [
+    { name = "jni", reason = "rustls-platform-verifier's Android trust store (network-images)" },
+    { name = "jni-sys", reason = "jni's bindings" },
+    { name = "windows-sys", reason = "raw Win32 bindings used by std-level crates (parking_lot, tokio, ...)" },
+    { name = "windows-link", reason = "windows-sys's link shim" },
+    { name = "windows-targets", reason = "windows-sys's import-library selector" },
+    { name = "windows_*", reason = "the per-target import libraries windows-targets selects" },
+    { name = "core-foundation", reason = "rustls-platform-verifier's macOS trust store" },
+    { name = "core-foundation-sys", reason = "core-foundation's bindings" },
+    { name = "objc2", reason = "the bare Objective-C runtime, no AppKit or UIKit" },
+    { name = "objc2-encode", reason = "objc2's type encodings" },
+]
+
+[workspace.metadata.flui.reach.tier.K]
+forbid = [
+    "flui-platform",
+    "winit",
+    "android-activity",
+    "ndk",
+    "windows",
+    "objc2-app-kit",
+    "objc2-ui-kit",
+    "wgpu",
+    "flui-engine",
+    "flui-app",
+]
+
+[workspace.metadata.flui.reach.tier.S]
+extends = "K"
+
+[workspace.metadata.flui.reach.tier.C]
+extends = "S"
+
+[workspace.metadata.flui.reach.tier.V]
+extends = "S"
+forbid = ["tokio"]
+
+[workspace.metadata.flui.reach.tier.R]
+# wgpu stays forbidden here: flui-engine alone reaches it, through its grant
+extends = "K"
+
+[workspace.metadata.flui.reach.tier.pkg]
+extends = "K"
+# "any other OS crate"; the generic FFI crates above still pass
+forbid = [
+    "windows-*",
+    "objc2-*",
+    "core-foundation*",
+    "core-graphics*",
+    "jni-*",
+    "ndk-*",
+    "android-*",
+    "android_*",
+]
+
 [workspace.package]
 version = "0.2.0-dev"
 edition = "2024"

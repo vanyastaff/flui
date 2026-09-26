@@ -1,8 +1,15 @@
 # ADR-0081: Workspace tiers, reach facts and stability kinds
 
 - **Status:** Accepted in part (2026-09-26): §1 (tiers, `order`, the direction rule,
-  `edge-exceptions`) and the `tier-kind` declarations of §3. §2 (reach), the kind rules of §3
-  (core never names official, the forward allowlist), §4 and §5 remain Proposed.
+  `edge-exceptions`) and the `tier-kind` declarations of §3. §2 (reach) is implemented and
+  checked by `cargo xtask reach` but remains Proposed until the owner decides three points it
+  assumes: `pkg`'s OS globs, whose `android-*`/`android_*` make
+  `flui-hot-reload → android_log-sys` an entry of its own; `flui-engine`'s standing `grant` for
+  `wgpu`; and that the ungated graph was red through three edges, none of them through
+  `flui-platform`, where the migration plan expected only `flui-platform` edges. ADR-0082's
+  trait move landed first, so the first run on `main` needed no `flui-platform` entry. The
+  kind rules of §3 (core never names official, the forward allowlist), §4
+  and §5 remain Proposed.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md) through the
   accepted §1 (the numbered layer table, "a crate is a layer" as the only reason for a crate, and
@@ -130,7 +137,7 @@ smaller `order`; moving the harness above the runtime removes that edge first.
 | **V** values | `flui-geometry`, `flui-types`, `flui-macros`, `flui-foundation` (with the signal read contract; [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md) keeps the graph in `flui-view`) | everything in S's set, plus `tokio` |
 | **C** contracts | `flui-platform-api` ([ADR-0082](ADR-0082-platform-api-contract-crate.md)), `flui-protocol` ([ADR-0095](ADR-0095-agent-protocol-schema-crate.md)) | S's set |
 | **S** substrate | `flui-log`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-semantics`, `flui-animation`, `flui-assets` | K's set |
-| **R** render machine | `flui-layer`, `flui-rendering`, `flui-objects`, `flui-engine` (and a CPU backend, [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)) | K's set minus `wgpu`, which only `flui-engine` may reach |
+| **R** render machine | `flui-layer`, `flui-rendering`, `flui-objects`, `flui-engine` (and a CPU backend, [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)) | K's set; `wgpu` stays in it, and only `flui-engine`'s `grant` (§2) admits it |
 | **K** spine and runtime | `flui-view`, `flui-widgets`, `flui-runtime` ([ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)), `flui-testing`, `flui-sdk` ([ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)) | `flui-platform`, `winit`, `android-activity`, `ndk`, `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine`, `flui-app` |
 | **H** hosts | `flui-platform` (OS backends), `flui-app` (runners), `flui-cli`, the `flui` facade | none |
 | **pkg** official packages | `flui-material`, `flui-cupertino`, `flui-devtools`, `flui-hot-reload`, later packages | K's set, plus any other OS crate, with named exceptions |
@@ -141,9 +148,13 @@ The K set is the corrected list from owner decision 4. Generic FFI crates (`wind
 `reqwest -> rustls-platform-verifier -> jni` behind `network-images`
 (`crates/flui-widgets/Cargo.toml:177`, `crates/flui-assets/Cargo.toml:69`) and say nothing
 about a windowing backend. A package that must reach a forbidden crate lists it under
-`reach-exceptions` with a reason; `flui-hot-reload`'s direct `windows` dependency
-(`crates/flui-hot-reload/Cargo.toml:47`) is the first entry, with
-[ADR-0094](ADR-0094-hot-reload-through-subsecond.md) as its exit.
+`reach-exceptions` with a reason (§2); `flui-hot-reload`'s direct `windows` dependency
+(`crates/flui-hot-reload/Cargo.toml:47`) is one entry, with
+[ADR-0094](ADR-0094-hot-reload-through-subsecond.md) as its exit. "Only `flui-engine` may reach
+`wgpu`" is the one standing permission: `flui-engine` holds a `grant` from this record for
+`wgpu`, which also covers the `windows` crate `wgpu-hal` brings for DX12. The grant is the only
+way in: R's set keeps `wgpu`, so any other R crate that reaches it is reported, with or without
+the DX12 backend that would bring `windows`.
 
 `flui-tree` and `flui-localizations` are deleted; the owner confirmed both deletions on
 2026-09-25. `flui-tree`'s tree traits have no generic consumer: its arity, slot and depth markers
@@ -159,29 +170,65 @@ longer applies: nothing in the catalog tiers depends on a localization crate.
 
 ### 2. Reach facts are a gate over the resolved graph
 
-A new command, `cargo xtask reach`, reads `cargo metadata --locked` without a target filter
-(the equivalent of `--target all`), for the facade's default features, no features, all
-features, and every single facade feature. For each package it computes the normal-edge
-closure and fails when a package matching its tier's forbidden set, by name or glob, is in it
-and is not a declared `reach-exceptions` entry. Matching is on package names, not
-`cargo tree -i`, which fails on an absent package and on ambiguous specs (`objc2-app-kit` is
-already ambiguous in this graph). The tier gate (§1) checks direct edges and `reach` checks
-transitive absence; they do not overlap. These four feature sets are what "every facade feature
+`cargo xtask reach` reads `cargo metadata --locked --all-features` without a target filter (the
+equivalent of `--target all`) and resolves each **root build** itself, as
+`cargo build -p <root> <selection>` would under resolver 2: dev edges are dropped, normal and
+build edges kept, and every declared entry for one dependency counts, whatever its target.
+Cargo's own resolution in that output cannot be used: it unifies features across the whole
+workspace, so an example that depends on the facade with its defaults turns them on for every
+root, and `flui-app`'s `hot-reload` is on in every build. The `--all-features` graph still lists
+every edge any root can activate, and a test pins the resolver to `cargo tree -e normal,build
+--target all` for five roots.
+
+The roots are the facade under every combination `cargo xtask facade-combos` builds, the facade
+with each of its features alone (which adds `testing` and `gpu-readback-tests`), and every crate
+with a tier, alone, at its defaults and with `--all-features` (which reaches what the facade never
+selects, such as `flui-widgets/network-images`). These are what "every facade feature
 combination" means everywhere in these records.
+
+Every crate with a tier that a root build reaches is checked against that build: its closure over
+the build's activated edges must contain no package whose name matches its tier's forbidden set.
+A pattern is a package name or a glob with `*` as its only wildcard; matching is on package
+names, not `cargo tree -i`, which fails on an absent package and on ambiguous specs
+(`objc2-app-kit` is already ambiguous in this graph). The sets live in the root manifest's
+`[workspace.metadata.flui.reach]`: a tier's set is the set of the tier it `extends` plus its
+`forbid`, as in the table of §1. A tier never drops an inherited name; a single crate that may
+reach one holds a `grant` for it instead. A `generic-ffi` allowlist, each entry with a
+reason, names the crates no pattern matches (`jni`, `windows-sys` and its import libraries, bare
+`objc2`, `core-foundation` and their bindings); a pattern that names one exactly is a
+configuration error. `pkg`'s "any other OS crate" is the globs `windows-*`, `objc2-*`,
+`core-foundation*`, `core-graphics*`, `jni-*`, `ndk-*`, `android-*` and `android_*`. The tier gate
+(§1) checks direct edges and `reach` checks transitive absence; they do not overlap.
 
 A package may add names to its tier's forbidden set with `reach-forbid` in its own
 `[package.metadata.flui]`, and may never remove one except through `reach-exceptions`. This is
-how a single crate states a fact its tier cannot, such as "`wgpu` is absent from `flui-layer`"
-(ADR-0087) or "`tokio` and `accesskit` are absent from `flui-platform-api`" (ADR-0082).
+how a single crate states a fact its tier cannot, such as "`tokio` and `accesskit` are absent
+from `flui-platform-api`" (ADR-0082).
 
-`TREE_FACTS` (`tools/xtask/src/tasks/facade.rs:53-92`) moves into `reach` as ordinary facts in
-the same change. Two of its three probes are positive facts (a feature *brings in* a crate);
-`reach` carries a `require` list for those.
+`reach-exceptions` on a package E is an array of
+`{ to = "<package>", exit | grant = "ADR-NNNN", reason = "<text>" }`, exactly one of `exit` and
+`grant`, whose ADR has a file under `docs/adr` (`cargo xtask workspace` checks the shape and
+the citation). An entry excuses every path that passes through E and then enters a package named
+`to`, for every crate whose closure the path is in; the same package reached any other way is
+still reported, so a direct `flui-view → flui-platform` edge would be. `exit` is debt the named
+ADR removes; `grant` is a standing permission the named ADR gives. An entry is **stale**, and a
+finding, when E reaches no `to` in any root build, or when in no root build anything behind `to`
+(itself included) is forbidden to E or to a crate with a tier that reaches E. So the list only
+shrinks: once the change an `exit` names lands, its entry becomes stale and must go.
 
-Today the gate is red, and only through `flui-platform`, by two direct edges:
-`flui-interaction → flui-platform` and `flui-widgets → flui-platform` under the widget harness's
-`testing` feature (`crates/flui-widgets/Cargo.toml:94`), which the facade's `testing` feature
-turns on. It turns green with the trait move of ADR-0082, not before.
+`TREE_FACTS` moved into `reach` as ordinary facts over one root's build: `flui-hot-reload` is
+absent from `flui-app` at its defaults, present under `flui-app --features hot-reload`, and
+`hot-reload-counter-host`'s build enables `flui-app/hot-reload`. A fact that names an unknown
+root, package or feature is an error, not a pass. The facts now run in `cargo xtask checks`
+instead of only in the heavy feature-matrix job.
+
+ADR-0082's trait move landed before the gate, so no crate below `flui-app` names
+`flui-platform` and the gate's first run on `main` needed no `flui-platform` entry. Without
+entries it reports 13 (crate, forbidden name) pairs through three edges:
+`flui-hot-reload → windows` (10, with the `windows-*` crates behind it),
+`flui-hot-reload → android_log-sys` (1) and `flui-engine → wgpu` (2: `wgpu` itself, and
+`windows` through `wgpu-hal`). Three entries are seeded: the two `flui-hot-reload` edges exit
+with ADR-0094, and `flui-engine`'s `wgpu` is the grant of §1. With them the gate is green.
 
 ### 3. Stability kinds
 
@@ -251,8 +298,8 @@ recorded:
   `file-length` and the core-never-names-official check. Each has a `--self-test` that runs it on
   a planted violation, as `wgsl --self-test` does. A gate without both does not count.
 - **[S] Structural invariants are green.** `cargo xtask workspace` reports zero findings under
-  tiers; `cargo xtask reach` is green for the four feature sets of §2 (this requires
-  ADR-0082's trait move); `cargo xtask module-dag -p flui-widgets` is green; and, if the owner
+  tiers; `cargo xtask reach` is green over the root builds of §2 with no `reach-exceptions`
+  entry naming `flui-platform` (it has none: ADR-0082's trait move landed first); `cargo xtask module-dag -p flui-widgets` is green; and, if the owner
   keeps the runtime extraction in B0, the frame-phase entry points are reachable only from
   `flui-runtime` (ADR-0083).
 - **[R] Debt is frozen.** The `globals`, `file-length` (3000 lines), undocumented-`unsafe` and
@@ -292,7 +339,9 @@ recorded:
 - ADR-0028's hard-coded exemption set (`flui-localizations`, `flui-app`, `flui`) is replaced by
   ADR-0088 using this record's kind rule and its dated exceptions. ADR-0028's decoupling rules
   are unchanged.
-- The reach gate is red until ADR-0082's trait move lands, so B0 closes only with it.
+- The reach gate is green only with its three seeded `reach-exceptions` entries, none of them
+  for `flui-platform`: ADR-0082's trait move landed first. The two that exit with ADR-0094
+  become stale, and must be deleted, in the change that lands it.
 - Applications that enabled `flui-view/runtime-internals` directly (none in this workspace
   besides the three composition roots) lose the feature; the items stay reachable under
   `__runtime`.
@@ -300,8 +349,8 @@ recorded:
   changed with the tier gate; `docs/ROADMAP.md:11` changes with §5. ADR-0041 carries the
   `Superseded in part by: ADR-0081` back-link.
 - Migration: one change added the three keys and `edge-exceptions` next to `layer` and taught
-  the gate both; a second removes `layer`. `reach` lands with its allowlist seeded from its own
-  first run.
+  the gate both; a second removes `layer`. `reach` landed with its `reach-exceptions` seeded
+  from its own first run.
 
 ## Verification
 
@@ -324,15 +373,48 @@ For the accepted part:
   `nothing_depends_on_a_tool_kind_crate`, `an_edge_exception_admits_one_upward_edge`,
   `a_stale_edge_exception_is_reported`, `an_edge_exception_citing_a_missing_adr_is_reported`,
   `the_self_test_reports_exactly_the_planted_findings`, and
-  `the_tiers_match_the_adr_0081_table`, which pins the table above and the six seeded
-  exceptions against the real manifests.
+  `the_tiers_match_the_adr_0081_table`, which pins the table above and the four remaining
+  seeded exceptions against the real manifests.
+- `cargo xtask reach` is green with the three seeded `reach-exceptions` entries of §2; removing
+  `flui-engine`'s grant makes it fail with
+  ``flui-engine (tier R) reaches wgpu under `flui --no-default-features`: flui-engine -> wgpu``
+  and its `windows` twin through `wgpu-hal`.
+- `cargo xtask reach --self-test` runs the check over a built-in workspace that plants a K crate
+  depending on `winit`, a K crate reaching `winit` only under a facade feature, a V crate reaching
+  `tokio`, an R crate whose `reach-forbid` adds `tokio`, an R crate without the grant reaching
+  `wgpu`, a `pkg` crate reaching `windows-core`, a
+  direct K → `flui-platform` edge beside an exception that excuses another path to it, an
+  exception whose edge is gone, one that excuses nothing, and a failing fact; it stays silent on a
+  dev edge to `winit`, a host reaching `winit`, a `pkg` crate reaching `windows-sys`, an R crate
+  reaching `wgpu` through its grant and an excused path, and fails unless exactly the planted findings are reported. `cargo xtask checks` runs it,
+  then `reach`, after `workspace`; the pinned list test in `tools/xtask/src/tasks/checks.rs` names
+  both.
+- `cargo nextest run -p xtask reach`: `a_k_crate_that_reaches_winit_is_reported`,
+  `a_dev_dependency_reaches_nothing`,
+  `an_optional_dependency_reaches_only_under_a_feature_that_enables_it`,
+  `a_weak_feature_does_not_activate_its_dependency`,
+  `a_strong_feature_enables_the_same_named_feature_whatever_it_lists`,
+  `an_unknown_feature_is_an_error_not_a_pass`,
+  `a_dependency_is_matched_by_package_name_not_library_name`,
+  `a_target_specific_dependency_counts_on_every_target`, `a_build_dependency_reaches`,
+  `features_combine_within_one_root_and_not_across_roots`,
+  `selection_parses_every_facade_combo`, `a_generic_ffi_crate_matches_no_glob`,
+  `an_exact_forbid_entry_naming_a_generic_ffi_crate_is_an_error`,
+  `the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio`, `only_a_grant_lets_an_r_crate_reach_wgpu`,
+  `an_extends_cycle_or_unknown_tier_is_an_error`, `reach_forbid_adds_to_the_tier_set`,
+  `a_reach_exception_excuses_only_paths_through_its_crate`,
+  `a_reach_exception_whose_edge_is_gone_is_stale`, `a_reach_exception_that_excuses_nothing_is_stale`,
+  `a_reach_exception_needs_exactly_one_of_exit_or_grant`, `a_reach_exception_citing_a_missing_adr_is_reported`,
+  `each_fact_reads_the_build_both_ways`, `the_self_test_reports_exactly_the_planted_findings`,
+  `the_forbid_sets_match_the_adr_0081_table`, `the_seeded_reach_exceptions_are_the_known_debt`
+  and `the_resolver_agrees_with_cargo_tree`, which compares the resolved package set with
+  `cargo tree -e normal,build --target all` for `flui` (no features, defaults, all features),
+  `flui-widgets --all-features` and `flui-app`.
 
 Still to come, with the Proposed parts:
 
 - `cargo xtask workspace --self-test` also plants a core crate with an optional dependency on an
   `official` crate (§3) and a feature with no `cfg` site (§4).
-- `cargo xtask reach --self-test`: plants a K crate depending on `winit`; must fail. ADR-0082's
-  trait move landed first, so the first real run passes with an empty allowlist.
-- The pinned list test in `tools/xtask/src/tasks/checks.rs` names the new gates, so removing
-  one from `checks` fails a unit test.
+- The pinned list test in `tools/xtask/src/tasks/checks.rs` names each further gate of §5, so
+  removing one from `checks` fails a unit test.
 - A doc-hidden check: `cargo doc -p flui-view` output contains no `__runtime` page.
