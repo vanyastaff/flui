@@ -6,12 +6,16 @@
 //! `WM_NCDESTROY` on that thread, so what it owns is never run or dropped
 //! anywhere else.
 use crate::{
-    PlatformError,
+    PlatformError, WakeRegistrationError,
     shared::{
         PlatformHandlers,
         hwnd_affinity::{UserDataRefusal, UserDataVerdict, classify_user_data_access},
-        owner_signal::OwnerSignal,
+        owner_signal::{OwnerSignal, OwnerTurnSlot},
         panic_boundary::contain_owner_callback,
+    },
+    traits::{
+        OpenWindowError, Platform, WindowOptions,
+        owner::{DirectOwnerHooks, OwnerHooks, ProxyTransport, WindowOpen},
     },
 };
 use parking_lot::Mutex;
@@ -43,6 +47,7 @@ static REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 pub(super) struct OwnerControlContext {
     signal: Arc<OwnerSignal>,
     handlers: Rc<RefCell<PlatformHandlers>>,
+    turn: Rc<OwnerTurnSlot>,
 }
 
 /// Owner-thread handles cloned out of the [`OwnerControlContext`]. Holding
@@ -52,11 +57,21 @@ pub(super) struct OwnerShares {
     /// The platform-level handlers (`on_quit`, `on_window_event`, ...),
     /// shared with every window context this platform opens.
     pub(super) handlers: Rc<RefCell<PlatformHandlers>>,
+    /// Where the owner-turn callback waits between turns.
+    pub(super) turn: Rc<OwnerTurnSlot>,
+}
+
+/// The owner window's address, and the owner-thread gate onto its context.
+/// `Send + Sync`: it carries only the address, so the owner hooks can hold
+/// one; reaching the context through it still requires the owner thread.
+#[derive(Clone)]
+pub(super) struct OwnerGate {
+    address: Arc<Mutex<Option<isize>>>,
 }
 
 pub(super) struct OwnerControl {
     pub(super) signal: Arc<OwnerSignal>,
-    address: Arc<Mutex<Option<isize>>>,
+    gate: OwnerGate,
 }
 impl OwnerControl {
     pub(super) fn new() -> Result<Self, PlatformError> {
@@ -100,6 +115,7 @@ impl OwnerControl {
         let context = Box::new(OwnerControlContext {
             signal: Arc::clone(&signal),
             handlers: Rc::new(RefCell::new(PlatformHandlers::default())),
+            turn: Rc::new(OwnerTurnSlot::default()),
         });
         // SAFETY: dedicated registered class, created on this (the owner) thread;
         // userdata is the boxed context, reclaimed exactly once by WM_NCDESTROY.
@@ -131,9 +147,50 @@ impl OwnerControl {
             let mut address_slot = address.lock();
             *address_slot = Some(hwnd.0 as isize);
         }
-        Ok(Self { signal, address })
+        Ok(Self {
+            signal,
+            gate: OwnerGate { address },
+        })
     }
 
+    /// See [`OwnerGate::shares`].
+    pub(super) fn shares(&self, op: &'static str) -> Result<OwnerShares, UserDataRefusal> {
+        self.gate.shares(op)
+    }
+
+    /// A gate the owner hooks can hold.
+    pub(super) fn gate(&self) -> OwnerGate {
+        self.gate.clone()
+    }
+
+    /// Stops owner turns. On the owner thread the registered turn callback
+    /// is dropped at once; elsewhere it stays in the owner context until the
+    /// owner releases it.
+    pub(super) fn close_signal(&self) {
+        self.signal.close();
+        if let Ok(shares) = self.shares("close owner turns") {
+            shares.turn.clear();
+        }
+    }
+
+    pub(super) fn close(&self) {
+        self.close_signal();
+        let address = self.gate.address.lock().take();
+        if let Some(address) = address {
+            // SAFETY: native destruction occurs on the recorded owner, outside
+            // the address/state locks. WM_NCDESTROY owns userdata reclamation.
+            if self.signal.owner() == std::thread::current().id() {
+                if let Err(error) = unsafe { DestroyWindow(HWND(address as *mut _)) } {
+                    tracing::error!(%error, "owner message window destruction failed");
+                }
+            } else {
+                tracing::error!("owner message window dropped off owner; native resource retained");
+            }
+        }
+    }
+}
+
+impl OwnerGate {
     /// Clones the owner-thread handles out of the owner context, or says why
     /// this thread may not have them: [`UserDataRefusal::ForeignThread`] off
     /// the owner, [`UserDataRefusal::WindowGone`] or
@@ -167,6 +224,7 @@ impl OwnerControl {
                 let context = unsafe { &*(slot as *const OwnerControlContext) };
                 Ok(OwnerShares {
                     handlers: Rc::clone(&context.handlers),
+                    turn: Rc::clone(&context.turn),
                 })
             }
             UserDataVerdict::Refuse(reason) => {
@@ -175,21 +233,48 @@ impl OwnerControl {
             }
         }
     }
+}
 
-    pub(super) fn close(&self) {
-        self.signal.close();
-        let address = self.address.lock().take();
-        if let Some(address) = address {
-            // SAFETY: native destruction occurs on the recorded owner, outside
-            // the address/state locks. WM_NCDESTROY owns userdata reclamation.
-            if self.signal.owner() == std::thread::current().id() {
-                if let Err(error) = unsafe { DestroyWindow(HWND(address as *mut _)) } {
-                    tracing::error!(%error, "owner message window destruction failed");
-                }
-            } else {
-                tracing::error!("owner message window dropped off owner; native resource retained");
+/// The Win32 [`OwnerHooks`]: window creation and the proxy transport as
+/// [`DirectOwnerHooks`] provides them, with the owner-turn callback
+/// registered into the owner context's [`OwnerTurnSlot`] instead of the
+/// signal's shared slot.
+pub(super) struct WindowsOwnerHooks {
+    direct: DirectOwnerHooks,
+    signal: Arc<OwnerSignal>,
+    gate: OwnerGate,
+}
+
+impl WindowsOwnerHooks {
+    pub(super) fn new(platform: Arc<dyn Platform>, control: &OwnerControl) -> Self {
+        Self {
+            direct: DirectOwnerHooks::with_signal(platform, Arc::clone(&control.signal)),
+            signal: Arc::clone(&control.signal),
+            gate: control.gate(),
+        }
+    }
+}
+
+impl OwnerHooks for WindowsOwnerHooks {
+    fn on_wake(&self, callback: Box<dyn FnMut() + Send>) -> Result<(), WakeRegistrationError> {
+        // `OwnerPlatform`, the only caller, is `!Send`, so this runs on the
+        // owner thread; a refusal here means the owner window is gone.
+        match self.gate.shares("on_wake") {
+            Ok(shares) => self.signal.register_in(&*shares.turn, callback),
+            Err(reason) => {
+                tracing::debug!(?reason, "owner-turn registration refused");
+                drop(callback);
+                Err(WakeRegistrationError::OwnerGone)
             }
         }
+    }
+
+    fn open_owner_window(&self, options: WindowOptions) -> Result<WindowOpen, OpenWindowError> {
+        self.direct.open_owner_window(options)
+    }
+
+    fn transport(&self) -> Arc<dyn ProxyTransport> {
+        self.direct.transport()
     }
 }
 impl Drop for OwnerControl {
@@ -232,8 +317,10 @@ unsafe extern "system" fn procedure(
                 drop(Box::from_raw(pointer));
             } else if message == WAKE && !pointer.is_null() {
                 let signal = Arc::clone(&(*pointer).signal);
-                if signal.drive() {
+                let turn = Rc::clone(&(*pointer).turn);
+                if signal.drive_in(&*turn) {
                     signal.close();
+                    turn.clear();
                     PostQuitMessage(0);
                 }
                 return;

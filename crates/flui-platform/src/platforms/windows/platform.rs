@@ -53,7 +53,7 @@ use crate::{
         Clipboard, DesktopCapabilities, OpenWindowError, OwnerPlatform, Platform,
         PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
         PlatformWindow, WindowAppearance, WindowEvent, WindowId, WindowMode, WindowOptions,
-        owner::{DirectOwnerHooks, OwnerHooks},
+        owner::OwnerHooks,
     },
 };
 
@@ -1602,9 +1602,9 @@ impl Platform for WindowsPlatform {
         }
         let _guard = RunGuard(Arc::clone(&platform));
         let erased: Arc<dyn Platform> = platform.clone();
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(super::owner_control::WindowsOwnerHooks::new(
             Arc::clone(&erased),
-            Arc::clone(&platform.owner_control.signal),
+            &platform.owner_control,
         ));
         on_ready(OwnerPlatform::new(erased, hooks)).map_err(PlatformError::bootstrap)?;
         platform
@@ -1618,7 +1618,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn quit(&self) {
-        self.owner_control.signal.close();
+        self.owner_control.close_signal();
         // PostQuitMessage posts to the CALLING thread's message queue — off
         // the owner thread it silently quits nothing (ADR-0039).
         self.affinity.debug_assert_owner("WindowsPlatform::quit");
@@ -2321,6 +2321,32 @@ mod tests {
 
         let owner = std::thread::current().id();
         assert_eq!(log.runs(), 1);
+        assert_eq!(log.ran_on(), Some(owner));
+        assert_eq!(log.dropped_on(), Some(owner));
+    }
+
+    #[test]
+    fn owner_turn_runs_on_the_owner_and_is_released_there() {
+        let platform = Box::new(WindowsPlatform::new().expect("platform"));
+        let log = Arc::new(ProbeLog::default());
+        let for_ready = Arc::clone(&log);
+        platform
+            .run(Box::new(move |owner| {
+                let probe = Probe::new(&for_ready);
+                let proxy = owner.proxy();
+                owner
+                    .on_wake(Box::new(move || {
+                        probe.hit();
+                        proxy.request_quit().expect("quit from the owner turn");
+                    }))
+                    .expect("register the owner turn");
+                owner.proxy().wake().expect("wake");
+                Ok(())
+            }))
+            .expect("run");
+
+        let owner = std::thread::current().id();
+        assert_eq!(log.runs(), 1, "one wake, one turn, then quit");
         assert_eq!(log.ran_on(), Some(owner));
         assert_eq!(log.dropped_on(), Some(owner));
     }
