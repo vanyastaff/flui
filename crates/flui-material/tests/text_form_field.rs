@@ -62,6 +62,47 @@ fn validator_error_reaches_the_input_decorator_error_line() {
     );
 }
 
+/// A caller-set `error_text` shows while the field has no error of its own,
+/// and the field's error replaces it once validation fails — Flutter's
+/// `copyWith(errorText: null)` keeps the existing value.
+///
+/// Fails when the builder assigns the field's `None` error over the
+/// decoration's: "Server says taken" never renders.
+#[test]
+fn a_caller_set_error_text_shows_until_the_field_has_its_own_error() {
+    let form = FormHandle::new();
+    let mut laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            Form::new(
+                TextFormField::with_initial_value("x")
+                    .decoration(InputDecoration {
+                        error_text: Some("Server says taken".to_owned()),
+                        ..InputDecoration::default()
+                    })
+                    .validator(|value| (value == "x").then(|| "Too short".to_owned())),
+            )
+            .handle(form.clone()),
+        ),
+        tight(300.0, 120.0),
+    );
+    assert!(
+        laid.find_text("Server says taken").is_some(),
+        "the caller's error shows before validation"
+    );
+
+    assert!(!form.validate());
+    laid.tick();
+    assert!(
+        laid.find_text("Too short").is_some(),
+        "the field's error shows"
+    );
+    assert!(
+        laid.find_text("Server says taken").is_none(),
+        "and replaces the caller's"
+    );
+}
+
 /// `reset()` writes the initial text back into the controller.
 #[test]
 fn reset_restores_the_initial_value() {

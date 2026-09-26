@@ -85,8 +85,9 @@ impl TextFormField {
         }
     }
 
-    /// The field's decoration; its `error_text` is replaced by the field's
-    /// error.
+    /// The field's decoration. The field's error, when it has one, replaces
+    /// the decoration's `error_text`; without one, a caller-set `error_text`
+    /// shows.
     #[must_use]
     pub fn decoration(mut self, decoration: InputDecoration) -> Self {
         self.decoration = decoration;
@@ -225,7 +226,11 @@ impl ViewState<TextFormField> for TextFormFieldState {
         let mut field = FormField::new(self.initial_value.clone(), move |_ctx, field| {
             let edits = field.clone();
             let mut decoration = decoration.clone();
-            decoration.error_text = field.error_text();
+            // `copyWith(errorText: field.errorText)`: a field error replaces
+            // the caller's, and no field error keeps it.
+            if let Some(error) = field.error_text() {
+                decoration.error_text = Some(error);
+            }
             let mut input = TextField::new(controller.clone())
                 .decoration(decoration)
                 .enabled(enabled)

@@ -252,9 +252,11 @@ present gap rather than reading "the `InkResponse` owns activation" as parity.
 calls `didChange`, and a `reset` that writes `initialValue` back into the
 controller.
 
-**Choice:** the same composition, with two named differences. The error
+**Choice:** the same composition, with two named differences. A field error
 replaces the decoration's `error_text`, so it reaches `InputDecorator`'s error
-line and the error caret colour exactly as a hand-set error does. The user's
+line and the error caret colour exactly as a hand-set error does; with no
+field error a caller-set `error_text` stays, as `copyWith(errorText: null)`
+keeps it. The user's
 edits come from `TextField::on_changed` rather than a controller listener,
 because FLUI's controller listeners are `Send + Sync` and cannot reach the
 owner-thread field state; the controller is read before the field validates or
