@@ -78,6 +78,21 @@ mod enabled {
         AppConfig,
         ui_realm::{UiCommandSender, UiRealm},
     };
+    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+    use flui_runtime::reload::ReloadTier;
+
+    /// The realm's reload tier for a driver's: the realm lives in
+    /// `flui-runtime`, which may not name `flui-hot-reload`, so the tier is
+    /// translated here, at the host. Exhaustive, so a new driver tier does not
+    /// compile until it is given a meaning.
+    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+    const fn reload_tier(tier: HotReloadTier) -> ReloadTier {
+        match tier {
+            HotReloadTier::HotReload => ReloadTier::Reassemble,
+            HotReloadTier::HotRestart => ReloadTier::Restart,
+            HotReloadTier::FullRestart => ReloadTier::ProcessRestart,
+        }
+    }
 
     /// Turn a worker-side rebuild request into a queued hot-reload command on
     /// the realm's inbox.
@@ -90,7 +105,7 @@ mod enabled {
         sender: UiCommandSender,
     ) -> impl Fn() + Send + Sync + 'static {
         move || {
-            if let Err(error) = sender.request_hot_reload(HotReloadTier::HotReload) {
+            if let Err(error) = sender.request_hot_reload(reload_tier(HotReloadTier::HotReload)) {
                 tracing::warn!(
                     ?error,
                     "ignoring hot-reload request for a dead or busy realm"
@@ -225,7 +240,7 @@ mod enabled {
             match driver.poll() {
                 WorkerPollOutcome::Reloaded { reload_count } => {
                     tracing::info!(reload_count, "hot reload: worker reloaded; reassembling");
-                    realm.perform_hot_reload_entered(HotReloadTier::HotReload);
+                    realm.perform_hot_reload_entered(reload_tier(HotReloadTier::HotReload));
                 }
                 WorkerPollOutcome::Degraded {
                     old_fingerprint,
@@ -337,6 +352,24 @@ mod enabled {
                 tracing::error!(?error, "Plugin render failed");
             }
             true
+        }
+    }
+
+    #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
+    mod tests {
+        use super::{HotReloadTier, ReloadTier, reload_tier};
+
+        #[test]
+        fn each_driver_tier_maps_to_the_realm_tier_that_applies_it() {
+            assert_eq!(
+                reload_tier(HotReloadTier::HotReload),
+                ReloadTier::Reassemble
+            );
+            assert_eq!(reload_tier(HotReloadTier::HotRestart), ReloadTier::Restart);
+            assert_eq!(
+                reload_tier(HotReloadTier::FullRestart),
+                ReloadTier::ProcessRestart
+            );
         }
     }
 }

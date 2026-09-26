@@ -32,6 +32,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
 | **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessBinding` | dev-dependency |
+| Realm | A `UiRealm`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_realm::UiRealm::for_test` with `flui_runtime::testing::{ScriptedSink, TestWindow}` (the realm tests live in `crates/flui-runtime/src/ui_realm/`) | `flui-runtime/test-support` |
 | **Widget** | A mounted widget tree with geometry probes and synthetic input | `flui_widgets::testing::{lay_out, LaidOut}` | `flui-widgets/testing` |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |
@@ -104,9 +105,10 @@ therefore the opt-in: adding a wasm dev-dependency to a crate does not drag its 
 onto wasm.
 
 `ExecutionServices`' `Backend::Sequential` branch — compute inline at the spawn site, IO through
-`spawn_local` — is now executed, from `crates/flui-app/src/app/execution.rs`'s
-`wasm_sequential_backend_tests`. It had to be a **lib** test: `ExecutionServices` is `pub(crate)`,
-so no integration test can reach it, and the only execution API one *can* reach there
+`spawn_local` — is now executed, from `crates/flui-runtime/src/execution.rs`'s
+`wasm_sequential_backend_tests`. It stays a **lib** test: it pins the private `Backend::Sequential`
+next to its definition, the `default_pools_started` probe it reads exists only under `cfg(test)` or
+the `test-support` feature, and the one execution API an embedder reaches through `flui-app`
 (`DeterministicExecutors`) is a target-independent FIFO that would pass identically on native.
 
 Still compile-only: `flui-platform`'s web backend, which is wasm32-only and has no executing

@@ -194,11 +194,11 @@ Rules:
   mechanism (`crates/flui-material/Cargo.toml:87-88`) instead of adding a parallel rule.
 - **The crate count is not a goal.** It is a reported fact of the tier table.
 
-**Why the runtime sits above `flui-widgets`.** The realm composes widget-level roots:
-`flui-app`'s realm attach code imports `FocusRoot`, `GestureArenaScope` and `VsyncScope` from
-`flui_widgets` (`crates/flui-app/src/app/ui_realm/attach.rs:6`), and the command channel carries
-`NavigatorCommand` (`crates/flui-app/src/app/ui_realm/commands.rs:8,95`). Extracting the runtime above
-widgets needs no preparatory moves. `NavigatorCommand` later becomes a design-neutral navigation
+**Why the runtime sits above `flui-widgets`.** The realm composes widget-level roots: its
+attach code imports `FocusRoot`, `GestureArenaScope` and `VsyncScope` from `flui_widgets`
+(`crates/flui-runtime/src/ui_realm/attach.rs:6`), and the command channel carries
+`NavigatorCommand` (`crates/flui-runtime/src/ui_realm/commands.rs:8,91`). The realm moved above
+widgets with no preparatory moves. `NavigatorCommand` later becomes a design-neutral navigation
 intent (§10.4).
 
 **Types reached through `LifecycleContext` stay at the view layer or lower.** `LifecycleContext`
@@ -235,7 +235,7 @@ inline test modules are large.
 | flui-foundation | 1, 11.3k | V / internal | Keep, absorb tree markers | Takes the arity markers and `IndexedSlot` (done 2026-09-26; `Depth` and `Slot` had no user and were deleted). Runtime-protocol identities go behind `#[doc(hidden)]`. Carries `links = "flui_train"` (§6.2). Takes the signal read contract (`read_scope`, ADR-0085 §2); the reactive graph does **not** go here: a foundation edit re-checks 15 crates, a graph edit in `flui-view` 3 (`cargo check -p flui-app`, one run). |
 | flui-macros | 1, 0.9k | V / internal | Keep, extend | `RenderView`, `Store`, `Catalog` and `Route` derives, `#[flui::main]`, `#[flui::test]`. Already resolves its runtime path through `proc_macro_crate` with a fallback to `flui` (`crates/flui-macros/src/runtime_path.rs:21-24`), so derives work from packages. |
 | flui-tree | 2, 6.9k | — | **Deleted 2026-09-26** (ADR-0081); markers merged into foundation | The `TreeRead`/`TreeNav`/`TreeWrite` traits had eight implementations, all on the layer, render and semantics trees, and no generic consumer; the call sites became inherent methods on those trees. |
-| flui-platform | 2, 46.3k | H / internal | **Split**: contracts to `flui-platform-api`, backends stay | Its only production import below the app is `crates/flui-interaction/src/text_input.rs:27`. Delete the no-op `desktop = ["dep:winit"]` feature (`crates/flui-platform/Cargo.toml:303`, zero `feature = "desktop"` sites in `src/`) and `LinuxPlatform` (`crates/flui-platform/src/platforms/linux/mod.rs:108`, whose methods are `unimplemented!`). `PlatformAccessibility` stays here, with its only consumer. |
+| flui-platform | 3, 46.3k | H / internal | **Split**: contracts to `flui-platform-api`, backends stay | Its only production import below the app is `crates/flui-interaction/src/text_input.rs:27`. Delete the no-op `desktop = ["dep:winit"]` feature (`crates/flui-platform/Cargo.toml:303`, zero `feature = "desktop"` sites in `src/`) and `LinuxPlatform` (`crates/flui-platform/src/platforms/linux/mod.rs:108`, whose methods are `unimplemented!`). `PlatformAccessibility` lives in `flui_semantics::platform` (internal, tier S), re-exported at `flui_platform::traits`, and never in `flui-platform-api`; that edge is why the crate sits at layer 3 ([ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) §2, amended). |
 | flui-scheduler | 2, 20.6k | S / internal | Keep, lighten | An owner-local core with a `Send` waker instead of the mutexes inside the scheduler. `AsyncDriver` and `Spawner` stay here as `!Send` types. `TIME_DILATION` (`crates/flui-scheduler/src/config.rs:43`) becomes a property of each presentation's clock. |
 | flui-painting | 2, 7.0k | S / internal | Keep | `FONT_SYSTEM` (`crates/flui-painting/src/text_layout/layout.rs:124`) becomes an injected per-realm `FontContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
 | flui-interaction | 2, 40.3k | S / internal | Keep | Depends on `flui-platform-api` instead of `flui-platform`. The gesture arena keeps its shape ([ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md)). |
@@ -507,7 +507,7 @@ through `pub(crate)`, a sealed token or a capability type. A syn scan with `--se
 fallback if no type works. Banning `pub fn pump_frame` would not be enough: a rename defeats it,
 and `HeadlessBinding::pump_frame` already reaches the scheduler through `drive_frame_with_lane`
 (`crates/flui-testing/src/lib.rs:1017`). Per-presentation failure containment (ADR-0048,
-`draw_frame_entered` at `crates/flui-app/src/app/ui_realm/frame.rs:74`) moves with the transaction.
+`draw_frame_entered` at `crates/flui-runtime/src/ui_realm/frame.rs:74`) moved with the transaction.
 
 ### 8.4 Scheduling and demand
 
@@ -566,10 +566,10 @@ decisions 5 and 7.
   `UiCommand::SignalWrite` used to apply to the primary presentation's graph, a conformance
   defect against ADR-0074, which already says "realm-scoped". It now carries its target slot and
   is routed by `SignalSlot::graph` to the presentation whose graph minted it
-  (`UiRealm::signal_graph_for` in `crates/flui-app/src/app/ui_realm/presentations.rs`); a write
+  (`UiRealm::signal_graph_for` in `crates/flui-runtime/src/ui_realm/presentations.rs`); a write
   no presentation of the realm owns is dropped and counted as stale. The multi-window test that
   failed with `ForeignGraph` before the fix is
-  `crates/flui-app/src/app/ui_realm/tests/signal_write_routing.rs`. This landed before the
+  `crates/flui-runtime/src/ui_realm/tests/signal_write_routing.rs`. This landed before the
   write-signature change.
 - **Reads go through `ReadScope`.** The read contract (`Signal<T>`, `SignalSlot`, `SignalError`,
   `ReadGraph`, `ReaderSink`, `ScopeRef`, `ReadScope`) lives in `flui_foundation::read_scope`.
@@ -668,7 +668,7 @@ and ADR-0068; decisions D5 and D6.
   (`crates/flui-layer/src/layer/mod.rs:80-116`).
 - **Damage.** A differ over retained trees emits `DamageRegion::Partial` with a fallback to
   `Full`. Today `DamageRegion` has only `Full` (`crates/flui-layer/src/scene_snapshot.rs:18-21`)
-  and the lane always sends it (`crates/flui-app/src/app/raster_lane.rs:354`). wgpu has no buffer
+  and the lane always sends it (`crates/flui-app/src/app/raster_lane.rs:291`). wgpu has no buffer
   age, so the presenter renders into a retained target and blits; the retained target is
   conditional, because a blit on tile-based mobile GPUs costs bandwidth (hypothesis; the damage
   spike measures it). Damage has an off switch that really removes its cost. Pixel claims need a
@@ -801,8 +801,9 @@ push-only shape; decision D10, owner decision 8.
   exists, as guidance rather than a 1:1 contract. The outgoing mapping is pinned by a test over a
   generated `ALL` list; the incoming mapping keeps exhaustive matches without a wildcard only on
   `accesskit::Action` and `ActionData` (today both end in `_ => None`,
-  `crates/flui-semantics/src/accesskit_translation.rs:316,359`). `PlatformAccessibility` stays in
-  the internal `flui-platform`. Roles outside the 33 arrive through an Evolving hook in
+  `crates/flui-semantics/src/accesskit_translation.rs:316,359`). `PlatformAccessibility` lives in
+  `flui_semantics::platform` (internal, tier S), re-exported at `flui_platform::traits`; never in
+  `flui-platform-api`. Roles outside the 33 arrive through an Evolving hook in
   `flui_sdk`, added with its first consumer. ADR-0080's wire contract (AccessKit role names) is
   unchanged: the own enum maps to those wire strings.
 - Semantics is part of a widget's definition of done: a generated test enumerates the catalog and
@@ -1101,7 +1102,7 @@ every pull request; wall time is a nightly trend per OS.
 | Topology ∝ changed parents | one global render-children pass | local commits owned by the render tree |
 | Layout ∝ relaid nodes | slab scans per dirty root, a per-pass arena, up to 10 build-in-layout passes (`layout_builder.rs:64`) | disjoint indexing, a persistent arena, epochs; one-pass lazy bands once their ADR lands |
 | Paint ∝ dirty boundaries | the root boundary is never retained | `Arc` subtrees keyed by `RenderId` |
-| Raster ∝ damage | always `Full` (`raster_lane.rs:354`) | differ + conditional retained target |
+| Raster ∝ damage | always `Full` (`raster_lane.rs:291`) | differ + conditional retained target |
 | Idle = 0 frames | several demand carriers, one loop-wide redraw flag (`runtime.rs:727`) | one demand mask per presentation |
 | No per-node locks | `ChildManagerRegistry = Arc<Mutex<HashMap<.., Arc<Mutex<dyn ChildManager>>>>>` (`crates/flui-view/src/element/child_manager.rs:56`) | the `!Send` flip, owner-local state |
 | A glyph miss does not stall the UI | one process-wide font mutex (`layout.rs:124`) | per-realm text, rasterisation on the raster side |

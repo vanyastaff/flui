@@ -31,7 +31,6 @@ const RUNNER_SOURCES: &[&str] = &[
     include_str!("../src/app/runner/device_recovery.rs"),
     include_str!("../src/app/runner/frame_pacing.rs"),
     include_str!("../src/app/runner/host.rs"),
-    include_str!("../src/app/lifecycle_state.rs"),
     include_str!("../src/app/runner/realm_dispatch.rs"),
     include_str!("../src/app/runner/secondary_window.rs"),
     include_str!("../src/app/runner/web.rs"),
@@ -222,7 +221,7 @@ fn every_pump_async_arm_calls_finish_then_drive_async_tasks() {
 /// never the pre-mailbox direct backend call. Only the web runner still
 /// takes the direct entry point, for a stated reason (its renderer arrives
 /// asynchronously and recovers across an `.await`, a shape the lane does
-/// not yet accommodate — see `FrameSink`'s own doc in `raster_lane.rs`).
+/// not yet accommodate — see `DirectSink`'s doc in `raster_lane.rs`).
 ///
 /// Red-check: revert either native bootstrap to `Arc<Mutex<Renderer>>` +
 /// `render_frame_entered` and the corresponding count here breaks.

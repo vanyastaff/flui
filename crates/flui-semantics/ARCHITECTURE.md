@@ -285,6 +285,9 @@ notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_
   falls back to the whole-tree rebuild, which is the correctness baseline.
 - `accesskit_translation.rs` maps the owner's tree to AccessKit updates with stable
   `AccessibilityNodeId`s; `flui-platform` hosts the AccessKit adapters per backend.
+- `platform.rs` holds `PlatformAccessibility`, the capability those adapters implement and the
+  realm holds per window (ADR-0082 §2). It names only AccessKit types, never a semantics type:
+  what crosses it is already translated.
 
 **Divergence.** Flutter's current `_RenderObjectSemantics` compiler is a nullable-per-node
 state machine (`_SemanticsFragment`, `mergeUp`, sibling merge groups, geometry-dirty tracking).

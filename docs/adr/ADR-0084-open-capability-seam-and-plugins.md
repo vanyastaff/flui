@@ -42,10 +42,10 @@ The platform side already has more than the widget side can reach:
 
 - **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform-api/src/platform_window.rs`),
   and `PresentationState::perform_haptic_feedback` resolves it
-  (`crates/flui-app/src/app/presentation.rs:893`), but that method and its forwarder
-  `UiRealm::perform_haptic_feedback` (`crates/flui-app/src/app/ui_realm/frame_clock.rs:508`) carry
-  `expect(dead_code)` with "no production caller yet" (`presentation.rs:883-892`,
-  `frame_clock.rs:502-507`). ADR-0031 §4 deferred the widget-facing handle "with the first widget
+  (`crates/flui-runtime/src/presentation.rs:970`), but that method and its forwarder
+  `UiRealm::perform_haptic_feedback` (`crates/flui-runtime/src/ui_realm/frame_clock.rs:466`) carry
+  `expect(dead_code)` with "no production caller yet" (both moved from `flui-app` by
+  ADR-0083). ADR-0031 §4 deferred the widget-facing handle "with the first widget
   consumer, as a lifecycle capability".
 - **Clipboard.** `Platform::clipboard()` is a required method
   (`crates/flui-platform/src/traits/platform.rs:423`), resolved once per loop into `AppRuntime`
@@ -406,15 +406,18 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
   capability (a new handle)" row in "Extending FLUI" changes in the implementing change to: an
   interface crate on `flui-platform-api`, a provider per target, registration through a plugin,
   a headless fake, and a test that fails without it.
-- The dead clipboard accessor (`runtime.rs:1631-1641`) and the haptics forwarders
-  (`presentation.rs:893`, `frame_clock.rs:508`) get production callers or are deleted in favour
+- The dead clipboard accessor (`crates/flui-app/src/app/runtime.rs:1581-1590`) and the haptics
+  forwarders (`crates/flui-runtime/src/presentation.rs:970`,
+  `crates/flui-runtime/src/ui_realm/frame_clock.rs:466`) get production callers or are deleted in favour
   of the built-in clipboard provider and the haptics plugin.
 - **Breaks.** `PlatformWindow::text_input()` returns `Arc<dyn PlatformTextInput>` with no
   default. `accessibility()` moves to the backend extension trait (ADR-0082 §3) and returns
   `Arc<dyn PlatformAccessibility>` with no default. Every backend, including third-party ones,
-  implements both. Every `cfg(feature = "a11y")` override gets an inert twin for builds without
-  `a11y`, macOS included. The `Option` branches in `flui-app` (`presentation.rs:357`, `:1384` and
-  their siblings) go away.
+  implements both; since `PlatformAccessibility` now lives in the internal `flui-semantics`
+  (ADR-0082 §2, amended), accepting this clause first re-homes that trait or re-exports it
+  through a contract crate. Every `cfg(feature = "a11y")` override gets an inert twin for builds without
+  `a11y`, macOS included. The `Option` branches over the bridge
+  (`crates/flui-runtime/src/presentation.rs:423`, `:1461` and their siblings) go away.
 - `AppRunError` gains `CapabilityConflict`. It is `#[non_exhaustive]`
   (`crates/flui-app/src/app/application.rs:22`), so this is not a break.
 - AGENTS.md's "Platform capability" row states the classification rule of §5, so a contributor

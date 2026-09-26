@@ -13,8 +13,12 @@
   `SemanticsAction` and the ADR-0080 wire vocabulary. ADR-0097: `cargo xtask globals` gates
   process-global state against the seeded `globals` entries in each manifest. ADR-0083:
   `flui-runtime` exists (tier K, internal, above `flui-widgets`) and holds the held-input lane,
-  the semantics host and the commit epoch; the realm core has not moved yet. The module-DAG gate
-  for flui-widgets is implemented as `cargo xtask module-dag`. The phase counters and
+  the semantics host, the commit epoch, the performance-stats window, the frame sink seam, the
+  execution services and the realm core (`UiRealm`, its presentations and their frame
+  transaction, driven through a `FrameSink`); `flui-app` keeps the runners, the raster lane and
+  the realm dispatch layer. ADR-0082 §2 was amended so `PlatformAccessibility` lives in
+  `flui-semantics`. The module-DAG gate for
+  flui-widgets is implemented as `cargo xtask module-dag`. The phase counters and
   `cargo xtask perf` with its baseline are implemented, non-blocking
   ([architecture.md](architecture.md), budgets). ADR-0088, still Proposed, has its first move:
   `flui-sdk` exists with no consumer yet, and `flui-foundation` carries the train guard

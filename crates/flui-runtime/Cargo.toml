@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Frame runtime for FLUI: the per-presentation lanes a UI realm drives between the widget tree and a host (internal)"
+description = "Frame runtime for FLUI: the UI realm, the per-presentation frame transaction it drives between the widget tree and a host, and the frame sink it submits through (internal)"
 documentation = "https://docs.rs/flui-runtime"
 keywords = ["gui", "ui", "runtime", "flui"]
 categories = ["gui"]
@@ -19,20 +19,63 @@ exclude = ["/ARCHITECTURE.md"]
 workspace = true
 
 [features]
-# Test hooks (`HeldPointerQueue::append`/`len`, and the `SemanticsHost`
-# surface that has no production caller yet) for this crate's own tests and
-# for `flui-app`'s, which enable it on their dev edge. Never on a normal edge.
+# Test hooks (`HeldPointerQueue::append`/`len`, the `SemanticsHost` surface
+# that has no production caller yet, and `ExecutionServices::with_limits`/
+# `default_pools_started`), and the `testing` module's `TestWindow` and
+# `ScriptedSink` doubles, for this crate's own tests and for `flui-app`'s,
+# which enable it on their dev edge. Never on a normal edge.
 test-support = []
+# `reload::ReloadTier`, the development reload the realm applies. Names no
+# hot-reload crate; `flui-app`'s `hot-reload` feature turns it on alongside its
+# optional `flui-hot-reload` edge and translates the driver's tier into it.
+hot-reload = []
 
 [dependencies]
 # `PresentationId`, which names a held-input queue in traces.
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # `PointerEvent`/`PointerId`, the events the held-input lane retains.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
+# `Scene`, what a frame sink submits.
+flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 # `Assertiveness`/`SemanticsEvent`, what the semantics host delivers.
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
+# `PlatformWindow` and its capability traits, the window contract a
+# presentation drives; no backend (ADR-0082).
+flui-platform-api = { workspace = true }
+# Window sizes and geometry.
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+# The realm core (ADR-0083 move 4): the widget tree a presentation hosts
+# (`WidgetsBinding`, `GlobalKeyScope`; `runtime-internals` is the seam a
+# realm drives it through), its render pipeline, the realm-owned scheduler,
+# the vsync the root's animations tick on, and the root wrappers the realm
+# installs above every root widget (`FocusRoot`, `GestureArenaScope`,
+# `VsyncScope`, `MediaQuery`).
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["runtime-internals"] }
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
+flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
+flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
+flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
+# The realm's bounded owner inbox.
+crossbeam-channel = { workspace = true }
 parking_lot = { workspace = true }
+# `SpawnError`'s messages.
+thiserror = { workspace = true }
 tracing = { workspace = true }
+# The cross-platform clock `PerformanceStats` samples (std's `Instant` panics
+# on wasm32).
+web-time = { workspace = true }
+
+# The execution services' default IO and compute pools, and the cancellation
+# root the host's lifecycle layer derives from. Native only: the wasm32 build
+# of `execution` is the sequential backend and needs neither crate.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+tokio-util = { workspace = true }
+
+# The sequential backend's IO lane (`spawn_local` on the browser's microtask
+# queue).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
@@ -44,23 +87,52 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # `flui-view`'s and `flui-interaction`'s are; no type crosses it, so the second
 # copy of this crate in the test build never meets the first.
 flui-testing = { workspace = true }
-# Pointer positions in the held-input tests.
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # Capturing emitted fields is how the semantics host's privacy contract on its
-# announce/event fallbacks is checked.
+# announce/event fallbacks, and what a contained frame failure reports to the
+# log, are checked.
 tracing-subscriber = { workspace = true }
+# The realm tests: the headless platform's windows and capability fakes
+# (`headless_platform`, `FakeTextInput`, `FakeHaptics`, `FakeAccessibility`),
+# a dev edge only, so the shipped crate still links no backend; the concrete
+# render objects some tests mount; AccessKit action requests driven the way
+# an adapter would; and `!Send` pins on the realm.
+flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
+accesskit = { workspace = true }
+static_assertions = { workspace = true }
+# The test-only hooks of the crates the realm drives: `push_pending_child_
+# request_for_test`, `register_layout_builder_for_test`.
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
+
+# Executing wasm32 unit tests: the execution services' sequential backend is
+# pinned by lib tests that run on wasm32 (`cargo xtask wasm-test`). Pinned to
+# the release that pairs with the locked wasm-bindgen; the unpinned "0.3"
+# resolves to one requiring a newer wasm-bindgen and would bump the workspace
+# lock as a side effect of adding a dev-dependency. flui-foundation carries the
+# same pin for the same reason.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.77"
 
 [package.metadata.docs.rs]
 all-features = true
 
 # Tier K, order 4: the frame runtime of ADR-0083 §1 sits in the spine tier
 # above `flui-view` (1), `flui-testing` (2) and `flui-widgets` (3), because
-# the realm it will own drives a widget tree; `flui-app` (tier H) is its only
-# normal dependent. Internal: it is not an embedder API (ADR-0027 §9). Layer 6
-# is the widget catalog's: its future `flui-widgets` edge allows layers 6 to 9
-# (`flui-app` is 9), and 6 is the lowest of them.
+# the realm it owns drives a widget tree; `flui-app` (tier H) is its only
+# normal dependent. Internal: it is not an embedder API (ADR-0027 §9), except
+# the execution host-injection seam and the frame-failure report types that
+# `flui-app` re-exports (ADR-0089 §1). Layer 6 is the widget catalog's: its
+# `flui-widgets` edge allows layers 6 to 9 (`flui-app` is 9), and 6 is the
+# lowest of them.
 [package.metadata.flui]
 layer = 6
 tier = "K"
 tier-kind = "internal"
 order = 4
+# ADR-0047: only a host crate constructs the execution services, and no other
+# workspace crate reaches their pools. They are `pub` here only so the host can
+# construct them, so the hosts are the crates allowed a normal edge; ADR-0083 §4
+# adds `flui-testing`, the host of the headless test loop, when its driver runs
+# the real frame. Dev edges are not restricted.
+allowed-dependents = ["flui-app"]

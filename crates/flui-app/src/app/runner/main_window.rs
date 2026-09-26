@@ -285,11 +285,10 @@ impl MainController {
         let result = match result {
             Ok(result) => result,
             Err(payload) => {
-                let message = self
-                    .config
-                    .frame_failure_detail
-                    .panic_text(payload.as_ref())
-                    .0;
+                let message = flui_runtime::frame_failure::panic_text(
+                    self.config.frame_failure_detail,
+                    payload.as_ref(),
+                );
                 std::mem::forget(payload);
                 Err(AppWindowError::InstallerPanicked { message })
             }
@@ -426,11 +425,10 @@ pub(super) fn drive_main_window() {
         .expect("BUG: controller lease is populated until Drop");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.drive()));
     if let Err(payload) = result {
-        let message = controller
-            .config
-            .frame_failure_detail
-            .panic_text(payload.as_ref())
-            .0;
+        let message = flui_runtime::frame_failure::panic_text(
+            controller.config.frame_failure_detail,
+            payload.as_ref(),
+        );
         std::mem::forget(payload);
         controller.fail(AppWindowError::InstallerPanicked { message });
     }
@@ -563,10 +561,10 @@ where
         let installer = Box::new(move |handle: &AppHandle, window, host| {
             let root = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory(handle)))
                 .map_err(|payload| {
-                let message = installer_config
-                    .frame_failure_detail
-                    .panic_text(payload.as_ref())
-                    .0;
+                let message = flui_runtime::frame_failure::panic_text(
+                    installer_config.frame_failure_detail,
+                    payload.as_ref(),
+                );
                 std::mem::forget(payload);
                 AppWindowError::FactoryPanicked { message }
             })?;

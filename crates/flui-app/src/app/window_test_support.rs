@@ -1,234 +1,93 @@
-//! Shared [`PlatformWindow`] test double for flui-app's test modules.
+//! Window test doubles for flui-app's test modules.
 //!
-//! Before this module, six hand-rolled stubs implemented the same trait
-//! surface across `presentation.rs`, `runtime.rs`, `ui_realm/`, and
-//! `window_registry.rs`, differing only in a knob or two (window id, scale
-//! factor, sizes, a redraw counter, an injected text-input or accessibility
-//! capability). [`TestWindow`] carries every knob those stubs varied, with
-//! the same defaults they shared.
-//!
-//! Deliberately NOT `flui_platform`'s `MockWindow`: that double is minted by
-//! a live `HeadlessPlatform` and carries a back-reference into its
-//! platform's window tracking and exit-policy machinery. State-level unit
-//! tests here want a window value with zero platform ceremony; the tests
-//! that DO want the real headless window (to exercise the platform's own
-//! capabilities) use [`headless_test_window`].
+//! The state-level [`TestWindow`] double is the frame runtime's
+//! (`flui_runtime::testing`), shared with the realm tests there. What stays
+//! here is what names a `flui-platform` type: [`HostedTestWindow`], a
+//! `TestWindow` offered as a [`HostWindow`] the way an `open_window` reply
+//! is, and the real headless windows for tests that exercise the platform's
+//! own capabilities.
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU32, Ordering},
-};
+use std::sync::Arc;
 
-use flui_platform::traits::{
-    HostWindow, PlatformAccessibility, PlatformTextInput, PlatformWindow, WindowId,
-};
-use flui_types::geometry::{DevicePixels, Pixels, Size};
+use flui_platform::traits::{HostWindow, PlatformAccessibility, PlatformWindow};
+pub(crate) use flui_runtime::testing::TestWindow;
 
-/// Configurable [`PlatformWindow`] double. Construct with [`TestWindow::new`],
-/// adjust via the builder-style setters, then `Arc::new` it where a
-/// `Arc<dyn PlatformWindow>` is needed.
-pub(crate) struct TestWindow {
-    id: WindowId,
-    scale_factor: f64,
-    physical_size: Size<DevicePixels>,
-    logical_size: Size<Pixels>,
-    focused: bool,
-    on_show: Option<Arc<dyn Fn() + Send + Sync>>,
-    visible: bool,
-    /// Incremented by every [`PlatformWindow::request_redraw`]; hand the
-    /// [`Self::redraw_calls_handle`] to the asserting side.
-    redraw_calls: Arc<AtomicU32>,
-    /// The thread each [`PlatformWindow::request_redraw`] ran on, in call
-    /// order. `request_redraw` is owner-thread-only (see that method's
-    /// contract), and a counter alone cannot tell a conforming call from a
-    /// violating one — only the thread can. See
-    /// [`Self::redraw_threads_handle`].
-    ///
-    /// This duplicates [`Self::redraw_calls`]'s count — `len()` would give it.
-    /// Both are kept because the counter is the handle existing callers already
-    /// hold (an `Arc<AtomicU32>` readable without a lock), and narrowing it to
-    /// serve one new test is not this change's business. They cannot drift:
-    /// both are written in the single `request_redraw` body below.
-    redraw_threads: Arc<parking_lot::Mutex<Vec<std::thread::ThreadId>>>,
-    /// How many times `pre_present_notify` ran — see
-    /// [`TestWindow::pre_present_notifies_handle`].
-    pre_present_notifies: Arc<AtomicU32>,
-    text_input: Option<Arc<dyn PlatformTextInput>>,
-    accessibility: Option<Arc<dyn PlatformAccessibility>>,
-    /// Last cursor set through [`PlatformWindow::set_cursor`]; read back via
-    /// [`Self::cursor`].
-    cursor: parking_lot::Mutex<flui_platform::CursorIcon>,
+/// A [`TestWindow`] as the runner receives a window from `open_window`: a
+/// [`HostWindow`] whose accessibility bridge is the one the double carries.
+///
+/// A wrapper because neither `HostWindow` nor `TestWindow` is this crate's.
+/// It delegates every method `TestWindow` overrides, and `as_any` exposes
+/// the inner `TestWindow`, so a downcast sees the same double.
+pub(crate) struct HostedTestWindow(TestWindow);
+
+impl HostedTestWindow {
+    pub(crate) fn new(window: TestWindow) -> Self {
+        Self(window)
+    }
 }
 
-impl std::fmt::Debug for TestWindow {
+impl std::fmt::Debug for HostedTestWindow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TestWindow")
-            .field("id", &self.id)
-            .field("scale_factor", &self.scale_factor)
-            .finish_non_exhaustive()
+        f.debug_tuple("HostedTestWindow").field(&self.0).finish()
     }
 }
 
-impl TestWindow {
-    pub(crate) fn new() -> Self {
-        Self {
-            id: WindowId(1),
-            scale_factor: 1.0,
-            physical_size: Size::default(),
-            logical_size: Size::default(),
-            focused: false,
-            on_show: None,
-            visible: true,
-            redraw_calls: Arc::new(AtomicU32::new(0)),
-            redraw_threads: Arc::new(parking_lot::Mutex::new(Vec::new())),
-            pre_present_notifies: Arc::new(AtomicU32::new(0)),
-            text_input: None,
-            accessibility: None,
-            cursor: parking_lot::Mutex::new(flui_platform::CursorIcon::Default),
-        }
-    }
-
-    pub(crate) fn with_id(mut self, id: u64) -> Self {
-        self.id = WindowId(id);
-        self
-    }
-
-    pub(crate) fn with_scale_factor(mut self, scale_factor: f64) -> Self {
-        self.scale_factor = scale_factor;
-        self
-    }
-
-    pub(crate) fn with_sizes(
-        mut self,
-        physical: Size<DevicePixels>,
-        logical: Size<Pixels>,
-    ) -> Self {
-        self.physical_size = physical;
-        self.logical_size = logical;
-        self
-    }
-
-    pub(crate) fn with_show_callback(mut self, callback: Arc<dyn Fn() + Send + Sync>) -> Self {
-        self.on_show = Some(callback);
-        self
-    }
-
-    pub(crate) fn visible(mut self, visible: bool) -> Self {
-        self.visible = visible;
-        self
-    }
-
-    pub(crate) fn focused(mut self, focused: bool) -> Self {
-        self.focused = focused;
-        self
-    }
-
-    pub(crate) fn with_text_input(
-        mut self,
-        text_input: Option<Arc<dyn PlatformTextInput>>,
-    ) -> Self {
-        self.text_input = text_input;
-        self
-    }
-
-    pub(crate) fn with_accessibility(
-        mut self,
-        accessibility: Arc<dyn PlatformAccessibility>,
-    ) -> Self {
-        self.accessibility = Some(accessibility);
-        self
-    }
-
-    /// The counter [`PlatformWindow::request_redraw`] bumps — clone it out
-    /// before `Arc`-ing the window.
-    /// A handle on the pre-present-notify counter, for a test that must
-    /// observe the count from inside a raster backend script (i.e. at the
-    /// moment of the present) rather than after the fact.
-    pub(crate) fn pre_present_notifies_handle(&self) -> Arc<AtomicU32> {
-        Arc::clone(&self.pre_present_notifies)
-    }
-
-    pub(crate) fn redraw_calls_handle(&self) -> Arc<AtomicU32> {
-        Arc::clone(&self.redraw_calls)
-    }
-
-    /// The threads [`PlatformWindow::request_redraw`] was called on, in call
-    /// order — the oracle for that method's owner-thread rule.
-    pub(crate) fn redraw_threads_handle(
-        &self,
-    ) -> Arc<parking_lot::Mutex<Vec<std::thread::ThreadId>>> {
-        Arc::clone(&self.redraw_threads)
-    }
-
-    /// The last cursor recorded by [`PlatformWindow::set_cursor`].
-    pub(crate) fn cursor(&self) -> flui_platform::CursorIcon {
-        *self.cursor.lock()
-    }
-}
-
-impl PlatformWindow for TestWindow {
+impl PlatformWindow for HostedTestWindow {
     fn show(&self) -> Result<(), flui_platform::WindowShowError> {
-        if let Some(callback) = &self.on_show {
-            callback();
-        }
-        Ok(())
+        self.0.show()
     }
 
-    fn id(&self) -> WindowId {
-        self.id
+    fn id(&self) -> flui_platform::traits::WindowId {
+        self.0.id()
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
-        self.physical_size
+    fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
+        self.0.physical_size()
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
-        self.logical_size
+    fn logical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::Pixels> {
+        self.0.logical_size()
     }
 
     fn scale_factor(&self) -> f64 {
-        self.scale_factor
+        self.0.scale_factor()
     }
 
     fn pre_present_notify(&self) {
-        self.pre_present_notifies.fetch_add(1, Ordering::Relaxed);
+        self.0.pre_present_notify();
     }
 
     fn request_redraw(&self) {
-        self.redraw_calls.fetch_add(1, Ordering::Relaxed);
-        self.redraw_threads.lock().push(std::thread::current().id());
+        self.0.request_redraw();
     }
 
     fn is_focused(&self) -> bool {
-        self.focused
+        self.0.is_focused()
     }
 
     fn is_visible(&self) -> bool {
-        self.visible
+        self.0.is_visible()
     }
 
-    fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
-        self.text_input.clone()
+    fn text_input(&self) -> Option<Arc<dyn flui_platform::traits::PlatformTextInput>> {
+        self.0.text_input()
     }
 
     fn set_cursor(
         &self,
         cursor: flui_platform::CursorIcon,
     ) -> Result<(), flui_platform::CursorError> {
-        *self.cursor.lock() = cursor;
-        Ok(())
+        self.0.set_cursor(cursor)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
-        self
+        self.0.as_any()
     }
 }
 
-/// So a test can hand a `TestWindow` to the runner as an `open_window`
-/// reply would, bridge and all.
-impl HostWindow for TestWindow {
+impl HostWindow for HostedTestWindow {
     fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
-        self.accessibility.clone()
+        self.0.accessibility()
     }
 }
 

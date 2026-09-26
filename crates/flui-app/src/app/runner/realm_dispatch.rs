@@ -683,7 +683,7 @@ pub(super) enum InstallPresentationError {
 /// whatever it already hosts — the addressed-routing counterpart to
 /// [`install_realm_alongside`] (which installs a second REALM instead of a
 /// second presentation of the SAME realm). This is the production entry
-/// point [`crate::app::presentation_forest::PresentationForest`]'s doc
+/// point `flui_runtime`'s `PresentationForest` doc
 /// points to: the forest's former `len()<=1` ratchet lifted (issue #555)
 /// specifically so this function has somewhere real to install into.
 ///

@@ -42,7 +42,7 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   facade re-exports that module as `flui::testing::a11y` behind its `testing` feature
   (`src/lib.rs:123-124`, `src/testing.rs:9`).
   `PlatformAccessibility::publish` takes an `accesskit::TreeUpdate`
-  (`crates/flui-platform/src/traits/accessibility.rs:72`). FLUI's own vocabulary already exists:
+  (`crates/flui-semantics/src/platform.rs:79`, moved from `flui-platform` by ADR-0082 §2). FLUI's own vocabulary already exists:
   `SemanticsRole` has 33 variants including `None` (`crates/flui-semantics/src/role.rs:32`),
   `SemanticsAction` 24 (`crates/flui-semantics/src/action.rs:23`), and neither is
   `#[non_exhaustive]`.
@@ -102,8 +102,9 @@ allowlist, and an upstream crate not on either list fails closed.
   to `flui-protocol` ([ADR-0095](ADR-0095-agent-protocol-schema-crate.md)).
 - Naming rule: use the AccessKit or ARIA name when the concept exists there. This is guidance for
   naming, not a 1:1 contract; FLUI does not add the ~150 roles nothing in the catalog produces.
-- The mapping to accesskit stays internal (`flui-semantics`, and `PlatformAccessibility` stays in
-  the internal `flui-platform`, not in `flui-platform-api`).
+- The mapping to accesskit stays internal (`flui-semantics`, and `PlatformAccessibility` lives in
+  `flui_semantics::platform`, internal and tier S, re-exported at `flui_platform::traits`; never
+  in `flui-platform-api`; ADR-0082 §2, amended).
 - Outbound pin (FLUI → accesskit): a generated `const ALL: &[SemanticsRole]` and the same for
   actions. A test asserts that every role except `None` maps to `Some(accesskit::Role)`, and that
   every action has an inbound source or is marked FLUI-only. A test over `ALL`, not an exhaustive

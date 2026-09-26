@@ -22,15 +22,6 @@ exclude = ["/ARCHITECTURE.md"]
 [lib]
 crate-type = ["rlib"]
 
-# Executing wasm32 unit tests — `ExecutionServices` is `pub(crate)`, so its
-# `Backend::Sequential` branch is only reachable from a LIB test, never an
-# integration one. Pinned to the release that pairs with the locked
-# wasm-bindgen; the unpinned "0.3" resolves to one requiring a newer
-# wasm-bindgen and would bump the workspace lock as a side effect of adding a
-# dev-dependency. flui-foundation carries the same pin for the same reason.
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "=0.3.77"
-
 [features]
 default = ["desktop"]
 
@@ -63,7 +54,7 @@ web = []
 # inert implementation; the inert one names no `flui_hot_reload` item at all.
 # Desktop and Android install drivers. Web and iOS remain compile-safe when
 # feature unification enables this feature, but do not install a driver yet.
-hot-reload = ["dep:flui-hot-reload"]
+hot-reload = ["dep:flui-hot-reload", "flui-runtime/hot-reload"]
 
 # === Native accessibility ===
 # Forwards `flui-platform`'s `a11y`: the per-OS AccessKit adapters
@@ -90,8 +81,6 @@ performance-overlay = []
 # Core FLUI crates
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["runtime-internals"] }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
-# Concrete render-object catalog (moved out of flui-rendering into flui-objects).
-flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # Composition-only logging backend. `flui-app` is a composition root, so it is
@@ -105,21 +94,18 @@ flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 flui-engine = { path = "../flui-engine", version = "=0.2.0-dev" }
 flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
-# The contracts the realm core drives (`PlatformWindow`, the capability
-# traits); `flui-platform` itself is for the runner's backend and host side.
-flui-platform-api = { workspace = true }
 # Development-only; see the `hot-reload` feature above.
 flui-hot-reload = { path = "../flui-hot-reload", version = "=0.2.0-dev", features = [
     "app-plugin",
 ], optional = true }
-flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 # Widget catalog: provides `VsyncScope`, which `AppBinding::attach_root_widget*`
 # auto-wraps the root in so implicit-animation widgets work with zero boilerplate.
 # Zero new link-time deps: every crate flui-widgets pulls is already transitively
 # present in flui-app's closure (verified via `cargo tree -p flui-app`); this adds
 # only a direct Cargo edge + re-exports. FOUNDATIONS.md targets app → widgets.
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
-# The frame runtime (ADR-0083): the per-presentation lanes the realm drives.
+# The frame runtime (ADR-0083): the realm core the runners drive, and the
+# per-presentation lanes it owns.
 flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev" }
 
 # Utilities
@@ -133,18 +119,15 @@ raw-window-handle.workspace = true
 pollster = { workspace = true }
 web-time = { workspace = true }
 
-# Default execution services (issue #557): the loop-scoped `AppRuntime` owns
-# the process's background worker pools (an IO runtime and a bounded compute
-# pool), replacing the per-platform full-core `BackgroundExecutor`s. Native
-# only — the wasm32 build of `app::execution` is the sequential variant and
-# needs neither crate.
+# `CancellationToken`, which the task/worker/service lifecycle layer
+# (ADR-0049) derives from the execution services' cancellation root. Native
+# only, like that layer.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 tokio-util = { workspace = true }
 
 # Web/WASM platform (runner spawns the frame loop via spawn_local)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen-futures = "0.4"
+wasm-bindgen-futures = { workspace = true }
 
 # Android platform (android_main entry point needs AndroidApp type)
 [target.'cfg(target_os = "android")'.dependencies]
@@ -173,17 +156,10 @@ flui-engine = { path = "../flui-engine", version = "=0.2.0-dev", features = ["vu
 # can use the test support built on it.
 flui-testing = { workspace = true }
 static_assertions.workspace = true
-# Test-only: constructing `accesskit::ActionRequest`s to drive the platform
-# accessibility wire exactly the way a real adapter would. The shipped crate
-# never names accesskit types — they cross it fully type-inferred, through
-# flui-semantics's deliberate named re-exports.
-accesskit.workspace = true
-# Test-only: capturing emitted events is how the frame-failure detail and
-# segment-gate tests check what a frame reports to the log. A *dev* edge only;
-# the shipped crate links no subscriber backend.
-tracing-subscriber.workspace = true
-# `HeldPointerQueue::append`/`len` and `SemanticsHost::ensure_semantics`, which
-# this crate's tests use and which exist only under `test-support`.
+# `HeldPointerQueue::append`/`len`, `SemanticsHost::ensure_semantics`,
+# `ExecutionServices::with_limits`/`default_pools_started`, the realm's test
+# constructors and the `testing` doubles, which this crate's tests use and
+# which exist only under `test-support`.
 flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["test-support"] }
 # Enable flui-interaction's `testing` feature in test builds so tests can
 # construct synthetic pointer events via `events::make_*_event`. Feature
@@ -197,6 +173,11 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features 
 # wiring test can plant a layout-builder registry entry. Same pattern; the
 # `register_layout_builder_for_test` hook stays out of release builds.
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
+# The concrete render object and the animation controller the runner's
+# device-recovery, frame-pacing and dispatch tests mount; the realm that
+# production code drives names them from `flui-runtime`.
+flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
+flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 
 [lints]
 workspace = true

@@ -393,7 +393,7 @@ driving the frame, only `Idle`/`PostFrameCallbacks` reach the
 thread, every phase reaches it.
 
 **Conflict:** `RenderingFlutterBinding::request_visual_update`
-(`flui-app`'s `bindings/renderer_binding.rs`) called the retired
+(`flui-runtime`'s `renderer_binding.rs`) called the retired
 `schedule_frame`, which pushed onto the (now-deleted) legacy queue and then
 called the **ungated** `request_frame()` directly. A binding whose
 scheduler had frames disabled (backgrounded app, `Hidden`/`Paused`/
@@ -405,7 +405,7 @@ request.
 `frames_enabled` gate (`ensure_visual_update` calls
 `schedule_frame_if_enabled`, which calls `request_frame` only when
 `frames_enabled` is true) and needed no new code, only a caller.
-`crates/flui-app/src/bindings/renderer_binding.rs`'s test module pins both
+`crates/flui-runtime/src/renderer_binding.rs`'s test module pins both
 edges:
 `request_visual_update_does_not_schedule_a_frame_while_frames_are_disabled`
 and `request_visual_update_schedules_a_frame_while_frames_are_enabled`.
@@ -447,7 +447,7 @@ is a sanctioned divergence point): the pipeline carrier no longer bypasses
 `VisualUpdateNotifier::fire_need_visual_update`
 (`flui-rendering/src/pipeline/notifier.rs`), which still invokes the
 closure a presentation registers via `owner.set_on_need_visual_update`
-(`flui-app/src/app/presentation.rs`) — but that closure no longer calls
+(`flui-runtime/src/presentation.rs`) — but that closure no longer calls
 the realm's shared `visual_wake()` and no longer pokes
 `window.request_redraw()` unconditionally. It now captures a
 `WeakUpdateScheduler` (matching `RenderingFlutterBinding.scheduler`'s

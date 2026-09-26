@@ -60,8 +60,10 @@ owner thread (`docs/adr/ADR-0045-raster-lane.md:295-296`).
 
 **A core crate names the dev tool.** `flui-app` has a `hot-reload` feature and an optional
 dependency on `flui-hot-reload` (`crates/flui-app/Cargo.toml:65`, `:108-110`), and its realm
-takes `flui_hot_reload::HotReloadTier` in production code
-(`crates/flui-app/src/app/ui_realm/presentations.rs:487`). The facade re-exports the crate
+took `flui_hot_reload::HotReloadTier` in production code until the realm moved to
+`flui-runtime` (ADR-0083); it now takes `flui_runtime::reload::ReloadTier`
+(`crates/flui-runtime/src/reload.rs`), which `flui-app`'s `hot_reload` module translates the
+driver's tier into. The facade re-exports the crate
 (`src/lib.rs:136-138`) behind its own `hot-reload` feature (`Cargo.toml:630`). Three reach
 facts keep the edge optional (`FACTS` in `tools/xtask/src/workspace/reach.rs`, ADR-0081 §2). Once
 `flui-hot-reload` becomes an official package (ADR-0088), those edges are a core crate naming an

@@ -75,6 +75,7 @@ pub mod flags;
 pub mod identity;
 pub mod node;
 pub mod owner;
+pub mod platform;
 pub mod properties;
 pub mod role;
 pub mod snapshot;
