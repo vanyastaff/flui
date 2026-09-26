@@ -45,7 +45,7 @@ use flui_foundation::RealmId;
 use flui_interaction::InteractionLane;
 use flui_layer::Scene;
 #[cfg(test)]
-use flui_platform::traits::{DragDropEvent, PlatformInput, PlatformWindow};
+use flui_platform_api::{DragDropEvent, PlatformInput, PlatformWindow};
 #[cfg(test)]
 use flui_rendering::binding::RendererBinding as _;
 #[cfg(test)]

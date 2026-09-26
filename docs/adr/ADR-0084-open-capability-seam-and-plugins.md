@@ -40,7 +40,7 @@ rule.
 
 The platform side already has more than the widget side can reach:
 
-- **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform/src/traits/window.rs:342`),
+- **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform-api/src/platform_window.rs`),
   and `PresentationState::perform_haptic_feedback` resolves it
   (`crates/flui-app/src/app/presentation.rs:893`), but that method and its forwarder
   `UiRealm::perform_haptic_feedback` (`crates/flui-app/src/app/ui_realm/frame_clock.rs:508`) carry
@@ -300,13 +300,13 @@ that rule. The class holds:
 
 - **clipboard** and **data transfer**: `Platform::clipboard()` and `Platform::data_transfer()`
   (`crates/flui-platform/src/traits/platform.rs:423,435`), already required;
-- **cursor**: `PlatformWindow::set_cursor` (`crates/flui-platform/src/traits/window.rs:467`),
+- **cursor**: `PlatformWindow::set_cursor` (`crates/flui-platform-api/src/platform_window.rs`),
   already required;
 - **text input and IME**: `PlatformWindow::text_input()`, today a defaulted method returning
-  `None` (`window.rs:333`), becomes required;
+  `None` (same file), becomes required;
 - **accessibility**: the backend-side window extension trait's `accessibility()` (ADR-0082 §3
-  moves it off `PlatformWindow`), today `PlatformWindow::accessibility()` defaulting to `None`
-  (`window.rs:352`), becomes required;
+  moved it off `PlatformWindow`), today `HostWindow::accessibility()` defaulting to `None`
+  (`crates/flui-platform/src/traits/host_window.rs`), becomes required;
 - **window chrome basics**: title, size, close request and decorations; the exact method list is
   fixed when the traits move into `flui-platform-api` (ADR-0082).
 

@@ -105,6 +105,9 @@ flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 flui-engine = { path = "../flui-engine", version = "=0.2.0-dev" }
 flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+# The contracts the realm core drives (`PlatformWindow`, the capability
+# traits); `flui-platform` itself is for the runner's backend and host side.
+flui-platform-api = { workspace = true }
 # Development-only; see the `hot-reload` feature above.
 flui-hot-reload = { path = "../flui-hot-reload", version = "=0.2.0-dev", features = [
     "app-plugin",

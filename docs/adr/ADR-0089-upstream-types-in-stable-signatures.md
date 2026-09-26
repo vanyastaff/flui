@@ -50,7 +50,7 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   `pub use android_activity` (`crates/flui-app/src/lib.rs:116`, re-exported again by the facade at
   `src/lib.rs:157`).
 - **Raw handles.** `PlatformWindow` already exposes only the borrowed
-  `HasWindowHandle`/`HasDisplayHandle` path (`crates/flui-platform/src/traits/window.rs:109`),
+  `HasWindowHandle`/`HasDisplayHandle` path (`crates/flui-platform-api/src/platform_window.rs`),
   which [ADR-0063](ADR-0063-the-renderer-owns-its-surface-target.md) moved the renderer to. The
   legacy `Window` trait (`crates/flui-platform/src/window.rs:53`) still has
   `fn raw_window_handle(&self) -> RawWindowHandle` (`window.rs:196`), returning a crate-local
@@ -78,7 +78,8 @@ facts of [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) instead.
 
 The promise follows the item, not its crate. A Stable signature already names types from
 internal crates (`flui-platform-api`'s window contract takes `Size<Pixels>` and `EdgeInsets`
-from `flui-geometry`/`flui-types`, `crates/flui-platform/src/traits/window.rs:496,540`), and the
+from `flui-geometry`/`flui-types`, `PlatformWindow::resize` and `safe_area_insets` in
+`crates/flui-platform-api/src/platform_window.rs`), and the
 facade re-exports whole internal crates (`pub use flui_types as types`, `src/lib.rs:150`). Every
 item reachable from a Stable crate's public API therefore carries the Stable promise, whatever
 its crate's `tier-kind`; the `internal` kind's "no promise" covers only items outside that
@@ -88,7 +89,7 @@ closure. The closure gate of §6 is what lists them.
 
 | Class | Crates | Condition | Cost, recorded here |
 |---|---|---|---|
-| **Named exception** | `raw-window-handle` 0.6 | Only the traits `HasWindowHandle` and `HasDisplayHandle` and the error type `HandleError`. No `RawWindowHandle`/`RawDisplayHandle` value in any Stable signature. | A raw-window-handle 0.7 is a major release of `flui-platform-api` and of `flui`. |
+| **Named exception** | `raw-window-handle` 0.6 | Only the traits `HasWindowHandle` and `HasDisplayHandle`, the borrowed `WindowHandle<'_>`/`DisplayHandle<'_>` their methods return, and the error type `HandleError`. No `RawWindowHandle`/`RawDisplayHandle` value in any Stable signature. | A raw-window-handle 0.7 is a major release of `flui-platform-api` and of `flui`. |
 | **Allowed 1.x** | `serde`, `schemars`, `cursor-icon` | serde and schemars only through derive impls behind a feature of the same name (`flui-protocol`, [ADR-0095](ADR-0095-agent-protocol-schema-crate.md)); cursor-icon as `CursorIcon`. | An upstream major is our major; neither has had one in the window measured. |
 | **Never** | accesskit, ui-events, keyboard-types, dpi, wgpu, kurbo, peniko, parley, fontique, cosmic-text, android-activity, and every OS binding crate ([ADR-0082](ADR-0082-platform-api-contract-crate.md)) | — | — |
 

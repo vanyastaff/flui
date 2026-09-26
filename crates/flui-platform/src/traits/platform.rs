@@ -14,7 +14,7 @@ use flui_platform_api::{
     WindowOptions,
 };
 
-use super::{OpenWindowError, OwnerPlatform, PlatformCapabilities, PlatformWindow};
+use super::{HostWindow, OpenWindowError, OwnerPlatform, PlatformCapabilities};
 use crate::{
     data_transfer::DataTransferSource,
     error::{BootstrapError, PlatformError},
@@ -240,10 +240,7 @@ pub trait Platform: Send + Sync + 'static {
     /// [`OwnerGone`](OpenWindowError::OwnerGone) /
     /// [`Unavailable`](OpenWindowError::Unavailable) for cross-thread
     /// lifecycle refusals.
-    fn open_window(
-        &self,
-        options: WindowOptions,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError>;
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError>;
 
     /// Get the currently active (focused) window ID
     fn active_window(&self) -> Option<WindowId>;

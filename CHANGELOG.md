@@ -58,7 +58,9 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `flui-widgets` `testing` harness now depend on `flui-platform-api` instead of `flui-platform`,
   so neither links winit, the `windows` crate, `objc2-app-kit`, `android-activity` or tokio any
   more, and only `flui-app` may depend on `flui-platform` (its `allowed-dependents`).
-  `PlatformWindow` and `Platform` stay in `flui-platform`.
+  `PlatformWindow` followed, without `accessibility()` (now on `flui-platform`'s `HostWindow`)
+  and without `as_winit`, together with `CursorIcon`; `cargo xtask reach` forbids the crate
+  `accesskit` and `tokio` on top of its tier's set. `Platform` stays in `flui-platform`.
 - **`flui-protocol`** (ADR-0095, tier C, stable): the vocabulary FLUI shares with tests,
   devtools and agents — `SemanticsRole` and `SemanticsAction`, and the ADR-0080 wire `Role`,
   `ActionName` and `Checked` (`serde`/`schemars` behind features). Every vocabulary enum has
@@ -237,8 +239,18 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `deny.toml`, and are reported without failing other pull requests. The weekly `advisories`
   job (the nightly run covers it daily) and `cargo-machete` job (cargo-shear replaces it) are
   removed.
+- **`flui-platform`: `accessibility()` moved to the new `HostWindow` subtrait** (ADR-0082 §3). A
+  window as a backend hands it out is an `Arc<dyn HostWindow>`: `Platform::open_window`,
+  `WindowOpen::Ready`, `WindowOpen::try_ready`, `PendingWindow` (`wait`, `try_take`, its
+  `Future` output) and `IOSSceneEvent::Connected`'s `window` field carry one, and it upcasts
+  to `Arc<dyn PlatformWindow>`. `PlatformWindow` itself no longer names an AccessKit type. A
+  binding that passed an `open_window` result where `&Arc<dyn PlatformWindow>` is expected
+  needs `let window: Arc<dyn PlatformWindow> = window;` first.
 
 ### Removed
+
+- `PlatformWindow::as_winit` (`flui-platform`, `winit-backend` feature): nothing called it, and
+  the window contract names no winit type (ADR-0082 §1).
 
 - `flui_rendering::slivers`, a public module with no items: the sliver windowing math lives in
   `flui_rendering::virtualization`.

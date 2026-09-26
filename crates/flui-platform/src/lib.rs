@@ -8,13 +8,14 @@
 //! The architecture is inspired by GPUI and Flutter's platform layer:
 //!
 //! ```text
-//! flui-platform-api         - Contracts: capability traits, window/input and
-//!                             data-transfer vocabulary (re-exported here)
+//! flui-platform-api         - Contracts: PlatformWindow, capability traits,
+//!                             window/input and data-transfer vocabulary
+//!                             (re-exported here)
 //!
 //! flui-platform
 //!   ├─ traits/              - Host-facing abstractions
 //!   │   ├─ platform.rs      - Central Platform trait
-//!   │   ├─ window.rs        - PlatformWindow
+//!   │   ├─ host_window.rs   - HostWindow: PlatformWindow + accessibility
 //!   │   ├─ owner.rs         - Owner-thread capability (ADR-0039)
 //!   │   ├─ accessibility.rs - PlatformAccessibility (AccessKit)
 //!   │   └─ capabilities.rs  - Platform capabilities
@@ -229,12 +230,12 @@ pub use task::{Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
     AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
-    CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities,
-    PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay,
-    PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
-    PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
-    WindowShowError,
+    CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, HostWindow,
+    MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
+    PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback,
+    PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId,
+    WindowMode, WindowOptions, WindowReveal, WindowShowError,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

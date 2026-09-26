@@ -13,9 +13,9 @@ use crate::{
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
-        Clipboard, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities, PlatformDisplay,
-        PlatformExecutor, PlatformReadyCallback, PlatformWindow, WebCapabilities, WindowAppearance,
-        WindowEvent, WindowId, WindowOptions,
+        Clipboard, HostWindow, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities,
+        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, WebCapabilities,
+        WindowAppearance, WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
@@ -181,10 +181,7 @@ impl Platform for WebPlatform {
         });
     }
 
-    fn open_window(
-        &self,
-        options: WindowOptions,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(title = %options.title, "Creating web window (canvas)");
 
         let window = WebWindow::new(

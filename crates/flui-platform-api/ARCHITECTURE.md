@@ -8,9 +8,10 @@ path.
 
 - **No backend types.** No OS (`windows`, `objc2-*`, `android-activity`,
   `ndk`, `web-sys`), winit, AccessKit or tokio type appears in a signature,
-  and none of those crates is a dependency. `flui-platform`'s
-  `allowed-dependents` and the `cargo tree` probe in ADR-0082 §3 are what
-  keep that true for the crates above.
+  and none of those crates is a dependency. `cargo xtask reach` holds it: tier
+  C forbids the OS crates and winit, and this crate's own `reach-forbid` adds
+  `accesskit` and `tokio`. `flui-platform`'s `allowed-dependents` keeps the
+  crates above from reaching the backends through a side door.
 - **No `unsafe`.** `#![forbid(unsafe_code)]`: FFI belongs to the backends.
 - **Flat root.** Every public item is re-exported at the crate root; the
   modules are private except `data_transfer`, whose many vocabulary types keep
@@ -20,10 +21,18 @@ path.
   and `Modifiers` through `ui-events`). ADR-0089 keeps upstream types out of
   stable signatures; this crate's own input types replace them before its
   first release.
-- **`PlatformWindow` is not here yet.** It still returns
-  `PlatformAccessibility`, whose signatures are AccessKit's, and carries the
-  winit-only `as_winit`. It moves once `accessibility()` goes to a host-side
-  subtrait (ADR-0082 §3, second change).
+- **`PlatformWindow` has no `accessibility()` and no `as_winit`.** The
+  accessibility bridge speaks AccessKit, so `flui-platform`'s
+  `HostWindow: PlatformWindow` carries it host-side: `open_window` returns an
+  `Arc<dyn HostWindow>`, and the runner reads the bridge once before handing
+  the realm an `Arc<dyn PlatformWindow>`. A `compile_fail` doctest on the
+  trait, paired with a twin that compiles, pins that the method is gone.
+- **The raw-handle impls live with the trait.** `HasWindowHandle` and
+  `HasDisplayHandle` for `dyn PlatformWindow` are here because the orphan rule
+  puts them next to the trait; `flui-platform` repeats them for
+  `dyn HostWindow`, so an `open_window` result is a renderer target before its
+  upcast. `raw-window-handle` appears only through those traits and their
+  `WindowHandle`/`DisplayHandle`/`HandleError` (ADR-0089).
 
 ## Mapping decisions
 

@@ -741,8 +741,9 @@ pub(super) enum InstallPresentationError {
 )]
 pub(super) fn install_presentation_alongside(
     dispatcher: RealmDispatcher,
-    window: &std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: impl Into<crate::app::presentation::PresentationWindow>,
 ) -> Result<RealmDispatcher, InstallPresentationError> {
+    let presentation_window = window.into();
     let realm_id = dispatcher.address.realm_id;
     let owner_thread = dispatcher.owner_thread;
     APP_RUNTIME.with(|slot| {
@@ -791,12 +792,13 @@ pub(super) fn install_presentation_alongside(
         // for why the ordering matters. `presentation` is dropped (no
         // forest membership, so nothing to roll back) if registration
         // below fails.
-        let presentation = realm.assemble_presentation(std::sync::Arc::clone(window));
+        let window = std::sync::Arc::clone(presentation_window.window());
+        let presentation = realm.assemble_presentation(presentation_window);
         let address = flui_foundation::PresentationAddress {
             realm_id,
             presentation_id: presentation.id(),
         };
-        state.registry.try_register_window(window, address)?;
+        state.registry.try_register_window(&window, address)?;
         let realm_slot = state
             .realms
             .get_mut(&realm_id)
