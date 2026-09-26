@@ -8,20 +8,23 @@
 //!   ([`data_transfer::DataTransferSource`], ADR-0038);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
 //!   [`DragDropEvent`] and the conversion helpers);
-//! - the window vocabulary ([`WindowId`], [`WindowOptions`], [`WindowMode`],
-//!   [`WindowEvent`], [`WindowExecutionState`] and the errors window
+//! - the per-window contract [`PlatformWindow`] and the window vocabulary
+//!   ([`WindowId`], [`WindowOptions`], [`WindowMode`], [`WindowEvent`],
+//!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
 //!   operations return).
 //!
 //! No OS, winit, AccessKit or tokio type may appear here (ADR-0082 §1). That
 //! is the point of the crate: naming a contract must not link a backend, so a
 //! framework crate or plugin that names or implements a capability depends on
 //! this crate, stays free of every OS stack and builds without
-//! `flui-platform`.
+//! `flui-platform`. The one AccessKit-speaking window capability, the
+//! accessibility bridge, is reached through `flui_platform::HostWindow`, a
+//! subtrait of [`PlatformWindow`] that only the composition root sees.
 //!
-//! The per-window contract `PlatformWindow`, the host-facing `Platform`
-//! trait, the owner-thread capability and every OS backend live in
-//! `flui-platform`, which re-exports everything defined here at its old
-//! paths. Only composition roots depend on `flui-platform` (ADR-0082 §2).
+//! The host-facing `Platform` trait, the owner-thread capability, the
+//! host-side window subtrait and every OS backend live in `flui-platform`,
+//! which re-exports everything defined here at its old paths. Only
+//! composition roots depend on `flui-platform` (ADR-0082 §2).
 //!
 //! The pointer and keyboard types re-exported from `ui-events` (and, through
 //! it, `keyboard-types`) are ADR-0089 debt: this crate's own types replace
@@ -86,10 +89,14 @@ pub mod data_transfer;
 mod display;
 mod haptics;
 mod input;
+mod platform_window;
 mod text_input;
 mod window;
 
 pub use clipboard::{Clipboard, ClipboardItem};
+/// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
+/// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
+pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
 pub use display::{DisplayId, PlatformDisplay};
 pub use haptics::PlatformHaptics;
@@ -99,6 +106,7 @@ pub use input::{
     ScrollDelta, delta_offset_from_coords, device_to_logical, logical_to_device,
     offset_from_coords,
 };
+pub use platform_window::PlatformWindow;
 pub use text_input::PlatformTextInput;
 pub use window::{
     CursorError, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,

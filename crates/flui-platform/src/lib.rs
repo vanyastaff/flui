@@ -8,13 +8,14 @@
 //! The architecture is inspired by GPUI and Flutter's platform layer:
 //!
 //! ```text
-//! flui-platform-api         - Contracts: capability traits, window/input and
-//!                             data-transfer vocabulary (re-exported here)
+//! flui-platform-api         - Contracts: PlatformWindow, capability traits,
+//!                             window/input and data-transfer vocabulary
+//!                             (re-exported here)
 //!
 //! flui-platform
 //!   ├─ traits/              - Host-facing abstractions
 //!   │   ├─ platform.rs      - Central Platform trait
-//!   │   ├─ window.rs        - PlatformWindow
+//!   │   ├─ host_window.rs   - HostWindow: PlatformWindow + accessibility
 //!   │   ├─ owner.rs         - Owner-thread capability (ADR-0039)
 //!   │   ├─ accessibility.rs - PlatformAccessibility (AccessKit)
 //!   │   └─ capabilities.rs  - Platform capabilities

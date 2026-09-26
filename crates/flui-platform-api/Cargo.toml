@@ -19,11 +19,17 @@ exclude = ["/ARCHITECTURE.md"]
 workspace = true
 
 [dependencies]
+# `PlatformWindow::set_cursor`'s `CursorIcon`, allowed in stable signatures
+# by ADR-0089.
+cursor-icon = { workspace = true }
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # `DataTransferId`, the generational id of the ADR-0038 transport.
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # The one-shot slot inside `TransferRequest`.
 parking_lot = { workspace = true }
+# `PlatformWindow`'s GPU handles, through `HasWindowHandle`/`HasDisplayHandle`
+# only (ADR-0089).
+raw-window-handle = { workspace = true }
 thiserror = { workspace = true }
 # The W3C pointer/keyboard vocabulary `PlatformInput` wraps. Re-exporting its
 # types is ADR-0089 debt: own types replace them before the first release.
@@ -33,10 +39,13 @@ ui-events = { workspace = true }
 all-features = true
 
 # Layer 1: depends only on `flui-types` (layer 0) and `flui-foundation`
-# (layer 1); its dependents are `flui-interaction`, `flui-platform` and
-# `flui-widgets`. The contracts sit below every backend (ADR-0082 §1).
+# (layer 1); its dependents are `flui-interaction`, `flui-platform`,
+# `flui-widgets` and `flui-app`. The contracts sit below every backend
+# (ADR-0082 §1), and on top of its tier's set this crate may never reach
+# AccessKit or tokio (ADR-0082 Verification).
 [package.metadata.flui]
 layer = 1
 tier = "C"
 tier-kind = "stable"
 order = 1
+reach-forbid = ["accesskit", "tokio"]

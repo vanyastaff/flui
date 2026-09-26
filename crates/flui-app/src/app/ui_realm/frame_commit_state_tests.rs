@@ -14,7 +14,7 @@ use flui_interaction::events::{
     PointerButtons, PointerType, make_down_event, make_down_event_for_id, make_move_event,
     make_move_event_for_id, make_up_event_for_id,
 };
-use flui_platform::traits::PlatformInput;
+use flui_platform_api::PlatformInput;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
 use flui_runtime::epoch::{FrameCommitState, TreeRevision};
 use flui_types::{

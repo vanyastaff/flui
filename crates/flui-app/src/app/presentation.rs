@@ -18,12 +18,12 @@ use flui_interaction::{
 use flui_layer::{LayerTree, PerformanceOverlayLayer};
 
 use super::performance_stats::PerformanceStats;
+// The one backend-side trait the realm core still names: the accessibility
+// bridge speaks AccessKit, so it stays in `flui-platform` (ADR-0082 §2).
+use flui_platform::traits::PlatformAccessibility;
 #[cfg(test)]
-use flui_platform::traits::PlatformTextInput;
-use flui_platform::{
-    CursorIcon,
-    traits::{CursorError, PlatformAccessibility, PlatformWindow},
-};
+use flui_platform_api::PlatformTextInput;
+use flui_platform_api::{CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 #[cfg(test)]
@@ -209,7 +209,7 @@ pub(crate) struct PresentationState {
     pub(super) media_query: Rc<crate::app::media_query_root::MediaQuerySource>,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
-    pub(super) window_execution: Cell<flui_platform::WindowExecutionState>,
+    pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
     lifecycle: Cell<PresentationLifecycle>,
     pipeline: PipelineCell,
@@ -939,7 +939,7 @@ impl PresentationState {
     /// [`PlatformWindow::haptics`].
     ///
     /// Silent no-op — no panic, no error — when the window is gone, or the
-    /// window's backend has no [`PlatformHaptics`](flui_platform::traits::PlatformHaptics)
+    /// window's backend has no [`PlatformHaptics`](flui_platform_api::PlatformHaptics)
     /// capability (desktop winit targets, for instance). Mirrors Flutter's own `HapticFeedback`
     /// degradation contract: every call is fire-and-forget best-effort, with
     /// no availability-discovery API to check first.

@@ -42,7 +42,9 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `flui-widgets` `testing` harness now depend on `flui-platform-api` instead of `flui-platform`,
   so neither links winit, the `windows` crate, `objc2-app-kit`, `android-activity` or tokio any
   more, and only `flui-app` may depend on `flui-platform` (its `allowed-dependents`).
-  `PlatformWindow` and `Platform` stay in `flui-platform`.
+  `PlatformWindow` followed, without `accessibility()` (now on `flui-platform`'s `HostWindow`)
+  and without `as_winit`, together with `CursorIcon`; `cargo xtask reach` forbids the crate
+  `accesskit` and `tokio` on top of its tier's set. `Platform` stays in `flui-platform`.
 - **`flui-protocol`** (ADR-0095, tier C, stable): the vocabulary FLUI shares with tests,
   devtools and agents — `SemanticsRole` and `SemanticsAction`, and the ADR-0080 wire `Role`,
   `ActionName` and `Checked` (`serde`/`schemars` behind features). Every vocabulary enum has

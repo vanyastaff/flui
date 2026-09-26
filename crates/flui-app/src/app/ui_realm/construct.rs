@@ -15,7 +15,7 @@ use crossbeam_channel::bounded;
 use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::InteractionLane;
 #[cfg(test)]
-use flui_platform::traits::PlatformTextInput;
+use flui_platform_api::PlatformTextInput;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_scheduler::AppLifecycleState;
 use flui_view::GlobalKeyScope;

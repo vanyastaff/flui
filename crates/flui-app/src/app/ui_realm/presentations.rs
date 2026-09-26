@@ -234,7 +234,7 @@ impl UiRealm {
     /// forest membership, never registry routing, can still use it.
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
-        let window: Arc<dyn flui_platform::traits::PlatformWindow> =
+        let window: Arc<dyn flui_platform_api::PlatformWindow> =
             Arc::new(crate::app::window_test_support::TestWindow::new().focused(false));
         let presentation = self.assemble_presentation(window);
         self.install_presentation(presentation)

@@ -116,7 +116,7 @@ mod tests {
     use std::num::NonZeroU32;
     use std::sync::Arc;
 
-    use flui_platform::traits::PlatformTextInput;
+    use flui_platform_api::PlatformTextInput;
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 
     use super::*;
