@@ -196,10 +196,6 @@ const EXCEPTION_KEYS: [&str; 5] = ["from", "to", "exit", "since", "reason"];
 /// The layer entry that stands for every module not named elsewhere.
 const WILDCARD: &str = "*";
 
-/// The node for items defined in the crate root itself, declarable like a
-/// module.
-const ROOT_NODE: &str = "crate";
-
 /// `[package.metadata.flui.modules]`.
 #[derive(Debug, Default)]
 struct Declaration {
@@ -505,7 +501,7 @@ fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcom
             findings.push(Finding::Nested {
                 name: name.to_owned(),
             });
-        } else if name != ROOT_NODE && !scan.modules.contains_key(name) {
+        } else if !scan.modules.contains_key(name) {
             findings.push(Finding::Unknown {
                 name: name.to_owned(),
             });
@@ -556,7 +552,6 @@ fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcom
         }
     }
 
-    let root_declared = placed.contains_key(ROOT_NODE);
     let mut edges: BTreeMap<(String, String), Vec<Site>> = BTreeMap::new();
     for reference in &scan.references {
         if transparent.contains(&reference.from) {
@@ -564,14 +559,15 @@ fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcom
         }
         let to = match scan.resolve(&reference.path, &transparent) {
             Resolved::Module(to) => to,
-            Resolved::Root(_) if root_declared => ROOT_NODE.to_owned(),
+            // The root is no node: its own code is not scanned, so an edge
+            // into it could hide one out of it.
             Resolved::Root(name) => {
                 findings.push(Finding::Unattributed {
                     from: reference.from.clone(),
                     site: reference.site.clone(),
                     why: format!(
                         "it names `{name}`, an item of the crate root itself; move it into a \
-                         module, or declare `{ROOT_NODE}` in a layer"
+                         module"
                     ),
                 });
                 continue;
@@ -623,12 +619,10 @@ fn check(declaration: &Declaration, scan: &Scan, adr_files: &[String]) -> Outcom
         });
     }
 
-    let is_node =
-        |name: &str| scan.modules.contains_key(name) || (name == ROOT_NODE && root_declared);
     let mut seen = BTreeSet::new();
     for entry in &declaration.exceptions {
         let (from, to) = (entry.from.clone(), entry.to.clone());
-        if !is_node(&entry.from) || !is_node(&entry.to) {
+        if !scan.modules.contains_key(&entry.from) || !scan.modules.contains_key(&entry.to) {
             findings.push(Finding::ExceptionModule { from, to });
             continue;
         }
