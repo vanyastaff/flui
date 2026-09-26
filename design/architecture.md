@@ -233,7 +233,7 @@ inline test modules are large.
 | flui-geometry | 0, 19.3k | V / internal | Keep, shrink | Drop unused GPUI-era vocabulary and the no-op `mint` feature; fix `Pixels` Eq/Hash consistency (§15). Merging into types is rejected: types has many more dependents. |
 | flui-types | 0, 21.8k | V / internal | Keep, compress | Physics duplicates `flui-animation`'s simulations; the second `BoxConstraints` and `MaterialColors` move to their owners. Rule: a type lives here only with two consumers. |
 | flui-foundation | 1, 11.3k | V / internal | Keep, absorb tree markers | Takes `Arity`/`Slot`/depth markers from flui-tree. Runtime-protocol identities go behind `#[doc(hidden)]`. Carries `links = "flui_train"` (§6.2). Takes the signal read contract (`read_scope`, ADR-0085 §2); the reactive graph does **not** go here: a foundation edit re-checks 15 crates, a graph edit in `flui-view` 3 (`cargo check -p flui-app`, one run). |
-| flui-macros | 1, 0.9k | V / internal | Keep, extend | `RenderView`, `Store`, `Catalog` and `Route` derives, `#[flui::main]`, `#[flui::test]`. Already resolves its runtime path through `proc_macro_crate` with a fallback to `flui` (`crates/flui-macros/src/runtime_path.rs:21-24`), so derives work from packages. |
+| flui-macros | 1, 0.9k | V / internal | Keep, extend | `RenderView`, `Store`, `Catalog` and `Routable` derives, `#[flui::main]`, `#[flui::test]`. Already resolves its runtime path through `proc_macro_crate` with a fallback to `flui` (`crates/flui-macros/src/runtime_path.rs:21-24`), so derives work from packages. |
 | flui-tree | 2, 6.9k | — | **Delete** (owner-confirmed, recorded in ADR-0081); markers merge into foundation | The `TreeRead`/`TreeNav`/`TreeWrite` traits have eight implementations outside the crate (`crates/flui-layer/src/tree/tree_traits.rs:18,45`, `crates/flui-rendering/src/storage/tree.rs:953,980,1028`, `crates/flui-semantics/src/tree.rs:643,676,737`) and no generic consumer; call sites become inherent methods. |
 | flui-platform | 2, 46.3k | H / internal | **Split**: contracts to `flui-platform-api`, backends stay | Its only production import below the app is `crates/flui-interaction/src/text_input.rs:27`. Delete the no-op `desktop = ["dep:winit"]` feature (`crates/flui-platform/Cargo.toml:303`, zero `feature = "desktop"` sites in `src/`) and `LinuxPlatform` (`crates/flui-platform/src/platforms/linux/mod.rs:108`, whose methods are `unimplemented!`). `PlatformAccessibility` stays here, with its only consumer. |
 | flui-scheduler | 2, 20.6k | S / internal | Keep, lighten | An owner-local core with a `Send` waker instead of the mutexes inside the scheduler. `AsyncDriver` and `Spawner` stay here as `!Send` types. `TIME_DILATION` (`crates/flui-scheduler/src/config.rs:43`) becomes a property of each presentation's clock. |
@@ -711,6 +711,13 @@ writer has no tree position. The Navigator is frozen, and the thread-local comma
 route that enters the stack has a path, and there are no pageless pages. Dialogs, popups, sheets
 and menus are overlay entries owned by the page that opened them and never appear in the URL.
 
+The route trait and its derive are `Routable` (`flui_widgets::Route` is the Navigator's
+route-lifecycle trait). `Router::<R>::handle(cx: &dyn LifecycleContext)` returns
+`Result<RouterHandle<R>, RouterError>`, and the handle's `push`, `replace`, `pop` and
+`go(location)` take no event context. Step one (the trait, `RoutePath`, `Router` and
+`RouterHandle` in `flui-widgets`, with a hand-written `Routable`) is implemented; the derive and
+the later steps are listed in ADR-0093's implementation series.
+
 ---
 
 ## 11. Platform, IME and accessibility
@@ -987,11 +994,11 @@ assembled from `StateCell` and a text controller behind `Arc<Mutex<..>>`
 ### 13.3 Two screens
 
 ```rust
-#[derive(Route, Clone, PartialEq)]
+#[derive(Routable, Clone, PartialEq)]
 enum AppRoute { #[route("/")] Home, #[route("/note/:id")] Note { id: NoteId } }
 
 fn main() -> App {
-    App::new(Router::new(|r: &AppRoute, _cx| match r {
+    App::new(Router::new(AppRoute::Home, |r: &AppRoute, _cx| match r {
         AppRoute::Home => Home.boxed(),
         AppRoute::Note { id } => NoteView(*id).boxed(),
     }))
@@ -1000,12 +1007,12 @@ fn main() -> App {
 struct HomeState { router: Option<RouterHandle<AppRoute>> }
 impl ViewState<Home> for HomeState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.router = Some(Router::<AppRoute>::handle(cx));   // nearest ancestor Router
+        self.router = Router::<AppRoute>::handle(cx).ok();   // nearest ancestor Router
     }
     fn build(&self, _: &Home, _cx: &dyn BuildContext) -> impl IntoView {
         let router = self.router.clone().expect("BUG: router handle acquired in init_state");
         RawButton::new(Text::new("Open"))
-            .on_press(move |cx| router.push(cx, AppRoute::Note { id: NoteId(1) }))
+            .on_press(move || { let _ = router.push(AppRoute::Note { id: NoteId(1) }); })
     }
 }
 ```

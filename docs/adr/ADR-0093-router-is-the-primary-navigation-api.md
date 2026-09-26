@@ -17,7 +17,8 @@
 - **Refs:** decision D14 in the [decision index](../../design/decisions.md); the
   [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md)
 
-Nothing in `crates/` changes as part of this ADR.
+This record changed nothing in `crates/` when it was written. Step one of the
+[implementation series](#implementation-series) is in `crates/flui-widgets/src/router/`.
 
 ## Context
 
@@ -66,16 +67,22 @@ navigation state is a value" (review survey
 An application declares its routes as a type and derives the mapping to and from a path:
 
 ```rust
-#[derive(Route, Clone, PartialEq)]
+#[derive(Routable, Clone, PartialEq)]
 enum AppRoute {
     #[route("/")] Home,
     #[route("/note/:id")] Note { id: NoteId },
 }
 ```
 
-`#[derive(Route)]` (in `flui-macros`) generates `fn to_path(&self) -> RoutePath` and
-`fn from_path(&str) -> Result<Self, RouteParseError>`. Field types parse through `FromStr` and
-print through `Display`. The derive's contract is the round trip: for every value `r`,
+The trait and its derive are named `Routable`, not `Route`: `flui_widgets::Route` is already the
+Navigator's route-lifecycle trait (`crates/flui-widgets/src/navigator/route.rs`), and a derive
+named `Route` that implements another trait would break the convention that a derive carries its
+trait's name. Dioxus uses the same name for the same shape.
+
+`#[derive(Routable)]` (in `flui-macros`) generates `fn to_path(&self) -> RoutePath` and
+`fn from_path(&RoutePath) -> Result<Self, RouteParseError>`; the trait provides
+`fn parse(&str)` (`RoutePath::parse`, then `from_path`) and `fn back_stack(&RoutePath)`, the stack
+a location opens with. Field types parse through `FromStr` and print through `Display`. The derive's contract is the round trip: for every value `r`,
 `from_path(&r.to_path()) == Ok(r)`. A path that matches no variant is a typed
 `RouteParseError::NoMatch`, never a panic and never a silent fallback to the first variant.
 Builder-style route tables are not a second public way to declare routes.
@@ -111,8 +118,10 @@ without a reason, and this record restores it.
 
 ```rust
 fn init_state(&mut self, cx: &dyn LifecycleContext) {
-    self.router = Some(Router::<AppRoute>::handle(cx));
+    self.router = Router::<AppRoute>::handle(cx).ok();
 }
+// later, in a callback the state built:
+router.push(AppRoute::Note { id: NoteId(1) })?;
 ```
 
 `Router::<R>::handle` takes `&dyn LifecycleContext`, so it is reachable only from `init_state`
@@ -120,8 +129,10 @@ and `did_change_dependencies` (ADR-0078). It resolves the **nearest ancestor** `
 the contract of Flutter's `Navigator.of(context)` — and returns an owned, `!Send`
 `RouterHandle<R>` that shares the router's state, as `NavigatorHandle` does today (ADR-0019
 §2), so no `GlobalKey` is involved. With no `Router<R>` above, it returns
-`Err(RouterError::NoRouter)`. `push`, `replace` and `pop` on the handle edit the stack; the
-edit takes effect at the next frame through the pure-data history flush of ADR-0019 §1.
+`Err(RouterError::NoRouter)`. `push`, `replace`, `pop` and `go` on the handle edit the stack;
+they take no event context, because the handle already is the capability. The edit goes through
+the pure-data history flush of ADR-0019 §1 at once, and the pages it adds build on the next
+frame.
 
 `Router::of(w)` from an event callback is rejected: a callback has no position in the tree,
 so "nearest ancestor" has no meaning there. A callback uses the handle its state captured.
@@ -137,9 +148,13 @@ From acceptance, `Navigator` and `NavigatorHandle` get no new public items.
   a thin facade. `NavigatorHandle::push<P: NavigatorRoute>` (`navigator.rs:1158`) takes an
   arbitrary route, which has no `to_path`. Under a `Router<R>`, the pops edit the Router's stack,
   and a push is accepted only when the pushed value is an `R` (the Router's page route carries
-  it); any other `NavigatorRoute` pushed under a Router is refused with
-  `RouterError::NotAddressable` and a debug assertion, so nothing unaddressable enters the stack.
-  With no `Router` above, `Navigator` keeps its current behaviour for code that has not moved.
+  it); any other `NavigatorRoute` pushed under a Router is refused, so nothing unaddressable
+  enters the stack. The typed facade cannot return a `Result` without a public signature change,
+  so a refused push returns an already-completed `RouteResult` (`None`), logs `tracing::error!`
+  with the `RouterError::NotAddressable` text, and fails a `debug_assert!`; the named doors
+  return `NamedRouteError::NotAddressable`. Pageless popups (`PopupRoute`, which `show_dialog`
+  pushes) stay admitted until dialogs move to overlay entries (step 7 below). With no `Router`
+  above, `Navigator` keeps its current behaviour for code that has not moved.
 - The named-route doors and `on_generate_route` (ADR-0024) are removed when the Router
   ships. `RouteKey<T>` (ADR-0024 §3) survives as the way a typed result is attached to a route:
   `push_for_result::<T>(route)` returns ADR-0019's `RouteResult<T>`, and the result still
@@ -162,6 +177,37 @@ agent protocol from naming a widget-catalog type.
   nearest-ancestor lookup, deep links through the same parse path, browser back/forward on web.
 - Flutter keeps pageless routes as a first-class kind. Here overlays are explicitly outside the
   navigation state (§2).
+
+## Implementation series
+
+1. **Router core (implemented).** `Routable`, `RoutePath`, `RouteParseError`, `Router<R>` and
+   `RouterHandle<R>` from `LifecycleContext` (`push`, `replace`, `pop`, `go`, `location`,
+   `current`, `can_pop`), in `crates/flui-widgets/src/router/`. The back-stack of a location is
+   its prefix chain. Router pages are `PageRoute`s on an addressed Navigator whose facade
+   refuses unaddressable pushes (§4), and each page scopes a semantics route.
+2. **`#[derive(Routable)]`** in `flui-macros`: `#[route("/…/:param")]` on unit and named-field
+   variants, fields through `FromStr`/`Display`, trybuild pass and fail tests, a proptest round
+   trip.
+3. **Nested routes.** `#[nest("/settings")] Settings(SettingsRoute)` composes a child enum into
+   the parent's path: one stack, one URL. A nested `Router` widget is a local stack saved with
+   its page (§2); a `RouterScope` marker gives the outermost Router per presentation the URL.
+4. **Guards.** `Router::guard(|from: Option<&R>, to: &R| -> Guard<R>)` with
+   `Guard::{Allow, Redirect(R), Deny}`, synchronous, applied to push, replace, go and inbound
+   URLs; more than five redirects is `RouterError::RedirectLoop`. Asynchronous checks stay in
+   app state, because the frame path is synchronous.
+5. **`PopScope` with results.** `RouterHandle::push_for_result::<T>(r) -> RouteResult<T>` (the
+   `RouteKey<T>` carry-over of ADR-0024 §3) and `pop_with<T>`; `RouterHandle::maybe_pop` honours
+   `PopScope`, and system back goes to the URL-owning Router.
+6. **Presentation-addressed intents.** `NavigationIntent { presentation, op }` in `flui-runtime`,
+   applied by the realm to that presentation's URL-owning Router (§5); `Platform::on_open_urls`
+   delivers intents, and the Router gains an `on_unknown` hook. `NAVIGATOR_COMMAND_TARGETS`, the
+   `NavigatorCommand*` types and their `globals` entry are deleted.
+7. **Freeze and removal.** `WidgetsApp::router(..)` and the Material and Cupertino router
+   constructors; the named-route doors, `on_generate_route` and the `WidgetsApp` routes table
+   are removed (`flui migrate` rewrites callers); dialogs move to overlay entries and popups stop
+   being admitted.
+8. **Web history and restoration.** `pushState`/`popstate` and browser back/forward on wasm,
+   stack restoration as a list of paths, query and fragment support in `RoutePath`.
 
 ## Alternatives considered
 
@@ -198,24 +244,37 @@ agent protocol from naming a widget-catalog type.
 
 ## Verification
 
-None of these tests exists yet; each fails on today's code or does not compile against it.
+Landed with step one (`crates/flui-widgets/tests/router.rs` and the unit tests in
+`crates/flui-widgets/src/router/`):
 
-- **Derive round trip.** A property test over generated values of a test route enum asserts
-  `from_path(&r.to_path()) == Ok(r)`; a table test asserts `NoMatch` for unknown paths and for
-  malformed parameters.
-- **Nearest ancestor.** Two nested `Router<R>`; a handle acquired inside the inner one pushes to
-  the inner stack and leaves the outer one unchanged. With no `Router` above, `handle` returns
-  `NoRouter`.
-- **Acquisition is typed.** A `compile_fail` doctest calls `Router::<R>::handle` with a
-  `&dyn BuildContext` and must fail to compile.
-- **Every push is addressable.** After pushing an `R` value through the frozen `NavigatorHandle`
-  facade under a `Router<R>`, the router's current path equals that value's `to_path`; pushing a
-  route that is not an `R` returns `RouterError::NotAddressable` and leaves the stack unchanged.
-- **Inbound deep link.** The headless platform delivers a URL through `on_open_urls`; after one
-  frame the stack is the parsed route and the page is mounted and laid out (not merely present).
-- **Overlays are not state.** Opening a dialog leaves the current path unchanged; popping the
+- **Round trip, hand-written.** `route_path_round_trips_a_hand_written_routable` and
+  `parse_reports_no_match_and_bad_params` over a hand-written `Routable`; the derive's property
+  test lands with step 2.
+- **Nearest ancestor.** `nested_router_handle_targets_the_nearest_router`: a handle acquired
+  inside the inner `Router<R>` pushes to the inner stack and leaves the outer one unchanged.
+  `router_handle_without_a_router_is_no_router`: with no `Router` above, `NoRouter`.
+- **Acquisition is typed.** The `compile_fail` doctest on `Router::handle`, beside a compiling
+  twin that takes a `&dyn LifecycleContext`.
+- **Every push is addressable.** `pushing_a_page_route_under_a_router_is_not_addressable`: a
+  `PageRoute`, a `SimpleRoute` and a named route pushed through the facade are refused and the
+  stack and location are unchanged; `facade_pop_updates_the_router_location` pins that the
+  facade's pops reach the Router. `popup_routes_are_admitted_and_leave_the_location_alone` pins
+  the popup admission that lasts until step 7.
+- **Back-stack from a location.** `back_stack_is_the_matching_prefix_chain`,
+  `router_opens_at_a_location_with_its_back_stack`, `go_reconciles_only_the_diverging_tail`,
+  `go_adds_the_new_back_stack_beneath_the_new_top`.
+
+Still to land, each with its step:
+
+- **Derive round trip** (step 2). A property test over generated values of a test route enum
+  asserts `from_path(&r.to_path()) == Ok(r)`; a table test asserts `NoMatch` for unknown paths
+  and for malformed parameters.
+- **Inbound deep link** (step 6). The headless platform delivers a URL through
+  `on_open_urls`; after one frame the stack is the parsed route and the page is mounted and laid out (not merely present).
+- **Overlays are not state** (step 7; step one pins only that a popup leaves the path
+  unchanged). Opening a dialog leaves the current path unchanged; popping the
   page that opened it removes the dialog's overlay entry.
-- **Multi-window.** In one realm with two presentations, a navigation intent addressed to the
+- **Multi-window** (step 6). In one realm with two presentations, a navigation intent addressed to the
   second presentation changes that presentation's Router and not the primary presentation's.
 - **Flutter lifecycle parity** stays pinned by the existing Navigator tests
   (`crates/flui-widgets/tests/navigator.rs`,
