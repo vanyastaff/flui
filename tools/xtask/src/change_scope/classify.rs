@@ -32,6 +32,7 @@ use serde::Deserialize;
 pub(super) const DOCS_ONLY: &[&str] = &[
     "*.md", // root-level only: `*` does not cross `/` (see `matches`)
     "docs/**",
+    "design/**",
     "book/**",
     ".rust-studio/**",
     ".github/**/*.md",
@@ -690,6 +691,7 @@ pub(super) mod tests {
         for path in [
             "README.md",
             "docs/testing.md",
+            "design/architecture.md",
             "book/src/intro.md",
             ".rust-studio/specs/x.md",
             ".github/PULL_REQUEST_TEMPLATE.md",
