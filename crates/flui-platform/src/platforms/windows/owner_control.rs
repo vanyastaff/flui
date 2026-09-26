@@ -5,6 +5,7 @@
 //! [`OwnerControl::shares`], or the window procedure), and it is freed by
 //! `WM_NCDESTROY` on that thread, so what it owns is never run or dropped
 //! anywhere else.
+use super::platform::WindowIdentity;
 use crate::{
     PlatformError, WakeRegistrationError,
     shared::{
@@ -45,6 +46,9 @@ static REGISTERED: OnceLock<Result<(), String>> = OnceLock::new();
 /// `GWLP_USERDATA` slot. `!Send`: it is created, used and freed on the owner
 /// thread only.
 pub(super) struct OwnerControlContext {
+    /// Which platform's owner window this context belongs to, so a gate
+    /// holding a recycled handle cannot reach another platform's state.
+    identity: WindowIdentity,
     signal: Arc<OwnerSignal>,
     handlers: Rc<RefCell<PlatformHandlers>>,
     turn: Rc<OwnerTurnSlot>,
@@ -67,6 +71,7 @@ pub(super) struct OwnerShares {
 #[derive(Clone)]
 pub(super) struct OwnerGate {
     address: Arc<Mutex<Option<isize>>>,
+    identity: WindowIdentity,
 }
 
 pub(super) struct OwnerControl {
@@ -112,7 +117,9 @@ impl OwnerControl {
                 },
             )
         }));
+        let identity = WindowIdentity::mint();
         let context = Box::new(OwnerControlContext {
+            identity,
             signal: Arc::clone(&signal),
             handlers: Rc::new(RefCell::new(PlatformHandlers::default())),
             turn: Rc::new(OwnerTurnSlot::default()),
@@ -149,7 +156,7 @@ impl OwnerControl {
         }
         Ok(Self {
             signal,
-            gate: OwnerGate { address },
+            gate: OwnerGate { address, identity },
         })
     }
 
@@ -194,7 +201,8 @@ impl OwnerGate {
     /// Clones the owner-thread handles out of the owner context, or says why
     /// this thread may not have them: [`UserDataRefusal::ForeignThread`] off
     /// the owner, [`UserDataRefusal::WindowGone`] or
-    /// [`UserDataRefusal::EmptySlot`] once the platform has shut down.
+    /// [`UserDataRefusal::EmptySlot`] once the platform has shut down,
+    /// including when its handle now names another platform's owner window.
     pub(super) fn shares(&self, op: &'static str) -> Result<OwnerShares, UserDataRefusal> {
         let raw = *self.address.lock();
         let Some(raw) = raw else {
@@ -222,6 +230,12 @@ impl OwnerGate {
                 // these clones dispatches a message; no reference outlives
                 // this block.
                 let context = unsafe { &*(slot as *const OwnerControlContext) };
+                if context.identity != self.identity {
+                    // The handle was recycled for another platform's owner
+                    // window after this platform's was destroyed.
+                    tracing::debug!(op, "refusing owner state: the handle names another owner");
+                    return Err(UserDataRefusal::WindowGone);
+                }
                 Ok(OwnerShares {
                     handlers: Rc::clone(&context.handlers),
                     turn: Rc::clone(&context.turn),
@@ -333,9 +347,25 @@ unsafe extern "system" fn procedure(
 
 #[cfg(test)]
 mod tests {
-    use super::OwnerControlContext;
+    use super::{OwnerControl, OwnerControlContext, UserDataRefusal};
 
     // The owner context holds owner-only state; it must never become
     // `Send` or `Sync` through a field change.
     static_assertions::assert_not_impl_any!(OwnerControlContext: Send, Sync);
+
+    #[test]
+    fn gate_refuses_a_handle_that_names_another_owner_window() {
+        let stale = OwnerControl::new().expect("first owner control");
+        let other = OwnerControl::new().expect("second owner control");
+        // Stand in for a recycled handle: both owner windows live on this
+        // thread and are of the owner class, so only the identity differs.
+        let recycled = (*other.gate.address.lock()).expect("the second owner window is open");
+        let own = stale.gate.address.lock().replace(recycled);
+
+        let refusal = stale.shares("recycled handle").err();
+        *stale.gate.address.lock() = own;
+
+        assert_eq!(refusal, Some(UserDataRefusal::WindowGone));
+        assert!(other.shares("own handle").is_ok());
+    }
 }
