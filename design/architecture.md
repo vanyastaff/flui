@@ -57,8 +57,8 @@ then narrowed it. The target is:
 4. **Signals are the realm's graph.** The graph is realm-owned, read through a read-only
    `ReadScope`, and written only through an `EventCx` that a `WriterSource` opens
    ([ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md),
-   [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md)). The graph moves into
-   its own crate only together with its second consumer.
+   [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md)). The graph stays in
+   `flui-view`; the read contract that render and animation code name lives in `flui-foundation`.
 5. **One raster contract, two backends.** The GPU-free lowering and `RasterBackend` move to
    `flui-layer`; wgpu and a CPU backend implement it; retained layer identity produces damage
    ([ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md)).
@@ -137,7 +137,7 @@ manifest-as-source rule stays).
 ```mermaid
 flowchart BT
   subgraph V["V: values (no OS, no tokio, no wgpu; wasm-clean)"]
-    geometry[flui-geometry]; types[flui-types]; macros[flui-macros]; foundation["flui-foundation<br/>(+ tree markers)"]; reactive["flui-reactive<br/>(internal; created with its second consumer)"]
+    geometry[flui-geometry]; types[flui-types]; macros[flui-macros]; foundation["flui-foundation<br/>(+ tree markers, read contract)"]
   end
   subgraph C["C: contracts (stable)"]
     papi[flui-platform-api]; proto[flui-protocol]
@@ -226,7 +226,7 @@ inline test modules are large.
 |---|---|---|---|---|
 | flui-geometry | 0, 19.3k | V / internal | Keep, shrink | Drop unused GPUI-era vocabulary and the no-op `mint` feature; fix `Pixels` Eq/Hash consistency (§15). Merging into types is rejected: types has many more dependents. |
 | flui-types | 0, 21.8k | V / internal | Keep, compress | Physics duplicates `flui-animation`'s simulations; the second `BoxConstraints` and `MaterialColors` move to their owners. Rule: a type lives here only with two consumers. |
-| flui-foundation | 1, 11.3k | V / internal | Keep, absorb tree markers | Takes `Arity`/`Slot`/depth markers from flui-tree. Runtime-protocol identities go behind `#[doc(hidden)]`. Carries `links = "flui_train"` (§6.2). The reactive core does **not** go here: every framework crate would rebuild on each graph edit. |
+| flui-foundation | 1, 11.3k | V / internal | Keep, absorb tree markers | Takes `Arity`/`Slot`/depth markers from flui-tree. Runtime-protocol identities go behind `#[doc(hidden)]`. Carries `links = "flui_train"` (§6.2). Takes the signal read contract (`read_scope`, ADR-0085 §2); the reactive graph does **not** go here: a foundation edit re-checks 15 crates, a graph edit in `flui-view` 3 (`cargo check -p flui-app`, one run). |
 | flui-macros | 1, 0.9k | V / internal | Keep, extend | `RenderView`, `Store`, `Catalog` and `Route` derives, `#[flui::main]`, `#[flui::test]`. Already resolves its runtime path through `proc_macro_crate` with a fallback to `flui` (`crates/flui-macros/src/runtime_path.rs:21-24`), so derives work from packages. |
 | flui-tree | 2, 6.9k | — | **Delete** (owner-confirmed, recorded in ADR-0081); markers merge into foundation | The `TreeRead`/`TreeNav`/`TreeWrite` traits have eight implementations outside the crate (`crates/flui-layer/src/tree/tree_traits.rs:18,45`, `crates/flui-rendering/src/storage/tree.rs:953,980,1028`, `crates/flui-semantics/src/tree.rs:643,676,737`) and no generic consumer; call sites become inherent methods. |
 | flui-platform | 2, 46.3k | H / internal | **Split**: contracts to `flui-platform-api`, backends stay | Its only production import below the app is `crates/flui-interaction/src/text_input.rs:27`. Delete the no-op `desktop = ["dep:winit"]` feature (`crates/flui-platform/Cargo.toml:303`, zero `feature = "desktop"` sites in `src/`) and `LinuxPlatform` (`crates/flui-platform/src/platforms/linux/mod.rs:108`, whose methods are `unimplemented!`). `PlatformAccessibility` stays here, with its only consumer. |
@@ -262,7 +262,6 @@ Each passes P8 by naming its second consumer or the seam it buys.
 | `flui-protocol` | C / stable (Evolving until H3) | One schema for `flui-testing`, `flui-devtools` and `flui-mcp`. | [ADR-0095](../docs/adr/ADR-0095-agent-protocol-schema-crate.md) |
 | `flui-runtime` | K / internal | One frame transaction for app, testing and perf. | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) |
 | `flui-sdk` | K / evolving | Package-author surface without the host; breaks without a `flui` major. | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
-| `flui-reactive` | V / internal, `publish = false` until decided | Layout and paint subscribers in rendering and animation without an upward edge. Created only in the change that adds the first render subscriber. | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) |
 | `flui-engine-cpu` | R / internal, `publish = false` until goldens ship | The second backend of the raster contract: goldens, GPU-free CI, a fallback. | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |
 
 Whether each name is free on crates.io was not checked (the crates.io tool did not connect). The
@@ -401,7 +400,7 @@ pub mod testing;     // WidgetTester, finders, goldens, conformance kits
 
 The order is generated from tiers and in-tier order, never kept by hand:
 
-V (geometry, types, macros, foundation, reactive) → C (platform-api, protocol) → S (log,
+V (geometry, types, macros, foundation) → C (platform-api, protocol) → S (log,
 scheduler, painting, interaction, semantics, animation, assets) → R (layer, rendering, objects,
 engine) → K (view, widgets, runtime, testing, sdk) → H (platform, app, flui) → pkg (official
 packages, same run).
@@ -411,7 +410,7 @@ packages, same run).
 - `cargo xtask release-check` dry-runs `cargo package` in that order, runs `cargo-semver-checks`
   against the last tag, and checks platform evidence freshness. Today the release workflow does
   not publish (`.github/workflows/release.yml:17`).
-- `flui-engine-cpu` and `flui-reactive` stay `publish = false` until their own decisions.
+- `flui-engine-cpu` stays `publish = false` until its own decision.
 - `flui-cli` has its own version.
 
 ---
@@ -553,25 +552,33 @@ decisions 5 and 7.
   failed with `ForeignGraph` before the fix is
   `crates/flui-app/src/app/ui_realm/tests/signal_write_routing.rs`. This landed before the
   write-signature change.
-- **Reads go through `ReadScope`.** `Signal::get/with/try_*` take `&dyn ReadScope`, and
-  `BuildContext: ReadScope`, so `count.get(cx)` keeps its spelling. Today `get` takes
-  `&dyn crate::BuildContext` (`mod.rs:752`). `ReadScope` is read-only: it registers the read and
-  checks graph identity, and it never hands out the owning graph handle.
-- **Placement in three stages.**
-  1. Inside `flui-view`: `ReadScope`; a one-method `RebuildSink` instead of
-     `ExternalBuildScheduler`; two non-`Clone` drivers the realm mints, an `ElementDriver` for
-     `BuildOwner` and a `RenderDriver` for `PipelineOwner`. The reactive module imports nothing
-     from `crate::`, and the module-DAG gate pins that. The `signals` feature goes.
-  2. Still inside `flui-view`: readers generalise from `ElementId` to
+- **Reads go through `ReadScope`.** The read contract (`Signal<T>`, `SignalSlot`, `SignalError`,
+  `ReadGraph`, `ReaderSink`, `ScopeRef`, `ReadScope`) lives in `flui_foundation::read_scope`.
+  `Signal::get/with/try_*` take `&S where S: ReadScope + ?Sized`, and `BuildContext: ReadScope`,
+  so `count.get(cx)` keeps its spelling. Today `get` takes `&dyn crate::BuildContext`
+  (`mod.rs:752`). `ReadScope` is read-only: it reads and identifies its graph, and it never hands
+  out the owning graph handle. Subscription goes through a `ReaderSink` that only the drivers
+  mint, so a holder of the graph cannot subscribe an arbitrary node. A handle of the wrong type is
+  `SignalError::TypeMismatch`. Writes are the `SignalWriteExt` trait in `flui_view::prelude`
+  until `EventCx` replaces `&Reactive`.
+- **The graph stays in `flui-view`, in three steps.**
+  1. The contract in foundation; a one-method `RebuildSink` instead of `ExternalBuildScheduler`;
+     two non-`Clone` drivers the realm mints, an `ElementDriver` for `BuildOwner` and a
+     `RenderDriver` that `PipelineOwner` reaches through a trait `flui-rendering` declares. The
+     `signals` feature goes.
+  2. Readers generalise from `ElementId` to
      `Element(ElementId) | Layout(RenderId) | Paint(RenderId)`, with phase guards that reject or
-     defer writes during layout and paint, like `WrittenDuringBuild`.
-  3. One change moves the module into `flui-reactive` (V, internal) **together with the first
-     render subscriber**: a render-object field read in paint through `PaintContext: ReadScope` and
-     written outside the frame phases, with a test that shows the repaint itself. `ScrollPosition`
-     is not that first consumer, because it is written from `perform_layout`. If no render consumer
-     exists by then, the graph stays in `flui-view` and the ADR says so.
-  Folding the crate into `flui-foundation` later is decided by a warm-edit measurement
-  (touch the graph, time `cargo check -p flui-app`), not by `--timings` of one unit.
+     defer writes during layout and paint, like `WrittenDuringBuild`, and writes that mark
+     `Layout`/`Paint` readers.
+  3. The first render subscriber, with no move: a render-object field read in paint through
+     `PaintCx: ReadScope` and written outside the frame phases, with a test that shows the
+     repaint itself. `ScrollPosition` is not that first consumer, because it is written from
+     `perform_layout`. If no render consumer exists by then, the render-phase readers and
+     `RenderDriver` are removed.
+  There is no `flui-reactive` crate. A prototype measured the warm edit: 15 crates in 5.74 s for
+  an edit to the foundation contract against 3 crates in 3.07 s for one to the graph in
+  `flui-view`; the contract already lets render code name `Signal<T>`
+  ([ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) §6).
 - **Writes go through `EventCx`.** Framework-issued event callbacks receive `&mut EventCx<'_>`,
   borrowed and created per dispatch, which derefs to `Writer`. A `WriterSource`, acquired from
   `LifecycleContext`, `!Send` and realm-bound, is the only way to open one, for catalog widgets,
@@ -713,9 +720,12 @@ loop behind a small `NativeLoop` trait; the backend-minting seam; and a backend 
   §5). Core-required capabilities are methods of the backend traits, so a backend without them
   does not compile: clipboard and data transfer, text input and IME, accessibility, cursor, and
   window chrome basics. Today `text_input()` and `accessibility()` default to `None`
-  (`crates/flui-platform/src/traits/window.rs:333,352`); they become required, and a backend that
-  cannot serve one yet (the web until H1) implements it explicitly as inert and says so in its
-  evidence record. Everything else (haptics, camera, geolocation, notifications, file dialogs) is
+  (`crates/flui-platform/src/traits/window.rs:333,352`). They become required and return an
+  object, not an `Option`: `text_input()` on `PlatformWindow`, `accessibility()` on the backend
+  extension trait that ADR-0082 §3 moves it to. A backend or build that cannot serve one returns
+  `InertTextInput`/`InertAccessibility` and says so in its evidence record. Only clipboard and
+  data transfer are reachable through `cx.capability::<C>()`; text input, accessibility and the
+  cursor stay on the framework's own routes. Everything else (haptics, camera, geolocation, notifications, file dialogs) is
   an optional plugin with a typed `Unsupported`. A capability is core-required when a
   Stable-surface widget or protocol needs it on every supported platform and every supported
   platform has the OS service; it moves between classes only by an ADR, keeping its type.
@@ -902,7 +912,7 @@ impl ViewState<Counter> for CounterState {
     fn build(&self, _: &Counter, cx: &dyn BuildContext) -> impl IntoView {
         let count = self.count;                  // Copy
         Column::new((
-            Text::new(count.get(cx).to_string()),   // &dyn BuildContext upcasts to &dyn ReadScope
+            Text::new(count.get(cx).to_string()),   // cx satisfies ReadScope
             RawButton::new(Text::new("+"))
                 .on_press(move |cx| count.update(cx, |n| *n += 1)),  // cx: &mut EventCx<'_>
         ))
@@ -995,9 +1005,10 @@ impl PlatformCapability for Haptics { type Handle = HapticsHandle; const NAME: &
 // crate flui-haptics: flui-sdk plus per-target providers
 pub struct Plugin;
 impl flui_sdk::Plugin for Plugin {
-    fn install(&self, app: &mut AppBuilder) {
-        #[cfg(target_os = "android")] app.capability::<Haptics>(android::Provider);
-        #[cfg(target_os = "ios")]     app.capability::<Haptics>(ios::Provider);
+    fn name(&self) -> &'static str { "flui-haptics" }
+    fn install(&self, registrar: &mut CapabilityRegistrar<'_>) {
+        #[cfg(target_os = "android")] registrar.capability::<Haptics>(android::Provider);
+        #[cfg(target_os = "ios")]     registrar.capability::<Haptics>(ios::Provider);
     }
 }
 
@@ -1016,11 +1027,11 @@ The seam stays object-safe:
 ```rust
 pub trait LifecycleContext: BuildContext /* sealed */ {
     #[doc(hidden)]
-    fn capability_erased(&self, id: TypeId) -> Result<Rc<dyn Any>, Unsupported>;
+    fn capability_erased(&self, id: TypeId, name: &'static str) -> Result<Rc<dyn Any>, Unsupported>;
 }
 pub trait LifecycleContextExt: LifecycleContext {
     fn capability<C: PlatformCapability>(&self) -> Result<C::Handle, Unsupported> {
-        self.capability_erased(TypeId::of::<C>())
+        self.capability_erased(TypeId::of::<C>(), C::NAME)
             .map(|rc| rc.downcast_ref::<C::Handle>().expect("BUG: registry type mismatch").clone())
     }
 }

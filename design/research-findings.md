@@ -153,7 +153,8 @@ are cases where the raw research, or the code, disagrees with the reports.
    executable lines in the engine, and the widgets crate carries 14.3k lines in test files
    alone. The warm-edit gain estimated for extracting a reactive crate is inflated by the same
    amount. [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md)
-   should rest on a measurement, not the line estimate.
+   should rest on a measurement, not the line estimate. Settled: ADR-0085 now rests on a
+   measured warm edit and keeps the graph in `flui-view`, with no reactive crate.
 3. **The signals gate.** Owner decision 5 makes its first step wait for a go/no-go "before
    #1090", but #1090 has landed (section 1). What remains is the ADR-0074 measurement, and
    possibly unifying the two reader registries (#1254). ADR-0085 must say which.
@@ -227,7 +228,7 @@ not been run), **resolved** (checked since the research; the result is given).
 | A Bevy-style development dylib links on Windows and speeds up iteration | **Resolved.** It links with the default features, at 64,336 of 65,535 exports, and fails with `LNK1189` once every facade feature is on. An app-crate edit takes 1.0-1.3 s dynamic against 1.4-2.9 s static (0.3-1.5 s saved); a framework edit gets slower | See [dynamic-linking.md](dynamic-linking.md) | [workspace_ecosystem_structure][mk-ws] | ADR-0096 |
 | `with_current_state` deadlocks under the frame's write lock | Partial (code shape, section 2.1) | A test that calls it from `build` | [view_element][m-view] | Issue |
 | Rendering: stale pixels outside a swapchain scissor; blit cost of the retained target on tile GPUs; the cold-start split including the font scan; lazy-band passes per frame; the per-level view-clone cost; extra frames from the loop-wide `needs_redraw` | Open | Benchmarks and traces on real hardware | [xcut_performance][m-perf], [performance_first][d-perf] | ADR-0087, ADR-0091 |
-| Build cost: duplicate upper-stack builds from per-crate `testing` features; "Cargo has no early cutoff"; the warm-edit gain of a reactive crate; the doubled compile cost of a nested workspace | Open (the nested-workspace figure rests on a two-crate probe) | `cargo build --timings` on the real workspace | [workspace_topology][m-ws], [q5_reactive_crate][q5] | ADR-0081, ADR-0085 |
+| Build cost: duplicate upper-stack builds from per-crate `testing` features; "Cargo has no early cutoff"; the warm-edit gain of a reactive crate; the doubled compile cost of a nested workspace | Open, except the reactive crate: settled by ADR-0085's measured warm edit, which keeps the graph in `flui-view` (the nested-workspace figure rests on a two-crate probe) | `cargo build --timings` on the real workspace | [workspace_topology][m-ws], [q5_reactive_crate][q5] | ADR-0081, ADR-0085 |
 | rustdoc JSON, cargo-public-api and cargo-semver-checks need nightly; cargo-public-api output includes the transitive closure; semver-checks allows per-module exemptions | Open | Run each tool on the pinned toolchain | [q2_sdk_stability][q2] | ADR-0089 |
 | The resolver's error text for conflicting `=` pins through a real registry | Partial (only a directory-source probe) | A publish to a local registry | [q1_packages_location][q1], [judges-and-verification][judges] | ADR-0088 |
 | `KEYEVENTF_UNICODE` bypasses the IME; `windows-a11y` and `windows-input` pass on hosted `windows-latest`; hosted runners support ja-JP | Open | One CI run on a hosted runner | [q8_windows_evidence_gate][q8] | ADR-0090, the Windows evidence gate |

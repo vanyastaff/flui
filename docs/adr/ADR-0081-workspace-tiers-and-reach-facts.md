@@ -127,7 +127,7 @@ smaller `order`; moving the harness above the runtime removes that edge first.
 
 | Tier | Contains | Forbidden in the normal graph (reach fact) |
 |---|---|---|
-| **V** values | `flui-geometry`, `flui-types`, `flui-macros`, `flui-foundation` (`flui-reactive` if [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md) extracts it) | everything in S's set, plus `tokio` |
+| **V** values | `flui-geometry`, `flui-types`, `flui-macros`, `flui-foundation` (with the signal read contract; [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md) keeps the graph in `flui-view`) | everything in S's set, plus `tokio` |
 | **C** contracts | `flui-platform-api` ([ADR-0082](ADR-0082-platform-api-contract-crate.md)), `flui-protocol` ([ADR-0095](ADR-0095-agent-protocol-schema-crate.md)) | S's set |
 | **S** substrate | `flui-log`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-semantics`, `flui-animation`, `flui-assets` | K's set |
 | **R** render machine | `flui-layer`, `flui-rendering`, `flui-objects`, `flui-engine` (and a CPU backend, [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)) | K's set minus `wgpu`, which only `flui-engine` may reach |

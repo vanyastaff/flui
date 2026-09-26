@@ -146,8 +146,7 @@ is still refused by the guard.
 `GestureArenaMember` and the recognizer callback aliases (`tap.rs:91`, `drag.rs:113-121`) keep
 their signatures. A widget captures its `WriterSource` in the recognizer closure (legal: the
 aliases are `Rc`) and calls `source.write(|cx| user_callback(cx, details))`. Consequences:
-`flui-interaction` does not depend on the reactive crate, custom recognizers do not break, and
-this record does not depend on whether ADR-0085's extraction has happened.
+`flui-interaction` does not depend on the reactive graph, and custom recognizers do not break.
 
 ### 5. Listener, animation-status and post-frame callbacks
 
@@ -212,8 +211,7 @@ The changes land one at a time, each with `cargo xtask check-changed` green:
    `examples/todo.rs`), so the pilot covers catalog code and application code. Steps 3 and 4
    land before the first crates.io publication (ADR-0091 §1).
 
-`Writer` and `WriterSource` live in `flui-reactive` if ADR-0085's extraction has happened, and
-in `flui-view` otherwise.
+`Writer` and `WriterSource` live in `flui-view`, beside the graph (ADR-0085 §6).
 
 **Rollback to guard-only.** If the pilot needs explicit closure type
 annotations at call sites that `callback(..)` does not cover, or the converted call sites are
@@ -234,8 +232,8 @@ amending this record.
   `disallowed_methods`.** Rejected: before the `Send` bounds go, the handle has almost no
   compilable use, and the fence would forbid exactly the recognizer wrapping §4 needs.
 - **Put `Writer` into the gesture arena** (`GestureArenaMember` and the recognizer aliases take
-  `&mut Writer`). Rejected: it breaks custom recognizers, makes `flui-interaction` depend on the
-  reactive crate, and couples this record to the timing of ADR-0085's extraction.
+  `&mut Writer`). Rejected: it breaks custom recognizers and makes `flui-interaction` depend on
+  the reactive graph, which lives in `flui-view` above it.
 - **Accept both `Fn()` and `Fn(&mut EventCx)` during a transition.** Rejected: new-style closures
   then need explicit type annotations (probe d1), which is worse than one shape.
 - **Give `StateCell` a `&mut Writer` parameter.** Rejected: `StateCell` is a capability already,

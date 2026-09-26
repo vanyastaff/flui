@@ -84,7 +84,7 @@ first behaviour it decides; the older ADRs it amends or supersedes get their bac
 | [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` (accepted in part: the first move; `PlatformWindow`, `Send` removal and deletions remain proposed) |
 | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) | One frame transaction lives in `flui-runtime` above `flui-widgets` |
 | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) | Platform capabilities are an open, typed set in two classes (core-required backend methods, optional plugins) behind one door |
-| [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) | The reactive graph is realm-owned, read through `ReadScope`, and extracted only with a second consumer |
+| [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) | The reactive graph is realm-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation` |
 | [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) | Signal writes go through `EventCx` opened by a `WriterSource` |
 | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) | One raster contract in `flui-layer` with wgpu and CPU backends; retained layer identity drives damage |
 | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) | Official packages live in this workspace, build on `flui-sdk`, and the facade names none of them |

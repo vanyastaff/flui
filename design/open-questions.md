@@ -306,7 +306,6 @@ Two unrun hypotheses: the old image is unloaded before the realm drops its views
 | The size N of the Stable closure | cargo-public-api spike before it is promised | ADR-0081 |
 | Mismatched `=` pins through a real registry give a resolver error, not E0308 | registry test (only a directory-source probe ran) | ADR-0088 |
 | "A plugin depends on about 30 crates", "a Win32 edit rebuilds 3 crates" | `cargo tree` and `cargo build --timings` | ADR-0082 |
-| The `flui-reactive` warm-edit gain | warm-edit measurement in the extraction change | ADR-0085 |
 | Stale pixels with a swapchain scissor; blit cost of a retained target on tile GPUs | readback on dx12 and vulkan; mobile measurement | ADR-0087 |
 | Parley glyphs rasterize into the ADR-0067 atlas with a stable key | ADR-0077's precondition 1 prototype | ADR-0092 |
 | vello_cpu is bit-deterministic across CPUs with pinned SIMD | conformance scenes on three OSes | ADR-0087 |
