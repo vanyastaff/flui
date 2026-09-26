@@ -7,8 +7,8 @@
   Proposed: the rest of §1's schema, the `flui-mcp` library, the semantics-to-wire role
   mapping, `flui-testing`'s query types, and §§3–5.
 - **Date:** 2026-09-25
-- **Amends (on acceptance):** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not decided
-  here" in-process transport; the wire contract is unchanged)
+- **Amends (on acceptance of §3, not yet accepted):** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md)
+  (settles its "Not decided here" in-process transport; the wire contract is unchanged)
 - **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
