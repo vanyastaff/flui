@@ -3,7 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-09-23
 - **Amended:** 2026-09-26 — scanners over structured data return under four conditions; see
-  §4 ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)).
+  §4 ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)); an allowlist entry may also
+  name the ADR that grants it for good ([ADR-0097](ADR-0097-no-process-global-state-gate.md)).
 - **Supersedes:** the capability-acquisition clauses of ADR-0018, ADR-0021, ADR-0030 and
   ADR-0037 (the rule stays, its enforcement moves into the type system); the port methodology
   (`docs/PORT.md`) and its grep gates (`scripts/port-check.sh`,
@@ -108,9 +109,11 @@ only when all four hold:
    the planted findings come back, as `wgsl --self-test` and `workspace --self-test` do, and
    `cargo xtask checks` runs the self-test beside the scan.
 4. **Its allowlist is data, not markers.** It lives in the manifests or a data file, is seeded
-   by the scan's own first run, names the ADR whose change removes each entry, and only
-   shrinks: an entry the scan no longer needs is a finding. No inline comment silences it;
-   inline markers are how the `PORT-CHECK-OK-*` sites reached 396.
+   by the scan's own first run, names the ADR whose change removes each entry, or the ADR that
+   grants it for good, and only shrinks: an entry the scan no longer needs is a finding. A
+   permanent grant names its class, which the scan checks as far as the source allows
+   (ADR-0097's `grant`/`class`). No inline comment silences it; inline markers are how the
+   `PORT-CHECK-OK-*` sites reached 396.
 
 The tier gate meets the first condition because nothing else sees the package graph. Types and
 clippy work inside one crate. Cargo rejects only dependency cycles, not direction.
