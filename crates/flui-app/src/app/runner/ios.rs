@@ -27,7 +27,7 @@
 //! capability is inert. See [`super::hot_reload`] for the seam and
 //! `docs/hot-reload.md` for the two-layer model.
 
-use flui_platform::PlatformWindow;
+use flui_platform::HostWindow;
 use flui_platform::platforms::ios::{IOSSceneEvent, IOSSceneSessionId};
 use flui_view::{StatelessView, View};
 use std::sync::Arc;
@@ -218,7 +218,7 @@ fn bootstrap_ios<V>(
     root: V,
     config: AppConfig,
     worker_reload: WorkerReload,
-    window: Arc<dyn PlatformWindow>,
+    host: Arc<dyn HostWindow>,
 ) -> anyhow::Result<RealmDispatcher>
 where
     V: View + StatelessView + Clone + 'static,
@@ -232,6 +232,9 @@ where
     fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
         with_owner_platform(f).expect("BUG: bootstrap_ios runs only after install_owner_platform")
     }
+
+    let presentation_window = super::presentation_window(host);
+    let window = Arc::clone(presentation_window.window());
 
     // 0b. This window's device-recovery backoff, constructed before the
     // wake-deadline hook below so the hook can carry its deadline.
@@ -280,7 +283,7 @@ where
     let wake = runtime_wake_callback();
     let ui_realm = match crate::app::ui_realm::UiRealm::new(
         Arc::clone(&wake),
-        Arc::clone(&window),
+        presentation_window,
         scale_factor,
         runtime_needs_redraw_handle(),
     ) {

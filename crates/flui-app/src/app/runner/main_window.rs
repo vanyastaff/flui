@@ -13,7 +13,7 @@ use crate::app::{
     application_control::{AppHandle, AppWindowError, Ingress, contain},
     hot_reload::{WorkerReload, WorkerWatcherGuard},
 };
-use flui_platform::{PendingWindow, PlatformProxy, WindowOpen, traits::PlatformWindow};
+use flui_platform::{PendingWindow, PlatformProxy, WindowOpen, traits::HostWindow};
 use flui_view::View;
 use std::{
     cell::RefCell,
@@ -32,7 +32,7 @@ use std::{
 type Installer = Box<
     dyn FnMut(
         &AppHandle,
-        Arc<dyn PlatformWindow>,
+        Arc<dyn HostWindow>,
         flui_scheduler::AppLifecycleState,
     ) -> Result<RenderedMain, AppWindowError>,
 >;
@@ -265,7 +265,7 @@ impl MainController {
             None => self.fail(AppWindowError::Cancelled),
         }
     }
-    fn install(&mut self, window: Arc<dyn PlatformWindow>) {
+    fn install(&mut self, window: Arc<dyn HostWindow>) {
         if !self.is_current() {
             contain(|| window.close());
             self.cancel();
@@ -645,7 +645,7 @@ where
 mod tests {
     use super::*;
     use crate::app::ExitPolicy;
-    use flui_platform::{HeadlessPlatform, Platform};
+    use flui_platform::{HeadlessPlatform, Platform, PlatformWindow};
     use std::sync::atomic::AtomicUsize;
 
     fn install_test_controller(
@@ -1108,11 +1108,13 @@ mod tests {
                     owner,
                     Box::new(move |_, window, host| {
                         installations.set(installations.get() + 1);
+                        let presentation = super::super::presentation_window(Arc::clone(&window));
+                        let window: Arc<dyn PlatformWindow> = window;
                         // This fixture exercises controller ownership with a registered
                         // realm; the separate native fixture proves actual GPU rendering.
                         let realm = crate::app::ui_realm::UiRealm::new(
                             Arc::new(|| {}),
-                            Arc::clone(&window),
+                            presentation,
                             1.0,
                             Arc::new(AtomicBool::new(false)),
                         )
@@ -1188,11 +1190,14 @@ mod tests {
                         owner,
                         Box::new(move |handle, window, host| {
                             installations.set(installations.get() + 1);
+                            let presentation =
+                                super::super::presentation_window(Arc::clone(&window));
+                            let window: Arc<dyn PlatformWindow> = window;
                             // This fixture exercises controller ownership with a registered
                             // realm; the separate native fixture proves actual GPU rendering.
                             let realm = crate::app::ui_realm::UiRealm::new(
                                 Arc::new(|| {}),
-                                Arc::clone(&window),
+                                presentation,
                                 1.0,
                                 Arc::new(AtomicBool::new(false)),
                             )

@@ -744,9 +744,10 @@ loop behind a small `NativeLoop` trait; the backend-minting seam; and a backend 
   §5). Core-required capabilities are methods of the backend traits, so a backend without them
   does not compile: clipboard and data transfer, text input and IME, accessibility, cursor, and
   window chrome basics. Today `text_input()` and `accessibility()` default to `None`
-  (`crates/flui-platform/src/traits/window.rs:333,352`). They become required and return an
-  object, not an `Option`: `text_input()` on `PlatformWindow`, `accessibility()` on the backend
-  extension trait that ADR-0082 §3 moves it to. A backend or build that cannot serve one returns
+  (`PlatformWindow::text_input` in `crates/flui-platform-api/src/platform_window.rs`,
+  `HostWindow::accessibility` in `crates/flui-platform/src/traits/host_window.rs`). They become
+  required and return an object, not an `Option`: `text_input()` on `PlatformWindow`,
+  `accessibility()` on `HostWindow`, the backend extension trait ADR-0082 §3 moved it to. A backend or build that cannot serve one returns
   `InertTextInput`/`InertAccessibility` and says so in its evidence record. Only clipboard and
   data transfer are reachable through `cx.capability::<C>()`; text input, accessibility and the
   cursor stay on the framework's own routes. Everything else (haptics, camera, geolocation, notifications, file dialogs) is

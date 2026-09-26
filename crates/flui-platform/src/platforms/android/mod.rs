@@ -605,7 +605,7 @@ impl Platform for AndroidPlatform {
     fn open_window(
         &self,
         _options: WindowOptions,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
+    ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
         let window = Arc::new(AndroidWindow::new(self.app.clone()));
         let _prev = self.window.lock().replace(Arc::clone(&window));
         tracing::info!("Android window created (wrapping ANativeWindow)");

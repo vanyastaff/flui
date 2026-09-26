@@ -1,0 +1,21 @@
+# Changelog
+
+A planted changelog: the text above the Unreleased region.
+
+## [Unreleased]
+
+The Unreleased preamble, left as it is.
+
+### Added
+
+- **Existing addition**: stays below the new bullets.
+
+### Fixed
+
+- **Existing fix**: untouched, since no fragment has a Fixed section.
+
+## [0.1.0] - 2026-01-01
+
+### Added
+
+- **Released addition**: outside the region, byte for byte.

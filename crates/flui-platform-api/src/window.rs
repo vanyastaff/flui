@@ -1,9 +1,10 @@
 //! Window vocabulary: identity, creation options, modes, lifecycle state and
 //! the events a backend reports about its windows.
 //!
-//! The per-window contract itself, `flui_platform::PlatformWindow`, and the
-//! host-facing `flui_platform::Platform` that opens windows stay in
-//! `flui-platform` (ADR-0082 §2); these are the values their signatures use.
+//! These are the values the per-window contract,
+//! [`PlatformWindow`](crate::PlatformWindow), and the host-facing
+//! `flui_platform::Platform` that opens windows (which stays in
+//! `flui-platform`, ADR-0082 §2) use in their signatures.
 
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
@@ -15,7 +16,8 @@ use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 /// The choice is the caller's because the two callers differ in what they
 /// can promise. An embedder that drives the frame loop (`flui-app`) reports
 /// its first presented frame through
-/// `flui_platform::PlatformWindow::reveal_after_first_frame`, so it may ask
+/// [`PlatformWindow::reveal_after_first_frame`](crate::PlatformWindow::reveal_after_first_frame),
+/// so it may ask
 /// for the reveal to wait for that frame and never show a bare background. A
 /// direct consumer of the platform crate — an example, a probe, a test — has
 /// no such report to give, and a window whose reveal waits for a call that
@@ -29,7 +31,7 @@ pub enum WindowReveal {
     #[default]
     AtOpen,
     /// The window is ordered on screen but stays invisible to the viewer
-    /// until `flui_platform::PlatformWindow::reveal_after_first_frame` is
+    /// until [`PlatformWindow::reveal_after_first_frame`](crate::PlatformWindow::reveal_after_first_frame) is
     /// called; the caller commits to calling it (or to a bounded fallback
     /// that does). A backend that cannot defer treats this as
     /// [`Self::AtOpen`].
@@ -288,7 +290,7 @@ pub enum WindowEvent {
     ///
     /// In practice that means the user route — a close button or compositor
     /// close on winit, `WM_CLOSE` on Win32, `simulate_close` on the headless
-    /// double. A programmatic `flui_platform::PlatformWindow::close` on the
+    /// double. A programmatic [`PlatformWindow::close`](crate::PlatformWindow::close) on the
     /// owning thread is a decision rather than a request, asks no veto, and
     /// so reports only [`Closed`](Self::Closed). The one case where a
     /// programmatic close does emit this is Win32's *cross-thread* route,

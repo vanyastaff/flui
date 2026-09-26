@@ -914,11 +914,7 @@ impl MacOSWindow {
 /// as long as the nested loop runs.
 const MAX_DEFER_HOPS: u8 = 4;
 
-impl PlatformWindow for MacOSWindow {
-    fn id(&self) -> WindowId {
-        WindowId(self.ns_window as u64)
-    }
-
+impl crate::traits::HostWindow for MacOSWindow {
     /// The window's own NSAccessibility bridge — the capability the
     /// composition root's accessibility wire discovers. Without this
     /// override the trait default (`None`) leaves every real macOS window
@@ -928,6 +924,12 @@ impl PlatformWindow for MacOSWindow {
         self.accessibility
             .get()
             .map(|bridge| Arc::clone(bridge) as _)
+    }
+}
+
+impl PlatformWindow for MacOSWindow {
+    fn id(&self) -> WindowId {
+        WindowId(self.ns_window as u64)
     }
 
     /// The window's IME capability — the `NSTextInputClient` conformance the

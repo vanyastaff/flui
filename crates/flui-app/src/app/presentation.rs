@@ -16,12 +16,12 @@ use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer};
+// The one backend-side trait the realm core still names: the accessibility
+// bridge speaks AccessKit, so it stays in `flui-platform` (ADR-0082 §2).
+use flui_platform::traits::PlatformAccessibility;
 #[cfg(test)]
-use flui_platform::traits::PlatformTextInput;
-use flui_platform::{
-    CursorIcon,
-    traits::{CursorError, PlatformWindow},
-};
+use flui_platform_api::PlatformTextInput;
+use flui_platform_api::{CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 #[cfg(test)]
@@ -88,6 +88,62 @@ pub(crate) struct RealmCapabilities<'a> {
     pub(crate) command_sender: super::ui_realm::UiCommandSender,
 }
 
+/// The window a presentation is built on, with the accessibility bridge its
+/// backend fixed when it built the window.
+///
+/// The framework drives a window only through [`PlatformWindow`], which names
+/// no AccessKit type (ADR-0082 §1); the bridge is read from the host-side
+/// window once, where the runner holds it (`runner::presentation_window`),
+/// and travels here beside the window. Production code has no implicit
+/// conversion into this type: a runner builds it through
+/// `runner::presentation_window` or names the bridge explicitly in
+/// [`Self::new`], so dropping the bridge is never an accident of a `.into()`.
+pub(crate) struct PresentationWindow {
+    window: Arc<dyn PlatformWindow>,
+    accessibility: Option<Arc<dyn PlatformAccessibility>>,
+}
+
+impl PresentationWindow {
+    /// Pairs `window` with the bridge its backend exposes, if any.
+    pub(crate) fn new(
+        window: Arc<dyn PlatformWindow>,
+        accessibility: Option<Arc<dyn PlatformAccessibility>>,
+    ) -> Self {
+        Self {
+            window,
+            accessibility,
+        }
+    }
+
+    /// The window itself.
+    #[must_use]
+    pub(crate) fn window(&self) -> &Arc<dyn PlatformWindow> {
+        &self.window
+    }
+}
+
+/// A test-only conversion that bypasses any accessibility bridge the
+/// concrete window has: the presentation is built with none, even when the
+/// window is a headless `MockWindow` carrying a `FakeAccessibility`. A test
+/// that needs the bridge wired goes through `runner::presentation_window`
+/// (or [`test_platform_window_with_accessibility`]) instead.
+#[cfg(test)]
+impl From<Arc<dyn PlatformWindow>> for PresentationWindow {
+    fn from(window: Arc<dyn PlatformWindow>) -> Self {
+        Self::new(window, None)
+    }
+}
+
+/// The `From<Arc<dyn PlatformWindow>>` conversion above
+/// for a borrowed window, for tests that reuse one window across several
+/// installs; it bypasses the window's bridge the same way.
+#[cfg(test)]
+impl From<&Arc<dyn PlatformWindow>> for PresentationWindow {
+    fn from(window: &Arc<dyn PlatformWindow>) -> Self {
+        Self::new(Arc::clone(window), None)
+    }
+}
+
 /// A realm-backed test window carrying an optional platform text-input
 /// capability — for `UiRealm::for_test_with_text_input`, which needs a real
 /// [`RealmCapabilities`]-assembled presentation (not the standalone
@@ -111,13 +167,14 @@ pub(crate) fn test_platform_window(
 #[cfg(test)]
 pub(crate) fn test_platform_window_with_accessibility(
     accessibility: Arc<flui_platform::FakeAccessibility>,
-) -> Arc<dyn PlatformWindow> {
+) -> PresentationWindow {
     use super::window_test_support::TestWindow;
-    Arc::new(
+    let host: Arc<dyn flui_platform::traits::HostWindow> = Arc::new(
         TestWindow::new()
             .focused(true)
             .with_accessibility(accessibility),
-    )
+    );
+    super::runner::presentation_window(host)
 }
 
 /// Lifecycle of the owner-thread half of a presentation.
@@ -158,7 +215,7 @@ pub(crate) struct PresentationState {
     pub(super) media_query: Rc<crate::app::media_query_root::MediaQuerySource>,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
-    pub(super) window_execution: Cell<flui_platform::WindowExecutionState>,
+    pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
     lifecycle: Cell<PresentationLifecycle>,
     pipeline: PipelineCell,
@@ -175,6 +232,10 @@ pub(crate) struct PresentationState {
     )]
     alive: Rc<()>,
     window: Weak<dyn PlatformWindow>,
+    /// The window's accessibility bridge, if its backend has one. `Weak`
+    /// like [`Self::window`]: the backend window owns the bridge, and this
+    /// presentation must not keep it alive past the window.
+    accessibility: Option<Weak<dyn PlatformAccessibility>>,
     gestures: GestureBinding,
     /// Pointer input retained while this presentation has no committed tree.
     /// The queue is owner-thread-only and internally capped; replay detaches
@@ -343,21 +404,21 @@ impl PresentationState {
     ///   routes the action argument-free with a trace rather than killing
     ///   the whole request.
     ///
-    /// A window without the capability (`accessibility()` → `None`) wires
-    /// nothing: the pipeline keeps its documented publish-nowhere
-    /// placeholder.
+    /// A window without the capability (`bridge` is `None`) wires nothing:
+    /// the pipeline keeps its documented publish-nowhere placeholder.
     fn wire_platform_accessibility(
         window: &Arc<dyn PlatformWindow>,
+        bridge: Option<&Arc<dyn PlatformAccessibility>>,
         pipeline: &PipelineCell,
         semantics: &SemanticsHost,
         wake: &Arc<dyn Fn() + Send + Sync>,
         command_sender: super::ui_realm::UiCommandSender,
     ) {
-        let Some(bridge) = window.accessibility() else {
+        let Some(bridge) = bridge else {
             return;
         };
 
-        let publish_bridge = Arc::downgrade(&bridge);
+        let publish_bridge = Arc::downgrade(bridge);
         pipeline.with_mut(|owner| {
             owner.set_semantics_update_callback(Arc::new(
                 move |update: &flui_semantics::TreeUpdate| {
@@ -489,9 +550,13 @@ impl PresentationState {
     pub(crate) fn new(
         id: PresentationId,
         pipeline: PipelineCell,
-        window: Arc<dyn PlatformWindow>,
+        window: impl Into<PresentationWindow>,
         capabilities: RealmCapabilities<'_>,
     ) -> Self {
+        let PresentationWindow {
+            window,
+            accessibility,
+        } = window.into();
         let gestures = Self::build_gestures(id, &window);
         let alive = Rc::new(());
         let focus = FocusManager::new();
@@ -575,6 +640,7 @@ impl PresentationState {
 
         Self::wire_platform_accessibility(
             &window,
+            accessibility.as_ref(),
             &pipeline,
             &semantics,
             &capabilities.wake,
@@ -594,6 +660,7 @@ impl PresentationState {
             pipeline,
             alive,
             window: Arc::downgrade(&window),
+            accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
@@ -647,6 +714,8 @@ impl PresentationState {
         widgets.set_pipeline_owner(pipeline.clone());
 
         let renderer = RenderingFlutterBinding::new_for_test_with_pipeline(pipeline.clone());
+        // This path wires no platform accessibility (see the doc above).
+        let accessibility: Option<Arc<dyn PlatformAccessibility>> = None;
 
         let semantics = SemanticsHost::new();
         let semantics_flag = semantics.platform_semantics_enabled_handle();
@@ -667,6 +736,7 @@ impl PresentationState {
             pipeline,
             alive,
             window: Arc::downgrade(&window),
+            accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
             focus,
@@ -875,7 +945,7 @@ impl PresentationState {
     /// [`PlatformWindow::haptics`].
     ///
     /// Silent no-op — no panic, no error — when the window is gone, or the
-    /// window's backend has no [`PlatformHaptics`](flui_platform::traits::PlatformHaptics)
+    /// window's backend has no [`PlatformHaptics`](flui_platform_api::PlatformHaptics)
     /// capability (desktop winit targets, for instance). Mirrors Flutter's own `HapticFeedback`
     /// degradation contract: every call is fire-and-forget best-effort, with
     /// no availability-discovery API to check first.
@@ -1379,8 +1449,8 @@ impl PresentationState {
             // so the owner's disposed notifier fires while the pipeline is
             // still alive. Guarded on `is_free()` because `close()` also runs
             // from `Drop`, where a panicking unwind may hold the checkout.
-            if let Some(window) = self.window.upgrade()
-                && let Some(bridge) = window.accessibility()
+            if self.window.strong_count() > 0
+                && let Some(bridge) = self.accessibility.as_ref().and_then(Weak::upgrade)
             {
                 bridge.set_activation_listener(Arc::new(|_| {}));
                 bridge.set_action_listener(Arc::new(|_| {}));

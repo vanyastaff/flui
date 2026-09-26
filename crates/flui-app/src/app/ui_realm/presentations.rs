@@ -2,10 +2,9 @@
 
 use super::UiRealm;
 use super::commands::UiCommandSender;
-use crate::app::presentation::{PresentationState, RealmCapabilities};
+use crate::app::presentation::{PresentationState, PresentationWindow, RealmCapabilities};
 use flui_foundation::PresentationId;
 use flui_interaction::{FocusManager, GestureBinding};
-use flui_platform::traits::PlatformWindow;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_view::GlobalKeyRegistryComposite;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -155,11 +154,14 @@ impl UiRealm {
     )]
     pub(crate) fn assemble_presentation(
         &self,
-        window: Arc<dyn PlatformWindow>,
+        window: impl Into<PresentationWindow>,
     ) -> PresentationState {
+        let window = window.into();
         let (_, presentation_id) = crate::app::runtime::next_identity();
         let pipeline = PipelineCell::new(PipelineOwner::new());
-        pipeline.with_mut(|owner| owner.set_device_pixel_ratio(window.scale_factor() as f32));
+        pipeline.with_mut(|owner| {
+            owner.set_device_pixel_ratio(window.window().scale_factor() as f32);
+        });
         // The prototype is stamped for the PRIMARY presentation; this
         // presentation's accessibility actions must address ITSELF, or the
         // drain would resolve them against a sibling's semantics tree.
@@ -232,7 +234,8 @@ impl UiRealm {
     /// forest membership, never registry routing, can still use it.
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
-        let window = Arc::new(crate::app::window_test_support::TestWindow::new().focused(false));
+        let window: Arc<dyn flui_platform_api::PlatformWindow> =
+            Arc::new(crate::app::window_test_support::TestWindow::new().focused(false));
         let presentation = self.assemble_presentation(window);
         self.install_presentation(presentation)
     }

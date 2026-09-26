@@ -73,6 +73,20 @@ pub use secondary_window::open_window;
 #[cfg(target_arch = "wasm32")]
 use web::run_web;
 
+/// The presentation window for a freshly opened host window: the window
+/// itself, upcast to the contract the realm drives, and the accessibility
+/// bridge its backend fixed when it built it.
+///
+/// The one place the runner turns an `open_window` result into what a realm
+/// constructor takes. Reading the bridge here, once, is sound because every
+/// backend sets it at construction and never swaps it.
+pub(crate) fn presentation_window(
+    host: std::sync::Arc<dyn flui_platform::traits::HostWindow>,
+) -> crate::app::presentation::PresentationWindow {
+    let accessibility = host.accessibility();
+    crate::app::presentation::PresentationWindow::new(host, accessibility)
+}
+
 /// Wire one presentation into the close-request seam (issue #558):
 /// register it with this loop's router, then install the
 /// `on_should_close` callback that consults the router when the platform
@@ -588,7 +602,7 @@ mod tests {
         use flui_platform::headless_platform;
 
         let _clear_guard = OwnerHostClearGuard::arm();
-        let window = headless_platform()
+        let window: std::sync::Arc<dyn flui_platform::PlatformWindow> = headless_platform()
             .open_window(flui_platform::WindowOptions::default())
             .expect("headless platform should create a test window");
         let dispatcher =
@@ -661,7 +675,7 @@ mod tests {
         use flui_platform::headless_platform;
 
         let _clear_guard = OwnerHostClearGuard::arm();
-        let window = headless_platform()
+        let window: std::sync::Arc<dyn flui_platform::PlatformWindow> = headless_platform()
             .open_window(flui_platform::WindowOptions::default())
             .expect("headless platform should create a test window");
         let dispatcher =
