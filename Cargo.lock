@@ -1964,6 +1964,7 @@ dependencies = [
  "tokio",
  "toml",
  "which",
+ "windows 0.62.2",
  "zip",
 ]
 

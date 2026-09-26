@@ -595,6 +595,10 @@ impl BuildTarget {
 }
 
 fn main() {
+    // Before anything is spawned: no child (or daemon it starts) may keep
+    // this process's stdout/stderr open behind the caller's back.
+    proc::keep_own_stdio_private();
+
     let cli = Cli::parse();
 
     let verbosity = if cli.verbose {
