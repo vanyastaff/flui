@@ -49,7 +49,6 @@ order = 5
 # frozen until then; the lists only shrink.
 allowed-dependents = [
     "flui",
-    "flui-layer",
     "flui-objects",
     "flui-rendering",
     "flui-semantics",

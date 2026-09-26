@@ -2152,7 +2152,6 @@ dependencies = [
  "bitflags 2.13.2",
  "flui-foundation",
  "flui-painting",
- "flui-tree",
  "flui-types",
  "static_assertions",
  "tracing",
