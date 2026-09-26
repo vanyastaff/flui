@@ -24,9 +24,9 @@
 //!
 //! What stays with the caller is what genuinely differs per harness: which
 //! presentation scopes wrap the root (`FocusRoot`, `VsyncScope`,
-//! `GestureArenaScope` all live in `flui-widgets`, which this crate never
-//! depends on as a normal dependency), which extra capabilities the
-//! `BuildOwner` carries, and what the root constraints are.
+//! `GestureArenaScope` all live in `flui-widgets`, which this crate must never
+//! depend on), which extra capabilities the `BuildOwner` carries, and what the
+//! root constraints are.
 //!
 //! # Example
 //!

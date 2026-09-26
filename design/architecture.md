@@ -1100,8 +1100,8 @@ every pull request; wall time is a nightly trend per OS.
   --check` does not block at B0 and blocks from exit B1. **Shipped, non-blocking:**
   `PipelineOwner::counters()`, `FrameBuildReport::builds_run`,
   `HeadlessBinding::last_frame_report()`, the idle, 10k-list scroll, text-change and
-  full-reassemble scenarios in `crates/flui-testing/tests/perf.rs` with their budgets, and
-  `cargo xtask perf` against `crates/flui-testing/perf/baseline.toml`; only `perf --self-test`
+  full-reassemble scenarios in `crates/flui-widgets/tests/perf.rs` with their budgets, and
+  `cargo xtask perf` against `crates/flui-widgets/perf/baseline.toml`; only `perf --self-test`
   runs in `cargo xtask checks` until the CI `perf` job exists. Idle is measured headlessly as
   "no frame committed", not through the `FrameClock` demand mask.
 - `bench-collect` stops skipping benches with `required-features`

@@ -429,14 +429,14 @@ counters"). `HeadlessBinding::last_frame_report()` pairs that difference with
 `BuildOwner::last_frame_build_report()` (distinct elements rebuilt and builds
 run) for the last pump.
 
-`crates/flui-testing/tests/perf.rs` drives a fixed app — a label over a lazy
+`crates/flui-widgets/tests/perf.rs` drives a fixed app — a label over a lazy
 10 000-row list — through an idle 10 s, a one-screen scroll, a one-label change
 and a full reassemble, and asserts budgets on those reports. `cargo xtask perf`
 runs that target with `FLUI_PERF_OUT` set and compares every count with
-`crates/flui-testing/perf/baseline.toml`:
+`crates/flui-widgets/perf/baseline.toml`:
 
 ```bash
-cargo nextest run -p flui-testing --test perf   # the budget assertions alone
+cargo nextest run -p flui-widgets --test perf   # the budget assertions alone
 cargo xtask perf                                # advisory: prints differences, exits 0
 cargo xtask perf --check                        # any difference fails
 cargo xtask perf --bless                        # rewrite the baseline from this run
