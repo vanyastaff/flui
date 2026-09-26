@@ -494,7 +494,7 @@ impl UiRealm {
     /// redraw.
     #[cfg(feature = "hot-reload")]
     #[must_use]
-    pub(crate) fn apply_hot_reload(&self, tier: flui_hot_reload::HotReloadTier) -> bool {
+    pub(crate) fn apply_hot_reload(&self, tier: flui_runtime::reload::ReloadTier) -> bool {
         let mut needs_redraw = false;
         for presentation in self.presentations.iter() {
             if presentation.apply_hot_reload(tier) {
@@ -515,7 +515,7 @@ impl UiRealm {
             reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
         )
     )]
-    pub(crate) fn perform_hot_reload_entered(&self, tier: flui_hot_reload::HotReloadTier) {
+    pub(crate) fn perform_hot_reload_entered(&self, tier: flui_runtime::reload::ReloadTier) {
         if self.apply_hot_reload(tier) {
             self.request_redraw();
         }

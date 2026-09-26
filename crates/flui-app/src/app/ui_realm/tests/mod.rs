@@ -1557,7 +1557,7 @@ fn hot_reload_command_applies_to_the_owned_presentation() {
 
     realm
         .command_sender()
-        .request_hot_reload(flui_hot_reload::HotReloadTier::HotReload)
+        .request_hot_reload(flui_runtime::reload::ReloadTier::Reassemble)
         .expect("inbox has room");
 
     let report = realm.drain_commands();
@@ -1582,7 +1582,7 @@ fn full_restart_command_does_not_arm_a_presentation_redraw() {
 
     runtime
         .command_sender()
-        .request_hot_reload(flui_hot_reload::HotReloadTier::FullRestart)
+        .request_hot_reload(flui_runtime::reload::ReloadTier::ProcessRestart)
         .expect("inbox has room");
 
     let report = runtime.drain_commands();

@@ -24,6 +24,10 @@ workspace = true
 # `default_pools_started`) for this crate's own tests and
 # for `flui-app`'s, which enable it on their dev edge. Never on a normal edge.
 test-support = []
+# `reload::ReloadTier`, the development reload the realm applies. Names no
+# hot-reload crate; `flui-app`'s `hot-reload` feature turns it on alongside its
+# optional `flui-hot-reload` edge and translates the driver's tier into it.
+hot-reload = []
 
 [dependencies]
 # `PresentationId`, which names a held-input queue in traces.

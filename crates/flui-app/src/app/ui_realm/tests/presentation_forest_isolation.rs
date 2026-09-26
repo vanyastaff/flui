@@ -131,7 +131,7 @@ fn duplicate_global_key_across_presentations_panics_eagerly_naming_both_owners()
 #[test]
 #[cfg(feature = "hot-reload")]
 fn reassemble_fans_out_to_all_presentations_in_mount_order() {
-    use flui_hot_reload::HotReloadTier;
+    use flui_runtime::reload::ReloadTier;
 
     let mut realm = UiRealm::for_test();
     let b_id = realm.install_second_presentation_for_test();
@@ -173,7 +173,7 @@ fn reassemble_fans_out_to_all_presentations_in_mount_order() {
         "precondition: B's initial build must be drained before reassembling"
     );
 
-    let _ = realm.apply_hot_reload(HotReloadTier::HotReload);
+    let _ = realm.apply_hot_reload(ReloadTier::Reassemble);
 
     assert!(
         realm.widgets().has_pending_builds(),
@@ -209,7 +209,7 @@ fn reassemble_fans_out_to_all_presentations_in_mount_order() {
 #[test]
 #[cfg(feature = "hot-reload")]
 fn hot_reload_via_the_command_inbox_fans_out_to_all_presentations_in_mount_order() {
-    use flui_hot_reload::HotReloadTier;
+    use flui_runtime::reload::ReloadTier;
 
     let mut realm = UiRealm::for_test();
     let b_id = realm.install_second_presentation_for_test();
@@ -246,7 +246,7 @@ fn hot_reload_via_the_command_inbox_fans_out_to_all_presentations_in_mount_order
 
     realm
         .command_sender()
-        .request_hot_reload(HotReloadTier::HotReload)
+        .request_hot_reload(ReloadTier::Reassemble)
         .expect("inbox has room");
     let report = realm.drain_commands();
     assert_eq!(

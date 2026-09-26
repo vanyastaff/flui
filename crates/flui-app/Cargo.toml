@@ -54,7 +54,7 @@ web = []
 # inert implementation; the inert one names no `flui_hot_reload` item at all.
 # Desktop and Android install drivers. Web and iOS remain compile-safe when
 # feature unification enables this feature, but do not install a driver yet.
-hot-reload = ["dep:flui-hot-reload"]
+hot-reload = ["dep:flui-hot-reload", "flui-runtime/hot-reload"]
 
 # === Native accessibility ===
 # Forwards `flui-platform`'s `a11y`: the per-OS AccessKit adapters

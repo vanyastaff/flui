@@ -21,6 +21,8 @@
 //!   the host-injection seam — which only the host constructs;
 //! - [`performance_stats`]: the rolling frame-time window a presentation's
 //!   performance overlay draws;
+//! - `reload` (with the `hot-reload` feature): the development reload tier a
+//!   realm applies, translated from the host's hot-reload driver;
 //! - [`semantics_host`]: per-presentation semantics enablement and platform
 //!   accessibility delivery;
 //! - [`sink`]: the [`FrameSink`](sink::FrameSink) a frame is submitted
@@ -31,5 +33,7 @@ pub mod epoch;
 pub mod execution;
 pub mod held_input;
 pub mod performance_stats;
+#[cfg(feature = "hot-reload")]
+pub mod reload;
 pub mod semantics_host;
 pub mod sink;

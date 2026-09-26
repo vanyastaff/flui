@@ -86,7 +86,7 @@ pub(crate) enum UiCommand {
             reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
         )
     )]
-    HotReload(flui_hot_reload::HotReloadTier),
+    HotReload(flui_runtime::reload::ReloadTier),
     /// Resolve and invoke an accessibility action on the owner thread,
     /// addressed to the exact presentation that was live when the sender
     /// stamped it.
@@ -215,7 +215,7 @@ impl UiCommandSender {
     )]
     pub(crate) fn request_hot_reload(
         &self,
-        tier: flui_hot_reload::HotReloadTier,
+        tier: flui_runtime::reload::ReloadTier,
     ) -> Result<(), CommandSendError> {
         self.send(UiCommand::HotReload(tier))
     }

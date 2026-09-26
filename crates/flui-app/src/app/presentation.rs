@@ -1359,11 +1359,11 @@ impl PresentationState {
     /// Apply a hot-reload tier to this presentation's own element tree.
     /// Returns whether a redraw is required.
     #[cfg(feature = "hot-reload")]
-    pub(crate) fn apply_hot_reload(&self, tier: flui_hot_reload::HotReloadTier) -> bool {
-        use flui_hot_reload::HotReloadTier;
+    pub(crate) fn apply_hot_reload(&self, tier: flui_runtime::reload::ReloadTier) -> bool {
+        use flui_runtime::reload::ReloadTier;
 
         match tier {
-            HotReloadTier::HotReload => {
+            ReloadTier::Reassemble => {
                 self.widgets.perform_reassemble();
                 self.pipeline
                     .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
@@ -1373,7 +1373,7 @@ impl PresentationState {
                 );
                 true
             }
-            HotReloadTier::HotRestart => {
+            ReloadTier::Restart => {
                 tracing::warn!(
                     { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
                     "HotRestart root remount is not implemented; applying reassemble"
@@ -1383,7 +1383,7 @@ impl PresentationState {
                     .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
                 true
             }
-            HotReloadTier::FullRestart => {
+            ReloadTier::ProcessRestart => {
                 tracing::debug!(
                     { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
                     "FullRestart is owned by the CLI process supervisor"
