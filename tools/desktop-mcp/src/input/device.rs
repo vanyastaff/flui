@@ -1,8 +1,10 @@
 //! The enigo-backed input device.
 //!
-//! Absolute pointer moves go through [`crate::os::move_pointer`] where the OS
-//! offers a virtual-desktop-wide move (Windows), because enigo's absolute
-//! move normalizes against the primary monitor only.
+//! Absolute pointer moves ([`Input::move_to`]) go through the OS's own
+//! virtual-desktop-wide move, `os::move_pointer`, because enigo's absolute
+//! move normalizes against the primary monitor only. Only Windows has that
+//! move (and a physical-button check to guard it); elsewhere `move_to`
+//! refuses.
 
 use std::thread;
 use std::time::Duration;
