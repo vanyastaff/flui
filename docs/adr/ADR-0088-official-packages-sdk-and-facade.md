@@ -4,7 +4,8 @@
 - **Date:** 2026-09-25
 - **Supersedes in part (on acceptance):** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) — the
   placement of Material and Cupertino as core-workspace crates, and the exemption set
-  `{flui-localizations, flui-app, flui}` that may depend on them. Its decoupling rules (shared
+  `{flui-app, flui}` that may depend on them (it named `flui-localizations` too until
+  ADR-0081 deleted that crate). Its decoupling rules (shared
   substrate below both, mechanism goes down, capability seams instead of platform branches, raw
   primitives, injected selection chrome, no god-widget entry point) stand.
 - **Amends (on acceptance):** the delivery-layer sentence of the product plan (the living plan linked from
@@ -27,14 +28,13 @@
 ### Where the design systems sit today
 
 Material and Cupertino are workspace members (`Cargo.toml:33-34`) at layer 7. ADR-0028's rule is
-enforced by their own manifests: both list `allowed-dependents = ["flui-localizations",
-"flui-app", "flui"]` and the same `allowed-dev-dependents`
+enforced by their own manifests: both list `allowed-dependents = ["flui-app", "flui"]` and
+the same `allowed-dev-dependents`
 (Material's manifest before move 2, `crates/flui-cupertino/Cargo.toml:82-85`), checked by
 `cargo xtask workspace` (`tools/xtask/src/workspace.rs:9-14`, `:146`, `:240-257`). In practice
 only the facade depends on them: `flui-material` and `flui-cupertino` are optional facade
 dependencies (`Cargo.toml:525-526`) behind `material` and `cupertino` features (`:605-606`), and
-`default = ["material"]` (`:598`). `flui-app` and `flui-localizations` are exempted but declare
-no such edge.
+`default = ["material"]` (`:598`). `flui-app` is exempted but declares no such edge.
 
 `flui-material` reaches into nine internal crates in its normal dependencies — widgets, view,
 types, objects, rendering, foundation, animation, interaction, scheduler

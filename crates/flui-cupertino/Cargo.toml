@@ -84,8 +84,8 @@ tier-kind = "official"
 order = 2
 # ADR-0028: no other crate depends on a design system in any form, and the
 # two design systems do not depend on each other.
-allowed-dependents = ["flui-localizations", "flui-app", "flui"]
-allowed-dev-dependents = ["flui-localizations", "flui-app", "flui"]
+allowed-dependents = ["flui-app", "flui"]
+allowed-dev-dependents = ["flui-app", "flui"]
 # ADR-0088 §2: an official package's normal dependencies are the SDK and the
 # contract crates. These go when Cupertino moves onto flui-sdk.
 edge-exceptions = [

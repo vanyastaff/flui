@@ -36,9 +36,8 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 
 /// The local test scope, one slice for the whole suite (docs/testing.md,
 /// "What `cargo xtask test` runs"):
-/// - `--features flui/cupertino,flui/localizations`: the facade's non-default
-///   catalogs join the workspace run through feature unification, instead of a
-///   second `-p flui --features ...` run that re-resolved features for flui's
+/// - `--features flui/cupertino`: the facade's non-default catalog joins the
+///   workspace run through feature unification, instead of a second `-p flui --features ...` run that re-resolved features for flui's
 ///   graph alone and so rebuilt every shared crate under a second hash. The
 ///   default-feature facade (material only) is then not tested here, CI's
 ///   `test` job included (it runs this scope); its `cargo build --workspace
@@ -62,7 +61,7 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
     "--bins",
     "--tests",
     "--features",
-    "flui/cupertino,flui/localizations",
+    "flui/cupertino",
 ];
 
 /// Options every task takes.
@@ -1010,7 +1009,7 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations";
+    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino";
 
     #[test]
     fn workflow_lint_runs_each_installed_linter_and_skips_the_rest() {

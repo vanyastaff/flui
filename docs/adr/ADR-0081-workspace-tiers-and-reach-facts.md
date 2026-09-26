@@ -13,7 +13,8 @@
   packages, in any kind, is declared) are implemented and checked
   by `cargo xtask workspace`, with today's refused edges seeded as `edge-exceptions` in place of
   a separate allowlist (ADR-0088 §2), but remain Proposed until the owner accepts them. §4 and
-  §5 remain Proposed.
+  §5 remain Proposed. The §1 deletions of `flui-tree` and `flui-localizations` landed
+  2026-09-26.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md) through the
   accepted §1 (the numbered layer table, "a crate is a layer" as the only reason for a crate, and
@@ -146,7 +147,7 @@ smaller `order`; moving the harness above the runtime removes that edge first.
 | **K** spine and runtime | `flui-view`, `flui-widgets`, `flui-runtime` ([ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)), `flui-testing`, `flui-sdk` ([ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)) | `flui-platform`, `winit`, `android-activity`, `ndk`, `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine`, `flui-app` |
 | **H** hosts | `flui-platform` (OS backends), `flui-app` (runners), `flui-cli`, the `flui` facade | none |
 | **pkg** official packages | `flui-material`, `flui-cupertino`, `flui-devtools`, `flui-hot-reload`, later packages | K's set, plus any other OS crate, with named exceptions |
-| **deleted** | `flui-tree`, `flui-localizations` | — (transitional tier until removed; see below) |
+| **deleted** | `flui-tree`, `flui-localizations` (removed 2026-09-26) | — |
 
 The K set is the corrected list from owner decision 4. Generic FFI crates (`windows-sys`,
 `jni`, bare `objc2`, `core-foundation`) are **not** forbidden in K: they arrive through
@@ -161,17 +162,25 @@ about a windowing backend. A package that must reach a forbidden crate lists it 
 way in: R's set keeps `wgpu`, so any other R crate that reaches it is reported, with or without
 the DX12 backend that would bring `windows`.
 
-`flui-tree` and `flui-localizations` are deleted; the owner confirmed both deletions on
-2026-09-25. `flui-tree`'s tree traits have no generic consumer: its arity, slot and depth markers
-fold into `flui-foundation`, and the read, navigation and write traits become inherent methods.
-`flui-localizations` (a crate alone in its own layer) moves its RTL table into
-`flui_widgets::localization` and its other tables into the packages. Until those removals land, both carry a transitional tier (`V` for `flui-tree`, `K` with kind `internal` for `flui-localizations`, which depends only on `flui-widgets` and `flui-types`), and their dependents are frozen with the existing `allowed-dependents` and
-`allowed-dev-dependents` keys, under a comment that names this record: `flui-tree` admits the
-six crates that name it today (`flui`, `flui-layer`, `flui-objects`, `flui-rendering`,
-`flui-semantics`, `flui-view`) and no dev-dependent, `flui-localizations` admits only `flui`.
-The lists only shrink: a test in `tools/xtask` pins each one to the crates that depend on it now,
-within the set above. ADR-0041's "Localization direction is locked" paragraph no
-longer applies: nothing in the catalog tiers depends on a localization crate.
+`flui-tree` and `flui-localizations` were deleted on 2026-09-26; the owner confirmed both
+deletions on 2026-09-25. Until then each carried a transitional tier with its dependents frozen,
+and a test in `tools/xtask` pinned the frozen lists; the test went with the last crate.
+
+`flui-tree`'s tree traits had eight implementations and no generic consumer. The arity markers
+and `IndexedSlot`, the only items used outside the crate, went to `flui-foundation`
+(`flui_foundation::arity`, `flui_foundation::IndexedSlot`). `Depth`, `Slot`, `SlotBuilder`,
+`SlotIter`, `TreeError` and `ArityError` had no user and were deleted with their tests. The read,
+navigation and write trio became inherent methods on the three trees that used it:
+`LayerTree::{ancestors, lowest_common_ancestor, descendants}`, `SemanticsTree::remove` (and a
+private ancestor check behind `add_child`), and `RenderTree::insert`.
+
+`flui-localizations` (a crate alone in its own layer) was removed on 2026-09-26. It held no
+translated strings: every string forwarded to `DefaultWidgetsLocalizations`, so nothing went to
+the packages. Its RTL table and `GlobalWidgetsLocalizationsDelegate` moved to
+`flui_widgets::localization`, the design systems' exemption set became `flui-app` and the
+facade ([ADR-0028](ADR-0028-design-system-decoupling-contract.md)), layer 8 is empty, and the
+facade's `localizations` feature stays empty until nothing names it. ADR-0041's "Localization
+direction is locked" paragraph has nothing left to govern.
 
 ### 2. Reach facts are a gate over the resolved graph
 
@@ -343,7 +352,8 @@ recorded:
 - Every manifest changes: `layer` becomes `tier`, `tier-kind` and `order`. The root
   `layers` array becomes `tiers` with the forbidden sets. `flui-platform` moves from the
   bottom of the graph to H, which is the point: nothing below the hosts may name it.
-- ADR-0028's hard-coded exemption set (`flui-localizations`, `flui-app`, `flui`) is replaced by
+- ADR-0028's hard-coded exemption set (`flui-app`, `flui`; `flui-localizations` until its
+  deletion) is replaced by
   ADR-0088 using this record's kind rule and its dated exceptions. ADR-0028's decoupling rules
   are unchanged.
 - The reach gate is green only with its three seeded `reach-exceptions` entries, none of them

@@ -12,7 +12,7 @@
 //!
 //! Both use [`AligningShiftedBox`] for child positioning and hit-testing.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Alignment, Pixels, Size, geometry::px};
 
 use flui_rendering::{

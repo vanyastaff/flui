@@ -291,7 +291,8 @@ impl WidgetsApp {
     /// The default widgets-localizations delegate is appended **after**
     /// these, and only the first delegate of a given resource type loads, so
     /// a caller-supplied `WidgetsLocalizations` delegate (for example
-    /// `flui-localizations`' global one) overrides the US-English default —
+    /// [`GlobalWidgetsLocalizationsDelegate`](crate::GlobalWidgetsLocalizationsDelegate))
+    /// overrides the US-English default —
     /// the oracle's `LocalizationsResolver.localizationsDelegates` contract.
     #[must_use]
     pub fn localizations_delegates(mut self, delegates: Vec<BoxedLocalizationsDelegate>) -> Self {

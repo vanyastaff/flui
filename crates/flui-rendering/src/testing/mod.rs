@@ -37,7 +37,7 @@
 //! ```
 //! use flui_rendering::testing::{RenderTester, Probe, box_node};
 //! use flui_rendering::prelude::*;
-//! use flui_tree::Leaf;
+//! use flui_foundation::Leaf;
 //! use flui_types::{Size, geometry::px};
 //!
 //! // A minimal leaf render object used only to exercise the harness API.

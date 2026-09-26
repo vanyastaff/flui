@@ -150,7 +150,8 @@ pub use flui_types::platform::Brightness;
 // Flutter oracle.
 pub use localization::{
     BoxedLocalizationsDelegate, BoxedWidgetsLocalizations, DefaultWidgetsLocalizations,
-    DefaultWidgetsLocalizationsDelegate, Directionality, Localizations, LocalizationsDelegate,
+    DefaultWidgetsLocalizationsDelegate, Directionality, GlobalWidgetsLocalizations,
+    GlobalWidgetsLocalizationsDelegate, Localizations, LocalizationsDelegate, RTL_LANGUAGES,
     WidgetsLocalizations, basic_locale_list_resolution, resolve_alignment,
 };
 

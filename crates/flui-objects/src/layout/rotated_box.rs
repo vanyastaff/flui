@@ -30,7 +30,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Matrix4, Offset, Size};
 
 use flui_rendering::{

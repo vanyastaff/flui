@@ -1,6 +1,6 @@
 //! RenderPadding - adds padding around a single child.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{EdgeInsets, Offset, Pixels, Size, geometry::px};
 
 use flui_rendering::{

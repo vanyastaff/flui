@@ -2,11 +2,11 @@
 
 # Crates Map
 
-> **Scope.** This page describes the **current** workspace as it is built today. `flui-localizations`, `flui-material`, and `flui-cupertino` (Catalog.1) have landed; the remaining target crate decomposition — the formal `flui` facade — is defined in [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md); the migration is sequenced in [`ROADMAP.md`](ROADMAP.md).
+> **Scope.** This page describes the **current** workspace as it is built today. `flui-material` and `flui-cupertino` have landed; the remaining target crate decomposition — the formal `flui` facade — is defined in [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md); the migration is sequenced in [`ROADMAP.md`](ROADMAP.md).
 
-The FLUI workspace contains 30 crates under `crates/`, the official packages under `packages/` (`flui-material`), and the `flui` facade, organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
+The FLUI workspace contains 28 crates under `crates/`, the official packages under `packages/` (`flui-material`), and the `flui` facade, organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
 
-> **Tier and layer assignments here mirror the manifests, which are the authority.** Each crate and the facade declare `[package.metadata.flui] tier`, `tier-kind` and `order`; the root `Cargo.toml` names the tiers in `[workspace.metadata.flui] tiers`, bottom to top ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md)). `cargo xtask workspace` checks every **normal** and build dependency between workspace packages: it points to a lower tier, or to a smaller `order` in the same tier, unless the dependent lists the edge in `edge-exceptions` with the ADR that removes it (an entry for an edge no rule of ADR-0081 refuses is itself a finding, so the list only shrinks); and nothing with a tier depends on a `tier-kind = "tool"` package. Examples and tools declare only `tier-kind = "tool"`. Until the `layer` key is removed, each crate also declares `layer = N` (names in the root `layers`), and the same edges must point to the same layer or lower, never at an example or tool ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)); the layer sections below follow that key. Cargo itself rejects cycles. See [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md) for the target graph. Dev-dependencies may point anywhere (tests use `flui-testing`) and Cargo permits cycles among them: `flui-view`, `flui-interaction` and `flui-scheduler` each form one with `flui-testing`, and `flui-rendering` one with `flui-objects`. The kind rule ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §3, [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md) §2) reads dev edges too: a crate that is neither an official package nor an application names a `tier-kind = "official"` package in no dependency kind, and an official package's normal and build dependencies are `flui-sdk` and the contract crates (`flui-platform-api`, `flui-protocol`); each refused edge needs the dependent's `edge-exceptions` entry, like a tier refusal. Official packages that build on the SDK live under `packages/`, and a member there is official with no `edge-exceptions`. A crate can also narrow who depends on it: `allowed-dependents` (normal and build edges) and `allowed-dev-dependents` in its `[package.metadata.flui]`, which is how `flui-log` stays composition-only and how no crate but `flui-localizations`, `flui-app` and the facade depends on Cupertino in any form until it moves onto the SDK ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)). Examples and tools are applications and may depend on anything.
+> **Tier and layer assignments here mirror the manifests, which are the authority.** Each crate and the facade declare `[package.metadata.flui] tier`, `tier-kind` and `order`; the root `Cargo.toml` names the tiers in `[workspace.metadata.flui] tiers`, bottom to top ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md)). `cargo xtask workspace` checks every **normal** and build dependency between workspace packages: it points to a lower tier, or to a smaller `order` in the same tier, unless the dependent lists the edge in `edge-exceptions` with the ADR that removes it (an entry for an edge no rule of ADR-0081 refuses is itself a finding, so the list only shrinks); and nothing with a tier depends on a `tier-kind = "tool"` package. Examples and tools declare only `tier-kind = "tool"`. Until the `layer` key is removed, each crate also declares `layer = N` (names in the root `layers`), and the same edges must point to the same layer or lower, never at an example or tool ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)); the layer sections below follow that key. Cargo itself rejects cycles. See [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md) for the target graph. Dev-dependencies may point anywhere (tests use `flui-testing`) and Cargo permits cycles among them: `flui-view`, `flui-interaction` and `flui-scheduler` each form one with `flui-testing`, and `flui-rendering` one with `flui-objects`. The kind rule ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §3, [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md) §2) reads dev edges too: a crate that is neither an official package nor an application names a `tier-kind = "official"` package in no dependency kind, and an official package's normal and build dependencies are `flui-sdk` and the contract crates (`flui-platform-api`, `flui-protocol`); each refused edge needs the dependent's `edge-exceptions` entry, like a tier refusal. Official packages that build on the SDK live under `packages/`, and a member there is official with no `edge-exceptions`. A crate can also narrow who depends on it: `allowed-dependents` (normal and build edges) and `allowed-dev-dependents` in its `[package.metadata.flui]`, which is how `flui-log` stays composition-only and how no crate but `flui-app` and the facade depends on Cupertino in any form until it moves onto the SDK ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)). Examples and tools are applications and may depend on anything.
 
 > **Reach.** `cargo xtask reach` checks what each crate's resolved graph contains, not just its direct edges ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §2): in every root build (the facade under each supported feature combination and each feature alone, every crate at its defaults and with all features), no crate reaches a package its tier forbids in the root `[workspace.metadata.flui.reach]`, or that its own `reach-forbid` adds. A crate that must reach one lists `reach-exceptions = [{ to = "<package>", exit = "ADR-NNNN", reason = "…" }]` (`grant` in place of `exit` for a standing permission): the entry excuses the paths that run through that crate, and an entry that excuses nothing is itself a finding.
 
@@ -16,11 +16,11 @@ The FLUI workspace contains 30 crates under `crates/`, the official packages und
 
 | Tier | Crates, by `order` | `tier-kind` |
 |------|--------------------|-------------|
-| V values | `flui-geometry` (1), `flui-types` (2), `flui-macros` (3), `flui-foundation` (4), `flui-tree` (5, deleted by ADR-0081; dependents frozen) | internal |
+| V values | `flui-geometry` (1), `flui-types` (2), `flui-macros` (3), `flui-foundation` (4) | internal |
 | C contracts | `flui-platform-api` (1), `flui-protocol` (2) | stable |
 | S substrate | `flui-log` (1), `flui-scheduler` (2), `flui-painting` (3), `flui-interaction` (4), `flui-semantics` (5), `flui-animation` (6), `flui-assets` (7) | internal |
 | R render machine | `flui-layer` (1), `flui-rendering` (2), `flui-objects` (3), `flui-engine` (4) | internal |
-| K spine and runtime | `flui-view` (1), `flui-testing` (2), `flui-widgets` (3), `flui-localizations` (4, deleted by ADR-0081; dependents frozen), `flui-runtime` (5), `flui-sdk` (6) | internal; `flui-sdk` evolving (its own `0.N` version, which `cargo xtask workspace` requires of an evolving crate) |
+| K spine and runtime | `flui-view` (1), `flui-testing` (2), `flui-widgets` (3), `flui-runtime` (4), `flui-sdk` (5) | internal; `flui-sdk` evolving (its own `0.N` version, which `cargo xtask workspace` requires of an evolving crate) |
 | H hosts | `flui-platform` (1), `flui-app` (2), `flui-cli` (3), `flui` (4) | internal; `flui-cli` tool; `flui` stable |
 | pkg official packages | `flui-material` (1, under `packages/`, on `flui-sdk`), `flui-cupertino` (2), `flui-devtools` (3), `flui-hot-reload` (4) | official |
 
@@ -56,7 +56,6 @@ These crates compose the rendering and platform substrate largely without knowin
 | Crate | Status | Purpose |
 |-------|--------|---------|
 | `flui-log` | ✅ ACTIVE | Composition-only cross-platform logging backend: desktop `fmt` (optionally hierarchical), Android logcat, Apple unified logging, browser console/performance timeline, behind an explicit subscriber-ownership policy. **No framework crate but `flui-app`, `flui-cli` and the facade may link it** (examples, being applications, may) — framework crates use `tracing` directly, and its manifest's `allowed-dependents` (checked by `cargo xtask workspace`) enforces that mechanically. |
-| `flui-tree` | ✅ ACTIVE | Generic tree abstractions: `TreeRead` / `TreeNav` / `TreeWrite` trio, iterators / slots, arity markers (`Leaf` / `Single` / `Optional` / `Variable`), depth markers. A workspace audit deleted the unused speculative `visitor` / `diff` modules; concrete trees adopt the trio directly. |
 | `flui-platform` | ✅ ACTIVE | Backends (native Win32 / AppKit / Headless + `winit` fallback) and the host-facing `Platform` / `HostWindow` surface; the contracts it implements, `PlatformWindow` among them, live in `flui-platform-api`. Sole home of OS-specific code. **Only `flui-app` may depend on it** (its manifest's `allowed-dependents`, checked by `cargo xtask workspace`; examples and tools are exempt). Loses `BackgroundExecutor`/`PlatformExecutor` when host-injected runtime execution lands. |
 | `flui-scheduler` | ✅ ACTIVE | Frame scheduling, microtasks, task prioritization. Narrows to logical update phases, tickers, callback ordering, and owner-local post-frame behavior; presentation clocks and raster backpressure move to presentation/runtime ownership. |
 | `flui-painting` | ✅ ACTIVE | `Canvas` API, `DisplayList`, paths, paint commands, text recording |
@@ -104,13 +103,9 @@ These crates compose the rendering and platform substrate largely without knowin
 | `flui-material` | ✅ ACTIVE | Material Design theming foundation — `ColorScheme`, `Typography`/`TextTheme`, `ThemeData`, and the `Theme` inherited widget (constants-first M3 baseline; `fromSeed` deferred), and the M3 widget catalog. An official package under `packages/flui-material`: its only FLUI dependency is `flui-sdk`, through which it implements `flui-widgets`' `InheritedTheme` trait |
 | `flui-cupertino` | ✅ ACTIVE | iOS-style (Cupertino) theming foundation — `CupertinoDynamicColor`/`CupertinoColors`, `CupertinoTextThemeData`, `CupertinoThemeData`, the `CupertinoTheme` inherited widget, and `CupertinoButton` (constants-first V1; brightness-only dynamic-color resolution, one component). Depends on `flui-widgets` (implements its `InheritedTheme` trait); independent sibling of `flui-material` (ADR-0028 — neither depends on the other) |
 
-Neither design system may depend on `flui-localizations`: it sits a layer above them, and its `allowed-dependents` admits only the facade. See Layer 8.
+## Layer 8 — empty
 
-## Layer 8 — Global localizations
-
-| Crate | Status | Purpose |
-|-------|--------|---------|
-| `flui-localizations` | ✅ ACTIVE | Global (multi-language) localized resources — `GlobalWidgetsLocalizations`, the analog of Flutter's `flutter_localizations`. It is the **implementation** package: it depends on the catalogs that *define* the contracts it implements (`flui-widgets` today; `flui-material`/`flui-cupertino` once `GlobalMaterialLocalizations`/`GlobalCupertinoLocalizations` land), never the reverse. That is why it sits above the design systems. |
+Empty since [ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) deleted `flui-localizations`; `GlobalWidgetsLocalizations` and its delegate live in `flui_widgets::localization`. The index stays so no manifest's `layer` renumbers.
 
 ## Layer 9 — Application / tooling
 
@@ -124,7 +119,7 @@ Neither design system may depend on `flui-localizations`: it sits a layer above 
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui` | ✅ ACTIVE | The root package / app-author facade. Feature-selective: `material` (default), `cupertino`, `localizations`, `hot-reload`. A module whose feature is off is absent, not empty. Every supported combination is compiled in isolation by `cargo xtask facade-combos` (run by the CI feature-matrix job), so a combination cannot pass through workspace feature unification. |
+| `flui` | ✅ ACTIVE | The root package / app-author facade. Feature-selective: `material` (default), `cupertino`, `hot-reload`; `localizations` is empty and deprecated. A module whose feature is off is absent, not empty. Every supported combination is compiled in isolation by `cargo xtask facade-combos` (run by the CI feature-matrix job), so a combination cannot pass through workspace feature unification. |
 
 ## Examples and Tools
 
@@ -150,7 +145,6 @@ cargo build -p flui-geometry
 cargo build -p flui-types
 cargo build -p flui-foundation
 cargo build -p flui-log
-cargo build -p flui-tree
 cargo build -p flui-platform
 # ... continue up the layers
 cargo build -p flui-app

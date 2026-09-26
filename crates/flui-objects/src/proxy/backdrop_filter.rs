@@ -41,7 +41,7 @@
 //! does not claim full-variant GPU coverage, only that the render-object
 //! and `LayerTree` wiring is variant-agnostic and correct.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{
     Offset,
     painting::{BlendMode, ImageFilter},

@@ -26,7 +26,7 @@
 //!   child). See the per-axis note on `child_constraints` and the
 //!   infinite-`max` factor tests.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Alignment, Offset, Pixels, Size, geometry::px};
 
 use flui_rendering::{

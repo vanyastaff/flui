@@ -9,6 +9,8 @@
 //! FLUI Foundation contains:
 //! - **Tree IDs**: `ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`
 //!   for the 5-tree architecture
+//! - **Tree structure**: the compile-time arity markers ([`Leaf`], [`Single`],
+//!   [`Variable`], …) and [`IndexedSlot`] for child reconciliation
 //! - **Keys**: `Key`, `ValueKey`, `UniqueKey` for widget identity
 //!   (ObjectKey/GlobalKey in flui-view)
 //! - **Change Notification**: Observable patterns for reactive UI updates
@@ -157,6 +159,8 @@
 extern crate self as flui_foundation;
 
 pub mod affinity;
+// Compile-time child-count markers the render protocol attaches to nodes.
+pub mod arity;
 pub mod async_snapshot;
 pub mod callbacks;
 // Generic at-most-once request/reply primitive (ADR-0039 §3): the winit
@@ -179,6 +183,8 @@ pub mod key;
 // the prelude: this is a narrow, deliberately-reached-for utility, not a
 // commonly-imported type.
 pub mod panic;
+// A child's position during reconciliation (index plus previous sibling).
+pub mod slot;
 pub mod wasm;
 
 // Shared field-name vocabulary for structured tracing events. Foundation owns
@@ -211,6 +217,9 @@ pub mod debug;
 
 // Core types - IDs for all tree levels
 pub use affinity::OwnerAffinity;
+// Arity markers. Kept out of the prelude: a glob import of `Range` would
+// shadow `std::ops::Range`.
+pub use arity::{Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
 pub use async_snapshot::{AsyncSnapshot, ConnectionState};
 // Callbacks
 pub use callbacks::{
@@ -272,6 +281,7 @@ pub use key::{Key, KeyRef, Keyed, SaltedKey, UniqueKey, ValueKey, ViewKey, WithK
 // Change notification (Listenable pattern)
 pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};
 pub use rebuild_reason::{RebuildReason, RebuildReasons};
+pub use slot::IndexedSlot;
 // Generic typed channel + unified listener registry
 pub use listener_registry::{ListenerRegistry, ListenerSubscription};
 pub use notifier_generic::{ArgCallback, Notifier};

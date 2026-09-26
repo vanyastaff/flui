@@ -127,7 +127,7 @@ fn absent_locale_resolves_to_first_supported() {
 }
 
 /// A caller-supplied `WidgetsLocalizations` resolving RTL — stands in
-/// for `flui-localizations`' global delegate.
+/// for `GlobalWidgetsLocalizationsDelegate`.
 #[derive(Debug, Clone, Copy)]
 struct RtlWidgetsLocalizations;
 

@@ -24,7 +24,7 @@
 //!   frame with the corrected offset, identical to the on-stage
 //!   passthrough.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 
 use flui_rendering::{
     constraints::SliverGeometry,

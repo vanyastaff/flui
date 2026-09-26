@@ -75,8 +75,8 @@ pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
 /// Flutter parity: `DefaultWidgetsLocalizations`
 /// (`widgets/localizations.dart`). Always [`TextDirection::Ltr`], matching
 /// the oracle (`DefaultWidgetsLocalizations` is unconditionally LTR; only
-/// `GlobalWidgetsLocalizations` — see `flui-localizations` — resolves RTL
-/// locales).
+/// [`GlobalWidgetsLocalizations`](super::GlobalWidgetsLocalizations)
+/// resolves RTL locales).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultWidgetsLocalizations;
 
