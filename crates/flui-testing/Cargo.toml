@@ -135,6 +135,11 @@ tier = "K"
 tier-kind = "internal"
 # Below flui-widgets, which names it as an optional dependency.
 order = 2
+# The kind rule (ADR-0081 §3): a core crate names an official package only by
+# exception.
+edge-exceptions = [
+    { to = "flui-devtools", exit = "ADR-0088", reason = "observation-seam test links both halves (dev)" },
+]
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
     { item = "log_capture::SINK", grant = "ADR-0097", class = "process", reason = "per-thread capture buffer behind tracing's global dispatcher, which the process has once" },

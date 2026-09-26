@@ -56,7 +56,6 @@ layer = 7
 tier = "pkg"
 tier-kind = "official"
 order = 1
-# ADR-0028: no other crate depends on a design system in any form, and the
-# two design systems do not depend on each other.
-allowed-dependents = ["flui-localizations", "flui-app", "flui"]
-allowed-dev-dependents = ["flui-localizations", "flui-app", "flui"]
+# The kind rule (ADR-0081 §3, ADR-0088 §2) replaces a dependents list: only
+# applications and official packages name this crate, and a core crate that
+# does lists the edge in its own `edge-exceptions` (the facade does).

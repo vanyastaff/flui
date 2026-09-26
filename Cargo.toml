@@ -96,7 +96,10 @@ members = [
 # (unique within the tier); examples and tools set only `tier-kind = "tool"`. A normal or build
 # dependency points to a lower tier, or to a smaller `order` in the same tier,
 # unless the dependent lists it in `edge-exceptions` with the ADR that removes
-# it; nothing with a tier depends on a `tool`. Dev-dependencies are free.
+# it; nothing with a tier depends on a `tool`. Dev-dependencies are free,
+# except that only applications and official packages name an official package
+# in any kind, and an official package's normal and build dependencies are
+# flui-sdk and the contract crates (ADR-0081 §3, ADR-0088 §2).
 tiers = [
     "V",   # values: geometry, types, macros, foundation; tree until it is deleted
     "C",   # contracts: flui-platform-api, flui-protocol

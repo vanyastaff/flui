@@ -1,5 +1,12 @@
-//! The tier rule (ADR-0081 §1), the `tier-kind` declarations (§3) and the
-//! train guard (ADR-0088 §5).
+//! The tier rule (ADR-0081 §1), the `tier-kind` declarations and the kind
+//! rule (§3, with ADR-0088 §2), and the train guard (ADR-0088 §5).
+//!
+//! The kind rule: only applications and official packages name an official
+//! package, in any dependency kind; an official package's normal and build
+//! dependencies are [`SDK_SURFACE`]; a member under `packages/` is an
+//! official package with no `edge-exceptions`. A refused edge is admitted by
+//! the dependent's `edge-exceptions`, as for the tier rule, and an entry that
+//! admits nothing either rule refuses is stale.
 //!
 //! The rule itself is pure over [`Members`], so `--self-test` runs it on a
 //! built-in graph without cargo or a disk; only the exit citations of
@@ -36,6 +43,13 @@ const KINDS: [&str; 5] = ["stable", "evolving", "internal", "official", "tool"];
 
 /// The kind of an application: an example, a tool or `flui-cli`.
 const TOOL: &str = "tool";
+
+/// The kind of an official package (ADR-0088).
+const OFFICIAL: &str = "official";
+
+/// What an official package may name in a normal or build dependency: the
+/// package-author surface and the contract crates (ADR-0081 §3, ADR-0088 §2).
+const SDK_SURFACE: [&str; 3] = ["flui-sdk", "flui-platform-api", "flui-protocol"];
 
 /// The keys a crate with a tier declares.
 const TIER_KEYS: [&str; 3] = ["tier", "tier-kind", "order"];
@@ -85,6 +99,22 @@ pub(super) enum Finding {
     Upward { from: Position, to: Position },
     /// A crate with a tier depends on an application.
     OnTool { from: String, to: String },
+    /// A crate that is neither an official package nor an application names
+    /// an official package, in a dependency of any kind, and no
+    /// `edge-exceptions` entry admits it (ADR-0081 §3).
+    NamesOfficial { from: String, to: String },
+    /// An official package has a normal or build dependency outside
+    /// [`SDK_SURFACE`] that no `edge-exceptions` entry admits (ADR-0088 §2).
+    OffSdk { from: String, to: String },
+    /// A member under `packages/` whose kind is not `official`.
+    PackageNotOfficial {
+        name: String,
+        rel: String,
+        kind: String,
+    },
+    /// A member under `packages/` lists `edge-exceptions`: a package moves
+    /// there only once it builds on the SDK alone.
+    PackageExcepted { name: String, rel: String },
     /// An `edge-exceptions` entry for an edge the rule admits or that does
     /// not exist.
     Stale { from: String, to: String },
@@ -133,6 +163,16 @@ impl Finding {
             ),
             Self::Upward { from, to } => (from.name.clone(), to.name.clone(), "upward"),
             Self::OnTool { from, to } => (from.clone(), to.clone(), "on tool"),
+            Self::NamesOfficial { from, to } => (from.clone(), to.clone(), "names official"),
+            Self::OffSdk { from, to } => (from.clone(), to.clone(), "off sdk"),
+            Self::PackageNotOfficial { name, kind, .. } => {
+                (name.clone(), kind.clone(), "package not official")
+            }
+            Self::PackageExcepted { name, .. } => (
+                name.clone(),
+                "edge-exceptions".to_owned(),
+                "package excepted",
+            ),
             Self::Stale { from, to } => (from.clone(), to.clone(), "stale exception"),
             Self::BadExit { from, to, .. } => (from.clone(), to.clone(), "bad exit"),
             Self::NoTrainGuard { name, .. } => (name.clone(), TRAIN_LINKS.to_owned(), "no guard"),
@@ -188,10 +228,34 @@ impl fmt::Display for Finding {
                 "{from} depends on {to}, whose `tier-kind` is \"tool\"; nothing with a tier \
                  depends on an application"
             ),
+            Self::NamesOfficial { from, to } => write!(
+                f,
+                "{from} depends on {to}, an official package: only applications and other \
+                 official packages name one, in any dependency kind (ADR-0081 §3); list it in \
+                 `edge-exceptions` with the ADR that removes the edge"
+            ),
+            Self::OffSdk { from, to } => write!(
+                f,
+                "{from} is an official package and depends on {to}: its normal and build \
+                 dependencies are {} only (ADR-0088 §2); list it in `edge-exceptions` with the \
+                 ADR that removes the edge",
+                SDK_SURFACE.join(", ")
+            ),
+            Self::PackageNotOfficial { rel, kind, .. } => write!(
+                f,
+                "{rel} is under packages/, which holds official packages only, but its \
+                 `tier-kind` is \"{kind}\" (ADR-0088)"
+            ),
+            Self::PackageExcepted { rel, .. } => write!(
+                f,
+                "{rel} is under packages/ and lists `edge-exceptions`: a package moves there \
+                 once it builds on the SDK alone (ADR-0088)"
+            ),
             Self::Stale { from, to } => write!(
                 f,
                 "{from} lists `edge-exceptions` for {to}, but has no normal or build \
-                 dependency on it that the tier rule refuses; remove the entry"
+                 dependency on it that the tier rule refuses, and no dependency on it that the \
+                 kind rule refuses; remove the entry"
             ),
             Self::BadExit { from, to, exit } => write!(
                 f,
@@ -271,6 +335,21 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
                 known: tiers.to_vec(),
             });
         }
+        if member.rel.starts_with("packages/") {
+            if member.tier_kind.as_deref() != Some(OFFICIAL) {
+                findings.push(Finding::PackageNotOfficial {
+                    name: name.clone(),
+                    rel: rel.clone(),
+                    kind: member.tier_kind.clone().unwrap_or_default(),
+                });
+            }
+            if !member.edge_exceptions.is_empty() {
+                findings.push(Finding::PackageExcepted {
+                    name: name.clone(),
+                    rel: rel.clone(),
+                });
+            }
+        }
         if let Some(kind) = &member.tier_kind
             && !KINDS.contains(&kind.as_str())
         {
@@ -326,9 +405,8 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
         tier: tiers[tier].clone(),
         order,
     };
-    // Every edge a rule of ADR-0081 refuses; an `edge-exceptions` entry for any
-    // other edge is stale. A further rule (the kind rule of its §3, which also
-    // reads dev and optional edges) adds its refusals here.
+    // Every edge a rule of ADR-0081 refuses: the tier rule below and the kind
+    // rule after it. An `edge-exceptions` entry for any other edge is stale.
     let mut refused: BTreeSet<(&str, &str)> = BTreeSet::new();
     for &(from_name, to_name) in &edges {
         let (from, to) = (by_name[from_name], by_name[to_name]);
@@ -353,6 +431,14 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
         }
     }
 
+    for (from_name, to_name, finding) in kind_refusals(members) {
+        refused.insert((from_name, to_name));
+        let from = by_name[from_name];
+        if !from.edge_exceptions.iter().any(|entry| entry.to == to_name) {
+            findings.push(finding);
+        }
+    }
+
     for member in members.iter() {
         let mut seen = BTreeSet::new();
         for entry in &member.edge_exceptions {
@@ -373,6 +459,47 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
         }
     }
     findings
+}
+
+/// The edges the kind rule refuses (ADR-0081 §3, ADR-0088 §2), each once,
+/// with the finding it produces unless an `edge-exceptions` entry admits it:
+///
+/// - **names official**: a member that is neither `official` nor `tool`, nor
+///   under `examples/` or `tools/`, depends on an `official` package in any
+///   kind (normal, build or dev; an optional dependency is a normal one);
+/// - **off the SDK**: an `official` package has a normal or build dependency
+///   on a member outside [`SDK_SURFACE`].
+fn kind_refusals(members: &Members) -> Vec<(&str, &str, Finding)> {
+    let by_name = members.by_name();
+    let mut refusals = BTreeMap::new();
+    for member in members.iter() {
+        if member.is_example_or_tool() || member.tier_kind.as_deref() == Some(TOOL) {
+            continue;
+        }
+        let official = member.tier_kind.as_deref() == Some(OFFICIAL);
+        for dep in member.repo_deps() {
+            let Some(to) = by_name.get(dep.name.as_str()) else {
+                continue;
+            };
+            let edge = (member.name(), to.name());
+            let (from, target) = (edge.0.to_owned(), edge.1.to_owned());
+            if official {
+                if dep.kind != DependencyKind::Development && !SDK_SURFACE.contains(&to.name()) {
+                    refusals
+                        .entry(edge)
+                        .or_insert(Finding::OffSdk { from, to: target });
+                }
+            } else if to.tier_kind.as_deref() == Some(OFFICIAL) {
+                refusals
+                    .entry(edge)
+                    .or_insert(Finding::NamesOfficial { from, to: target });
+            }
+        }
+    }
+    refusals
+        .into_iter()
+        .map(|((from, to), finding)| (from, to, finding))
+        .collect()
 }
 
 /// The train guard (ADR-0088 §5): [`TRAIN_GUARD`], when it is a member,
@@ -493,6 +620,24 @@ fn self_test_members() -> Members {
         .remove("tier-kind");
     let (pkg_rel, pkg) = krate("pkg1", "pkg", 1, "official");
     let (pkg2_rel, pkg2) = krate("pkg2", "pkg", 2, "official");
+    let (k_devx_rel, k_devx) = with(
+        krate("k-devx", "K", 5, "internal"),
+        "edge-exceptions",
+        exception("pkg1"),
+    );
+    let (cli_rel, cli) = krate("h-cli", "H", 4, "tool");
+    let (sdk_rel, sdk) = krate("flui-sdk", "K", 6, "evolving");
+    let package = |name: &str, order: u64, kind: &str| {
+        let (_, flui) = krate(name, "pkg", order, kind);
+        (format!("packages/{name}/Cargo.toml"), flui)
+    };
+    let (pkg3_rel, pkg3) = package("pkg3", 3, "official");
+    let (pkg_internal_rel, pkg_internal) = package("pkg-internal", 4, "internal");
+    let (pkg_exc_rel, pkg_exc) = with(
+        package("pkg-exc", 5, "official"),
+        "edge-exceptions",
+        exception("v1"),
+    );
     let guard = |mut node: Node| {
         node.links = Some(TRAIN_LINKS.to_owned());
         node
@@ -522,12 +667,30 @@ fn self_test_members() -> Members {
         crate_node("k1", "K", 3, &[("h1", Dev), ("k-high", Normal)]),
         crate_node("h1", "H", 1, &[("k-high", Normal), ("k-high", Normal)]),
         // silent: H -> pkg with an exception; planted: its second H -> pkg
-        // edge, which the exception does not name
+        // edge, which the exception does not name (upward, and names an
+        // official package)
         node(&h_pkg_rel, &h_pkg, &[("pkg1", Normal), ("pkg2", Normal)]),
-        // planted: H -> pkg without one
+        // planted: H -> pkg without one (upward, and names an official package)
         crate_node("h2", "H", 3, &[("pkg1", Normal)]),
+        // planted: a core crate's dev edge to an official package
+        crate_node("k-dev", "K", 4, &[("pkg1", Dev)]),
+        // silent: the same dev edge with an exception
+        node(&k_devx_rel, &k_devx, &[("pkg1", Dev)]),
+        // silent: a `tool` crate under crates/ may name an official package
+        node(&cli_rel, &cli, &[("pkg1", Dev)]),
+        node(&sdk_rel, &sdk, &[]),
+        // planted: an official package's normal edge off the SDK
         node(&pkg_rel, &pkg, &[("h1", Normal)]),
-        node(&pkg2_rel, &pkg2, &[]),
+        // silent: an official package's dev edges may point anywhere, other
+        // official packages included
+        node(&pkg2_rel, &pkg2, &[("h1", Dev), ("pkg1", Dev)]),
+        // silent: a package on the SDK; planted: its edge off it
+        node(&pkg3_rel, &pkg3, &[("flui-sdk", Normal), ("v1", Normal)]),
+        // planted: a non-official member under packages/
+        node(&pkg_internal_rel, &pkg_internal, &[]),
+        // planted: a member under packages/ with an exception; the edge it
+        // excuses stays silent
+        node(&pkg_exc_rel, &pkg_exc, &[("v1", Normal)]),
         // silent: applications depend on anything
         node(
             "examples/ex/Cargo.toml",
@@ -540,7 +703,14 @@ fn self_test_members() -> Members {
 }
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 9] = [
+const EXPECTED: [(&str, &str, &str); 16] = [
+    ("h2", "pkg1", "names official"),
+    ("h-pkg", "pkg2", "names official"),
+    ("k-dev", "pkg1", "names official"),
+    ("pkg1", "h1", "off sdk"),
+    ("pkg3", "v1", "off sdk"),
+    ("pkg-internal", "internal", "package not official"),
+    ("pkg-exc", "edge-exceptions", "package excepted"),
     ("v-guard", TRAIN_LINKS, "second guard"),
     ("v-dup", "v1", "duplicate order"),
     ("v2", "t1", "on tool"),

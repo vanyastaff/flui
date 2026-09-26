@@ -10,7 +10,14 @@
 //!   exception for an edge the rule admits, or one that does not exist, is a
 //!   finding, so the list only shrinks. Nothing with a tier depends on a
 //!   `tier-kind = "tool"` package. Examples and tools declare only
-//!   `tier-kind = "tool"`. Dev-dependencies may point anywhere.
+//!   `tier-kind = "tool"`. Dev-dependencies may point anywhere, except as the
+//!   kind rule says.
+//! - **Kinds** (ADR-0081 §3, ADR-0088 §2). Only applications and official
+//!   packages name a `tier-kind = "official"` package, in any dependency kind;
+//!   an official package's normal and build dependencies are `flui-sdk` and
+//!   the contract crates; a member under `packages/` is official and lists no
+//!   `edge-exceptions`. A refused edge needs the dependent's `edge-exceptions`
+//!   entry, as for the tiers.
 //! - **Reach declarations** (ADR-0081 §2). `reach-forbid` and
 //!   `reach-exceptions` are read here, and each exception's `exit` or `grant`
 //!   must cite an ADR with a file under `docs/adr`; what they mean over the
@@ -25,8 +32,8 @@
 //! - **Allowed dependents.** A crate may list `allowed-dependents`, the complete
 //!   set of crates allowed a normal or build dependency on it, and
 //!   `allowed-dev-dependents`, the same for dev-dependencies: `flui-log`, which
-//!   only composition roots link, the design systems, which nothing else
-//!   depends on in any form (ADR-0028), and the crates ADR-0081 deletes, whose
+//!   only composition roots link, a design system not yet under the kind rule
+//!   (ADR-0028), and the crates ADR-0081 deletes, whose
 //!   dependents are frozen until then. Examples and tools are applications and
 //!   may depend on anything.
 //! - **wasm32.** `wasm = false` marks a package that cannot build for wasm32;
