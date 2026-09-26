@@ -193,6 +193,10 @@ pub mod rebuild_reason;
 
 // Reactive programming - change notification and observables
 pub mod notifier;
+// The read side of the realm's signal graph (ADR-0085 §2): handles, errors and
+// the `ReadScope` contract. The graph itself lives in `flui-view`. Not
+// re-exported from the root: reached as `flui_foundation::read_scope::…`.
+pub mod read_scope;
 
 // Generic typed notification channel + unified listener registry
 pub mod listener_registry;
