@@ -281,7 +281,7 @@ impl Loader<'_> {
         child: &syn::ItemMod,
         file: &str,
         dir: &str,
-        test_only: bool,
+        mut test_only: bool,
     ) -> anyhow::Result<()> {
         let name = child.ident.to_string();
         let path: Vec<String> = module.iter().cloned().chain([name.clone()]).collect();
@@ -320,7 +320,8 @@ impl Loader<'_> {
             } else {
                 format!("{dir}{name}/")
             };
-            let test_only = test_only || implies_test(&parsed.attrs);
+            // `#![cfg(test)]` at the top of the file gates the whole module.
+            test_only = test_only || implies_test(&parsed.attrs);
             self.items(&path, &parsed.items, &child_file, &child_dir, test_only)?;
             child_file
         };

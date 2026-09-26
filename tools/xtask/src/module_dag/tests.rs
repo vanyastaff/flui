@@ -404,6 +404,22 @@ fn cfg_test_code_is_exempt() {
 }
 
 #[test]
+fn a_top_level_module_file_under_inner_cfg_test_is_no_module() {
+    assert_eq!(
+        identities(
+            TWO,
+            &[
+                ("lib.rs", "pub mod low;\npub mod high;\nmod fixtures;\n"),
+                ("low.rs", "pub struct Low;\n"),
+                ("high.rs", "pub struct High;\n"),
+                ("fixtures.rs", "#![cfg(test)]\nuse crate::high::High;\n"),
+            ],
+        ),
+        set(&[])
+    );
+}
+
+#[test]
 fn cfg_any_test_or_feature_code_is_checked() {
     assert_eq!(
         identities(
