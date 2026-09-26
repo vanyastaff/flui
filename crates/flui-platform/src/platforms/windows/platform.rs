@@ -58,14 +58,40 @@ use crate::{
 /// `static mut bool`).
 static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 
-/// Context data stored per window for event dispatch
+/// Identity of one native window's context, minted once per
+/// [`WindowsWindow::new`] and held by both the context and every wrapper
+/// clone. Unlike the context's address it is never reused, so a wrapper can
+/// tell its own window from one the OS built behind a recycled handle.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct WindowIdentity(std::num::NonZeroU64);
+
+impl WindowIdentity {
+    pub(super) fn mint() -> Self {
+        // A monotonic id source, not shared state: nothing reads it back.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let raw = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(std::num::NonZeroU64::new(raw).expect("BUG: the window identity counter wrapped"))
+    }
+}
+
+/// Context data stored per window for event dispatch.
+///
+/// Lives in the window's `GWLP_USERDATA` slot and is only ever reached on
+/// the window's owner thread, through [`with_window_context`] or
+/// `window_proc`. That is what makes it the home of the window's callbacks:
+/// a registration that cannot reach this context from the calling thread is
+/// refused, so a callback never lands where a foreign thread could run or
+/// drop it.
 pub(super) struct WindowContext {
     /// Window ID for event dispatch
     pub window_id: WindowId,
+    /// Which native window this context belongs to; see [`WindowIdentity`].
+    pub identity: WindowIdentity,
     /// Reference to platform handlers (global)
     pub handlers: Arc<Mutex<PlatformHandlers>>,
-    /// Per-window callbacks for event delivery
-    pub callbacks: Arc<WindowCallbacks>,
+    /// Per-window callbacks for event delivery, owned by this context and
+    /// released by `WM_DESTROY` on the owner thread.
+    pub callbacks: WindowCallbacks,
     /// Scale factor for coordinate conversion.
     ///
     /// `Cell`, not a plain `f32`: `window_proc` only ever holds a shared
@@ -253,6 +279,18 @@ pub(super) fn with_window_context<R>(
     op: &'static str,
     f: impl FnOnce(&WindowContext) -> R,
 ) -> Option<R> {
+    with_window_context_checked(hwnd, op, f).ok()
+}
+
+/// [`with_window_context`] that reports why it refused. On refusal `f` is
+/// dropped here, on the calling thread, untouched — which is what lets a
+/// callback registration hand its callback back to the thread that offered
+/// it instead of parking it where the owner would later run or free it.
+pub(super) fn with_window_context_checked<R>(
+    hwnd: HWND,
+    op: &'static str,
+    f: impl FnOnce(&WindowContext) -> R,
+) -> Result<R, crate::shared::hwnd_affinity::UserDataRefusal> {
     use crate::shared::hwnd_affinity::{UserDataVerdict, classify_user_data_access};
 
     // SAFETY: `GetWindowThreadProcessId(hwnd, None)` takes an optional out
@@ -287,7 +325,7 @@ pub(super) fn with_window_context<R>(
             // `f` defers the free past the guard's drop (see
             // `ContextGuard`).
             let guard = unsafe { ContextGuard::acquire(slot as *mut WindowContext) };
-            Some(f(guard.context()))
+            Ok(f(guard.context()))
         }
         UserDataVerdict::Refuse(reason) => {
             tracing::debug!(
@@ -296,7 +334,7 @@ pub(super) fn with_window_context<R>(
                 ?reason,
                 "refusing to touch this window's native context"
             );
-            None
+            Err(reason)
         }
     }
 }

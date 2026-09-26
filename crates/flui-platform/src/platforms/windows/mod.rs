@@ -47,3 +47,5 @@ pub mod win32 {
 }
 
 mod owner_control;
+#[cfg(test)]
+mod test_probe;
