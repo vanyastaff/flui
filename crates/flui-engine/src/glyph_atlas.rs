@@ -78,6 +78,10 @@ struct Page {
     size: u32,
     /// Whether this is the colour page (the key's `color_page` selects it).
     is_color: bool,
+    /// Allocations of glyphs a grow dropped while this frame still drew
+    /// them; freed at the frame's end so no other glyph lands in a region a
+    /// recorded draw samples.
+    retired: Vec<AllocId>,
 }
 
 impl Page {
@@ -99,6 +103,14 @@ impl Page {
             packer: BucketedAtlasAllocator::new(size2(size as i32, size as i32)),
             size,
             is_color,
+            retired: Vec::new(),
+        }
+    }
+
+    /// Frees the allocations a grow retired during the frame that just ended.
+    fn release_retired(&mut self) {
+        for alloc in self.retired.drain(..) {
+            self.packer.deallocate(alloc);
         }
     }
 
@@ -165,12 +177,15 @@ impl Page {
     /// position. `false` when the page is already at the device limit.
     ///
     /// A re-rasterized image that no longer fits its slot (another size,
-    /// another content kind, or data of the wrong length) is not uploaded:
-    /// its slot is left blank in the new texture rather than failing the
-    /// upload. Warned once per grow.
+    /// another content kind, or data of the wrong length) is not uploaded,
+    /// which would fail wgpu's copy validation. Its entry is dropped, so the
+    /// glyph's next use asks the rasterizer again, as after a `None`; its
+    /// allocation is freed now, or at the frame's end if `frame` drew it.
+    /// Warned once per grow.
     fn grow<R: GlyphRasterizer>(
         &mut self,
-        entries: &FxHashMap<R::Key, Entry>,
+        entries: &mut FxHashMap<R::Key, Entry>,
+        frame: u64,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         rasterizer: &mut R,
@@ -194,8 +209,8 @@ impl Page {
         } else {
             GlyphContent::Mask
         };
-        let mut mismatched = None;
-        for (key, entry) in entries {
+        let mut mismatched = Vec::new();
+        for (key, entry) in entries.iter() {
             if entry.slot.color_page != self.is_color || entry.slot.is_empty() {
                 continue;
             }
@@ -206,17 +221,33 @@ impl Page {
                 || image.content != content
                 || !fits(&image)
             {
-                mismatched.get_or_insert(*key);
+                mismatched.push(*key);
                 continue;
             }
             self.upload(queue, entry.slot.texel, entry.slot.size, &image.data);
         }
-        if let Some(key) = mismatched {
+        if let Some(key) = mismatched.first() {
             tracing::warn!(
                 ?key,
+                count = mismatched.len(),
                 page = self.label(),
-                "a glyph re-rasterized to another bitmap on atlas grow; its slot is left blank"
+                "a glyph re-rasterized to another bitmap on atlas grow; it is dropped and asked for again on its next use"
             );
+        }
+        for key in mismatched {
+            let Some(Entry {
+                alloc: Some(alloc),
+                last_used,
+                ..
+            }) = entries.remove(&key)
+            else {
+                continue;
+            };
+            if last_used == frame {
+                self.retired.push(alloc);
+            } else {
+                self.packer.deallocate(alloc);
+            }
         }
         true
     }
@@ -403,7 +434,8 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
                 continue;
             }
             if page.grow(
-                &self.entries,
+                &mut self.entries,
+                frame,
                 &self.device,
                 &self.queue,
                 &mut self.rasterizer,
@@ -433,6 +465,8 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
     /// Once per presented frame, after its submit: slots the next frame does
     /// not touch become reclaimable.
     pub(crate) fn end_frame(&mut self) {
+        self.mask.release_retired();
+        self.color.release_retired();
         self.frame = self.frame.wrapping_add(1);
         self.reported_full = false;
     }
@@ -654,30 +688,56 @@ mod rasterizer_tests {
         )
     }
 
-    /// Forty 48² masks, more than a 256² page holds: placed in one frame, the
-    /// page must grow once.
-    fn crowded() -> FakeRasterizer {
+    /// Forty 48² images of `content`, more than a 256² page holds: placed in
+    /// one frame, their page must grow once.
+    fn crowded(content: GlyphContent) -> FakeRasterizer {
         let mut fake = FakeRasterizer::default();
         for key in 0..40 {
-            fake.images.insert(key, image(48, 48, GlyphContent::Mask));
+            fake.images.insert(key, image(48, 48, content));
         }
         fake
     }
 
+    fn page_size(atlas: &GlyphAtlas<FakeRasterizer>, content: GlyphContent) -> u32 {
+        match content {
+            GlyphContent::Mask => atlas.mask_page_size(),
+            GlyphContent::Color => atlas.color_page_size(),
+        }
+    }
+
     /// Places every key of [`crowded`] in one frame. Returns the keys placed
-    /// before the mask page grew.
-    fn place_crowded(atlas: &mut GlyphAtlas<FakeRasterizer>) -> Vec<u32> {
-        let initial = atlas.mask_page_size();
+    /// before their page grew, and every slot the frame was handed.
+    fn place_crowded(
+        atlas: &mut GlyphAtlas<FakeRasterizer>,
+        content: GlyphContent,
+    ) -> (Vec<u32>, Vec<super::GlyphSlot>) {
+        let initial = page_size(atlas, content);
         let mut before_grow = Vec::new();
+        let mut slots = Vec::new();
         for key in 0..40 {
             let slot = atlas.slot(key).expect("a grown page has room");
             assert_eq!(slot.size, [48, 48]);
-            if atlas.mask_page_size() == initial {
+            slots.push(slot);
+            if page_size(atlas, content) == initial {
                 before_grow.push(key);
             }
         }
-        assert!(atlas.mask_page_size() > initial, "the page grew");
-        before_grow
+        assert!(page_size(atlas, content) > initial, "the page grew");
+        (before_grow, slots)
+    }
+
+    /// No two slots handed out on one page overlap.
+    fn assert_disjoint(slots: &[super::GlyphSlot]) {
+        for (i, a) in slots.iter().enumerate() {
+            for b in &slots[i + 1..] {
+                let apart = a.color_page != b.color_page
+                    || a.texel[0] + a.size[0] <= b.texel[0]
+                    || b.texel[0] + b.size[0] <= a.texel[0]
+                    || a.texel[1] + a.size[1] <= b.texel[1]
+                    || b.texel[1] + b.size[1] <= a.texel[1];
+                assert!(apart, "{a:?} overlaps {b:?}");
+            }
+        }
     }
 
     #[test]
@@ -726,9 +786,10 @@ mod rasterizer_tests {
     /// never rasterizes a glyph it is not holding.
     #[test]
     fn a_grow_rerasterizes_each_live_glyph_once() {
-        let mut atlas = atlas(crowded());
-        let before_grow = place_crowded(&mut atlas);
+        let mut atlas = atlas(crowded(GlyphContent::Mask));
+        let (before_grow, slots) = place_crowded(&mut atlas, GlyphContent::Mask);
         assert!(!before_grow.is_empty());
+        assert_disjoint(&slots);
         let calls = &atlas.rasterizer_mut().calls;
         for key in 0..40 {
             let expected = if before_grow.contains(&key) { 2 } else { 1 };
@@ -736,19 +797,60 @@ mod rasterizer_tests {
         }
     }
 
-    /// A rasterizer that answers a grow with a smaller bitmap would fail
-    /// wgpu's copy validation (the default error handler panics); the atlas
-    /// skips the upload and the slot keeps its size.
-    #[test]
-    fn a_bitmap_that_changes_on_grow_is_not_uploaded() {
-        let mut fake = crowded();
-        fake.second_call = Some(image(8, 8, GlyphContent::Mask));
+    /// A rasterizer that answers a grow with another bitmap for a live key.
+    /// Uploading it into the slot would fail wgpu's copy validation (the
+    /// default error handler panics), so the atlas skips the upload and drops
+    /// the entry: the glyph's next use asks again, and a later frame reuses
+    /// its space. Nothing the frame was handed overlaps.
+    fn changes_on_grow(content: GlyphContent, second: GlyphImage) {
+        let (size, color_page) = (
+            [second.width, second.height],
+            second.content == GlyphContent::Color,
+        );
+        let mut fake = crowded(content);
+        fake.second_call = Some(second);
         let mut atlas = atlas(fake);
-        let before_grow = place_crowded(&mut atlas);
+        let (before_grow, mut slots) = place_crowded(&mut atlas, content);
         assert!(!before_grow.is_empty());
-        for key in before_grow {
-            assert_eq!(atlas.slot(key).expect("still placed").size, [48, 48]);
+        assert_eq!(
+            atlas.len(),
+            40 - before_grow.len(),
+            "the rejected are dropped"
+        );
+        for key in &before_grow {
+            let again = atlas.slot(*key).expect("placed from the new bitmap");
+            assert_eq!(again.size, size, "key {key}");
+            assert_eq!(again.color_page, color_page, "key {key}");
+            assert_eq!(
+                atlas.rasterizer_mut().calls[key],
+                3,
+                "key {key} is asked again"
+            );
+            slots.push(again);
         }
+        assert_disjoint(&slots);
+        atlas.end_frame();
+        // A new frame: every other slot is reclaimable, the retired ones too.
+        for key in 0..40 {
+            atlas.slot(key).expect("placed");
+        }
+    }
+
+    #[test]
+    fn a_bitmap_that_changes_size_on_grow_is_not_uploaded() {
+        changes_on_grow(GlyphContent::Mask, image(8, 8, GlyphContent::Mask));
+    }
+
+    #[test]
+    fn a_colour_bitmap_that_changes_size_on_grow_is_not_uploaded() {
+        changes_on_grow(GlyphContent::Color, image(8, 8, GlyphContent::Color));
+    }
+
+    /// Same size, but a mask where the colour page holds colour: its data is
+    /// a quarter of what the slot's copy reads.
+    #[test]
+    fn a_bitmap_that_changes_content_on_grow_is_not_uploaded() {
+        changes_on_grow(GlyphContent::Color, image(48, 48, GlyphContent::Mask));
     }
 
     const FACE: FaceKey = FaceKey {

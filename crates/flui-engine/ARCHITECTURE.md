@@ -433,11 +433,18 @@ rasterizer ADR-0092 §10 step 3 switches to. Because a rasterizer is a seam,
 the atlas guards the upload rather than trusting it: an image whose data
 length is not `width × height × bytes_per_texel` is not placed (warned), and
 a grow re-uploads a re-rasterized glyph only if it has the size and content
-kind its slot was given, leaving the slot blank and warning once otherwise.
-Either would otherwise fail wgpu's copy validation, which panics under the
-default error handler. The cosmic-text path always passes both checks
-(`a_bitmap_that_changes_on_grow_is_not_uploaded`,
-`an_image_whose_data_does_not_match_its_size_is_not_placed`).
+kind its slot was given. Either would otherwise fail wgpu's copy validation,
+which panics under the default error handler. A glyph that fails the grow
+check is dropped from the cache, as after a `None`, so its next use asks
+again; its allocation is freed at the end of the frame if the frame already
+drew from it, so no other glyph is packed into a region a recorded draw
+samples (`an_image_whose_data_does_not_match_its_size_is_not_placed`, the
+three `*_on_grow_is_not_uploaded` tests). The cosmic-text path draws the
+same image for a key every time, so the checks never fire on it: its three
+atlas tests (`a_slot_is_shared_by_equal_keys_and_an_empty_glyph_takes_no_space`,
+`eviction_reclaims_slots_before_the_page_grows`,
+`a_page_grows_within_a_frame_and_earlier_slots_keep_their_place`) pass
+unchanged.
 
 ---
 

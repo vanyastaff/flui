@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default keeps today's cosmic-text path, and every production site names the
   default. The atlas no longer uploads a bitmap wgpu would reject: an image
   whose data does not match its size is not placed, and a grow skips a
-  re-rasterized glyph whose size or content changed (both warned). The
-  cosmic-text path never produces either, so its output is unchanged.
+  re-rasterized glyph whose size or content changed and drops it from the
+  cache, so its next use asks again (both warned). The cosmic-text path never
+  produces either, so its output is unchanged.
 
 ### Fixed — SDR presentation transfer
 
