@@ -408,6 +408,15 @@ impl TextEditingController {
             .is_collapsed()
     }
 
+    /// The selected text, empty when the selection is collapsed — Flutter's
+    /// `TextSelection.textInside(text)`, what a copy writes to the clipboard.
+    #[must_use]
+    pub fn selected_text(&self) -> String {
+        let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        let range = guard.selection.range();
+        guard.text[range].to_owned()
+    }
+
     // =========================================================================
     // Mutation — each method notifies listeners after the change
     // =========================================================================

@@ -47,6 +47,8 @@ mod directionality;
 mod directionality_dependency;
 #[path = "editable_text.rs"]
 mod editable_text;
+#[path = "editable_text_clipboard.rs"]
+mod editable_text_clipboard;
 #[path = "exclude_focus.rs"]
 mod exclude_focus;
 #[path = "fade_transition.rs"]

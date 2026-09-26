@@ -22,6 +22,7 @@ use std::any::TypeId;
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{AnimationController, Vsync};
@@ -39,6 +40,7 @@ use flui_objects::{
     RenderParagraph, RenderPhysicalModel, RenderPhysicalShape, RenderSliverOpacity,
     RenderTransform,
 };
+use flui_platform_api::InMemoryClipboard;
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::storage::IntrinsicDimension;
@@ -93,6 +95,9 @@ pub struct LaidOut {
     unconstrained_wrap: UnconstrainedWrap,
     /// Per-contact pointer identity for the synthetic dispatch helpers.
     contacts: PointerContacts,
+    /// The clipboard installed in the build owner, as a realm installs its
+    /// platform's: the headless platform's type, read back by tests.
+    clipboard: Arc<InMemoryClipboard>,
 }
 
 impl std::fmt::Debug for LaidOut {
@@ -297,8 +302,9 @@ fn lay_out_with_pipeline_owner_and_binding(
     mut binding: HeadlessBinding,
 ) -> LaidOut {
     let logical_root_type = root.view_type_id();
-    let owners = MountOwners::with_pipeline_owner(pipeline_owner.clone());
+    let mut owners = MountOwners::with_pipeline_owner(pipeline_owner.clone());
     let focus_manager = owners.build_owner.focus_manager();
+    let clipboard = install_clipboard(&mut owners.build_owner);
 
     // Presentation scopes are this crate's to supply — `flui-testing` owns the
     // mount ordering (including the RootRenderView wrap), not the widget
@@ -343,7 +349,16 @@ fn lay_out_with_pipeline_owner_and_binding(
         reapply_constraints,
         unconstrained_wrap,
         contacts: PointerContacts::new(),
+        clipboard,
     }
+}
+
+/// Install a fresh in-memory clipboard in `build_owner`, as every realm
+/// installs its platform's, and return it for read-back.
+fn install_clipboard(build_owner: &mut flui_view::BuildOwner) -> Arc<InMemoryClipboard> {
+    let clipboard = Arc::new(InMemoryClipboard::new());
+    build_owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(clipboard.clone()));
+    clipboard
 }
 
 /// Shallowest mounted element of `logical_root_type` → its render id.
@@ -415,6 +430,12 @@ impl LaidOut {
     /// Focus manager that owns this mounted widget tree.
     pub fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
         Rc::clone(&self.focus_manager)
+    }
+
+    /// The clipboard this tree's widgets reach through
+    /// `LifecycleContext::clipboard_handle`.
+    pub fn clipboard(&self) -> Arc<InMemoryClipboard> {
+        Arc::clone(&self.clipboard)
     }
 
     /// This binding's own scheduler, for a probe that must observe frame
