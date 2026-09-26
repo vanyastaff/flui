@@ -140,7 +140,6 @@ pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
 /// declares no role and the flags must decide.
 fn explicit_role(role: SemanticsRole) -> Option<Role> {
     Some(match role {
-        SemanticsRole::None => return None,
         SemanticsRole::AlertDialog => Role::AlertDialog,
         SemanticsRole::Dialog => Role::Dialog,
         SemanticsRole::Tab => Role::Tab,
@@ -176,8 +175,9 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
         // approximated into a role that would mislead a screen reader about
         // what the control does.
         SemanticsRole::DragHandle | SemanticsRole::HotKey => Role::GenericContainer,
-        // SemanticsRole is non_exhaustive; the pin is
-        // `every_role_but_none_maps_to_an_accesskit_role`, not this match.
+        // `SemanticsRole::None`, which declares no role. SemanticsRole is
+        // non_exhaustive, so this arm would also take a role added later; the
+        // pin is `every_role_but_none_maps_to_an_accesskit_role`, not this match.
         _ => return None,
     })
 }
@@ -332,8 +332,10 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
 #[must_use]
 pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction> {
     match action {
-        accesskit::Action::Expand | accesskit::Action::Collapse => Some(SemanticsAction::Tap),
-        accesskit::Action::Click => Some(SemanticsAction::Tap),
+        // Expand and collapse toggle through the tap handler (see above).
+        accesskit::Action::Click | accesskit::Action::Expand | accesskit::Action::Collapse => {
+            Some(SemanticsAction::Tap)
+        }
         accesskit::Action::ShowContextMenu => Some(SemanticsAction::LongPress),
         accesskit::Action::ScrollLeft => Some(SemanticsAction::ScrollLeft),
         accesskit::Action::ScrollRight => Some(SemanticsAction::ScrollRight),
