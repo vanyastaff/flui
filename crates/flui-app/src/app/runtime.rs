@@ -65,7 +65,8 @@ use super::runner::{RealmTask, SurfaceApplier};
 use super::ui_realm::UiRealm;
 use super::window_registry::{RegistryError, WindowRegistry};
 #[cfg(not(target_arch = "wasm32"))]
-use flui_runtime::execution::{ExecutionServices, HostExecutors, SpawnError};
+use flui_runtime::execution::SpawnError;
+use flui_runtime::execution::{ExecutionServices, HostExecutors};
 
 /// Process-level engine services, each resolved **once** per owner thread in
 /// [`SharedEngineServices::resolve`] — never re-resolved on every access, and
