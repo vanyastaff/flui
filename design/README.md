@@ -16,8 +16,9 @@
   the execution services; the realm core has not moved yet. The module-DAG gate for
   flui-widgets is implemented as `cargo xtask module-dag`. The phase counters and
   `cargo xtask perf` with its baseline are implemented, non-blocking
-  ([architecture.md](architecture.md), budgets). Nothing else described here is implemented. The owner answered the open questions on 2026-09-25; the ADRs
-  and this folder carry those answers.
+  ([architecture.md](architecture.md), budgets). Nothing else described here is implemented.
+  The owner answered the open questions on 2026-09-25; the ADRs and this folder carry those
+  answers.
 - **Date:** 2026-09-25
 - **Baseline:** `main` at `cab06137d`
 
