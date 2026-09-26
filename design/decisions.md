@@ -28,15 +28,17 @@ decisions add up to is in [architecture.md](architecture.md); what still needs t
   date. "Confirmed" means the decision stands as written; "changed" means the entry and its ADR
   now say what the owner decided.
 
-None of these is an accepted decision, except the part of D8 that ADR-0081 accepted, D1 in part and D16 in part (below). The panel's answers are recommendations and the owner's
-answers settle the open questions; acceptance still happens ADR by ADR.
+None of these is an accepted decision, except the part of D8 that ADR-0081 accepted and D1, D2,
+D16 and G in part (ADR-0082, ADR-0083, ADR-0095 and ADR-0097; below). D1's per-backend `Send` removal is
+still Proposed, though Win32 has done its first step. The panel's answers are recommendations and
+the owner's answers settle the open questions; acceptance still happens ADR by ADR.
 
 ## Summary
 
 | # | Decision | Status | ADR |
 |---|---|---|---|
 | D1 | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` | Changed by verification (split into a mechanical move and a per-backend `Send` removal); **accepted in part** (2026-09-26): the capability traits and window/input vocabulary moved, `PlatformWindow` follows in a second move; the per-backend `Send` removal (§4, still Proposed) was revised to require refusing off-owner registration, and Win32 has done its first step | [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) |
-| D2 | One frame transaction in `flui-runtime`, above `flui-widgets` | Changed by verification (test modules move; transaction defined by type); owner confirmed it in B0 | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) |
+| D2 | One frame transaction in `flui-runtime`, above `flui-widgets` | Changed by verification (test modules move; transaction defined by type); owner confirmed it in B0; **accepted in part** (2026-09-26): the crate exists in tier K above `flui-widgets` with the presentation lanes, the realm core follows in later moves | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) |
 | D3 | An open, typed capability set registered by plugins | Verified (seam shape); registration specified by verification; **changed by the owner** (two classes, core-required and optional, behind one door); a prototype (2026-09-26) confirmed the seam and corrected the provider signature, the registry's lifetime (per realm) and the conflict rules; cursor, text input and accessibility are not widget capabilities | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) |
 | D4 | The reactive graph is realm-owned and read through `ReadScope` | Changed by verification and by owner decision O5; owner confirmed removing the `signals` feature; a prototype (2026-09-26) placed the read contract in `flui-foundation` and withdrew the `flui-reactive` extraction | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md), [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) |
 | D5 | One raster contract in `flui-layer`; wgpu and CPU backends | Changed by verification (`RasterBackend` moves first; `RasterOwner` stays) | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |

@@ -10,6 +10,8 @@
 - **Superseded in part by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) — tiers
   are checked beside layers; the layer table, "a crate is a layer" as the only reason, and
   "Localization direction is locked" end when the `layer` key is removed.
+- **Superseded in part by:** [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) — the
+  paragraph "No `flui-runtime` without two consumers"; `flui-runtime` exists.
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (L1 gains
   `flui-platform-api`; the `interaction -> platform` edge becomes `interaction -> platform-api`,
   and `flui-platform` allows only `flui-app` as a dependent)
@@ -76,7 +78,7 @@ The manifests are the source of truth; this table is their reading at the time o
 (L7), so `flui-material`/`flui-cupertino -> flui-localizations` would point up and fail; the
 reverse edges point down when they land.
 
-**No `flui-runtime` without two consumers.** It is recorded as gated. Extraction needs a
+**No `flui-runtime` without two consumers.** (Superseded by ADR-0083.) It is recorded as gated. Extraction needs a
 managed entry point and an embedded/host-driven one both driving the same core, a measurable
 dependency reduction for a consumer, and that boundary exercised by both. Until then
 `flui-app` is the private composition root. Review holds this gate; no tool refuses the

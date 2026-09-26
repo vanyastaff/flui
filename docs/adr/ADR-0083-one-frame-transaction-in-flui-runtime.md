@@ -1,8 +1,10 @@
 # ADR-0083: One frame transaction lives in `flui-runtime` above `flui-widgets`
 
-- **Status:** Proposed
+- **Status:** Accepted in part (2026-09-26): §1's placement (tier K, kind `internal`, above
+  `flui-widgets`, a normal graph that reaches none of the K set) and the first move (see
+  `## Migration`). §1's ownership list, §2–§5 remain Proposed.
 - **Date:** 2026-09-25
-- **Supersedes in part (on acceptance):** [ADR-0041](ADR-0041-workspace-topology-contract.md)
+- **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md)
   (the paragraph "No `flui-runtime` without two consumers")
 - **Amends (on acceptance):** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §9 (the public
   realm/runtime surface); [ADR-0037](ADR-0037-presentation-ownership-domains.md) §1 and §4 (the
@@ -223,6 +225,48 @@ the platform backend and the raster owner remain the three owners of ADR-0037 §
 - Material and Cupertino tests that use `flui_widgets::testing` switch to `flui-testing`.
 - Rollback for the series: the old driver can be kept behind a feature for one minor while the
   runners move; it is removed before the next release.
+
+## Migration
+
+The crate is created first and filled in five moves, each independently mergeable. The
+[migration plan](../plans/2026-09-25-architecture-migration-plan.md) tracks them.
+
+| Move | What moves or changes | Waits on |
+|---|---|---|
+| 1. Lanes (done) | `flui-runtime` is created: tier K, `internal`, `order = 5`, layer 6, with no `flui-widgets` edge until the realm core needs one. It holds the presentation lanes that need nothing from the realm core: `epoch` (`TreeRevision`, `FrameCommitState`), `held_input` (`HeldPointerQueue`, `HeldPointerReplay`) and `semantics_host` (`SemanticsHost`). Items with no production caller compile only under `cfg(test)` or the `test-support` feature | — |
+| 2. Frame sink | `FrameSink` and `SubmitVerdict` (engine-free; they name only `flui_layer::Scene`) and `PerformanceStats` move; `RasterLane<B>` and `DirectSink` stay in `flui-app` and implement the trait | move 1 |
+| 3. Execution | `ExecutionServices` (ADR-0047) moves; `flui-app` re-exports `ComputeJob`, `DeterministicExecutors`, `HostComputePool`, `HostExecutors`, `HostIoPool`, `IoFuture` and `SpawnError`, so their public paths do not change | move 1 |
+| 4. Realm core | `ui_realm`, `presentation`, `presentation_forest`, `lifecycle_state`, `frame_failure`, and `media_query_root` minus its window constructor; the ADR-0048 `catch_unwind` moves unchanged and the realm tests move with a headless `FrameSink`; `UiRealm::enter_for_close` is deleted | `PlatformWindow` in `flui-platform-api` (ADR-0082 §3, second change), since `PresentationState` and `UiRealm` name it; moves 2 and 3; the realm-dispatch tests leaving `realm_dispatch.rs` |
+| 5. Transaction | `Realm::pump` absorbs the runners' `drive_frame_with_lane` calls; `OwnerHost` replaces `AppRuntime`'s realm slot and is §3's one trampoline cell; the production part of `realm_dispatch.rs` moves; the two verification tests below land. Rollback: a `legacy-frame-driver` cargo feature on `flui-app` for one minor | move 4 |
+
+§2 (sealing the entry points), §4 (`flui-testing` above the runtime, taking an `order` after it)
+and the widgets' inline test modules follow move 5.
+
+Until `cargo xtask reach` is on `main`, the K-set fact is checked by
+`cargo tree -p flui-runtime -e normal --target all`, which names none of `flui-platform`,
+`winit`, `android-activity`, `ndk`, `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`,
+`flui-engine` or `flui-app`.
+
+Two defects the realm core would have carried across are fixed with move 1, each pinned by a
+test that failed before the fix:
+
+- **A `GlobalKey` read inside its own presentation's frame deadlocked.** `WidgetsBinding` holds
+  its own write lock across a frame, attach, detach and layout-builder build, and the registry
+  read it again from the same thread. The registry now reads without blocking and reports a
+  busy member; the realm composite skips it, and `GlobalKey` resolves to `None` for keys of the
+  presentation whose frame is running (a Flutter divergence recorded in `flui-view`'s
+  `ARCHITECTURE.md`). This makes the closing-presentation exclusion in
+  `UiRealm::enter_for_close` redundant; move 4 deletes it. Tests:
+  `global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking`,
+  `global_key_in_a_sibling_binding_resolves_during_this_bindings_frame`,
+  `global_key_lookup_from_dispose_during_detach_returns_instead_of_deadlocking` (`flui-view`),
+  `drawer_style_state_read_during_the_realm_frame_does_not_deadlock` and
+  `state_read_across_presentations_during_a_segment_resolves` (`flui-app`).
+- **`ElementBase::depth` returned the sibling slot.** The tree now stamps the depth on the
+  element whenever it sets a node's depth (`ElementBase::set_depth`), as Flutter's
+  `Element._depth` is set in `mount` and repaired in `_updateDepth`. Tests:
+  `element_depth_is_the_tree_depth_not_the_sibling_slot`,
+  `globalkey_retake_restamps_element_depth_for_the_moved_subtree`.
 
 ## Verification
 
