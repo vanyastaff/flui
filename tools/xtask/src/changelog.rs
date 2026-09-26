@@ -462,7 +462,11 @@ fn link_problem(link_type: LinkType, dest: &str) -> Option<String> {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
     });
-    if link_type == LinkType::Email || dest.starts_with('/') || scheme {
+    if dest.starts_with("//") {
+        Some(format!(
+            "`{dest}` is protocol-relative, not root-relative; write it with its scheme"
+        ))
+    } else if link_type == LinkType::Email || dest.starts_with('/') || scheme {
         None
     } else if dest.starts_with('#') {
         Some(format!(

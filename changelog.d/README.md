@@ -36,9 +36,10 @@ nothing goes above the first header.
 
 A link is root-relative (`/docs/testing.md`), absolute (`https:`, `mailto:`), or a code span.
 The link check reads a fragment here and the same text is later pasted into the root file; a
-root-relative link resolves the same way in both places, a relative one does not. An
-`#anchor`-only link and a reference definition (`[x]: /docs/x.md`) are refused, since their
-target changes once fragments are merged.
+root-relative link resolves the same way in both places, a relative one does not. A
+protocol-relative link (`//host/x`) is refused as neither; an `#anchor`-only link and a
+reference definition (`[x]: /docs/x.md`) are refused, since their target changes once fragments
+are merged.
 
 ## Checks and release
 

@@ -329,6 +329,7 @@ fn relative_and_anchor_links_are_refused_root_relative_accepted() {
         "[x](./x.md)",
         "[x](#added)",
         "![img](assets/x.png)",
+        "[x](//example.com/a)",
     ] {
         assert_eq!(
             rules(&format!("### Added\n\n- {bad}\n")),
