@@ -36,11 +36,12 @@ pub struct PipelineCounters {
     /// Render nodes whose `paint_raw` ran. A repaint boundary grafted from
     /// its retained layers is not a paint.
     pub nodes_painted: u64,
-    /// Layers the paint composer created fresh this pass: sealed pictures and
-    /// pushed effect or boundary layers.
+    /// Layers the paint composer created fresh this pass: sealed pictures,
+    /// pushed effect or boundary layers, and the layers a composited-layer
+    /// update patches into a grafted boundary.
     pub layers_produced: u64,
-    /// Layers cloned from a clean repaint boundary's retained output instead
-    /// of being painted again.
+    /// Layers cloned unchanged from a clean repaint boundary's retained
+    /// output instead of being painted again. A patched layer is not one.
     pub layers_reused: u64,
     /// Nodes carried by the accessibility updates the semantics owner
     /// delivered. A flush whose diff is empty adds nothing.

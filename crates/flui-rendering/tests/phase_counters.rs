@@ -4,11 +4,13 @@
 //! a frame and asserts on the difference, which is how a frame driver uses
 //! them.
 
-use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBoundary};
+use flui_objects::{
+    RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
+};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::{Idle, PipelineCounters, PipelineOwner},
-    testing::{RenderLabelRegistry, TreeNode, box_node, tree},
+    testing::{RenderLabelRegistry, TreeNode, box_node, tree, update_render_object},
 };
 use flui_types::{Size, geometry::px};
 
@@ -138,6 +140,44 @@ fn counters_count_grafted_layers_apart_from_fresh_ones() {
         "a paint-only frame lays nothing out: {second:?}"
     );
     assert_eq!(second.frames_produced, 1, "{second:?}");
+}
+
+#[test]
+fn counters_count_a_patched_layer_as_produced_not_reused() {
+    let mut owner = PipelineOwner::new();
+    let registry = root(
+        &mut owner,
+        box_node(RenderFlex::row())
+            .child(
+                box_node(RenderRepaintBoundary::new()).child(
+                    box_node(RenderOpacity::new(0.5))
+                        .label("opacity")
+                        .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+                ),
+            )
+            .child(
+                box_node(RenderRepaintBoundary::new())
+                    .child(box_node(RenderColoredBox::red(10.0, 10.0))),
+            ),
+    );
+    let opacity_id = registry.get("opacity").expect("opacity is labelled");
+    let (mut owner, _) = frame(owner);
+
+    // An alpha change that keeps the opacity composited is served by a layer
+    // patch on the clean boundary's capture, not by a repaint.
+    update_render_object::<RenderOpacity, _>(&mut owner, opacity_id, |o| o.set_opacity(0.25));
+    let (_, second) = frame(owner);
+
+    assert_eq!(
+        second.layers_produced, 3,
+        "both boundaries' OffsetLayers are pushed again, and the patched \
+         OpacityLayer is built from the current alpha: {second:?}"
+    );
+    assert_eq!(
+        second.layers_reused, 2,
+        "the opacity's picture and the other boundary's picture are clones \
+         of retained output: {second:?}"
+    );
 }
 
 #[test]
