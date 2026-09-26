@@ -104,9 +104,10 @@ therefore the opt-in: adding a wasm dev-dependency to a crate does not drag its 
 onto wasm.
 
 `ExecutionServices`' `Backend::Sequential` branch — compute inline at the spawn site, IO through
-`spawn_local` — is now executed, from `crates/flui-app/src/app/execution.rs`'s
-`wasm_sequential_backend_tests`. It had to be a **lib** test: `ExecutionServices` is `pub(crate)`,
-so no integration test can reach it, and the only execution API one *can* reach there
+`spawn_local` — is now executed, from `crates/flui-runtime/src/execution.rs`'s
+`wasm_sequential_backend_tests`. It stays a **lib** test: it pins the private `Backend::Sequential`
+next to its definition, the `default_pools_started` probe it reads exists only under `cfg(test)` or
+the `test-support` feature, and the one execution API an embedder reaches through `flui-app`
 (`DeterministicExecutors`) is a target-independent FIFO that would pass identically on native.
 
 Still compile-only: `flui-platform`'s web backend, which is wasm32-only and has no executing

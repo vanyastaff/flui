@@ -13,7 +13,7 @@ use web_time::{Duration, Instant};
 
 /// Frame timing over the last `max_samples` frames.
 #[derive(Debug, Clone)]
-pub(crate) struct PerformanceStats {
+pub struct PerformanceStats {
     frame_times: VecDeque<Duration>,
     max_samples: usize,
     last_frame: Option<Instant>,
@@ -29,7 +29,8 @@ impl Default for PerformanceStats {
 
 impl PerformanceStats {
     /// A window that keeps the last `max_samples` frame durations.
-    pub(crate) fn new(max_samples: usize) -> Self {
+    #[must_use]
+    pub fn new(max_samples: usize) -> Self {
         Self {
             frame_times: VecDeque::with_capacity(max_samples),
             max_samples,
@@ -39,7 +40,7 @@ impl PerformanceStats {
     }
 
     /// Records that a frame was composited now.
-    pub(crate) fn record_frame(&mut self) {
+    pub fn record_frame(&mut self) {
         let now = Instant::now();
         if let Some(last) = self.last_frame {
             if self.frame_times.len() >= self.max_samples {
@@ -53,7 +54,8 @@ impl PerformanceStats {
 
     /// Average frame time over the window, in milliseconds; `0.0` before the
     /// second frame.
-    pub(crate) fn avg_frame_time_ms(&self) -> f32 {
+    #[must_use]
+    pub fn avg_frame_time_ms(&self) -> f32 {
         if self.frame_times.is_empty() {
             return 0.0;
         }
@@ -66,13 +68,15 @@ impl PerformanceStats {
     }
 
     /// Frames per second over the window; `0.0` before the second frame.
-    pub(crate) fn fps(&self) -> f32 {
+    #[must_use]
+    pub fn fps(&self) -> f32 {
         let avg_ms = self.avg_frame_time_ms();
         if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 }
     }
 
     /// Frames recorded since this window was created.
-    pub(crate) fn total_frames(&self) -> u64 {
+    #[must_use]
+    pub fn total_frames(&self) -> u64 {
         self.total_frames
     }
 }
