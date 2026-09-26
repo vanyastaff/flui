@@ -294,6 +294,43 @@ fn unresolvable_mod_is_an_error() {
     );
 }
 
+#[test]
+fn a_file_the_walk_cannot_follow_is_an_error() {
+    let state = "static S: std::sync::Mutex<u8> = std::sync::Mutex::new(0);";
+    for (root, needle) in [
+        (
+            "fn init() { #[path = \"state.rs\"] mod state; }",
+            "not at module level",
+        ),
+        (
+            "struct T; impl T { fn f() { mod inner { #[path = \"state.rs\"] mod state; } } }",
+            "not at module level",
+        ),
+        (
+            "const _: () = { #[path = \"state.rs\"] mod state; };",
+            "not at module level",
+        ),
+        ("mod m { include!(\"state.rs\"); }", "`include!`"),
+        (
+            "fn f() { include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/state.rs\")); }",
+            "`include!`",
+        ),
+    ] {
+        let error = scan(&[("src/lib.rs", root), ("src/state.rs", state)])
+            .expect_err(&format!("{root} is not followed"));
+        assert!(format!("{error:#}").contains(needle), "{root}: {error:#}");
+    }
+    // build-script output, a test-only include and inline modules in a body
+    // are fine
+    let keys = keys(&[(
+        "src/lib.rs",
+        "mod generated { include!(concat!(env!(\"OUT_DIR\"), \"/generated.rs\")); } \
+         #[cfg(test)] mod t { include!(\"state.rs\"); } \
+         fn f() { mod inline { static I: std::sync::Mutex<u8> = std::sync::Mutex::new(0); } }",
+    )]);
+    assert_eq!(keys, ["f::inline::I"]);
+}
+
 // ---------------------------------------------------------------------------
 // the counter rule
 
