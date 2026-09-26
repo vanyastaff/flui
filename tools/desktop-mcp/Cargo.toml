@@ -19,6 +19,7 @@ path = "src/main.rs"
 workspace = true
 
 [package.metadata.flui]
+tier-kind = "tool"
 # A host tool: stdio MCP server over the OS accessibility and input APIs.
 wasm = false
 

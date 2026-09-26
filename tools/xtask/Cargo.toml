@@ -35,5 +35,6 @@ windows = { workspace = true, features = [
 workspace = true
 
 [package.metadata.flui]
+tier-kind = "tool"
 # Repository automation, a host tool.
 wasm = false

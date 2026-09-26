@@ -94,3 +94,6 @@ workspace = true
 
 [package.metadata.flui]
 layer = 9
+tier = "pkg"
+tier-kind = "official"
+order = 3

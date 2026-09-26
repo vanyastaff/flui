@@ -200,3 +200,9 @@ path = "tests/main.rs"
 
 [package.metadata.flui]
 layer = 9
+tier = "H"
+tier-kind = "internal"
+order = 2
+edge-exceptions = [
+    { to = "flui-hot-reload", exit = "ADR-0094", reason = "the optional `hot-reload` reload driver" },
+]

@@ -84,7 +84,23 @@ members = [
 # feature.
 
 [workspace.metadata.flui]
-# Crate layers, bottom (0) to top. Each crate under crates/ and the facade set
+# Crate tiers, bottom to top (ADR-0081). Each crate under crates/ and the facade
+# set `[package.metadata.flui] tier`, `tier-kind` and `order` (unique within the
+# tier); examples and tools set only `tier-kind = "tool"`. A normal or build
+# dependency points to a lower tier, or to a smaller `order` in the same tier,
+# unless the dependent lists it in `edge-exceptions` with the ADR that removes
+# it; nothing with a tier depends on a `tool`. Dev-dependencies are free.
+tiers = [
+    "V",   # values: geometry, types, macros, foundation; tree until it is deleted
+    "C",   # contracts: the platform API and protocol crates, when they exist
+    "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
+    "R",   # render machine: layer, rendering, objects, engine
+    "K",   # spine and runtime: view, testing, widgets; localizations until it is deleted
+    "H",   # hosts: platform backends, app runners, the CLI, the facade
+    "pkg", # official packages: material, cupertino, devtools, hot reload
+]
+# Crate layers, bottom (0) to top, checked beside the tiers until the `layer`
+# key is removed. Each crate under crates/ and the facade set
 # `[package.metadata.flui] layer`; a normal or build dependency may point to the
 # same layer or lower, never higher, and never at an example or tool. Cargo
 # itself rejects cycles. Checked by `cargo xtask workspace` (ADR-0041).
@@ -495,6 +511,15 @@ categories = ["gui", "rendering::engine"]
 
 [package.metadata.flui]
 layer = 10
+tier = "H"
+tier-kind = "stable"
+order = 4
+# The facade names official packages until they build on the SDK.
+edge-exceptions = [
+    { to = "flui-cupertino", exit = "ADR-0088", reason = "the optional `cupertino` catalog re-export" },
+    { to = "flui-hot-reload", exit = "ADR-0094", reason = "the optional `hot-reload` feature" },
+    { to = "flui-material", exit = "ADR-0088", reason = "the optional `material` catalog re-export" },
+]
 
 # cargo-shear reports these as unlinked; tools/device-checks' iOS safe-area and
 # resident-reopen checks copy them into a scratch project as its `src/main.rs`.

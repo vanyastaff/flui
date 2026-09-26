@@ -17,3 +17,6 @@ flui-view = { path = "../../crates/flui-view" }
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+tier-kind = "tool"

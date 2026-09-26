@@ -95,5 +95,8 @@ path = "tests/main.rs"
 
 [package.metadata.flui]
 layer = 2
+tier = "S"
+tier-kind = "internal"
+order = 7
 # tokio's networking stack (mio) has no wasm32-unknown-unknown support.
 wasm = false

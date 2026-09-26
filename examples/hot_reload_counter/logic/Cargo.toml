@@ -22,5 +22,6 @@ hot-reload-counter-types = { path = "../types" }
 workspace = true
 
 [package.metadata.flui]
+tier-kind = "tool"
 # Hot reload loads the logic crate with dlopen, which the web does not have.
 wasm = false

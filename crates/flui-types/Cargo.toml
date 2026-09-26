@@ -113,3 +113,6 @@ ignored-paths = ["tests/compile_fail/*.rs"]
 
 [package.metadata.flui]
 layer = 0
+tier = "V"
+tier-kind = "internal"
+order = 2

@@ -60,3 +60,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.flui]
 layer = 0
+tier = "V"
+tier-kind = "internal"
+order = 1

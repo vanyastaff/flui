@@ -79,6 +79,9 @@ path = "tests/main.rs"
 
 [package.metadata.flui]
 layer = 7
+tier = "pkg"
+tier-kind = "official"
+order = 2
 # ADR-0028: no other crate depends on a design system in any form, and the
 # two design systems do not depend on each other.
 allowed-dependents = ["flui-localizations", "flui-app", "flui"]

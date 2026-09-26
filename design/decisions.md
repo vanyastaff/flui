@@ -28,7 +28,7 @@ decisions add up to is in [architecture.md](architecture.md); what still needs t
   date. "Confirmed" means the decision stands as written; "changed" means the entry and its ADR
   now say what the owner decided.
 
-None of these is an accepted decision. The panel's answers are recommendations and the owner's
+None of these is an accepted decision, except the part of D8 that ADR-0081 accepted. The panel's answers are recommendations and the owner's
 answers settle the open questions; acceptance still happens ADR by ADR.
 
 ## Summary
@@ -42,7 +42,7 @@ answers settle the open questions; acceptance still happens ADR by ADR.
 | D5 | One raster contract in `flui-layer`; wgpu and CPU backends | Changed by verification (`RasterBackend` moves first; `RasterOwner` stays) | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |
 | D6 | Retained layer identity drives damage | Verified; retained target made conditional | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |
 | D7 | Where official packages live | Changed by owner decision O1 (one workspace, not a nested one) | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
-| D8 | Workspace tiers, stability kinds, "three crates, N items" | Changed by verification and by O2/O3; owner confirmed deleting `flui-tree` and `flui-localizations` | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md), [ADR-0089](../docs/adr/ADR-0089-upstream-types-in-stable-signatures.md) |
+| D8 | Workspace tiers, stability kinds, "three crates, N items" | Changed by verification and by O2/O3; owner confirmed deleting `flui-tree` and `flui-localizations`; ADR-0081 accepted in part on 2026-09-26 (tiers, order, direction rule, `edge-exceptions`, `tier-kind` declarations), checked beside the layers | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md), [ADR-0089](../docs/adr/ADR-0089-upstream-types-in-stable-signatures.md) |
 | D9 | One owner thread hosts isolated realms | Verified; the real bar to parallel layout named; **changed by the owner** (`!Send` flip before the first crates.io publication) | [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) |
 | D10 | IME talks to a pull text-store contract | Changed by owner decision O8 (read + edit + asynchronous lock) | [ADR-0090](../docs/adr/ADR-0090-ime-pull-text-store-contract.md) |
 | D11 | `runtime-internals` becomes `#[doc(hidden)] __runtime` | Re-checked; not challenged by verification; scheduled as its own step in the migration plan | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) |

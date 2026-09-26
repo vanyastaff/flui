@@ -97,7 +97,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 7] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 8] {
     [
         (
             if strict {
@@ -107,6 +107,9 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 7] {
             },
             |args| docs_links::docs_links(&parsed(args)?),
         ),
+        ("workspace --self-test", |args| {
+            workspace::workspace(&parsed(args)?)
+        }),
         ("workspace", |args| workspace::workspace(&parsed(args)?)),
         ("toolchain", |args| toolchain::toolchain(&parsed(args)?)),
         ("wgsl --self-test", |args| wgsl::wgsl(&parsed(args)?)),
@@ -152,6 +155,7 @@ mod tests {
             lines(false),
             [
                 "docs-links",
+                "workspace --self-test",
                 "workspace",
                 "toolchain",
                 "wgsl --self-test",

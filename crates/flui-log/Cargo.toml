@@ -60,6 +60,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [package.metadata.flui]
 layer = 2
+tier = "S"
+tier-kind = "internal"
+order = 1
 # Composition-only: assembling a subscriber (sink, filter, the process-global
 # install) is an application decision, so only composition roots may link it.
 # Framework crates depend on `tracing` alone.
