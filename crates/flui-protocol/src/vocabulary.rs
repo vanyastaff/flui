@@ -1,6 +1,6 @@
 //! One list per vocabulary.
 //!
-//! [`vocabulary!`] expands a single list of `Variant => "name"` entries into
+//! The `vocabulary!` macro expands a single list of `Variant => "name"` entries into
 //! the enum, its `ALL` slice and its `name()` match. A variant cannot be
 //! declared without also being listed and named, which is what ADR-0089 §3
 //! asks of an enumerable vocabulary: every consumer that walks `ALL` sees every
