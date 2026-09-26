@@ -42,7 +42,7 @@ Upstream types reach public paths today in four ways, each checked in this tree:
   facade re-exports that module as `flui::testing::a11y` behind its `testing` feature
   (`src/lib.rs:123-124`, `src/testing.rs:9`).
   `PlatformAccessibility::publish` takes an `accesskit::TreeUpdate`
-  (`crates/flui-platform/src/traits/accessibility.rs:72`). FLUI's own vocabulary already exists:
+  (`crates/flui-semantics/src/platform.rs:79`, moved from `flui-platform` by ADR-0082 §2). FLUI's own vocabulary already exists:
   `SemanticsRole` has 33 variants including `None` (`crates/flui-semantics/src/role.rs:32`),
   `SemanticsAction` 24 (`crates/flui-semantics/src/action.rs:23`), and neither is
   `#[non_exhaustive]`.

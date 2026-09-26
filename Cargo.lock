@@ -2286,6 +2286,7 @@ dependencies = [
  "dpi",
  "flui-foundation",
  "flui-platform-api",
+ "flui-semantics",
  "flui-types",
  "keyboard-types",
  "libc",

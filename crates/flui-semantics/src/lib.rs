@@ -68,6 +68,7 @@ pub mod accessibility;
 // would enrol its internal helpers (`to_node`, `resolve_role`) in the crate's
 // contract, and a translation detail is not something a consumer should pin.
 mod accesskit_translation;
+pub mod platform;
 pub mod action;
 pub mod configuration;
 pub mod event;

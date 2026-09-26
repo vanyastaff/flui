@@ -16,9 +16,6 @@ use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer};
-// The one backend-side trait the realm core still names: the accessibility
-// bridge speaks AccessKit, so it stays in `flui-platform` (ADR-0082 §2).
-use flui_platform::traits::PlatformAccessibility;
 #[cfg(test)]
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::{CursorError, CursorIcon, PlatformWindow};
@@ -34,6 +31,7 @@ use flui_scheduler::{
     AsyncDriver, FrameClock, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler,
     input_to_present_histogram, produce_to_present_histogram,
 };
+use flui_semantics::platform::PlatformAccessibility;
 use flui_semantics::{
     AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_args_for,
     semantics_action_for,

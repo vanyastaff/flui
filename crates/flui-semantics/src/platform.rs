@@ -1,22 +1,27 @@
-//! Platform accessibility capability.
+//! The platform accessibility capability a backend implements.
 //!
-//! [`PlatformAccessibility`] is reached through
-//! [`HostWindow::accessibility`](super::HostWindow::accessibility),
-//! the same fallible `Option<Arc<dyn _>>` discovery used by
-//! [`PlatformTextInput`](crate::traits::PlatformTextInput) (ADR-0030) and
-//! [`PlatformHaptics`](crate::traits::PlatformHaptics) (ADR-0031). A backend
-//! with no accessibility integration returns `None` rather than every
-//! `HostWindow` implementor inheriting methods it cannot honor. It is on the
-//! host-side subtrait, not on `PlatformWindow`, because its signatures are
-//! AccessKit's and the window contract names none (ADR-0082 §1).
+//! [`PlatformAccessibility`] is defined here, beside the AccessKit translation
+//! that produces what it carries, and implemented by the backends in
+//! `flui-platform`, which re-exports it at `flui_platform::traits`. A window
+//! offers it through `flui_platform::traits::HostWindow::accessibility`, the
+//! same fallible `Option<Arc<dyn _>>` discovery used for text input
+//! (ADR-0030) and haptics (ADR-0031): a backend with no accessibility
+//! integration returns `None` rather than every window inheriting methods it
+//! cannot honor. It is on the host-side subtrait, not on `PlatformWindow`,
+//! because its signatures are AccessKit's and the window contract names none
+//! (ADR-0082 §1).
+//!
+//! It lives in this crate rather than the backend crate so the frame runtime
+//! that holds and wires a window's bridge can name it without linking a
+//! platform backend (ADR-0082 §2, ADR-0083).
 //!
 //! # It speaks AccessKit, never semantics types
 //!
-//! `flui-platform` is layer 2 and `flui-semantics` is layer 3, so this crate
-//! cannot name a `SemanticsNode`. That is not a workaround — it is what forces
-//! the translation to happen on the producing side, where the tree and its
-//! stable identities live. What crosses this seam is an
-//! [`accesskit::TreeUpdate`], already translated.
+//! No [`SemanticsNode`](crate::SemanticsNode) crosses this seam, although this
+//! crate could name one: the translation happens on the producing side, where
+//! the tree and its stable identities live, so what a backend receives is an
+//! [`accesskit::TreeUpdate`], already translated, and a backend needs to know
+//! nothing of the semantics tree.
 //!
 //! # Both directions
 //!
@@ -24,7 +29,7 @@
 //!   tree.
 //! - **In** — assistive technology attaches, detaches, and requests actions.
 //!   Those arrive through listeners registered by the composition root, because
-//!   a layer-2 crate has nothing to call.
+//!   a backend has nothing to call.
 //!
 //! The inbound `NodeId`s are the same stable `AccessibilityNodeId` values the
 //! published tree carried, which is what lets a composition root route an

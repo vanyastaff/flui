@@ -7,7 +7,8 @@
   pending the evidence Verification lists as outstanding for it. §4 and §5 remain Proposed. §4
   was revised in place on 2026-09-26, while still Proposed: what step one requires, the
   precondition for step two, and the order of the headless and Win32 backends. Win32 has
-  completed step one.
+  completed step one. §2 was amended on 2026-09-26: `PlatformAccessibility` moves to
+  `flui-semantics`.
 - **Date:** 2026-09-25
 - **Amends (on acceptance):** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,
   [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §1–§3,
@@ -112,7 +113,8 @@ release, not in the move.
 
 `flui-platform` becomes tier H, kind `internal`. It keeps every OS backend, the host-facing
 `Platform` trait, `OwnerPlatform`, `SharedPlatform`, `PlatformProxy`, `PendingWindow`/`WindowOpen`,
-the prompt APIs, and `PlatformAccessibility` (its signatures are AccessKit's). Only composition
+the prompt APIs, and, until the amendment below, `PlatformAccessibility` (its signatures are
+AccessKit's). Only composition
 roots depend on it: `flui-app`, and tests that drive a backend.
 
 `PlatformAccessibility` has two consumers in `flui-app`, not one: the runner reads the bridge from
@@ -123,6 +125,16 @@ roots depend on it: `flui-app`, and tests that drive a backend.
 port, typed through `flui_semantics`, that a host adapter implements over
 `Arc<dyn PlatformAccessibility>`, or `PlatformAccessibility` itself moved to a crate at tier S
 or below that may depend on `accesskit`.
+
+**Amended (2026-09-26): the second option.** `PlatformAccessibility` and its two listener aliases
+(`AccessibilityActivationListener`, `AccessibilityActionListener`) move to
+`flui_semantics::platform`, next to the AccessKit translation that produces what `publish`
+carries (`tree_to_update`, `semantics_action_for`). `flui-semantics` is tier S and already
+depends on `accesskit`. `flui-platform` depends on `flui-semantics` and re-exports the three names
+at `flui_platform::traits`, so no backend or host path changes; its layer becomes 3 so the edge
+points to the same layer. `HostWindow::accessibility` stays in `flui-platform`: only the trait
+moved, not the discovery. A runtime-owned port was not chosen because it has one implementation
+and would move the translation in `PresentationState` into the host.
 
 `Platform` stays effectively sealed, as ADR-0039 §1 describes: an out-of-crate backend cannot mint
 the `OwnerPlatform` its `run()` hands to `on_ready`. This record does not open that minting seam;
