@@ -173,8 +173,8 @@ where
         self.core.depth()
     }
 
-    fn set_depth(&mut self, depth: usize) {
-        self.core.set_depth(depth);
+    fn set_depth(&mut self, depth: crate::view::ElementDepth) {
+        self.core.set_depth(depth.get());
     }
 
     fn mark_needs_build(&mut self) {

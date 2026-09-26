@@ -221,7 +221,7 @@ impl ElementNode {
             "BUG: ElementNode::set_depth during the build_scope take/put window"
         );
         if let Some(kind) = self.kind.as_mut() {
-            kind.set_depth(depth);
+            kind.set_depth(crate::view::ElementDepth::new(depth));
         }
     }
 

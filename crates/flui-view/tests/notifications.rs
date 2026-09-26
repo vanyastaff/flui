@@ -143,8 +143,8 @@ impl<N: Notification> ElementBase for NotificationListenerElement<N> {
         self.depth
     }
 
-    fn set_depth(&mut self, depth: usize) {
-        self.depth = depth;
+    fn set_depth(&mut self, depth: flui_view::ElementDepth) {
+        self.depth = depth.get();
     }
 
     fn mark_needs_build(&mut self) {}

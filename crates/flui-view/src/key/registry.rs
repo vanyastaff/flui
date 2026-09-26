@@ -498,7 +498,7 @@ mod tests {
             0
         }
 
-        fn set_depth(&mut self, _depth: usize) {
+        fn set_depth(&mut self, _depth: crate::view::ElementDepth) {
             unreachable!("test double: never inserted into a tree")
         }
 

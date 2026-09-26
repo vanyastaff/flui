@@ -21,7 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stamps the depth through a new required `ElementBase::set_depth` before
   `mount` and again when a GlobalKey retake or reparent moves the subtree, as
   Flutter's `Element._depth` is set in `mount` and repaired in `_updateDepth`.
-  Hand-written `ElementBase` impls must add `set_depth`.
+  Hand-written `ElementBase` impls must add `set_depth(&mut self, depth:
+  ElementDepth)` and store `depth.get()`; `ElementDepth` has no public
+  constructor, so only the tree can call it.
 
 ### Changed
 

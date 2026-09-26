@@ -226,10 +226,10 @@ pub use reactive::{Reactive, Signal, SignalError, SignalSender, SignalSlot, Slot
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
-    AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementExt, ErrorView,
-    ErrorViewBuilder, FieldMask, FieldSet, FlutterError, InheritedData, InheritedElement,
-    InheritedView, IntoElement, IntoView, Memo, ParentDataConfig, ParentDataElement,
-    ParentDataView, ProxyElement, ProxyView, RenderElement, RenderObjectContext,
+    AnimatedElement, AnimatedView, BoxedElement, BoxedView, ElementBase, ElementDepth, ElementExt,
+    ErrorView, ErrorViewBuilder, FieldMask, FieldSet, FlutterError, InheritedData,
+    InheritedElement, InheritedView, IntoElement, IntoView, Memo, ParentDataConfig,
+    ParentDataElement, ParentDataView, ProxyElement, ProxyView, RenderElement, RenderObjectContext,
     RenderObjectContextError, RenderView, RootRenderElement, RootRenderView, StatefulElement,
     StatefulView, StatelessElement, StatelessView, View, ViewExt, ViewState,
     clear_error_view_builder, set_error_view_builder,
