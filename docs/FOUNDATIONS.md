@@ -151,7 +151,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 |---|---|
 | L0 — Foundation | `flui-geometry`, `flui-types` |
 | L1 — Framework primitives | `flui-foundation`, `flui-macros`, `flui-platform-api` |
-| L2 — Substrate | `flui-tree`, `flui-platform`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-assets` |
+| L2 — Substrate | `flui-platform`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-assets` |
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
 | L4 — Render machine + render catalog | `flui-engine`, `flui-rendering`, `flui-objects` |
 | L5 — Framework spine | `flui-view` |
@@ -167,7 +167,6 @@ graph TD
     types[flui-types]
     foundation[flui-foundation]
     macros[flui-macros]
-    tree[flui-tree]
     platformapi[flui-platform-api +services-caps]
     platform[flui-platform backends]
     scheduler[flui-scheduler]
@@ -193,7 +192,6 @@ graph TD
 
     types --> geometry
     foundation -.-> types
-    tree --> foundation
     platformapi --> types
     platformapi --> foundation
     platform --> platformapi
@@ -202,16 +200,13 @@ graph TD
     interaction --> foundation
     interaction --> platformapi
     assets --> types
-    semantics --> tree
     layer --> painting
-    layer --> tree
     animation --> scheduler
     engine --> layer
     engine --> painting
     rendering --> interaction
     rendering --> layer
     rendering --> semantics
-    rendering --> tree
     rendering --> scheduler
     objects --> rendering
     objects --> painting

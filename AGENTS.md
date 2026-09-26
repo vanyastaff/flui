@@ -42,7 +42,7 @@ now and expensive once consumers exist, so fix a bad shape instead of working ar
 
 ## Codebase map
 
-29 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
+28 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
 declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtask workspace`);
 `docs/crates.md` is the readable version. Bottom to top:
 
@@ -51,7 +51,7 @@ declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtas
 - **Contracts** — `flui-platform-api` (platform contracts: capability traits and window/input
   vocabulary, no OS code; ADR-0082), `flui-protocol` (semantics roles and actions, the
   agent-protocol wire vocabulary; ADR-0095).
-- **Substrate** — `flui-tree` (tree traits), `flui-platform` (the backends behind those
+- **Substrate** — `flui-platform` (the backends behind those
   contracts: windows, input, IME, clipboard; every `windows::*`/`objc2::*` type stays inside it;
   only `flui-app` depends on it), `flui-scheduler` (frame phases),
   `flui-painting` (records into a `DisplayList`), `flui-interaction` (event routing, gestures),
@@ -144,7 +144,7 @@ memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only c
 | **ID offset** — slab indices are 0-based; public IDs (`ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`: insert `slab_index + 1`, look up `id.get() - 1` | `NonZeroUsize` + ID newtypes |
 | No lock guard held across an `if let`/`match` arm | `clippy::significant_drop_in_scrutinee` |
 | No `todo!`/`unimplemented!`/`dbg!` in production (linux/ios/android init stubs carry an `#[expect]`) | clippy `todo`/`unimplemented`/`dbg_macro` |
-| No `println!`/`eprintln!` in `flui-foundation`/`flui-tree`/`flui-macros` | clippy `print_stdout`/`print_stderr` |
+| No `println!`/`eprintln!` in `flui-foundation`/`flui-macros` | clippy `print_stdout`/`print_stderr` |
 | No `From<f32>` for `flui-geometry` unit wrappers | `compile_fail` doctests in `flui-geometry` |
 | No bare `unwrap()` in production; by convention `expect("BUG: <invariant>")` for internal invariants, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | `clippy::unwrap_used`; the conventions are review |
 | Crate layering (a normal or build dependency points to a lower tier, or a smaller `order` in the same tier, unless the dependent lists it in `edge-exceptions` with the ADR that removes it; and, until `layer` is removed, to the same layer or lower — ADR-0081); no framework crate but `flui-app`, `flui-cli` and the facade links `flui-log`; none but `flui-app` depends on `flui-platform` (ADR-0082); none but `flui-app` and the facade depends on Material or Cupertino, in any form (ADR-0028); manifests inherit the workspace keys and lints; no unreachable test file; unique ADR numbers | `cargo xtask workspace` (`[package.metadata.flui]` in each manifest) |

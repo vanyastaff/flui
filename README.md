@@ -17,7 +17,7 @@ are defined in [Beta release criteria](docs/BETA.md).
 
 ## Status
 
-- ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`, `flui-log`, `flui-tree`, `flui-platform`
+- ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`, `flui-log`, `flui-platform`
 - ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-hot-reload`
 - ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-material`, `flui-cupertino`, `flui-testing`, `flui-animation`, `flui-assets`, `flui-app` (migration)
 - ✅ DX/tooling: `flui-devtools` (partial), `flui-cli` (with the per-target build pipeline in `crates/flui-cli/src/build/`)

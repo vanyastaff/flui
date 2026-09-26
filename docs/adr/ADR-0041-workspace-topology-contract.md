@@ -16,7 +16,7 @@
   `flui-platform-api`; the `interaction -> platform` edge becomes `interaction -> platform-api`,
   and `flui-platform` allows only `flui-app` as a dependent)
 - **Amended by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (2026-09-26) —
-  `flui-localizations` is deleted, so L8 is empty and "Localization direction is locked" has
+  `flui-tree` (L2) and `flui-localizations` are deleted, so L8 is empty and "Localization direction is locked" has
   nothing left to govern. The layer table below is a dated reading and stays as written.
 - **Related:** ADR-0028 (the design-system rule this generalizes), ADR-0037 (the
   `interaction -> platform` same-layer edge)

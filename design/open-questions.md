@@ -163,7 +163,7 @@ its own.
 - **Decision:** delete both.
   [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) records the deletions in its
   tier table.
-- **Implemented:** `flui-localizations` deleted on 2026-09-26.
+- **Implemented:** both crates deleted on 2026-09-26.
 
 ### 11. Clipboard: required backend method or registry capability
 

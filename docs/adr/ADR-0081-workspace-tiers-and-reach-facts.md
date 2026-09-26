@@ -9,7 +9,7 @@
   `flui-platform`, where the migration plan expected only `flui-platform` edges. ADR-0082's
   trait move landed first, so the first run on `main` needed no `flui-platform` entry. The
   kind rules of §3 (core never names official, the forward allowlist), §4
-  and §5 remain Proposed. The §1 deletion of `flui-localizations` landed 2026-09-26.
+  and §5 remain Proposed. The §1 deletions of `flui-tree` and `flui-localizations` landed 2026-09-26.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md) through the
   accepted §1 (the numbered layer table, "a crate is a layer" as the only reason for a crate, and
@@ -141,7 +141,7 @@ smaller `order`; moving the harness above the runtime removes that edge first.
 | **K** spine and runtime | `flui-view`, `flui-widgets`, `flui-runtime` ([ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)), `flui-testing`, `flui-sdk` ([ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)) | `flui-platform`, `winit`, `android-activity`, `ndk`, `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine`, `flui-app` |
 | **H** hosts | `flui-platform` (OS backends), `flui-app` (runners), `flui-cli`, the `flui` facade | none |
 | **pkg** official packages | `flui-material`, `flui-cupertino`, `flui-devtools`, `flui-hot-reload`, later packages | K's set, plus any other OS crate, with named exceptions |
-| **deleted** | `flui-tree`; `flui-localizations` (removed 2026-09-26) | — (transitional tier until removed; see below) |
+| **deleted** | `flui-tree`, `flui-localizations` (removed 2026-09-26) | — |
 
 The K set is the corrected list from owner decision 4. Generic FFI crates (`windows-sys`,
 `jni`, bare `objc2`, `core-foundation`) are **not** forbidden in K: they arrive through
@@ -156,15 +156,17 @@ about a windowing backend. A package that must reach a forbidden crate lists it 
 way in: R's set keeps `wgpu`, so any other R crate that reaches it is reported, with or without
 the DX12 backend that would bring `windows`.
 
-`flui-tree` and `flui-localizations` are deleted; the owner confirmed both deletions on
-2026-09-25. `flui-tree`'s tree traits have no generic consumer: its arity, slot and depth markers
-fold into `flui-foundation`, and the read, navigation and write traits become inherent methods.
-Until that removal lands, it carries a transitional tier (`V`), and its dependents are frozen
-with the existing `allowed-dependents` and `allowed-dev-dependents` keys, under a comment that
-names this record: `flui-tree` admits the six crates that name it today (`flui`, `flui-layer`,
-`flui-objects`, `flui-rendering`, `flui-semantics`, `flui-view`) and no dev-dependent. The list
-only shrinks: a test in `tools/xtask` pins it to the crates that depend on it now, within that
-set.
+`flui-tree` and `flui-localizations` were deleted on 2026-09-26; the owner confirmed both
+deletions on 2026-09-25. Until then each carried a transitional tier with its dependents frozen,
+and a test in `tools/xtask` pinned the frozen lists; the test went with the last crate.
+
+`flui-tree`'s tree traits had eight implementations and no generic consumer. The arity markers
+and `IndexedSlot`, the only items used outside the crate, went to `flui-foundation`
+(`flui_foundation::arity`, `flui_foundation::IndexedSlot`). `Depth`, `Slot`, `SlotBuilder`,
+`SlotIter`, `TreeError` and `ArityError` had no user and were deleted with their tests. The read,
+navigation and write trio became inherent methods on the three trees that used it:
+`LayerTree::{ancestors, lowest_common_ancestor, descendants}`, `SemanticsTree::remove` (and a
+private ancestor check behind `add_child`), and `RenderTree::insert`.
 
 `flui-localizations` (a crate alone in its own layer) was removed on 2026-09-26. It held no
 translated strings: every string forwarded to `DefaultWidgetsLocalizations`, so nothing went to

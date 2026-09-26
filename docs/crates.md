@@ -4,7 +4,7 @@
 
 > **Scope.** This page describes the **current** workspace as it is built today. `flui-material` and `flui-cupertino` have landed; the remaining target crate decomposition — the formal `flui` facade — is defined in [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md); the migration is sequenced in [`ROADMAP.md`](ROADMAP.md).
 
-The FLUI workspace contains 29 crates plus the `flui` facade, organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
+The FLUI workspace contains 28 crates plus the `flui` facade, organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
 
 > **Tier and layer assignments here mirror the manifests, which are the authority.** Each crate and the facade declare `[package.metadata.flui] tier`, `tier-kind` and `order`; the root `Cargo.toml` names the tiers in `[workspace.metadata.flui] tiers`, bottom to top ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md)). `cargo xtask workspace` checks every **normal** and build dependency between workspace packages: it points to a lower tier, or to a smaller `order` in the same tier, unless the dependent lists the edge in `edge-exceptions` with the ADR that removes it (an entry for an edge no rule of ADR-0081 refuses is itself a finding, so the list only shrinks); and nothing with a tier depends on a `tier-kind = "tool"` package. Examples and tools declare only `tier-kind = "tool"`. Until the `layer` key is removed, each crate also declares `layer = N` (names in the root `layers`), and the same edges must point to the same layer or lower, never at an example or tool ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)); the layer sections below follow that key. Cargo itself rejects cycles. See [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md) for the target graph. Dev-dependencies may point anywhere (tests use `flui-testing`) and Cargo permits cycles among them: `flui-view`, `flui-interaction` and `flui-scheduler` each form one with `flui-testing`, and `flui-rendering` one with `flui-objects`. A crate can narrow who depends on it: `allowed-dependents` (normal and build edges) and `allowed-dev-dependents` in its `[package.metadata.flui]`, which is how `flui-log` stays composition-only and how no crate but `flui-app` and the facade depends on Material or Cupertino in any form ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)). Examples and tools are applications and may depend on anything.
 
@@ -16,7 +16,7 @@ The FLUI workspace contains 29 crates plus the `flui` facade, organized into a s
 
 | Tier | Crates, by `order` | `tier-kind` |
 |------|--------------------|-------------|
-| V values | `flui-geometry` (1), `flui-types` (2), `flui-macros` (3), `flui-foundation` (4), `flui-tree` (5, deleted by ADR-0081; dependents frozen) | internal |
+| V values | `flui-geometry` (1), `flui-types` (2), `flui-macros` (3), `flui-foundation` (4) | internal |
 | C contracts | `flui-platform-api` (1), `flui-protocol` (2) | stable |
 | S substrate | `flui-log` (1), `flui-scheduler` (2), `flui-painting` (3), `flui-interaction` (4), `flui-semantics` (5), `flui-animation` (6), `flui-assets` (7) | internal |
 | R render machine | `flui-layer` (1), `flui-rendering` (2), `flui-objects` (3), `flui-engine` (4) | internal |
@@ -53,7 +53,6 @@ These crates compose the rendering and platform substrate largely without knowin
 | Crate | Status | Purpose |
 |-------|--------|---------|
 | `flui-log` | ✅ ACTIVE | Composition-only cross-platform logging backend: desktop `fmt` (optionally hierarchical), Android logcat, Apple unified logging, browser console/performance timeline, behind an explicit subscriber-ownership policy. **No framework crate but `flui-app`, `flui-cli` and the facade may link it** (examples, being applications, may) — framework crates use `tracing` directly, and its manifest's `allowed-dependents` (checked by `cargo xtask workspace`) enforces that mechanically. |
-| `flui-tree` | ✅ ACTIVE | Generic tree abstractions: `TreeRead` / `TreeNav` / `TreeWrite` trio, iterators / slots, arity markers (`Leaf` / `Single` / `Optional` / `Variable`), depth markers. A workspace audit deleted the unused speculative `visitor` / `diff` modules; concrete trees adopt the trio directly. |
 | `flui-platform` | ✅ ACTIVE | Backends (native Win32 / AppKit / Headless + `winit` fallback) and the host-facing `Platform` / `PlatformWindow` surface; the contracts it implements live in `flui-platform-api`. Sole home of OS-specific code. **Only `flui-app` may depend on it** (its manifest's `allowed-dependents`, checked by `cargo xtask workspace`; examples and tools are exempt). Loses `BackgroundExecutor`/`PlatformExecutor` when host-injected runtime execution lands. |
 | `flui-scheduler` | ✅ ACTIVE | Frame scheduling, microtasks, task prioritization. Narrows to logical update phases, tickers, callback ordering, and owner-local post-frame behavior; presentation clocks and raster backpressure move to presentation/runtime ownership. |
 | `flui-painting` | ✅ ACTIVE | `Canvas` API, `DisplayList`, paths, paint commands, text recording |
@@ -142,7 +141,6 @@ cargo build -p flui-geometry
 cargo build -p flui-types
 cargo build -p flui-foundation
 cargo build -p flui-log
-cargo build -p flui-tree
 cargo build -p flui-platform
 # ... continue up the layers
 cargo build -p flui-app

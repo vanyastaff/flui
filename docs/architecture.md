@@ -29,7 +29,7 @@ Layer 4  ── flui-engine, flui-rendering, flui-objects
                 │   (objects → rendering, never the reverse)
 Layer 3  ── flui-layer, flui-semantics, flui-animation
                 │
-Layer 2  ── flui-tree, flui-platform, flui-scheduler, flui-painting,
+Layer 2  ── flui-platform, flui-scheduler, flui-painting,
                 │  flui-interaction, flui-assets
                 │  (flui-platform = OS backends; only flui-app depends on it)
 Layer 1  ── flui-foundation, flui-macros, flui-platform-api, flui-protocol

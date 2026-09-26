@@ -8,8 +8,8 @@
   status names. ADR-0082: `flui-platform-api` exists and holds the capability traits and the
   window and input vocabulary, and only `flui-app` depends on `flui-platform`; its `Send`
   removal is still Proposed, but Win32 has done its first step (owner-only callbacks, off-owner
-  registration refused). ADR-0081's deletion of `flui-localizations` landed on 2026-09-26.
-  ADR-0095: the `flui-protocol` crate exists and holds `SemanticsRole`, `SemanticsAction` and
+  registration refused). ADR-0081's deletions of `flui-tree` and `flui-localizations` landed on
+  2026-09-26. ADR-0095: the `flui-protocol` crate exists and holds `SemanticsRole`, `SemanticsAction` and
   the ADR-0080 wire vocabulary. ADR-0097: `cargo xtask globals` gates process-global state
   against the seeded `globals` entries in each manifest. ADR-0083: `flui-runtime` exists (tier
   K, internal, above `flui-widgets`) and holds the held-input lane, the semantics host and the

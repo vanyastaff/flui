@@ -305,16 +305,15 @@ cargo test --workspace --release                  # run tests against the releas
 ```bash
 cargo test -p flui-types
 cargo test -p flui-foundation
-cargo test -p flui-tree
 cargo test -p flui-platform
 ```
 
 ### A single test or filter
 
 ```bash
-cargo test -p flui-tree element_id_offset                 # filter by name
-cargo test -p flui-tree element_id_offset -- --nocapture  # surface stdout/println from tests
-cargo test -p flui-tree -- --test-threads=1               # serialize tests (debugging)
+cargo test -p flui-foundation indexed_slot                 # filter by name
+cargo test -p flui-foundation indexed_slot -- --nocapture  # surface stdout/println from tests
+cargo test -p flui-foundation -- --test-threads=1          # serialize tests (debugging)
 ```
 
 ### With logging
@@ -332,7 +331,7 @@ The constitution sets minimum coverage thresholds per crate category:
 
 | Category | Minimum | Examples |
 |----------|---------|----------|
-| Core | 80 % | `flui-types`, `flui-foundation`, `flui-tree`, `flui-rendering`, `flui-view` |
+| Core | 80 % | `flui-types`, `flui-foundation`, `flui-rendering`, `flui-view` |
 | Platform | 70 % | `flui-platform` |
 | Widget | 85 % | (future widget crates) |
 
