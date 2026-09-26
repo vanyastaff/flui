@@ -4,7 +4,8 @@
 - **Date:** 2026-08-18
 - **Amended by:** [ADR-0097](ADR-0097-no-process-global-state-gate.md) (execution services stay
   loop-scoped; any process-global executor state is a `cargo xtask globals` entry that only
-  shrinks)
+  shrinks); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (where
+  `ExecutionServices` lives: `flui-runtime`, reachable only by `flui-app`)
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime/scheduling topology is a sanctioned leapfrog zone — Flutter is not the reference here); [Runtime Architecture Execution Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) ("Unify worker, I/O, and service execution with host injection"); [Runtime Dependency Adoption Guide](../research/2026-08-01-runtime-dependency-adoption-guide.md) (`tokio-util` adoption, "another async runtime: do not add")
 - **Issue:** [#557](https://github.com/vanyastaff/flui/issues/557) — between singleton retirement (#553) and the task/worker/service lifecycles (#558) / threaded raster lane (#559)
 
@@ -25,7 +26,7 @@ The runtime architecture study's target is explicit: *"Work is classified by dea
 
 ### One owner, no ambient reach
 
-`AppRuntime` — the loop-scoped composition root — owns exactly one `ExecutionServices` value (`app/execution.rs`, `pub(crate)`). It is resolved at the same known point as `SharedEngineServices` (realm install, `ensure_execution`), shut down at full loop-exit teardown, and reachable only by injection. There is no global accessor, no thread-local, and no way for a library crate to reach the pools. Realms and presentations will receive capability handles from it when #558 defines them; they do not resolve it themselves.
+`AppRuntime` — the loop-scoped composition root — owns exactly one `ExecutionServices` value (`crates/flui-runtime/src/execution.rs`, `pub` in an internal crate whose only allowed normal dependent is `flui-app`, checked by `cargo xtask workspace`). It is resolved at the same known point as `SharedEngineServices` (realm install, `ensure_execution`), shut down at full loop-exit teardown, and reachable only by injection. There is no global accessor, no thread-local, and no way for a library crate to reach the pools. Realms and presentations will receive capability handles from it when #558 defines them; they do not resolve it themselves.
 
 ### Work classes are lanes, not a priority enum
 

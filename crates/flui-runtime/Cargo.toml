@@ -98,3 +98,8 @@ layer = 6
 tier = "K"
 tier-kind = "internal"
 order = 5
+# ADR-0047: no library crate can reach the execution services' pools. They are
+# `pub` here only so the host can construct them, so the host is the one crate
+# allowed a normal edge; ADR-0083 §4 adds `flui-testing` when the test driver
+# runs the real frame. Dev edges are not restricted.
+allowed-dependents = ["flui-app"]

@@ -151,10 +151,11 @@ execution slot's reset.
 
 ## Consequences
 
-- The `expect(dead_code)` ratchet on `app/execution.rs` is retired on native targets — the
-  lifecycle layer is the lanes' production consumer (bootstrap → services → spawner → lanes,
-  teardown → staged shutdown). It survives narrowed to wasm32, where the lifecycle layer does
-  not exist yet.
+- The `expect(dead_code)` ratchet on the execution services is retired — the lifecycle layer
+  is the lanes' production consumer on native targets (bootstrap → services → spawner →
+  lanes, teardown → staged shutdown). The services now live in `flui-runtime` as a `pub`
+  surface whose only allowed normal dependent is `flui-app` (ADR-0083), so there is no dead
+  code left for the ratchet to catch on wasm32 either.
 - `ExecutionServices` is now held in an `Arc` by `AppRuntime` so lifecycle handles can hold
   it weakly; shutdown semantics are unchanged.
 - **Deliberately deferred, tracked under #558:** ProcessWorker (FLUI has no process

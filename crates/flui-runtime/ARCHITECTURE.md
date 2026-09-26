@@ -16,12 +16,22 @@ lists them and what each waits on.
   every root build. A seam that needs a
   host type (the frame sink, the platform window) crosses as a trait this
   crate defines or one from `flui-platform-api`.
-- **Internal.** Tier K, `tier-kind = "internal"`: nothing here is an embedder
-  API (ADR-0027 §9). `flui-app` is the only normal dependent; the facade
-  re-exports nothing from it.
-- **Per presentation, never per process.** Every type here is owned by one
-  presentation (`HeldPointerQueue`, `SemanticsHost`, `PerformanceStats`, the
-  commit epoch); there is no static, thread-local or process-global state.
+- **Internal, and only the host depends on it.** Tier K,
+  `tier-kind = "internal"`: nothing here is an embedder API (ADR-0027 §9).
+  `allowed-dependents = ["flui-app"]` makes `flui-app` the only crate allowed a
+  normal edge, checked by `cargo xtask workspace` (and pinned by its
+  `the_runtime_admits_only_the_host_as_a_normal_dependent`). That rule is what
+  keeps ADR-0047's "no library crate can reach the pools" true now that
+  `ExecutionServices` is `pub`; ADR-0083 §4 adds `flui-testing` when the test
+  driver runs the real frame. Dev edges are not restricted. `flui-app`
+  re-exports the host-injection seam (`HostExecutors` and its companions) at
+  its old `flui_app::…` paths; the facade re-exports nothing from this crate
+  directly.
+- **Per presentation or per host loop, never per process.** Every type here is
+  owned by one presentation (`HeldPointerQueue`, `SemanticsHost`,
+  `PerformanceStats`, the commit epoch) or, for `ExecutionServices`, by one
+  host loop, constructed only by the host's composition root. There is no
+  static, thread-local or process-global state.
 - **The frame sink is the host's, the verdict is the realm's.** A host
   implements `sink::FrameSink`; the realm reads its `SubmitVerdict` and
   classifies retry, device loss and not-shown (ADR-0068). The trait stays
@@ -66,3 +76,7 @@ frame with nothing to present falls back to no-present pacing (ADR-0068). The
 divergence predates this crate; it is recorded here because the verdict is now
 a crate contract. Pinned by `flui-app`'s raster-lane classification tests, for
 example `app::raster_lane::tests::a_withheld_frame_is_not_collapsed_into_no_present`.
+
+`execution` has no Flutter counterpart to map: runtime and scheduling
+topology, including background execution, is outside Flutter's reference
+(ADR-0027), and ADR-0047 records its design.
