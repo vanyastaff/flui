@@ -1848,7 +1848,6 @@ dependencies = [
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
- "flui-localizations",
  "flui-macros",
  "flui-material",
  "flui-objects",
@@ -2165,14 +2164,6 @@ version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "x11rb 0.14.0",
-]
-
-[[package]]
-name = "flui-localizations"
-version = "0.2.0-dev"
-dependencies = [
- "flui-types",
- "flui-widgets",
 ]
 
 [[package]]

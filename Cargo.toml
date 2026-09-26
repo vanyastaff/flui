@@ -26,15 +26,14 @@ members = [
     "crates/flui-hot-reload",  # Hot-reload scene plugins via dlopen (ACTIVE)
 
     # === Phase 3: Framework Layer ===
-    "crates/flui-rendering",     # Render tree / engine (ACTIVE)
-    "crates/flui-objects",       # Concrete RenderBox/RenderSliver catalog (ACTIVE)
-    "crates/flui-view",          # View/Element tree (ACTIVE)
-    "crates/flui-widgets",       # User-facing widget catalog (ACTIVE — Core.1 slice)
-    "crates/flui-runtime",       # Frame runtime: per-presentation lanes a realm drives (ADR-0083)
-    "crates/flui-localizations", # Global (multi-language) localized resources (ACTIVE — Catalog.1 slice)
-    "crates/flui-testing",       # Test-support: headless deterministic frame driver (pump_frame) (ACTIVE)
-    "crates/flui-material",      # Material Design theming foundation — ColorScheme/TextTheme/ThemeData/Theme (ACTIVE — Catalog.1 slice)
-    "crates/flui-cupertino",     # iOS-style theming foundation — CupertinoDynamicColor/CupertinoTextTheme/CupertinoTheme/CupertinoButton (ACTIVE — Catalog.1 slice)
+    "crates/flui-rendering", # Render tree / engine (ACTIVE)
+    "crates/flui-objects",   # Concrete RenderBox/RenderSliver catalog (ACTIVE)
+    "crates/flui-view",      # View/Element tree (ACTIVE)
+    "crates/flui-widgets",   # User-facing widget catalog (ACTIVE — Core.1 slice)
+    "crates/flui-runtime",   # Frame runtime: per-presentation lanes a realm drives (ADR-0083)
+    "crates/flui-testing",   # Test-support: headless deterministic frame driver (pump_frame) (ACTIVE)
+    "crates/flui-material",  # Material Design theming foundation — ColorScheme/TextTheme/ThemeData/Theme (ACTIVE — Catalog.1 slice)
+    "crates/flui-cupertino", # iOS-style theming foundation — CupertinoDynamicColor/CupertinoTextTheme/CupertinoTheme/CupertinoButton (ACTIVE — Catalog.1 slice)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app",    # Application framework (ACTIVE - Migration)
@@ -98,7 +97,7 @@ tiers = [
     "C",   # contracts: flui-platform-api, flui-protocol
     "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
     "R",   # render machine: layer, rendering, objects, engine
-    "K",   # spine and runtime: view, testing, widgets, runtime; localizations until it is deleted
+    "K",   # spine and runtime: view, testing, widgets, runtime
     "H",   # hosts: platform backends, app runners, the CLI, the facade
     "pkg", # official packages: material, cupertino, devtools, hot reload
 ]
@@ -116,7 +115,7 @@ layers = [
     "Framework spine",                 # 5
     "Widget catalog + DX tooling",     # 6
     "Design systems",                  # 7
-    "Global localizations",            # 8
+    "(empty, ADR-0081)",               # 8
     "Application / tooling",           # 9
     "Facade",                          # 10
 ]
@@ -619,10 +618,9 @@ workspace = true
 # Custom painting, rendering, and gestures have curated authoring modules.
 # Engine/platform internals stay dev-deps for framework integration examples.
 #
-# The catalogs (flui-material/flui-cupertino) and the global localization
-# implementation (flui-localizations) are *optional* normal dependencies, not
-# dev-deps: `src/lib.rs` re-exports them as `flui::material` /
-# `flui::cupertino` / `flui::localizations`, and a `[dev-dependencies]` crate
+# The catalogs (flui-material/flui-cupertino) are *optional* normal
+# dependencies, not dev-deps: `src/lib.rs` re-exports them as
+# `flui::material` / `flui::cupertino`, and a `[dev-dependencies]` crate
 # is unavailable to the lib target itself. Optional means an author who wants
 # neither catalog pays for neither — see `[features]` below. The facade's
 # layer (10) is above the design systems (7), so these edges point down
@@ -644,7 +642,6 @@ flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
 flui-testing = { workspace = true, optional = true }
 flui-material = { path = "crates/flui-material", version = "=0.2.0-dev", optional = true }
 flui-cupertino = { path = "crates/flui-cupertino", version = "=0.2.0-dev", optional = true }
-flui-localizations = { path = "crates/flui-localizations", version = "=0.2.0-dev", optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -724,15 +721,11 @@ default = ["material"]
 # import site rather than a mystery empty namespace.
 material = ["dep:flui-material"]
 cupertino = ["dep:flui-cupertino"]
-# `flui::localizations` — the global (multi-language) implementations of the
-# catalogs' localization contracts. The catalogs own the contracts and never
-# depend back on this package (it sits a layer above them, and
-# `cargo xtask workspace` rejects an upward edge);
-# the facade re-exporting it does not change that direction. Future Material
-# and Cupertino implementations inside flui-localizations must use independent
-# optional features, so enabling one catalog's translations never compiles the
-# other catalog accidentally.
-localizations = ["dep:flui-localizations"]
+# Deprecated and empty. The global widgets localizations now live in
+# `flui::widgets` and need no feature; this name stays only so a build that
+# still passes `flui/localizations` (the weekly workflow does) keeps resolving.
+# It is removed once nothing names it (ADR-0081).
+localizations = []
 
 # === GPU readback tests ===
 # Opt-in, and OFF by default on purpose. `tests/composited_layer_update_readback.rs`
@@ -866,7 +859,7 @@ required-features = ["cupertino"]
 # catalogs because it snapshots the Material and Cupertino demos; both are
 # named directly rather than through an alias feature, so the target's
 # requirements are readable at the target. CI's "facade non-default catalogs"
-# step (`--features cupertino,localizations`, Material being default) runs it.
+# step (`--features cupertino`, Material being default) runs it.
 [[test]]
 name = "composited_layer_update_readback"
 path = "tests/composited_layer_update_readback.rs"
