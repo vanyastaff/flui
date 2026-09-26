@@ -175,29 +175,13 @@ fn seed_round_trips() {
 #[test]
 fn archival_roots_are_the_ones_agents_md_lists() {
     let agents = crate::util::read("AGENTS.md").expect("AGENTS.md");
-    let flat = agents.split_whitespace().collect::<Vec<_>>().join(" ");
-    let (_, rest) = flat
-        .split_once("Archival roots are exempt (")
-        .expect("AGENTS.md lists the archival roots");
-    let (list, _) = rest.split_once(").").expect("the list closes");
-    let mut listed = BTreeSet::new();
-    for item in list.split('`').skip(1).step_by(2) {
-        match item.split_once('{') {
-            Some((prefix, braced)) => {
-                for name in braced.trim_end_matches('}').split(',') {
-                    listed.insert(format!("{prefix}{}/", name.trim()));
-                }
-            }
-            None => {
-                listed.insert(format!("{item}/"));
-            }
-        }
-    }
-    let roots: BTreeSet<String> = ARCHIVAL_ROOTS
-        .iter()
-        .map(|root| (*root).to_owned())
-        .collect();
-    assert_eq!(listed, roots);
+    assert_eq!(archival_drift(&agents), Ok(()));
+    // a root added to the prose alone is drift
+    let widened = agents.replace("`openspec`)", "`openspec`, `docs/drafts`)");
+    assert_ne!(widened, agents, "the list's last item moved");
+    let why = archival_drift(&widened).expect_err("drift is reported");
+    assert!(why.contains("docs/drafts/"), "{why}");
+    assert!(archival_drift("no list here").is_err());
 }
 
 #[test]
