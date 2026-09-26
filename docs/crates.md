@@ -15,14 +15,14 @@ The FLUI workspace contains 28 crates plus the `flui` facade, organized into a s
 | Tier | Crates, by `order` | `tier-kind` |
 |------|--------------------|-------------|
 | V values | `flui-geometry` (1), `flui-types` (2), `flui-macros` (3), `flui-foundation` (4), `flui-tree` (5, deleted by ADR-0081; dependents frozen) | internal |
-| C contracts | `flui-protocol` (2); `flui-platform-api` planned | stable |
+| C contracts | `flui-platform-api` (1), `flui-protocol` (2) | stable |
 | S substrate | `flui-log` (1), `flui-scheduler` (2), `flui-painting` (3), `flui-interaction` (4), `flui-semantics` (5), `flui-animation` (6), `flui-assets` (7) | internal |
 | R render machine | `flui-layer` (1), `flui-rendering` (2), `flui-objects` (3), `flui-engine` (4) | internal |
 | K spine and runtime | `flui-view` (1), `flui-testing` (2), `flui-widgets` (3), `flui-localizations` (4, deleted by ADR-0081; dependents frozen) | internal |
 | H hosts | `flui-platform` (1), `flui-app` (2), `flui-cli` (3), `flui` (4) | internal; `flui-cli` tool; `flui` stable |
 | pkg official packages | `flui-material` (1), `flui-cupertino` (2), `flui-devtools` (3), `flui-hot-reload` (4) | official |
 
-The `edge-exceptions` in force: `flui-interaction → flui-platform` and `flui-widgets → flui-platform` (the `testing` harness) until [ADR-0082](adr/ADR-0082-platform-api-contract-crate.md); `flui-app → flui-hot-reload` and `flui → flui-hot-reload` until [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md); `flui → flui-material` and `flui → flui-cupertino` until [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md).
+The `edge-exceptions` in force: `flui-app → flui-hot-reload` and `flui → flui-hot-reload` until [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md); `flui → flui-material` and `flui → flui-cupertino` until [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md).
 
 A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members]` while integration is in progress; the source tree still exists but is not built by default.
 

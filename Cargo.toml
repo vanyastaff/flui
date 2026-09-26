@@ -94,7 +94,7 @@ members = [
 # it; nothing with a tier depends on a `tool`. Dev-dependencies are free.
 tiers = [
     "V",   # values: geometry, types, macros, foundation; tree until it is deleted
-    "C",   # contracts: the platform API and protocol crates, when they exist
+    "C",   # contracts: flui-platform-api, flui-protocol
     "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
     "R",   # render machine: layer, rendering, objects, engine
     "K",   # spine and runtime: view, testing, widgets; localizations until it is deleted

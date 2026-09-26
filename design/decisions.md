@@ -28,7 +28,7 @@ decisions add up to is in [architecture.md](architecture.md); what still needs t
   date. "Confirmed" means the decision stands as written; "changed" means the entry and its ADR
   now say what the owner decided.
 
-None of these is an accepted decision, except the part of D8 that ADR-0081 accepted and D1 in part (below). The panel's answers are recommendations and the owner's
+None of these is an accepted decision, except the part of D8 that ADR-0081 accepted, D1 in part and D16 in part (below). The panel's answers are recommendations and the owner's
 answers settle the open questions; acceptance still happens ADR by ADR.
 
 ## Summary
