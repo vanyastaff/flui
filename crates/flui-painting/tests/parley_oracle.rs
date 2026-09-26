@@ -37,7 +37,10 @@ struct HostScript {
     color: bool,
 }
 
-const HOST_SCRIPTS: [HostScript; 3] = [
+/// The complex scripts of which the host must carry at least one.
+const COMPLEX_SCRIPTS: [&str; 3] = ["arabic", "devanagari", "hebrew"];
+
+const HOST_SCRIPTS: [HostScript; 4] = [
     HostScript {
         name: "arabic",
         text: "مرحبا بالعالم هذا نص عربي",
@@ -46,6 +49,11 @@ const HOST_SCRIPTS: [HostScript; 3] = [
     HostScript {
         name: "devanagari",
         text: "नमस्ते दुनिया यह हिंदी पाठ है",
+        color: false,
+    },
+    HostScript {
+        name: "hebrew",
+        text: "שלום עולם זה טקסט בעברית",
         color: false,
     },
     HostScript {
@@ -292,29 +300,41 @@ fn padded(coords: &[i16], font: &FontData) -> Vec<i16> {
 /// A host face whose charmap covers `script`'s sample (spaces aside), picked
 /// by family name so the choice is stable on a host; `None` if the host has
 /// none.
+///
+/// A static face is preferred over a variable one: Parley may place a
+/// variable face at coordinates cosmic-text would not, and the reference
+/// skips those keys.
 fn host_face(db: &fontdb::Database, script: &HostScript) -> Option<(String, Vec<u8>)> {
     let mut candidates: Vec<(&str, fontdb::ID)> = db
         .faces()
         .filter_map(|face| Some((face.families.first()?.0.as_str(), face.id)))
         .collect();
     candidates.sort_unstable();
-    candidates.into_iter().find_map(|(family, id)| {
-        db.with_face_data(id, |data, index| {
-            let face = swash::FontRef::from_index(data, usize::try_from(index).ok()?)?;
-            let charmap = face.charmap();
-            let covers = script
-                .text
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .all(|c| charmap.map(c) != 0);
-            let colored = [*b"COLR", *b"CBDT", *b"sbix"].iter().any(|tag| {
-                swash::TableProvider::table_by_tag(&face, u32::from_be_bytes(*tag)).is_some()
-            });
-            (covers && (colored || !script.color) && index == 0)
-                .then(|| (family.to_owned(), data.to_vec()))
+    let pick = |allow_variable: bool| {
+        candidates.iter().find_map(|(family, id)| {
+            db.with_face_data(*id, |data, index| {
+                let face = swash::FontRef::from_index(data, usize::try_from(index).ok()?)?;
+                let charmap = face.charmap();
+                let covers = script
+                    .text
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .all(|c| charmap.map(c) != 0);
+                let has = |tag: &[u8; 4]| {
+                    swash::TableProvider::table_by_tag(&face, u32::from_be_bytes(*tag)).is_some()
+                };
+                let colored = [b"COLR", b"CBDT", b"sbix"].into_iter().any(has);
+                let variable = has(b"fvar");
+                (covers
+                    && (colored || !script.color)
+                    && (allow_variable || !variable)
+                    && index == 0)
+                    .then(|| ((*family).to_owned(), data.to_vec()))
+            })
+            .flatten()
         })
-        .flatten()
-    })
+    };
+    pick(false).or_else(|| pick(true))
 }
 
 #[derive(Default)]
@@ -360,8 +380,9 @@ fn compare(shaper: &mut Shaper, family: &str, text: &str) -> Report {
 
 /// swash on Parley's keys draws exactly what cosmic-text's scaler draws.
 ///
-/// Latin is the bundled Roboto and always runs. Of Arabic and Devanagari at
-/// least one must be on the host; emoji runs when the host has a colour face.
+/// Latin is the bundled Roboto and always runs. Of Arabic, Devanagari and
+/// Hebrew at least one must be on the host; emoji runs when the host has a
+/// colour face.
 #[test]
 fn swash_matches_cosmic_text_bit_for_bit() {
     let mut shaper = Shaper::new();
@@ -391,9 +412,9 @@ fn swash_matches_cosmic_text_bit_for_bit() {
     assert!(
         scripts
             .iter()
-            .any(|(name, ..)| name == "arabic" || name == "devanagari"),
-        "no host font covers Arabic or Devanagari; install one (the Linux runner is \
-         expected to carry DejaVu Sans for Arabic)"
+            .any(|(name, ..)| COMPLEX_SCRIPTS.contains(&name.as_str())),
+        "no host font covers any of {COMPLEX_SCRIPTS:?}; install one (DejaVu Sans, \
+         which Linux images ship with fontconfig, covers Arabic and Hebrew)"
     );
 
     println!(
