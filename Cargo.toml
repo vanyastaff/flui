@@ -299,6 +299,10 @@ wgsl_bindgen = { version = "0.23", default-features = false }
 regex = "1"
 walkdir = "2.5"
 clap = { version = "4.5", features = ["derive"] }
+# Rust source parsing: flui-macros' derive stack, and `cargo xtask globals`,
+# which walks every item (`visit`).
+proc-macro2 = "1"
+syn = { version = "3", features = ["full", "visit"] }
 
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:

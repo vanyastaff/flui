@@ -15,6 +15,7 @@ mod doc_strict;
 mod docs_links;
 mod doctor;
 mod fonts;
+mod globals;
 mod toolchain;
 mod wasm;
 mod wgsl;
@@ -87,6 +88,8 @@ enum Command {
     Toolchain(toolchain::ToolchainArgs),
     /// Check WGSL derivative uniformity.
     Wgsl(wgsl::WgslArgs),
+    /// Check that every process-global has a reviewed entry (ADR-0097).
+    Globals(globals::GlobalsArgs),
     /// Check a linked wasm module's imports against the allowlist.
     WasmImports(wasm::WasmImportsArgs),
     /// Print the crates whose tests run on wasm32.
@@ -139,6 +142,7 @@ fn main() -> ExitCode {
         Command::CiVerify(args) => change_scope::ci_verify(&args),
         Command::Toolchain(args) => toolchain::toolchain(&args),
         Command::Wgsl(args) => wgsl::wgsl(&args),
+        Command::Globals(args) => globals::globals(&args),
         Command::WasmImports(args) => wasm::wasm_imports(&args),
         Command::WasmTestCrates(args) => wasm::wasm_test_crates(&args),
         Command::LockedVersion(args) => wasm::locked_version(&args),
