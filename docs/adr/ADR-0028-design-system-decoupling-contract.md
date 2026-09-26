@@ -4,6 +4,14 @@
 - **Date:** 2026-07-16
 - **Amended:** 2026-09-23 — enforced through the design systems' own manifests
   (`allowed-dependents`, `allowed-dev-dependents`) instead of a registry.
+- **Amended:** 2026-09-26 — Material's lists are replaced by the kind rule of
+  [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §3 and
+  [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) §2, which `cargo xtask workspace`
+  checks: a crate that is not an application or an official package names `flui-material` only
+  through a named `edge-exceptions` entry (today only the facade's), and an official package,
+  Cupertino included, names it in no dependency kind without a declared exception (none exists).
+  Cupertino keeps its lists until it moves onto `flui-sdk`. The rule's shape below is
+  unchanged.
 - **Related:** ADR-0041 (the whole-workspace layer policy this rule is one part of)
 
 ## Context
