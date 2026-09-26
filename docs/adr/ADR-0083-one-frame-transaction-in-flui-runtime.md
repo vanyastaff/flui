@@ -184,10 +184,11 @@ the platform backend and the raster owner remain the three owners of ADR-0037 §
 
 ### Not decided here
 
-- **Build during layout.** The review proposed a `LayoutCallbackScope` token so lazy children
-  build inside layout (Flutter's `invokeLayoutCallback`). That would supersede ADR-0017 §3 and
-  change ADR-0003's fixpoint, and its spike has not run. The phase order above keeps today's
-  between-pass servicing; a change needs its own ADR.
+- **Build during layout.** A `LayoutCallbackScope` spike ran on 2026-09-26
+  ([ADR-0017](ADR-0017-build-during-layout-callback-seam.md), "Revisited"). It reached one pass
+  for plain lazy rows, regressed `LayoutBuilder` rows, and left the double borrow unsolved, so
+  ADR-0017 §3 and the ADR-0003 fixpoint stay and the phase order above keeps between-pass
+  servicing. A superseding ADR needs the four conditions recorded there.
 - **Realm concurrency.** One owner thread hosting isolated realms is ADR-0091's decision.
 - **A public embedder API.** `Realm` and `OwnerHost` are `pub` in `flui-runtime` because
   `flui-app` and `flui-testing` are separate crates, but the crate's kind is `internal`; a

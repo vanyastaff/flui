@@ -30,6 +30,7 @@ members = [
     "crates/flui-view",      # View/Element tree (ACTIVE)
     "crates/flui-widgets",   # User-facing widget catalog (ACTIVE — Core.1 slice)
     "crates/flui-runtime",   # Frame runtime: per-presentation lanes a realm drives (ADR-0083)
+    "crates/flui-sdk",       # Package-author surface: what official and third-party packages build on (ADR-0088)
     "crates/flui-testing",   # Test-support: headless deterministic frame driver (pump_frame) (ACTIVE)
     "crates/flui-material",  # Material Design theming foundation — ColorScheme/TextTheme/ThemeData/Theme (ACTIVE — Catalog.1 slice)
     "crates/flui-cupertino", # iOS-style theming foundation — CupertinoDynamicColor/CupertinoTextTheme/CupertinoTheme/CupertinoButton (ACTIVE — Catalog.1 slice)
@@ -96,7 +97,7 @@ tiers = [
     "C",   # contracts: flui-platform-api, flui-protocol
     "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
     "R",   # render machine: layer, rendering, objects, engine
-    "K",   # spine and runtime: view, testing, widgets, runtime
+    "K",   # spine and runtime: view, testing, widgets, runtime, sdk
     "H",   # hosts: platform backends, app runners, the CLI, the facade
     "pkg", # official packages: material, cupertino, devtools, hot reload
 ]

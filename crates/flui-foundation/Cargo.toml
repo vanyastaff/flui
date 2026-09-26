@@ -11,6 +11,12 @@ description = "Foundation types and utilities for FLUI framework"
 documentation = "https://docs.rs/flui-foundation"
 keywords = ["ui", "gui", "foundation", "flui"]
 categories = ["gui", "data-structures"]
+# The train guard (ADR-0088 §5): Cargo admits one package per `links` value in
+# a graph, and every train depends on this crate, so an application and a
+# package on different trains fail in the resolver instead of with E0308.
+# `links` needs a build script; `build.rs` does nothing else. `cargo xtask
+# workspace` requires this key here and refuses it on any other member.
+links = "flui_train"
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
