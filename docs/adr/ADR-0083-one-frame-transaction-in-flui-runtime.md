@@ -3,7 +3,9 @@
 - **Status:** Accepted in part (2026-09-26): §1's placement (tier K, kind `internal`, above
   `flui-widgets`, a normal graph that reaches none of the K set) and the first three moves (see
   `## Migration`). §1's ordering before `flui-testing` follows §4 and is not yet in place
-  (`flui-testing` still sits below the runtime); §1's ownership list, §2–§5 remain Proposed.
+  (`flui-testing` still sits below the runtime). §1's ownership list is accepted for the items
+  those moves placed (the presentation lanes, the frame sink seam, `PerformanceStats` and
+  `ExecutionServices`); the rest of it and §2–§5 remain Proposed.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md)
   (the paragraph "No `flui-runtime` without two consumers")
