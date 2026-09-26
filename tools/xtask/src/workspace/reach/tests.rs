@@ -186,6 +186,26 @@ fn a_strong_feature_enables_the_same_named_feature_whatever_it_lists() {
 }
 
 #[test]
+fn an_unknown_feature_is_an_error_not_a_pass() {
+    let fixture = base()
+        .member("k", "K", &json!(null))
+        .external("x")
+        .feature("k", "f", &["x/missing"])
+        .dep("k", "x", Dep::normal());
+    let graph = Graph::from_metadata(&fixture.metadata()).expect("the graph joins");
+    let k = graph.member("k").expect("a member");
+    for selection in ["--features no-such-feature", "--features f"] {
+        let error = resolve(
+            &graph,
+            k,
+            &Selection::parse(selection).expect("a selection"),
+        )
+        .expect_err("refused");
+        assert!(error.to_string().contains("has no feature"), "{error}");
+    }
+}
+
+#[test]
 fn a_dependency_is_matched_by_package_name_not_library_name() {
     // the resolve graph names `xml-rs` by its library, `xml`
     let fixture = base()
