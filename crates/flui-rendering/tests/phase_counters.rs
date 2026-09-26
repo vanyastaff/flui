@@ -109,6 +109,11 @@ fn counters_count_grafted_layers_apart_from_fresh_ones() {
         first.nodes_painted, 5,
         "the first frame paints the flex, both boundaries and both leaves: {first:?}"
     );
+    assert_eq!(
+        first.layers_produced, 4,
+        "each boundary gets a pushed OffsetLayer and its leaf one sealed \
+         picture: {first:?}"
+    );
     assert_eq!(first.layers_reused, 0, "{first:?}");
 
     owner.mark_needs_paint(dirty_id);
@@ -119,11 +124,15 @@ fn counters_count_grafted_layers_apart_from_fresh_ones() {
         "the flex, the dirty boundary and its leaf paint; the clean boundary \
          and its leaf are grafted, not painted: {second:?}"
     );
-    assert!(
-        second.layers_reused >= 1,
-        "the clean boundary's retained layers are counted as reused: {second:?}"
+    assert_eq!(
+        second.layers_reused, 1,
+        "the clean boundary's retained picture is grafted: {second:?}"
     );
-    assert!(second.layers_produced >= 1, "{second:?}");
+    assert_eq!(
+        second.layers_produced, 3,
+        "both boundaries' OffsetLayers are pushed again and the dirty leaf \
+         seals a fresh picture: {second:?}"
+    );
     assert_eq!(
         second.nodes_laid_out, 0,
         "a paint-only frame lays nothing out: {second:?}"
