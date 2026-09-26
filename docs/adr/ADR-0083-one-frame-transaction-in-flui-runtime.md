@@ -212,8 +212,8 @@ the platform backend and the raster owner remain the three owners of ADR-0037 §
 
 ## Consequences
 
-- `crates/flui-app/src/app/runner/realm_dispatch.rs` (7,149 lines, of which production code is
-  lines 1–1690; the test module starts at `:1691-1692`) and the `ui_realm` modules move to `flui-runtime`; `flui-app` keeps
+- `crates/flui-app/src/app/runner/realm_dispatch.rs` (about 1,690 lines of production code; its
+  tests live in `realm_dispatch/tests.rs`) and the `ui_realm` modules move to `flui-runtime`; `flui-app` keeps
   runners, the raster lane and platform wiring. The review targets under 15k lines for
   `flui-app`; that is a goal, not a measurement.
 - Test code that constructs `HeadlessBinding` and calls `pump_frame` changes to the new driver.
@@ -237,7 +237,7 @@ The crate is created first and filled in five moves, each independently mergeabl
 | 1. Lanes (done) | `flui-runtime` is created: tier K, `internal`, `order = 5`, layer 6, with no `flui-widgets` edge until the realm core needs one. It holds the presentation lanes that need nothing from the realm core: `epoch` (`TreeRevision`, `FrameCommitState`), `held_input` (`HeldPointerQueue`, `HeldPointerReplay`) and `semantics_host` (`SemanticsHost`). Items with no production caller compile only under `cfg(test)` or the `test-support` feature | — |
 | 2. Frame sink | `FrameSink` and `SubmitVerdict` (engine-free; they name only `flui_layer::Scene`) and `PerformanceStats` move; `RasterLane<B>` and `DirectSink` stay in `flui-app` and implement the trait | move 1 |
 | 3. Execution | `ExecutionServices` (ADR-0047) moves; `flui-app` re-exports `ComputeJob`, `DeterministicExecutors`, `HostComputePool`, `HostExecutors`, `HostIoPool`, `IoFuture` and `SpawnError`, so their public paths do not change | move 1 |
-| 4. Realm core | `ui_realm`, `presentation`, `presentation_forest`, `lifecycle_state`, `frame_failure`, and `media_query_root` minus its window constructor; the ADR-0048 `catch_unwind` moves unchanged and the realm tests move with a headless `FrameSink`; `UiRealm::enter_for_close` is deleted | `PlatformWindow` in `flui-platform-api` (ADR-0082 §3, second change), since `PresentationState` and `UiRealm` name it; moves 2 and 3; the realm-dispatch tests leaving `realm_dispatch.rs` |
+| 4. Realm core | `ui_realm`, `presentation`, `presentation_forest`, `lifecycle_state`, `frame_failure`, and `media_query_root` minus its window constructor; the ADR-0048 `catch_unwind` moves unchanged and the realm tests move with a headless `FrameSink`; `UiRealm::enter_for_close` is deleted | `PlatformWindow` in `flui-platform-api` (ADR-0082 §3, second change), since `PresentationState` and `UiRealm` name it; moves 2 and 3 |
 | 5. Transaction | `Realm::pump` absorbs the runners' `drive_frame_with_lane` calls; `OwnerHost` replaces `AppRuntime`'s realm slot and is §3's one trampoline cell; the production part of `realm_dispatch.rs` moves; the two verification tests below land. Rollback: a `legacy-frame-driver` cargo feature on `flui-app` for one minor | move 4 |
 
 §2 (sealing the entry points), §4 (`flui-testing` above the runtime, taking an `order` after it)
