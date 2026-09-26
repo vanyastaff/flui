@@ -179,6 +179,11 @@ pub(crate) fn default_compute_worker_count(available_parallelism: usize) -> usiz
 ///
 /// Defaults are deliberately generous — they are overload backstops, not
 /// throttles. Tests inject small values to exercise refusal.
+///
+/// Production always uses [`Default`]; the type is `pub` only so
+/// `ExecutionServices::with_limits` (behind `test-support`) can take it from
+/// `flui-app`'s tests. It is not re-exported by `flui-app` and carries no
+/// promise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdmissionLimits {
     /// Maximum in-flight compute jobs.
