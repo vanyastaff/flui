@@ -420,7 +420,8 @@ where
     /// Mount this element into the tree.
     ///
     /// Sets lifecycle to Active and records the parent. The depth is not
-    /// derived here: the tree stamps it through [`Self::set_depth`] before
+    /// derived here: the tree stamps it through
+    /// [`ElementBase::set_depth`](crate::view::ElementBase::set_depth) before
     /// mount. Child reconciliation stays centralized in
     /// `BuildOwner::build_scope`.
     ///
@@ -608,7 +609,7 @@ where
     }
 
     /// Get the depth in the element tree (root = 0), as last stamped by
-    /// [`Self::set_depth`].
+    /// [`ElementBase::set_depth`](crate::view::ElementBase::set_depth).
     pub fn depth(&self) -> usize {
         self.state.depth
     }
