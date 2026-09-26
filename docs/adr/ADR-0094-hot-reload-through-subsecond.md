@@ -61,8 +61,8 @@ owner thread (`docs/adr/ADR-0045-raster-lane.md:295-296`).
 dependency on `flui-hot-reload` (`crates/flui-app/Cargo.toml:65`, `:108-110`), and its realm
 takes `flui_hot_reload::HotReloadTier` in production code
 (`crates/flui-app/src/app/ui_realm/presentations.rs:487`). The facade re-exports the crate
-(`src/lib.rs:136-138`) behind its own `hot-reload` feature (`Cargo.toml:630`). Three
-`TREE_FACTS` keep the edge optional (`tools/xtask/src/tasks/facade.rs:53-92`). Once
+(`src/lib.rs:136-138`) behind its own `hot-reload` feature (`Cargo.toml:630`). Three reach
+facts keep the edge optional (`FACTS` in `tools/xtask/src/workspace/reach.rs`, ADR-0081 §2). Once
 `flui-hot-reload` becomes an official package (ADR-0088), those edges are a core crate naming an
 official package, which ADR-0088 forbids: core must build, version and release without knowing
 which official packages exist, and an optional edge still ties the core's semver to the
@@ -113,8 +113,8 @@ pub trait DevReloadHook: 'static {
 `flui-app`'s `hot-reload` feature and optional dependency, the facade's `hot-reload` feature and
 `pub use flui_hot_reload as hot_reload` are removed in the change that moves `flui-hot-reload`
 into the official packages. The application adds the package itself, and the `flui create`
-template adds it for development builds. The three `TREE_FACTS` have by then moved into the
-reach gate (ADR-0081 §2); in this change they are replaced by the "core names no official
+template adds it for development builds. The three hot-reload facts of the reach gate
+(ADR-0081 §2) are replaced in this change by the "core names no official
 crate" rule (ADR-0081 §3, ADR-0088 §2), whose dated exceptions for these edges expire here.
 
 ### 3. The package implements the hook on Subsecond
