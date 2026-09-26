@@ -6,6 +6,8 @@ FLUI combines two patterns: a **Layered Modular Workspace** (workspace structure
 
 For the deep, rule-by-rule guide (anti-patterns, code examples, dependency rules), read [`FOUNDATIONS.md`](FOUNDATIONS.md) (`.ai-factory/ARCHITECTURE.md` does not exist in this checkout). This page is the high-level orientation.
 
+This page describes the architecture as it is. The proposed target architecture (tiers in place of layers, ADR-0081 to ADR-0097, all Proposed) is in [`design/README.md`](../design/README.md).
+
 ## Layered Modular Workspace
 
 20+ crates are organized into a strict directed acyclic graph (DAG). Dependencies flow downward only; circular dependencies are forbidden. Each crate exposes its public API exclusively through `lib.rs` (and an optional `prelude` module). Internal modules default to `pub(crate)`.
