@@ -39,3 +39,7 @@ A paragraph before the list. <!-- expect: not-a-list -->
 ```text <!-- expect: not-a-list -->
 a fence at section level
 ```
+
+### Deprecated
+
+* A bullet with `*` for its marker. <!-- expect: list-marker -->

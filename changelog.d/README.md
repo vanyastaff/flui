@@ -16,7 +16,8 @@ directory holds.
 
 One or more sections. Each is a `### <Section>` header, where the section is one of `Added`,
 `Changed`, `Deprecated`, `Removed`, `Fixed` or `Security`, each at most once, followed by one
-unordered list. Continuation lines and nested lists inside a bullet are fine; nothing else goes
+unordered list whose bullets start with `-` (a `*` or `+` list would render as a separate list
+once merged above the existing `-` bullets). Continuation lines and nested lists inside a bullet are fine; nothing else goes
 in a section (no paragraph, ordered list, code block, table, quote, HTML or deeper heading), and
 nothing goes above the first header.
 

@@ -93,6 +93,7 @@ fn each_rule_fires_on_its_planted_line() {
         "duplicate-section",
         "empty-section",
         "not-a-list",
+        "list-marker",
         "link",
     ] {
         assert!(rules.contains(rule), "{rule} never fires");
@@ -346,6 +347,12 @@ fn section_bodies_hold_one_unordered_list() {
     assert_eq!(rules("### Added\n\n- a\n\n- b\n"), []);
     assert_eq!(rules("### Added\n\n1. a\n"), [(3, "not-a-list")]);
     assert_eq!(rules("### Added\n\n- a\n\n* b\n"), [(5, "not-a-list")]);
+    assert_eq!(rules("### Added\n\n* a\n"), [(3, "list-marker")]);
+    assert_eq!(
+        rules("### Added\n\n+ a\n  - nested\n"),
+        [(3, "list-marker")]
+    );
+    assert_eq!(rules("### Added\n\n - a\n   * nested\n"), []);
     assert_eq!(rules("### Added\n\n- a\n\n> quote\n"), [(5, "not-a-list")]);
     assert_eq!(
         rules("### Added\n\n- a\n\n<div>x</div>\n"),

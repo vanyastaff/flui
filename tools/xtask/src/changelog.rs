@@ -7,7 +7,8 @@
 //! `^[a-z0-9]+(-[a-z0-9]+)*\.md$`); `changelog.d/README.md` is the only other
 //! file the directory may hold. Its body is one or more `### <Section>`
 //! headers, each one of Keep a Changelog's six ([`SECTIONS`]), each followed by
-//! one unordered list (continuation lines and nested lists are part of it).
+//! one unordered `-` list (continuation lines and nested lists are part of
+//! it; a `*` or `+` list would render apart from the one it is merged above).
 //! Links are root-relative (`/docs/x.md`), absolute, or email autolinks: a
 //! fragment is link-checked where it sits and then pasted into the root file,
 //! and a root-relative link resolves the same in both places. An `#anchor`-only
@@ -400,6 +401,15 @@ fn check_body(path: &str, header: usize, body: &str) -> Vec<Finding> {
                 if depth == 0 {
                     if matches!(tag, Tag::List(None)) && !listed {
                         listed = true;
+                        if !body[span.start..].trim_start().starts_with('-') {
+                            findings.push(Finding::new(
+                                path,
+                                line_of(span.start),
+                                "list-marker",
+                                "bullets start with `-`, as CHANGELOG.md's do: a `*` or `+` \
+                                 list would render apart from the one it is merged above",
+                            ));
+                        }
                     } else {
                         findings.push(not_a_list(path, line_of(span.start)));
                     }
