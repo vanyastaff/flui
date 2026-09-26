@@ -168,12 +168,18 @@ Rules:
   tier's declared order. Dev edges go through `allowed-dev-dependents`, the mechanism that exists
   today (`tools/xtask/src/workspace.rs:9-13`); `flui-view` already has a dev cycle with
   `flui-testing` (`crates/flui-view/Cargo.toml:63-67`).
-- **Reach facts.** The K forbid set is `flui-platform`, `winit`, `android-activity`, `ndk`, the
-  `windows` crate (not `windows-sys`), `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine`,
-  `flui-app`. Generic FFI crates (`jni`, `windows-sys`, `core-foundation`, bare `objc2`) are
-  allowed or listed with a reason, because `reqwest → rustls-platform-verifier → jni` arrives
-  through the `network-images` feature. Packages get the same set plus the OS crates. The three
-  hot-reload `TREE_FACTS` (`tools/xtask/src/tasks/facade.rs:53`) become reach facts.
+- **Reach facts** (implemented: `cargo xtask reach`, ADR-0081 §2). The K forbid set is
+  `flui-platform`, `winit`, `android-activity`, `ndk`, the `windows` crate (not `windows-sys`),
+  `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine`, `flui-app`. Generic FFI crates (`jni`,
+  `windows-sys`, `core-foundation`, bare `objc2`, their bindings) are on a `generic-ffi`
+  allowlist with reasons, because `reqwest → rustls-platform-verifier → jni` arrives through the
+  `network-images` feature. Packages get the same set plus the OS crates by glob. Each root build
+  (the facade's feature combinations, each facade feature alone, each crate at its defaults and
+  with all features) is resolved on its own; a `reach-exceptions` entry excuses the paths through
+  its crate and goes stale when it excuses nothing. Five are seeded: `flui-interaction` and
+  `flui-widgets` → `flui-platform` (exit ADR-0082), `flui-hot-reload` → `windows` and
+  `android_log-sys` (exit ADR-0094), and `flui-engine` → `wgpu` (a grant). The three hot-reload
+  `cargo tree` facts are reach facts now.
 - **Core names no official crate.** No core crate depends on an `official` crate in any form,
   optional and dev included. The exceptions are named, each with a reason and an exit
   ([ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)):
@@ -1126,7 +1132,7 @@ does not cover each gate they add.
 | Invariant | Gate | Today |
 |---|---|---|
 | Tier direction and in-tier order | `cargo xtask workspace` (tiers) | 11 numbered layers |
-| Transitive absence | `cargo xtask reach` over `cargo metadata`, all facade feature combinations | three hot-reload `TREE_FACTS` only |
+| Transitive absence | `cargo xtask reach` over `cargo metadata`, all facade feature combinations | implemented, green with five seeded `reach-exceptions` (two exit with ADR-0082) |
 | Core names no official crate | `cargo xtask workspace` | facade `material` and `hot-reload` features |
 | No new process global | `cargo xtask globals`: syn scan of every `static` (atomics included) and `thread_local!`, `#[cfg(test)]` excluded | no gate |
 | Module direction inside flui-widgets | `cargo xtask module-dag -p flui-widgets` | promised, absent |

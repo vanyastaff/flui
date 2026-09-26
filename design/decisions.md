@@ -261,7 +261,9 @@ draft claimed the semver promise "drops from 28 crates to 3".
 
 **Decision.** Layers become tiers (V, C, S, R, K, H, packages) with a declared order inside each
 tier, `tier-kind = stable | evolving | internal | official | tool`, and forbid-reach facts that
-generalize today's `TREE_FACTS` (`tools/xtask/src/tasks/facade.rs:53`). Stable crates: `flui`,
+generalize the three hot-reload `cargo tree` facts (implemented in part: tiers, `order` and
+`tier-kind` in `cargo xtask workspace`, the forbid-reach facts in `cargo xtask reach`; the kind
+rules are not). Stable crates: `flui`,
 `flui-platform-api`, `flui-protocol`; Evolving: `flui-sdk`. The frozen surface is "three crates,
 N items", where N is the transitive closure of public types in the Stable modules, measured before
 it is promised.
