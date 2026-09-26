@@ -2,9 +2,10 @@
 
 - **Status:** Accepted in part (2026-09-26): §1 for the items both of §3's changes move; §2's
   rule that only composition roots depend on `flui-platform` (its `allowed-dependents`); §3's
-  first change; §3's second change, `PlatformWindow`'s move with the host-side window subtrait
-  `HostWindow` for `accessibility()` and the removal of `as_winit`. §4 and §5 remain Proposed.
-  §4 was revised in place on 2026-09-26, while still Proposed: what step one requires, the
+  first change. §3's second change (`PlatformWindow`'s move with the host-side window subtrait
+  `HostWindow` for `accessibility()`, and the removal of `as_winit`) is accepted on merge,
+  pending the evidence Verification lists as outstanding for it. §4 and §5 remain Proposed. §4
+  was revised in place on 2026-09-26, while still Proposed: what step one requires, the
   precondition for step two, and the order of the headless and Win32 backends. Win32 has
   completed step one.
 - **Date:** 2026-09-25
@@ -58,9 +59,10 @@ keep:
   written) register callbacks as `Box<dyn FnMut(..) + Send>`: `set_exit_policy_hook`,
   `set_wake_deadline_hook`, `on_keyboard_layout_change`, `on_quit`, `on_reopen`,
   `on_window_event`, `on_open_urls` (`platform.rs:158,219,359-386`) and the window's `on_input`,
-  `on_request_frame`, `on_resize`, `on_close` and the rest (`window.rs:392-570`).
-  `OwnerPlatform::on_wake` and `SharedPlatform`'s forwarding registrations
-  (`traits/owner.rs:95,258-307`) carry the same bound. Delivery is on
+  `on_request_frame`, `on_resize`, `on_close` and the rest (`window.rs:392-570`; this and the
+  next two `window.rs` citations are to `crates/flui-platform/src/traits/window.rs` as it was
+  before §3's second change removed it). `OwnerPlatform::on_wake` and `SharedPlatform`'s
+  forwarding registrations (`traits/owner.rs:95,258-307`) carry the same bound. Delivery is on
   the owner thread by construction (ADR-0039 §2), so the bound only forces callers to be `Send`.
   The runner's own comment names the consequence: "the platform callback surface still requires
   `Send`, so the `!Send` realm this holds remains in owner TLS"
@@ -148,14 +150,15 @@ subtrait returned by `Platform::open_window`, `WindowOpen::Ready` and `PendingWi
 about fifty `dyn PlatformWindow` sites in `flui-app` across four backends, two of which CI only
 type-checks.
 
-**Second change (accepted).** `PlatformWindow` moves without `as_winit` (nothing calls it) and
+**Second change (accepted on merge, verification pending).** `PlatformWindow` moves without `as_winit` (nothing calls it) and
 without `accessibility()`, which becomes a method of a backend-side extension trait in
 `flui-platform` that the runner uses: `HostWindow: PlatformWindow`. `Platform::open_window`,
 `WindowOpen::Ready`/`try_ready` and `PendingWindow` return `Arc<dyn HostWindow>`, which upcasts
 to `Arc<dyn PlatformWindow>`, and `dyn HostWindow` repeats the raw-handle impls so an
 `open_window` result stays a renderer target. The runner reads the bridge once, when it turns an
 open result into a realm, and hands the realm the window with its bridge beside it; production
-code has no conversion from a bare window, so a runner cannot drop the bridge silently. The
+code has no implicit conversion from a bare window, so dropping the bridge takes an explicit
+`None` rather than a `.into()`. The
 contract crate gains `cursor-icon` (re-exported as `CursorIcon`) and `raw-window-handle`, both
 allowed by ADR-0089, and its manifest adds `reach-forbid = ["accesskit", "tokio"]`.
 
@@ -294,7 +297,17 @@ by the `flui_platform_api` crate doctest, which implements `PlatformTextInput` a
   `a_realm_built_from_a_host_window_publishes_through_its_accessibility`, which fails if the
   runner drops the bridge on the way to the realm.
 
-Every backend change also runs `cargo xtask cross-typecheck` for Win32, AppKit, Android and iOS.
+A backend change is checked by `cargo xtask cross-typecheck` for Win32, AppKit, Android and iOS.
+For the second change only Win32 and AppKit (`aarch64-apple-darwin`, with `a11y`) and the Linux
+`winit-backend` build of `flui-platform` with `a11y` were type-checked. Outstanding for it:
+
+- `cargo xtask cross-typecheck` for Android and iOS (the `android` and `ios` backends, the
+  `android.rs`/`ios.rs` runners and `session_controller`), and a wasm32 check of the web
+  backend and the `web.rs` runner;
+- a recorded live run on Windows (`cargo xtask device windows-input`), and a UIA check that a
+  real Win32 window still publishes its tree now that its `accessibility` override lives in
+  `impl HostWindow`.
+
 Not yet in place:
 
 - A compile-time pin that registered callbacks accept `!Send` closures once step 2 lands: a

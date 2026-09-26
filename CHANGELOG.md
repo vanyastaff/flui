@@ -225,11 +225,11 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   removed.
 - **`flui-platform`: `accessibility()` moved to the new `HostWindow` subtrait** (ADR-0082 §3). A
   window as a backend hands it out is an `Arc<dyn HostWindow>`: `Platform::open_window`,
-  `WindowOpen::Ready`, `WindowOpen::try_ready` and `PendingWindow` (`wait`, `try_take`, its
-  `Future` output) return one, and it upcasts to `Arc<dyn PlatformWindow>`. `PlatformWindow`
-  itself no longer names an AccessKit type. A binding that passed an `open_window` result where
-  `&Arc<dyn PlatformWindow>` is expected needs `let window: Arc<dyn PlatformWindow> = window;`
-  first.
+  `WindowOpen::Ready`, `WindowOpen::try_ready`, `PendingWindow` (`wait`, `try_take`, its
+  `Future` output) and `IOSSceneEvent::Connected`'s `window` field carry one, and it upcasts
+  to `Arc<dyn PlatformWindow>`. `PlatformWindow` itself no longer names an AccessKit type. A
+  binding that passed an `open_window` result where `&Arc<dyn PlatformWindow>` is expected
+  needs `let window: Arc<dyn PlatformWindow> = window;` first.
 
 ### Removed
 
