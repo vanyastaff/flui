@@ -444,6 +444,7 @@ fn self_test_members() -> Members {
         .expect("BUG: a crate's flui table is an object")
         .remove("tier-kind");
     let (pkg_rel, pkg) = krate("pkg1", "pkg", 1, "official");
+    let (pkg2_rel, pkg2) = krate("pkg2", "pkg", 2, "official");
 
     let nodes = vec![
         crate_node("v1", "V", 1, &[]),
@@ -464,11 +465,13 @@ fn self_test_members() -> Members {
         // silent: a dev edge may point up
         crate_node("k1", "K", 3, &[("h1", Dev), ("k-high", Normal)]),
         crate_node("h1", "H", 1, &[("k-high", Normal), ("k-high", Normal)]),
-        // silent: H -> pkg with an exception
-        node(&h_pkg_rel, &h_pkg, &[("pkg1", Normal)]),
+        // silent: H -> pkg with an exception; planted: its second H -> pkg
+        // edge, which the exception does not name
+        node(&h_pkg_rel, &h_pkg, &[("pkg1", Normal), ("pkg2", Normal)]),
         // planted: H -> pkg without one
         crate_node("h2", "H", 3, &[("pkg1", Normal)]),
         node(&pkg_rel, &pkg, &[("h1", Normal)]),
+        node(&pkg2_rel, &pkg2, &[]),
         // silent: applications depend on anything
         node(
             "examples/ex/Cargo.toml",
@@ -481,7 +484,7 @@ fn self_test_members() -> Members {
 }
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 7] = [
+const EXPECTED: [(&str, &str, &str); 8] = [
     ("v-dup", "v1", "duplicate order"),
     ("v2", "t1", "on tool"),
     ("v-nokind", "tier-kind", "missing"),
@@ -489,6 +492,7 @@ const EXPECTED: [(&str, &str, &str); 7] = [
     ("s-stale", "v1", "stale exception"),
     ("k-low", "k-high", "upward"),
     ("h2", "pkg1", "upward"),
+    ("h-pkg", "pkg2", "upward"),
 ];
 
 type Identity = (String, String, &'static str);
