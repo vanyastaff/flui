@@ -63,6 +63,8 @@ mod flex_parent_data;
 mod flow;
 #[path = "focus.rs"]
 mod focus;
+#[path = "form.rs"]
+mod form;
 #[path = "future_builder.rs"]
 mod future_builder;
 #[path = "gesture_detector.rs"]

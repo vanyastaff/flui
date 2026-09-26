@@ -11,5 +11,6 @@
 
 pub use crate::__generic_render_view_element as generic_render_view_element;
 pub use crate::anchored_box::AnchoredBox;
+pub use crate::form::bind_text_controller;
 pub use crate::interaction::focus::{enclosing_focus_parent, install_rect_provider};
 pub use crate::paint::repaint_boundary::SaltingChildKey;

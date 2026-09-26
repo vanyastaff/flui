@@ -85,6 +85,7 @@ mod async_builders;
 pub mod clip;
 mod container;
 pub mod flex;
+pub mod form;
 pub mod icon;
 pub mod image;
 pub mod interaction;
@@ -224,6 +225,11 @@ pub use navigator::{
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
 // the crate — `Navigator` and `Draggable`'s feedback layer are its callers.
+pub use form::{
+    AutovalidateMode, Form, FormField, FormFieldBuilder, FormFieldHandle, FormFieldSetter,
+    FormFieldState, FormFieldValidator, FormHandle, FormState, RawTextFormField,
+    RawTextFormFieldState,
+};
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use physical_model::{PhysicalModel, PhysicalShape};
@@ -326,35 +332,35 @@ pub mod prelude {
     // The widget catalog.
     pub use crate::{
         AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, Align, AspectRatio,
-        Baseline, Brightness, ButtonActivateIntent, CallbackAction, CallbackShortcuts, Center,
-        ClipOval, ClipPath, ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container,
-        CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint, CustomScrollView,
-        CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal, DefaultFocusTraversalState,
-        DefaultTextStyle, DefaultWidgetsLocalizations, Directionality, DragTarget, Draggable,
-        EditableText, EditableTextState, ExcludeFocus, ExcludeSemantics, Expanded, FittedBox, Flex,
-        FlexFit, Flexible, FlightDirection, Flow, Focus, FocusRoot, FocusScope,
-        FractionalTranslation, FractionallySizedBox, FutureBuilder, GestureArenaScope,
-        GestureDetector, GridView, Hero, HeroController, HeroMode, Icon, IconData, IconTheme,
-        IconThemeData, IgnoreBaseline, IgnorePointer, Image, ImageAlignment, ImageFit,
-        ImageProvider, IndexedSemantics, IndexedStack, InheritedTheme, Intent, IntrinsicHeight,
-        IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener,
-        Localizations, LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics,
-        MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage,
-        Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle,
-        Padding, PageController, PageRoute, PageScrollPhysics, PageView, PasteTextIntent,
-        PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned, PreferredSize,
-        PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawTextField,
-        RawTextFieldState, RepaintBoundary, RichText, RotatedBox, Row, SafeArea, ScrollController,
-        Scrollable, Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute,
-        SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, StreamBuilder, SubmitCallback, Table, TableCell,
-        TableRow, Text, TextEditingController, TickerMode, Transform, UnconstrainedBox,
-        ValueListenableBuilder, Viewport, Visibility, VisibilityGate, WidgetState,
-        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
-        WidgetsApp, WidgetsLocalizations, Wrap,
+        AutovalidateMode, Baseline, Brightness, ButtonActivateIntent, CallbackAction,
+        CallbackShortcuts, Center, ClipOval, ClipPath, ClipRRect, ClipRect, ColoredBox, Column,
+        ConstrainedBox, Container, CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint,
+        CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal,
+        DefaultFocusTraversalState, DefaultTextStyle, DefaultWidgetsLocalizations, Directionality,
+        DragTarget, Draggable, EditableText, EditableTextState, ExcludeFocus, ExcludeSemantics,
+        Expanded, FittedBox, Flex, FlexFit, Flexible, FlightDirection, Flow, Focus, FocusRoot,
+        FocusScope, Form, FormField, FormFieldHandle, FormHandle, FractionalTranslation,
+        FractionallySizedBox, FutureBuilder, GestureArenaScope, GestureDetector, GridView, Hero,
+        HeroController, HeroMode, Icon, IconData, IconTheme, IconThemeData, IgnoreBaseline,
+        IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IndexedSemantics,
+        IndexedStack, InheritedTheme, Intent, IntrinsicHeight, IntrinsicWidth, LayoutBuilder,
+        LayoutId, LimitedBox, ListBody, ListView, Listener, Localizations, LocalizationsDelegate,
+        MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Navigator, NavigatorHandle,
+        NextFocusAction, NextFocusIntent, Offstage, Opacity, OverflowBox, OverflowBoxFit, Overlay,
+        OverlayEntry, OverlayEntryId, OverlayHandle, Padding, PageController, PageRoute,
+        PageScrollPhysics, PageView, PasteTextIntent, PhysicalModel, PhysicalShape, PopScope,
+        PopupRoute, Positioned, PreferredSize, PreferredSizeView, PreviousFocusAction,
+        PreviousFocusIntent, RawTextField, RawTextFieldState, RawTextFormField, RepaintBoundary,
+        RichText, RotatedBox, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics,
+        Shortcuts, ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView,
+        SizedBox, SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
+        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder,
+        SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController, TickerMode,
+        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, VisibilityGate,
+        WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
+        WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.
