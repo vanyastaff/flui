@@ -71,8 +71,10 @@ one for Win32 makes that safe without changing a signature.
   context; the owner-turn callback lives in that context's `OwnerTurnSlot`.
   Both contexts sit behind `GWLP_USERDATA`, are reached only through the
   owner-thread gates (`with_window_context_checked`, `OwnerControl::shares`),
-  and are freed by `WM_DESTROY` / `WM_NCDESTROY` on the owner thread. Both are
-  pinned `!Send + !Sync`.
+  and are freed by `WM_DESTROY` / `WM_NCDESTROY` on the owner thread. A
+  platform dropped off its owner thread without running keeps the owner window,
+  so its `OwnerControlContext` and the handlers in it are leaked, never freed
+  on the wrong thread. Both are pinned `!Send + !Sync`.
 - **Refusal.** A registration from any thread but the owner, on a window that
   is gone, or on a handle the OS recycled for another window, is refused. The
   callback is dropped right there, on the registering thread, so it never runs
@@ -840,8 +842,9 @@ The signal holds admission and scheduling state; the callback waits between
 turns in a `TurnSlot` the caller passes to `register_in` and `drive_in`. Win32
 keeps an `OwnerTurnSlot` (`!Send`) in its owner control context, so closing or
 dropping the last `Arc<OwnerSignal>` on another thread never drops the
-callback there; the owner clears the slot on quit, or `WM_NCDESTROY` frees it
-with the context. macOS, UIKit, winit and headless still use `register` and
+callback there (test: `off_owner_quit_leaves_the_owner_turn_callback_to_the_owner`);
+the owner clears the slot on quit, or `WM_NCDESTROY` frees it with the
+context, and a platform dropped off its owner leaks it with the context. macOS, UIKit, winit and headless still use `register` and
 `drive`, backed by a shared slot inside the signal, until their own steps of
 ADR-0082 §4 (test: `close_off_owner_does_not_drop_the_turn_callback_there`).
 

@@ -199,7 +199,8 @@ trampoline cell of ADR-0083 and ADR-0097.
 **Win32, step 1.** Window callbacks live by value in the window's `WindowContext`, and the
 platform-level handlers and the owner-turn callback in the owner message window's
 `OwnerControlContext`; both sit behind `GWLP_USERDATA` and are reached and freed on the owner
-thread only. Every setter installs through that gate, an off-owner `open_window` is refused, and
+thread only (a platform dropped off its owner leaks its owner context rather than free it
+elsewhere). Every setter installs through that gate, an off-owner `open_window` is refused, and
 `WindowContext` and `OwnerControlContext` are pinned `!Send + !Sync`. The tests live in
 `crates/flui-platform/src/platforms/windows/` (`window.rs` `callback_affinity_tests`,
 `platform.rs` `tests`) and `shared/owner_signal.rs`.

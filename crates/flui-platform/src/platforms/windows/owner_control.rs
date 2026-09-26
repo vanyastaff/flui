@@ -4,7 +4,8 @@
 //! owner-thread state. Only the owner thread can reach it (through
 //! [`OwnerControl::shares`], or the window procedure), and it is freed by
 //! `WM_NCDESTROY` on that thread, so what it owns is never run or dropped
-//! anywhere else.
+//! anywhere else. A platform dropped off its owner thread keeps the native
+//! window, and so leaks the context instead.
 use super::platform::WindowIdentity;
 use crate::{
     PlatformError, WakeRegistrationError,
@@ -171,8 +172,11 @@ impl OwnerControl {
     }
 
     /// Stops owner turns. On the owner thread the registered turn callback
-    /// is dropped at once; elsewhere it stays in the owner context until the
-    /// owner releases it.
+    /// is dropped at once; elsewhere it stays in the owner context, which the
+    /// owner frees when it destroys the owner window. If the platform is
+    /// dropped off the owner instead, [`Self::close`] keeps the native window
+    /// and the context, callback included, is leaked rather than freed on
+    /// the wrong thread.
     pub(super) fn close_signal(&self) {
         self.signal.close();
         if let Ok(shares) = self.shares("close owner turns") {
