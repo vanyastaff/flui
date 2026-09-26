@@ -681,6 +681,27 @@ is a breaking change of `flui` (ADR-0085 Consequences, ADR-0089 §1).
 
 ---
 
+## The train guard (`links = "flui_train"`)
+
+This crate's manifest declares `links = "flui_train"`, and `build.rs` exists only because Cargo
+requires a build script beside `links`; it prints nothing but its own rerun condition. Cargo
+allows one package per `links` value in a dependency graph, so two releases ("trains") of FLUI
+cannot meet in one build: an application on one train and a package on another resolve to one
+train or fail in the resolver, never later with a type mismatch (ADR-0088 §5).
+
+The guard sits here, not on `flui-sdk`, because this is the crate every train shares: the facade,
+`flui-sdk`, `flui-platform-api` and every crate above them depend on it normally, while the facade
+does not depend on the SDK. A guard on the SDK alone would not separate an application on one
+`flui` train from a package on another `flui-sdk` train.
+
+Invariants, checked by `cargo xtask workspace`: this crate declares the guard and no other member
+does. `two_trains_refuse_to_resolve` in `tools/xtask` builds two copies of this crate with this
+manifest's `links` value into one graph and requires the resolver to refuse it. Dropping the key,
+or moving it to a crate that not every train depends on, re-opens the E0308 failure the guard
+exists to prevent.
+
+---
+
 ## Architecture Decision Summary
 
 | Decision | Flutter | FLUI |
