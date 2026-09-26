@@ -137,6 +137,18 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 - **`SemanticsRole` and `SemanticsAction` are `#[non_exhaustive]`** (breaking): they moved to
   `flui-protocol` (still reachable through `flui-semantics`), a `match` over them from another
   crate needs a wildcard arm, and `values()` is replaced by the `ALL` constant.
+- **Win32 refuses callback registration off the owner thread** (`flui-platform`, ADR-0082 §4
+  step one): a `PlatformWindow` callback, a platform hook (`on_quit`, `on_window_event`,
+  `on_keyboard_layout_change`) registered from any thread but the
+  platform's owner is now refused and dropped on the registering thread, with an error logged,
+  instead of being silently accepted and later run on the owner. A registration on a window
+  that is already destroyed is refused and dropped the same way, logged at debug level. An off-owner `open_window` returns
+  `OpenWindowError::Backend` instead of tripping a debug assertion. A window-event or
+  keyboard-layout handler replaced from inside its own call now keeps the replacement; the old
+  handler used to be restored over it. Signatures keep `+ Send`. `WindowsWindow::new` is no
+  longer public: a window is opened through `WindowsPlatform::open_window`, the owner-thread
+  gate, which hands it the platform's handler set.
+
 - **`flui_widgets::TextField` renamed to `RawTextField`** (and
   `TextFieldState` to `RawTextFieldState`) — a breaking rename, sanctioned
   pre-1.0. `flui::prelude`'s `TextField` now names `flui_material::TextField`

@@ -1,9 +1,9 @@
 //! Windows window implementation
 
-use std::{collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size, device_px, px};
+use flui_types::geometry::{Bounds, DevicePixels, EdgeInsets, Pixels, Point, Size, device_px, px};
 use parking_lot::Mutex;
 use raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
@@ -38,10 +38,11 @@ use windows::{
 
 use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device};
 use crate::{
-    shared::{PlatformHandlers, WindowCallbacks},
+    shared::{PlatformHandlers, WindowCallbacks, hwnd_affinity::UserDataRefusal},
     traits::{
-        CursorError, OpenWindowError, PlatformDisplay, PlatformWindow, WindowAppearance,
-        WindowBackgroundAppearance, WindowBounds, WindowId, WindowMode, WindowOptions,
+        CursorError, DispatchEventResult, OpenWindowError, PlatformDisplay, PlatformInput,
+        PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+        WindowExecutionState, WindowId, WindowMode, WindowOptions,
     },
 };
 
@@ -53,8 +54,10 @@ pub struct WindowsWindow {
     /// Window state
     state: Arc<Mutex<WindowState>>,
 
-    /// Per-window callbacks for event delivery
-    callbacks: Arc<WindowCallbacks>,
+    /// Which native window this wrapper was built for. The callbacks
+    /// themselves live in that window's owner-thread context, not here;
+    /// see [`Self::register`].
+    identity: super::platform::WindowIdentity,
 
     /// Reference to platform's window map (for cleanup)
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
@@ -78,9 +81,12 @@ pub struct WindowsWindow {
     accessibility: Arc<super::accessibility::WindowsAccessibility>,
 }
 
-// SAFETY, per field: `state` and `callbacks` are `Arc<Mutex<..>>`/`Arc<..>`
-// with their own synchronization; `windows_map` is likewise an
-// `Arc<Mutex<..>>`. The non-`Sync`/non-`Send` members are `hwnd: HWND` and
+// SAFETY, per field: `state` is an `Arc<Mutex<..>>` with its own
+// synchronization; `windows_map` is likewise an `Arc<Mutex<..>>`;
+// `identity` is a plain integer. The struct carries no callback storage:
+// callbacks live in the owner-thread `WindowContext` and are installed only
+// through the context gate below, so a foreign thread can neither run nor
+// drop one. The non-`Sync`/non-`Send` members are `hwnd: HWND` and
 // `context: *const WindowContext`, both bare addresses that this type never
 // dereferences through these fields (`context` is an identity token for
 // value comparison only — see its field doc) — sending or sharing an
@@ -148,14 +154,16 @@ impl std::fmt::Debug for WindowsWindow {
 }
 
 impl WindowsWindow {
-    /// Create a new Windows window
+    /// Create a new Windows window. Crate-internal: windows are opened
+    /// through `WindowsPlatform::open_window`, which refuses a call off the
+    /// owner thread and hands over the platform's own handler set.
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
-    pub fn new(
+    pub(super) fn new(
         options: WindowOptions,
         windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
-        handlers: Arc<Mutex<PlatformHandlers>>,
+        handlers: Rc<RefCell<PlatformHandlers>>,
         config: crate::config::WindowConfiguration,
     ) -> Result<Arc<Self>, OpenWindowError> {
         // SAFETY: `GetModuleHandleW(None)` queries the current process image
@@ -245,7 +253,7 @@ impl WindowsWindow {
 
             // Create window state with default bounds (actual bounds will be set after
             // creation)
-            let callbacks = Arc::new(WindowCallbacks::new());
+            let identity = super::platform::WindowIdentity::mint();
 
             let state = Arc::new(Mutex::new(WindowState {
                 bounds: Bounds {
@@ -279,8 +287,9 @@ impl WindowsWindow {
             let created_style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
             let context = Box::new(WindowContext {
                 window_id,
-                handlers: handlers.clone(),
-                callbacks: Arc::clone(&callbacks),
+                identity,
+                handlers,
+                callbacks: WindowCallbacks::new(),
                 scale_factor: std::cell::Cell::new(scale_factor),
                 mode: std::cell::Cell::new(WindowMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
@@ -301,7 +310,7 @@ impl WindowsWindow {
             let window = Arc::new(Self {
                 hwnd,
                 state,
-                callbacks,
+                identity,
                 windows_map,
                 context: context_ptr,
                 // On the creating (owning) thread, as Win32 subclassing
@@ -403,6 +412,41 @@ impl WindowsWindow {
     /// Get the native HWND handle
     pub fn hwnd(&self) -> HWND {
         self.hwnd
+    }
+
+    /// Installs a callback into this window's owner-thread context.
+    ///
+    /// `install` runs only on the window's owner thread, against the context
+    /// of the very window this wrapper was built for. Otherwise the
+    /// registration is refused and `install`, with the callback it carries,
+    /// is dropped right here — on the calling thread for a foreign-thread
+    /// registration, which is logged as an error because the caller has
+    /// just lost a callback; on the owner for a window that is already gone,
+    /// which is routine teardown ordering.
+    fn register(&self, op: &'static str, install: impl FnOnce(&WindowCallbacks)) {
+        let outcome = super::platform::with_window_context_checked(self.hwnd, op, |context| {
+            (context.identity == self.identity).then(|| install(&context.callbacks))
+        });
+        match outcome {
+            Ok(Some(())) => {}
+            Ok(None) => tracing::debug!(
+                hwnd = ?self.hwnd,
+                op,
+                "callback registration refused: the handle now names a different window"
+            ),
+            Err(UserDataRefusal::ForeignThread) => tracing::error!(
+                hwnd = ?self.hwnd,
+                op,
+                "callback registration refused: window callbacks are registered on the \
+                 window's owner thread; the callback was dropped on the calling thread"
+            ),
+            Err(reason) => tracing::debug!(
+                hwnd = ?self.hwnd,
+                op,
+                ?reason,
+                "callback registration refused: the native window is gone"
+            ),
+        }
     }
 
     /// Get current window bounds
@@ -931,11 +975,12 @@ impl PlatformWindow for WindowsWindow {
                 if route != TeardownRoute::DestroyDirect {
                     return route;
                 }
-                // Both the retained wrapper and live context own this Arc. Unlike
-                // the raw context address, its identity cannot be recycled while
-                // this wrapper survives. Only inspect it under the owner guard.
+                // The wrapper and its live context carry the same identity,
+                // minted once and never reused, so unlike the raw context
+                // address it cannot be recycled. Only inspect it under the
+                // owner guard.
                 if super::platform::with_window_context(self.hwnd, "show identity", |context| {
-                    Arc::ptr_eq(&context.callbacks, &self.callbacks)
+                    context.identity == self.identity
                 }) == Some(true)
                 {
                     route
@@ -1134,8 +1179,103 @@ impl PlatformWindow for WindowsWindow {
     }
 
     // ==================== Per-Window Callbacks ====================
+    //
+    // Every setter goes through `Self::register`: it installs into the
+    // owner-thread context, or refuses and drops the callback on the calling
+    // thread. A replaced callback is dropped after its slot's lock is
+    // released, since its destructor may re-enter this window.
 
-    crate::shared::impl_window_callback_setters!(callbacks);
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+        self.register("on_input", move |callbacks| {
+            let previous = callbacks.on_input.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
+    fn on_request_frame(&self, callback: Box<dyn FnMut() + Send>) {
+        self.register("on_request_frame", move |callbacks| {
+            let previous = callbacks.on_request_frame.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
+        self.register("on_resize", move |callbacks| {
+            let previous = callbacks.on_resize.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
+    fn on_moved(&self, callback: Box<dyn FnMut() + Send>) {
+        self.register("on_moved", move |callbacks| {
+            let previous = callbacks.on_moved.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
+    fn on_close(&self, callback: Box<dyn FnOnce() + Send>) {
+        self.register("on_close", move |callbacks| {
+            let previous = callbacks.on_close.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
+    fn on_should_close(&self, callback: Box<dyn FnMut() -> bool + Send>) {
+        self.register("on_should_close", move |callbacks| {
+            let previous = callbacks.on_should_close.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
+    fn on_safe_area_change(&self, callback: Box<dyn FnMut(EdgeInsets) + Send>) {
+        self.register("on_safe_area_change", move |callbacks| {
+            callbacks.set_safe_area_callback(callback);
+        });
+    }
+
+    fn on_execution_state_change(&self, callback: Box<dyn FnMut(WindowExecutionState) + Send>) {
+        self.register("on_execution_state_change", move |callbacks| {
+            callbacks.set_execution_state_callback(callback);
+        });
+    }
+
+    fn on_active_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.register("on_active_status_change", move |callbacks| {
+            let previous = callbacks.on_active_status_change.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
+    fn on_visibility_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.register("on_visibility_status_change", move |callbacks| {
+            let previous = callbacks
+                .on_visibility_status_change
+                .lock()
+                .replace(callback);
+            drop(previous);
+        });
+    }
+
+    fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.register("on_hover_status_change", move |callbacks| {
+            let previous = callbacks.on_hover_status_change.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
+    fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        self.register("on_appearance_changed", move |callbacks| {
+            let previous = callbacks.on_appearance_changed.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
+    fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
+        self.register("on_surface_status_change", move |callbacks| {
+            let previous = callbacks.on_surface_status_change.lock().replace(callback);
+            drop(previous);
+        });
+    }
 
     fn window_handle(
         &self,
@@ -1294,7 +1434,7 @@ impl Clone for WindowsWindow {
         Self {
             hwnd: self.hwnd,
             state: Arc::clone(&self.state),
-            callbacks: Arc::clone(&self.callbacks),
+            identity: self.identity,
             windows_map: Arc::clone(&self.windows_map),
             // Same window, same identity token.
             context: self.context,
@@ -2082,7 +2222,7 @@ mod tests {
         };
 
         let windows_map = Arc::new(Mutex::new(HashMap::new()));
-        let handlers = Arc::new(Mutex::new(PlatformHandlers::default()));
+        let handlers = Rc::new(RefCell::new(PlatformHandlers::default()));
         let config = crate::config::WindowConfiguration::default();
         let result = WindowsWindow::new(options, windows_map, handlers, config);
 
@@ -2095,5 +2235,110 @@ mod tests {
         let window = result.unwrap();
         assert!(!window.hwnd().is_invalid());
         assert_eq!(window.logical_size().width.0, 800.0);
+    }
+}
+
+/// Window callbacks live in the owner-thread context: a registration from
+/// any other thread is refused, and the refused callback is released on the
+/// thread that offered it.
+#[cfg(test)]
+mod callback_affinity_tests {
+    use std::sync::Arc;
+
+    use windows::Win32::{
+        Foundation::{HWND, LPARAM, WPARAM},
+        Graphics::Gdi::InvalidateRect,
+        UI::WindowsAndMessaging::{DestroyWindow, SendMessageW, WM_PAINT},
+    };
+
+    use super::super::{
+        WindowsPlatform,
+        test_probe::{Probe, ProbeLog, hwnd_of, open_hidden},
+    };
+
+    /// Invalidates the whole client area and handles `WM_PAINT` now. The
+    /// window is hidden, so the system would not paint it by itself;
+    /// `SendMessageW` runs `window_proc` synchronously, so the frame
+    /// callback has run (or not) by the time this returns.
+    fn paint_now(hwnd: HWND) {
+        // SAFETY: both calls take the handle and plain values; `hwnd` names a
+        // live window this thread created, so the send is handled here.
+        unsafe {
+            let _ = InvalidateRect(Some(hwnd), None, false);
+            SendMessageW(hwnd, WM_PAINT, Some(WPARAM(0)), Some(LPARAM(0)));
+        }
+    }
+
+    #[test]
+    fn off_owner_registration_is_refused_and_dropped_on_the_registering_thread() {
+        let platform = WindowsPlatform::new().expect("platform");
+        let window = open_hidden(&platform);
+        let log = Arc::new(ProbeLog::default());
+
+        let worker = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let probe = Probe::new(&log);
+                    window.on_request_frame(Box::new(move || probe.hit()));
+                    std::thread::current().id()
+                })
+                .join()
+                .expect("registering thread")
+        });
+        paint_now(hwnd_of(&window));
+
+        assert_eq!(log.runs(), 0, "an off-owner frame callback must not run");
+        assert_eq!(
+            log.dropped_on(),
+            Some(worker),
+            "the refused callback is released on the thread that offered it"
+        );
+    }
+
+    #[test]
+    fn registration_after_destroy_is_refused_not_parked_on_the_wrapper() {
+        let platform = WindowsPlatform::new().expect("platform");
+        let window = open_hidden(&platform);
+        // SAFETY: the handle names a live window this thread created.
+        unsafe { DestroyWindow(hwnd_of(&window)) }.expect("destroy on the owner");
+
+        let log = Arc::new(ProbeLog::default());
+        let probe = Probe::new(&log);
+        window.on_resize(Box::new(move |_, _| probe.hit()));
+
+        assert_eq!(
+            log.dropped_on(),
+            Some(std::thread::current().id()),
+            "a registration on a destroyed window is released at once, on the registering owner"
+        );
+        std::thread::spawn(move || drop(window))
+            .join()
+            .expect("worker drop");
+        assert_eq!(log.runs(), 0);
+    }
+
+    #[test]
+    fn owner_registration_runs_and_is_released_on_the_owner() {
+        let platform = WindowsPlatform::new().expect("platform");
+        let window = open_hidden(&platform);
+        let log = Arc::new(ProbeLog::default());
+        let probe = Probe::new(&log);
+        window.on_request_frame(Box::new(move || probe.hit()));
+
+        paint_now(hwnd_of(&window));
+        assert_eq!(log.runs(), 1, "the owner's frame callback runs on WM_PAINT");
+        assert_eq!(log.ran_on(), Some(std::thread::current().id()));
+        assert_eq!(
+            log.dropped_on(),
+            None,
+            "still registered while the window lives"
+        );
+
+        window.close();
+        assert_eq!(
+            log.dropped_on(),
+            Some(std::thread::current().id()),
+            "WM_DESTROY releases the callback on the owner"
+        );
     }
 }

@@ -1,6 +1,6 @@
 //! Windows platform implementation
 
-use std::{collections::HashMap, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
@@ -45,12 +45,15 @@ use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::PlatformError,
     executor::BackgroundExecutor,
-    shared::{PlatformHandlers, WindowCallbacks, hwnd_affinity::ContextLedger},
+    shared::{
+        PlatformHandlers, WindowCallbacks,
+        hwnd_affinity::{ContextLedger, UserDataRefusal},
+    },
     traits::{
         Clipboard, DesktopCapabilities, OpenWindowError, OwnerPlatform, Platform,
         PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
         PlatformWindow, WindowAppearance, WindowEvent, WindowId, WindowMode, WindowOptions,
-        owner::{DirectOwnerHooks, OwnerHooks},
+        owner::OwnerHooks,
     },
 };
 
@@ -58,14 +61,42 @@ use crate::{
 /// `static mut bool`).
 static REGISTER_WINDOW_CLASS: std::sync::Once = std::sync::Once::new();
 
-/// Context data stored per window for event dispatch
+/// Identity of one native window's context, minted once per
+/// [`WindowsWindow::new`] and held by both the context and every wrapper
+/// clone. Unlike the context's address it is never reused, so a wrapper can
+/// tell its own window from one the OS built behind a recycled handle.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct WindowIdentity(std::num::NonZeroU64);
+
+impl WindowIdentity {
+    pub(super) fn mint() -> Self {
+        // A monotonic id source, not shared state: nothing reads it back.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let raw = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(std::num::NonZeroU64::new(raw).expect("BUG: the window identity counter wrapped"))
+    }
+}
+
+/// Context data stored per window for event dispatch.
+///
+/// Lives in the window's `GWLP_USERDATA` slot and is only ever reached on
+/// the window's owner thread, through [`with_window_context`] or
+/// `window_proc`. That is what makes it the home of the window's callbacks:
+/// a registration that cannot reach this context from the calling thread is
+/// refused, so a callback never lands where a foreign thread could run or
+/// drop it.
 pub(super) struct WindowContext {
     /// Window ID for event dispatch
     pub window_id: WindowId,
-    /// Reference to platform handlers (global)
-    pub handlers: Arc<Mutex<PlatformHandlers>>,
-    /// Per-window callbacks for event delivery
-    pub callbacks: Arc<WindowCallbacks>,
+    /// Which native window this context belongs to; see [`WindowIdentity`].
+    pub identity: WindowIdentity,
+    /// The platform-level handlers, shared with the owner control context.
+    /// `Rc<RefCell<..>>`: every holder lives on the owner thread, and no
+    /// borrow is held while a handler runs.
+    pub handlers: Rc<RefCell<PlatformHandlers>>,
+    /// Per-window callbacks for event delivery, owned by this context and
+    /// released by `WM_DESTROY` on the owner thread.
+    pub callbacks: WindowCallbacks,
     /// Scale factor for coordinate conversion.
     ///
     /// `Cell`, not a plain `f32`: `window_proc` only ever holds a shared
@@ -124,29 +155,56 @@ pub(super) struct WindowContext {
 }
 
 impl WindowContext {
-    /// Dispatch a window event safely without holding locks
-    ///
-    /// This method extracts the handler, releases the lock, calls the handler,
-    /// then re-acquires the lock to restore it. This prevents deadlocks when
-    /// the handler tries to acquire the same lock.
+    /// Dispatch a window event to the platform-level handler.
+    #[inline]
+    pub(super) fn dispatch_event(&self, event: WindowEvent) {
+        self.with_leased_handler(
+            |handlers| &mut handlers.window_event,
+            |handler| handler(event),
+        );
+    }
+
+    /// Dispatch a keyboard-layout change to the platform-level hook.
+    pub(super) fn dispatch_keyboard_layout_change(&self) {
+        self.with_leased_handler(
+            |handlers| &mut handlers.keyboard_layout_changed,
+            |handler| handler(),
+        );
+    }
+
+    /// Runs one platform-level handler leased out of its slot: taken out, so
+    /// no `RefCell` borrow is held while it runs, then put back only if the
+    /// slot is still empty. A handler registered while this one was out —
+    /// including by this handler itself — is the newer registration and
+    /// wins; the leased one is then dropped. The same lease rule as
+    /// `OwnerSignal::drive`.
     ///
     /// The restore touches `self` AFTER the handler returns, and the handler
     /// may have closed this very window — that is sound only because every
     /// caller holds a [`ContextGuard`] over `self`, which defers the
     /// context's free past the borrow even when the handler's close runs a
     /// nested `WM_DESTROY` (which merely retires it).
-    #[inline]
-    pub(super) fn dispatch_event(&self, event: WindowEvent) {
-        // Take the handler out of the lock
-        let handler = self.handlers.lock().window_event.take();
-
-        // Release the lock before calling the handler
-        if let Some(mut handler) = handler {
-            handler(event);
-
-            // Restore the handler after the call
-            self.handlers.lock().window_event = Some(handler);
-        }
+    fn with_leased_handler<H>(
+        &self,
+        slot: impl Fn(&mut PlatformHandlers) -> &mut Option<H>,
+        call: impl FnOnce(&mut H),
+    ) {
+        let handler = slot(&mut self.handlers.borrow_mut()).take();
+        let Some(mut handler) = handler else {
+            return;
+        };
+        call(&mut handler);
+        let superseded = {
+            let mut handlers = self.handlers.borrow_mut();
+            let current = slot(&mut handlers);
+            if current.is_none() {
+                *current = Some(handler);
+                None
+            } else {
+                Some(handler)
+            }
+        };
+        drop(superseded);
     }
 }
 
@@ -253,6 +311,18 @@ pub(super) fn with_window_context<R>(
     op: &'static str,
     f: impl FnOnce(&WindowContext) -> R,
 ) -> Option<R> {
+    with_window_context_checked(hwnd, op, f).ok()
+}
+
+/// [`with_window_context`] that reports why it refused. On refusal `f` is
+/// dropped here, on the calling thread, untouched — which is what lets a
+/// callback registration hand its callback back to the thread that offered
+/// it instead of parking it where the owner would later run or free it.
+pub(super) fn with_window_context_checked<R>(
+    hwnd: HWND,
+    op: &'static str,
+    f: impl FnOnce(&WindowContext) -> R,
+) -> Result<R, crate::shared::hwnd_affinity::UserDataRefusal> {
     use crate::shared::hwnd_affinity::{UserDataVerdict, classify_user_data_access};
 
     // SAFETY: `GetWindowThreadProcessId(hwnd, None)` takes an optional out
@@ -287,7 +357,7 @@ pub(super) fn with_window_context<R>(
             // `f` defers the free past the guard's drop (see
             // `ContextGuard`).
             let guard = unsafe { ContextGuard::acquire(slot as *mut WindowContext) };
-            Some(f(guard.context()))
+            Ok(f(guard.context()))
         }
         UserDataVerdict::Refuse(reason) => {
             tracing::debug!(
@@ -296,7 +366,7 @@ pub(super) fn with_window_context<R>(
                 ?reason,
                 "refusing to touch this window's native context"
             );
-            None
+            Err(reason)
         }
     }
 }
@@ -344,9 +414,9 @@ pub struct WindowsPlatform {
     /// All created windows (keyed by HWND)
     windows: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
 
-    /// Platform handlers (callbacks from platform to framework)
-    handlers: Arc<Mutex<PlatformHandlers>>,
-
+    // The platform-level handlers (callbacks from platform to framework)
+    // are not a field: they live in the owner control context, reachable
+    // only on the owner thread through `owner_control.shares`.
     /// Background executor for async tasks
     background_executor: Arc<BackgroundExecutor>,
 
@@ -361,10 +431,13 @@ pub struct WindowsPlatform {
     affinity: flui_foundation::OwnerAffinity,
 }
 
-// SAFETY, per field: `windows` and `handlers` are `Arc<Mutex<..>>`, the
-// executors are `Arc`-shared and internally synchronized, and `config` is plain
-// data. The only non-`Sync` member is `message_window: HWND`, a bare address
-// that is never dereferenced here.
+// SAFETY, per field: `windows` is an `Arc<Mutex<..>>`, `owner_control` holds
+// only an `Arc`-shared signal and a locked address (its owner-thread state,
+// callbacks included, sits behind the owner window's `GWLP_USERDATA` and is
+// reached only through the owner-thread gate `OwnerControl::shares`), the
+// executors are `Arc`-shared and internally synchronized, and `config` is
+// plain data. The only non-`Sync` member is `message_window: HWND`, a bare
+// address that is never dereferenced here.
 //
 // NOT claimed — an earlier version of this comment claimed both, wrongly: that
 // an HWND is "thread-safe by design" (it is thread-AFFINE; its message queue
@@ -512,7 +585,6 @@ impl WindowsPlatform {
             owner_control: super::owner_control::OwnerControl::new()?,
             message_window,
             windows: Arc::new(Mutex::new(HashMap::new())),
-            handlers: Arc::new(Mutex::new(PlatformHandlers::default())),
             background_executor,
             config,
             affinity: flui_foundation::OwnerAffinity::new(),
@@ -1414,12 +1486,7 @@ impl WindowsPlatform {
                 // T046: Keyboard layout change
                 WM_INPUTLANGCHANGE => {
                     if let Some(ctx) = ctx {
-                        // Dispatch keyboard layout change via take/restore pattern
-                        let handler = ctx.handlers.lock().keyboard_layout_changed.take();
-                        if let Some(mut handler) = handler {
-                            handler();
-                            ctx.handlers.lock().keyboard_layout_changed = Some(handler);
-                        }
+                        ctx.dispatch_keyboard_layout_change();
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -1460,6 +1527,42 @@ impl WindowsPlatform {
         }
         Ok(())
     }
+
+    /// Installs a platform-level handler into the owner-thread handler set.
+    ///
+    /// Off the owner thread, or once the platform has shut down, the
+    /// registration is refused and `callback` is dropped here, on the
+    /// calling thread. A replaced handler is dropped after the `RefCell`
+    /// borrow ends, since its destructor may re-enter the platform.
+    fn register_handler<H>(
+        &self,
+        op: &'static str,
+        callback: H,
+        slot: impl FnOnce(&mut PlatformHandlers) -> &mut Option<H>,
+    ) {
+        match self.owner_control.shares(op) {
+            Ok(shares) => {
+                let previous = slot(&mut shares.handlers.borrow_mut()).replace(callback);
+                drop(previous);
+            }
+            Err(UserDataRefusal::ForeignThread) => {
+                tracing::error!(
+                    op,
+                    "platform callback registration refused: platform callbacks are registered \
+                     on the owner thread; the callback was dropped on the calling thread"
+                );
+                drop(callback);
+            }
+            Err(reason) => {
+                tracing::debug!(
+                    op,
+                    ?reason,
+                    "platform callback registration refused: the platform has shut down"
+                );
+                drop(callback);
+            }
+        }
+    }
 }
 
 impl Platform for WindowsPlatform {
@@ -1483,8 +1586,15 @@ impl Platform for WindowsPlatform {
         struct RunGuard(Arc<WindowsPlatform>);
         impl Drop for RunGuard {
             fn drop(&mut self) {
+                // Take the quit callback while the owner context still
+                // exists, close (which frees that context on this thread),
+                // and only then run it: the callback still observes a
+                // closed platform.
+                let callback = match self.0.owner_control.shares("run teardown") {
+                    Ok(shares) => shares.handlers.borrow_mut().quit.take(),
+                    Err(_) => None,
+                };
                 self.0.owner_control.close();
-                let callback = self.0.handlers.lock().quit.take();
                 if let Some(callback) = callback {
                     crate::shared::panic_boundary::invoke_and_drop_owner_callback(callback);
                 }
@@ -1492,9 +1602,9 @@ impl Platform for WindowsPlatform {
         }
         let _guard = RunGuard(Arc::clone(&platform));
         let erased: Arc<dyn Platform> = platform.clone();
-        let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
+        let hooks: Arc<dyn OwnerHooks> = Arc::new(super::owner_control::WindowsOwnerHooks::new(
             Arc::clone(&erased),
-            Arc::clone(&platform.owner_control.signal),
+            &platform.owner_control,
         ));
         on_ready(OwnerPlatform::new(erased, hooks)).map_err(PlatformError::bootstrap)?;
         platform
@@ -1508,7 +1618,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn quit(&self) {
-        self.owner_control.signal.close();
+        self.owner_control.close_signal();
         // PostQuitMessage posts to the CALLING thread's message queue — off
         // the owner thread it silently quits nothing (ADR-0039).
         self.affinity.debug_assert_owner("WindowsPlatform::quit");
@@ -1554,21 +1664,27 @@ impl Platform for WindowsPlatform {
         &self,
         options: WindowOptions,
     ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
-        // An HWND's message queue belongs to the creating thread; a window
-        // minted off the owner thread is silently mis-affined (ADR-0039).
-        self.affinity
-            .debug_assert_owner("WindowsPlatform::open_window");
         if !self.owner_control.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
                 rejected: Some(options),
             });
         }
+        // An HWND's message queue belongs to the creating thread, and the
+        // window context shares the owner-only platform handlers, so a
+        // window is opened on the owner thread or not at all (ADR-0039).
+        let shares = self.owner_control.shares("open_window").map_err(|reason| {
+            OpenWindowError::Backend {
+                message: format!(
+                    "Win32 windows are opened on the platform's owner thread ({reason:?})"
+                ),
+            }
+        })?;
         tracing::info!("Opening window: {:?}", options.title);
 
         let window = WindowsWindow::new(
             options,
             self.windows.clone(),
-            self.handlers.clone(),
+            shares.handlers,
             self.config.clone(),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
@@ -1605,15 +1721,19 @@ impl Platform for WindowsPlatform {
     // ==================== Callbacks ====================
 
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>) {
-        self.handlers.lock().quit = Some(callback);
+        self.register_handler("on_quit", callback, |handlers| &mut handlers.quit);
     }
 
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>) {
-        self.handlers.lock().window_event = Some(callback);
+        self.register_handler("on_window_event", callback, |handlers| {
+            &mut handlers.window_event
+        });
     }
 
     fn on_keyboard_layout_change(&self, callback: Box<dyn FnMut() + Send>) {
-        self.handlers.lock().keyboard_layout_changed = Some(callback);
+        self.register_handler("on_keyboard_layout_change", callback, |handlers| {
+            &mut handlers.keyboard_layout_changed
+        });
     }
 
     // ==================== App Activation (US3 T038) ====================
@@ -2109,5 +2229,181 @@ mod tests {
             "Failed to create Windows platform: {:?}",
             result.err()
         );
+    }
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use windows::Win32::UI::WindowsAndMessaging::SendMessageW;
+
+    use super::super::test_probe::{Probe, ProbeLog, hwnd_of, open_hidden};
+
+    // The window context holds owner-only state (its callbacks and the
+    // shared handler set); it must never become `Send` or `Sync` through a
+    // field change.
+    static_assertions::assert_not_impl_any!(WindowContext: Send, Sync);
+
+    /// Sends `msg` to `hwnd` and returns once `window_proc` has handled it.
+    fn send(hwnd: HWND, msg: u32) {
+        // SAFETY: the handle names a live window created on this thread, so
+        // `SendMessageW` runs `window_proc` synchronously here; the zero
+        // parameters are valid for every message the tests send.
+        unsafe {
+            SendMessageW(hwnd, msg, Some(WPARAM(0)), Some(LPARAM(0)));
+        }
+    }
+
+    #[test]
+    fn off_owner_keyboard_layout_hook_is_refused() {
+        let platform = WindowsPlatform::new().expect("platform");
+        let window = open_hidden(&platform);
+        let log = Arc::new(ProbeLog::default());
+
+        let worker = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let probe = Probe::new(&log);
+                    platform.on_keyboard_layout_change(Box::new(move || probe.hit()));
+                    std::thread::current().id()
+                })
+                .join()
+                .expect("registering thread")
+        });
+        send(hwnd_of(&window), WM_INPUTLANGCHANGE);
+
+        assert_eq!(log.runs(), 0, "an off-owner platform hook must not run");
+        assert_eq!(log.dropped_on(), Some(worker));
+    }
+
+    #[test]
+    fn window_event_handler_replaced_from_inside_itself_keeps_the_replacement() {
+        let platform = Arc::new(WindowsPlatform::new().expect("platform"));
+        let window = open_hidden(&platform);
+        let first_calls = Arc::new(AtomicUsize::new(0));
+        let replacement_calls = Arc::new(AtomicUsize::new(0));
+
+        let weak = Arc::downgrade(&platform);
+        let first = Arc::clone(&first_calls);
+        let replacement = Arc::clone(&replacement_calls);
+        platform.on_window_event(Box::new(move |_| {
+            first.fetch_add(1, Ordering::SeqCst);
+            let replacement = Arc::clone(&replacement);
+            weak.upgrade()
+                .expect("platform")
+                .on_window_event(Box::new(move |_| {
+                    replacement.fetch_add(1, Ordering::SeqCst);
+                }));
+        }));
+
+        send(hwnd_of(&window), WM_MOVE);
+        send(hwnd_of(&window), WM_MOVE);
+
+        assert_eq!(first_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            replacement_calls.load(Ordering::SeqCst),
+            1,
+            "the handler registered from inside the first one receives the next event"
+        );
+    }
+
+    #[test]
+    fn quit_callback_runs_once_on_owner_after_owner_window_closes() {
+        let platform = Box::new(WindowsPlatform::new().expect("platform"));
+        let log = Arc::new(ProbeLog::default());
+        let for_ready = Arc::clone(&log);
+        platform
+            .run(Box::new(move |owner| {
+                let probe = Probe::new(&for_ready);
+                owner.shared().on_quit(Box::new(move || probe.hit()));
+                owner.quit();
+                Ok(())
+            }))
+            .expect("run");
+
+        let owner = std::thread::current().id();
+        assert_eq!(log.runs(), 1);
+        assert_eq!(log.ran_on(), Some(owner));
+        assert_eq!(log.dropped_on(), Some(owner));
+    }
+
+    #[test]
+    fn owner_turn_runs_on_the_owner_and_is_released_there() {
+        let platform = Box::new(WindowsPlatform::new().expect("platform"));
+        let log = Arc::new(ProbeLog::default());
+        let for_ready = Arc::clone(&log);
+        platform
+            .run(Box::new(move |owner| {
+                let probe = Probe::new(&for_ready);
+                let proxy = owner.proxy();
+                owner
+                    .on_wake(Box::new(move || {
+                        probe.hit();
+                        proxy.request_quit().expect("quit from the owner turn");
+                    }))
+                    .expect("register the owner turn");
+                owner.proxy().wake().expect("wake");
+                Ok(())
+            }))
+            .expect("run");
+
+        let owner = std::thread::current().id();
+        assert_eq!(log.runs(), 1, "one wake, one turn, then quit");
+        assert_eq!(log.ran_on(), Some(owner));
+        assert_eq!(log.dropped_on(), Some(owner));
+    }
+
+    #[test]
+    fn off_owner_quit_leaves_the_owner_turn_callback_to_the_owner() {
+        use super::super::owner_control::WindowsOwnerHooks;
+
+        let platform = Arc::new(WindowsPlatform::new().expect("platform"));
+        let log = Arc::new(ProbeLog::default());
+        let hooks = WindowsOwnerHooks::new(
+            Arc::clone(&platform) as Arc<dyn Platform>,
+            &platform.owner_control,
+        );
+        let probe = Probe::new(&log);
+        hooks
+            .on_wake(Box::new(move || probe.hit()))
+            .expect("register the owner turn");
+        drop(hooks);
+
+        let worker = std::thread::scope(|scope| {
+            let quitting = scope.spawn(|| platform.quit());
+            let worker = quitting.thread().id();
+            // `quit` closes the signal first; off the owner, debug builds
+            // then fail its owner assertion, which is not what this pins.
+            let _ = quitting.join();
+            worker
+        });
+        assert_ne!(
+            log.dropped_on(),
+            Some(worker),
+            "an off-owner quit must not drop the owner-turn callback on its thread"
+        );
+        assert_eq!(log.dropped_on(), None, "the owner has not released it yet");
+
+        drop(platform);
+        assert_eq!(log.runs(), 0);
+        assert_eq!(log.dropped_on(), Some(std::thread::current().id()));
+    }
+
+    #[test]
+    fn off_owner_open_window_is_refused() {
+        let platform = WindowsPlatform::new().expect("platform");
+        let refused = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    matches!(
+                        platform.open_window(WindowOptions {
+                            visible: false,
+                            ..Default::default()
+                        }),
+                        Err(OpenWindowError::Backend { .. })
+                    )
+                })
+                .join()
+                .expect("opening thread")
+        });
+        assert!(refused, "a window opened off the owner thread is refused");
     }
 }

@@ -57,6 +57,53 @@ Tests: `a_null_owner_open_on_another_thread_fails_while_a_session_is_open`
 (fails with a `NULL` owner) and `another_opener_can_empty_a_clipboard_flui_owns`
 (fails when the owner thread does not pump).
 
+### Win32 callbacks live in the window's owner-thread context; off-owner registration is refused
+
+Flutter's Windows embedder has no counterpart: its callbacks are set and run on
+the platform thread, and Dart has no `Send`. FLUI's registration methods take
+`&self` on `Send + Sync` traits, so any thread can call them. ADR-0082 §4 step
+one for Win32 makes that safe without changing a signature.
+
+- **Storage.** A window's callbacks (`WindowCallbacks`) live by value in its
+  `WindowContext`; the platform-level handlers (`on_quit`, `on_window_event`,
+  `on_keyboard_layout_change`) live as `Rc<RefCell<PlatformHandlers>>` in the
+  `OwnerControlContext` of the owner message window, shared by every window
+  context; the owner-turn callback lives in that context's `OwnerTurnSlot`.
+  Both contexts sit behind `GWLP_USERDATA`, are reached only through the
+  owner-thread gates (`with_window_context_checked`, `OwnerControl::shares`),
+  and are freed by `WM_DESTROY` / `WM_NCDESTROY` on the owner thread. A
+  platform dropped off its owner thread without running keeps the owner window,
+  so its `OwnerControlContext` and the handlers in it are leaked, never freed
+  on the wrong thread. Both are pinned `!Send + !Sync`.
+- **Refusal.** A registration from any thread but the owner, on a window that
+  is gone, or on a handle the OS recycled for another window, is refused. The
+  callback is dropped right there, on the registering thread, so it never runs
+  on the owner and is never freed by a thread that did not create it. A
+  foreign-thread refusal logs an error ("registration refused"): the caller has
+  just lost a callback. An off-owner `open_window` returns
+  `OpenWindowError::Backend`.
+- **Lease-style restore.** Dispatching the window-event or keyboard-layout
+  handler takes it out of its slot, runs it with no borrow held, and puts it
+  back only if the slot is still empty. A handler registered while it ran —
+  including by itself — wins, the rule `OwnerSignal::drive` already follows.
+  Before this, the old handler was put back unconditionally and the
+  replacement was silently lost.
+- **Quit order.** The run's teardown takes the quit callback while the owner
+  context exists, destroys the owner window, then runs the callback.
+
+The other backends still store `Send` callbacks behind locks until their own
+steps.
+
+Tests (Windows host; CI only type-checks Win32):
+`off_owner_registration_is_refused_and_dropped_on_the_registering_thread`,
+`registration_after_destroy_is_refused_not_parked_on_the_wrapper`,
+`off_owner_keyboard_layout_hook_is_refused`, `off_owner_open_window_is_refused`
+and `window_event_handler_replaced_from_inside_itself_keeps_the_replacement`
+each fail on the previous storage;
+`owner_registration_runs_and_is_released_on_the_owner`,
+`quit_callback_runs_once_on_owner_after_owner_window_closes` and
+`owner_turn_runs_on_the_owner_and_is_released_there` guard the owner path.
+
 ### AppKit reopen signals use a loop-owned serialized callback pump
 
 The owned application delegate implements
@@ -791,6 +838,16 @@ covers both, so nested owner dispatch cannot recursively invoke a replacement.
 Quit fences admission before posting and remains retryable after posting failure.
 Per-run weak proxy stamps retain the original owner thread even after expiry.
 
+The signal holds admission and scheduling state; the callback waits between
+turns in a `TurnSlot` the caller passes to `register_in` and `drive_in`. Win32
+keeps an `OwnerTurnSlot` (`!Send`) in its owner control context, so closing or
+dropping the last `Arc<OwnerSignal>` on another thread never drops the
+callback there (test: `off_owner_quit_leaves_the_owner_turn_callback_to_the_owner`);
+the owner clears the slot on quit, or `WM_NCDESTROY` frees it with the
+context, and a platform dropped off its owner leaks it with the context. macOS, UIKit, winit and headless still use `register` and
+`drive`, backed by a shared slot inside the signal, until their own steps of
+ADR-0082 §4 (test: `close_off_owner_does_not_drop_the_turn_callback_there`).
+
 macOS posts through GCD, winit through its existing EventLoopProxy, and Win32
 through a dedicated message-only class with its own typed userdata. Headless
 provides `HeadlessOwnerTurns`, an owner-local driver and one-shot posting failure
@@ -807,8 +864,10 @@ python3 tools/device-checks/check-owner-wake.py target/debug/examples/owner_wake
 ```
 
 External counters assert owner affinity, nonrecursive delivery, shutdown capture
-release and rejected work after quit. Windows evidence is cross-compilation,
-not native runtime verification. Mobile/web registration remains explicitly
+release and rejected work after quit. On Windows,
+`owner_turn_runs_on_the_owner_and_is_released_there` runs one wake-and-quit
+turn through the real message loop; it runs on a Windows host only, since CI
+only type-checks Win32. Mobile/web registration remains explicitly
 unsupported; proxy window creation support is separate from wake/quit support.
 
 ### Reveal without changing window mode

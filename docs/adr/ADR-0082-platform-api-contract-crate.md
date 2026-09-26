@@ -3,7 +3,9 @@
 - **Status:** Accepted in part (2026-09-26): §1 for the items §3's first change moves; §2's rule
   that only composition roots depend on `flui-platform` (its `allowed-dependents`); §3's first
   change. `PlatformWindow`'s move with a host-side window subtrait for `accessibility()` and the
-  removal of `as_winit` (§3, second change), §4 and §5 remain Proposed.
+  removal of `as_winit` (§3, second change), §4 and §5 remain Proposed. §4 was revised in place
+  on 2026-09-26, while still Proposed: what step one requires, the precondition for step two, and
+  the order of the headless and Win32 backends. Win32 has completed step one.
 - **Date:** 2026-09-25
 - **Amends (on acceptance):** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,
   [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §1–§3,
@@ -50,18 +52,20 @@ an edit to the Win32 backend rebuilds the UI stack.
 The contracts themselves carry backend and threading assumptions that a contract crate cannot
 keep:
 
-- `Platform: Send + Sync + 'static` (`crates/flui-platform/src/traits/platform.rs:253`) and
-  `PlatformWindow: Send + Sync` (`crates/flui-platform/src/traits/window.rs:169`) register
-  callbacks as `Box<dyn FnMut(..) + Send>`: `set_exit_policy_hook`, `on_quit`, `on_reopen`,
-  `on_window_event`, `on_open_urls` (`platform.rs:319,523-550`) and the window's `on_input`,
-  `on_request_frame`, `on_resize`, `on_close` and the rest (`window.rs:481-657`). Delivery is on
+- `Platform: Send + Sync + 'static` (`crates/flui-platform/src/traits/platform.rs:92`) and
+  `PlatformWindow: Send + Sync` (`crates/flui-platform/src/traits/window.rs:80`) register
+  callbacks as `Box<dyn FnMut(..) + Send>`: `set_exit_policy_hook`, `set_wake_deadline_hook`,
+  `on_keyboard_layout_change`, `on_quit`, `on_reopen`, `on_window_event`, `on_open_urls`
+  (`platform.rs:158,219,362-389`) and the window's `on_input`, `on_request_frame`, `on_resize`,
+  `on_close` and the rest (`window.rs:392-568`). `OwnerPlatform::on_wake` and `SharedPlatform`'s
+  forwarding registrations (`traits/owner.rs:95,258-307`) carry the same bound. Delivery is on
   the owner thread by construction (ADR-0039 §2), so the bound only forces callers to be `Send`.
   The runner's own comment names the consequence: "the platform callback surface still requires
   `Send`, so the `!Send` realm this holds remains in owner TLS"
   (`crates/flui-app/src/app/runner/host.rs:32-34`).
 - `PlatformWindow` names winit under a feature (`fn as_winit(&self) -> Option<&Arc<Window>>`,
-  `window.rs:767-770`) and returns `PlatformAccessibility`, which speaks AccessKit
-  (`window.rs:352`).
+  `window.rs:680`) and returns `PlatformAccessibility`, which speaks AccessKit
+  (`window.rs:263`).
 - A second, older window family (`Window`, `WindowManager`, `WindowBuilder`, a crate-local
   `RawWindowHandle` enum, `crates/flui-platform/src/window.rs:53,265,340,452`) exposes
   `fn raw_window_handle(&self) -> RawWindowHandle` (`window.rs:196`). Nothing outside the crate
@@ -159,21 +163,47 @@ ADR-0081 land.
 
 Every callback registered through `Platform` or `PlatformWindow` is delivered on the owner
 thread, so the contract states that and drops the bound: `Box<dyn FnMut(..)>` instead of
-`Box<dyn FnMut(..) + Send>`. `PlatformExecutor::spawn` (`platform.rs:698`) keeps `Send`: it
+`Box<dyn FnMut(..) + Send>`. `PlatformExecutor::spawn` (`platform.rs:419`) keeps `Send`: it
 really crosses threads. The traits themselves stay `Send + Sync`; handles such as
 `Arc<dyn PlatformWindow>` still reach the raster thread (ADR-0063).
 
 A trait signature cannot differ per backend, so the order is:
 
-1. each backend moves its callback storage to owner-thread-only state, behind an adapter that
-   still accepts `Send` callbacks — Win32, AppKit, winit, UIKit, Android and web in separate
-   changes, each with the live-run evidence below;
-2. one change drops `+ Send` from the signatures once every backend stores callbacks owner-only.
+1. each backend moves its callback storage to owner-thread-only state and **refuses a
+   registration made from any other thread**, dropping the refused callback on the thread that
+   registered it. The public signatures keep `+ Send`; with owner-only storage the adapter is the
+   free coercion `Box<dyn F + Send>` to `Box<dyn F>`. Win32, AppKit, winit, UIKit, Android, web
+   and headless each do this in a separate change, each with the live-run evidence below.
+2. one change drops `+ Send` from the signatures once every backend stores callbacks owner-only
+   **and** registration is reachable only through types that prove the owner thread.
+
+The refusal in step 1 is what keeps step 2 sound. `Platform`, `PlatformWindow` and
+`SharedPlatform` are `Send + Sync` and their registrations take `&self`, so without it any thread
+could hand over a closure that captures an `Rc` and have it run on the owner while the `Rc`'s
+other handle stays on the registering thread. Step 2 therefore also moves registration behind
+owner-proof types: the platform hooks (`on_quit`, `on_window_event`, …) from `SharedPlatform` to
+`OwnerPlatform`, and window callbacks through an owner-minted `!Send` registrar — for example
+`OwnerPlatform::window(&self, &Arc<dyn PlatformWindow>) -> OwnerWindow<'_>`, which fits the
+host-side window subtrait of §3's second change.
+
+The headless backend is converted before Win32 drops the bound. `current_platform()` returns
+`HeadlessPlatform` on any target when `FLUI_HEADLESS` is set, so a Windows build runs both
+backends behind one signature, and a bound that depends on the target (wgpu's `WasmNotSend`
+pattern) cannot express "`!Send` on Windows" while headless still stores `Send` callbacks.
 
 A backend whose storage cannot be made owner-local keeps a `Send` adapter and blocks step 2; that
 is the rollback, per backend. When step 2 lands, the runtime's owner host can hold the `!Send`
 realm without reaching it from a `Send` closure, and the thread-local cell narrows to the single
 trampoline cell of ADR-0083 and ADR-0097.
+
+**Win32, step 1.** Window callbacks live by value in the window's `WindowContext`, and the
+platform-level handlers and the owner-turn callback in the owner message window's
+`OwnerControlContext`; both sit behind `GWLP_USERDATA` and are reached and freed on the owner
+thread only (a platform dropped off its owner leaks its owner context rather than free it
+elsewhere). Every setter installs through that gate, an off-owner `open_window` is refused, and
+`WindowContext` and `OwnerControlContext` are pinned `!Send + !Sync`. The tests live in
+`crates/flui-platform/src/platforms/windows/` (`window.rs` `callback_affinity_tests`,
+`platform.rs` `tests`) and `shared/owner_signal.rs`.
 
 ### 5. One backend per OS
 
