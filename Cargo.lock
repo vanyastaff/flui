@@ -1992,6 +1992,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.25.0",
  "enigo",
+ "flui-protocol",
  "image",
  "rmcp",
  "schemars",
@@ -2308,6 +2309,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-protocol"
+version = "0.2.0-dev"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "flui-rendering"
 version = "0.2.0-dev"
 dependencies = [
@@ -2365,6 +2375,7 @@ dependencies = [
  "accesskit_consumer",
  "criterion",
  "flui-foundation",
+ "flui-protocol",
  "flui-tree",
  "flui-types",
  "parking_lot",

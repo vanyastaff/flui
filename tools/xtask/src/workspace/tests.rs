@@ -758,7 +758,7 @@ type Placement = (String, Option<String>, String);
 fn the_tiers_match_the_adr_0081_table() {
     let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
     let members = super::Members::load(&util::repo_root(), &metadata).expect("manifests load");
-    let table: [(&str, &str, &[&str]); 8] = [
+    let table: [(&str, &str, &[&str]); 9] = [
         (
             "V",
             "internal",
@@ -770,6 +770,7 @@ fn the_tiers_match_the_adr_0081_table() {
                 "flui-tree",
             ],
         ),
+        ("C", "stable", &["flui-protocol"]),
         (
             "S",
             "internal",
