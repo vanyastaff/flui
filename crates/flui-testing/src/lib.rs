@@ -580,7 +580,6 @@ impl HeadlessBinding {
     /// read them back without mounting a widget around them. `None` for a
     /// gesture-only binding (built via [`new`](Self::new) rather than
     /// [`with_tree`](Self::with_tree)): there is no tree, so no graph.
-    #[cfg(feature = "signals")]
     #[must_use]
     pub fn reactive(&self) -> Option<flui_view::Reactive> {
         self.tree

@@ -116,10 +116,9 @@ test-utils = ["dep:tracing-subscriber"]
 # Narrow cross-crate seam for framework composition roots (`flui-app` and the
 # widget hot-reload pipeline). Not an application-facing API contract.
 runtime-internals = []
-# ADR-0074: realm-scoped `Signal<T>` owned by the `BuildOwner`'s `Reactive` graph.
-# Reading a signal in `build` registers the element as a reader; writing schedules
-# exactly the readers. Off by default until the
-# go/no-go measurement in the ADR lands.
+# Accepted and ignored: realm-scoped signals are always compiled (ADR-0085 §5).
+# It stays only because CI's `test-features` job still passes
+# `--features flui-view/signals`; it goes with that step.
 signals = []
 
 # The `legacy-downcast` feature flag was retired

@@ -93,7 +93,6 @@ pub mod element;
 pub mod key;
 pub mod macros;
 pub mod owner;
-#[cfg(feature = "signals")]
 pub mod reactive;
 pub mod seq;
 pub mod state_cell;
@@ -220,7 +219,6 @@ pub use owner::{
     RebuildHandle, RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
-#[cfg(feature = "signals")]
 pub use reactive::{Reactive, Signal, SignalError, SignalSender, SignalSlot, SlotInfo};
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};

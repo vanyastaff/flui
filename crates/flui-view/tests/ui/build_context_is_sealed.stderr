@@ -1,13 +1,15 @@
-error[E0046]: not all trait items implemented, missing: `element_id`, `depth`, `mounted`, `is_building`, `depend_on_inherited`, `depend_on_inherited_fields`, `get_inherited`, `find_ancestor_element`, `find_ancestor_view`, `find_ancestor_state`, `find_root_ancestor_state`, `find_render_object`, `visit_ancestor_elements`, `visit_child_elements`, `mark_needs_build`, `dispatch_notification`
+error[E0046]: not all trait items implemented, missing: `element_id`, `depth`, `mounted`, `is_building`, `reactive`, `signal_read`, `depend_on_inherited`, `depend_on_inherited_fields`, `get_inherited`, `find_ancestor_element`, `find_ancestor_view`, `find_ancestor_state`, `find_root_ancestor_state`, `find_render_object`, `visit_ancestor_elements`, `visit_child_elements`, `mark_needs_build`, `dispatch_notification`
  --> tests/ui/build_context_is_sealed.rs:5:1
   |
 5 | impl flui_view::BuildContext for Mine {}
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `element_id`, `depth`, `mounted`, `is_building`, `depend_on_inherited`, `depend_on_inherited_fields`, `get_inherited`, `find_ancestor_element`, `find_ancestor_view`, `find_ancestor_state`, `find_root_ancestor_state`, `find_render_object`, `visit_ancestor_elements`, `visit_child_elements`, `mark_needs_build`, `dispatch_notification` in implementation
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `element_id`, `depth`, `mounted`, `is_building`, `reactive`, `signal_read`, `depend_on_inherited`, `depend_on_inherited_fields`, `get_inherited`, `find_ancestor_element`, `find_ancestor_view`, `find_ancestor_state`, `find_root_ancestor_state`, `find_render_object`, `visit_ancestor_elements`, `visit_child_elements`, `mark_needs_build`, `dispatch_notification` in implementation
   |
   = help: implement the missing item: `fn element_id(&self) -> ElementId { todo!() }`
   = help: implement the missing item: `fn depth(&self) -> usize { todo!() }`
   = help: implement the missing item: `fn mounted(&self) -> bool { todo!() }`
   = help: implement the missing item: `fn is_building(&self) -> bool { todo!() }`
+  = help: implement the missing item: `fn reactive(&self) -> Reactive { todo!() }`
+  = help: implement the missing item: `fn signal_read(&self, _: SignalSlot) { todo!() }`
   = help: implement the missing item: `fn depend_on_inherited(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
   = help: implement the missing item: `fn depend_on_inherited_fields(&self, _: context::build_context::sealed::CrateToken, _: TypeId, _: FieldSet, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
   = help: implement the missing item: `fn get_inherited(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`

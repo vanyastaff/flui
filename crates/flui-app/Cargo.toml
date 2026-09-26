@@ -34,9 +34,10 @@ wasm-bindgen-test = "=0.3.77"
 [features]
 default = ["desktop"]
 
-# ADR-0074 phase-2 prototype: `UiCommand::SignalWrite` — a cross-thread signal write
-# executed on the realm's owner thread at the next Idle drain.
-signals = ["flui-view/signals"]
+# Accepted and ignored: `UiCommand::SignalWrite` is always compiled (ADR-0085 §5).
+# It stays only because CI's `test-features` job still passes
+# `--features flui-app/signals`; it goes with that step.
+signals = []
 
 # === Platform Features ===
 # Honest note (verified 2026-08-04): these four are no-op selectors today —

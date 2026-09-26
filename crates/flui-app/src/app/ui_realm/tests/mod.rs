@@ -1662,5 +1662,4 @@ mod frame_clock_segment_gate;
 // Cross-thread signal writes run against the graph that minted the slot,
 // in whichever presentation owns it (ADR-0085 §1).
 // ========================================================================
-#[cfg(feature = "signals")]
 mod signal_write_routing;

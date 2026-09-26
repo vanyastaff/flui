@@ -103,7 +103,6 @@ pub(crate) enum UiCommand {
     /// way to write a signal. Readers it marks land in the owning
     /// presentation's inbox for the next frame — enqueue-and-wake, never
     /// touch the tree.
-    #[cfg(feature = "signals")]
     #[cfg_attr(
         not(test),
         expect(
@@ -138,7 +137,6 @@ impl std::fmt::Debug for UiCommand {
                 .debug_tuple("UiCommand::Navigation")
                 .field(command)
                 .finish(),
-            #[cfg(feature = "signals")]
             UiCommand::SignalWrite { target, .. } => f
                 .debug_struct("UiCommand::SignalWrite")
                 .field("target", target)
@@ -276,7 +274,6 @@ impl UiCommandSender {
     ///
     /// The routing key comes from `target` itself, so a caller cannot
     /// address a write to one graph and perform it against another.
-    #[cfg(feature = "signals")]
     #[cfg_attr(
         not(test),
         expect(
@@ -470,7 +467,6 @@ impl UiRealm {
                         report.dropped_stale += 1;
                     }
                 },
-                #[cfg(feature = "signals")]
                 UiCommand::SignalWrite { target, apply } => {
                     let Some((presentation, reactive)) = self.signal_graph_for(target) else {
                         tracing::warn!(

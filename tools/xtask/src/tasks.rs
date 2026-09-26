@@ -323,9 +323,10 @@ fn cross_typecheck_plan(host: Host) -> Vec<Step> {
 }
 
 /// CI's `test-features` job: the suites behind features the default run never
-/// enables (flui-assets and flui-widgets default to `default = []`; the
-/// realm-scoped signals are opt-in). The facade's non-default catalogs are in
-/// [`TEST_SCOPE`].
+/// enables (flui-assets and flui-widgets default to `default = []`). The
+/// facade's non-default catalogs are in [`TEST_SCOPE`]. The last step names
+/// the `signals` features, which are now accepted and ignored (signals are
+/// always compiled, ADR-0085 §5); it mirrors the job until the job drops it.
 fn test_features_plan() -> Vec<Step> {
     let nextest =
         |args: &[&str]| Step::from(Cmd::cargo(["nextest", "run"]).args(args.iter().copied()));

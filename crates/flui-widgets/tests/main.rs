@@ -158,10 +158,8 @@ mod semantics;
 mod shortcuts;
 #[path = "shrink_wrapping_viewport.rs"]
 mod shrink_wrapping_viewport;
-#[cfg(feature = "signals")]
 #[path = "signals.rs"]
 mod signals;
-#[cfg(feature = "signals")]
 #[path = "signals_legal_shapes.rs"]
 mod signals_legal_shapes;
 #[path = "slide_transition.rs"]

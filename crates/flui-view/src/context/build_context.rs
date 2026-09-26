@@ -128,12 +128,10 @@ pub trait BuildContext: sealed::Sealed {
 
     /// The realm's reactive graph (ADR-0074). Reachable from every lifecycle
     /// hook and callback; the graph is owned by the `BuildOwner`.
-    #[cfg(feature = "signals")]
     fn reactive(&self) -> crate::reactive::Reactive;
 
     /// Record that the element building through this context read `slot`.
     /// Called by `Signal::get`/`with`; a no-op outside a build.
-    #[cfg(feature = "signals")]
     fn signal_read(&self, slot: crate::reactive::SignalSlot);
 
     // ========================================================================
@@ -576,7 +574,6 @@ pub trait BuildContextExt: BuildContext {
     ///
     /// If called while this element's `build` is running
     /// (`SignalError::CreatedDuringBuild`): a slot per rebuild is a leak.
-    #[cfg(feature = "signals")]
     #[must_use]
     fn signal<T: 'static>(&self, value: T) -> crate::reactive::Signal<T> {
         self.reactive().signal_owned_by(self.element_id(), value)

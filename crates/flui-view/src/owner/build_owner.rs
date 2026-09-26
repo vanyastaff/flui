@@ -440,7 +440,6 @@ pub struct BuildOwner {
     /// ADR-0074: the realm's reactive graph. Constructed with the owner,
     /// re-pointed at the external inbox whenever the frame-request callback
     /// changes (`set_on_build_scheduled`).
-    #[cfg(feature = "signals")]
     reactive: crate::reactive::Reactive,
 
     /// Keep-alive holds on lazy sliver children — which children band eviction
@@ -718,7 +717,6 @@ impl BuildOwner {
             inactive_elements: Vec::new(),
             pending_dependency_changes: std::collections::HashSet::new(),
             inherited_dependencies: InheritedDependencies::default(),
-            #[cfg(feature = "signals")]
             reactive: crate::reactive::Reactive::new(),
             keep_alive: super::KeepAliveHolds::default(),
             tree_observer: None,
@@ -752,7 +750,6 @@ impl BuildOwner {
         // ADR-0074: writes must reach the inbox from the first frame, before any
         // binding installs a frame-request callback (`set_on_build_scheduled`
         // re-points the graph when one arrives).
-        #[cfg(feature = "signals")]
         owner.reactive.set_scheduler(owner.external_scheduler());
         owner
     }
@@ -962,14 +959,12 @@ impl BuildOwner {
         F: Fn() + Send + Sync + 'static,
     {
         self.on_build_scheduled = Some(Arc::new(callback));
-        #[cfg(feature = "signals")]
         self.reactive.set_scheduler(self.external_scheduler());
     }
 
     /// The realm's reactive graph (ADR-0074): signals and the
     /// reader registry that schedules exactly the elements that read a
     /// written signal.
-    #[cfg(feature = "signals")]
     pub fn reactive(&self) -> &crate::reactive::Reactive {
         &self.reactive
     }
@@ -1246,7 +1241,6 @@ impl BuildOwner {
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
             build_recovered: None,
-            #[cfg(feature = "signals")]
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
         }
@@ -1775,7 +1769,6 @@ impl BuildOwner {
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
                     build_recovered: Some(&build_recovered),
-                    #[cfg(feature = "signals")]
                     reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
                 };
@@ -1988,7 +1981,6 @@ impl BuildOwner {
                     tree_observer: &mut self.tree_observer,
                     recovered_panics: &mut self.recovered_panics,
                     build_recovered: None,
-                    #[cfg(feature = "signals")]
                     reactive: &self.reactive,
                     lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
                 };
@@ -2424,7 +2416,6 @@ impl BuildOwner {
                 tree_observer: &mut self.tree_observer,
                 recovered_panics: &mut self.recovered_panics,
                 build_recovered: None,
-                #[cfg(feature = "signals")]
                 reactive: &self.reactive,
                 lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
             };
@@ -2634,7 +2625,6 @@ impl BuildOwner {
             tree_observer: &mut self.tree_observer,
             recovered_panics: &mut self.recovered_panics,
             build_recovered: None,
-            #[cfg(feature = "signals")]
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
         };

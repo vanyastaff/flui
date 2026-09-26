@@ -15,7 +15,7 @@
 //! The counts are deterministic and printed once as a markdown table (that
 //! table is the evidence ADR-0074 §8 cites); the timings follow as criterion
 //! groups. Run with
-//! `cargo bench -p flui-widgets --features signals --bench signals_rebuilds -- --noplot`.
+//! `cargo bench -p flui-widgets --bench signals_rebuilds -- --noplot`.
 
 use std::cell::RefCell;
 use std::rc::Rc;

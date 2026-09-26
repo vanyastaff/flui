@@ -158,9 +158,10 @@ harness = true
 
 [features]
 default = []
-# ADR-0074 phase-2 prototype: realm-scoped signals in the widget harness and
-# the `signals` integration tests (`--features signals`).
-signals = ["flui-view/signals", "flui-testing?/signals"]
+# Accepted and ignored: the signals tests and bench always build (ADR-0085 §5).
+# It stays only because CI's `test-features` job still passes
+# `--features flui-widgets/signals`; it goes with that step.
+signals = []
 # Activates the `image` crate for decoding PNG/JPEG/GIF/… from bytes or files.
 # Required by `MemoryImage` and `FileImage`; `DirectImageProvider` compiles
 # without it.
@@ -198,11 +199,10 @@ workspace = true
 # ADR-0074 §8: setState (A) vs signals (B) on the same widget tree — rebuild counts
 # from `BuildOwner::last_frame_build_report`, relayout roots from
 # `PipelineOwner::layout_roots_total`, and pump wall time:
-# `cargo bench -p flui-widgets --features signals --bench signals_rebuilds -- --noplot`.
+# `cargo bench -p flui-widgets --bench signals_rebuilds -- --noplot`.
 [[bench]]
 name = "signals_rebuilds"
 harness = false
-required-features = ["signals"]
 
 [package.metadata.flui]
 layer = 6

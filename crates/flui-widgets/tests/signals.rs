@@ -5,8 +5,6 @@
 //! Every test counts `build` calls per element, because the claim under test
 //! is *which elements rebuild*, not what they render.
 
-#![cfg(feature = "signals")]
-
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;

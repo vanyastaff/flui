@@ -22,9 +22,10 @@ exclude = ["/benches/"]
 autotests = false
 
 [features]
-# ADR-0074: exposes `HeadlessBinding::reactive()` so a test creates, writes and
-# reads signals against the tree's own graph.
-signals = ["flui-view/signals"]
+# Accepted and ignored: `HeadlessBinding::reactive()` is always available
+# (ADR-0085 §5). It stays only because CI's `test-features` job still passes
+# `--features flui-testing/signals`; it goes with that step.
+signals = []
 
 [lints]
 workspace = true

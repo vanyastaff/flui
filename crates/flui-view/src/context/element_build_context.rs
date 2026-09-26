@@ -221,12 +221,10 @@ impl BuildContext for ElementBuildContext {
         }
     }
 
-    #[cfg(feature = "signals")]
     fn reactive(&self) -> crate::reactive::Reactive {
         self.owner.read().reactive().clone()
     }
 
-    #[cfg(feature = "signals")]
     fn signal_read(&self, slot: crate::reactive::SignalSlot) {
         if BuildContext::is_building(self) {
             self.owner
@@ -708,7 +706,6 @@ pub(crate) struct BuildCapabilities {
     /// The presentation's keep-alive table, so an item can take a hold on the
     /// lazy sliver child it lives inside from `init_state`.
     pub(crate) keep_alive: crate::owner::KeepAliveHolds,
-    #[cfg(feature = "signals")]
     pub(crate) reactive: crate::reactive::Reactive,
 }
 
@@ -800,12 +797,10 @@ impl BuildContext for BuildCtx<'_> {
         true
     }
 
-    #[cfg(feature = "signals")]
     fn reactive(&self) -> crate::reactive::Reactive {
         self.capabilities.reactive.clone()
     }
 
-    #[cfg(feature = "signals")]
     fn signal_read(&self, slot: crate::reactive::SignalSlot) {
         self.capabilities
             .reactive
@@ -1410,7 +1405,6 @@ mod tests {
                 hit_test_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
-                #[cfg(feature = "signals")]
                 reactive: crate::reactive::Reactive::new(),
             },
         );
@@ -1438,7 +1432,6 @@ mod tests {
                 hit_test_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
-                #[cfg(feature = "signals")]
                 reactive: crate::reactive::Reactive::new(),
             },
         );
