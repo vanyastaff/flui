@@ -1,5 +1,5 @@
 # Written by `cargo xtask perf --bless`; counts, not timings.
-# One table per scenario of crates/flui-testing/tests/perf.rs.
+# One table per scenario of crates/flui-widgets/tests/perf.rs.
 
 [full_reassemble]
 builds_run = 274

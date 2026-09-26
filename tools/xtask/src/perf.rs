@@ -1,7 +1,7 @@
 //! `cargo xtask perf`: run the counted perf scenarios and compare them with
 //! the checked-in baseline.
 //!
-//! The scenarios are `flui-testing`'s `perf` test target. Each one mounts a
+//! The scenarios are `flui-widgets`' `perf` test target. Each one mounts a
 //! small app, applies one change, and records the frame's work — elements
 //! rebuilt, nodes laid out and painted, layers produced and reused, semantics
 //! nodes published, frames produced — as counts, never timings. Counts are a
@@ -24,13 +24,16 @@ use anyhow::{Context, bail};
 
 use crate::util::{self, repo_root};
 
-/// The baseline, inside the `flui-testing` crate so a change to it is
-/// classified as a change to that crate and runs its lane.
-const BASELINE: &str = "crates/flui-testing/perf/baseline.toml";
+/// The package whose `perf` test target holds the scenarios.
+const PACKAGE: &str = "flui-widgets";
+
+/// The baseline, inside the scenarios' crate so a change to it is classified
+/// as a change to that crate and runs its lane.
+const BASELINE: &str = "crates/flui-widgets/perf/baseline.toml";
 
 /// Written above the tables of a blessed baseline.
 const BASELINE_HEADER: &str = "# Written by `cargo xtask perf --bless`; counts, not timings.\n\
-# One table per scenario of crates/flui-testing/tests/perf.rs.\n";
+# One table per scenario of crates/flui-widgets/tests/perf.rs.\n";
 
 /// Scenario name → counter name → value.
 type Counts = BTreeMap<String, BTreeMap<String, u64>>;
@@ -198,7 +201,7 @@ fn run_scenarios(root: &Path, out: &Path) -> anyhow::Result<()> {
             "run",
             "--locked",
             "-p",
-            "flui-testing",
+            PACKAGE,
             "--test",
             "perf",
             "--no-fail-fast",

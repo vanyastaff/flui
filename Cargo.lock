@@ -2417,7 +2417,6 @@ dependencies = [
  "flui-semantics",
  "flui-types",
  "flui-view",
- "flui-widgets",
  "parking_lot",
  "static_assertions",
  "thiserror 2.0.20",

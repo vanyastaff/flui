@@ -4,13 +4,17 @@
 //! 10 000-row list — applies one change, pumps, and asserts bounds on the
 //! frame's [`FrameReport`]. The bounds are the budget and hold on every host;
 //! the exact values are what `cargo xtask perf` compares against the checked-in
-//! baseline (`crates/flui-testing/perf/baseline.toml`), and it collects them
+//! baseline (`crates/flui-widgets/perf/baseline.toml`), and it collects them
 //! through `FLUI_PERF_OUT`: when that variable names a directory, each scenario
 //! writes `<dir>/<scenario>.toml` **before** asserting, so a broken budget still
 //! reports its numbers.
 //!
 //! A target of its own, not a module of `tests/main.rs`: it pins the
-//! process-global font system and reads the environment.
+//! process-global font system and reads the environment. It lives here rather
+//! than in `flui-testing`, which owns the frame driver, because the app is a
+//! widget tree: a `flui-testing` → `flui-widgets` dev edge would make every
+//! crate that dev-depends on `flui-testing` a dependent of the widget catalog,
+//! widening every change's CI scope.
 
 use std::fmt::Write as _;
 use std::sync::Once;
