@@ -896,11 +896,13 @@ runs `checks`, `plan` and the `ci` aggregator:
   The scope comes from `cargo xtask affected`; `cargo xtask check-changed`
   uses the same classification and arguments before a PR, and also counts
   uncommitted work. One difference: CI's `fast-lane` runs clippy over the
-  whole workspace and builds the tests of `cargo xtask test`'s scope (both
-  what its cache, saved by `test` on main, holds), then runs only the
-  affected packages' tests with a nextest filterset
+  whole workspace and builds the tests of `cargo xtask test`'s scope (the
+  feature set whose dependencies its cache, saved by `test` on main, holds;
+  the cache keeps no workspace crates, so all of them compile), then runs
+  only the affected packages' tests with a nextest filterset
   (`-E package(a)|package(b)`); `check-changed` builds only the scope, which
-  is cheaper in a fresh worktree.
+  is cheaper in a fresh worktree. Whether the CI shape beats a scoped build
+  is measured on its first runs (`design/ci.md` §4.1).
 - **Tooling lane**: nothing in the workspace compiles. A standalone crate is
   a directory under the repository whose `Cargo.toml` declares its own
   `[workspace]` and that no workspace crate reaches by a path dependency

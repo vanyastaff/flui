@@ -396,8 +396,9 @@ jobs:
           # Restores the cache the `test` job saves on main (same
           # shared-key): this job never runs on main, so a job-keyed cache
           # would always be cold. Both build TEST_SCOPE's feature set, and
-          # clippy below the `clippy` job's command, so what is restored is
-          # what is built.
+          # clippy below the `clippy` job's command, so the restored
+          # dependencies are the ones built (the entry holds no workspace
+          # crates: rust-cache prunes them).
           shared-key: workspace-tests-v2
           save-if: false
 
@@ -416,8 +417,9 @@ jobs:
       # CI_TEST_ARGS has no spaces for that reason).
       #
       # Clippy over the whole workspace, the `clippy` job's command: the
-      # check-mode artifacts `test` warms on main then serve it, and only the
-      # changed crates and their dependents re-check.
+      # dependencies' check-mode artifacts `test` warms on main serve it.
+      # rust-cache keeps no workspace-crate artifacts, so every workspace
+      # crate re-checks (design/ci.md §4.1: a lever measured on these runs).
       - name: cargo clippy (workspace)
         run: |
           cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -425,7 +427,8 @@ jobs:
             *" flui-engine "*) cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings ;;
           esac
 
-      # TEST_SCOPE's build (the `test` job's, so the restored cache is warm),
+      # TEST_SCOPE's build (the `test` job's, so the restored dependencies
+      # match its feature set; the workspace crates all build here),
       # running only the affected packages' tests (`-E package(a)|...`).
       - name: cargo nextest run (affected packages)
         if: needs.plan.outputs.ci_test_args != ''

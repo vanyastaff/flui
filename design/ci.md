@@ -299,20 +299,26 @@ that keeps file and line in a panic; both stay.
      scope keeps coming from the declared graph (optional and target-specific edges included),
      which nextest's `rdeps()` over the resolved graph would not reproduce.
    - `fast-lane`'s clippy runs `--workspace --all-targets`, the `clippy` job's command, so the
-     check-mode artifacts `test` warms on `main` (`ci.yml:753-755`) serve it.
-   - The cost: a whole-workspace build graph on every fast-lane run instead of the scope's. On a
-     warm cache only the changed crates and their dependents compile either way; what is saved is
-     the rebuild of every shared crate under a second feature set. Measured on the Windows host
-     for a `flui-widgets` edit: the scoped build's first run compiled 88 units in 117 s and added
-     3.3 GB; the `TEST_SCOPE` build then took 34 s and added 0.35 GB; warm edits were 28-46 s
-     either way ([study](build-footprint.md#duplicate-builds)).
-   - Those numbers are all taken **after** a workspace build existed in the same target
-     directory, which is CI's case (`fast-lane` restores `workspace-tests` from `main`). They say
-     nothing about a cold target, where a scoped build compiles fewer crates than `TEST_SCOPE`
-     and may well be faster and smaller. This design therefore applies the filterset to CI's
-     `fast-lane` only; `cargo xtask check-changed` keeps its scoped build until a cold scoped
-     build and a cold `TEST_SCOPE` build have been measured side by side, each in an empty target
-     directory (see C6 and the study's R1).
+     dependencies' check-mode artifacts `test` warms on `main` (`ci.yml:753-755`) serve it.
+   - The cost: a whole-workspace build graph on every fast-lane run instead of the scope's. What
+     is saved is the rebuild of third-party dependencies under a second feature set. Measured on
+     the Windows host for a `flui-widgets` edit: the scoped build's first run compiled 88 units in
+     117 s and added 3.3 GB; the `TEST_SCOPE` build then took 34 s and added 0.35 GB; warm edits
+     were 28-46 s either way ([study](build-footprint.md#duplicate-builds)).
+   - **Those numbers do not transfer to CI.** They were taken after a workspace build existed in
+     the same target directory, workspace crates included. CI's restored cache holds only the
+     dependencies: `Swatinem/rust-cache` (v2.9.2) leaves `cache-workspace-crates` at its default
+     `false` and prunes the workspace crates' artifacts before saving, and a fresh checkout gives
+     every path package new mtimes, so cargo would treat them as dirty anyway. On CI every
+     fast-lane run therefore compiles every workspace crate twice over: clippy in check mode over
+     the workspace, then the whole `TEST_SCOPE` test build (the 4 min 12 s `mode=full` build of
+     §5's table), where the scoped build compiled only the scope and its dependencies. For a leaf
+     crate that is likely a loss; for a crate most of the workspace depends on it is about even.
+     The shape is kept per C6, as a lever under C8: the first fast-lane runs are compared against
+     the scoped runs before it (job duration, per step), and the scoped build comes back if they
+     are slower. A cold local measurement says nothing either way until it is repeated with the
+     dependencies warm and the workspace crates cold, which is CI's actual state.
+     `cargo xtask check-changed` keeps its scoped build (C6 and the study's R1).
 2. **`test-features` in one resolution per crate group.** The five `flui-assets`/`flui-widgets`
    invocations (`ci.yml:845-849`) become one:
    `cargo nextest run -p flui-assets -p flui-widgets --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images`.
@@ -477,7 +483,7 @@ Estimates, from the measured job durations in §1; the implementation remeasures
 
 | Case | Today | Target |
 |---|---|---|
-| PR touching one leaf crate (e.g. `flui-material`) | fast lane: never observed in `packages` mode; the test build alone was 4 min 12 s on a warm cache in `mode=full` | `fast`: cache restore 1.1 + clippy ~1 + test build of the changed crates and dependents + run of the filtered tests + scoped rustdoc, doctests and cross clippies; target under 10 min wall-clock, about 12 job-minutes |
+| PR touching one leaf crate (e.g. `flui-material`) | fast lane: never observed in `packages` mode; the test build alone was 4 min 12 s on a warm cache in `mode=full` | `fast`: cache restore 1.1 + workspace clippy + the whole `TEST_SCOPE` test build (every workspace crate: the restored cache holds only dependencies, §4.1) + run of the filtered tests + scoped rustdoc, doctests and cross clippies; unmeasured, the first fast-lane runs are the measurement against the scoped build (C8) |
 | PR changing `Cargo.lock`, a workflow or `tools/xtask/src/change_scope/**` | heavy: 14-16.5 min wall-clock, about 90 job-minutes, 21 jobs, 3 of them Windows or macOS | `wide`: the Linux jobs only; long pole `test` or `test-features` (8.8-10.9 min on PR runs) plus `checks`; about 70 job-minutes, 18 jobs, no Windows or macOS runner |
 | Push to `main` | 21-27 min, about 105 job-minutes; long poles `test-features` (up to 24.6) and `feature-matrix (3/3)` (up to 21.4) | `full`: the same jobs; with §4's two long-pole fixes the long pole becomes `test` (9-20 min) |
 | Nightly | 17-19 min | `extended`: adds `macos-ci`, `test-windows`, `windows-a11y`, `protocol-windows`; not on any PR's critical path |
@@ -583,7 +589,9 @@ The proposals as they were put:
   owner wants `macos-ci` (the B0 exit's "`cargo xtask ci` is green on `macos-latest`") on every
   `main` push, it moves to `full` at about 25-35 min of macOS per push (estimate).
 - **C6. The fast lane's build graph.** Proposed: CI's `fast-lane` builds the whole `TEST_SCOPE`
-  and filters the run (§4.1), because its cache always holds a workspace build. The alternative
+  and filters the run (§4.1), because its cache always holds a workspace build. (That premise
+  holds for the dependencies only: rust-cache does not keep workspace crates, §4.1, so the
+  decision stands as an unmeasured lever until the first fast-lane runs are compared.) The alternative
   keeps `-p <scope>` and accepts the second feature resolution; the study's numbers are the
   trade-off. `cargo xtask check-changed` is not part of this proposal: a fresh worktree starts
   cold, the study measured only the warm case, and the cold comparison comes first.
