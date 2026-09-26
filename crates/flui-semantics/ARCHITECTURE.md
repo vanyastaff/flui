@@ -318,3 +318,52 @@ in `packages/flutter/lib/src/semantics/semantics.dart`, tag `3.44.0`, `'\n'`).
 **Test.** `static_text_is_named_by_its_text` reads each node's name through
 `accesskit_consumer` the way the adapters do; `cargo xtask device windows-a11y` is the live
 check that found the defect.
+
+### 5. The ADR-0080 tools reach FLUI through AccessKit's Windows adapter: `set_value` is `SetText`, `expand`/`collapse` are `Tap`
+
+**Rule.** `semantics_action_for` names every `accesskit::Action`. The tools an agent calls
+(ADR-0080, `flui_protocol::ActionName`) arrive through accesskit_windows 0.35.0 as:
+`invoke`, `toggle` and `select` → `Click` → `Tap`; `set_value` → `SetValue` → `SetText`;
+`focus` → `Focus`; `scroll_into_view` → `ScrollIntoView` → `ShowOnScreen`; `expand` and
+`collapse` → `Expand`/`Collapse` → `Tap`. A node with `HasExpandedState` and a tap handler
+advertises `Expand` while collapsed and `Collapse` while expanded, never both.
+
+**Why.** AccessKit does not count a node with an expanded state as invocable
+(`accesskit_consumer` 0.39, `Node::is_invocable`), so the Windows adapter offers only the
+`ExpandCollapse` pattern for it. With `Expand` and `Collapse` unrouted, an expandable FLUI node
+could be neither invoked nor expanded by an agent or a screen reader. FLUI toggles an
+expandable node through its tap handler, and the adapter refuses a transition to the state
+the node already has (accesskit_windows 0.35.0 `node.rs`, the `ExpandCollapse` provider), so
+routing both to `Tap` toggles in the requested direction. No other shipped adapter
+(`accesskit_macos` 0.27, `accesskit_atspi_common` 0.20) emits them.
+
+**Divergence.** Flutter's `dart:ui` has discrete `SemanticsAction.expand` (`1 << 24`) and
+`collapse` (`1 << 25`) (`engine/src/flutter/lib/ui/semantics.dart`, checked on 2026-09-26).
+FLUI has no such actions and keeps those bits reserved
+(`flui_protocol::SemanticsAction::RESERVED_BITS`); adding the two actions at Flutter's bits
+is the follow-up that would remove the `Tap` route. A numeric `set_value` (a slider through
+UI Automation's `RangeValue`) arrives as `SetValue` with `ActionData::NumericValue`, which has
+no FLUI argument shape: the handler receives `SetText` with no arguments. Nothing sends
+`Increase`/`Decrease` for it.
+
+**Test.** `every_wire_action_routes_to_a_semantics_action` (one row per `ActionName::ALL`),
+`a_numeric_set_value_routes_set_text_without_its_number`,
+`an_expandable_node_advertises_only_the_transition_its_state_allows` and
+`every_inbound_routable_action_is_advertised_outbound_again` in `accesskit_translation.rs`;
+`a_platform_expand_runs_the_tap_handler_of_a_collapsed_node` in
+`crates/flui-widgets/tests/semantics.rs`. `flui_testing::a11y::invoke_semantics_action` has
+no state guard: sending it the transition the node does not advertise toggles it anyway.
+
+### 6. Every explicit role maps to an AccessKit role; `DragHandle` and `HotKey` stay generic
+
+**Rule.** `explicit_role` gives every `SemanticsRole` except `None` an AccessKit role.
+`DragHandle` and `HotKey`, which AccessKit has no counterpart for, become
+`GenericContainer` rather than a role that would mislead a screen reader.
+
+**Why.** `SemanticsRole` lives in `flui-protocol` and is `#[non_exhaustive]`, so the match in
+this crate ends in a wildcard and the compiler no longer catches a forgotten arm. A role
+without an arm would silently fall back to the flag cascade.
+
+**Test.** `every_role_but_none_maps_to_an_accesskit_role` walks `SemanticsRole::ALL`, and
+asserts that exactly `DragHandle` and `HotKey` map to `GenericContainer`; deleting the
+`Form` arm makes it fail with `form maps to no AccessKit role`.

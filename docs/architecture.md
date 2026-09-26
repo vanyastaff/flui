@@ -32,11 +32,13 @@ Layer 3  ── flui-layer, flui-semantics, flui-animation
 Layer 2  ── flui-tree, flui-platform, flui-scheduler, flui-painting,
                 │  flui-interaction, flui-assets
                 │  (flui-platform = OS backends; only flui-app depends on it)
-Layer 1  ── flui-foundation, flui-macros, flui-platform-api
+Layer 1  ── flui-foundation, flui-macros, flui-platform-api, flui-protocol
                 │   (flui-foundation = framework primitives:
                 │    ChangeNotifier, Id system, BindingBase, Key, diagnostics;
                 │    flui-platform-api = platform contracts, no OS code;
-                │    interaction → platform-api, platform → platform-api)
+                │    interaction → platform-api, platform → platform-api;
+                │    flui-protocol = semantics and agent-protocol vocabulary,
+                │    semantics → protocol)
 Layer 0  ── flui-geometry, flui-types
                 (geometry, styling, typography, layout, gestures, physics,
                  platform value types; base units)

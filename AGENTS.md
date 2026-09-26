@@ -47,8 +47,10 @@ declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtas
 `docs/crates.md` is the readable version. Bottom to top:
 
 - **Values & primitives** — `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`
-  (View derives), `flui-platform-api` (platform contracts: capability traits and window/input
-  vocabulary, no OS code).
+  (View derives).
+- **Contracts** — `flui-platform-api` (platform contracts: capability traits and window/input
+  vocabulary, no OS code; ADR-0082), `flui-protocol` (semantics roles and actions, the
+  agent-protocol wire vocabulary; ADR-0095).
 - **Substrate** — `flui-tree` (tree traits), `flui-platform` (the backends behind those
   contracts: windows, input, IME, clipboard; every `windows::*`/`objc2::*` type stays inside it;
   only `flui-app` depends on it), `flui-scheduler` (frame phases),
