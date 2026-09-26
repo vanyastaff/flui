@@ -7,11 +7,11 @@ use flui_log::AppIdentity;
 use flui_types::{Size, geometry::px};
 
 use super::close_request::CloseRequestHandler;
-use super::execution::HostExecutors;
 use super::frame_failure::{FrameFailureDetail, FrameFailureHandler};
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::ServiceDefinition;
 use super::runtime::ExitPolicy;
+use flui_runtime::execution::HostExecutors;
 
 /// Default diagnostics policy for a managed application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
