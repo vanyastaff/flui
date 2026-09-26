@@ -38,6 +38,13 @@ fn test_window() -> std::sync::Arc<dyn flui_platform::traits::PlatformWindow> {
     crate::app::window_test_support::headless_test_window()
 }
 
+/// A fresh headless window as a runner hands it to
+/// `install_presentation_alongside`: through `presentation_window`, so the
+/// headless backend's accessibility bridge is wired as in production.
+fn test_presentation_window() -> crate::app::presentation::PresentationWindow {
+    super::super::presentation_window(crate::app::window_test_support::headless_test_host_window())
+}
+
 fn install_test_realm() -> RealmDispatcher {
     install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &test_window())
 }
@@ -214,7 +221,8 @@ fn window_execution_is_local_reversible_and_cannot_override_host_or_terminal_sto
     use flui_platform::WindowExecutionState::{Detached, Running, Suspended};
     with_quit_notification_loop(|_, _| {
         let a = install_test_realm();
-        let b = install_presentation_alongside(a, test_window()).expect("shared presentation");
+        let b = install_presentation_alongside(a, test_presentation_window())
+            .expect("shared presentation");
         resume_for_quit(a);
         dispatch_platform_realm(
             a,
@@ -365,7 +373,8 @@ fn window_lifecycle_separate_realms_do_not_share_visibility_facts() {
 fn window_lifecycle_shared_realm_visible_sibling_keeps_frames_enabled() {
     with_quit_notification_loop(|_, _| {
         let a = install_test_realm();
-        let b = install_presentation_alongside(a, test_window()).expect("shared presentation");
+        let b = install_presentation_alongside(a, test_presentation_window())
+            .expect("shared presentation");
         resume_for_quit(a);
         dispatch_platform_realm(b, RealmTask::Event(PlatformToUi::WindowFocus(true)))
             .expect("focus B");
@@ -448,7 +457,7 @@ fn window_lifecycle_close_unregisters_after_terminal_observer_panics() {
         with_quit_notification_loop(move |_, _| {
             let a = install_test_realm();
             let closing = if shared {
-                install_presentation_alongside(a, test_window()).expect("B")
+                install_presentation_alongside(a, test_presentation_window()).expect("B")
             } else {
                 a
             };
@@ -530,8 +539,9 @@ fn quit_notification_survives_primary_removal_and_visits_shared_realm_once() {
         let secondary =
             install_realm_alongside(crate::app::ui_realm::UiRealm::for_test(), &test_window())
                 .expect("secondary");
-        let _other_presentation = install_presentation_alongside(secondary, test_window())
-            .expect("shared realm presentation");
+        let _other_presentation =
+            install_presentation_alongside(secondary, test_presentation_window())
+                .expect("shared realm presentation");
         resume_for_quit(secondary);
         let detached = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed = Arc::clone(&detached);

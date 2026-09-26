@@ -29,8 +29,13 @@ fn counting_wake() -> (Arc<dyn Fn() + Send + Sync>, Arc<AtomicUsize>) {
     )
 }
 
-fn test_window() -> Arc<dyn PlatformWindow> {
-    crate::app::window_test_support::headless_test_window()
+/// A headless window as the runner hands it to a realm: through
+/// `runner::presentation_window`, so the headless backend's accessibility
+/// bridge is wired exactly as a production window's would be.
+fn test_window() -> crate::app::presentation::PresentationWindow {
+    crate::app::runner::presentation_window(
+        crate::app::window_test_support::headless_test_host_window(),
+    )
 }
 
 fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmError> {

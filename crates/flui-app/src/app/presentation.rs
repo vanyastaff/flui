@@ -95,9 +95,10 @@ pub(crate) struct RealmCapabilities<'a> {
 /// The framework drives a window only through [`PlatformWindow`], which names
 /// no AccessKit type (ADR-0082 §1); the bridge is read from the host-side
 /// window once, where the runner holds it (`runner::presentation_window`),
-/// and travels here beside the window. Production code has no conversion
-/// into this type, so a runner that forgets the bridge does not compile
-/// rather than silently opening an inaccessible window.
+/// and travels here beside the window. Production code has no implicit
+/// conversion into this type: a runner builds it through
+/// `runner::presentation_window` or names the bridge explicitly in
+/// [`Self::new`], so dropping the bridge is never an accident of a `.into()`.
 pub(crate) struct PresentationWindow {
     window: Arc<dyn PlatformWindow>,
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
@@ -122,8 +123,11 @@ impl PresentationWindow {
     }
 }
 
-/// Test windows carry no accessibility bridge unless a test asks for one
-/// ([`test_platform_window_with_accessibility`]).
+/// A test-only conversion that bypasses any accessibility bridge the
+/// concrete window has: the presentation is built with none, even when the
+/// window is a headless `MockWindow` carrying a `FakeAccessibility`. A test
+/// that needs the bridge wired goes through `runner::presentation_window`
+/// (or [`test_platform_window_with_accessibility`]) instead.
 #[cfg(test)]
 impl From<Arc<dyn PlatformWindow>> for PresentationWindow {
     fn from(window: Arc<dyn PlatformWindow>) -> Self {
@@ -131,6 +135,9 @@ impl From<Arc<dyn PlatformWindow>> for PresentationWindow {
     }
 }
 
+/// The `From<Arc<dyn PlatformWindow>>` conversion above
+/// for a borrowed window, for tests that reuse one window across several
+/// installs; it bypasses the window's bridge the same way.
 #[cfg(test)]
 impl From<&Arc<dyn PlatformWindow>> for PresentationWindow {
     fn from(window: &Arc<dyn PlatformWindow>) -> Self {
