@@ -16,7 +16,7 @@ use super::*;
 fn non_primary_presentation_pipeline_is_seeded_with_its_own_windows_scale_factor() {
     let mut realm = UiRealm::for_test();
     let window_b: Arc<dyn PlatformWindow> = Arc::new(
-        crate::app::window_test_support::TestWindow::new()
+        crate::testing::TestWindow::new()
             .with_id(42)
             .with_scale_factor(2.5),
     );

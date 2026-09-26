@@ -9,10 +9,10 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{Layer, Registry};
 
 use super::UiRealm;
-use crate::app::frame_failure::{
+use crate::frame_failure::{
     FrameFailureDetail, FrameFailureHandler, FrameFailureKind, PanicText, SegmentPhase,
 };
-use crate::app::raster_test_support::TestRasterBackend;
+use crate::testing::ScriptedSink;
 
 #[derive(Clone)]
 struct ErrorFieldLayer {
@@ -168,8 +168,8 @@ fn explicit_segment_detail_is_profile_independent_and_classifies_before_redactio
         );
         realm.request_redraw();
 
-        let mut backend = TestRasterBackend::always_presents();
-        with_quiet_panics(|| realm.render_frame_entered(&mut backend));
+        let mut backend = ScriptedSink::always_presents();
+        with_quiet_panics(|| realm.render_frame(&mut backend));
 
         assert_eq!(
             *reports.lock().expect("report mutex"),

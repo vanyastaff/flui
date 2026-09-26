@@ -406,17 +406,47 @@ pub(crate) struct DirectSink<'a, R: RasterBackend> {
 }
 
 impl<'a, R: RasterBackend> DirectSink<'a, R> {
+    pub(crate) fn new(renderer: &'a mut R) -> Self {
+        Self { renderer }
+    }
+}
+
+/// The realm's frame transaction over this crate's two engine-backed sinks.
+///
+/// The realm (`flui_runtime::ui_realm::UiRealm`) renders through any
+/// [`FrameSink`] and names no engine type; these entry points pick the sink
+/// that wraps an engine backend, which is this crate's to name.
+pub(crate) trait RealmRaster {
+    /// Render one frame through a [`DirectSink`] over `renderer`: the web
+    /// runner's production frame path and the tests that pin the transaction
+    /// against scripted backends. Returns whether the frame presented.
     #[cfg_attr(
         all(not(target_arch = "wasm32"), not(test)),
         expect(
             dead_code,
-            reason = "constructed by UiRealm::render_frame_entered, whose native production \
-                      callers moved to the raster lane -- see DirectSink's own doc for who \
-                      still drives this path"
+            reason = "the direct-sink entry point is the web runner's production frame path \
+                      (wasm32) and the scripted-backend test seam; native production drives \
+                      render_frame_on_lane instead -- see DirectSink's own doc"
         )
     )]
-    pub(crate) fn new(renderer: &'a mut R) -> Self {
-        Self { renderer }
+    fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool;
+
+    /// Render one frame through the raster mailbox: the desktop and Android
+    /// runners' canonical frame path (ADR-0045's inline lane). The scene
+    /// crosses the raster boundary as an owned, stamped `SceneSnapshot` and
+    /// is rendered by the lane's own pump.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_frame_on_lane<B: RasterBackend>(&self, lane: &mut RasterLane<B>) -> bool;
+}
+
+impl RealmRaster for flui_runtime::ui_realm::UiRealm {
+    fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
+        self.render_frame(&mut DirectSink::new(renderer))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_frame_on_lane<B: RasterBackend>(&self, lane: &mut RasterLane<B>) -> bool {
+        self.render_frame(lane)
     }
 }
 
@@ -470,6 +500,60 @@ mod tests {
 
     fn test_scene() -> Scene {
         scene_from_canvas()
+    }
+
+    /// `DirectSink` is the one place the web runner's backend outcomes become
+    /// the realm's verdicts; the realm's own tests script verdicts through
+    /// `flui_runtime::testing::ScriptedSink` and never reach it. Changing any
+    /// arm of the table fails this test.
+    #[test]
+    fn direct_sink_classifies_each_engine_outcome() {
+        use crate::app::raster_test_support::TestRasterBackend;
+
+        type Outcome = fn() -> Result<PresentDisposition, EngineError>;
+        let cases: [(&str, Outcome, SubmitVerdict); 7] = [
+            (
+                "presented",
+                || Ok(PresentDisposition::Presented),
+                SubmitVerdict::Presented,
+            ),
+            (
+                "no damage",
+                || Ok(PresentDisposition::NoDamage),
+                SubmitVerdict::NoPresent,
+            ),
+            (
+                "not shown",
+                || Ok(PresentDisposition::NotShown),
+                SubmitVerdict::NotShown,
+            ),
+            (
+                "surface lost",
+                || Err(EngineError::SurfaceLost),
+                SubmitVerdict::SurfaceStale,
+            ),
+            (
+                "surface validation",
+                || Err(EngineError::SurfaceValidation),
+                SubmitVerdict::SurfaceStale,
+            ),
+            (
+                "device lost",
+                || Err(EngineError::DeviceLost),
+                SubmitVerdict::DeviceLost,
+            ),
+            (
+                "timeout",
+                || Err(EngineError::Timeout),
+                SubmitVerdict::Failed,
+            ),
+        ];
+        for (label, outcome, expected) in cases {
+            let mut backend = TestRasterBackend::new(move |_, _| outcome());
+            let verdict = DirectSink::new(&mut backend).submit(test_scene());
+            assert_eq!(verdict, expected, "{label}");
+            assert_eq!(backend.render_scene_calls, 1, "{label}: rendered once");
+        }
     }
 
     /// A scripted backend for lane-behavior tests: every render outcome is

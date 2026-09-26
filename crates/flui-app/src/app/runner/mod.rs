@@ -308,6 +308,46 @@ mod tests {
     use super::realm_dispatch::teardown_platform_realm;
     use super::*;
 
+    /// The runner's path from an `open_window` result to a realm: the bridge is
+    /// read from the host window once and carried beside the window, which the
+    /// realm then only sees as a `PlatformWindow`. If that constructor drops the
+    /// bridge (say, passes `None`), nothing is wired and nothing is published.
+    #[test]
+    fn a_realm_built_from_a_host_window_publishes_through_its_accessibility() {
+        use crate::app::window_test_support::{HostedTestWindow, TestWindow};
+
+        let fake = std::sync::Arc::new(flui_platform::FakeAccessibility::new());
+        let host: std::sync::Arc<dyn flui_platform::traits::HostWindow> =
+            std::sync::Arc::new(HostedTestWindow::new(
+                TestWindow::new()
+                    .focused(true)
+                    .with_accessibility(std::sync::Arc::clone(&fake) as _),
+            ));
+        let realm = crate::app::ui_realm::UiRealm::new(
+            std::sync::Arc::new(|| {}),
+            presentation_window(host),
+            1.0,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .expect("realm");
+        let constraints = flui_rendering::constraints::BoxConstraints::tight(
+            flui_types::Size::new(px(100.0), px(100.0)),
+        );
+        realm
+            .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+            .expect("root mounted");
+
+        fake.set_active(true);
+        realm.enter(|_| {
+            let _ = realm.draw_frame_entered(constraints);
+        });
+
+        assert!(
+            fake.published_count() >= 1,
+            "the bridge read from the host window must receive the assembled tree"
+        );
+    }
+
     /// Trivial leaf fixture: an empty view used as the terminal node under
     /// `OwnerLocalRoot` below, and constructible on its own wherever a test
     /// needs a minimal `View + StatelessView` root.

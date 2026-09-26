@@ -21,8 +21,16 @@ use flui_foundation::PresentationId;
 use super::presentation::PresentationState;
 
 /// The insertion-ordered set of presentations one `UiRealm` owns.
-pub(crate) struct PresentationForest {
+pub struct PresentationForest {
     presentations: Vec<PresentationState>,
+}
+
+impl std::fmt::Debug for PresentationForest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.presentations.iter().map(PresentationState::id))
+            .finish()
+    }
 }
 
 impl PresentationForest {
@@ -42,20 +50,6 @@ impl PresentationForest {
     /// is the caller that also mints this presentation's real
     /// `WindowRegistry` mapping — the two steps a hosted presentation needs
     /// to be genuinely dispatchable, not just forest-resident.
-    ///
-    /// `runner.rs::install_presentation_alongside` (the real, non-test
-    /// caller reachability threads through) is desktop-only — on a target
-    /// where that function is itself dead code (android/wasm32), this
-    /// method loses its only non-test caller too.
-    #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-        expect(
-            dead_code,
-            reason = "reachable only through UiRealm::install_presentation, whose one \
-                      production caller (runner.rs::install_presentation_alongside) is \
-                      desktop-only"
-        )
-    )]
     pub(crate) fn install(&mut self, presentation: PresentationState) {
         self.presentations.push(presentation);
     }

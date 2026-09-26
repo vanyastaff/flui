@@ -21,6 +21,7 @@ use super::super::host::{
 use super::super::secondary_window::{open_secondary_window, open_secondary_window_impl};
 use super::super::{install_close_request_wiring, request_presentation_close};
 use super::*;
+use crate::app::raster_lane::RealmRaster as _;
 use crate::app::raster_test_support::TestRasterBackend;
 use crate::app::runtime::{ExitPolicy, WindowPolicy};
 use crate::app::{AppConfig, FrameFailureDetail};

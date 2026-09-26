@@ -1,3 +1,7 @@
+//! The application lifecycle a presentation observes: derived from its
+//! window's execution state and the host's lifecycle, and delivered as the
+//! ordered ladder of states between the old and the new one.
+
 use flui_scheduler::AppLifecycleState;
 
 // ============================================================================
@@ -88,7 +92,11 @@ pub(crate) fn lifecycle_ladder(
     }
 }
 
-pub(crate) fn preserve_first_lifecycle_panic(
+/// Keep the first panic of a multi-step lifecycle teardown: a later
+/// `candidate` payload is leaked rather than dropped (its destructor could
+/// panic again) and only logged, under `phase`, so the caller resumes the
+/// first failure once every step has run.
+pub fn preserve_first_lifecycle_panic(
     first: &mut Option<Box<dyn std::any::Any + Send>>,
     candidate: Option<Box<dyn std::any::Any + Send>>,
     phase: &'static str,
@@ -347,7 +355,7 @@ mod lifecycle_derivation_tests {
 
     #[test]
     fn hidden_transition_drains_the_realms_interrupted_pointer_sequence() {
-        let realm = crate::app::ui_realm::UiRealm::for_test();
+        let realm = crate::ui_realm::UiRealm::for_test();
         let lane = InteractionLane::try_new().expect("test interaction lane");
         let handle = lane.dispatch_handle();
         let cleanup_committed = Arc::new(AtomicBool::new(false));
@@ -410,7 +418,7 @@ mod lifecycle_derivation_tests {
 
     #[test]
     fn multi_step_lifecycle_commits_the_target_before_the_first_panic_resumes() {
-        let realm = crate::app::ui_realm::UiRealm::for_test();
+        let realm = crate::ui_realm::UiRealm::for_test();
         realm.synchronize_window_lifecycle();
         let lane = InteractionLane::try_new().expect("test interaction lane");
         let handle = lane.dispatch_handle();

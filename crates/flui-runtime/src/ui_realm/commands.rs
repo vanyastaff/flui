@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// backpressure as a typed value, and a dropped owner is a typed value — the
 /// producer decides what to do, nothing blocks, nothing grows unbounded.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CommandSendError {
+pub enum CommandSendError {
     /// The inbox is full; the producer must back off (retry next frame,
     /// drop, or escalate — its call).
     #[error("realm command inbox full ({capacity} capacity); back off and retry")]
@@ -74,19 +74,10 @@ impl CommandSendError {
 ///   `BuildOwner` minted it (ADR-0085 §1). They need no presentation stamp:
 ///   graph ids are process-unique, so two presentation incarnations never
 ///   share one.
-pub(crate) enum UiCommand {
+pub enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
-    // Only constructed by `request_hot_reload`, whose consumer is the
-    // desktop runner — absent from the wasm lib check.
     #[cfg(feature = "hot-reload")]
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(
-            dead_code,
-            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
-        )
-    )]
-    HotReload(flui_runtime::reload::ReloadTier),
+    HotReload(crate::reload::ReloadTier),
     /// Resolve and invoke an accessibility action on the owner thread,
     /// addressed to the exact presentation that was live when the sender
     /// stamped it.
@@ -103,13 +94,6 @@ pub(crate) enum UiCommand {
     /// way to write a signal. Readers it marks land in the owning
     /// presentation's inbox for the next frame — enqueue-and-wake, never
     /// touch the tree.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "constructed by send_signal_write, whose public vending lands with the realm API"
-        )
-    )]
     SignalWrite {
         /// The slot the write targets; its `graph()` selects the presentation.
         target: flui_view::SignalSlot,
@@ -149,7 +133,7 @@ impl std::fmt::Debug for UiCommand {
 /// and tests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[must_use]
-pub(crate) struct DrainReport {
+pub struct DrainReport {
     /// Owner commands successfully applied.
     pub invoked: usize,
     /// Commands whose typed owner target is stale or no longer live.
@@ -167,7 +151,7 @@ pub(crate) struct DrainReport {
 /// callback, or run build/layout/paint. Every enqueued command
 /// executes on the owner thread, at the next Idle drain.
 #[derive(Clone)]
-pub(crate) struct UiCommandSender {
+pub struct UiCommandSender {
     pub(super) tx: Sender<UiCommand>,
     pub(super) capacity: usize,
     pub(super) redraw_pending: Arc<AtomicBool>,
@@ -203,19 +187,14 @@ impl UiCommandSender {
     /// Unlike direct platform dispatch, this capability is safe to call from
     /// any thread: delivery occurs at the owner's next Idle drain and the
     /// normal enqueue-and-wake contract pumps that drain.
-    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
-    // non-test consumer, so the wasm lib check sees this as dead.
+    ///
+    /// # Errors
+    ///
+    /// [`CommandSendError`] when the inbox is full or the realm is gone.
     #[cfg(feature = "hot-reload")]
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(
-            dead_code,
-            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
-        )
-    )]
-    pub(crate) fn request_hot_reload(
+    pub fn request_hot_reload(
         &self,
-        tier: flui_runtime::reload::ReloadTier,
+        tier: crate::reload::ReloadTier,
     ) -> Result<(), CommandSendError> {
         self.send(UiCommand::HotReload(tier))
     }
@@ -299,14 +278,9 @@ impl UiCommandSender {
     /// Infallible and idempotent by design: the flag outlives the runtime,
     /// and a request against a dropped runtime is a harmless no-op (the wake
     /// has no loop left to wake).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "typed redraw capability is not yet vended externally"
-        )
-    )]
-    pub(crate) fn request_redraw(&self) {
+    // Test-only: the typed redraw capability is not yet vended externally.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn request_redraw(&self) {
         // `swap` (not store) so only the first request in a burst pays the
         // wake; a pending frame absorbs repeated wakes anyway, this just
         // skips redundant platform calls.
@@ -317,18 +291,6 @@ impl UiCommandSender {
 
     /// The inbox's configured capacity.
     #[must_use]
-    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
-    // non-test consumer, so the wasm lib check sees this as dead.
-    #[cfg_attr(
-        all(
-            not(test),
-            any(target_os = "android", target_os = "ios", target_arch = "wasm32")
-        ),
-        expect(
-            dead_code,
-            reason = "consumed only by the desktop runner's inbox-capacity read and by tests"
-        )
-    )]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
@@ -353,12 +315,6 @@ impl UiCommandSender {
 impl UiRealm {
     /// A new cross-thread sender into this runtime's inbox.
     #[must_use]
-    // Desktop and iOS runners both vend it (iOS for the reload hook); Android
-    // and wasm have no caller, so their lib checks see this as dead.
-    #[cfg_attr(
-        all(not(test), any(target_os = "android", target_arch = "wasm32")),
-        expect(dead_code, reason = "no Android/wasm caller outside tests")
-    )]
     pub fn command_sender(&self) -> UiCommandSender {
         self.sender_prototype.clone()
     }

@@ -35,20 +35,16 @@ impl UiRealm {
     ///
     /// Forwards every [`flui_view::AttachError`] the underlying
     /// [`flui_view::WidgetsBinding::attach_root_widget`] returns.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "desktop/mobile runners use the sized attach variant"
-        )
-    )]
-    pub(crate) fn attach_root_widget<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
+    // Test-only: the desktop and mobile runners use the sized variant.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn attach_root_widget<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
     where
         V: flui_view::View + Clone + 'static,
     {
         self.enter(|realm| realm.attach_root_widget_entered(view))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn attach_root_widget_entered<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
     where
         V: flui_view::View + Clone + 'static,
@@ -63,7 +59,7 @@ impl UiRealm {
         // (size, device pixel ratio, brightness) to the whole user subtree;
         // the realm's resize/appearance arms write the shared source and the
         // wrapper republishes.
-        let with_media_query = crate::app::media_query_root::MediaQueryRoot::new(
+        let with_media_query = crate::media_query_root::MediaQueryRoot::new(
             std::rc::Rc::clone(self.media_query()),
             flui_view::view::ViewExt::boxed(view.clone()),
         );
@@ -120,16 +116,18 @@ impl UiRealm {
     /// Attach a root widget sizing the root view to an explicit logical
     /// `width` × `height` — the platform window's surface size.
     ///
-    /// Identical to [`Self::attach_root_widget`] except the root
-    /// `RenderView` is born at the real window size instead of the
-    /// framework's fallback default. This is the runner's bootstrap entry
-    /// point. See [`Self::attach_root_widget`] for the auto-wrap invariants.
+    /// Identical to `attach_root_widget` (a `test-support` entry point)
+    /// except the root `RenderView` is born at the real window size instead
+    /// of the framework's fallback default. This is the runner's bootstrap
+    /// entry point, and wraps the root in the same `GestureArenaScope`,
+    /// `VsyncScope`, `FocusRoot` and `MediaQuery` as that method (see its
+    /// doc for the auto-wrap invariants).
     ///
     /// # Errors
     ///
     /// Forwards every [`flui_view::AttachError`] from
     /// [`flui_view::WidgetsBinding::attach_root_widget_with_size`].
-    pub(crate) fn attach_root_widget_with_size<V>(
+    pub fn attach_root_widget_with_size<V>(
         &self,
         view: &V,
         width: f32,
@@ -152,7 +150,7 @@ impl UiRealm {
     {
         // Same root MediaQuery as the production attach path — the sized
         // variant must not present a different ambient environment.
-        let with_media_query = crate::app::media_query_root::MediaQueryRoot::new(
+        let with_media_query = crate::media_query_root::MediaQueryRoot::new(
             std::rc::Rc::clone(self.media_query()),
             flui_view::view::ViewExt::boxed(view.clone()),
         );

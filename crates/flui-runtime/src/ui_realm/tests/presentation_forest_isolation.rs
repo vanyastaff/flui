@@ -131,7 +131,7 @@ fn duplicate_global_key_across_presentations_panics_eagerly_naming_both_owners()
 #[test]
 #[cfg(feature = "hot-reload")]
 fn reassemble_fans_out_to_all_presentations_in_mount_order() {
-    use flui_runtime::reload::ReloadTier;
+    use crate::reload::ReloadTier;
 
     let mut realm = UiRealm::for_test();
     let b_id = realm.install_second_presentation_for_test();
@@ -209,7 +209,7 @@ fn reassemble_fans_out_to_all_presentations_in_mount_order() {
 #[test]
 #[cfg(feature = "hot-reload")]
 fn hot_reload_via_the_command_inbox_fans_out_to_all_presentations_in_mount_order() {
-    use flui_runtime::reload::ReloadTier;
+    use crate::reload::ReloadTier;
 
     let mut realm = UiRealm::for_test();
     let b_id = realm.install_second_presentation_for_test();
@@ -280,12 +280,12 @@ fn dropping_the_realm_closes_every_presentation() {
     let lifecycles_before: Vec<_> = realm
         .presentations
         .iter()
-        .map(crate::app::presentation::PresentationState::lifecycle)
+        .map(crate::presentation::PresentationState::lifecycle)
         .collect();
     assert!(
         lifecycles_before
             .iter()
-            .all(|l| { *l == crate::app::presentation::PresentationLifecycle::SurfaceAttached }),
+            .all(|l| { *l == crate::presentation::PresentationLifecycle::SurfaceAttached }),
         "both presentations must start attached"
     );
 

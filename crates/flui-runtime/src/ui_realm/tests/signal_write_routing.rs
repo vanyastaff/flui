@@ -75,8 +75,8 @@ fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() {
             },
         )
         .expect("secondary root attaches");
-    let mut backend = TestRasterBackend::always_presents();
-    realm.render_frame_entered(&mut backend);
+    let mut backend = ScriptedSink::always_presents();
+    realm.render_frame(&mut backend);
     assert_eq!((count(&builds_a), count(&builds_b)), (1, 1));
 
     let (tx, rx) = mpsc::channel::<Result<(), SignalError>>();
@@ -102,7 +102,7 @@ fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() {
     );
     assert_eq!(sig_b.peek(&graph_b, |v| *v), Ok(7));
 
-    realm.render_frame_entered(&mut backend);
+    realm.render_frame(&mut backend);
     assert_eq!(
         (count(&builds_a), count(&builds_b)),
         (1, 2),

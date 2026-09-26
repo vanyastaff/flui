@@ -1,16 +1,15 @@
 //! Frame production: draw, paint, commit, render and frame telemetry.
 
 use super::{EpochDisposition, FramePaintOutcome, MAX_NOT_SHOWN_RETRIES, UiRealm};
-use crate::app::frame_failure::{FrameFailureKind, SegmentPhase};
-use crate::app::presentation::PresentationState;
-use flui_engine::RasterBackend;
+use crate::epoch::FrameCommitState;
+use crate::frame_failure::{FrameFailureKind, SegmentPhase};
+use crate::held_input::HeldPointerReplay;
+use crate::presentation::PresentationState;
 use flui_foundation::PresentationId;
 use flui_layer::Scene;
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_runtime::epoch::FrameCommitState;
-use flui_runtime::held_input::HeldPointerReplay;
 use flui_scheduler::{DemandKind, FrameSnapshot, Instant, PresentOutcome};
 use flui_types::Size;
 use flui_types::geometry::px;
@@ -22,12 +21,13 @@ impl UiRealm {
     // ========================================================================
 
     /// Draw a frame and return the produced `Scene`, if any. Test-only —
-    /// production drives frames through [`Self::render_frame_entered`].
-    #[cfg(test)]
-    pub(crate) fn draw_frame(&self, constraints: BoxConstraints) -> Option<Scene> {
+    /// production drives frames through [`Self::render_frame`].
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<Scene> {
         match self.enter(|realm| realm.draw_frame_entered(constraints)).1 {
             // (the third tuple element, `any_failed`, is a retry-arming
-            // concern for `render_frame_entered`; this test helper only
+            // concern for `render_frame`; this test helper only
             // reports what was painted)
             FramePaintOutcome::Painted(scene) => Some(scene),
             FramePaintOutcome::Idle | FramePaintOutcome::Errored => None,
@@ -61,7 +61,7 @@ impl UiRealm {
     /// withholds only the submit). Production can host multiple
     /// presentations, but secondary windows carry no widget content today,
     /// so only the primary can produce painted output; see
-    /// [`Self::draw_frame_for_presentation`]'s doc for the proof that the
+    /// `Self::draw_frame_for_presentation`'s doc for the proof that the
     /// gate cannot skip a segment the old, ungated code would have run.
     /// Returns the last presentation whose segment ran, paired with its
     /// outcome. This aggregate is not a multi-surface submit contract: it
@@ -71,7 +71,7 @@ impl UiRealm {
     /// presentations requires per-presentation constraints, sinks, and
     /// submit routing under issue #559; callers must not treat the current
     /// last-outcome tuple as last-scene-wins behavior.
-    pub(super) fn draw_frame_entered(
+    pub fn draw_frame_entered(
         &self,
         constraints: BoxConstraints,
     ) -> (PresentationId, FramePaintOutcome, bool) {
@@ -99,7 +99,7 @@ impl UiRealm {
             //
             // The "does the NEXT pump need to be scheduled" question
             // (Flutter's own `shouldScheduleTick`, sampled AFTER the tick)
-            // is answered separately, in `render_frame_entered`, AFTER the
+            // is answered separately, in `render_frame`, AFTER the
             // segment this demand mark feeds has actually rendered and
             // `mark_rendered()`/the retry check has run -- NOT here. See
             // that method's own comment for why: raising the continuation
@@ -279,7 +279,7 @@ impl UiRealm {
                     "Presentation tree revision advanced"
                 );
             }
-            // Telemetry: remember this segment's span so `render_frame_entered`
+            // Telemetry: remember this segment's span so `render_frame`
             // (this method's own caller, which decides whether/how to submit)
             // can attach it to a `FrameSnapshot` at its own submit point --
             // see `PresentationState::last_segment_span`'s own doc for why
@@ -296,7 +296,7 @@ impl UiRealm {
             // guard, now also excluding `ProduceWithheld`: a withheld
             // result was never sent, by construction, so confirming it as
             // sent would be self-contradictory and would wrongly disarm a
-            // later `defer_first_frame` call. `render_frame_entered` below
+            // later `defer_first_frame` call. `render_frame` below
             // separately re-checks `is_deferred()` at its own submit point
             // before honoring whatever this segment produced.
             if decision.is_produce() && !matches!(result, FramePaintOutcome::Errored) {
@@ -427,9 +427,17 @@ impl UiRealm {
         }
     }
 
-    /// Render while the platform dispatcher already owns the realm entry.
-    /// This keeps scheduler callbacks and the full build/layout/paint/raster
-    /// transaction under one activation instead of creating a nested scope.
+    /// Render one frame through `sink`, while the platform dispatcher already
+    /// owns the realm entry. This keeps scheduler callbacks and the full
+    /// build/layout/paint/submit transaction under one activation instead of
+    /// creating a nested scope.
+    ///
+    /// The host chooses the sink: `flui-app` drives its raster lane on the
+    /// desktop and Android runners and a direct sink over a borrowed backend
+    /// on the web runner (its `RealmRaster` entry points); tests drive a
+    /// scripted one. Every sink feeds the same classification arms below
+    /// through [`SubmitVerdict`](crate::sink::SubmitVerdict), so the
+    /// retry/telemetry semantics cannot drift between them.
     ///
     /// Returns whether the frame reached `present()` — needed for the
     /// runner's no-present fallback throttle: `Fifo` present blocks every
@@ -465,39 +473,7 @@ impl UiRealm {
     /// submit do neither; they did not produce a reusable scene or are not
     /// retried, respectively.
     #[tracing::instrument(level = "debug", skip_all)]
-    #[cfg_attr(
-        all(not(target_arch = "wasm32"), not(test)),
-        expect(
-            dead_code,
-            reason = "the direct-sink entry point is the web runner's production frame path \
-                      (wasm32) and the scripted-backend test seam; native production drives \
-                      render_frame_on_lane instead -- see DirectSink's own doc"
-        )
-    )]
-    pub(crate) fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
-        self.render_frame_with_sink(&mut crate::app::raster_lane::DirectSink::new(renderer))
-    }
-
-    /// [`Self::render_frame_entered`], driven through the raster mailbox:
-    /// the desktop/Android runners' canonical frame path (ADR-0045's inline
-    /// lane). The scene crosses the raster boundary as an owned, stamped
-    /// `SceneSnapshot` and is rendered by the lane's own pump; the direct
-    /// entry point above remains for the web runner and for tests that pin
-    /// this transaction against scripted backends — both feed the same
-    /// classification arms below, so the retry/telemetry semantics cannot
-    /// drift between the two.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[tracing::instrument(level = "debug", skip_all)]
-    pub(crate) fn render_frame_on_lane<B: RasterBackend>(
-        &self,
-        lane: &mut crate::app::raster_lane::RasterLane<B>,
-    ) -> bool {
-        self.render_frame_with_sink(lane)
-    }
-
-    /// The shared frame transaction behind both entry points above. See
-    /// [`Self::render_frame_entered`]'s doc for the step-by-step contract.
-    fn render_frame_with_sink<S: flui_runtime::sink::FrameSink>(&self, sink: &mut S) -> bool {
+    pub fn render_frame<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
         self.gestures().drain_deferred_arena_resolutions();
         self.gestures().flush_pending_moves();
 
@@ -550,7 +526,7 @@ impl UiRealm {
         // likewise does not use this submit-specific flag.
         let mut retry_needs_repaint = false;
         let mut replay_committed_input = false;
-        use flui_runtime::sink::SubmitVerdict;
+        use crate::sink::SubmitVerdict;
         if should_send && let FramePaintOutcome::Painted(scene) = outcome {
             // The frame this scene will become once presented.
             let frame_number = producer.frames_rendered() + 1;
@@ -883,7 +859,7 @@ impl UiRealm {
             // Still called unconditionally for every `retry_needed` cause,
             // pipeline `Errored` included: unlike the pre-frame success arm
             // (which runs synchronously right before this same call's own
-            // `render_frame_entered`, so nothing external needs poking),
+            // `render_frame`, so nothing external needs poking),
             // every cause here fails INSIDE this call — the retry can only
             // happen on a LATER wake, so the platform still needs the poke
             // `wake_frame()` provides regardless of whether a repaint was
@@ -918,7 +894,7 @@ impl UiRealm {
         // `runner.rs`'s
         // `a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate`,
         // which drives the exact `record_compositor_tick` -> dirty-gate ->
-        // `render_frame_entered` sequence `bootstrap_desktop`'s closure
+        // `render_frame` sequence `bootstrap_desktop`'s closure
         // uses, not `draw_frame_entered` called directly (which never
         // exercises `wake_action` at all and could not have caught this).
         //
@@ -950,7 +926,7 @@ impl UiRealm {
     /// gate) has nothing to record.
     ///
     /// `presentation` must be the exact presentation whose segment produced
-    /// the outcome being submitted this call — [`Self::render_frame_entered`]
+    /// the outcome being submitted this call — [`Self::render_frame`]
     /// resolves this from `draw_frame_entered`'s own returned producer id,
     /// never `self.presentations.primary()` unconditionally. The bug this
     /// guards against: with more than one presentation mounted, a pump where
@@ -969,7 +945,7 @@ impl UiRealm {
     /// has its span read, and the addressed one's stale cross-pump reads are
     /// impossible because the span is cleared the moment it is used.
     ///
-    /// Called only from the branches of [`Self::render_frame_entered`] that
+    /// Called only from the branches of [`Self::render_frame`] that
     /// reached a real submit attempt (never for `Ok(false)`/no-damage, whose
     /// pending input epochs must stay buffered for a later, real submit).
     ///

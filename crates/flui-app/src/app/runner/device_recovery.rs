@@ -103,7 +103,7 @@ fn attempt_device_recovery<R: DeviceRecovery>(
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) struct FrameRecoveryOutcome {
     /// Whether the frame reached `present()` — same meaning as
-    /// [`crate::app::ui_realm::UiRealm::render_frame_entered`]'s own return.
+    /// [`RealmRaster::render_frame_entered`](crate::app::raster_lane::RealmRaster::render_frame_entered)'s own return.
     // Read only by the desktop runner's fallback-pacing arm; the mobile and
     // web runners pace from their own frame sources and do not consult it.
     #[cfg_attr(
@@ -159,7 +159,7 @@ pub(super) struct FrameRecoveryOutcome {
 ///
 /// A device already lost at frame start gets a backoff-gated recovery
 /// attempt here, BEFORE
-/// [`crate::app::ui_realm::UiRealm::render_frame_on_lane`] (the
+/// [`RealmRaster::render_frame_on_lane`](crate::app::raster_lane::RealmRaster::render_frame_on_lane) (the
 /// mailbox-driving twin of `render_frame_entered`; this doc refers to the
 /// pair interchangeably below) — but that frame drive runs regardless of
 /// whether that attempt happened or what it returned. Skipping it on a still-lost device was the
@@ -218,6 +218,8 @@ pub(super) fn render_frame_with_device_recovery<B>(
 where
     B: flui_engine::RasterBackend + DeviceRecovery,
 {
+    use crate::app::raster_lane::RealmRaster as _;
+
     let mut just_failed = false;
     let mut next_attempt_at = None;
 

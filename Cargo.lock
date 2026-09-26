@@ -1894,7 +1894,6 @@ dependencies = [
 name = "flui-app"
 version = "0.2.0-dev"
 dependencies = [
- "accesskit",
  "android-activity",
  "anyhow",
  "crossbeam-channel",
@@ -1908,7 +1907,6 @@ dependencies = [
  "flui-objects",
  "flui-painting",
  "flui-platform",
- "flui-platform-api",
  "flui-rendering",
  "flui-runtime",
  "flui-scheduler",
@@ -1924,7 +1922,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio-util",
  "tracing",
- "tracing-subscriber",
  "wasm-bindgen-futures",
  "web-time",
 ]
@@ -2370,15 +2367,24 @@ dependencies = [
 name = "flui-runtime"
 version = "0.2.0-dev"
 dependencies = [
+ "accesskit",
+ "crossbeam-channel",
+ "flui-animation",
  "flui-foundation",
  "flui-interaction",
  "flui-layer",
+ "flui-objects",
+ "flui-platform",
  "flui-platform-api",
+ "flui-rendering",
  "flui-scheduler",
  "flui-semantics",
  "flui-testing",
  "flui-types",
+ "flui-view",
+ "flui-widgets",
  "parking_lot",
+ "static_assertions",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",

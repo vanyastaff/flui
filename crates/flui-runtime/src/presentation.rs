@@ -1,6 +1,7 @@
 //! Owner-thread state for one presentation of a UI realm.
 //!
-//! This is deliberately crate-private. It is the UI-owner domain, not a
+//! Public only so the host that drives a realm (`flui-app`) can name it; it
+//! is not an embedder API (ADR-0027 §9). It is the UI-owner domain, not a
 //! cross-thread god object: native event-loop ownership remains in the
 //! runner/window host and raster/surface ownership remains in
 //! `flui_engine::RasterOwner`.
@@ -16,17 +17,13 @@ use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::{CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
 #[cfg(test)]
 use flui_rendering::pipeline::PipelineOwner;
-use flui_runtime::epoch::{FrameCommitState, TreeRevision};
-use flui_runtime::held_input::HeldPointerQueue;
-use flui_runtime::performance_stats::PerformanceStats;
-use flui_runtime::semantics_host::SemanticsHost;
 use flui_scheduler::{
     AsyncDriver, FrameClock, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler,
     input_to_present_histogram, produce_to_present_histogram,
@@ -40,8 +37,12 @@ use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding, binding::FramePhaseMarker};
 use web_time::{Duration, Instant};
 
-use super::SegmentPhase;
-use crate::bindings::RenderingFlutterBinding;
+use crate::epoch::{FrameCommitState, TreeRevision};
+use crate::frame_failure::SegmentPhase;
+use crate::held_input::HeldPointerQueue;
+use crate::performance_stats::PerformanceStats;
+use crate::renderer_binding::RenderingFlutterBinding;
+use crate::semantics_host::SemanticsHost;
 
 fn format_millis(duration: Duration) -> String {
     format!("{:.1}ms", duration.as_secs_f64() * 1_000.0)
@@ -96,14 +97,23 @@ pub(crate) struct RealmCapabilities<'a> {
 /// conversion into this type: a runner builds it through
 /// `runner::presentation_window` or names the bridge explicitly in
 /// [`Self::new`], so dropping the bridge is never an accident of a `.into()`.
-pub(crate) struct PresentationWindow {
+pub struct PresentationWindow {
     window: Arc<dyn PlatformWindow>,
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
 }
 
+impl std::fmt::Debug for PresentationWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PresentationWindow")
+            .field("window", &self.window.id())
+            .field("accessibility", &self.accessibility.is_some())
+            .finish()
+    }
+}
+
 impl PresentationWindow {
     /// Pairs `window` with the bridge its backend exposes, if any.
-    pub(crate) fn new(
+    pub fn new(
         window: Arc<dyn PlatformWindow>,
         accessibility: Option<Arc<dyn PlatformAccessibility>>,
     ) -> Self {
@@ -115,7 +125,7 @@ impl PresentationWindow {
 
     /// The window itself.
     #[must_use]
-    pub(crate) fn window(&self) -> &Arc<dyn PlatformWindow> {
+    pub fn window(&self) -> &Arc<dyn PlatformWindow> {
         &self.window
     }
 }
@@ -123,9 +133,9 @@ impl PresentationWindow {
 /// A test-only conversion that bypasses any accessibility bridge the
 /// concrete window has: the presentation is built with none, even when the
 /// window is a headless `MockWindow` carrying a `FakeAccessibility`. A test
-/// that needs the bridge wired goes through `runner::presentation_window`
-/// (or [`test_platform_window_with_accessibility`]) instead.
-#[cfg(test)]
+/// that needs the bridge wired names it in [`PresentationWindow::new`]
+/// instead.
+#[cfg(any(test, feature = "test-support"))]
 impl From<Arc<dyn PlatformWindow>> for PresentationWindow {
     fn from(window: Arc<dyn PlatformWindow>) -> Self {
         Self::new(window, None)
@@ -135,7 +145,7 @@ impl From<Arc<dyn PlatformWindow>> for PresentationWindow {
 /// The `From<Arc<dyn PlatformWindow>>` conversion above
 /// for a borrowed window, for tests that reuse one window across several
 /// installs; it bypasses the window's bridge the same way.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl From<&Arc<dyn PlatformWindow>> for PresentationWindow {
     fn from(window: &Arc<dyn PlatformWindow>) -> Self {
         Self::new(Arc::clone(window), None)
@@ -145,12 +155,12 @@ impl From<&Arc<dyn PlatformWindow>> for PresentationWindow {
 /// A realm-backed test window carrying an optional platform text-input
 /// capability — for `UiRealm::for_test_with_text_input`, which needs a real
 /// [`RealmCapabilities`]-assembled presentation (not the standalone
-/// [`PresentationState::new_for_test`] path), just with a test window.
-#[cfg(test)]
+/// `PresentationState::new_for_test` path), just with a test window.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn test_platform_window(
     platform_text_input: Option<Arc<dyn PlatformTextInput>>,
 ) -> Arc<dyn PlatformWindow> {
-    use super::window_test_support::TestWindow;
+    use crate::testing::TestWindow;
     Arc::new(
         TestWindow::new()
             .focused(true)
@@ -166,7 +176,7 @@ pub(crate) fn test_platform_window(
 pub(crate) fn test_platform_window_with_accessibility(
     accessibility: Arc<flui_platform::FakeAccessibility>,
 ) -> PresentationWindow {
-    use super::window_test_support::TestWindow;
+    use crate::testing::TestWindow;
     PresentationWindow::new(
         Arc::new(TestWindow::new().focused(true)),
         Some(accessibility),
@@ -175,7 +185,7 @@ pub(crate) fn test_platform_window_with_accessibility(
 
 /// Lifecycle of the owner-thread half of a presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PresentationLifecycle {
+pub enum PresentationLifecycle {
     /// Identity exists, but no render surface is attached yet.
     ///
     /// Constructor-internal and production-unreachable once construction
@@ -206,9 +216,9 @@ struct SegmentProbe {
 /// a provider trait, service locator, erased resource bag, or arbitrary
 /// executor. Cross-thread ingress is handled by closed commands stamped with
 /// this presentation's generational identity.
-pub(crate) struct PresentationState {
+pub struct PresentationState {
     id: PresentationId,
-    pub(super) media_query: Rc<crate::app::media_query_root::MediaQuerySource>,
+    pub(super) media_query: Rc<crate::media_query_root::MediaQuerySource>,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
@@ -645,7 +655,7 @@ impl PresentationState {
 
         let state = Self {
             id,
-            media_query: Rc::new(crate::app::media_query_root::MediaQuerySource::from_window(
+            media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
             )),
             window_visible: Cell::new(window.is_visible()),
@@ -721,7 +731,7 @@ impl PresentationState {
 
         let state = Self {
             id,
-            media_query: Rc::new(crate::app::media_query_root::MediaQuerySource::from_window(
+            media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
             )),
             window_visible: Cell::new(window.is_visible()),
@@ -784,13 +794,15 @@ impl PresentationState {
         &self.renderer
     }
 
+    /// This presentation's generational identity.
     #[must_use]
-    pub(crate) fn id(&self) -> PresentationId {
+    pub fn id(&self) -> PresentationId {
         self.id
     }
 
+    /// Where this presentation is in its owner-thread lifecycle.
     #[must_use]
-    pub(crate) fn lifecycle(&self) -> PresentationLifecycle {
+    pub fn lifecycle(&self) -> PresentationLifecycle {
         self.lifecycle.get()
     }
 
@@ -1357,8 +1369,8 @@ impl PresentationState {
     /// Apply a hot-reload tier to this presentation's own element tree.
     /// Returns whether a redraw is required.
     #[cfg(feature = "hot-reload")]
-    pub(crate) fn apply_hot_reload(&self, tier: flui_runtime::reload::ReloadTier) -> bool {
-        use flui_runtime::reload::ReloadTier;
+    pub(crate) fn apply_hot_reload(&self, tier: crate::reload::ReloadTier) -> bool {
+        use crate::reload::ReloadTier;
 
         match tier {
             ReloadTier::Reassemble => {
@@ -1423,7 +1435,7 @@ impl PresentationState {
         let _ = source.commit_terminal(flui_scheduler::AppLifecycleState::Detached);
         let mut first =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.drain())).err();
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first,
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| source.finish_close())).err(),
             "lifecycle direct close",
@@ -1476,7 +1488,7 @@ impl PresentationState {
             // PresentationState owns an exclusive WidgetsBinding.
         }))
         .err();
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first,
             cleanup,
             "presentation input disposal",
@@ -1486,7 +1498,7 @@ impl PresentationState {
         }))
         .err();
         self.lifecycle.set(PresentationLifecycle::Closed);
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first,
             disposal,
             "presentation widget disposal",
@@ -1671,7 +1683,7 @@ mod tests {
         };
         use flui_types::geometry::{Offset, Pixels};
 
-        let window = Arc::new(crate::app::window_test_support::TestWindow::new().focused(true));
+        let window = Arc::new(crate::testing::TestWindow::new().focused(true));
         let platform_window: Arc<dyn PlatformWindow> = window.clone();
         let presentation = PresentationState::new_for_test_with_window(
             PresentationId::new_gen(0, NonZeroU32::MIN),
@@ -1760,8 +1772,7 @@ mod tests {
         /// is gone", not "never installed".
         #[test]
         fn perform_haptic_feedback_with_no_active_window_is_a_silent_no_op() {
-            let window: Arc<dyn PlatformWindow> =
-                Arc::new(crate::app::window_test_support::TestWindow::new());
+            let window: Arc<dyn PlatformWindow> = Arc::new(crate::testing::TestWindow::new());
             let presentation = PresentationState::new_for_test_with_window(
                 PresentationId::new_gen(0, NonZeroU32::MIN),
                 PipelineCell::new(PipelineOwner::new()),
@@ -1780,7 +1791,7 @@ mod tests {
             let presentation = PresentationState::new_for_test_with_window(
                 PresentationId::new_gen(0, NonZeroU32::MIN),
                 PipelineCell::new(PipelineOwner::new()),
-                Arc::new(crate::app::window_test_support::TestWindow::new()),
+                Arc::new(crate::testing::TestWindow::new()),
             );
 
             presentation.perform_haptic_feedback(HapticFeedback::MediumImpact);

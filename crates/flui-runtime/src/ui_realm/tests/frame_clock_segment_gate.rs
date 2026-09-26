@@ -79,7 +79,7 @@ fn mount_root_here() -> UiRealm {
 /// same "did the segment run" answer as an undeferred one with the
 /// same demand (see `segment_still_runs_by_the_same_predicate_while_
 /// deferred` below for that companion proof; deferral only changes
-/// whether `render_frame_entered` may submit the result):
+/// whether `render_frame` may submit the result):
 ///
 /// | woken | pending build | segment runs |
 /// |-------|---------------|---------------|
@@ -207,8 +207,8 @@ fn an_idle_pump_while_deferred_does_not_latch_first_frame_sent() {
     let realm = UiRealm::for_test(); // nothing attached: no demand at all
     realm.defer_first_frame();
 
-    let mut backend = TestRasterBackend::always_presents();
-    let presented = realm.render_frame_entered(&mut backend);
+    let mut backend = ScriptedSink::always_presents();
+    let presented = realm.render_frame(&mut backend);
     assert!(!presented, "nothing to present with no root attached");
 
     // If the idle pump above had (wrongly) latched first_frame_sent,
@@ -217,7 +217,7 @@ fn an_idle_pump_while_deferred_does_not_latch_first_frame_sent() {
     realm
         .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(1.0, 1.0)))
         .expect("attach succeeds");
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
     assert!(
         !presented,
         "the earlier idle pump must not have latched first_frame_sent -- this \
@@ -228,7 +228,7 @@ fn an_idle_pump_while_deferred_does_not_latch_first_frame_sent() {
     assert_eq!(realm.presentations.primary().flush_count(), 1);
 
     realm.allow_first_frame();
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
     assert!(
         presented,
         "lifting must finally let the withheld content through"
@@ -377,9 +377,9 @@ fn a_running_controller_with_no_other_dirty_state_still_flushes_every_tick() {
 /// flui-scheduler's own unit test for that, at the bare-clock
 /// level). A produce (capacity freed) must re-arm it.
 ///
-/// Drives `render_frame_entered`, not the bare `draw_frame_entered`
+/// Drives `render_frame`, not the bare `draw_frame_entered`
 /// this test used before: the continuation-wake check now runs
-/// AFTER `mark_rendered()`, inside `render_frame_entered`, not
+/// AFTER `mark_rendered()`, inside `render_frame`, not
 /// inside `draw_frame_entered`'s vsync loop — see that
 /// method's own comment for why the move was necessary: raising
 /// the wake before `mark_rendered()` let the SAME callback silently
@@ -409,11 +409,11 @@ fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm() {
     clock.record_submit(); // at capacity for the whole loop below
     wake_count.store(0, Ordering::Relaxed);
 
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     for tick in 1..=5 {
         realm.set_now_secs_for_test(0.01 * f64::from(tick));
-        let _ = realm.render_frame_entered(&mut backend);
+        let _ = realm.render_frame(&mut backend);
     }
     assert_eq!(
         wake_count.load(Ordering::Relaxed),
@@ -422,14 +422,14 @@ fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm() {
          one platform-facing wake"
     );
 
-    // Free capacity: THIS SAME callback's `render_frame_entered`
+    // Free capacity: THIS SAME callback's `render_frame`
     // now both produces (`poll()` grants a produce, clearing the
     // mask and the armed latch) AND re-arms a fresh wake for the
     // controller's continuation in its own post-render step --
     // the two are no longer split across two separate callbacks.
     clock.record_retire();
     realm.set_now_secs_for_test(0.10);
-    let _ = realm.render_frame_entered(&mut backend);
+    let _ = realm.render_frame(&mut backend);
     assert_eq!(
         wake_count.load(Ordering::Relaxed),
         2,
@@ -572,17 +572,17 @@ fn a_single_dirty_mark_after_an_idle_stretch_produces_on_the_very_next_pump() {
 fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden() {
     let realm = mount_root_here();
     let presentation_id = realm.presentations.primary().id();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     // Settle the initial attach paint first, so the assertions below
     // isolate exactly what happens WHILE hidden -- baselines
     // captured AFTER settling, not absolute zero (the settle itself
     // is one legitimate submit).
-    let _ = realm.render_frame_entered(&mut backend);
+    let _ = realm.render_frame(&mut backend);
     realm.set_presentation_hidden(presentation_id, true);
     let flush_count_before = realm.presentations.primary().flush_count();
     let produced_before = realm.presentations.primary().clock().produced_count();
-    let submits_before = backend.render_scene_calls;
+    let submits_before = backend.submit_calls;
 
     for pump in 0..10 {
         realm.set_now_secs_for_test(f64::from(pump) * 0.016);
@@ -593,7 +593,7 @@ fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden() {
                 owner.mark_needs_paint(root_id);
             }
         });
-        let presented = realm.render_frame_entered(&mut backend);
+        let presented = realm.render_frame(&mut backend);
         assert!(
             !presented,
             "pump {pump}: a hidden presentation must never present"
@@ -611,7 +611,7 @@ fn gated_presentation_produces_zero_segments_and_zero_submits_while_hidden() {
         "a hidden presentation must never grant a produce"
     );
     assert_eq!(
-        backend.render_scene_calls, submits_before,
+        backend.submit_calls, submits_before,
         "a hidden presentation must never reach the raster backend -- zero GPU submits"
     );
 }
@@ -674,13 +674,13 @@ fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_onc
         .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
         .expect("attach succeeds");
     let presentation_id = realm.presentations.primary().id();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     // Settle the attach's own first paint.
     realm.set_now_secs_for_test(0.0);
-    let _ = realm.render_frame_entered(&mut backend);
+    let _ = realm.render_frame(&mut backend);
     let produced_before = realm.presentations.primary().clock().produced_count();
-    let submits_before = backend.render_scene_calls;
+    let submits_before = backend.submit_calls;
 
     realm.set_presentation_hidden(presentation_id, true);
     wake_count.store(0, Ordering::Relaxed);
@@ -704,7 +704,7 @@ fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_onc
 
     for pump in 1..=3 {
         realm.set_now_secs_for_test(0.016 * f64::from(pump));
-        let presented = realm.render_frame_entered(&mut backend);
+        let presented = realm.render_frame(&mut backend);
         assert!(!presented, "pump {pump}: must not present while hidden");
     }
     assert_eq!(
@@ -713,7 +713,7 @@ fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_onc
         "zero produces while hidden, however many times pumped"
     );
     assert_eq!(
-        backend.render_scene_calls, submits_before,
+        backend.submit_calls, submits_before,
         "zero submits while hidden"
     );
     let wake_count_before_unhide = wake_count.load(Ordering::Relaxed);
@@ -731,7 +731,7 @@ fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_onc
     // ...and produce exactly once on the very next pump, with no
     // further external input.
     realm.set_now_secs_for_test(0.1);
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
     assert!(presented, "the unhide pump must present");
     assert_eq!(
         realm.presentations.primary().clock().produced_count(),
@@ -739,7 +739,7 @@ fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_onc
         "exactly one produce after unhiding -- no lost frame, no extra one"
     );
     assert_eq!(
-        backend.render_scene_calls,
+        backend.submit_calls,
         submits_before + 1,
         "exactly one submit after unhiding"
     );
@@ -747,7 +747,7 @@ fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_onc
     // Settling: a further pump with nothing newly dirtied produces
     // nothing more.
     realm.set_now_secs_for_test(0.2);
-    let _ = realm.render_frame_entered(&mut backend);
+    let _ = realm.render_frame(&mut backend);
     assert_eq!(
         realm.presentations.primary().clock().produced_count(),
         produced_before + 1,
@@ -784,7 +784,7 @@ fn unoccluding_an_undirtied_presentation_does_not_wake() {
 /// earlier, unrelated produce) and never consumed since, because
 /// nothing polled while hidden. Set up exactly that ordering: a
 /// visible pump first arms the latch (a running controller's own
-/// continuation-wake, `render_frame_entered`'s tail) and leaves
+/// continuation-wake, `render_frame`'s tail) and leaves
 /// demand retained (the controller keeps running), THEN hide, THEN
 /// unhide with no further pump in between. A version gated on
 /// `try_arm_redraw_request()` instead of `demand_mask().is_empty()`
@@ -800,7 +800,7 @@ fn unhide_wakes_on_retained_demand_even_when_the_latch_was_armed_before_the_hide
     let (wake, wake_count) = super::counting_wake();
     let realm = super::new_runtime(wake).expect("runtime");
     let presentation_id = realm.presentations.primary().id();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     let controller = AnimationController::new(
         Duration::from_secs(1),
@@ -810,7 +810,7 @@ fn unhide_wakes_on_retained_demand_even_when_the_latch_was_armed_before_the_hide
     controller.forward().expect("fresh controller forwards");
 
     // One VISIBLE pump: the segment produces off the controller's
-    // own Animation demand, and render_frame_entered's tail --
+    // own Animation demand, and render_frame's tail --
     // since the controller is still running -- marks a FRESH
     // Animation demand for the next pump and arms
     // try_arm_redraw_request's latch (the ONLY production call
@@ -818,7 +818,7 @@ fn unhide_wakes_on_retained_demand_even_when_the_latch_was_armed_before_the_hide
     // nonempty (Animation, retained), and the latch is armed
     // (true) -- both facts this test's ordering depends on.
     realm.set_now_secs_for_test(0.0);
-    let _ = realm.render_frame_entered(&mut backend);
+    let _ = realm.render_frame(&mut backend);
     assert_eq!(
         realm.presentations.primary().clock().demand_mask(),
         flui_scheduler::DemandMask::ANIMATION,
@@ -864,15 +864,15 @@ fn gated_long_press_resolves_through_the_arenas_own_callback_with_zero_submits()
 
     let realm = mount_root_here();
     let presentation_id = realm.presentations.primary().id();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     // Settle the attach's own first paint before gating -- baselines
     // captured AFTER settling, not absolute zero.
-    let _ = realm.render_frame_entered(&mut backend);
+    let _ = realm.render_frame(&mut backend);
     realm.set_presentation_hidden(presentation_id, true);
     let flush_count_before = realm.presentations.primary().flush_count();
     let produced_before = realm.presentations.primary().clock().produced_count();
-    let submits_before = backend.render_scene_calls;
+    let submits_before = backend.submit_calls;
 
     // Arm a real long-press against the SAME arena
     // `draw_frame_entered`'s gesture-deadline tick polls -- not a
@@ -903,7 +903,7 @@ fn gated_long_press_resolves_through_the_arenas_own_callback_with_zero_submits()
     // presentation's build/layout/paint/submit entirely.
     for pump in 0..3 {
         realm.set_now_secs_for_test(f64::from(pump) * 0.016);
-        let presented = realm.render_frame_entered(&mut backend);
+        let presented = realm.render_frame(&mut backend);
         assert!(!presented, "pump {pump}: must not present while hidden");
     }
 
@@ -923,7 +923,7 @@ fn gated_long_press_resolves_through_the_arenas_own_callback_with_zero_submits()
         "the gated presentation must never grant a produce"
     );
     assert_eq!(
-        backend.render_scene_calls, submits_before,
+        backend.submit_calls, submits_before,
         "zero GPU submits -- the long-press resolves through the arena's own \
          callback, never through the produce path"
     );
@@ -1068,9 +1068,9 @@ fn gesture_arena_next_deadline_is_the_min_across_two_recognizers_on_one_arena() 
 // ------------------------------------------------------------------
 // Frame telemetry: input->present attribution, driven through the
 // REAL production sequence (`handle_input_addressed` ->
-// `render_frame_entered`), never `FrameClock`'s own methods called
+// `render_frame`), never `FrameClock`'s own methods called
 // directly — the lesson this codebase has already paid for once in
-// this same area (see `render_frame_entered`'s own doc on why a
+// this same area (see `render_frame`'s own doc on why a
 // production-sequence probe caught what calling `draw_frame_entered`
 // directly could not).
 // ------------------------------------------------------------------
@@ -1109,8 +1109,8 @@ fn dispatched_input_is_attributed_end_to_end_in_the_exported_frame_record() {
     // A measurable, non-flaky real gap between dispatch and produce.
     thread::sleep(Duration::from_millis(5));
 
-    let mut backend = TestRasterBackend::always_presents();
-    let presented = realm.render_frame_entered(&mut backend);
+    let mut backend = ScriptedSink::always_presents();
+    let presented = realm.render_frame(&mut backend);
     assert!(
         presented,
         "precondition: the frame actually reached present()"
@@ -1167,8 +1167,8 @@ fn two_dispatched_inputs_before_one_produce_both_attributed_older_larger() {
         realm.handle_input_addressed(primary_id, PlatformInput::Pointer(second));
     });
 
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
 
     let snapshots = realm.presentations.primary().clock().frames_since(None);
     assert_eq!(snapshots.len(), 1);
@@ -1195,7 +1195,7 @@ fn two_dispatched_inputs_before_one_produce_both_attributed_older_larger() {
 /// here since no production caller saturates `FrameClock`'s
 /// in-flight counter yet -- see `FrameClock::record_submit`'s own
 /// doc) must leave `UiRealm::frames_dropped` untouched, while a
-/// GENUINE submit failure through `render_frame_entered` (a real
+/// GENUINE submit failure through `render_frame` (a real
 /// `SurfaceLost`) must increment it. Two different mechanisms,
 /// asserted against the same realm, so a mutant that folds either
 /// counter into the other is caught either way.
@@ -1228,8 +1228,8 @@ fn backpressure_episode_is_not_counted_as_a_dropped_frame_but_a_real_submit_erro
     presentation.clock().record_retire();
     presentation.mark_redraw_pending();
 
-    let mut backend = TestRasterBackend::new(|_, _| Err(EngineError::SurfaceLost));
-    let presented = realm.render_frame_entered(&mut backend);
+    let mut backend = ScriptedSink::new(|_, _| SubmitVerdict::SurfaceStale);
+    let presented = realm.render_frame(&mut backend);
 
     assert!(!presented, "SurfaceLost never reaches present()");
     assert_eq!(
@@ -1250,7 +1250,7 @@ fn successful_submit_emits_structured_frame_telemetry_with_tail_quality() {
     let realm = mount_root_here();
     let capture = FrameEventCapture::default();
     let subscriber = Registry::default().with(capture.clone());
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     // Disarm `tracing`'s process-global callsite-interest cache first: it is
     // computed on whichever thread reaches a callsite FIRST, so without this a
@@ -1258,7 +1258,7 @@ fn successful_submit_emits_structured_frame_telemetry_with_tail_quality() {
     // See `flui_testing::log_capture`.
     flui_testing::log_capture::disarm_interest_cache();
     tracing::subscriber::with_default(subscriber, || {
-        assert!(realm.render_frame_entered(&mut backend));
+        assert!(realm.render_frame(&mut backend));
     });
 
     let events = capture
@@ -1323,9 +1323,9 @@ fn a_pump_where_the_primary_skips_and_a_secondary_produces_attributes_telemetry_
     realm
         .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
         .expect("A attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     assert!(
-        realm.render_frame_entered(&mut backend),
+        realm.render_frame(&mut backend),
         "pump 1: A alone must produce and present"
     );
     let a_snapshots_after_pump_1 = realm
@@ -1347,7 +1347,7 @@ fn a_pump_where_the_primary_skips_and_a_secondary_produces_attributes_telemetry_
         .attach_root_widget_to_for_test(b_id, &flui_widgets::SizedBox::new(20.0, 20.0))
         .expect("B attaches");
     assert!(
-        realm.render_frame_entered(&mut backend),
+        realm.render_frame(&mut backend),
         "pump 2: B alone must produce and present"
     );
 
@@ -1407,8 +1407,8 @@ fn more_than_max_coalesced_inputs_before_one_produce_keeps_the_newest_arrivals()
         thread::sleep(Duration::from_micros(200));
     }
 
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
 
     let snapshots = realm.presentations.primary().clock().frames_since(None);
     assert_eq!(snapshots.len(), 1);
@@ -1460,12 +1460,12 @@ fn submit_latency_includes_time_spent_inside_render_scene_not_just_before_it() {
     // vsync on the Vulkan/Wayland path — proving `submit_at` is
     // sampled AFTER `render_scene` returns, not before it.
     let sleep = std::time::Duration::from_millis(30);
-    let mut backend = TestRasterBackend::new(move |_, _| {
+    let mut backend = ScriptedSink::new(move |_, _| {
         std::thread::sleep(sleep);
-        Ok(PresentDisposition::Presented)
+        SubmitVerdict::Presented
     });
     assert!(
-        realm.render_frame_entered(&mut backend),
+        realm.render_frame(&mut backend),
         "precondition: the frame actually reached present()"
     );
 
@@ -1487,7 +1487,7 @@ fn submit_latency_includes_time_spent_inside_render_scene_not_just_before_it() {
 /// Finding: on `SurfaceLost`, `record_submit_telemetry` used to
 /// unconditionally DRAIN this presentation's pending input epochs
 /// into the failed attempt's own `Errored` snapshot — but
-/// `render_frame_entered` arms a retry for exactly this outcome
+/// `render_frame` arms a retry for exactly this outcome
 /// (`retry_needed = true` -> `wake_frame()`), so the frame that
 /// eventually reaches the screen would find the epoch buffer
 /// already empty and carry no attribution at all. Drives the exact
@@ -1509,8 +1509,8 @@ fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame
     // First attempt: the surface is lost. A retry is armed, and the
     // failed attempt's own snapshot must still see the epoch that
     // was pending (diagnostic value), but must NOT consume it.
-    let mut failing_backend = TestRasterBackend::new(|_, _| Err(EngineError::SurfaceLost));
-    let presented = realm.render_frame_entered(&mut failing_backend);
+    let mut failing_backend = ScriptedSink::new(|_, _| SubmitVerdict::SurfaceStale);
+    let presented = realm.render_frame(&mut failing_backend);
     assert!(!presented, "SurfaceLost never reaches present()");
     let after_failure = realm.presentations.primary().clock().frames_since(None);
     assert_eq!(
@@ -1524,7 +1524,7 @@ fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame
         "the failed attempt's own snapshot still reports the pending epoch"
     );
 
-    // Retry: as of #637's fix, `render_frame_entered`'s own
+    // Retry: as of #637's fix, `render_frame`'s own
     // `retry_needed` arm already marks the root needs-paint (see
     // `mark_primary_needs_full_repaint`), so this hand mark is no
     // longer load-bearing for getting `render_scene` reached again
@@ -1543,8 +1543,8 @@ fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame
         }
     });
     primary.mark_redraw_pending();
-    let mut succeeding_backend = TestRasterBackend::always_presents();
-    let presented = realm.render_frame_entered(&mut succeeding_backend);
+    let mut succeeding_backend = ScriptedSink::always_presents();
+    let presented = realm.render_frame(&mut succeeding_backend);
     assert!(presented, "the retry must actually reach present()");
 
     let after_retry = realm.presentations.primary().clock().frames_since(None);
@@ -1590,8 +1590,8 @@ fn device_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame(
     // First attempt: the device is lost. A retry is armed, and the
     // failed attempt's own snapshot must still see the epoch that
     // was pending (diagnostic value), but must NOT consume it.
-    let mut failing_backend = TestRasterBackend::new(|_, _| Err(EngineError::DeviceLost));
-    let presented = realm.render_frame_entered(&mut failing_backend);
+    let mut failing_backend = ScriptedSink::new(|_, _| SubmitVerdict::DeviceLost);
+    let presented = realm.render_frame(&mut failing_backend);
     assert!(!presented, "DeviceLost never reaches present()");
     let after_failure = realm.presentations.primary().clock().frames_since(None);
     assert_eq!(
@@ -1606,7 +1606,7 @@ fn device_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame(
     );
 
     // Retry: as of #637's fix this hand mark is no longer required
-    // to reach `render_scene` again (`render_frame_entered`'s own
+    // to reach `render_scene` again (`render_frame`'s own
     // `retry_needed` arm now does that -- see the `SurfaceLost` pin
     // above's comment for the non-vacuous test that covers it). Kept
     // here standing in for the renderer owner's recovery + wake, to
@@ -1619,8 +1619,8 @@ fn device_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame(
         }
     });
     primary.mark_redraw_pending();
-    let mut succeeding_backend = TestRasterBackend::always_presents();
-    let presented = realm.render_frame_entered(&mut succeeding_backend);
+    let mut succeeding_backend = ScriptedSink::always_presents();
+    let presented = realm.render_frame(&mut succeeding_backend);
     assert!(presented, "the retry must actually reach present()");
 
     let after_retry = realm.presentations.primary().clock().frames_since(None);
@@ -1668,8 +1668,8 @@ fn surface_validation_retry_preserves_the_original_input_epoch_for_the_presented
     // armed, and the failed attempt's own snapshot must still see
     // the epoch that was pending (diagnostic value), but must NOT
     // consume it.
-    let mut failing_backend = TestRasterBackend::new(|_, _| Err(EngineError::SurfaceValidation));
-    let presented = realm.render_frame_entered(&mut failing_backend);
+    let mut failing_backend = ScriptedSink::new(|_, _| SubmitVerdict::SurfaceStale);
+    let presented = realm.render_frame(&mut failing_backend);
     assert!(!presented, "SurfaceValidation never reaches present()");
     let after_failure = realm.presentations.primary().clock().frames_since(None);
     assert_eq!(
@@ -1684,7 +1684,7 @@ fn surface_validation_retry_preserves_the_original_input_epoch_for_the_presented
     );
 
     // Retry: as of #637's fix this hand mark is no longer required
-    // to reach `render_scene` again (`render_frame_entered`'s own
+    // to reach `render_scene` again (`render_frame`'s own
     // `retry_needed` arm now does that -- see the `SurfaceLost` pin
     // above's comment for the non-vacuous test that covers it). Kept
     // here standing in for the external reconfigure a later wake
@@ -1697,8 +1697,8 @@ fn surface_validation_retry_preserves_the_original_input_epoch_for_the_presented
         }
     });
     primary.mark_redraw_pending();
-    let mut succeeding_backend = TestRasterBackend::always_presents();
-    let presented = realm.render_frame_entered(&mut succeeding_backend);
+    let mut succeeding_backend = ScriptedSink::always_presents();
+    let presented = realm.render_frame(&mut succeeding_backend);
     assert!(presented, "the retry must actually reach present()");
 
     let after_retry = realm.presentations.primary().clock().frames_since(None);
@@ -1755,11 +1755,11 @@ fn a_mid_frame_submit_failure_retry_actually_reaches_render_scene_again_on_a_sta
     // Pump 1: the mount's own dirty state is genuinely consumed --
     // build, layout, and paint all run, producing real content --
     // but the submit of that content fails.
-    let mut backend = TestRasterBackend::fails_once_then_presents(EngineError::SurfaceLost);
-    let presented = realm.render_frame_entered(&mut backend);
+    let mut backend = ScriptedSink::fails_once_then_presents(SubmitVerdict::SurfaceStale);
+    let presented = realm.render_frame(&mut backend);
     assert!(!presented, "SurfaceLost never reaches present()");
     assert_eq!(
-        backend.render_scene_calls, 1,
+        backend.submit_calls, 1,
         "precondition: the failing pump actually reached render_scene once"
     );
     assert!(realm.needs_redraw(), "the failure must arm a retry");
@@ -1768,10 +1768,10 @@ fn a_mid_frame_submit_failure_retry_actually_reaches_render_scene_again_on_a_sta
     // hand-dirties around. The tree is unchanged (static) since the
     // failure: whatever reaches render_scene again must come from
     // the failure arm's own fix, not from anything this test did.
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
     assert!(presented, "the retry must actually reach present()");
     assert_eq!(
-        backend.render_scene_calls, 2,
+        backend.submit_calls, 2,
         "the retry must reach render_scene a SECOND time -- wake_frame() alone \
          re-opens the segment gate but leaves PipelineOwner's own dirty tracking \
          untouched, so an unmodified static tree produces Idle and render_scene is \
@@ -1781,7 +1781,7 @@ fn a_mid_frame_submit_failure_retry_actually_reaches_render_scene_again_on_a_sta
 
 /// Regression for a review finding on this fix's own first draft: an
 /// earlier version called `self.mark_primary_needs_full_repaint()`
-/// unconditionally from `render_frame_entered`'s `retry_needed` arm
+/// unconditionally from `render_frame`'s `retry_needed` arm
 /// — but this method's own doc, at the `producer` binding, already
 /// says `producer` (the presentation whose segment actually
 /// produced the failed submit) is NEVER assumed to be `primary()`,
@@ -1817,9 +1817,9 @@ fn a_mid_frame_submit_failure_retry_repaints_the_actual_producer_not_the_primary
     realm
         .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
         .expect("A attaches");
-    let mut warm_up = TestRasterBackend::always_presents();
+    let mut warm_up = ScriptedSink::always_presents();
     assert!(
-        realm.render_frame_entered(&mut warm_up),
+        realm.render_frame(&mut warm_up),
         "pump 1: A alone must produce and present"
     );
     assert_eq!(
@@ -1841,20 +1841,20 @@ fn a_mid_frame_submit_failure_retry_repaints_the_actual_producer_not_the_primary
 
     // Pump 2: B is the producer (A's segment skips -- nothing dirty
     // there), and B's submit fails.
-    let mut backend = TestRasterBackend::fails_once_then_presents(EngineError::SurfaceLost);
-    let presented = realm.render_frame_entered(&mut backend);
+    let mut backend = ScriptedSink::fails_once_then_presents(SubmitVerdict::SurfaceStale);
+    let presented = realm.render_frame(&mut backend);
     assert!(!presented, "SurfaceLost never reaches present()");
     assert_eq!(
-        backend.render_scene_calls, 1,
+        backend.submit_calls, 1,
         "precondition: B's segment actually reached render_scene once"
     );
     assert!(realm.needs_redraw(), "the failure must arm a retry");
 
     // Pump 3, the retry -- no hand-dirtying of either presentation.
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
     assert!(presented, "the retry must actually reach present()");
     assert_eq!(
-        backend.render_scene_calls, 2,
+        backend.submit_calls, 2,
         "the retry must reach render_scene a second time"
     );
 
@@ -1928,8 +1928,8 @@ fn drag_drop_input_is_not_stamped_since_it_is_dropped_not_routed() {
         realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
     });
 
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
 
     let snapshots = realm.presentations.primary().clock().frames_since(None);
     assert_eq!(snapshots.len(), 1);

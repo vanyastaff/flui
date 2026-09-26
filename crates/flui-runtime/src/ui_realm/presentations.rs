@@ -2,12 +2,15 @@
 
 use super::UiRealm;
 use super::commands::UiCommandSender;
-use crate::app::presentation::{PresentationState, PresentationWindow, RealmCapabilities};
+use crate::presentation::{PresentationState, PresentationWindow, RealmCapabilities};
 use flui_foundation::PresentationId;
-use flui_interaction::{FocusManager, GestureBinding};
+#[cfg(any(test, feature = "test-support"))]
+use flui_interaction::FocusManager;
+use flui_interaction::GestureBinding;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_view::GlobalKeyRegistryComposite;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+#[cfg(any(test, feature = "test-support"))]
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -28,7 +31,7 @@ impl UiRealm {
     /// resolves — closing the last presentation is closing the REALM, and
     /// must route there instead (see that match arm's own doc).
     #[must_use]
-    pub(crate) fn is_sole_presentation(&self, id: PresentationId) -> bool {
+    pub fn is_sole_presentation(&self, id: PresentationId) -> bool {
         self.presentations.len() == 1 && self.presentations.get(id).is_some()
     }
 
@@ -46,7 +49,7 @@ impl UiRealm {
     /// in the same drain loop against whatever survives the close, silently
     /// misaddressed rather than refused outright.
     ///
-    /// Mirrors exactly what [`PresentationForest::remove`](crate::app::presentation_forest::PresentationForest::remove)'s `Vec::remove`
+    /// Mirrors exactly what `PresentationForest::remove`'s `Vec::remove`
     /// shift produces: if `id` is the CURRENT primary, the new primary is
     /// whichever presentation is next in mount order; otherwise removing
     /// `id` cannot move index 0 at all, so the primary is unchanged.
@@ -55,7 +58,7 @@ impl UiRealm {
     /// [`Self::is_sole_presentation`] first and never reaches this call in
     /// that case.
     #[must_use]
-    pub(crate) fn primary_id_excluding(&self, id: PresentationId) -> Option<PresentationId> {
+    pub fn primary_id_excluding(&self, id: PresentationId) -> Option<PresentationId> {
         if self.presentations.primary().id() != id {
             return Some(self.presentations.primary().id());
         }
@@ -68,8 +71,9 @@ impl UiRealm {
     /// Number of presentations this realm currently hosts — for the
     /// isolation test suite (production topology allows any number since
     /// this slice lifted `PresentationForest`'s former ratchet).
-    #[cfg(test)]
-    pub(crate) fn presentation_count(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn presentation_count(&self) -> usize {
         self.presentations.len()
     }
 
@@ -78,13 +82,13 @@ impl UiRealm {
     /// directly into a NON-primary presentation without going through
     /// [`Self::enter`] (registration itself needs no active composite; only
     /// resolution via [`flui_view::GlobalKey::current_element`] does).
-    /// `pub(crate)` for the same cross-module reason as
-    /// [`Self::install_second_presentation_for_test`] above.
-    #[cfg(test)]
-    pub(crate) fn presentation_widgets_for_test(
-        &self,
-        id: PresentationId,
-    ) -> &flui_view::WidgetsBinding {
+    ///
+    /// # Panics
+    ///
+    /// If `id` names no presentation of this realm.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn presentation_widgets_for_test(&self, id: PresentationId) -> &flui_view::WidgetsBinding {
         self.presentations
             .get(id)
             .expect("BUG: presentation_widgets_for_test called with an unknown id")
@@ -95,8 +99,13 @@ impl UiRealm {
     /// addressed counterpart to [`Self::gestures`] (primary-only), for the
     /// tests proving focus-loss cancellation reaches exactly the binding
     /// the addressed presentation's pointer input lands in.
-    #[cfg(test)]
-    pub(crate) fn presentation_gestures_for_test(&self, id: PresentationId) -> &GestureBinding {
+    ///
+    /// # Panics
+    ///
+    /// If `id` names no presentation of this realm.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn presentation_gestures_for_test(&self, id: PresentationId) -> &GestureBinding {
         self.presentations
             .get(id)
             .expect("BUG: presentation_gestures_for_test called with an unknown id")
@@ -136,7 +145,7 @@ impl UiRealm {
     /// haptics, redraw-poke — see `PresentationState::new`'s wiring).
     /// Its pipeline is seeded with `window.scale_factor()` before
     /// construction — the same DPR-before-first-frame ordering
-    /// [`Self::construct`] uses for this realm's own primary presentation
+    /// the realm's constructor uses for its own primary presentation
     /// (there, the caller reads the window's scale factor and passes it in
     /// as `device_pixel_ratio`; here, `window` is already in hand, so this
     /// method reads it directly instead of requiring every caller to
@@ -144,20 +153,13 @@ impl UiRealm {
     /// `RenderView` and first frame would disagree with its OWN window's
     /// actual scale — silently defaulting to `1.0` regardless of what
     /// `window.scale_factor()` actually reports.
-    #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-        expect(
-            dead_code,
-            reason = "reachable only through runner.rs::install_presentation_alongside, itself \
-                      desktop-only"
-        )
-    )]
-    pub(crate) fn assemble_presentation(
+    #[must_use]
+    pub fn assemble_presentation(
         &self,
         window: impl Into<PresentationWindow>,
     ) -> PresentationState {
         let window = window.into();
-        let (_, presentation_id) = crate::app::runtime::next_identity();
+        let (_, presentation_id) = crate::realm_services::next_identity();
         let pipeline = PipelineCell::new(PipelineOwner::new());
         pipeline.with_mut(|owner| {
             owner.set_device_pixel_ratio(window.window().scale_factor() as f32);
@@ -200,18 +202,7 @@ impl UiRealm {
     /// (`cfg(test)`-only, no stable link target in a non-test doc build) is
     /// the test-only counterpart for `UiRealm`-only tests that never touch
     /// `AppRuntime`/`WindowRegistry` at all.
-    #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-        expect(
-            dead_code,
-            reason = "reachable only through runner.rs::install_presentation_alongside, itself \
-                      desktop-only"
-        )
-    )]
-    pub(crate) fn install_presentation(
-        &mut self,
-        presentation: PresentationState,
-    ) -> PresentationId {
+    pub fn install_presentation(&mut self, presentation: PresentationState) -> PresentationId {
         let presentation_id = presentation.id();
         if presentation.window_focused.get() && presentation.window_visible.get() {
             for previous in self.presentations.iter() {
@@ -235,7 +226,7 @@ impl UiRealm {
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
         let window: Arc<dyn flui_platform_api::PlatformWindow> =
-            Arc::new(crate::app::window_test_support::TestWindow::new().focused(false));
+            Arc::new(crate::testing::TestWindow::new().focused(false));
         let presentation = self.assemble_presentation(window);
         self.install_presentation(presentation)
     }
@@ -243,8 +234,9 @@ impl UiRealm {
     /// The presentation keyboard input currently routes to
     /// ([`FocusCoordinator`]) — for the isolation suite proving
     /// `WindowFocus` events move it.
-    #[cfg(test)]
-    pub(crate) fn active_presentation_for_test(&self) -> PresentationId {
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn active_presentation_for_test(&self) -> PresentationId {
         self.focus_coordinator.active()
     }
 
@@ -254,8 +246,9 @@ impl UiRealm {
     /// gate exactly the presentation they were addressed to, never a
     /// sibling's. `None` if `id` is not resident (already closed, or a
     /// forged/mixed address).
-    #[cfg(test)]
-    pub(crate) fn presentation_hidden_for_test(&self, id: PresentationId) -> Option<bool> {
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn presentation_hidden_for_test(&self, id: PresentationId) -> Option<bool> {
         self.presentations.get(id).map(|p| p.clock().is_hidden())
     }
 
@@ -263,8 +256,9 @@ impl UiRealm {
     /// tests in a sibling module (`runner.rs`) that need to observe the
     /// clock's produce count without reaching into the private
     /// `presentations` field directly.
-    #[cfg(test)]
-    pub(crate) fn primary_produced_count_for_test(&self) -> u64 {
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn primary_produced_count_for_test(&self) -> u64 {
         self.presentations.primary().clock().produced_count()
     }
 
@@ -274,7 +268,7 @@ impl UiRealm {
     /// singleton; see [`Self::scheduler`]'s field doc for the ownership
     /// story.
     #[must_use]
-    pub(crate) fn scheduler(&self) -> &flui_scheduler::UpdateScheduler {
+    pub fn scheduler(&self) -> &flui_scheduler::UpdateScheduler {
         &self.scheduler
     }
 
@@ -284,7 +278,7 @@ impl UiRealm {
     /// queue — drain-by-parameter, the same reason [`Self::scheduler`]
     /// exists rather than a process-global lookup.
     #[must_use]
-    pub(crate) fn local_post_frame_lane(&self) -> &flui_scheduler::LocalPostFrameLane {
+    pub fn local_post_frame_lane(&self) -> &flui_scheduler::LocalPostFrameLane {
         &self.local_post_frame
     }
 
@@ -305,7 +299,7 @@ impl UiRealm {
     /// scope to succeed. The frame drive drains that lane by passing it
     /// explicitly to `UpdateScheduler::drive_frame_with_lane`/
     /// `end_frame_with_lane`, not by anything entered here.
-    pub(crate) fn enter<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
+    pub fn enter<R>(&self, f: impl FnOnce(&Self) -> R) -> R {
         self.interaction_lane.enter(|| {
             let composite = GlobalKeyRegistryComposite::assemble(
                 self.presentations.iter().map(PresentationState::widgets),
@@ -314,13 +308,11 @@ impl UiRealm {
         })
     }
 
-    /// Owner-local widgets binding. Crate-private so callers cannot bypass the
-    /// guarded realm entry boundary.
-    #[cfg(any(
-        test,
-        not(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))
-    ))]
-    pub(crate) fn widgets(&self) -> &flui_view::WidgetsBinding {
+    /// The primary presentation's owner-local widgets binding. For the host
+    /// only: a caller that drives the tree through it outside
+    /// [`Self::enter`] bypasses the realm's entry scope.
+    #[must_use]
+    pub fn widgets(&self) -> &flui_view::WidgetsBinding {
         self.presentations.primary().widgets()
     }
 
@@ -357,9 +349,7 @@ impl UiRealm {
     /// use [`Self::media_query_for`] instead: that id travels through a queue
     /// shared by every presentation the realm hosts, so it can name a
     /// presentation that was closed before the event was delivered.
-    pub(crate) fn media_query(
-        &self,
-    ) -> &std::rc::Rc<crate::app::media_query_root::MediaQuerySource> {
+    pub(crate) fn media_query(&self) -> &std::rc::Rc<crate::media_query_root::MediaQuerySource> {
         &self.presentations.primary().media_query
     }
 
@@ -375,16 +365,18 @@ impl UiRealm {
     /// ([`Self::handle_input_addressed`], [`Self::update_window_focus`],
     /// [`Self::update_window_execution`]) treats that same interleaving the
     /// same way: drop the addressed effect, keep the realm-wide one.
-    pub(crate) fn media_query_for(
+    pub fn media_query_for(
         &self,
         id: PresentationId,
-    ) -> Option<&std::rc::Rc<crate::app::media_query_root::MediaQuerySource>> {
+    ) -> Option<&std::rc::Rc<crate::media_query_root::MediaQuerySource>> {
         self.presentations
             .get(id)
             .map(|presentation| &presentation.media_query)
     }
 
-    pub(crate) fn gestures(&self) -> &GestureBinding {
+    /// The primary presentation's gesture binding.
+    #[must_use]
+    pub fn gestures(&self) -> &GestureBinding {
         self.presentations.primary().gestures()
     }
 
@@ -417,17 +409,11 @@ impl UiRealm {
     /// presentation's own `focus_manager()` directly instead of through this
     /// primary-only wrapper; kept for the tests that still exercise a
     /// single-presentation realm's focus tree without addressing.
+    // Test-only: production input dispatch reads the addressed
+    // presentation's own `focus_manager()` (`handle_input_addressed`).
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "production input dispatch reads the addressed presentation's own \
-                      focus_manager() directly (handle_input_addressed); this primary-only \
-                      wrapper is exercised only by tests"
-        )
-    )]
-    pub(crate) fn focus_manager(&self) -> Rc<FocusManager> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn focus_manager(&self) -> Rc<FocusManager> {
         self.presentations.primary().focus_manager()
     }
 
@@ -451,7 +437,7 @@ impl UiRealm {
     /// redraw.
     #[cfg(feature = "hot-reload")]
     #[must_use]
-    pub(crate) fn apply_hot_reload(&self, tier: flui_runtime::reload::ReloadTier) -> bool {
+    pub(crate) fn apply_hot_reload(&self, tier: crate::reload::ReloadTier) -> bool {
         let mut needs_redraw = false;
         for presentation in self.presentations.iter() {
             if presentation.apply_hot_reload(tier) {
@@ -465,14 +451,7 @@ impl UiRealm {
     /// requesting a redraw if it actually changed anything. Moved here from
     /// the retired `AppBinding::perform_hot_reload_entered`.
     #[cfg(feature = "hot-reload")]
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(
-            dead_code,
-            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
-        )
-    )]
-    pub(crate) fn perform_hot_reload_entered(&self, tier: flui_runtime::reload::ReloadTier) {
+    pub fn perform_hot_reload_entered(&self, tier: crate::reload::ReloadTier) {
         if self.apply_hot_reload(tier) {
             self.request_redraw();
         }
@@ -555,10 +534,10 @@ impl UiRealm {
     ///    the realm's only presentation (seeing [`Self::is_sole_presentation`]
     ///    return `true`) — this method's own contract never has to reason
     ///    about leaving the forest empty.
-    /// 2. IME detach + focus deactivate — [`PresentationState::close`]'s
+    /// 2. IME detach + focus deactivate — `PresentationState::close`'s
     ///    first half.
     /// 3. `detach_root_widget` through this exact presentation's own
-    ///    `WidgetsBinding` — [`PresentationState::close`]'s second half —
+    ///    `WidgetsBinding` — `PresentationState::close`'s second half —
     ///    run inside [`Self::enter`], so a `State::dispose()` a
     ///    descendant runs here gets the SAME realm-shared capabilities
     ///    (post-frame/interaction handles, TLS deferral) any other
@@ -604,7 +583,7 @@ impl UiRealm {
     /// which happens in a SEPARATE, sequential statement after that call
     /// returns — not nested inside it, so there is no borrow conflict and
     /// no need to give `PresentationForest` interior mutability.
-    pub(crate) fn close_presentation_entered(&mut self, id: PresentationId) -> bool {
+    pub fn close_presentation_entered(&mut self, id: PresentationId) -> bool {
         if self.presentations.get(id).is_none() {
             return false;
         }
@@ -622,13 +601,13 @@ impl UiRealm {
         // Membership removal must complete even when an observer or disposer panics.
         let removed = self.presentations.remove(id);
         let failure = catch_unwind(AssertUnwindSafe(|| drop(removed))).err();
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first_panic,
             failure,
             "removed presentation cleanup",
         );
         let failure = catch_unwind(AssertUnwindSafe(|| self.synchronize_window_lifecycle())).err();
-        crate::app::lifecycle_state::preserve_first_lifecycle_panic(
+        crate::lifecycle_state::preserve_first_lifecycle_panic(
             &mut first_panic,
             failure,
             "surviving presentation lifecycle",

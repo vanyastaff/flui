@@ -31,7 +31,6 @@ const RUNNER_SOURCES: &[&str] = &[
     include_str!("../src/app/runner/device_recovery.rs"),
     include_str!("../src/app/runner/frame_pacing.rs"),
     include_str!("../src/app/runner/host.rs"),
-    include_str!("../src/app/lifecycle_state.rs"),
     include_str!("../src/app/runner/realm_dispatch.rs"),
     include_str!("../src/app/runner/secondary_window.rs"),
     include_str!("../src/app/runner/web.rs"),

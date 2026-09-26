@@ -3,7 +3,7 @@ use std::sync::Mutex as StdMutex;
 use flui_widgets::SizedBox;
 
 use super::*;
-use crate::app::frame_failure::{FrameFailureHandler, FrameFailureKind, PanicText};
+use crate::frame_failure::{FrameFailureHandler, FrameFailureKind, PanicText};
 
 /// Failure reports collected through the real registered-handler
 /// route — the same `FrameFailureHandler` an embedder registers via
@@ -129,11 +129,11 @@ fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling
         .attach_root_widget_to_for_test(b_id, &SizedBox::new(20.0, 20.0))
         .expect("B attaches");
 
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     // Pump 1: both presentations mount and frame cleanly.
     assert!(
-        realm.render_frame_entered(&mut backend),
+        realm.render_frame(&mut backend),
         "pump 1: a clean two-presentation frame must present"
     );
     assert!(seen.lock().expect("mutex").is_empty(), "no failures yet");
@@ -174,11 +174,8 @@ fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling
 
     // Pump 2: A's segment probe panics. The pump must return and B
     // must still frame after A's earlier failure.
-    let outcome = with_quiet_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| {
-            realm.render_frame_entered(&mut backend)
-        }))
-    });
+    let outcome =
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))));
     let presented = outcome.expect(
         "a panic escaping one presentation's segment must be contained at the \
          frame-transaction boundary, not unwind out of the realm pump",
@@ -256,12 +253,9 @@ fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling
         });
     });
     realm.request_redraw();
-    let presented = with_quiet_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| {
-            realm.render_frame_entered(&mut backend)
-        }))
-    })
-    .expect("the recovery pump must not panic");
+    let presented =
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
+            .expect("the recovery pump must not panic");
     assert!(presented, "the recovery pump must present");
     assert_eq!(
         realm.presentations.primary().frames_rendered(),
@@ -286,13 +280,13 @@ fn a_failed_frame_submits_nothing_rather_than_a_blank_scene() {
     realm
         .attach_root_widget(&SizedBox::new(10.0, 10.0))
         .expect("attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     assert!(
-        realm.render_frame_entered(&mut backend),
+        realm.render_frame(&mut backend),
         "pump 1 presents real content"
     );
-    assert_eq!(backend.render_scene_calls, 1);
+    assert_eq!(backend.submit_calls, 1);
 
     // Inject a segment failure and give the presentation demand so
     // its segment genuinely runs (a skipped segment would prove
@@ -306,15 +300,12 @@ fn a_failed_frame_submits_nothing_rather_than_a_blank_scene() {
     realm.request_redraw();
     realm.mark_rendered();
 
-    let presented = with_quiet_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| {
-            realm.render_frame_entered(&mut backend)
-        }))
-    })
-    .expect("the failure must be contained");
+    let presented =
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
+            .expect("the failure must be contained");
     assert!(!presented, "a failed frame must never present");
     assert_eq!(
-        backend.render_scene_calls, 1,
+        backend.submit_calls, 1,
         "the failed frame must not reach render_scene at all — retention means \
          the previous submission stands, not that a zero/blank scene replaced it"
     );
@@ -330,7 +321,7 @@ fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
         .attach_root_widget(&SizedBox::new(10.0, 10.0))
         .expect("attaches");
     let seen = install_collecting_handler(&realm);
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     let probe_armed = Rc::new(Cell::new(true));
     let armed = Rc::clone(&probe_armed);
@@ -341,10 +332,10 @@ fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
         })),
     );
 
-    let pump = |realm: &UiRealm, backend: &mut TestRasterBackend| {
+    let pump = |realm: &UiRealm, backend: &mut ScriptedSink| {
         realm.request_redraw();
         realm.mark_rendered();
-        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame_entered(backend))))
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(backend))))
             .expect("every failure must be contained")
     };
 
@@ -385,13 +376,10 @@ fn a_pipeline_error_reaches_the_typed_report_route() {
         owner.set_root_id(Some(root_id));
     });
 
-    let mut backend = TestRasterBackend::always_presents();
-    let presented = with_quiet_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| {
-            realm.render_frame_entered(&mut backend)
-        }))
-    })
-    .expect("a pipeline error is contained (pre-existing) and reported (this test)");
+    let mut backend = ScriptedSink::always_presents();
+    let presented =
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
+            .expect("a pipeline error is contained (pre-existing) and reported (this test)");
     assert!(!presented);
 
     let seen = seen.lock().expect("mutex");
@@ -440,8 +428,8 @@ impl flui_rendering::traits::RenderBox for PanicOnLayoutForReportBox {
 fn a_failed_pump_skips_the_stationary_device_re_hit_test() {
     let (realm, hits) = super::super::frame_commit_state_tests::mount_hit_counting_root();
 
-    let mut backend = TestRasterBackend::always_presents();
-    let _ = realm.render_frame_entered(&mut backend);
+    let mut backend = ScriptedSink::always_presents();
+    let _ = realm.render_frame(&mut backend);
     let hits_after_clean_pump = hits.load(Ordering::Relaxed);
     assert!(
         hits_after_clean_pump > 0,
@@ -455,12 +443,9 @@ fn a_failed_pump_skips_the_stationary_device_re_hit_test() {
         })),
     );
     realm.request_redraw();
-    let _ = with_quiet_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| {
-            realm.render_frame_entered(&mut backend)
-        }))
-    })
-    .expect("contained");
+    let _ =
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
+            .expect("contained");
     assert_eq!(
         hits.load(Ordering::Relaxed),
         hits_after_clean_pump,
@@ -487,13 +472,10 @@ fn a_bug_prefixed_panic_is_reported_as_an_internal_invariant() {
     );
     realm.request_redraw();
 
-    let mut backend = TestRasterBackend::always_presents();
-    let _ = with_quiet_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| {
-            realm.render_frame_entered(&mut backend)
-        }))
-    })
-    .expect("contained");
+    let mut backend = ScriptedSink::always_presents();
+    let _ =
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
+            .expect("contained");
 
     let seen = seen.lock().expect("mutex");
     assert_eq!(seen.len(), 1);
@@ -538,9 +520,9 @@ fn a_panicking_failure_handler_does_not_escape_the_frame_boundary() {
         panic!("FrameFailureHandler — intentional embedder-bug test panic");
     })));
 
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     assert!(
-        realm.render_frame_entered(&mut backend),
+        realm.render_frame(&mut backend),
         "pump 1: both presentations frame cleanly"
     );
     let b_flushes_after_pump_1 = realm
@@ -568,11 +550,8 @@ fn a_panicking_failure_handler_does_not_escape_the_frame_boundary() {
         });
     });
 
-    let outcome = with_quiet_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| {
-            realm.render_frame_entered(&mut backend)
-        }))
-    });
+    let outcome =
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))));
     let presented = outcome.expect(
         "a panicking FrameFailureHandler must be contained at its delivery site, \
          not unwind out of the realm pump",
@@ -599,12 +578,9 @@ fn a_panicking_failure_handler_does_not_escape_the_frame_boundary() {
     // The handler stays registered: the next failure is delivered
     // (and contained) again.
     realm.request_redraw();
-    let _ = with_quiet_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| {
-            realm.render_frame_entered(&mut backend)
-        }))
-    })
-    .expect("second failing pump must also be contained");
+    let _ =
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
+            .expect("second failing pump must also be contained");
     assert_eq!(
         handler_calls.load(Ordering::Relaxed),
         2,
@@ -640,13 +616,10 @@ fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reporte
         owner.set_root_id(Some(root_id));
     });
 
-    let mut backend = TestRasterBackend::always_presents();
-    let presented = with_quiet_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| {
-            realm.render_frame_entered(&mut backend)
-        }))
-    })
-    .expect("a handler panic during a pipeline report must be contained");
+    let mut backend = ScriptedSink::always_presents();
+    let presented =
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
+            .expect("a handler panic during a pipeline report must be contained");
     assert!(!presented);
     assert_eq!(
         delivered.lock().expect("mutex").as_slice(),

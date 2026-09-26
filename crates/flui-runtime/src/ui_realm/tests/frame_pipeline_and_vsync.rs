@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool as StdAtomicBool, AtomicUsize};
 
-use flui_engine::EngineError;
 use flui_types::geometry::px;
 
 use super::*;
@@ -1118,17 +1117,17 @@ fn make_controller(duration_ms: u64) -> flui_animation::AnimationController {
 /// schedulable across every mid-animation frame, and the gate must
 /// go idle once the controller completes.
 ///
-/// Drives `render_frame_entered` (a fresh single-shot
-/// `TestRasterBackend` per call), not the bare `draw_frame`
+/// Drives `render_frame` (a fresh single-shot
+/// `ScriptedSink` per call), not the bare `draw_frame`
 /// this test used before — the continuation wake this test pins is
-/// now raised in `render_frame_entered`, AFTER `mark_rendered()`
+/// now raised in `render_frame`, AFTER `mark_rendered()`
 /// runs, not inside `draw_frame_entered` (a reviewer
 /// probe found that raising it before `mark_rendered()` let the
 /// SAME callback's own `mark_rendered()` clobber it, silently
 /// stalling a controller with no other tree-visible effect on the
-/// real desktop path — see `render_frame_entered`'s own comment).
+/// real desktop path — see `render_frame`'s own comment).
 /// `draw_frame` alone no longer implies a continuation wake by
-/// design; only `render_frame_entered` does, matching what
+/// design; only `render_frame` does, matching what
 /// production always actually calls.
 #[test]
 fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle() {
@@ -1143,15 +1142,15 @@ fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle() {
 
     realm.set_now_secs_for_test(0.0);
     realm.mark_rendered();
-    let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::Presented));
-    let _ = realm.render_frame_entered(&mut backend);
+    let mut backend = ScriptedSink::single_shot(SubmitVerdict::Presented);
+    let _ = realm.render_frame(&mut backend);
     // `needs_redraw()` is what actually carries this assertion in
     // this test, not `has_pending_work()`: no widget is attached
     // (a pure-animation scenario, matching this test's own point —
     // the controller alone keeps the gate open), so nothing ever
     // dirties the pipeline and `has_pending_work()` reads `false`
     // for the entire test (checked directly, not assumed).
-    // `needs_redraw()` is `true` here because `render_frame_entered`'s
+    // `needs_redraw()` is `true` here because `render_frame`'s
     // post-`mark_rendered()` continuation-wake step (see that
     // method's own comment) called `wake_frame()` for this still-
     // running controller. The `||` stays as the real production
@@ -1167,8 +1166,8 @@ fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle() {
 
     realm.set_now_secs_for_test(0.05);
     realm.mark_rendered();
-    let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::Presented));
-    let _ = realm.render_frame_entered(&mut backend);
+    let mut backend = ScriptedSink::single_shot(SubmitVerdict::Presented);
+    let _ = realm.render_frame(&mut backend);
     assert!(
         realm.needs_redraw() || realm.has_pending_work(),
         "V1: runner gate must remain open at t=0.05s",
@@ -1181,8 +1180,8 @@ fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle() {
 
     realm.set_now_secs_for_test(0.20);
     realm.mark_rendered();
-    let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::Presented));
-    let _ = realm.render_frame_entered(&mut backend);
+    let mut backend = ScriptedSink::single_shot(SubmitVerdict::Presented);
+    let _ = realm.render_frame(&mut backend);
     assert_eq!(controller.status(), AnimationStatus::Completed);
 
     assert!(
@@ -1406,7 +1405,7 @@ fn vsync_empty_does_not_keep_gate_open() {
     );
 }
 
-// ---- render_frame_entered retry / first-frame-deferral semantics ----
+// ---- render_frame retry / first-frame-deferral semantics ----
 
 fn mount_root() -> UiRealm {
     let realm = UiRealm::for_test();
@@ -1419,14 +1418,14 @@ fn mount_root() -> UiRealm {
 #[test]
 fn surface_lost_keeps_needs_redraw_armed_for_a_retry() {
     let realm = mount_root();
-    let mut backend = TestRasterBackend::single_shot(Err(EngineError::SurfaceLost));
+    let mut backend = ScriptedSink::single_shot(SubmitVerdict::SurfaceStale);
 
     realm.mark_rendered();
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
 
     assert!(!presented, "a SurfaceLost frame never reaches present()");
     assert_eq!(
-        backend.render_scene_calls, 1,
+        backend.submit_calls, 1,
         "precondition: the mounted scene actually reached render_scene"
     );
     assert!(
@@ -1439,14 +1438,14 @@ fn surface_lost_keeps_needs_redraw_armed_for_a_retry() {
 #[test]
 fn device_lost_keeps_needs_redraw_armed_for_a_retry() {
     let realm = mount_root();
-    let mut backend = TestRasterBackend::single_shot(Err(EngineError::DeviceLost));
+    let mut backend = ScriptedSink::single_shot(SubmitVerdict::DeviceLost);
 
     realm.mark_rendered();
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
 
     assert!(!presented, "a DeviceLost frame never reaches present()");
     assert_eq!(
-        backend.render_scene_calls, 1,
+        backend.submit_calls, 1,
         "precondition: the mounted scene actually reached render_scene"
     );
     assert!(
@@ -1460,17 +1459,17 @@ fn device_lost_keeps_needs_redraw_armed_for_a_retry() {
 #[test]
 fn surface_validation_keeps_needs_redraw_armed_for_a_retry() {
     let realm = mount_root();
-    let mut backend = TestRasterBackend::single_shot(Err(EngineError::SurfaceValidation));
+    let mut backend = ScriptedSink::single_shot(SubmitVerdict::SurfaceStale);
 
     realm.mark_rendered();
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
 
     assert!(
         !presented,
         "a SurfaceValidation frame never reaches present()"
     );
     assert_eq!(
-        backend.render_scene_calls, 1,
+        backend.submit_calls, 1,
         "precondition: the mounted scene actually reached render_scene"
     );
     assert!(
@@ -1484,10 +1483,10 @@ fn surface_validation_keeps_needs_redraw_armed_for_a_retry() {
 #[test]
 fn a_successful_frame_still_clears_needs_redraw() {
     let realm = mount_root();
-    let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::Presented));
+    let mut backend = ScriptedSink::single_shot(SubmitVerdict::Presented);
 
     realm.request_redraw();
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
 
     assert!(presented, "Ok(true) means render_scene reached present()");
     assert!(
@@ -1499,16 +1498,16 @@ fn a_successful_frame_still_clears_needs_redraw() {
 #[test]
 fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene() {
     let realm = mount_root();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     realm.defer_first_frame();
     realm.mark_rendered();
 
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
 
     assert!(!presented, "a deferred first frame must never present");
     assert_eq!(
-        backend.render_scene_calls, 0,
+        backend.submit_calls, 0,
         "the scene must never reach render_scene while deferred"
     );
     assert_eq!(realm.frames_rendered(), 0);
@@ -1523,7 +1522,7 @@ fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene() {
     // will still do all the work to produce frames"). Without this
     // assertion a regression that skips the WHOLE segment while
     // deferred (not just the submit) would still pass every check
-    // above -- `render_scene_calls == 0` and `frames_rendered ==
+    // above -- `submit_calls == 0` and `frames_rendered ==
     // 0` are also exactly what a fully-skipped segment produces.
     assert_eq!(
         realm.presentations.primary().flush_count(),
@@ -1535,53 +1534,53 @@ fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene() {
 #[test]
 fn allow_first_frame_alone_presents_the_previously_withheld_content() {
     let realm = mount_root();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     realm.defer_first_frame();
-    let withheld = realm.render_frame_entered(&mut backend);
+    let withheld = realm.render_frame(&mut backend);
     assert!(
         !withheld,
         "precondition: the first frame is withheld while deferred"
     );
-    assert_eq!(backend.render_scene_calls, 0);
+    assert_eq!(backend.submit_calls, 0);
 
     realm.allow_first_frame();
 
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
 
     assert!(
         presented,
         "allow_first_frame alone (no external re-dirty) must make the withheld \
          content reach present() on the next pumped frame"
     );
-    assert_eq!(backend.render_scene_calls, 1);
+    assert_eq!(backend.submit_calls, 1);
     assert_eq!(realm.frames_rendered(), 1);
 }
 
 #[test]
 fn nested_defer_allow_only_presents_after_the_last_allow() {
     let realm = mount_root();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     realm.defer_first_frame();
     realm.defer_first_frame();
 
-    assert!(!realm.render_frame_entered(&mut backend));
-    assert_eq!(backend.render_scene_calls, 0);
+    assert!(!realm.render_frame(&mut backend));
+    assert_eq!(backend.submit_calls, 0);
 
     realm.allow_first_frame();
     assert!(
-        !realm.render_frame_entered(&mut backend),
+        !realm.render_frame(&mut backend),
         "one matching allow of two nested defers must not yet open the gate"
     );
-    assert_eq!(backend.render_scene_calls, 0);
+    assert_eq!(backend.submit_calls, 0);
 
     realm.allow_first_frame();
     assert!(
-        realm.render_frame_entered(&mut backend),
+        realm.render_frame(&mut backend),
         "the last matching allow must open the gate"
     );
-    assert_eq!(backend.render_scene_calls, 1);
+    assert_eq!(backend.submit_calls, 1);
 }
 
 #[test]
@@ -1628,15 +1627,15 @@ fn mount_panicking_root() -> UiRealm {
 #[test]
 fn errored_first_frame_does_not_latch_first_frame_sent() {
     let realm = mount_panicking_root();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
     std::panic::set_hook(prev_hook);
 
     assert!(!presented, "an errored frame must never present");
-    assert_eq!(backend.render_scene_calls, 0);
+    assert_eq!(backend.submit_calls, 0);
 
     assert!(realm.send_frames_to_engine());
 
@@ -1650,9 +1649,9 @@ fn errored_first_frame_does_not_latch_first_frame_sent() {
 #[test]
 fn first_frame_sent_latch_short_circuits_later_defers() {
     let realm = mount_root();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
-    let presented = realm.render_frame_entered(&mut backend);
+    let presented = realm.render_frame(&mut backend);
     assert!(
         presented,
         "precondition: the first frame presents with no active deferral"

@@ -4,17 +4,17 @@ use super::commands::UiCommandSender;
 use super::input::FocusCoordinator;
 use super::presentation_lifecycle::HostLifecycle;
 use super::{DEFAULT_COMMAND_CAPACITY, UiRealm, UiRealmError};
-use crate::app::frame_failure::{
+use crate::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport,
 };
-use crate::app::presentation::{PresentationState, PresentationWindow, RealmCapabilities};
-use crate::app::presentation_forest::PresentationForest;
-use crate::app::runtime::RealmServices;
+use crate::presentation::{PresentationState, PresentationWindow, RealmCapabilities};
+use crate::presentation_forest::PresentationForest;
+use crate::realm_services::RealmServices;
 use crossbeam_channel::bounded;
 use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::InteractionLane;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_scheduler::AppLifecycleState;
@@ -24,9 +24,9 @@ use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::AtomicU64;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::Ordering;
 
 impl UiRealm {
@@ -45,7 +45,7 @@ impl UiRealm {
     ///
     /// [`UiRealmError::InteractionLane`] if the owner-local interaction lane
     /// could not be created.
-    pub(crate) fn new(
+    pub fn new(
         wake: Arc<dyn Fn() + Send + Sync>,
         window: impl Into<PresentationWindow>,
         device_pixel_ratio: f32,
@@ -79,7 +79,7 @@ impl UiRealm {
         needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
-        let identity = crate::app::runtime::next_identity();
+        let identity = crate::realm_services::next_identity();
         let services = RealmServices::construct();
         Self::construct(
             capacity,
@@ -186,7 +186,7 @@ impl UiRealm {
             start: web_time::Instant::now(),
             needs_redraw,
             wake: Arc::clone(&wake),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             now_secs_override: AtomicU64::new(0),
             rx,
             sender_prototype: UiCommandSender {
@@ -204,17 +204,26 @@ impl UiRealm {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test() -> Self {
+    /// A realm over a focused test window, with a wake that only sets the
+    /// redraw flag.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn for_test() -> Self {
         Self::for_test_with_text_input(None)
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test_with_text_input(
+    /// [`Self::for_test`], its window offering `platform_text_input`.
+    ///
+    /// # Panics
+    ///
+    /// If the realm's interaction lane cannot be created.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn for_test_with_text_input(
         platform_text_input: Option<Arc<dyn PlatformTextInput>>,
     ) -> Self {
-        let identity = crate::app::runtime::next_identity();
-        let window = crate::app::presentation::test_platform_window(platform_text_input);
+        let identity = crate::realm_services::next_identity();
+        let window = crate::presentation::test_platform_window(platform_text_input);
         // The no-op `wake` still must set THIS SAME `needs_redraw` flag —
         // in production the two are the same fact through AppRuntime's
         // `frame_wake_callback` (see `Self::needs_redraw`'s field doc); a
@@ -255,17 +264,19 @@ impl UiRealm {
     /// Install (or clear) the embedder's typed frame-failure callback.
     /// Called by each backend's bootstrap with
     /// `AppConfig::frame_failure_handler` right after realm construction.
-    pub(crate) fn set_frame_failure_handler(&self, handler: Option<FrameFailureHandler>) {
+    pub fn set_frame_failure_handler(&self, handler: Option<FrameFailureHandler>) {
         let _prev = std::mem::replace(&mut *self.frame_failure_handler.borrow_mut(), handler);
     }
 
     /// Install the realm-scoped frame-failure text-retention policy.
-    pub(crate) fn set_frame_failure_detail(&self, detail: FrameFailureDetail) {
+    pub fn set_frame_failure_detail(&self, detail: FrameFailureDetail) {
         self.frame_failure_detail.set(detail);
     }
 
-    #[cfg(test)]
-    pub(crate) fn frame_failure_detail_for_test(&self) -> FrameFailureDetail {
+    /// The realm's frame-failure text-retention policy.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn frame_failure_detail_for_test(&self) -> FrameFailureDetail {
         self.frame_failure_detail.get()
     }
 

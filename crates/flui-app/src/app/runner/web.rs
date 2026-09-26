@@ -30,6 +30,8 @@ where
     };
     use parking_lot::Mutex;
 
+    use crate::app::raster_lane::RealmRaster as _;
+
     tracing::info!("Starting web platform via flui-platform");
 
     // Platform init is an environment failure (unsupported browser, missing

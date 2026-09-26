@@ -16,8 +16,8 @@ use flui_types::{Offset, Size, geometry::px, painting::Alignment};
 use flui_widgets::SizedBox;
 
 use super::{FrameFailureHandler, FrameFailureKind, SegmentPhase, UiRealm};
-use crate::app::raster_test_support::TestRasterBackend;
-use flui_engine::PresentDisposition;
+use crate::sink::SubmitVerdict;
+use crate::testing::ScriptedSink;
 
 fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
     type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync>;
@@ -45,13 +45,13 @@ fn mount() -> UiRealm {
     realm
 }
 
-fn capturing_backend(submitted: Arc<StdMutex<Vec<String>>>) -> TestRasterBackend {
-    TestRasterBackend::new(move |_, scene| {
+fn capturing_backend(submitted: Arc<StdMutex<Vec<String>>>) -> ScriptedSink {
+    ScriptedSink::new(move |_, scene| {
         submitted
             .lock()
             .expect("scene capture mutex")
             .push(format!("{:?}", scene.tree()));
-        Ok(PresentDisposition::Presented)
+        SubmitVerdict::Presented
     })
 }
 
@@ -113,7 +113,7 @@ fn semantics_failure_retry_submits_the_retained_linked_tree() {
 
     let submitted_link_counts = Arc::new(StdMutex::new(Vec::new()));
     let captured_counts = Arc::clone(&submitted_link_counts);
-    let mut backend = TestRasterBackend::new(move |_, scene| {
+    let mut backend = ScriptedSink::new(move |_, scene| {
         let tree = scene.tree();
         let (leaders, followers) =
             tree.iter()
@@ -128,27 +128,27 @@ fn semantics_failure_retry_submits_the_retained_linked_tree() {
             .lock()
             .expect("link-count capture mutex")
             .push((leaders, followers));
-        Ok(PresentDisposition::Presented)
+        SubmitVerdict::Presented
     });
 
     assert!(
-        !realm.render_frame_entered(&mut backend),
+        !realm.render_frame(&mut backend),
         "the semantics failure must prevent submission"
     );
-    assert_eq!(backend.render_scene_calls, 0);
+    assert_eq!(backend.submit_calls, 0);
     assert!(realm.needs_redraw(), "the failed attempt must arm a retry");
 
-    let retry_presented = realm.render_frame_entered(&mut backend);
+    let retry_presented = realm.render_frame(&mut backend);
     assert!(
         retry_presented,
         "the automatic retry must submit the retained painted frame; phase={:?}, calls={}, \
          needs_redraw={}, has_pending_work={}",
         realm.presentations.primary().segment_phase(),
-        backend.render_scene_calls,
+        backend.submit_calls,
         realm.needs_redraw(),
         realm.has_pending_work(),
     );
-    assert_eq!(backend.render_scene_calls, 1);
+    assert_eq!(backend.submit_calls, 1);
     assert_eq!(
         *submitted_link_counts
             .lock()
@@ -178,14 +178,11 @@ fn a_tail_panic_repaints_and_presents_on_the_automatic_retry() {
     let submitted = Arc::new(StdMutex::new(Vec::new()));
     let mut backend = capturing_backend(Arc::clone(&submitted));
 
-    let first_presented = with_quiet_panics(|| {
-        catch_unwind(AssertUnwindSafe(|| {
-            realm.render_frame_entered(&mut backend)
-        }))
-    })
-    .expect("the Tail panic must be contained");
+    let first_presented =
+        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
+            .expect("the Tail panic must be contained");
     assert!(!first_presented, "the failed attempt must not present");
-    assert_eq!(backend.render_scene_calls, 0);
+    assert_eq!(backend.submit_calls, 0);
     assert_eq!(realm.frames_rendered(), 0);
     assert_eq!(
         realm.presentations.primary().segment_phase(),
@@ -194,12 +191,12 @@ fn a_tail_panic_repaints_and_presents_on_the_automatic_retry() {
     );
     assert!(realm.needs_redraw(), "the failure must arm a retry");
 
-    let second_presented = realm.render_frame_entered(&mut backend);
+    let second_presented = realm.render_frame(&mut backend);
     assert!(
         second_presented,
         "the automatic retry must repaint and present without external dirtiness"
     );
-    assert_eq!(backend.render_scene_calls, 1);
+    assert_eq!(backend.submit_calls, 1);
     assert_eq!(realm.frames_rendered(), 1);
     assert_eq!(
         realm.presentations.primary().segment_phase(),
@@ -209,7 +206,7 @@ fn a_tail_panic_repaints_and_presents_on_the_automatic_retry() {
     let fresh = mount();
     let expected = Arc::new(StdMutex::new(Vec::new()));
     let mut fresh_backend = capturing_backend(Arc::clone(&expected));
-    assert!(fresh.render_frame_entered(&mut fresh_backend));
+    assert!(fresh.render_frame(&mut fresh_backend));
     assert_eq!(
         *submitted.lock().expect("scene capture mutex"),
         *expected.lock().expect("fresh scene capture mutex"),
@@ -257,12 +254,10 @@ fn every_segment_phase_survives_unwind_and_retries_to_scene() {
                 })),
             );
         }
-        let mut backend = TestRasterBackend::always_presents();
+        let mut backend = ScriptedSink::always_presents();
 
         let first_presented = with_quiet_panics(|| {
-            catch_unwind(AssertUnwindSafe(|| {
-                realm.render_frame_entered(&mut backend)
-            }))
+            catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend)))
         })
         .expect("the phase panic must be contained");
         assert!(!first_presented, "{phase:?} failure must not present");
@@ -278,7 +273,7 @@ fn every_segment_phase_survives_unwind_and_retries_to_scene() {
         );
 
         assert!(
-            realm.render_frame_entered(&mut backend),
+            realm.render_frame(&mut backend),
             "{phase:?} must recover on the automatic retry"
         );
         assert_eq!(
@@ -314,18 +309,16 @@ fn a_tail_failure_repaints_a_even_when_later_b_paints_in_the_same_pump() {
             );
         })),
     );
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     assert!(
         with_quiet_panics(|| {
-            catch_unwind(AssertUnwindSafe(|| {
-                realm.render_frame_entered(&mut backend)
-            }))
+            catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend)))
         })
         .expect("A's Tail panic must be contained"),
         "later B must still paint and present in the failing pump"
     );
-    assert_eq!(backend.render_scene_calls, 1, "only B submits in pump 1");
+    assert_eq!(backend.submit_calls, 1, "only B submits in pump 1");
     assert_eq!(
         realm
             .presentations
@@ -344,10 +337,10 @@ fn a_tail_failure_repaints_a_even_when_later_b_paints_in_the_same_pump() {
     );
 
     assert!(
-        realm.render_frame_entered(&mut backend),
+        realm.render_frame(&mut backend),
         "A must repaint and present on the automatic retry"
     );
-    assert_eq!(backend.render_scene_calls, 2, "pump 2 submits only A");
+    assert_eq!(backend.submit_calls, 2, "pump 2 submits only A");
     assert_eq!(
         realm
             .presentations

@@ -1,8 +1,8 @@
 //! Renderer, vsync and frame clock; frame wake; first-frame deferral and frame accounting.
 
 use super::UiRealm;
-use crate::app::presentation::PresentationState;
-use crate::bindings::RenderingFlutterBinding;
+use crate::presentation::PresentationState;
+use crate::renderer_binding::RenderingFlutterBinding;
 use flui_animation::Vsync;
 use flui_rendering::binding::RendererBinding as _;
 use flui_types::HapticFeedback;
@@ -45,7 +45,8 @@ impl UiRealm {
     /// existing single-presentation caller and test unchanged; a genuine
     /// multi-presentation caller reads
     /// `self.presentations.get(id).vsync()` directly instead.
-    pub(crate) fn vsync(&self) -> Vsync {
+    #[must_use]
+    pub fn vsync(&self) -> Vsync {
         self.presentations.primary().vsync()
     }
 
@@ -63,7 +64,7 @@ impl UiRealm {
         dead_code,
         reason = "no production caller yet, and no test exercises the \
                   custom-registry substitution path -- an app-author escape \
-                  hatch that has no wiring point since UiRealm is pub(crate)-only"
+                  hatch that has no wiring point: the realm is internal to its host"
     )]
     pub(crate) fn set_vsync(&self, vsync: Vsync) {
         self.presentations.primary().set_vsync(vsync);
@@ -95,7 +96,7 @@ impl UiRealm {
     /// linked from a normal doc build) takes precedence, allowing
     /// deterministic animation stepping with no wall-clock reads.
     pub(super) fn now_secs(&self) -> f64 {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         {
             let bits = self.now_secs_override.load(Ordering::Relaxed);
             if bits != 0 {
@@ -112,8 +113,8 @@ impl UiRealm {
     /// nonzero bit pattern so `now_secs`'s `bits != 0` check (its "no
     /// override installed" test) cannot mistake an explicit zero override
     /// for an absent one.
-    #[cfg(test)]
-    pub(crate) fn set_now_secs_for_test(&self, secs: f64) {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_now_secs_for_test(&self, secs: f64) {
         let bits = secs.to_bits();
         let stored = if bits == 0 { 1u64 } else { bits };
         self.now_secs_override.store(stored, Ordering::Relaxed);
@@ -144,9 +145,9 @@ impl UiRealm {
     /// [`Self::handle_input_addressed`] arm not yet ported to it) is still a
     /// primary-only operation, so this marks `self.presentations.primary()`'s
     /// own pump wake bit (ADR-0043 §3) specifically — see
-    /// [`Self::request_redraw_for`] for the addressed counterpart
+    /// `Self::request_redraw_for` for the addressed counterpart
     /// [`Self::handle_input_addressed`] actually uses.
-    pub(crate) fn request_redraw(&self) {
+    pub fn request_redraw(&self) {
         self.request_redraw_for(self.presentations.primary());
     }
 
@@ -190,7 +191,7 @@ impl UiRealm {
     ///   unless something forces one. That caller is still single-renderer/
     ///   single-presentation shaped (see its own TODO(#559)), so `primary()`
     ///   is the only presentation it has to address.
-    /// - [`Self::render_frame_entered`]'s own `retry_needed` arm (issue
+    /// - [`Self::render_frame`]'s own `retry_needed` arm (issue
     ///   #637), for a submit that failed with `SurfaceLost`, `DeviceLost`,
     ///   or `SurfaceValidation` mid-frame: the frame that just failed had
     ///   already consumed the pipeline's dirty state producing the scene it
@@ -200,8 +201,8 @@ impl UiRealm {
     ///   (that method's own doc, at the `producer` binding, explains why
     ///   the two can differ).
     /// - The per-presentation unwind boundary, when a panic escapes after a
-    ///   successful pipeline in [`SegmentPhase::Tail`](crate::app::frame_failure::SegmentPhase::Tail) or
-    ///   [`SegmentPhase::Scene`](crate::app::frame_failure::SegmentPhase::Scene). That catch still holds the exact failed
+    ///   successful pipeline in [`SegmentPhase::Tail`](crate::frame_failure::SegmentPhase::Tail) or
+    ///   [`SegmentPhase::Scene`](crate::frame_failure::SegmentPhase::Scene). That catch still holds the exact failed
     ///   presentation, so it re-dirties it immediately instead of asking
     ///   pump-wide producer selection to infer attribution later.
     ///
@@ -245,12 +246,8 @@ impl UiRealm {
     /// post-pipeline Tail/Scene distinction above is what makes repainting a
     /// correct retry premise rather than an indiscriminate fallback.
     ///
-    /// No longer wasm-dead-code (this method used to carry a
-    /// `#[cfg_attr(target_arch = "wasm32", expect(dead_code, ...))]` when it
-    /// had only the pre-frame device-recovery caller): `render_frame_entered`
-    /// runs on every target, `wasm32` included (`runner.rs`'s
-    /// `bootstrap_web` calls it directly), so its own `retry_needed` arm
-    /// reaches this method there too.
+    /// Reached on every target: [`Self::render_frame`]'s `retry_needed` arm
+    /// calls it.
     pub(super) fn mark_needs_full_repaint_for(&self, presentation: &PresentationState) {
         self.request_redraw_for(presentation);
         presentation
@@ -263,10 +260,10 @@ impl UiRealm {
             });
     }
 
-    /// [`Self::mark_needs_full_repaint_for`], addressed to
+    /// `Self::mark_needs_full_repaint_for`, addressed to
     /// `self.presentations.primary()` — the shape its one caller
     /// (`runner.rs`'s `render_frame_with_device_recovery`) needs: that
-    /// function runs BEFORE `render_frame_entered`, driven purely by
+    /// function runs BEFORE `render_frame`, driven purely by
     /// `renderer.is_device_lost()`, with no per-pump `producer` of its own
     /// to resolve which presentation actually owns the lost device.
     // TODO(#559): marks `self.presentations.primary()` unconditionally --
@@ -276,34 +273,20 @@ impl UiRealm {
     // (`open_secondary_window`'s own doc); #559's addressing slice is
     // where this needs to become presentation-addressed, matching how
     // `render_frame_with_device_recovery` itself is still single-renderer/
-    // single-presentation shaped.
-    //
-    // wasm-dead-code (unlike `mark_needs_full_repaint_for` above, which
-    // `render_frame_entered`'s own `retry_needed` arm also calls on every
-    // target): this wrapper's only caller, `render_frame_with_device_
-    // recovery`, is itself `#[cfg(all(not(target_os = "ios"),
-    // not(target_arch = "wasm32")))]` (desktop/Android only -- web's own
-    // recovery stays un-unified and pokes `wake_handle()` directly
-    // instead), so on `wasm32` this wrapper genuinely has no caller at all.
-    #[cfg_attr(
-        target_arch = "wasm32",
-        expect(
-            dead_code,
-            reason = "the only caller, render_frame_with_device_recovery, is itself \
-                      desktop/Android-only -- see this method's own comment"
-        )
-    )]
-    pub(crate) fn mark_primary_needs_full_repaint(&self) {
+    // single-presentation shaped. Its caller is the host's device recovery
+    // (`flui-app`'s `render_frame_with_device_recovery`, desktop and Android);
+    // web's own recovery pokes `wake_handle()` directly instead.
+    pub fn mark_primary_needs_full_repaint(&self) {
         self.mark_needs_full_repaint_for(self.presentations.primary());
     }
 
     /// Whether a redraw is needed.
-    pub(crate) fn needs_redraw(&self) -> bool {
+    pub fn needs_redraw(&self) -> bool {
         self.needs_redraw.load(Ordering::Relaxed)
     }
 
     /// Mark the frame as rendered, clearing the redraw flag.
-    pub(crate) fn mark_rendered(&self) {
+    pub fn mark_rendered(&self) {
         self.needs_redraw.store(false, Ordering::Relaxed);
     }
 
@@ -311,12 +294,12 @@ impl UiRealm {
     /// `needs_redraw` AND pokes the installed window.
     ///
     /// Deadlock-safety: this only ever touches the `Send + Sync` state
-    /// captured in [`Self::wake`] (an `Arc<AtomicBool>` plus an `Arc<Mutex<Option<Arc<dyn
+    /// captured in the realm's `wake` (an `Arc<AtomicBool>` plus an `Arc<Mutex<Option<Arc<dyn
     /// PlatformWindow>>>>` on `AppRuntime` — see `FrameWakeHandle` in
     /// `runtime.rs`), never this realm's own `widgets`/`renderer`/gesture
     /// locks, so it is safe to call from inside a build/layout/paint
     /// callback without risking a lock-ordering cycle against those.
-    pub(crate) fn wake_frame(&self) {
+    pub fn wake_frame(&self) {
         (self.wake)();
     }
 
@@ -324,17 +307,10 @@ impl UiRealm {
     /// caller that must move a wake past this realm's own borrow (e.g. an
     /// `async move` block spawned from inside a frame callback, which
     /// outlives the synchronous `&UiRealm` the callback was given).
-    /// `wake_frame()` above is for every same-scope caller instead.
-    #[cfg_attr(
-        not(target_arch = "wasm32"),
-        expect(
-            dead_code,
-            reason = "the only production caller is the web bootstrap's GPU \
-                      device-recovery spawn_local (runner.rs's bootstrap_web), \
-                      invisible outside a wasm32 build"
-        )
-    )]
-    pub(crate) fn wake_handle(&self) -> Arc<dyn Fn() + Send + Sync> {
+    /// `wake_frame()` above is for every same-scope caller instead. The web
+    /// runner's GPU device-recovery `spawn_local` is its caller.
+    #[must_use]
+    pub fn wake_handle(&self) -> Arc<dyn Fn() + Send + Sync> {
         Arc::clone(&self.wake)
     }
 
@@ -342,7 +318,7 @@ impl UiRealm {
     // First-frame deferral and frame accounting (moved from the retired
     // `AppBinding`; the deferral gate itself is re-homed from
     // `RenderingFlutterBinding`'s own counter onto the primary presentation's
-    // `FrameClock` — see `render_frame_entered`'s own doc for the submit-gate
+    // `FrameClock` — see `render_frame`'s own doc for the submit-gate
     // check that is the actual production consumer now)
     // ========================================================================
 
@@ -355,8 +331,8 @@ impl UiRealm {
         expect(
             dead_code,
             reason = "no production caller yet -- an app-author async-init \
-                      deferral has no wiring point since UiRealm is \
-                      pub(crate)-only; the retired AppBinding had the same gap"
+                      deferral has no wiring point: the realm is internal to \
+                      its host; the retired AppBinding had the same gap"
         )
     )]
     pub(crate) fn defer_first_frame(&self) {
@@ -389,7 +365,7 @@ impl UiRealm {
         let was_deferred = clock.is_deferred();
         clock.lift();
         if was_deferred {
-            crate::bindings::redirty_pipeline_root(
+            crate::renderer_binding::redirty_pipeline_root(
                 self.presentations
                     .primary()
                     .renderer()
@@ -402,7 +378,7 @@ impl UiRealm {
     /// engine right now — exactly `!is_deferred()`. See
     /// [`FrameClock::is_deferred`](flui_scheduler::FrameClock::is_deferred).
     ///
-    /// `render_frame_entered` consults the SAME query directly at its own
+    /// `render_frame` consults the SAME query directly at its own
     /// submit point (see that method's own doc); this forwarder exists for
     /// tests exercising the deferral contract end to end through `UiRealm`'s
     /// own API rather than reaching into the presentation's clock directly.
@@ -410,7 +386,7 @@ impl UiRealm {
         not(test),
         expect(
             dead_code,
-            reason = "render_frame_entered reads presentation.clock().is_deferred() directly, \
+            reason = "render_frame reads presentation.clock().is_deferred() directly, \
                       not through this wrapper; kept for tests and future external callers"
         )
     )]
@@ -430,29 +406,11 @@ impl UiRealm {
     /// tried and reverted). This remains primary-addressed because the
     /// canonical backend frame callback is not presentation-addressed yet;
     /// a realm may already hold N resident presentations, but secondary
-    /// widget content and frame submission remain unwired.
-    #[cfg_attr(
-        all(
-            any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
-            not(test)
-        ),
-        expect(
-            dead_code,
-            reason = "this method's only caller, bootstrap_desktop's on_request_frame \
-                      closure (runner.rs), is cfg'd to exactly the desktop targets this \
-                      predicate excludes -- android has no build here (no NDK toolchain: \
-                      `cargo check -p flui-app --target aarch64-linux-android` fails at the \
-                      cc-detection step before reaching this file), ios likewise (no Xcode \
-                      SDK: fails in the psm build script before reaching this file), and \
-                      wasm32 (run_web's own RAF-driven frame-pump closure does not call this \
-                      yet) DOES build clean here and was verified dead_code-free with this \
-                      predicate. Wiring each backend's own compositor-tick feedback is \
-                      deferred, stated honestly in docs/adr/ADR-0044-driver-loop-hybrid.md's \
-                      per-platform table (none of android/ios/web get compositor pacing in \
-                      this slice; all three keep the wake-channel driver)."
-        )
-    )]
-    pub(crate) fn record_compositor_tick(&self, now: web_time::Instant) {
+    ///
+    /// Only the desktop runner's frame callback calls it: Android, iOS and
+    /// the web runner keep the wake-channel driver (ADR-0044's per-platform
+    /// table).
+    pub fn record_compositor_tick(&self, now: web_time::Instant) {
         self.presentations
             .primary()
             .clock()
@@ -491,7 +449,7 @@ impl UiRealm {
 
     /// Turn this presentation's performance overlay on or off. See the
     /// retired `AppBinding::set_performance_overlay`'s doc.
-    pub(crate) fn set_performance_overlay(&self, enabled: bool) {
+    pub fn set_performance_overlay(&self, enabled: bool) {
         self.presentations
             .primary()
             .set_performance_overlay(enabled);
@@ -513,7 +471,7 @@ impl UiRealm {
 
     /// Apply a new device pixel ratio to this realm's render pipeline (the
     /// resize path; construction applies the initial ratio directly).
-    pub(crate) fn set_device_pixel_ratio(&self, device_pixel_ratio: f32) {
+    pub fn set_device_pixel_ratio(&self, device_pixel_ratio: f32) {
         self.presentations
             .primary()
             .renderer()
@@ -528,7 +486,7 @@ impl UiRealm {
     /// although secondary windows are contentless today, so the union must
     /// remain presentation-wide rather than assuming the primary is the
     /// realm's only source of pending work.
-    pub(crate) fn has_pending_work(&self) -> bool {
+    pub fn has_pending_work(&self) -> bool {
         self.presentations.iter().any(|presentation| {
             presentation.has_pending_work()
                 || presentation.gestures().has_pending_motion()
@@ -548,7 +506,7 @@ impl UiRealm {
     /// it, even though that pump will render nothing for the gated
     /// presentation itself.
     #[must_use]
-    pub(crate) fn next_wake(&self) -> Option<web_time::Instant> {
+    pub fn next_wake(&self) -> Option<web_time::Instant> {
         self.presentations
             .iter()
             .filter_map(|presentation| presentation.gestures().next_deadline())

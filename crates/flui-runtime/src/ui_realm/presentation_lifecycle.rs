@@ -6,7 +6,7 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_scheduler::AppLifecycleState;
 
 use super::UiRealm;
-use crate::app::lifecycle_state::{
+use crate::lifecycle_state::{
     derive_lifecycle_state, lifecycle_ladder, preserve_first_lifecycle_panic,
 };
 
@@ -18,7 +18,9 @@ pub(super) enum HostLifecycle {
 }
 
 impl UiRealm {
-    pub(crate) fn update_host_lifecycle(&self, state: AppLifecycleState) {
+    /// Record the host's application lifecycle and deliver what it changes
+    /// to every presentation. Ignored once the realm is stopping.
+    pub fn update_host_lifecycle(&self, state: AppLifecycleState) {
         if self.host_lifecycle.get() == HostLifecycle::Stopping {
             return;
         }
@@ -26,8 +28,11 @@ impl UiRealm {
         self.reconcile_lifecycle(Vec::new());
     }
 
-    #[cfg(any(test, not(any(target_arch = "wasm32", target_os = "android"))))]
-    pub(crate) fn synchronize_window_snapshot(
+    /// Adopt presentation `id`'s whole window state at once (execution,
+    /// focus, visibility), as a window reports it when it is shown, and
+    /// deliver what it changes. Cancels the pointer sequences of a
+    /// presentation that loses focus or stops running.
+    pub fn synchronize_window_snapshot(
         &self,
         id: PresentationId,
         execution: flui_platform_api::WindowExecutionState,
@@ -62,7 +67,9 @@ impl UiRealm {
         self.reconcile_lifecycle(cancel);
     }
 
-    pub(crate) fn update_window_execution(
+    /// Record presentation `id`'s window execution state; a window that
+    /// stops running cancels its pointer sequences.
+    pub fn update_window_execution(
         &self,
         id: PresentationId,
         state: flui_platform_api::WindowExecutionState,
@@ -86,7 +93,9 @@ impl UiRealm {
         );
     }
 
-    pub(crate) fn update_window_focus(&self, id: PresentationId, focused: bool) {
+    /// Record presentation `id`'s window focus. Focus is exclusive within
+    /// the realm: gaining it takes it from every sibling.
+    pub fn update_window_focus(&self, id: PresentationId, focused: bool) {
         if self.host_lifecycle.get() == HostLifecycle::Stopping {
             return;
         }
@@ -111,7 +120,8 @@ impl UiRealm {
         self.reconcile_lifecycle(cancel);
     }
 
-    pub(crate) fn update_window_visibility(&self, id: PresentationId, visible: bool) {
+    /// Record presentation `id`'s window visibility, gating its frame clock.
+    pub fn update_window_visibility(&self, id: PresentationId, visible: bool) {
         if self.host_lifecycle.get() == HostLifecycle::Stopping {
             return;
         }
@@ -130,11 +140,15 @@ impl UiRealm {
         });
     }
 
-    pub(crate) fn synchronize_window_lifecycle(&self) {
+    /// Re-derive and deliver every presentation's lifecycle from the state
+    /// already recorded.
+    pub fn synchronize_window_lifecycle(&self) {
         self.reconcile_lifecycle(Vec::new());
     }
 
-    pub(crate) fn stop_presentations(&self) {
+    /// Begin closing every presentation: each is told it is detached and
+    /// drops its held input, and later lifecycle updates are ignored.
+    pub fn stop_presentations(&self) {
         self.host_lifecycle.set(HostLifecycle::Stopping);
         for presentation in self.presentations.iter() {
             presentation.closing_requested.set(true);
@@ -144,7 +158,9 @@ impl UiRealm {
         self.reconcile_lifecycle(Vec::new());
     }
 
-    pub(crate) fn stop_presentation(&self, id: PresentationId) {
+    /// Begin closing presentation `id` alone: it is told it is detached and
+    /// drops its held input.
+    pub fn stop_presentation(&self, id: PresentationId) {
         if let Some(presentation) = self.presentations.get(id) {
             presentation.closing_requested.set(true);
             presentation.widgets().lifecycle_source().begin_close();
@@ -155,7 +171,7 @@ impl UiRealm {
 
     fn execution_lifecycle(
         &self,
-        presentation: &crate::app::presentation::PresentationState,
+        presentation: &crate::presentation::PresentationState,
     ) -> AppLifecycleState {
         use AppLifecycleState::{Detached, Hidden, Inactive, Paused, Resumed};
         if presentation.closing_requested.get() {
@@ -285,7 +301,7 @@ impl UiRealm {
                     AppLifecycleState::Resumed | AppLifecycleState::Inactive
                 ) {
                     let suspended = presentation.lifecycle()
-                        == crate::app::presentation::PresentationLifecycle::Suspended;
+                        == crate::presentation::PresentationLifecycle::Suspended;
                     presentation.resume();
                     if suspended {
                         restored.push(presentation);
@@ -309,7 +325,7 @@ impl UiRealm {
             }
             for presentation in restored {
                 let failure = catch_unwind(AssertUnwindSafe(|| {
-                    crate::bindings::redirty_pipeline_root(
+                    crate::renderer_binding::redirty_pipeline_root(
                         presentation.renderer().root_pipeline_owner(),
                     );
                     self.request_redraw_for(presentation);
@@ -366,7 +382,7 @@ impl UiRealm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{presentation::PresentationLifecycle, window_test_support::TestWindow};
+    use crate::{presentation::PresentationLifecycle, testing::TestWindow};
     use flui_view::WidgetsBindingObserver;
     use std::{
         cell::{Cell, RefCell},
@@ -464,9 +480,9 @@ mod tests {
                 .widgets()
                 .add_observer(Arc::new(Legacy));
         }
-        let mut backend = crate::app::raster_test_support::TestRasterBackend::always_presents();
+        let mut backend = crate::testing::ScriptedSink::always_presents();
         realm.enter(|realm| {
-            realm.render_frame_entered(&mut backend);
+            realm.render_frame(&mut backend);
         });
         assert!(
             views.iter().all(|view| view.handle.borrow().is_some()),
@@ -999,9 +1015,9 @@ mod tests {
                 .attach_root_widget_to_for_test(id, &flui_widgets::SizedBox::new(10.0, 10.0))
                 .expect("root");
         }
-        let mut backend = crate::app::raster_test_support::TestRasterBackend::always_presents();
+        let mut backend = crate::testing::ScriptedSink::always_presents();
         realm.enter(|realm| {
-            realm.render_frame_entered(&mut backend);
+            realm.render_frame(&mut backend);
         });
         let before = realm
             .presentations
@@ -1017,7 +1033,7 @@ mod tests {
             AppLifecycleState::Resumed
         );
         realm.enter(|realm| {
-            realm.render_frame_entered(&mut backend);
+            realm.render_frame(&mut backend);
         });
         assert!(
             realm
@@ -1047,7 +1063,7 @@ mod tests {
         realm.update_window_visibility(b, true);
         assert!(realm.scheduler().frames_enabled());
         realm.enter(|realm| {
-            realm.render_frame_entered(&mut backend);
+            realm.render_frame(&mut backend);
         });
         assert_eq!(
             realm

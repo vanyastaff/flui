@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use super::*;
 
 fn counting_window(id: u64) -> (Arc<dyn PlatformWindow>, Arc<AtomicU32>) {
-    let window = crate::app::window_test_support::TestWindow::new().with_id(id);
+    let window = crate::testing::TestWindow::new().with_id(id);
     let redraw_calls = window.redraw_calls_handle();
     (Arc::new(window), redraw_calls)
 }

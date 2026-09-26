@@ -32,13 +32,13 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(test)]
 use std::rc::Rc;
 use std::sync::Arc;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crossbeam_channel::Receiver;
 #[cfg(test)]
-use flui_engine::EngineError;
+use crate::sink::SubmitVerdict;
+use crossbeam_channel::Receiver;
 #[cfg(test)]
 use flui_foundation::PresentationId;
 use flui_foundation::RealmId;
@@ -62,7 +62,7 @@ use flui_view::GlobalKeyScope;
 use parking_lot::RwLock;
 
 #[cfg(test)]
-use flui_runtime::epoch::FrameCommitState;
+use crate::epoch::FrameCommitState;
 
 #[cfg(test)]
 use super::frame_failure::{FailureDisposition, FrameFailureKind, SegmentPhase};
@@ -112,10 +112,7 @@ mod frame_clock;
 mod input;
 mod presentations;
 
-#[cfg(test)]
-use commands::CommandSendError;
-use commands::UiCommand;
-pub(crate) use commands::{DrainReport, UiCommandSender};
+pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
 #[cfg(test)]
 use input::input_dropped_by_lifecycle;
@@ -127,7 +124,7 @@ use input::input_dropped_by_lifecycle;
 /// Errors constructing a [`UiRealm`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
-pub(crate) enum UiRealmError {
+pub enum UiRealmError {
     /// The owner-local interaction lane could not be created.
     #[error("failed to create the realm interaction lane: {0}")]
     InteractionLane(#[from] flui_interaction::InteractionDispatchError),
@@ -143,7 +140,7 @@ pub(crate) enum UiRealmError {
 /// `!Send + !Sync` by construction (raw-pointer `PhantomData` marker) — the
 /// compiler, not convention, keeps the owner on its thread. Cross-thread
 /// access goes through [`UiCommandSender`] only.
-pub(crate) struct UiRealm {
+pub struct UiRealm {
     realm_id: RealmId,
     /// Owner-local callback queue, activated with the realm's other TLS scope.
     local_post_frame: LocalPostFrameLane,
@@ -157,14 +154,6 @@ pub(crate) struct UiRealm {
     /// addressed-routing slice) and its `install_second_presentation_for_test`
     /// counterpart (the isolation test suite) read it back to assemble a
     /// second presentation sharing this exact scope.
-    #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-        expect(
-            dead_code,
-            reason = "read back only by assemble_presentation, reachable only through \
-                      runner.rs::install_presentation_alongside, itself desktop-only"
-        )
-    )]
     global_key_scope: GlobalKeyScope,
     /// The insertion-ordered set of UI-owner presentation domains this realm
     /// hosts (ADR-0043 §1 — `PresentationForest`). Production topology
@@ -209,27 +198,18 @@ pub(crate) struct UiRealm {
     /// read it with a single relaxed load; `0u64` is the "not set" sentinel
     /// (see [`Self::set_now_secs_for_test`] for why a genuine `t=0.0` is
     /// nudged to the smallest positive subnormal instead).
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     now_secs_override: AtomicU64,
     rx: Receiver<UiCommand>,
     /// Prototype for [`Self::command_sender`]: crossbeam receivers cannot
     /// mint senders, so the runtime keeps one sender to clone from. Holding
     /// it here does not keep the channel alive past the runtime: `rx` drops
     /// with the runtime and every outstanding sender turns `OwnerGone`.
-    // The desktop runner (`cfg(not(target_arch = "wasm32"))`) is the only
-    // non-test consumer, so the wasm lib check sees this as dead.
-    #[cfg_attr(
-        all(target_arch = "wasm32", not(test)),
-        expect(
-            dead_code,
-            reason = "consumed only by the desktop runner and tests, neither in the wasm lib check"
-        )
-    )]
     sender_prototype: UiCommandSender,
     redraw_pending: Arc<AtomicBool>,
     /// This realm's OWN scheduler — the strong root every `WeakUpdateScheduler`
     /// this realm vends (tickers, `PostFrameHandle`s) upgrades against.
-    /// Built fresh per realm by [`RealmServices::construct`](crate::app::runtime::RealmServices::construct), never a
+    /// Built fresh per realm by [`RealmServices::construct`](crate::realm_services::RealmServices::construct), never a
     /// process-global singleton: when this realm drops, this field drops
     /// with it, and every retained weak handle starts failing closed.
     /// Read directly for the idle-only commit-gate phase probe in
@@ -270,9 +250,10 @@ impl std::fmt::Debug for UiRealm {
 /// finalization, pipeline work, post-pipeline tail, and scene construction.
 /// `Idle` and `Errored` both produce no scene to submit, but only `Errored`
 /// forces a retry rather than being treated as a clean segment (see
-/// [`UiRealm::render_frame_entered`]'s retry gate). Moved here from the retired
+/// [`UiRealm::render_frame`]'s retry gate). Moved here from the retired
 /// `AppBinding`.
-enum FramePaintOutcome {
+#[derive(Debug)]
+pub enum FramePaintOutcome {
     /// A fresh layer tree was painted and turned into a `Scene`. Holds
     /// `Scene` by value, not `Arc<Scene>`: the sole reader (the frame
     /// transaction immediately below) MOVES it into the submit sink —
@@ -296,7 +277,7 @@ enum FramePaintOutcome {
 ///
 /// `Retain` exists for exactly one shape: a submit failure whose own caller
 /// has already armed a retry. **Two** verdict arms in the frame transaction
-/// behind [`UiRealm::render_frame_entered`] are that shape —
+/// behind [`UiRealm::render_frame`] are that shape —
 /// `SurfaceStale` (covering a lost surface, a validation failure, and a
 /// stale surface-generation stamp, which used to be two separate
 /// `SurfaceLost`/`SurfaceValidation` arms) and `DeviceLost`. `DeviceLost`

@@ -157,7 +157,7 @@ fn ime_event_addressed_to_b_does_not_reach_as_session() {
 
     let mut realm = UiRealm::for_test_with_text_input(Some(capability_a));
     let a_id = realm.presentation_id();
-    let window_b = crate::app::presentation::test_platform_window(Some(capability_b));
+    let window_b = crate::presentation::test_platform_window(Some(capability_b));
     let presentation_b = realm.assemble_presentation(window_b);
     let b_id = realm.install_presentation(presentation_b);
 

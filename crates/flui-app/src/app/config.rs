@@ -7,11 +7,11 @@ use flui_log::AppIdentity;
 use flui_types::{Size, geometry::px};
 
 use super::close_request::CloseRequestHandler;
-use super::frame_failure::{FrameFailureDetail, FrameFailureHandler};
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::ServiceDefinition;
 use super::runtime::ExitPolicy;
 use flui_runtime::execution::HostExecutors;
+use flui_runtime::frame_failure::{FrameFailureDetail, FrameFailureHandler};
 
 /// Default diagnostics policy for a managed application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -367,6 +367,15 @@ impl AppConfig {
     }
 
     /// Select how much unstructured text frame-failure diagnostics retain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_app::{AppConfig, FrameFailureDetail};
+    ///
+    /// let config = AppConfig::new().with_frame_failure_detail(FrameFailureDetail::Redacted);
+    /// assert_eq!(config.frame_failure_detail, FrameFailureDetail::Redacted);
+    /// ```
     #[must_use]
     pub fn with_frame_failure_detail(mut self, detail: FrameFailureDetail) -> Self {
         self.frame_failure_detail = detail;

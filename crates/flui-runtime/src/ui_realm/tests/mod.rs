@@ -1,4 +1,3 @@
-use flui_engine::PresentDisposition;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 
@@ -10,7 +9,7 @@ use flui_view::prelude::*;
 use flui_widgets::{NavigatorCommand, NavigatorHandle, SimpleRoute, SizedBox};
 
 use super::*;
-use crate::app::raster_test_support::TestRasterBackend;
+use crate::testing::ScriptedSink;
 
 static_assertions::assert_not_impl_any!(UiRealm: Send, Sync);
 
@@ -29,13 +28,16 @@ fn counting_wake() -> (Arc<dyn Fn() + Send + Sync>, Arc<AtomicUsize>) {
     )
 }
 
-/// A headless window as the runner hands it to a realm: through
-/// `runner::presentation_window`, so the headless backend's accessibility
-/// bridge is wired exactly as a production window's would be.
-fn test_window() -> crate::app::presentation::PresentationWindow {
-    crate::app::runner::presentation_window(
-        crate::app::window_test_support::headless_test_host_window(),
-    )
+/// A headless window as a runner hands it to a realm: the window and the
+/// accessibility bridge its backend fixed, read once (what `flui-app`'s
+/// `runner::presentation_window` does), so the headless backend's bridge is
+/// wired exactly as a production window's would be.
+fn test_window() -> crate::presentation::PresentationWindow {
+    let host = flui_platform::headless_platform()
+        .open_window(flui_platform::traits::WindowOptions::default())
+        .expect("headless platform should create a test window");
+    let accessibility = host.accessibility();
+    crate::presentation::PresentationWindow::new(host, accessibility)
 }
 
 fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmError> {
@@ -259,8 +261,7 @@ fn stale_semantics_action_is_gracefully_dropped() {
 #[test]
 fn platform_action_request_routes_through_the_wire_to_the_handler() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
-    let window =
-        crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+    let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
     let realm =
         UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
 
@@ -310,8 +311,7 @@ fn platform_action_request_routes_through_the_wire_to_the_handler() {
 #[test]
 fn platform_action_payload_reaches_the_handler_with_its_arguments() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
-    let window =
-        crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+    let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
     let realm =
         UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
 
@@ -360,8 +360,7 @@ fn platform_action_payload_reaches_the_handler_with_its_arguments() {
 #[test]
 fn unroutable_platform_action_requests_are_dropped_at_the_listener() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
-    let window =
-        crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+    let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
     let realm =
         UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
 
@@ -416,8 +415,7 @@ fn unroutable_platform_action_requests_are_dropped_at_the_listener() {
 #[test]
 fn at_activation_drives_semantics_assembly_through_the_frame_reconcile() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
-    let window =
-        crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+    let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
     let realm =
         UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
     let pipeline = realm.pipeline_for_test();
@@ -468,8 +466,7 @@ fn at_activation_drives_semantics_assembly_through_the_frame_reconcile() {
 #[test]
 fn at_activation_requests_a_full_republish_and_the_reconcile_consumes_it() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
-    let window =
-        crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+    let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
     let realm =
         UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
     let host_flag = realm
@@ -512,8 +509,7 @@ fn at_activation_requests_a_full_republish_and_the_reconcile_consumes_it() {
 #[test]
 fn closing_the_presentation_withdraws_from_the_platform_bridge() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
-    let window =
-        crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
+    let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
     // Hold the window strong across the drop: `close()` withdraws only
     // while its window is alive, exactly as a production runner (which
     // owns the window) would still succeed.
@@ -532,42 +528,6 @@ fn closing_the_presentation_withdraws_from_the_platform_bridge() {
     assert!(
         !flag.load(Ordering::Relaxed),
         "a closed presentation's enablement flag must never flip again"
-    );
-}
-
-/// The runner's path from an `open_window` result to a realm: the bridge is
-/// read from the host window once and carried beside the window, which the
-/// realm then only sees as a `PlatformWindow`. If that constructor drops the
-/// bridge (say, passes `None`), nothing is wired and nothing is published.
-#[test]
-fn a_realm_built_from_a_host_window_publishes_through_its_accessibility() {
-    let fake = Arc::new(flui_platform::FakeAccessibility::new());
-    let host: Arc<dyn flui_platform::traits::HostWindow> =
-        Arc::new(crate::app::window_test_support::HostedTestWindow::new(
-            crate::app::window_test_support::TestWindow::new()
-                .focused(true)
-                .with_accessibility(Arc::clone(&fake) as _),
-        ));
-    let realm = UiRealm::new(
-        noop_wake(),
-        crate::app::runner::presentation_window(host),
-        1.0,
-        Arc::new(AtomicBool::new(false)),
-    )
-    .expect("realm");
-    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
-    realm
-        .enter(|realm| realm.attach_root_widget(&SizedBox::new(10.0, 10.0)))
-        .expect("root mounted");
-
-    fake.set_active(true);
-    realm.enter(|_| {
-        let _ = realm.draw_frame_entered(constraints);
-    });
-
-    assert!(
-        fake.published_count() >= 1,
-        "the bridge read from the host window must receive the assembled tree"
     );
 }
 
@@ -894,7 +854,7 @@ fn a_redraw_request_fires_the_platform_wake() {
     });
     let realm = UiRealm::new(
         wake,
-        crate::app::presentation::test_platform_window(None),
+        crate::presentation::test_platform_window(None),
         1.0,
         Arc::new(AtomicBool::new(false)),
     )
@@ -1558,7 +1518,7 @@ fn hot_reload_command_applies_to_the_owned_presentation() {
 
     realm
         .command_sender()
-        .request_hot_reload(flui_runtime::reload::ReloadTier::Reassemble)
+        .request_hot_reload(crate::reload::ReloadTier::Reassemble)
         .expect("inbox has room");
 
     let report = realm.drain_commands();
@@ -1583,7 +1543,7 @@ fn full_restart_command_does_not_arm_a_presentation_redraw() {
 
     runtime
         .command_sender()
-        .request_hot_reload(flui_runtime::reload::ReloadTier::ProcessRestart)
+        .request_hot_reload(crate::reload::ReloadTier::ProcessRestart)
         .expect("inbox has room");
 
     let report = runtime.drain_commands();

@@ -2,12 +2,12 @@
 
 use super::UiRealm;
 use super::presentation_lifecycle::HostLifecycle;
-use crate::app::presentation::PresentationState;
+use crate::epoch::FrameCommitState;
+use crate::presentation::PresentationState;
 use flui_foundation::PresentationId;
 use flui_interaction::PointerEvent;
 use flui_platform_api::{DragDropEvent, PlatformInput};
 use flui_rendering::binding::RendererBinding as _;
-use flui_runtime::epoch::FrameCommitState;
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -98,10 +98,10 @@ pub(super) fn preserve_first_input_panic(
 /// breaks this match at compile time instead of silently falling through a
 /// `_` arm.
 pub(super) fn input_dropped_by_lifecycle(
-    lifecycle: crate::app::presentation::PresentationLifecycle,
+    lifecycle: crate::presentation::PresentationLifecycle,
     input: &PlatformInput,
 ) -> bool {
-    use crate::app::presentation::PresentationLifecycle;
+    use crate::presentation::PresentationLifecycle;
     match lifecycle {
         PresentationLifecycle::Created
         | PresentationLifecycle::Closing
@@ -170,8 +170,7 @@ impl UiRealm {
     /// that produced it, resolved through `WindowRegistry` at hop-1 — never
     /// assumed to be this realm's primary. A `presentation_id` this realm no
     /// longer hosts (closed between enqueue and drain) is a traced drop,
-    /// never a panic or a silent fall-through to [`PresentationForest::
-    /// primary`](crate::app::presentation_forest::PresentationForest::primary).
+    /// never a panic or a silent fall-through to the forest's primary.
     ///
     /// Pointer/IME/drag-drop events go to the ADDRESSED presentation's own
     /// gesture/text-input state — never a sibling's, and never falling
@@ -180,11 +179,11 @@ impl UiRealm {
     /// `ime_event_addressed_to_b_does_not_reach_as_session`,
     /// `input_addressed_to_a_closed_or_unknown_presentation_drops_traced_
     /// never_falls_through`). Keyboard is the one exception: it always
-    /// goes to [`Self::focus_coordinator`]'s currently ACTIVE presentation
-    /// instead of the stamped one — see [`FocusCoordinator`]'s own doc for
+    /// goes to the focus coordinator's currently ACTIVE presentation
+    /// instead of the stamped one — see `FocusCoordinator`'s own doc for
     /// why (`keyboard_routes_to_active_presentation_only`).
     ///
-    /// [`input_dropped_by_lifecycle`] gates every kind next, against the
+    /// `input_dropped_by_lifecycle` gates every kind next, against the
     /// RESOLVED target's own lifecycle (not necessarily `presentation_id`'s,
     /// for `Keyboard`): `Closing`/`Closed` refuses all input; `Suspended`
     /// drops pointer/drag-drop only (keyboard/IME keep flowing, so a flaky
@@ -192,12 +191,8 @@ impl UiRealm {
     ///
     /// Pointer events are coalesced by the target presentation's own
     /// `GestureBinding` — high-frequency move events are stored and flushed
-    /// once per frame via [`Self::render_frame_entered`].
-    pub(crate) fn handle_input_addressed(
-        &self,
-        presentation_id: PresentationId,
-        input: PlatformInput,
-    ) {
+    /// once per frame via [`Self::render_frame`].
+    pub fn handle_input_addressed(&self, presentation_id: PresentationId, input: PlatformInput) {
         let target_id = match &input {
             PlatformInput::Keyboard(_) => self.focus_coordinator.active(),
             PlatformInput::Pointer(_) | PlatformInput::Ime(_) | PlatformInput::DragDrop(_) => {
@@ -331,11 +326,7 @@ impl UiRealm {
     /// Enter is a no-op: the next pointer move re-primes hover from a fresh
     /// hit test on its own. A stale or unknown `presentation_id` is a traced
     /// no-op, the same posture as every other addressed signal.
-    pub(crate) fn handle_window_hover_addressed(
-        &self,
-        presentation_id: PresentationId,
-        inside: bool,
-    ) {
+    pub fn handle_window_hover_addressed(&self, presentation_id: PresentationId, inside: bool) {
         if inside {
             return;
         }

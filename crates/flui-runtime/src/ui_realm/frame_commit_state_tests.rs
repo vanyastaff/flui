@@ -7,8 +7,6 @@ use std::sync::{
 use std::time::Duration;
 
 use flui_animation::AnimationController;
-use flui_engine::EngineError;
-use flui_engine::PresentDisposition;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerButtons, PointerType, make_down_event, make_down_event_for_id, make_move_event,
@@ -16,7 +14,6 @@ use flui_interaction::events::{
 };
 use flui_platform_api::PlatformInput;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
-use flui_runtime::epoch::{FrameCommitState, TreeRevision};
 use flui_types::{
     Size,
     geometry::{Offset, px},
@@ -25,7 +22,9 @@ use flui_view::{BuildContext, IntoView, StatelessView};
 use flui_widgets::SizedBox;
 
 use super::{SegmentPhase, UiRealm};
-use crate::app::raster_test_support::TestRasterBackend;
+use crate::epoch::{FrameCommitState, TreeRevision};
+use crate::sink::SubmitVerdict;
+use crate::testing::ScriptedSink;
 
 fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
     type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync>;
@@ -193,12 +192,12 @@ fn presented_and_no_present_painted_frames_commit() {
     for presents in [true, false] {
         let realm = mount_box();
         let outcome = if presents {
-            PresentDisposition::Presented
+            SubmitVerdict::Presented
         } else {
-            PresentDisposition::NoDamage
+            SubmitVerdict::NoPresent
         };
-        let mut backend = TestRasterBackend::single_shot(Ok(outcome));
-        assert_eq!(realm.render_frame_entered(&mut backend), presents);
+        let mut backend = ScriptedSink::single_shot(outcome);
+        assert_eq!(realm.render_frame(&mut backend), presents);
         assert_eq!(primary_state(&realm), FrameCommitState::Committed);
         let revision = TreeRevision::ZERO.next();
         assert_eq!(
@@ -212,13 +211,11 @@ fn presented_and_no_present_painted_frames_commit() {
 fn errored_frame_is_uncommitted() {
     let realm = mount_box();
     arm_one_shot_build_panic(&realm);
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
-    assert!(!with_quiet_panics(
-        || realm.render_frame_entered(&mut backend)
-    ));
+    assert!(!with_quiet_panics(|| realm.render_frame(&mut backend)));
     assert_uncommitted_since(&realm, TreeRevision::ZERO.next());
-    assert_eq!(backend.render_scene_calls, 0);
+    assert_eq!(backend.submit_calls, 0);
 }
 
 #[test]
@@ -233,17 +230,15 @@ fn errored_then_automatic_idle_preserves_the_earliest_absent_revision() {
     realm.set_now_secs_for_test(0.0);
     arm_one_shot_build_panic(&realm);
     realm.request_redraw();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
-    assert!(!with_quiet_panics(
-        || realm.render_frame_entered(&mut backend)
-    ));
+    assert!(!with_quiet_panics(|| realm.render_frame(&mut backend)));
     let since = TreeRevision::ZERO.next();
     assert_uncommitted_since(&realm, since);
     let flushes_after_error = realm.presentations.primary().flush_count();
 
     realm.set_now_secs_for_test(0.01);
-    assert!(!realm.render_frame_entered(&mut backend));
+    assert!(!realm.render_frame(&mut backend));
     assert_eq!(
         realm.presentations.primary().flush_count(),
         flushes_after_error + 1,
@@ -273,19 +268,15 @@ fn repeated_errors_keep_the_first_gap_and_a_later_commit_starts_a_new_gap() {
             }
         })),
     );
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
-    assert!(!with_quiet_panics(
-        || realm.render_frame_entered(&mut backend)
-    ));
+    assert!(!with_quiet_panics(|| realm.render_frame(&mut backend)));
     let first_missing = TreeRevision::ZERO.next();
     assert_uncommitted_since(&realm, first_missing);
-    assert!(!with_quiet_panics(
-        || realm.render_frame_entered(&mut backend)
-    ));
+    assert!(!with_quiet_panics(|| realm.render_frame(&mut backend)));
     assert_uncommitted_since(&realm, first_missing);
 
-    assert!(realm.render_frame_entered(&mut backend));
+    assert!(realm.render_frame(&mut backend));
     assert_eq!(primary_state(&realm), FrameCommitState::Committed);
     let committed_revision = first_missing.next().next();
     assert_eq!(
@@ -295,25 +286,23 @@ fn repeated_errors_keep_the_first_gap_and_a_later_commit_starts_a_new_gap() {
 
     arm_one_shot_build_panic(&realm);
     realm.request_redraw();
-    assert!(!with_quiet_panics(
-        || realm.render_frame_entered(&mut backend)
-    ));
+    assert!(!with_quiet_panics(|| realm.render_frame(&mut backend)));
     assert_uncommitted_since(&realm, committed_revision.next());
 }
 
 #[test]
 fn submit_failures_leave_the_painted_revision_uncommitted() {
     let outcomes = [
-        ("surface-stale", EngineError::SurfaceLost),
-        ("device-lost", EngineError::DeviceLost),
-        ("failed", EngineError::Timeout),
+        ("surface-stale", SubmitVerdict::SurfaceStale),
+        ("device-lost", SubmitVerdict::DeviceLost),
+        ("failed", SubmitVerdict::Failed),
     ];
     let states: Vec<_> = outcomes
         .into_iter()
-        .map(|(label, error)| {
+        .map(|(label, verdict)| {
             let realm = mount_box();
-            let mut backend = TestRasterBackend::single_shot(Err(error));
-            assert!(!realm.render_frame_entered(&mut backend));
+            let mut backend = ScriptedSink::single_shot(verdict);
+            assert!(!realm.render_frame(&mut backend));
             (label, primary_state(&realm))
         })
         .collect();
@@ -334,29 +323,29 @@ fn submit_failures_leave_the_painted_revision_uncommitted() {
 fn deferred_painted_frame_waits_for_the_later_present_to_commit() {
     let realm = mount_box();
     realm.defer_first_frame();
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
-    assert!(!realm.render_frame_entered(&mut backend));
+    assert!(!realm.render_frame(&mut backend));
     assert_uncommitted_since(&realm, TreeRevision::ZERO.next());
-    assert_eq!(backend.render_scene_calls, 0);
+    assert_eq!(backend.submit_calls, 0);
 
     realm.allow_first_frame();
-    assert!(realm.render_frame_entered(&mut backend));
+    assert!(realm.render_frame(&mut backend));
     assert_eq!(primary_state(&realm), FrameCommitState::Committed);
 }
 
 #[test]
 fn semantics_only_idle_on_a_committed_tree_changes_no_revision() {
     let realm = mount_box();
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
     let committed_pair = realm.presentations.primary().revision_pair();
     let flushes = realm.presentations.primary().flush_count();
 
     realm
         .pipeline_for_test()
         .with_mut(|owner| owner.set_semantics_enabled(true));
-    assert!(!realm.render_frame_entered(&mut backend));
+    assert!(!realm.render_frame(&mut backend));
     assert_eq!(realm.presentations.primary().flush_count(), flushes + 1);
     assert_eq!(
         realm.presentations.primary().revision_pair(),
@@ -368,8 +357,8 @@ fn semantics_only_idle_on_a_committed_tree_changes_no_revision() {
 #[test]
 fn uncommitted_primary_holds_the_previous_hover_derivation() {
     let (realm, hits) = mount_hit_counting_root();
-    let mut clean_backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut clean_backend));
+    let mut clean_backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut clean_backend));
     let clean_hits = hits.load(Ordering::Relaxed);
 
     realm.pipeline_for_test().with_mut(|owner| {
@@ -377,8 +366,8 @@ fn uncommitted_primary_holds_the_previous_hover_derivation() {
         owner.mark_needs_paint(root);
     });
     realm.request_redraw();
-    let mut failed_backend = TestRasterBackend::single_shot(Err(EngineError::Timeout));
-    assert!(!realm.render_frame_entered(&mut failed_backend));
+    let mut failed_backend = ScriptedSink::single_shot(SubmitVerdict::Failed);
+    assert!(!realm.render_frame(&mut failed_backend));
     assert!(matches!(
         primary_state(&realm),
         FrameCommitState::Uncommitted { .. }
@@ -393,8 +382,8 @@ fn uncommitted_primary_holds_the_previous_hover_derivation() {
 #[test]
 fn secondary_failure_does_not_freeze_a_committed_primary_reprobe() {
     let (mut realm, hits) = mount_hit_counting_root();
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
     let hits_before_secondary_failure = hits.load(Ordering::Relaxed);
 
     let secondary_id = realm.install_second_presentation_for_test();
@@ -402,9 +391,7 @@ fn secondary_failure_does_not_freeze_a_committed_primary_reprobe() {
         .attach_root_widget_to_for_test(secondary_id, &SizedBox::new(20.0, 20.0))
         .expect("secondary root attaches");
     arm_one_shot_build_panic_for(&realm, secondary_id);
-    assert!(!with_quiet_panics(
-        || realm.render_frame_entered(&mut backend)
-    ));
+    assert!(!with_quiet_panics(|| realm.render_frame(&mut backend)));
 
     assert_eq!(primary_state(&realm), FrameCommitState::Committed);
     assert!(
@@ -434,15 +421,13 @@ fn arm_one_shot_build_panic_for(realm: &UiRealm, presentation_id: flui_foundatio
 #[test]
 fn primary_failure_suppresses_its_ambient_reprobe() {
     let (realm, hits) = mount_hit_counting_root();
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
     let clean_hits = hits.load(Ordering::Relaxed);
 
     arm_one_shot_build_panic(&realm);
     realm.request_redraw();
-    assert!(!with_quiet_panics(
-        || realm.render_frame_entered(&mut backend)
-    ));
+    assert!(!with_quiet_panics(|| realm.render_frame(&mut backend)));
     assert!(matches!(
         primary_state(&realm),
         FrameCommitState::Uncommitted { .. }
@@ -453,8 +438,8 @@ fn primary_failure_suppresses_its_ambient_reprobe() {
 #[test]
 fn pointer_input_is_held_while_the_target_presentation_is_uncommitted() {
     let (realm, hits) = mount_hit_counting_root();
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
     let clean_hits = hits.load(Ordering::Relaxed);
 
     realm.pipeline_for_test().with_mut(|owner| {
@@ -462,8 +447,8 @@ fn pointer_input_is_held_while_the_target_presentation_is_uncommitted() {
         owner.mark_needs_paint(root);
     });
     realm.request_redraw();
-    let mut failed_backend = TestRasterBackend::single_shot(Err(EngineError::Timeout));
-    assert!(!realm.render_frame_entered(&mut failed_backend));
+    let mut failed_backend = ScriptedSink::single_shot(SubmitVerdict::Failed);
+    assert!(!realm.render_frame(&mut failed_backend));
     assert!(matches!(
         primary_state(&realm),
         FrameCommitState::Uncommitted { .. }
@@ -488,8 +473,8 @@ fn pointer_input_is_held_while_the_target_presentation_is_uncommitted() {
 #[test]
 fn held_terminal_event_for_an_already_active_pointer_releases_the_cached_route_after_commit() {
     let (realm, hits) = mount_hit_counting_root();
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
     let primary = realm.presentations.primary();
     let pointer = PointerId::new(101).expect("test pointer id is nonzero");
 
@@ -509,8 +494,8 @@ fn held_terminal_event_for_an_already_active_pointer_releases_the_cached_route_a
         owner.mark_needs_paint(root);
     });
     realm.request_redraw();
-    let mut failed_backend = TestRasterBackend::single_shot(Err(EngineError::Timeout));
-    assert!(!realm.render_frame_entered(&mut failed_backend));
+    let mut failed_backend = ScriptedSink::single_shot(SubmitVerdict::Failed);
+    assert!(!realm.render_frame(&mut failed_backend));
     assert!(matches!(
         primary.frame_commit_state(),
         FrameCommitState::Uncommitted { .. }
@@ -542,7 +527,7 @@ fn held_terminal_event_for_an_already_active_pointer_releases_the_cached_route_a
         owner.mark_needs_paint(root);
     });
     realm.request_redraw();
-    assert!(realm.render_frame_entered(&mut backend));
+    assert!(realm.render_frame(&mut backend));
     assert_eq!(primary.held_pointer_input().borrow().len(), 0);
     assert_eq!(
         primary.gestures().active_pointer_count(),
@@ -554,8 +539,8 @@ fn held_terminal_event_for_an_already_active_pointer_releases_the_cached_route_a
 #[test]
 fn a_nonempty_held_queue_keeps_later_pointer_input_held_after_commit() {
     let (realm, hits) = mount_hit_counting_root();
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
     let clean_hits = hits.load(Ordering::Relaxed);
 
     let primary = realm.presentations.primary();
@@ -660,8 +645,8 @@ fn presented_commit_replays_held_pointer_input_after_current_frame_telemetry() {
             PointerType::Touch,
         ));
 
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
 
     assert!(
         primary.held_pointer_input().borrow().is_empty(),
@@ -702,8 +687,8 @@ fn replayed_move_enters_pending_moves_and_flushes_on_the_next_pump() {
             PointerType::Touch,
         ));
 
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
 
     assert_eq!(
         primary.gestures().pending_move_count(),
@@ -715,7 +700,7 @@ fn replayed_move_enters_pending_moves_and_flushes_on_the_next_pump() {
         "the pending replayed Move needs a pump"
     );
 
-    let _ = realm.render_frame_entered(&mut backend);
+    let _ = realm.render_frame(&mut backend);
     assert_eq!(
         primary.gestures().pending_move_count(),
         0,
@@ -738,19 +723,19 @@ fn replayed_move_enters_pending_moves_and_flushes_on_the_next_pump() {
 #[test]
 fn a_frame_the_surface_never_showed_is_retained_and_repainted() {
     let realm = mount_box();
-    let mut backend = TestRasterBackend::new(|call, _scene| {
-        Ok(if call == 0 {
-            PresentDisposition::NotShown
+    let mut backend = ScriptedSink::new(|call, _scene| {
+        if call == 0 {
+            SubmitVerdict::NotShown
         } else {
-            PresentDisposition::Presented
-        })
+            SubmitVerdict::Presented
+        }
     });
 
     assert!(
-        !realm.render_frame_entered(&mut backend),
+        !realm.render_frame(&mut backend),
         "a frame whose surface was unavailable did not present"
     );
-    assert_eq!(backend.render_scene_calls, 1);
+    assert_eq!(backend.submit_calls, 1);
     assert_eq!(
         primary_state(&realm),
         FrameCommitState::Committed,
@@ -758,9 +743,9 @@ fn a_frame_the_surface_never_showed_is_retained_and_repainted() {
          what failed was showing it, not making it"
     );
 
-    let _ = realm.render_frame_entered(&mut backend);
+    let _ = realm.render_frame(&mut backend);
     assert_eq!(
-        backend.render_scene_calls, 2,
+        backend.submit_calls, 2,
         "the retained frame must be handed to the backend again, not merely \
          have its wake bit set"
     );
@@ -773,13 +758,13 @@ fn a_frame_the_surface_never_showed_is_retained_and_repainted() {
 #[test]
 fn a_frame_with_nothing_owed_is_not_retained() {
     let realm = mount_box();
-    let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::NoDamage));
+    let mut backend = ScriptedSink::single_shot(SubmitVerdict::NoPresent);
 
     assert!(
-        !realm.render_frame_entered(&mut backend),
+        !realm.render_frame(&mut backend),
         "nothing was owed, so nothing presented"
     );
-    assert_eq!(backend.render_scene_calls, 1);
+    assert_eq!(backend.submit_calls, 1);
     assert!(
         !realm.needs_redraw(),
         "a frame with nothing owed leaves the loop nothing to come back for"
@@ -803,26 +788,26 @@ fn the_withheld_retry_is_bounded_and_then_parks() {
     // Every attempt is withheld, including the one that exhausts the budget,
     // so what the test measures is WHERE the loop stopped rather than that it
     // stopped only because a frame finally succeeded.
-    let mut backend = TestRasterBackend::new(|_, _| Ok(PresentDisposition::NotShown));
+    let mut backend = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
 
     for _ in 0..=budget {
         assert!(
-            !realm.render_frame_entered(&mut backend),
+            !realm.render_frame(&mut backend),
             "a withheld frame never reports a present"
         );
     }
     assert_eq!(
-        backend.render_scene_calls,
+        backend.submit_calls,
         budget + 1,
         "the budget is spent by RE-ARMING: {budget} retained attempts, then \
          the attempt that exhausts it and runs without arming another"
     );
 
     for _ in 0..8 {
-        let _ = realm.render_frame_entered(&mut backend);
+        let _ = realm.render_frame(&mut backend);
     }
     assert_eq!(
-        backend.render_scene_calls,
+        backend.submit_calls,
         budget + 1,
         "once the budget is spent and nothing else is dirty the loop must \
          park: no further frame may reach the backend"
@@ -844,13 +829,13 @@ fn an_exhausted_budget_opens_a_fresh_burst_after_an_event() {
     let budget = super::MAX_NOT_SHOWN_RETRIES;
     let realm = mount_box();
     // Every attempt is withheld, before and after the event.
-    let mut backend = TestRasterBackend::new(|_, _| Ok(PresentDisposition::NotShown));
+    let mut backend = ScriptedSink::new(|_, _| SubmitVerdict::NotShown);
 
     // Spend the budget and park.
     for _ in 0..=budget {
-        assert!(!realm.render_frame_entered(&mut backend));
+        assert!(!realm.render_frame(&mut backend));
     }
-    let parked = backend.render_scene_calls;
+    let parked = backend.submit_calls;
     assert_eq!(
         parked,
         budget + 1,
@@ -867,11 +852,11 @@ fn an_exhausted_budget_opens_a_fresh_burst_after_an_event() {
     realm.request_redraw();
 
     assert!(
-        !realm.render_frame_entered(&mut backend),
+        !realm.render_frame(&mut backend),
         "the event-driven frame is still withheld"
     );
     assert_eq!(
-        backend.render_scene_calls,
+        backend.submit_calls,
         parked + 1,
         "the event-driven withheld frame must reach the backend"
     );
@@ -894,19 +879,19 @@ fn an_exhausted_budget_opens_a_fresh_burst_after_an_event() {
 fn a_presented_frame_clears_the_withheld_streak() {
     let budget = super::MAX_NOT_SHOWN_RETRIES;
     let realm = mount_box();
-    let mut backend = TestRasterBackend::new(move |call, _| {
+    let mut backend = ScriptedSink::new(move |call, _| {
         // Present exactly once, on the attempt that exhausts the budget;
         // withhold every other attempt.
-        Ok(if call == budget {
-            PresentDisposition::Presented
+        if call == budget {
+            SubmitVerdict::Presented
         } else {
-            PresentDisposition::NotShown
-        })
+            SubmitVerdict::NotShown
+        }
     });
 
     // Spend the budget, ending on the scripted present.
     for i in 0..=budget {
-        let presented = realm.render_frame_entered(&mut backend);
+        let presented = realm.render_frame(&mut backend);
         assert_eq!(
             presented,
             i == budget,
@@ -928,17 +913,17 @@ fn a_presented_frame_clears_the_withheld_streak() {
     });
     realm.request_redraw();
 
-    let _ = realm.render_frame_entered(&mut backend);
-    let after_event = backend.render_scene_calls;
+    let _ = realm.render_frame(&mut backend);
+    let after_event = backend.submit_calls;
     assert_eq!(
         after_event,
         budget + 2,
         "the event-driven frame reached the backend"
     );
 
-    let _ = realm.render_frame_entered(&mut backend);
+    let _ = realm.render_frame(&mut backend);
     assert_eq!(
-        backend.render_scene_calls,
+        backend.submit_calls,
         after_event + 1,
         "a withheld frame AFTER the present must retain again — the streak it \
          inherited was cleared, not carried over as an exhausted budget"
@@ -967,8 +952,8 @@ fn no_present_commit_also_replays_held_pointer_input() {
             PointerType::Touch,
         ));
 
-    let mut backend = TestRasterBackend::single_shot(Ok(PresentDisposition::NoDamage));
-    assert!(!realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::single_shot(SubmitVerdict::NoPresent);
+    assert!(!realm.render_frame(&mut backend));
 
     assert!(
         primary.held_pointer_input().borrow().is_empty(),
@@ -1000,8 +985,8 @@ fn failed_update_frame_holds_pointer_sequence_until_new_tree_commits() {
         .attach_root_widget(&root)
         .expect("switching root attaches");
 
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
     assert_eq!(
         realm.presentations.primary().frame_commit_state(),
         FrameCommitState::Committed
@@ -1018,8 +1003,8 @@ fn failed_update_frame_holds_pointer_sequence_until_new_tree_commits() {
         owner.mark_needs_paint(root);
     });
     realm.request_redraw();
-    let mut failed_backend = TestRasterBackend::single_shot(Err(EngineError::Timeout));
-    assert!(!realm.render_frame_entered(&mut failed_backend));
+    let mut failed_backend = ScriptedSink::single_shot(SubmitVerdict::Failed);
+    assert!(!realm.render_frame(&mut failed_backend));
     assert!(matches!(
         realm.presentations.primary().frame_commit_state(),
         FrameCommitState::Uncommitted { .. }
@@ -1053,7 +1038,7 @@ fn failed_update_frame_holds_pointer_sequence_until_new_tree_commits() {
         owner.mark_needs_paint(root);
     });
     realm.request_redraw();
-    assert!(realm.render_frame_entered(&mut backend));
+    assert!(realm.render_frame(&mut backend));
     assert_eq!(
         primary.held_pointer_input().borrow().len(),
         0,
@@ -1071,8 +1056,8 @@ fn failed_update_frame_holds_pointer_sequence_until_new_tree_commits() {
 #[test]
 fn production_addressed_input_collapses_a_thousand_held_moves() {
     let (realm, hits) = mount_hit_counting_root();
-    let mut backend = TestRasterBackend::always_presents();
-    assert!(realm.render_frame_entered(&mut backend));
+    let mut backend = ScriptedSink::always_presents();
+    assert!(realm.render_frame(&mut backend));
     let clean_hits = hits.load(Ordering::Relaxed);
 
     realm.pipeline_for_test().with_mut(|owner| {
@@ -1080,8 +1065,8 @@ fn production_addressed_input_collapses_a_thousand_held_moves() {
         owner.mark_needs_paint(root);
     });
     realm.request_redraw();
-    let mut failed_backend = TestRasterBackend::single_shot(Err(EngineError::Timeout));
-    assert!(!realm.render_frame_entered(&mut failed_backend));
+    let mut failed_backend = ScriptedSink::single_shot(SubmitVerdict::Failed);
+    assert!(!realm.render_frame(&mut failed_backend));
 
     let primary = realm.presentations.primary();
     let pointer = PointerId::new(100).expect("test pointer id is nonzero");

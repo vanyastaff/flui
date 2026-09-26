@@ -10,14 +10,23 @@ use flui_widgets::{MediaQuery, MediaQueryData};
 
 /// Owner-local shared cell for the root media-query data.
 ///
-/// The realm mutates it from platform signals; the [`MediaQueryRoot`]
+/// The realm mutates it from platform signals; the `MediaQueryRoot`
 /// element reads it during build. Deliberately `!Send` (`Rc`/`RefCell`):
 /// every write side runs on the realm's owner thread.
 #[derive(Default)]
-pub(crate) struct MediaQuerySource {
+pub struct MediaQuerySource {
     data: RefCell<MediaQueryData>,
     rebuild: RefCell<Option<(u64, RebuildHandle)>>,
     generation: Cell<u64>,
+}
+
+impl std::fmt::Debug for MediaQuerySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MediaQuerySource")
+            .field("data", &self.data.borrow())
+            .field("generation", &self.generation.get())
+            .finish_non_exhaustive()
+    }
 }
 
 impl MediaQuerySource {
@@ -26,7 +35,7 @@ impl MediaQuerySource {
     /// A mutation before the root wrapper has mounted (bootstrap ordering)
     /// just updates the cell — the first build reads the fresh value, so
     /// the missing handle loses nothing.
-    pub(crate) fn update(&self, mutate: impl FnOnce(&mut MediaQueryData)) {
+    pub fn update(&self, mutate: impl FnOnce(&mut MediaQueryData)) {
         let changed = {
             let mut data = self.data.borrow_mut();
             let before = data.clone();

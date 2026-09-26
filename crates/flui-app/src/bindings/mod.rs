@@ -11,7 +11,7 @@
 //!   binding here actually stores and clones, `PipelineOwner` being the
 //!   value it wraps
 //! - [`UpdateScheduler`] - Frame scheduling (from flui-scheduler)
-//! - [`RenderingFlutterBinding`] - Rendering integration (local); per-window
+//! - [`RenderingFlutterBinding`] - Rendering integration (from flui-runtime); per-window
 //!   semantics enablement/announce/event delivery lives on `SemanticsHost`
 //!   (`flui_runtime::semantics_host`), not on a process-wide accessibility
 //!   binding
@@ -27,13 +27,11 @@
 //! ```
 //!
 //! FLUI does not compose a matching struct. The frame loop, render pipeline,
-//! and input dispatch live directly on `UiRealm` (`crate::app::ui_realm`,
+//! and input dispatch live directly on `UiRealm` (`flui_runtime::ui_realm`,
 //! owner-affine, one per window) — there is no separate process-scoped
 //! service host; the retired `AppBinding` and its combined-binding type
 //! alias dissolved into `UiRealm` and the loop-scoped `AppRuntime`
 //! (`crate::app::runtime`).
-
-mod renderer_binding;
 
 // Re-export bindings from their respective crates
 pub use flui_interaction::binding::GestureBinding;
@@ -43,6 +41,6 @@ pub use flui_rendering::{
 };
 pub use flui_scheduler::UpdateScheduler;
 pub use flui_view::WidgetsBinding;
-// Re-export the local binding
-pub use renderer_binding::RenderingFlutterBinding;
-pub(crate) use renderer_binding::redirty_pipeline_root;
+// The per-presentation rendering binding lives with the realm in the frame
+// runtime (ADR-0083); its public path stays `flui_app::bindings`.
+pub use flui_runtime::renderer_binding::RenderingFlutterBinding;

@@ -23,12 +23,12 @@
 //!   └── semantics enablement  - fan-out via add_semantics_enabled_listener;
 //!                               per-presentation announce/event delivery
 //!                               lives on that presentation's SemanticsHost
-//!                               (flui_runtime::semantics_host), not here
+//!                               (crate::semantics_host), not here
 //! ```
 //!
 //! # Usage
 //!
-//! For most applications, use `UiRealm` instead (`crate::app::ui_realm`),
+//! For most applications, use `UiRealm` instead ([`crate::ui_realm`]),
 //! which owns this binding plus widgets support per window. Use
 //! `RenderingFlutterBinding` directly only when working with the rendering
 //! layer without widgets.
@@ -101,7 +101,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 /// - Coordinating frame production
 /// - Fanning out semantics-enabled changes to listeners (per-presentation
 ///   announce/event delivery lives on that presentation's `SemanticsHost`
-///   instead — see `flui_runtime::semantics_host`)
+///   instead — see `crate::semantics_host`)
 ///
 /// # Thread Safety
 ///
@@ -118,7 +118,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 /// this binding cannot cross a thread boundary:
 ///
 /// ```compile_fail
-/// use flui_app::bindings::RenderingFlutterBinding;
+/// use flui_runtime::renderer_binding::RenderingFlutterBinding;
 /// use flui_rendering::binding::RendererBinding;
 ///
 /// let binding = RenderingFlutterBinding::new();
@@ -276,7 +276,7 @@ impl RenderingFlutterBinding {
         // `SharedEngineServices` at realm install (`app/runtime.rs`).
         //
         // Semantics enablement is per-presentation now (`SemanticsHost`,
-        // `flui_runtime::semantics_host`) -- there is no process-wide semantics
+        // `crate::semantics_host`) -- there is no process-wide semantics
         // binding for this method to touch.
         tracing::info!("RenderingFlutterBinding initialized");
     }
@@ -295,8 +295,8 @@ impl RenderingFlutterBinding {
     // reintroducing a second copy of this state. Every consumer (the
     // `RendererBinding` trait impl below and `UiRealm::defer_first_frame`
     // / `allow_first_frame` / `send_frames_to_engine` in
-    // `crates/flui-app/src/app/ui_realm/`, which the production
-    // `render_frame_entered` path actually calls) forwards to this struct.
+    // `crates/flui-runtime/src/ui_realm/`, which the production
+    // `render_frame` path actually calls) forwards to this struct.
     //
     // # Flutter Equivalence (oracle tag `3.44.0`)
     //
@@ -335,7 +335,7 @@ impl RenderingFlutterBinding {
     // Layout/compositing-bits/paint always run; only the composite-to-engine
     // step (and Flutter's semantics flush alongside it) is gated. FLUI's
     // production mirror of this split lives in `UiRealm::
-    // render_frame_entered` (`crates/flui-app/src/app/ui_realm/`): the
+    // render_frame` (`crates/flui-runtime/src/ui_realm/`): the
     // build/layout/paint pipeline always runs in `draw_frame_entered`, and
     // only the GPU `render_scene` (present) call is gated on
     // `send_frames_to_engine`. FLUI's `run_frame` does not yet gate its own
@@ -511,7 +511,7 @@ impl RenderingFlutterBinding {
     /// When enabled, the framework will maintain the semantics tree. This no
     /// longer forwards to a process-wide semantics binding (retired —
     /// enablement is per-presentation now, via `SemanticsHost`
-    /// (`flui_runtime::semantics_host`)): a caller that owns a presentation's
+    /// (`crate::semantics_host`)): a caller that owns a presentation's
     /// `SemanticsHost` and wants it to track this toggle registers
     /// [`Self::add_semantics_enabled_listener`] and calls
     /// `SemanticsHost::set_platform_semantics_enabled` from that listener.

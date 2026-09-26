@@ -7,8 +7,9 @@
 //! continue. Both outcomes surface as a [`FrameFailureReport`] instead of a
 //! silent skip: `tracing` carries the structured diagnostics, and an embedder
 //! that registered a [`FrameFailureHandler`] via
-//! [`AppConfig::with_frame_failure_handler`](crate::AppConfig::with_frame_failure_handler)
-//! receives the typed report synchronously on the UI thread.
+//! `flui_app::AppConfig::with_frame_failure_handler` receives the typed
+//! report synchronously on the UI thread. The types here are re-exported at
+//! the root of `flui_app`, which is where an application names them.
 //!
 //! The report deliberately carries the presentation's own
 //! [`PresentationAddress`] — ownership identity, per issue #561's
@@ -34,7 +35,7 @@ use flui_view::{LifecycleHook, RecoveredAt, RecoveredPanic as ViewRecoveredPanic
 /// # Examples
 ///
 /// ```
-/// use flui_app::PanicText;
+/// use flui_runtime::frame_failure::PanicText;
 ///
 /// assert_eq!(PanicText::Verbatim("boom".into()).to_string(), "boom");
 /// assert_eq!(PanicText::Redacted.to_string(), flui_foundation::diagnostics::REDACTED_VALUE);
@@ -70,14 +71,7 @@ impl fmt::Display for PanicText {
 /// treat reports as potentially sensitive and apply their own policy before
 /// formatting or forwarding them.
 ///
-/// # Examples
-///
-/// ```
-/// use flui_app::{AppConfig, FrameFailureDetail};
-///
-/// let config = AppConfig::new().with_frame_failure_detail(FrameFailureDetail::Redacted);
-/// assert_eq!(config.frame_failure_detail, FrameFailureDetail::Redacted);
-/// ```
+/// An application selects it with `flui_app::AppConfig::with_frame_failure_detail`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum FrameFailureDetail {
@@ -95,6 +89,17 @@ impl Default for FrameFailureDetail {
             Self::Redacted
         }
     }
+}
+
+/// The text a caught panic `payload` reports as under `detail`: for a host
+/// that contains a panic outside the realm's frame (a window installer, say)
+/// and must apply the same retention policy.
+///
+/// A free function rather than a method so it stays off the surface of
+/// `FrameFailureDetail`, which `flui-app` re-exports.
+#[must_use]
+pub fn panic_text(detail: FrameFailureDetail, payload: &(dyn Any + Send)) -> PanicText {
+    detail.panic_text(payload).0
 }
 
 impl FrameFailureDetail {
@@ -178,7 +183,7 @@ impl FrameFailureDetail {
 /// # Examples
 ///
 /// ```
-/// use flui_app::FailureDisposition;
+/// use flui_runtime::frame_failure::FailureDisposition;
 ///
 /// fn outcome(disposition: FailureDisposition) -> &'static str {
 ///     match disposition {
@@ -328,8 +333,7 @@ pub struct FrameFailureReport {
 
 /// An embedder-registered callback receiving every [`FrameFailureReport`].
 ///
-/// Register via
-/// [`AppConfig::with_frame_failure_handler`](crate::AppConfig::with_frame_failure_handler).
+/// Register via `flui_app::AppConfig::with_frame_failure_handler`.
 /// Invoked synchronously on the UI thread, from inside the frame pump,
 /// after the presentation's complete frame attempt finishes and its recovery
 /// queue is drained. A frame with multiple recovered occurrences delivers

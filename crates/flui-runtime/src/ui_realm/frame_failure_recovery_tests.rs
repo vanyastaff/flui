@@ -10,9 +10,9 @@ use flui_view::{IntoView, StatelessView, View, element::ElementKind};
 use flui_widgets::{Column, ListView, SizedBox};
 
 use super::*;
-use crate::app::frame_failure::{FrameFailureHandler, FrameFailureKind, PanicText};
-use crate::app::raster_test_support::TestRasterBackend;
-use crate::{FailureDisposition, LifecycleHook, RecoveredAt};
+use crate::frame_failure::{FailureDisposition, FrameFailureHandler, FrameFailureKind, PanicText};
+use crate::testing::ScriptedSink;
+use flui_view::{LifecycleHook, RecoveredAt};
 
 #[derive(Debug, Clone, PartialEq)]
 struct ObservedFailure {
@@ -71,10 +71,10 @@ fn install_collecting_handler(realm: &UiRealm) -> Arc<Mutex<Vec<ObservedFailure>
     observed
 }
 
-fn render_attempt(realm: &UiRealm, backend: &mut TestRasterBackend) -> bool {
+fn render_attempt(realm: &UiRealm, backend: &mut ScriptedSink) -> bool {
     realm.request_redraw();
     realm.mark_rendered();
-    catch_unwind(AssertUnwindSafe(|| realm.render_frame_entered(backend)))
+    catch_unwind(AssertUnwindSafe(|| realm.render_frame(backend)))
         .expect("the realm boundary must contain the intentional panic")
 }
 
@@ -87,7 +87,7 @@ fn real_recovery_location() -> RecoveredAt {
             message: "location fixture",
         })
         .expect("root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     let _presented = render_attempt(&realm, &mut backend);
     let observed = observed.lock().expect("failure collector mutex");
     let ObservedKind::Recovered { at, .. } = observed[0].kind else {
@@ -290,7 +290,7 @@ fn real_build_recovery_is_reported_once_in_the_same_attempt() {
             message: "same-attempt recovery",
         })
         .expect("root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     let _first_presented = render_attempt(&realm, &mut backend);
     let _second_presented = render_attempt(&realm, &mut backend);
 
@@ -320,7 +320,7 @@ fn explicit_verbatim_keeps_a_non_string_lifecycle_payload_redacted() {
             should_panic: Rc::new(Cell::new(true)),
         })
         .expect("root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     assert!(render_attempt(&realm, &mut backend));
 
     let observed = observed.lock().expect("failure collector mutex");
@@ -350,7 +350,7 @@ fn release_default_keeps_a_non_string_lifecycle_payload_redacted() {
             should_panic: Rc::new(Cell::new(true)),
         })
         .expect("root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     assert!(render_attempt(&realm, &mut backend));
 
     let observed = observed.lock().expect("failure collector mutex");
@@ -373,7 +373,7 @@ fn real_bug_prefixed_recovery_preserves_classification_and_full_attribution() {
             observed_element_id: Rc::clone(&observed_element_id),
         })
         .expect("root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     let _presented = render_attempt(&realm, &mut backend);
 
     let observed = observed.lock().expect("failure collector mutex");
@@ -423,7 +423,7 @@ fn two_real_recoveries_from_one_attempt_are_delivered_in_production_queue_order(
     realm
         .attach_root_widget(&TwoPanickingChildren)
         .expect("root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     let _presented = render_attempt(&realm, &mut backend);
 
     let observed = observed.lock().expect("failure collector mutex");
@@ -460,7 +460,7 @@ fn real_lazy_recovery_is_reported_in_the_servicing_attempt_without_duplicates() 
             |_| -> Option<flui_view::BoxedView> { panic!("lazy builder recovery") },
         ))
         .expect("lazy root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
 
     let _servicing_attempt_presented = render_attempt(&realm, &mut backend);
     let reports_after_service = observed.lock().expect("failure collector mutex").len();
@@ -509,7 +509,7 @@ fn recovered_reports_precede_tail_and_scene_frame_drops() {
             .presentations
             .primary()
             .set_segment_probe(phase, Some(Box::new(|| panic!("terminal probe"))));
-        let mut backend = TestRasterBackend::always_presents();
+        let mut backend = ScriptedSink::always_presents();
         assert!(!render_attempt(&realm, &mut backend));
 
         let observed = observed.lock().expect("failure collector mutex");
@@ -533,7 +533,7 @@ fn contained_report_exposes_the_existing_streak_until_clean_delivery_finishes() 
             message: "recovery while streak is live",
         })
         .expect("root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     assert!(render_attempt(&realm, &mut backend));
     assert_eq!(
         observed.lock().expect("failure collector mutex")[0].consecutive_failures,
@@ -584,7 +584,7 @@ fn recovered_report_precedes_a_real_pipeline_drop() {
             >);
         owner.set_root_id(Some(root_id));
     });
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     assert!(!render_attempt(&realm, &mut backend));
 
     let observed = observed.lock().expect("failure collector mutex");
@@ -615,7 +615,7 @@ fn recovery_reports_keep_their_presentation_addresses_isolated() {
             },
         )
         .expect("second root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     assert!(render_attempt(&realm, &mut backend));
 
     let observed = observed.lock().expect("failure collector mutex");
@@ -638,7 +638,7 @@ fn empty_drain_emits_nothing() {
     realm
         .attach_root_widget(&SizedBox::new(10.0, 10.0))
         .expect("root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     assert!(render_attempt(&realm, &mut backend));
     assert!(observed.lock().expect("failure collector mutex").is_empty());
     assert!(realm.widgets().take_recovered_panics().is_empty());
@@ -654,7 +654,7 @@ fn default_recovery_privacy_matches_the_build_profile() {
             message: "profile-sensitive recovery",
         })
         .expect("root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     assert!(render_attempt(&realm, &mut backend));
 
     let observed = observed.lock().expect("failure collector mutex");
@@ -685,7 +685,7 @@ fn panicking_handler_does_not_escape_or_duplicate_recovery() {
             message: "contained producer",
         })
         .expect("root attaches");
-    let mut backend = TestRasterBackend::always_presents();
+    let mut backend = ScriptedSink::always_presents();
     let _first_presented = render_attempt(&realm, &mut backend);
     let _second_presented = render_attempt(&realm, &mut backend);
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);

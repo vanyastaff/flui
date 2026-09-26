@@ -44,6 +44,19 @@ flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 flui-platform-api = { workspace = true }
 # Window sizes and geometry.
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+# The realm core (ADR-0083 move 4): the widget tree a presentation hosts
+# (`WidgetsBinding`, `GlobalKeyScope`; `runtime-internals` is the seam a
+# realm drives it through), its render pipeline, the realm-owned scheduler,
+# the vsync the root's animations tick on, and the root wrappers the realm
+# installs above every root widget (`FocusRoot`, `GestureArenaScope`,
+# `VsyncScope`, `MediaQuery`).
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["runtime-internals"] }
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
+flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
+flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
+flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
+# The realm's bounded owner inbox.
+crossbeam-channel = { workspace = true }
 parking_lot = { workspace = true }
 # `SpawnError`'s messages.
 thiserror = { workspace = true }
@@ -74,13 +87,23 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # `flui-view`'s and `flui-interaction`'s are; no type crosses it, so the second
 # copy of this crate in the test build never meets the first.
 flui-testing = { workspace = true }
-# `AsyncDriver`, the frame lane that
-# `frame_lane_makes_progress_while_background_lanes_are_saturated` drives
-# while the execution services' background lanes are full.
-flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 # Capturing emitted fields is how the semantics host's privacy contract on its
-# announce/event fallbacks is checked.
+# announce/event fallbacks, and what a contained frame failure reports to the
+# log, are checked.
 tracing-subscriber = { workspace = true }
+# The realm tests: the headless platform's windows and capability fakes
+# (`headless_platform`, `FakeTextInput`, `FakeHaptics`, `FakeAccessibility`),
+# a dev edge only, so the shipped crate still links no backend; the concrete
+# render objects some tests mount; AccessKit action requests driven the way
+# an adapter would; and `!Send` pins on the realm.
+flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
+accesskit = { workspace = true }
+static_assertions = { workspace = true }
+# The test-only hooks of the crates the realm drives: `push_pending_child_
+# request_for_test`, `register_layout_builder_for_test`.
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
 
 # Executing wasm32 unit tests: the execution services' sequential backend is
 # pinned by lib tests that run on wasm32 (`cargo xtask wasm-test`). Pinned to

@@ -30,20 +30,10 @@
 //! *ownership* (one struct, one thread-local slot instead of two), not the
 //! dispatch/teardown semantics those functions implement.
 
-use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
 
 use flui_foundation::{PresentationId, RealmId};
-use flui_scheduler::{AsyncDriver, LocalPostFrameLane, UpdateScheduler};
-
-// `RealmServices` and `next_identity` below are used unconditionally by
-// `ui_realm/` (every `UiRealm` constructor resolves its own
-// `RealmServices` now, on every platform `UiRealm` itself compiles for,
-// including iOS's stub). `AppRuntime` and `SharedEngineServices` further
-// down are the loop-scoped composition root that only the non-iOS runners
-// (`runner.rs`'s desktop/android/web dispatch) instantiate, so they -- and
-// the imports only they need -- stay `#[cfg(not(target_os = "ios"))]`,
-// matching the cfg the absorbed `RealmHost`/`OWNER_PLATFORM_HOST` carried.
+use flui_scheduler::UpdateScheduler;
 
 use std::cell::OnceCell;
 use std::collections::VecDeque;
@@ -75,7 +65,7 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// Owns the process-level accessibility flags and initializes the shared font
 /// system through [`flui_painting::shared_font_system`]. Semantics state belongs
 /// to each presentation's `SemanticsHost`; scheduling belongs to each realm
-/// (see [`RealmServices::construct`]). The retired `SemanticsBinding`
+/// (see `flui_runtime`'s `RealmServices::construct`). The retired `SemanticsBinding`
 /// singleton no longer exists at all (its enablement/announce/event state
 /// moved to the per-presentation `SemanticsHost` instead — see
 /// `flui_runtime::semantics_host` — since that half of the old binding was a
@@ -83,7 +73,7 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// read-mostly accessibility flags stayed process-scoped, and this struct
 /// now owns that value directly. There is no `scheduler` field here any
 /// more: each realm now owns its own `UpdateScheduler` strong root (see
-/// [`RealmServices::construct`]), so there is no process-level scheduler
+/// `RealmServices::construct` in `flui_runtime`), so there is no process-level scheduler
 /// left for this struct to resolve.
 pub(crate) struct SharedEngineServices {
     /// OS-level accessibility flags (reduced motion, high contrast, ...).
@@ -151,56 +141,6 @@ impl SharedEngineServices {
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
         }
     }
-}
-
-/// What [`UiRealm::construct`](super::ui_realm) needs to wire itself up: a
-/// fresh, realm-owned [`UpdateScheduler`] — the strong root — plus the
-/// `local_post_frame_lane()` and `async_driver()` handles derived from that
-/// SAME scheduler (formerly `UpdateScheduler::instance()` calls inside
-/// `ui_realm/` itself). Resolved once, here — never inside `ui_realm/`
-/// itself, so `UiRealm`'s own source performs zero `::instance()` calls.
-pub(crate) struct RealmServices {
-    pub(crate) local_post_frame: LocalPostFrameLane,
-    pub(crate) async_driver: AsyncDriver,
-    pub(crate) scheduler: UpdateScheduler,
-}
-
-impl RealmServices {
-    /// Builds a brand-new `UpdateScheduler` for a realm about to be constructed.
-    /// Every `UiRealm` constructor (`new`, `with_capacity`, `for_test`,
-    /// `for_test_with_text_input`) calls this instead of reaching for a
-    /// process-global scheduler — each realm gets its OWN strong root, torn
-    /// down when the realm drops, none of them taking a process-host
-    /// parameter any more (the retired `AppBinding` is gone).
-    pub(crate) fn construct() -> Self {
-        let scheduler = UpdateScheduler::new();
-        Self {
-            local_post_frame: scheduler.new_local_post_frame_lane(),
-            async_driver: scheduler.async_driver().clone(),
-            scheduler,
-        }
-    }
-}
-
-/// Monotonic incarnation counter: every successfully constructed realm gets
-/// a fresh `RealmId` generation, so a recreated realm never compares equal
-/// to its predecessor. Moved here from `ui_realm/`: identity minting is an
-/// `AppRuntime` concern now, not a `UiRealm` one — a real multi-window
-/// `AppRuntime` registry mints slots from here once it exists.
-static NEXT_INCARNATION: AtomicU32 = AtomicU32::new(1);
-
-/// Mints a fresh, process-unique `(RealmId, PresentationId)` pair. Slot 0 is
-/// the single-window slot; a real multi-window `AppRuntime` registry mints
-/// slots once the element forest lets a realm host multiple presentations —
-/// the shape is the deliverable now, single-window the only instantiation.
-pub(crate) fn next_identity() -> (RealmId, PresentationId) {
-    let incarnation = NEXT_INCARNATION.fetch_add(1, Ordering::Relaxed);
-    let generation = NonZeroU32::new(incarnation)
-        .expect("BUG: incarnation counter starts at 1 and only increments");
-    (
-        RealmId::new_gen(0, generation),
-        PresentationId::new_gen(0, generation),
-    )
 }
 
 // ============================================================================
@@ -565,7 +505,7 @@ pub(super) enum QuitNotification {
 ///
 /// The realm-facing API is `RealmId`-keyed: `realms` is [`RealmRegistry`],
 /// an insertion-ordered map of any number of hosted realms (issue #555) —
-/// `next_identity` above already mints from a shape that never needed to
+/// the realm's `next_identity` (`flui_runtime`) already mints from a shape that never needed to
 /// change for this to land.
 pub(crate) struct AppRuntime {
     /// Every hosted realm, keyed by `RealmId`, in mount (insertion) order.
@@ -1676,6 +1616,8 @@ impl Drop for AppRuntime {
 
 #[cfg(all(test, not(target_os = "ios")))]
 mod app_runtime_tests {
+    use std::num::NonZeroU32;
+
     use super::*;
 
     #[test]
@@ -2087,21 +2029,6 @@ mod wake_and_clipboard_tests {
             "the wake hook wired onto the scheduler must be a Send handle captured \
              at install time, not one resolved from a thread-local at fire time -- a foreign \
              OS thread has no such thread-local to resolve"
-        );
-    }
-}
-
-#[cfg(test)]
-mod identity_tests {
-    use super::*;
-
-    #[test]
-    fn next_identity_mints_distinct_generations() {
-        let (realm_a, _) = next_identity();
-        let (realm_b, _) = next_identity();
-        assert_ne!(
-            realm_a, realm_b,
-            "every mint must produce a fresh generation, never repeating"
         );
     }
 }
