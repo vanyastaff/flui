@@ -174,3 +174,9 @@ layer = 5
 tier = "K"
 tier-kind = "internal"
 order = 1
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "key::registry::REGISTRY_STACK", exit = "ADR-0094", reason = "the owner thread's GlobalKey registry stack, `ManuallyDrop` for a hot-reload cdylib" },
+    { item = "key::registry::TEST_REGISTRY", exit = "ADR-0094", reason = "the fixture registry lane beside the stack, `ManuallyDrop` for a hot-reload cdylib" },
+    { item = "view::error::ERROR_VIEW_BUILDER", exit = "ADR-0097", reason = "the process-wide error view builder; it becomes realm configuration" },
+]

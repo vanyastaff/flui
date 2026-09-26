@@ -126,3 +126,9 @@ layer = 2
 tier = "S"
 tier-kind = "internal"
 order = 4
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "routing::interaction_lane::ACTIVE_LANES", exit = "ADR-0091", reason = "the owner thread's stack of active interaction lanes" },
+    { item = "routing::interaction_lane::LOCAL_LANES", exit = "ADR-0091", reason = "the owner thread's registry of local interaction lanes" },
+    { item = "routing::interaction_lane::NEXT_LANE_ID", grant = "ADR-0097", class = "counter", reason = "lane IDs, advanced by `try_update` through a reference so exhaustion is an error" },
+]

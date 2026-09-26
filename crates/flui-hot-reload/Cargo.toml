@@ -66,3 +66,12 @@ reach-exceptions = [
     { to = "windows", exit = "ADR-0094", reason = "the dlopen loader's Win32 LibraryLoader calls" },
     { to = "android_log-sys", exit = "ADR-0094", reason = "the loader's Android logging" },
 ]
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "dispatch::REQUEST_REBUILD", exit = "ADR-0094", reason = "the rebuild hook slot of the dlopen reload path" },
+    { item = "plugin::app_plugin!::__FLUI_APP_NEXT_THREAD_TOKEN", exit = "ADR-0094", reason = "per-image lane token source that `app_plugin!` emits into the plugin crate" },
+    { item = "plugin::app_plugin!::__FLUI_APP_PINNED_THREAD", exit = "ADR-0094", reason = "the lane pinned by the first build call, emitted into the plugin crate" },
+    { item = "plugin::app_plugin!::__FLUI_APP_STATE", exit = "ADR-0094", reason = "the plugin image's pipeline slot, emitted into the plugin crate" },
+    { item = "worker::REGISTRATION_SESSION", exit = "ADR-0094", reason = "worker build registrations collected during `flui_worker_init`" },
+    { item = "worker::WORKER_BUILDS", exit = "ADR-0094", reason = "the registered worker build functions of the dlopen reload path" },
+]
