@@ -905,18 +905,33 @@ fn planted_findings(planted: &Planted) -> anyhow::Result<Vec<Finding>> {
 
 /// `(missed, false positives)` of the rule over the self-test crates.
 fn self_test_diff() -> anyhow::Result<(Vec<Identity>, Vec<Identity>)> {
-    let mut seen = BTreeSet::new();
+    let mut seen = Vec::new();
     for planted in &PLANTED {
         seen.extend(planted_findings(planted)?.iter().map(Finding::identity));
     }
-    let expected: BTreeSet<Identity> = EXPECTED
+    let expected = EXPECTED
         .iter()
         .map(|&(from, to, kind)| (from.to_owned(), to.to_owned(), kind))
         .collect();
-    Ok((
-        expected.difference(&seen).cloned().collect(),
-        seen.difference(&expected).cloned().collect(),
-    ))
+    Ok(multiset_diff(expected, seen))
+}
+
+/// `(expected - seen, seen - expected)` counting repeats: a finding reported
+/// twice where it is planted once is a false positive.
+fn multiset_diff(expected: Vec<Identity>, seen: Vec<Identity>) -> (Vec<Identity>, Vec<Identity>) {
+    let mut balance: BTreeMap<Identity, isize> = BTreeMap::new();
+    for identity in expected {
+        *balance.entry(identity).or_default() += 1;
+    }
+    for identity in seen {
+        *balance.entry(identity).or_default() -= 1;
+    }
+    let (mut missed, mut extra) = (Vec::new(), Vec::new());
+    for (identity, count) in balance {
+        let side = if count > 0 { &mut missed } else { &mut extra };
+        side.extend(std::iter::repeat_n(identity, count.unsigned_abs()));
+    }
+    (missed, extra)
 }
 
 /// `cargo xtask module-dag --self-test`.
