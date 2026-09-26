@@ -12,7 +12,7 @@ mod check_changed;
 mod checks;
 mod deps;
 mod exec;
-mod facade;
+pub(crate) mod facade;
 mod web;
 
 use std::path::Path;

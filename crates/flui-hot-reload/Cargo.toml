@@ -62,3 +62,7 @@ layer = 6
 tier = "pkg"
 tier-kind = "official"
 order = 4
+reach-exceptions = [
+    { to = "windows", exit = "ADR-0094", reason = "the dlopen loader's Win32 LibraryLoader calls" },
+    { to = "android_log-sys", exit = "ADR-0094", reason = "the loader's Android logging" },
+]
