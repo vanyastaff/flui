@@ -4,10 +4,8 @@
 //! - a read in `build` subscribes the building element through the context
 //!   production builds with (`BuildCtx`, reached by a real mount), and a write
 //!   rebuilds exactly that element;
-//! - a handle of the wrong type is a typed error on every path, never a panic.
-//!
-//! The production-context test also runs in release (`cargo xtask test`), so
-//! the half of the build path gated on `debug_assertions` is covered too.
+//! - a handle of the wrong type is a typed error on every path, never a panic,
+//!   and a write through one marks no reader.
 
 // ADR-0027: ElementBuildContext's test seam takes Arc<RwLock<…>> over a !Send
 // owner graph; do not restore Send + Sync to satisfy clippy.
@@ -265,4 +263,40 @@ fn a_signal_handle_of_the_wrong_type_is_a_typed_error() {
 
     assert_eq!(n.peek(&graph, |v| *v), Ok(7), "the slot is untouched");
     assert!(graph.readers_of(n.slot()).is_empty());
+}
+
+#[test]
+fn a_write_through_the_wrong_type_rebuilds_no_reader() {
+    let owners = MountOwners::fresh();
+    let graph = owners.build_owner.reactive().clone();
+    let sig = graph.signal(1u32);
+    let reader_builds = Rc::new(Cell::new(0));
+    let reader_id = Rc::new(Cell::new(None));
+    let root = SigReader {
+        sig,
+        builds: Rc::clone(&reader_builds),
+        id: Rc::clone(&reader_id),
+    };
+
+    let mut binding = HeadlessBinding::new();
+    binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
+    binding.pump_frame(FRAME);
+    let reader = reader_id.get().expect("the reader built");
+    assert_eq!(graph.readers_of(sig.slot()), [reader], "the slot has a reader");
+    assert_eq!(reader_builds.get(), 1);
+
+    let wrong = Signal::<String>::from_slot(sig.slot());
+    assert_eq!(
+        wrong.set(&graph, String::from("x")),
+        Err(SignalError::TypeMismatch {
+            index: sig.slot().index(),
+            expected: type_name::<String>(),
+        })
+    );
+    binding.pump_frame(FRAME);
+
+    assert_eq!(reader_builds.get(), 1, "a refused write rebuilds nobody");
+    let report = binding.build_owner_mut().last_frame_build_report();
+    assert_eq!(report.count(RebuildReason::SignalChange), 0, "{report:?}");
+    assert_eq!(sig.peek(&graph, |v| *v), Ok(1), "the slot is untouched");
 }
