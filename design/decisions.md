@@ -48,10 +48,10 @@ the owner's answers settle the open questions; acceptance still happens ADR by A
 | D9 | One owner thread hosts isolated realms | Verified; the real bar to parallel layout named; **changed by the owner** (`!Send` flip before the first crates.io publication) | [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) |
 | D10 | IME talks to a pull text-store contract | Changed by owner decision O8 (read + edit + asynchronous lock) | [ADR-0090](../docs/adr/ADR-0090-ime-pull-text-store-contract.md) |
 | D11 | `runtime-internals` becomes `#[doc(hidden)] __runtime` | Re-checked; not challenged by verification; scheduled as its own step in the migration plan | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) |
-| D12 | Text shapes per realm over Parley | Verified | [ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) |
+| D12 | Text shapes per realm over Parley | Verified; gate 1 met by a prototype (2026-09-26): swash rasterizes, glifo not adopted; still Proposed | [ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md) |
 | D13 | One raster thread per `GpuContext` (revision of ADR-0045) | Changed by verification | [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) |
 | D14 | Router is the primary navigation API | Changed by verification (handle from `init_state`); **changed by the owner** (every push URL-addressable, dialogs and overlays excluded) | [ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md) |
-| D15 | Hot reload through Subsecond behind a runtime hook | Changed by verification (no facade `hot-reload` feature) | [ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) |
+| D15 | Hot reload through Subsecond behind a runtime hook | Changed by verification (no facade `hot-reload` feature); the Windows spike (2026-09-26) failed (stock dx cannot patch; app-crate statics and thread-locals break); the dlopen path stays until a later spike | [ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) |
 | D16 | `flui-protocol` is the typed schema shared by tests, devtools and agents | Changed by verification (amends ADR-0080 by settling its in-process transport; does not reverse it); accepted in part on 2026-09-26 (the crate, the lifted wire vocabulary and the moved semantics enums) | [ADR-0095](../docs/adr/ADR-0095-agent-protocol-schema-crate.md) |
 | D17 | Packages build on `flui-sdk`; the facade names none of them | Changed by owner decision O6 (the reason is semver, not a cycle) | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
 | G | Process-global state is gated; one trampoline cell | Changed by verification (scan every `static`, seed by scan); **accepted in part** 2026-09-26 (the gate and its seeded allowlist) | [ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md) |
@@ -340,6 +340,15 @@ production.
 **Verified.** `FONT_SYSTEM` was confirmed. ADR-0092 supersedes ADR-0077 and must carry its
 rasterization precondition as a gate.
 
+**Spike (2026-09-26).** The rasterization gate is met by a prototype: swash, driven directly,
+rasterizes Parley-shaped glyphs into the unmodified atlas with a key on font blob identity; glifo
+is not adopted (slower, experimental, vertical-only hinting, its own atlas). Keys stay stable only
+while a raster-side registry holds each blob, since fontique's shared source cache holds blobs
+weakly. FLUI adds no lock, but fontique locks internally on a local cache miss, shared across
+realms. Two items stay open for the migration: a neutral run that does not carry
+`parley::FontData`, and a door for feeding new faces to the atlas-owned rasterizer. ADR-0092
+stays Proposed (its Context).
+
 ### D13. One raster thread per `GpuContext`
 
 **Context.** [ADR-0045](../docs/adr/ADR-0045-raster-lane.md) is Proposed and describes GPU
@@ -396,7 +405,14 @@ cycle; the probe reproduces a cycle (`cyclic package dependency`, exit 101) only
 depends on the crate that holds the optional edge, and `flui-hot-reload` depends on neither
 `flui-app` nor the facade. The reason that stands is ADR-0088's: core must not name an official
 package. The feature, the facade edges and the `flui-app → flui-hot-reload` edge are deleted in
-the change that moves hot reload into packages. Subsecond on Windows is unverified.
+the change that moves hot reload into packages.
+
+**Spike (2026-09-26, Windows only).** It failed: stock `dx` cannot patch a FLUI app on Windows
+x64 (its missing-symbol stub clobbers `__chkstk`'s argument), and with a patched `dx` a logic
+edit keeps state but app-crate statics are zeroed per patch and app-crate thread-locals crash.
+Patches reach only calls the hook wraps, so the hook sits at the element seam, not per frame.
+ADR-0094 §5 now keeps the dlopen path on a platform where the spike fails, until a later spike
+passes; macOS and Android were not run.
 
 ### D16. `flui-protocol` is the typed schema
 
@@ -822,7 +838,8 @@ Versioned upstream escape modules exist only with a consumer, except `flui_sdk::
 
 A three-day spike first, then a decision (#9);
 [ADR-0017](../docs/adr/ADR-0017-build-during-layout-callback-seam.md) stays in force until then.
-Confirmed.
+Confirmed. Spike ran 2026-09-26; ADR-0017 stays (its Revisited section names the conditions for a
+follow-up spike).
 
 #### A11. New scanner gates amend ADR-0078
 
