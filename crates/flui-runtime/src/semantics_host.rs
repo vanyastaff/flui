@@ -152,6 +152,8 @@ impl SemanticsHost {
     }
 
     /// Returns the number of outstanding semantics handles.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     #[must_use]
     pub fn outstanding_handles(&self) -> usize {
         self.handle_count.load(Ordering::Relaxed)
@@ -181,6 +183,8 @@ impl SemanticsHost {
     }
 
     /// Returns whether the platform has requested semantics.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
     #[must_use]
     pub fn platform_semantics_enabled(&self) -> bool {
         self.platform_semantics_enabled.load(Ordering::Relaxed)
@@ -336,10 +340,13 @@ impl std::fmt::Debug for SemanticsHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SemanticsHost")
             .field("semantics_enabled", &self.semantics_enabled())
-            .field("outstanding_handles", &self.outstanding_handles())
+            .field(
+                "outstanding_handles",
+                &self.handle_count.load(Ordering::Relaxed),
+            )
             .field(
                 "platform_semantics_enabled",
-                &self.platform_semantics_enabled(),
+                &self.platform_semantics_enabled.load(Ordering::Relaxed),
             )
             .finish_non_exhaustive()
     }

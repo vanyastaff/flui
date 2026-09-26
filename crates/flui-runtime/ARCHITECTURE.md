@@ -23,7 +23,8 @@ lists them and what each waits on.
   is no static, thread-local or process-global state.
 - **Test hooks stay behind `test-support`.** Items that exist for tests, or
   that have no production caller yet (`HeldPointerQueue::append`/`len`,
-  `SemanticsHost::ensure_semantics`, the announce/event delivery), compile
+  `SemanticsHost::ensure_semantics`, `outstanding_handles` and
+  `platform_semantics_enabled`, the announce/event delivery), compile
   only under `cfg(test)` or the `test-support` feature, which only dev edges
   enable. Wiring one into production removes its gate in the same change.
 
