@@ -170,6 +170,11 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Fixed
 
+- **Cross-thread signal writes reach the right window** (`flui-app`, `flui-view`, ADR-0085 §1):
+  a `SignalWrite` command runs against the graph of the presentation that minted the slot
+  instead of always the primary's, where a write to a secondary window's signal failed with
+  `ForeignGraph`. A write whose presentation has closed is dropped and logged. `SignalSlot::graph`
+  and `SignalSender::slot` expose the routing key.
 - **`Color::with_opacity` rounds the alpha** (`flui-types`): `0.5` gives 128 and `0.12` gives
   31, the nearest of the 256 steps; it truncated, so a colour built from an opacity could be
   one step more transparent than asked. Flutter's `withOpacity` rounds the same way.
