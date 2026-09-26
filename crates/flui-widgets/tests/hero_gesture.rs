@@ -23,16 +23,17 @@ use flui_foundation::ValueKey;
 use flui_view::ViewExt;
 use flui_view::prelude::*;
 
-use super::back_gesture::BackGestureController;
-use super::hero::{Hero, HeroTag};
-use super::hero_controller::HeroController;
-use super::navigator::{Navigator, NavigatorHandle};
-use super::observer::NavigatorObserver;
-use super::overlay_route::SimpleRoute;
-use super::page_route::PageRoute;
-use super::route::RouteId;
-use crate::testing::harness::{Harness, mount};
-use crate::{Center, SizedBox};
+use flui_widgets::__test_access::{
+    BackGestureController, HeroControllerProbe as _, HeroTag, NavigatorProbe as _,
+    OverlayProbe as _, RouteProbe as _,
+};
+use flui_widgets::navigator::{
+    Hero, HeroController, Navigator, NavigatorHandle, NavigatorObserver, PageRoute, RouteId,
+    SimpleRoute,
+};
+use flui_widgets::{Center, SizedBox};
+
+use crate::common::harness::{Harness, mount};
 
 const TRANSITION: Duration = Duration::from_millis(300);
 
@@ -385,7 +386,7 @@ fn cancel_release_preserves_the_from_pages_sibling_state() {
 
     let creations_for_page = Arc::clone(&creations);
     let from_route = PageRoute::<i32>::new(move |_ctx, _p, _s| {
-        crate::Stack::new(vec![
+        flui_widgets::Stack::new(vec![
             Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 18.0))
                 .transition_on_user_gestures(true)
                 .into_view()
@@ -502,7 +503,7 @@ fn complete_release_pops_to_the_destination_route_and_the_flight_lands() {
 /// place (`ModalRoute`'s own doc: "a covered modal with `maintain_state ==
 /// false` is unmounted"; pinned directly by
 /// `modal_covered_route_without_maintain_state_is_unmounted_and_loses_its_state`
-/// in `modal_route_tests.rs`, once the covering transition completes), so
+/// in `modal_route.rs`, once the covering transition completes), so
 /// there is nothing to measure — the deferred path correctly measures
 /// nothing, exactly as it would for a programmatic transition onto the same
 /// unmeasurable destination

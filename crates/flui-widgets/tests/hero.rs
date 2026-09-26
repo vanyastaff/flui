@@ -15,9 +15,11 @@ use flui_view::ViewExt;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::hero::{Hero, HeroHandle, HeroRegistry, HeroScope, HeroTag};
-use crate::testing::harness::{Harness, mount};
-use crate::{Center, Column, MainAxisSize, SizedBox, Text};
+use flui_widgets::__test_access::{HeroHandle, HeroRegistry, HeroScope, HeroTag};
+use flui_widgets::navigator::Hero;
+use flui_widgets::{Center, Column, MainAxisSize, SizedBox, Text};
+
+use crate::common::harness::{Harness, mount};
 
 fn tag(name: &'static str) -> HeroTag {
     HeroTag::new(ValueKey::new(name))

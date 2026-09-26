@@ -24,17 +24,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::transition_route::TransitionHandle;
 use flui_animation::AnimationStatus;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
+use flui_widgets::__test_access::{PageRouteProbe as _, RouteProbe as _, TransitionHandle};
+use flui_widgets::SizedBox;
+use flui_widgets::navigator::{Navigator, NavigatorHandle, PageRoute, RouteAnimation, SimpleRoute};
 use parking_lot::Mutex;
 
-use super::navigator::{Navigator, NavigatorHandle};
-use super::overlay_route::{RouteAnimation, SimpleRoute};
-use super::page_route::PageRoute;
-use crate::SizedBox;
-use crate::testing::harness::{Harness, mount};
+use crate::common::harness::{Harness, mount};
 
 const TRANSITION: Duration = Duration::from_millis(300);
 
@@ -226,7 +224,7 @@ fn clearing_offstage_restores_the_live_animations() {
 /// `mark_entry_needs_build` is *not* what does this — deleting it leaves this test
 /// green. What it does control is the **overlay entry**: the `Offstage` wrapper and
 /// the barrier, which live in the entry's builder rather than in the scope. That is
-/// pinned by `modal_route_tests::modal_offstage_keeps_the_page_but_drops_the_barrier`,
+/// pinned by `modal_route::modal_offstage_keeps_the_page_but_drops_the_barrier`,
 /// which *does* go red when it is deleted.
 ///
 /// Two mechanisms, two tests. Neither doc claims the other's job.

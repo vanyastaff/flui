@@ -452,6 +452,9 @@ The constitution requires `///` doc comments on every public item and `//!` over
 ## Test Conventions
 
 - **Unit tests** live in the same file under `#[cfg(test)] mod tests { ... }`.
+  `flui-widgets` unit tests cannot use the headless harness: `flui_widgets::testing` is
+  `cfg(not(test))`, so a test that mounts a tree lives in `crates/flui-widgets/tests/`
+  (ADR-0083 §4).
 - **Integration tests** live in `tests/` per crate. Cross-crate pipelines are tested in `flui-engine`.
   A crate's root `tests/*.rs` files compile as modules of **one** integration-test
   binary (`tests/main.rs` with `#[path]` module declarations, `autotests = false`

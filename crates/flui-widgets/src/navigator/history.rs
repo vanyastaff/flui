@@ -191,7 +191,6 @@ impl RouteEntry {
         self.route.id()
     }
 
-    #[cfg(test)]
     pub(crate) fn state(&self) -> RouteLifecycle {
         self.state
     }
@@ -713,7 +712,6 @@ impl RouteHistory {
     }
 
     /// The state of `id`'s entry, or `None` once disposed and dropped.
-    #[cfg(test)]
     pub(crate) fn state_of(&self, id: RouteId) -> Option<RouteLifecycle> {
         self.entries
             .iter()

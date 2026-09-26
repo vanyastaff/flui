@@ -489,7 +489,7 @@ impl ViewState<ModalScope> for ModalScopeState {
 ///
 /// Private: `modal_route_is_not_exported` keeps it that way until its parity +
 /// sign-off gate.
-pub(crate) struct ModalRoute<T> {
+pub struct ModalRoute<T> {
     transition: TransitionRoute<T>,
     inner: Arc<ModalInner>,
 }
@@ -500,7 +500,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     ///
     /// Defaults match Flutter's `ModalRoute`: `maintain_state = true`,
     /// `offstage = false`, no barrier colour, not dismissible, not opaque.
-    pub(crate) fn new(duration: Duration, page: RoutePageBuilder) -> Self {
+    pub fn new(duration: Duration, page: RoutePageBuilder) -> Self {
         let inner = Arc::new(ModalInner {
             offstage: AtomicBool::new(false),
             maintain_state: AtomicBool::new(true),
@@ -552,7 +552,8 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     }
 
     /// `TransitionRoute.opaque`. `PageRoute` sets this; `PopupRoute` does not.
-    pub(crate) fn opaque(mut self, opaque: bool) -> Self {
+    #[must_use]
+    pub fn opaque(mut self, opaque: bool) -> Self {
         self.transition = self.transition.opaque(opaque);
         self
     }
@@ -588,7 +589,8 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     }
 
     /// `ModalRoute.maintainState` (`routes.dart:1893`).
-    pub(crate) fn maintain_state(self, maintain_state: bool) -> Self {
+    #[must_use]
+    pub fn maintain_state(self, maintain_state: bool) -> Self {
         self.inner
             .maintain_state
             .store(maintain_state, Ordering::Relaxed);
@@ -596,7 +598,8 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     }
 
     /// `barrierDismissible` (`routes.dart:1804`).
-    pub(crate) fn barrier_dismissible(self, dismissible: bool) -> Self {
+    #[must_use]
+    pub fn barrier_dismissible(self, dismissible: bool) -> Self {
         self.inner
             .barrier_dismissible
             .store(dismissible, Ordering::Relaxed);
@@ -613,7 +616,8 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     }
 
     /// `barrierColor` (`routes.dart:1774`).
-    pub(crate) fn barrier_color(self, color: Color) -> Self {
+    #[must_use]
+    pub fn barrier_color(self, color: Color) -> Self {
         *self.inner.barrier_color.lock() = Some(color);
         self
     }
@@ -623,15 +627,16 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
     ///
     /// Production since ADR-0021: `HeroController` drives `set_offstage` through
     /// the copy this route publishes into the navigator's registry at `install()`.
-    pub(crate) fn handle(&self) -> ModalHandle {
+    #[must_use]
+    pub fn handle(&self) -> ModalHandle {
         ModalHandle {
             inner: Arc::clone(&self.inner),
         }
     }
 
     /// The transition handle, for driving the animation by hand.
-    #[cfg(test)]
-    pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {
+    #[must_use]
+    pub fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.transition.handle()
     }
 }
@@ -656,8 +661,16 @@ impl<T> fmt::Debug for ModalRoute<T> {
 /// This is FLUI's `route.offstage = …` (`routes.dart:1951`). `HeroController` holds
 /// one per route, looked up by [`RouteId`] through the navigator's registry.
 #[derive(Clone)]
-pub(crate) struct ModalHandle {
+pub struct ModalHandle {
     inner: Arc<ModalInner>,
+}
+
+impl fmt::Debug for ModalHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ModalHandle")
+            .field("offstage", &self.inner.offstage.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
 }
 
 /// `dead_code` in the lib target: `HeroController` is this handle's only production
@@ -700,7 +713,7 @@ impl ModalHandle {
     ///
     /// (ADR-0021 added the proxy swap. Until then this doc read "minus the
     /// animation-proxy swap", which was true when written and a trap afterwards.)
-    pub(crate) fn set_offstage(&self, offstage: bool) {
+    pub fn set_offstage(&self, offstage: bool) {
         if self.inner.offstage.swap(offstage, Ordering::Relaxed) == offstage {
             return; // `if (_offstage == value) return;`
         }
@@ -712,7 +725,9 @@ impl ModalHandle {
         changed_internal_state(&self.inner);
     }
 
-    pub(crate) fn offstage(&self) -> bool {
+    /// `ModalRoute.offstage`.
+    #[must_use]
+    pub fn offstage(&self) -> bool {
         self.inner.offstage.load(Ordering::Relaxed)
     }
 
@@ -729,7 +744,8 @@ impl ModalHandle {
 
     /// The heroes mounted in this route's page — FLUI's `Hero._allHeroesFor(route)`
     /// (`heroes.dart:279`), as a registry rather than an element walk.
-    pub(crate) fn heroes(&self) -> HeroRegistry {
+    #[must_use]
+    pub fn heroes(&self) -> HeroRegistry {
         self.inner.heroes.clone()
     }
 
@@ -738,7 +754,8 @@ impl ModalHandle {
     /// publishes for its own current top `PageRoute`. FLUI's
     /// `Hero._allHeroesFor(route.subtreeContext, …, navigator)`
     /// (`heroes.dart:279-333`), including the nested-navigator branch.
-    pub(crate) fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
+    #[must_use]
+    pub fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
         self.inner.heroes.all_heroes()
     }
 
@@ -747,7 +764,8 @@ impl ModalHandle {
     /// `HeroController::maybe_start`'s gesture-pop sync fast path — a
     /// destination that does not maintain state may not be laid out yet, so
     /// only a `true` here can skip the offstage measurement dance.
-    pub(crate) fn maintain_state(&self) -> bool {
+    #[must_use]
+    pub fn maintain_state(&self) -> bool {
         self.inner.maintain_state.load(Ordering::Relaxed)
     }
 
@@ -755,8 +773,7 @@ impl ModalHandle {
     /// subclass overrides, and `changedInternalState` republishes it. This is the
     /// same thing with a cell behind it, which is what lets a test observe the
     /// republish.
-    #[cfg(test)]
-    pub(crate) fn set_maintain_state(&self, maintain_state: bool) {
+    pub fn set_maintain_state(&self, maintain_state: bool) {
         if self
             .inner
             .maintain_state
@@ -913,7 +930,7 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
     /// the flush, under the history lock, where a user callback calling back
     /// into the navigator deadlocks. The flush owes the fan-out through
     /// `FlushOutcome::pop_invoked`, and `apply` delivers it via
-    /// [`ModalHandle::notify_pop_invoked`] outside the lock.
+    /// `ModalHandle::notify_pop_invoked` outside the lock.
     fn on_pop_invoked(&mut self, did_pop: bool) {
         self.transition.on_pop_invoked(did_pop);
     }

@@ -21,16 +21,17 @@ use flui_view::ViewExt;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::hero::{Hero, HeroHandle, HeroMode, HeroTag};
-use super::hero_controller::{FlightDirection, HeroController};
-use super::navigator::{Navigator, NavigatorHandle};
-use super::observer::NavigatorObserver;
-use super::overlay_route::SimpleRoute;
-use super::page_route::{PageRoute, PopupRoute};
-use super::transition_route::TransitionHandle;
-use crate::testing::harness::{Harness, mount};
-use crate::testing::overlay_probe::OverlayProbe as _;
-use crate::{Center, ColoredBox, Column, MainAxisSize, SizedBox};
+use flui_widgets::__test_access::{
+    HeroControllerProbe as _, HeroHandle, HeroTag, NavigatorProbe as _, OverlayProbe as _,
+    RouteProbe as _, TransitionHandle,
+};
+use flui_widgets::navigator::{
+    FlightDirection, Hero, HeroController, HeroMode, Navigator, NavigatorHandle, NavigatorObserver,
+    PageRoute, PopupRoute, SimpleRoute,
+};
+use flui_widgets::{Center, ColoredBox, Column, MainAxisSize, SizedBox};
+
+use crate::common::harness::{Harness, mount};
 
 const TRANSITION: Duration = Duration::from_millis(300);
 

@@ -97,7 +97,7 @@ flui-platform-api = { workspace = true, optional = true }
 # Enable this crate's own `testing` feature for its integration tests:
 # `tests/common/mod.rs` is a thin re-export of `flui_widgets::testing`, which
 # only exists on the feature-gated build of the library the test binaries
-# link (the unit-test build reaches it via `cfg(test)` instead).
+# link. The unit-test build never has it (`cfg(not(test))`, ADR-0083 §4).
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-widgets = { path = ".", features = ["testing"] }
 # ADR-0074 §8 go/no-go benchmarks (`benches/signals_rebuilds.rs`).

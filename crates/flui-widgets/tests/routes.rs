@@ -2,7 +2,7 @@
 //!
 //! Everything here imports from `flui_widgets::prelude` or the crate root — a
 //! missing `pub use` fails to compile rather than fails an assertion. And unlike
-//! the in-crate `page_route_tests`, nothing reaches for a `TransitionHandle`: the
+//! `page_route.rs`, nothing reaches for a `TransitionHandle`: the
 //! transitions are driven by pumping a real `Vsync`, which is the only clock an
 //! app author has.
 //!

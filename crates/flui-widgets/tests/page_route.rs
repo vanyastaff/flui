@@ -8,9 +8,10 @@
 //! `:422-496` (`_updateSecondaryAnimation`). Expected values are read from the
 //! reference, not from running this code.
 //!
-//! These drive the animation by hand, through the `#[cfg(test)]`
-//! `transition_handle()`. `tests/routes.rs` is the public counterpart: it pushes
-//! the same routes through the prelude and drives a real `Vsync`.
+//! These drive the animation by hand, through the temporary test-access probe
+//! `RouteProbe::transition_handle()` (ADR-0083 §4). `tests/routes.rs` is the
+//! public counterpart: it pushes the same routes through the prelude and drives
+//! a real `Vsync`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -20,16 +21,16 @@ use flui_types::Color;
 use flui_types::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
+use flui_widgets::__test_access::{
+    BackGestureController, NavigatorProbe as _, OverlayEntryProbe as _, RouteProbe as _,
+    TransitionHandle,
+};
+use flui_widgets::navigator::{
+    Navigator, NavigatorHandle, PageRoute, PopupRoute, RouteAnimation, RouteId, SimpleRoute,
+};
+use flui_widgets::{Directionality, SizedBox};
 
-use crate::Directionality;
-
-use super::navigator::{Navigator, NavigatorHandle};
-use super::overlay_route::{RouteAnimation, SimpleRoute};
-use super::page_route::{PageRoute, PopupRoute};
-use super::route::RouteId;
-use super::transition_route::TransitionHandle;
-use crate::SizedBox;
-use crate::testing::harness::{Harness, mount};
+use crate::common::harness::{Harness, mount};
 
 /// A leaf whose `create_state` is counted, so "was this subtree destroyed?" is
 /// observable.
@@ -771,8 +772,7 @@ fn back_gesture_enabled_preserves_page_state_across_a_cancelled_gesture() {
     // Simulate a released-but-cancelled drag: partway back, then released
     // with no fling and value > 0.5, so the oracle's `dragEnd` "stay" branch
     // animates forward to 1.0 rather than popping.
-    let gesture =
-        super::back_gesture::BackGestureController::new(navigator.clone(), top, controller.clone());
+    let gesture = BackGestureController::new(navigator.clone(), top, controller.clone());
     gesture.drag_update(0.2); // value -> 0.8
     let still_settling = gesture.drag_end(0.0);
     assert!(still_settling, "the stay animation keeps running");

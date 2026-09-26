@@ -114,19 +114,31 @@ pub(crate) enum RouteCommand {
 /// `Box<dyn ErasedRoute>` inside a `Mutex`, so a route cannot reach another —
 /// this was flagged early on as needing a lookup handle. The
 /// registry is that handle.
+///
+/// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
+/// module is private, so nothing else names it.
 #[derive(Clone)]
-pub(crate) struct TransitionPeer {
+pub struct TransitionPeer {
     /// The route's **primary** animation, controller-backed.
-    pub(crate) animation: Arc<dyn Animation<f32>>,
+    pub animation: Arc<dyn Animation<f32>>,
     /// `nextRoute.canTransitionFrom(this)` (`routes.dart:561`), asked of the
     /// route *above*.
-    pub(crate) can_transition_from: bool,
+    pub can_transition_from: bool,
     /// Which family of routes this one coordinates transitions with.
-    pub(crate) group: TransitionGroup,
+    pub group: TransitionGroup,
     /// Fires when the route is disposed — Flutter's `Route.completed`
     /// (`routes.dart:115-122`), which `_setSecondaryAnimation` awaits to release
     /// its reference to a gone route's animation (`:503-509`).
     pub(crate) completed: Arc<CompletedSignal>,
+}
+
+impl std::fmt::Debug for TransitionPeer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransitionPeer")
+            .field("can_transition_from", &self.can_transition_from)
+            .field("group", &self.group)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The family a route coordinates its transitions with.
@@ -144,7 +156,7 @@ pub(crate) struct TransitionPeer {
 /// A `PopupRoute` pushed over a `PageRoute` therefore drives no secondary
 /// animation on the page, matching `PageRoute.canTransitionTo(popup) == false`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum TransitionGroup {
+pub enum TransitionGroup {
     /// `TransitionRoute`'s defaults: coordinates with anything else that also
     /// leaves both predicates at `true`. `PopupRoute` lives here.
     #[default]

@@ -33,8 +33,9 @@
 //! No Navigator 2.0/page-list API, restoration, `PopScope`,
 //! `LocalHistoryRoute`, `HeroControllerScope`, `NavigationNotification`,
 //! pointer-cancelling wrapper, or per-route focus scope that Flutter's `build` adds
-//! (`:5946-5998`). `TransitionRoute` / `ModalRoute` stay private implementation
-//! details behind public `PageRoute` / `PopupRoute`.
+//! (`:5946-5998`). `TransitionRoute` / `ModalRoute` stay implementation details
+//! behind public `PageRoute` / `PopupRoute`, not public API (nameable only
+//! through the doc-hidden, temporary `__test_access`, ADR-0083 §4).
 //!
 //! Named-route generation *is* here — see the `Named routes` impl block below
 //! and `named_route.rs`. What that feature deliberately leaves out is
@@ -923,8 +924,8 @@ impl NavigatorHandle {
 
     /// How many attached observers drive hero flights — the auto-default plus any
     /// hand-attached `HeroController`s. Test-facing: pins that automatic attach adds
-    /// exactly one, and that a manual controller suppresses it.
-    #[cfg(test)]
+    /// exactly one, and that a manual controller suppresses it. Read through
+    /// `crate::__test_access::NavigatorProbe`.
     pub(crate) fn hero_observer_count(&self) -> usize {
         self.shared
             .observers
@@ -1537,8 +1538,9 @@ impl NavigatorHandle {
         self.shared.history.lock().is_present(route)
     }
 
-    /// The lifecycle state of `id`'s entry. Test-facing.
-    #[cfg(test)]
+    /// The lifecycle state of `id`'s entry. Test-facing, read through
+    /// `crate::__test_access::NavigatorProbe`; the same applies to the four
+    /// accessors below.
     pub(crate) fn route_state(&self, id: RouteId) -> Option<super::lifecycle::RouteLifecycle> {
         self.shared.history.lock().state_of(id)
     }
@@ -1546,7 +1548,6 @@ impl NavigatorHandle {
     /// The overlay entry `id`'s route presents. Test-facing: `opaque` and
     /// `maintain_state` are written through a `RouteBinding`, and this is the only
     /// way to read back what a route actually wrote.
-    #[cfg(test)]
     pub(crate) fn entry_of(&self, id: RouteId) -> Option<OverlayEntry> {
         self.shared.registries.entries.lock().get(&id).cloned()
     }
@@ -1556,7 +1557,6 @@ impl NavigatorHandle {
     /// Test-facing. Must track the route count exactly: an entry left behind for
     /// a disposed route is invisible in the overlay (it was removed from *its*
     /// list) but leaks here, forever.
-    #[cfg(test)]
     pub(crate) fn tracked_entry_count(&self) -> usize {
         self.shared.registries.entries.lock().len()
     }
@@ -1566,14 +1566,12 @@ impl NavigatorHandle {
     /// Test-facing, and for the same reason as `tracked_entry_count`: a cell left
     /// behind for a disposed route resolves to `None` (its page is unmounted), so
     /// the leak is invisible through `route_subtree` and visible only here.
-    #[cfg(test)]
     pub(crate) fn tracked_subtree_count(&self) -> usize {
         self.shared.registries.subtrees.lock().len()
     }
 
     /// `id`'s subtree cell, half by half. Test-facing; see
     /// [`RouteSubtreeCell::parts`](super::subtree::RouteSubtreeCell::parts).
-    #[cfg(test)]
     pub(crate) fn route_subtree_parts(&self, id: RouteId) -> Option<super::subtree::SubtreeParts> {
         self.shared
             .registries
@@ -2362,8 +2360,7 @@ impl NavigatorHandle {
     ///
     /// Test-facing: `did_change_top` no longer asserts on it (the over-strict
     /// `is_current` check was removed because FLUI's re-entrant notification model
-    /// breaks it).
-    #[cfg(test)]
+    /// breaks it). Read through `crate::__test_access::NavigatorProbe`.
     pub(crate) fn is_current(&self, id: RouteId) -> bool {
         self.current() == Some(id)
     }

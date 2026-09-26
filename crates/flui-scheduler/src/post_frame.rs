@@ -213,6 +213,24 @@ impl LocalPostFrameHandle {
         Ok(())
     }
 
+    /// The number of owner-local callbacks queued on this handle's lane and
+    /// not yet drained by a completed frame; `0` once the lane is closed.
+    ///
+    /// A self-rescheduling callback (one that queues its successor from
+    /// inside its own run) keeps this at `1` after every frame, so a reading
+    /// of `0` after a frame is how an owner proves such a loop has stopped.
+    ///
+    /// A test probe, not part of the documented API: no production path reads
+    /// it. It exists so an owner crate's integration tests can observe the
+    /// lane without a test-only global counter.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn pending_len(&self) -> usize {
+        self.lane
+            .upgrade()
+            .map_or(0, |lane| lane.queue.borrow().len())
+    }
+
     /// Whether this handle targets `other`.
     #[must_use]
     pub fn targets_same_scheduler(&self, other: &UpdateScheduler) -> bool {
@@ -319,6 +337,27 @@ mod tests {
         scheduler.execute_frame_with_lane(&lane);
 
         assert_eq!(*log.lock().expect("log mutex"), [1, 2, 3]);
+    }
+
+    /// `pending_len` counts what is queued on the handle's own lane, drops
+    /// to zero once a frame drains it, and reads zero on a closed lane.
+    #[test]
+    fn pending_len_counts_queued_local_callbacks_until_the_frame_drains() {
+        let scheduler = UpdateScheduler::new();
+        let lane = scheduler.new_local_post_frame_lane();
+        let handle = lane.local_handle();
+        assert_eq!(handle.pending_len(), 0);
+
+        handle.schedule_local(|_| {}).expect("lane alive");
+        handle.schedule_local(|_| {}).expect("lane alive");
+        assert_eq!(handle.pending_len(), 2);
+
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(handle.pending_len(), 0, "the frame drained the lane");
+
+        handle.schedule_local(|_| {}).expect("lane alive");
+        drop(lane);
+        assert_eq!(handle.pending_len(), 0, "a closed lane has nothing pending");
     }
 
     /// A local callback that re-registers another LOCAL callback (the direct

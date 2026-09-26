@@ -65,7 +65,7 @@
 // callers.
 //
 // The `navigator` module needs no such allow: every item there has a production
-// caller or a `#[cfg(test)]`.
+// caller, a `#[cfg(test)]`, or a `crate::__test_access` re-export (ADR-0083 §4).
 #![expect(dead_code)]
 
 mod entry;
@@ -279,8 +279,8 @@ impl OverlayHandle {
             .is_some_and(RebuildHandle::is_active)
     }
 
-    /// The entries, bottom → top. Read by `testing::overlay_probe`, which is
-    /// how tests (in this crate and its siblings) inspect the list.
+    /// The entries, bottom → top. Read by `crate::__test_access::OverlayProbe`,
+    /// which is how this crate's integration tests inspect the list.
     pub(crate) fn ids_bottom_to_top(&self) -> Vec<OverlayEntryId> {
         self.shared
             .entries

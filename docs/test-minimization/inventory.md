@@ -71,7 +71,7 @@ rechecking during that crate's own baseline pass, not a minimization target by i
   pure functions tested with 3 literal cases each.
   → `rstest` or `proptest` (clamp invariant: output always within `[min, max]`). Est. 6 → 2.
   Confidence: high.
-- **Navigator/route/hero lifecycle scenarios** (`navigator_tests.rs` and siblings, ~223 tests):
+- **Navigator/route/hero lifecycle scenarios** (`crates/flui-widgets/tests/navigator.rs` and siblings, ~223 tests):
   superficially repetitive names, but each verb (push/pop/remove/replace) drives a genuinely
   distinct state transition. **False positive** — flag for shared-helper extraction only
   (boilerplate, not behavior, is duplicated); do not parameterize away the distinct scenarios.

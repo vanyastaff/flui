@@ -11,6 +11,11 @@
 //! | 4. Route subtree | `route.subtreeContext` (`routes.dart:1966`) | `route_subtree_*` |
 //! | 5. Overlay access | `navigator.overlay` (`heroes.dart:990`) | `overlay_*` |
 
+// ADR-0027: these tests capture owner-local handles in shared cells. The
+// library carries the same lint expectation; an integration test is a
+// separate crate, so it is repeated here.
+#![expect(clippy::arc_with_non_send_sync)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -21,17 +26,16 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
 use parking_lot::Mutex;
 
-use super::binding::TransitionGroup;
-use super::navigator::{Navigator, NavigatorHandle};
-use super::observer::NavigatorObserver;
-use super::overlay_route::{RouteAnimation, SimpleRoute};
-use super::page_route::{PageRoute, PopupRoute};
-use super::route::RouteId;
-use super::subtree::RouteSubtree;
-use crate::testing::harness::{Harness, mount};
-use crate::testing::overlay_probe::OverlayProbe as _;
-use crate::{InsertPosition, OverlayEntry};
-use crate::{Opacity, SizedBox, Text};
+use flui_widgets::__test_access::{
+    NavigatorProbe as _, OverlayEntryProbe as _, OverlayProbe as _, RouteSubtree, TransitionGroup,
+};
+use flui_widgets::navigator::{
+    Navigator, NavigatorHandle, NavigatorObserver, PageRoute, PopupRoute, RouteAnimation, RouteId,
+    SimpleRoute,
+};
+use flui_widgets::{InsertPosition, Opacity, OverlayEntry, SizedBox, Text};
+
+use crate::common::harness::{Harness, mount};
 
 /// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page sits
 /// under `Stack(fit: expand)` (`routes.dart:2350-2356`, merged into one entry here).

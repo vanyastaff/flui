@@ -207,57 +207,12 @@ fn resolve_horizontal_axis_direction(
     if reverse { base.opposite() } else { base }
 }
 
+// The mounted `resolve_alignment` test lives in
+// `crates/flui-widgets/tests/directionality.rs`.
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::SizedBox;
-    use flui_types::Alignment;
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    /// A directional alignment resolves to opposite edges under the two
-    /// directions, through a real mounted `Directionality`.
-    ///
-    /// The whole point of the seam: `AlignmentGeometry::resolve(is_ltr)` was
-    /// already correct and already tested, and the parity corpus called it at
-    /// the call site with a literal `false` because "no widget-surface path
-    /// reads one" (`tests/parity/align_test.rs`). This is that path.
-    #[test]
-    fn a_directional_alignment_resolves_against_a_mounted_directionality() {
-        use flui_types::layout::AlignmentDirectional;
-
-        #[derive(Clone, StatelessView)]
-        struct Probe {
-            seen: Rc<Cell<Option<Alignment>>>,
-        }
-
-        impl StatelessView for Probe {
-            fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-                self.seen.set(Some(resolve_alignment(
-                    ctx,
-                    AlignmentDirectional::new(-1.0, 0.0),
-                )));
-                SizedBox::shrink()
-            }
-        }
-
-        for (direction, expected_x) in [(TextDirection::Ltr, -1.0), (TextDirection::Rtl, 1.0)] {
-            let seen = Rc::new(Cell::new(None));
-            let _harness = crate::testing::harness::mount(Directionality::new(
-                direction,
-                Probe {
-                    seen: Rc::clone(&seen),
-                },
-            ));
-            let resolved = seen.get().expect("the probe must have built");
-            assert!(
-                (resolved.x - expected_x).abs() < f32::EPSILON,
-                "start is the {direction:?} reading edge, so x must be \
-                 {expected_x}, got {}",
-                resolved.x
-            );
-        }
-    }
 
     #[test]
     fn directionality_new_wires_direction_and_child() {

@@ -30,8 +30,10 @@
 //! `EntryInner → closure → state → handle → EntryInner` cycle Rust would leak
 //! forever (ADR-0025); the loyal-but-leaking alternative loses.
 
-// The mechanism ships with a crate-private surface: its only in-crate
-// producers are the tests until the public surface lands beside the first
+// The mechanism ships without a public surface: the module is `pub(crate)`,
+// its handles are nameable outside the crate only through the doc-hidden,
+// temporary `__test_access` (ADR-0083 §4), and its only producers are the
+// tests until the public surface lands beside the first
 // Catalog consumer (ADR-0025) — the seam-before-consumer shape
 // `hero_controller.rs` documents. Deleting and re-deriving later is how a
 // seam stops matching the ADR that specified it.
@@ -88,18 +90,21 @@ impl EntryInner {
 
 /// A pending local-history entry, built by the caller and consumed by
 /// [`LocalHistoryHandle::add`].
-pub(crate) struct LocalHistoryEntry {
+#[derive(Default)]
+pub struct LocalHistoryEntry {
     on_remove: Option<OnRemoveCallback>,
 }
 
 impl LocalHistoryEntry {
-    pub(crate) fn new() -> Self {
+    /// An entry with no `on_remove` callback.
+    #[must_use]
+    pub fn new() -> Self {
         Self { on_remove: None }
     }
 
     /// Called when this entry leaves the history (`routes.dart:711`).
     #[must_use]
-    pub(crate) fn on_remove(mut self, callback: impl Fn() + 'static) -> Self {
+    pub fn on_remove(mut self, callback: impl Fn() + 'static) -> Self {
         self.on_remove = Some(Rc::new(callback));
         self
     }
@@ -249,7 +254,7 @@ impl std::fmt::Debug for LocalHistoryRegistry {
 }
 
 // ============================================================================
-// The page-facing handles (crate-private until the first consumer)
+// The page-facing handles (not public API until the first consumer)
 // ============================================================================
 
 /// The capability a page uses to push local-history entries onto its route —
@@ -258,7 +263,7 @@ impl std::fmt::Debug for LocalHistoryRegistry {
 /// from event or animation callbacks (lifecycle-only discipline: `add` is
 /// rebuild-adjacent).
 #[derive(Clone)]
-pub(crate) struct LocalHistoryHandle {
+pub struct LocalHistoryHandle {
     registry: LocalHistoryRegistry,
     /// The route's rebuild hook for the empty↔non-empty edges — the
     /// `changed_internal_state` half `add`/`remove` owe (`routes.dart:886-895`).
@@ -277,14 +282,14 @@ impl LocalHistoryHandle {
     }
 
     /// The enclosing route's handle, or `None` outside any route.
-    pub(crate) fn maybe_of(ctx: &dyn BuildContext) -> Option<Self> {
+    pub fn maybe_of(ctx: &dyn BuildContext) -> Option<Self> {
         ctx.get::<LocalHistoryScope, _>(|scope| scope.handle.clone())
     }
 
     /// `addLocalHistoryEntry` (`routes.dart:882-896`). On a disposed route
     /// the entry is inert (logged), and the returned handle's `remove` is a
     /// no-op.
-    pub(crate) fn add(&self, entry: LocalHistoryEntry) -> LocalHistoryEntryHandle {
+    pub fn add(&self, entry: LocalHistoryEntry) -> LocalHistoryEntryHandle {
         let inner = Arc::new(EntryInner {
             on_remove: Mutex::new(entry.on_remove),
             removed: AtomicBool::new(false),
@@ -319,7 +324,7 @@ impl std::fmt::Debug for LocalHistoryHandle {
 /// Holds the registry weakly (ADR-0025): a handle outliving its route
 /// keeps no route state alive.
 #[derive(Clone)]
-pub(crate) struct LocalHistoryEntryHandle {
+pub struct LocalHistoryEntryHandle {
     inner: Arc<EntryInner>,
     registry: Weak<RegistryInner>,
     changed_internal_state: Rc<dyn Fn()>,
@@ -330,7 +335,7 @@ impl LocalHistoryEntryHandle {
     /// lock (`routes.dart:902-927`). Idempotent, and exactly-once against a
     /// racing pop (the entry's atomic flag is the linearization point). A
     /// no-op after the route died (module-doc divergence).
-    pub(crate) fn remove(&self) {
+    pub fn remove(&self) {
         let Some(registry) = self.registry.upgrade() else {
             return;
         };

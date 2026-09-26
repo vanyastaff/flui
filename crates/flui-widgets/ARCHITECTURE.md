@@ -503,7 +503,7 @@ knows whether it intends to register again.
 **Replacement tests:**
 `route_registrations_survive_an_unmount_and_remount_over_a_retained_handle` and
 `clear_routes_drops_every_registration_including_the_generator_hooks`
-(`navigator_tests.rs`) for the lifecycle contract above — restoring the dispose
+(`tests/navigator.rs`) for the lifecycle contract above — restoring the dispose
 clear fails the first;
 `a_table_entry_wins_and_the_generate_hook_is_never_consulted`,
 `on_unknown_route_runs_only_after_the_generator_declined_and_sees_the_callers_payload`,
@@ -914,7 +914,7 @@ tree.
 
 **Replacement test:**
 `a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it`
-(`navigator_tests.rs`), red-checked by swapping step 0 and step 1 — which yields
+(`tests/navigator.rs`), red-checked by swapping step 0 and step 1 — which yields
 `[pop, push]`, i.e. **the divergence, not the fix**.
 
 ### 14. `ParentDataView` ancestry is checked at attach, with catalog diagnostic labels
@@ -1439,7 +1439,7 @@ mean guessing a flight plan the replacement never measured.
   one invariant the type docs rest on.
 
 **Replacement test**
-(`navigator::hero_gesture_tests::replacing_the_auto_hero_observer_retires_its_in_flight_flight`):
+(`tests/hero_gesture.rs`, `replacing_the_auto_hero_observer_retires_its_in_flight_flight`):
 pushes two same-tagged hero pages so the auto observer launches a real
 programmatic flight, then installs a manual controller and asserts (a) the
 overlay count returns to its pre-flight value, (b) the replacement controller

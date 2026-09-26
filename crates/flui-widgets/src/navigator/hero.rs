@@ -1,7 +1,8 @@
 //! The `Hero` view, its per-route registry, and the handle a `HeroController` drives.
 //!
 //! `Hero` is public; its registry, handle and tag
-//! storage stay private. A `Hero` registers with its route, can be *told* to show a
+//! storage are not public API (nameable only through the doc-hidden, temporary
+//! `__test_access`, ADR-0083 §4). A `Hero` registers with its route, can be *told* to show a
 //! placeholder, and exposes the signed-off customization hooks:
 //! `create_rect_tween`, `flight_shuttle_builder`, and FLUI's state-preserving
 //! `placeholder`.
@@ -122,13 +123,13 @@ pub(crate) type PlaceholderBuilder = Rc<dyn Fn(Size) -> BoxedView>;
 /// key types, which is precisely what a tag is. **No `dyn Any`, no downcast** — this
 /// type never calls `ViewKey::as_any`, so no view type is ever downcast.
 #[derive(Clone)]
-pub(crate) struct HeroTag(Arc<dyn ViewKey>);
+pub struct HeroTag(Arc<dyn ViewKey>);
 
 impl HeroTag {
     /// Tag a hero with any [`ViewKey`] — `ValueKey<&str>`, `ValueKey<u64>`, a domain
     /// newtype. Flutter accepts any `Object`; this accepts anything the framework
     /// already knows how to compare.
-    pub(crate) fn new(key: impl ViewKey) -> Self {
+    pub fn new(key: impl ViewKey) -> Self {
         Self(Arc::new(key))
     }
 }
@@ -168,7 +169,7 @@ impl fmt::Debug for HeroTag {
 ///
 /// [`ModalHandle`]: super::modal_route::ModalHandle
 #[derive(Clone, Default)]
-pub(crate) struct HeroRegistry {
+pub struct HeroRegistry {
     heroes: Arc<Mutex<HashMap<HeroTag, HeroHandle>>>,
     /// Nested `Navigator`s that publish a cross-flight visibility hook here —
     /// Flutter's `_allHeroesFor` does not stop its walk at a nested `Navigator`
@@ -179,7 +180,9 @@ pub(crate) struct HeroRegistry {
 }
 
 impl HeroRegistry {
-    pub(crate) fn new() -> Self {
+    /// An empty registry.
+    #[must_use]
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -271,10 +274,10 @@ impl HeroRegistry {
     }
 
     /// The handle registered under `tag`, cloned out. Test-facing: production
-    /// matching goes through [`all_heroes`](Self::all_heroes), which also reaches a
+    /// matching goes through `all_heroes`, which also reaches a
     /// nested `Navigator`'s heroes.
-    #[cfg(test)]
-    pub(crate) fn get(&self, tag: &HeroTag) -> Option<HeroHandle> {
+    #[must_use]
+    pub fn get(&self, tag: &HeroTag) -> Option<HeroHandle> {
         self.heroes.lock().get(tag).cloned()
     }
 
@@ -284,8 +287,13 @@ impl HeroRegistry {
         self.heroes.lock().keys().cloned().collect()
     }
 
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
+    /// How many heroes are registered. Test-facing.
+    #[must_use]
+    #[expect(
+        clippy::len_without_is_empty,
+        reason = "a test-facing count; nothing asks whether the registry is empty"
+    )]
+    pub fn len(&self) -> usize {
         self.heroes.lock().len()
     }
 
@@ -293,7 +301,8 @@ impl HeroRegistry {
     /// `NavigatorState::sync_nested_hero_registration` checks each build, so an
     /// unchanged enclosing route costs one `Arc::ptr_eq` instead of a
     /// deregister/register round trip.
-    pub(crate) fn is_same(&self, other: &Self) -> bool {
+    #[must_use]
+    pub fn is_same(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.heroes, &other.heroes)
     }
 }
@@ -358,13 +367,14 @@ impl fmt::Debug for NestedHeroSource {
 /// `Navigator.of(hero) == navigator` check: a hero registers with the route it is
 /// lexically inside, and can reach no other.
 #[derive(Clone)]
-pub(crate) struct HeroScope {
+pub struct HeroScope {
     registry: HeroRegistry,
     child: BoxedView,
 }
 
 impl HeroScope {
-    pub(crate) fn new(registry: HeroRegistry, child: impl IntoView) -> Self {
+    /// Publish `registry` to the heroes in `child`'s subtree.
+    pub fn new(registry: HeroRegistry, child: impl IntoView) -> Self {
         Self {
             registry,
             child: BoxedView(Box::new(child.into_view())),
@@ -463,7 +473,7 @@ struct HeroInner {
 /// The same pattern seen elsewhere: a `HeroController` can never hold `&mut HeroState`
 /// — nothing can — so the state that a flight mutates lives behind this handle.
 #[derive(Clone)]
-pub(crate) struct HeroHandle {
+pub struct HeroHandle {
     inner: Arc<HeroInner>,
 }
 
@@ -498,7 +508,8 @@ impl HeroHandle {
     /// Whether both handles name the same mounted hero — the "same tag" vs "same
     /// hero" distinction the duplicate-tag contract and the flight-divert logic both
     /// turn on (`heroes.dart:744-745`, `:766`).
-    pub(crate) fn is_same(&self, other: &Self) -> bool {
+    #[must_use]
+    pub fn is_same(&self, other: &Self) -> bool {
         self.is(other)
     }
 
@@ -511,12 +522,14 @@ impl HeroHandle {
     /// Resolving to `Some` says nothing about layout — `attach` runs during build.
     /// Ask [`PipelineOwner::box_size`](flui_rendering::pipeline::PipelineOwner::box_size)
     /// for geometry.
-    pub(crate) fn render_id(&self) -> Option<RenderId> {
+    #[must_use]
+    pub fn render_id(&self) -> Option<RenderId> {
         self.inner.anchor.get()
     }
 
     /// `_HeroState._placeholderSize` — `Some` exactly while in flight.
-    pub(crate) fn placeholder_size(&self) -> Option<Size> {
+    #[must_use]
+    pub fn placeholder_size(&self) -> Option<Size> {
         *self.inner.placeholder.lock()
     }
 
@@ -566,7 +579,8 @@ impl HeroHandle {
     }
 
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
-    pub(crate) fn includes_child(&self) -> bool {
+    #[must_use]
+    pub fn includes_child(&self) -> bool {
         self.inner.include_child.load(Ordering::Relaxed)
     }
 
@@ -577,7 +591,8 @@ impl HeroHandle {
     /// `MatrixUtils.transformRect(box.getTransformTo(ancestor), Offset.zero & box.size)`.
     /// Its `assert(box.hasSize && box.size.isFinite)` becomes an `Option` here — a
     /// hero on an unbuilt route is a routine `None`, not a broken invariant.
-    pub(crate) fn bounding_box_in(&self, ancestor: RenderId) -> Option<Rect> {
+    #[must_use]
+    pub fn bounding_box_in(&self, ancestor: RenderId) -> Option<Rect> {
         let render_id = self.render_id()?;
         let owner = self.inner.owner.lock().clone()?;
         owner.with(|owner| {
@@ -602,7 +617,7 @@ impl HeroHandle {
     /// `include_child_in_placeholder` is `true` for the *from* hero of a push and
     /// `false` otherwise (`:379-380`): the source subtree is preserved offstage so its
     /// state survives the flight, while the destination's is not yet needed.
-    pub(crate) fn start_flight(&self, include_child_in_placeholder: bool) -> Option<Size> {
+    pub fn start_flight(&self, include_child_in_placeholder: bool) -> Option<Size> {
         let render_id = self.render_id()?;
         let size = {
             let owner = self.inner.owner.lock().clone()?;
@@ -622,7 +637,7 @@ impl HeroHandle {
     ///
     /// `keep_placeholder` leaves it frozen — Flutter uses it when a flight ends by
     /// being diverted into another.
-    pub(crate) fn end_flight(&self, keep_placeholder: bool) {
+    pub fn end_flight(&self, keep_placeholder: bool) {
         {
             let mut placeholder = self.inner.placeholder.lock();
             if keep_placeholder || placeholder.is_none() {

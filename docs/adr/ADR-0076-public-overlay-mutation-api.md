@@ -89,8 +89,8 @@ asserts the same preconditions):
 builder-form constructors, `OverlayScope`, `Theater`, `OverlayShared`, `OnstagePlan` and
 `OverlayEntryViewState` stay `pub(crate)`, like their Flutter counterparts
 (`_RenderTheaterMarker`, `_Theater`). Tests read stacking order through
-`flui_widgets::testing::overlay_probe::OverlayProbe` (feature `testing`); the public API never
-exposes the list.
+`flui_widgets::__test_access::OverlayProbe` (doc-hidden and temporary, ADR-0083 §4); the public
+API never exposes the list.
 
 ### 4. Lookup: a per-entry `OverlayScope` marker resolved with `depend_on`
 

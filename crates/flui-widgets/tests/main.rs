@@ -6,11 +6,15 @@ mod common;
 
 #[path = "absorb_pointer.rs"]
 mod absorb_pointer;
+#[path = "actions.rs"]
+mod actions;
 mod anchored_box;
 #[path = "animated_builder_swap.rs"]
 mod animated_builder_swap;
 #[path = "animated_size.rs"]
 mod animated_size;
+#[path = "back_gesture.rs"]
+mod back_gesture;
 #[path = "baseline.rs"]
 mod baseline;
 #[path = "binding_animation.rs"]
@@ -37,8 +41,12 @@ mod custom_paint;
 mod custom_single_child_layout;
 #[path = "decorated_box.rs"]
 mod decorated_box;
+#[path = "directionality.rs"]
+mod directionality;
 #[path = "directionality_dependency.rs"]
 mod directionality_dependency;
+#[path = "editable_text.rs"]
+mod editable_text;
 #[path = "exclude_focus.rs"]
 mod exclude_focus;
 #[path = "fade_transition.rs"]
@@ -51,14 +59,26 @@ mod flex;
 mod flex_parent_data;
 #[path = "flow.rs"]
 mod flow;
+#[path = "focus.rs"]
+mod focus;
 #[path = "future_builder.rs"]
 mod future_builder;
 #[path = "gesture_detector.rs"]
 mod gesture_detector;
 #[path = "gesture_detector_advanced.rs"]
 mod gesture_detector_advanced;
+#[path = "hero.rs"]
+mod hero;
+#[path = "hero_controller.rs"]
+mod hero_controller;
+#[path = "hero_flight.rs"]
+mod hero_flight;
+#[path = "hero_gesture.rs"]
+mod hero_gesture;
 #[path = "hero_public.rs"]
 mod hero_public;
+#[path = "hero_seam.rs"]
+mod hero_seam;
 #[path = "hot_reload_state.rs"]
 mod hot_reload_state;
 #[path = "image.rs"]
@@ -85,21 +105,35 @@ mod lazy_list;
 mod list_body;
 #[path = "listener.rs"]
 mod listener;
+#[path = "localizations.rs"]
+mod localizations;
 #[path = "media_query_fields.rs"]
 mod media_query_fields;
 #[path = "meta_data.rs"]
 mod meta_data;
+#[path = "modal_route.rs"]
+mod modal_route;
 #[path = "modifiers.rs"]
 mod modifiers;
 #[path = "mouse_region.rs"]
 mod mouse_region;
+#[path = "navigator.rs"]
+mod navigator;
 #[path = "navigator_public.rs"]
 mod navigator_public;
+#[path = "offstage_measurement.rs"]
+mod offstage_measurement;
+#[path = "offstage_proxy.rs"]
+mod offstage_proxy;
 /// Issue #536: an `Opacity` rebuild reaches the composited layer.
 #[path = "opacity_layer_update.rs"]
 mod opacity_layer_update;
 #[path = "overflow_box.rs"]
 mod overflow_box;
+#[path = "overlay.rs"]
+mod overlay;
+#[path = "page_route.rs"]
+mod page_route;
 #[path = "parent_data_ancestry.rs"]
 mod parent_data_ancestry;
 #[path = "post_frame_handle.rs"]
@@ -120,6 +154,8 @@ mod scale_transition;
 mod scroll;
 #[path = "semantics.rs"]
 mod semantics;
+#[path = "shortcuts.rs"]
+mod shortcuts;
 #[path = "shrink_wrapping_viewport.rs"]
 mod shrink_wrapping_viewport;
 #[cfg(feature = "signals")]
@@ -148,10 +184,18 @@ mod table;
 mod text;
 #[path = "text_field.rs"]
 mod text_field;
+#[path = "text_field_widget.rs"]
+mod text_field_widget;
+#[path = "ticker_mode.rs"]
+mod ticker_mode;
 /// Issue #536: a `Transform` rebuild reaches the composited layer.
 #[path = "transform_layer_update.rs"]
 mod transform_layer_update;
+#[path = "transition_route.rs"]
+mod transition_route;
 #[path = "visibility.rs"]
 mod visibility;
+#[path = "widgets_app.rs"]
+mod widgets_app;
 #[path = "wrap.rs"]
 mod wrap;
