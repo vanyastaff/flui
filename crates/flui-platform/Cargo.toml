@@ -28,6 +28,9 @@ autotests = false
 accesskit = { workspace = true }
 
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+# The contracts the backends implement (capability traits, window/input and
+# data-transfer vocabulary), re-exported here at their old paths (ADR-0082).
+flui-platform-api = { workspace = true }
 # Layer-legal downward edge (foundation sits below platform in the DAG),
 # carrying two seams: OwnerAffinity — the ADR-0039 owner-thread backstop,
 # hosted in foundation so its tests run in CI (flui-platform's suite does
@@ -365,3 +368,7 @@ layer = 2
 tier = "H"
 tier-kind = "internal"
 order = 1
+# ADR-0082 §2: only composition roots link the OS backends. Crates that
+# program against a capability trait depend on `flui-platform-api` instead.
+# Examples and tools are applications and are exempt from this list.
+allowed-dependents = ["flui-app"]

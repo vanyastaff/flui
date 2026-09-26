@@ -154,7 +154,7 @@ pub fn mount_with_capabilities(
                 ime_allowed: Arc<parking_lot::Mutex<Vec<bool>>>,
             }
 
-            impl flui_platform::traits::PlatformTextInput for HarnessTextInput {
+            impl flui_platform_api::PlatformTextInput for HarnessTextInput {
                 fn set_ime_allowed(&self, allowed: bool) {
                     self.ime_allowed.lock().push(allowed);
                 }
@@ -167,7 +167,7 @@ pub fn mount_with_capabilities(
             let recorded: Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>> =
                 Arc::new(parking_lot::Mutex::new(Vec::new()));
             let ime_allowed = Arc::new(parking_lot::Mutex::new(Vec::new()));
-            let platform: Arc<dyn flui_platform::traits::PlatformTextInput> = // headless harness supplies the same direct OS-capability boundary as a presentation.
+            let platform: Arc<dyn flui_platform_api::PlatformTextInput> = // headless harness supplies the same direct OS-capability boundary as a presentation.
             Arc::new(HarnessTextInput {
                 cursor_areas: Arc::clone(&recorded),
                 ime_allowed: Arc::clone(&ime_allowed),

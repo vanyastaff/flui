@@ -6,10 +6,7 @@
 
 mod accessibility;
 mod capabilities;
-mod display;
 mod embedder;
-mod haptics;
-mod input;
 // The owner-thread capability (ADR-0039): `OwnerPlatform`, `PlatformProxy`,
 // `PendingWindow`, and their typed errors. `pub(crate)` (not private): the
 // `pub(crate)` seams inside it — `OwnerHooks`, `ProxyTransport`,
@@ -17,8 +14,19 @@ mod input;
 // module, not just this crate's own `traits` tree.
 pub(crate) mod owner;
 mod platform;
-mod text_input;
+mod velocity;
 mod window;
+
+// The contracts live in `flui-platform-api` (ADR-0082) and are re-exported
+// here under their old names, so every existing path keeps resolving.
+pub use flui_platform_api::{
+    Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DragDropEvent, Key,
+    KeyboardEvent, Modifiers, PlatformDisplay, PlatformHaptics, PlatformInput, PlatformTextInput,
+    PointerButton, PointerButtons, PointerEvent, PointerId, PointerType, PointerUpdate,
+    ScrollDelta, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
+    WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,
+    delta_offset_from_coords, device_to_logical, logical_to_device, offset_from_coords,
+};
 
 pub use accessibility::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
@@ -26,48 +34,13 @@ pub use accessibility::{
 pub use capabilities::{
     DesktopCapabilities, MobileCapabilities, PlatformCapabilities, WebCapabilities,
 };
-pub use display::{DisplayId, PlatformDisplay};
 pub use embedder::PlatformEmbedder;
-pub use haptics::PlatformHaptics;
-pub use input::{
-    // Platform utilities
-    BasicVelocityTracker,
-    // Event dispatch result
-    DispatchEventResult,
-    // System drag-and-drop (ADR-0038)
-    DragDropEvent,
-    // W3C event types (re-exported from ui-events)
-    Key,
-    KeyboardEvent,
-    Modifiers,
-    PlatformInput,
-    PointerButton,
-    PointerButtons,
-    PointerEvent,
-    PointerId,
-    PointerType,
-    PointerUpdate,
-    ScrollDelta,
-    SystemTimestamp,
-    TimestampProvider,
-    // Conversion helpers
-    delta_offset_from_coords,
-    device_to_logical,
-    logical_to_device,
-    offset_from_coords,
-};
 // Re-export keyboard-types for convenience
 pub use keyboard_types::NamedKey;
 pub use owner::{
     OpenWindowError, OwnerPlatform, PendingWindow, PlatformProxy, ProxySendError, SharedPlatform,
     WaitError, WakeRegistrationError, WindowOpen,
 };
-pub use platform::{
-    Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback,
-    WindowEvent, WindowId, WindowMode, WindowOptions, WindowReveal,
-};
-pub use text_input::PlatformTextInput;
-pub use window::{
-    CursorError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowExecutionState, WindowShowError,
-};
+pub use platform::{PathPromptOptions, Platform, PlatformExecutor, PlatformReadyCallback};
+pub use velocity::{BasicVelocityTracker, SystemTimestamp, TimestampProvider};
+pub use window::PlatformWindow;

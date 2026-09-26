@@ -8,11 +8,15 @@
 //! The architecture is inspired by GPUI and Flutter's platform layer:
 //!
 //! ```text
+//! flui-platform-api         - Contracts: capability traits, window/input and
+//!                             data-transfer vocabulary (re-exported here)
+//!
 //! flui-platform
-//!   ├─ traits/              - Core abstractions
+//!   ├─ traits/              - Host-facing abstractions
 //!   │   ├─ platform.rs      - Central Platform trait
-//!   │   ├─ window.rs        - Window abstraction
-//!   │   ├─ display.rs       - Display/monitor info
+//!   │   ├─ window.rs        - PlatformWindow
+//!   │   ├─ owner.rs         - Owner-thread capability (ADR-0039)
+//!   │   ├─ accessibility.rs - PlatformAccessibility (AccessKit)
 //!   │   └─ capabilities.rs  - Platform capabilities
 //!   │
 //!   ├─ shared/              - Shared infrastructure
@@ -166,7 +170,9 @@
 #![deny(missing_docs)]
 
 pub mod config;
-pub mod data_transfer;
+/// The data-transfer transport (ADR-0038), defined in `flui-platform-api`
+/// and re-exported here at its old path.
+pub use flui_platform_api::data_transfer;
 pub mod error;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod executor;

@@ -27,8 +27,10 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # the foundation clock returns, so timestamps interoperate.
 web-time = { workspace = true }
 # Presentation-owned IME state holds the exact platform capability directly.
-# This removes the former app-layer Any/downcast + closure-bridge path.
-flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+# This removes the former app-layer Any/downcast + closure-bridge path. The
+# contract crate, not `flui-platform`: naming a capability trait must not link
+# the OS backends (ADR-0082).
+flui-platform-api = { workspace = true }
 
 # UI Events - Cross-platform input event abstraction (W3C compliant)
 ui-events = { workspace = true }

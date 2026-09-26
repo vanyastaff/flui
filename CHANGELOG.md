@@ -23,6 +23,18 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Added
 
+- **`flui-platform-api`** (ADR-0082): the platform contracts as their own crate —
+  `PlatformTextInput`, `PlatformHaptics`, `PlatformDisplay`, `Clipboard`/`ClipboardItem`, the
+  `data_transfer` transport, and the input (`PlatformInput`, `DispatchEventResult`,
+  `DragDropEvent`, pointer/keyboard types) and window (`WindowId`, `WindowOptions`,
+  `WindowEvent`, `WindowExecutionState`, …) vocabulary — with no OS, winit, AccessKit or tokio
+  dependency. `flui-platform` re-exports every moved item at its old path, so existing imports
+  keep compiling; the old paths go in the minor after this one. `flui-interaction` and the
+  `flui-widgets` `testing` harness now depend on `flui-platform-api` instead of `flui-platform`,
+  so neither links winit, the `windows` crate, `objc2-app-kit`, `android-activity` or tokio any
+  more, and only `flui-app` may depend on `flui-platform` (its `allowed-dependents`).
+  `PlatformWindow` and `Platform` stay in `flui-platform`.
+
 - **`flui-desktop-mcp`** (`tools/desktop-mcp`, ADR-0080): an MCP server over stdio that lets
   an agent list and capture windows, read the accessibility tree, perform element actions
   and send real input to any desktop application, with a backend-neutral wire contract —

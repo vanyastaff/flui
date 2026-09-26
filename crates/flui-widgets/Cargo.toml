@@ -91,7 +91,8 @@ flui-testing = { workspace = true, optional = true }
 # mounted `EditableText` makes through a `PlatformTextInput` it supplies.
 # Activated only by the `testing` feature, like `flui-testing` above; the
 # production graph never links it (flui-interaction already depends on it).
-flui-platform = { path = "../flui-platform", version = "=0.2.0-dev", optional = true }
+# The contract crate, so the harness links no OS backend (ADR-0082).
+flui-platform-api = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Enable this crate's own `testing` feature for its integration tests:
@@ -121,7 +122,7 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # Test-only recording `PlatformTextInput` used by the widget harness. The
 # production widget crate reaches this capability through flui-interaction's
 # concrete weak `TextInputHandle` and has no platform dependency.
-flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+flui-platform-api = { workspace = true }
 # Headless frame driver: provides the shared clock-bound arena a `GestureArenaScope`
 # hands to detectors, and `pump_frame` to poll deadline-driven gestures in tests.
 flui-testing = { workspace = true }
@@ -187,7 +188,7 @@ serde = ["flui-types/serde"]
 # feature-gated `src/testing` modules.
 testing = [
     "dep:flui-testing",
-    "dep:flui-platform",
+    "dep:flui-platform-api",
     "flui-rendering/testing",
     "flui-interaction/testing",
 ]

@@ -203,23 +203,10 @@ pub trait Window {
 /// Unique identifier for a window.
 ///
 /// This ID is unique within the application and persists for the window's
-/// lifetime. Consolidated onto the canonical definition
-/// (`traits::platform::WindowId`, the one `PlatformWindowEvent::Created`/
-/// `PlatformWindow::id()` use) rather than a second parallel newtype — this
-/// module used to define its own identical `(pub u64)` wrapper.
+/// lifetime. The canonical definition lives in `flui-platform-api` (the one
+/// `WindowEvent::Created`/`PlatformWindow::id()` use) rather than a second
+/// parallel newtype here.
 pub use crate::traits::WindowId;
-
-impl WindowId {
-    /// Create a new window ID.
-    pub fn new(id: u64) -> Self {
-        Self(id)
-    }
-
-    /// Get the raw ID value.
-    pub fn as_u64(self) -> u64 {
-        self.0
-    }
-}
 
 // ============================================================================
 // Window State

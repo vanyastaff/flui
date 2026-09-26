@@ -3,16 +3,15 @@
 //! Flutter's `services` package is deliberately dissolved in FLUI
 //! (`docs/FOUNDATIONS.md`); its IME/text-input residue becomes a capability
 //! trait here instead of a standalone crate. [`PlatformTextInput`] is reached
-//! through [`PlatformWindow::text_input`](super::window::PlatformWindow::text_input)
-//! — the same capability-discovery pattern as
-//! [`PlatformWindow::display`](super::window::PlatformWindow::display) and
-//! [`Platform::primary_display`](super::platform::Platform::primary_display):
-//! a fallible accessor returning `Option<Arc<dyn _>>`, not a method bolted
-//! directly onto `PlatformWindow` with a panicking/no-op default. A backend
-//! that cannot support IME (a minimal future embedder; headless without its
+//! through `flui_platform::PlatformWindow::text_input` — the same
+//! capability-discovery pattern as `flui_platform::PlatformWindow::display`
+//! and `flui_platform::Platform::primary_display`: a fallible accessor
+//! returning `Option<Arc<dyn _>>`, not a method bolted directly onto
+//! `PlatformWindow` with a panicking/no-op default. A backend that cannot
+//! support IME (a minimal future embedder; headless without its
 //! `FakeTextInput`) returns `None` from the accessor instead of every
 //! `PlatformWindow` implementor inheriting IME methods it cannot honor.
-//! [`PlatformHaptics`](super::haptics::PlatformHaptics) follows the same
+//! [`PlatformHaptics`](crate::PlatformHaptics) follows the same
 //! template (`PlatformWindow::haptics`, ADR-0031); `PlatformSystemChrome`
 //! is deferred (ADR-0031) with no target date.
 
@@ -40,7 +39,6 @@ pub trait PlatformTextInput: Send + Sync {
 
     /// Tell the platform IME where to draw its candidate/composition
     /// window, in logical window coordinates (origin + size, matching
-    /// [`PlatformWindow::bounds`](super::window::PlatformWindow::bounds)'s
-    /// convention).
+    /// `flui_platform::PlatformWindow::bounds`'s convention).
     fn set_ime_cursor_area(&self, area: Bounds<Pixels>);
 }

@@ -6,6 +6,13 @@ Versioning: per `docs/release.md` policy.
 
 ## [Unreleased]
 
+### Changed
+
+- The `testing` feature enables an optional `flui-platform-api` dependency
+  instead of `flui-platform` (ADR-0082): the harness's recording
+  `PlatformTextInput` implements the contract crate's trait, so a build with
+  `testing` no longer links any OS backend, winit or tokio.
+
 ### Added
 
 - **Public overlay mutation API** (ADR-0076), re-exported from the crate

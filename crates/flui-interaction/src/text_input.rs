@@ -24,7 +24,7 @@ use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
-use flui_platform::traits::PlatformTextInput;
+use flui_platform_api::PlatformTextInput;
 use flui_types::ImeEvent;
 use flui_types::geometry::{Bounds, Pixels};
 
