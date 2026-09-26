@@ -82,6 +82,13 @@ some_macro! {
     static HIDDEN: std::cell::Cell<u8> = std::cell::Cell::new(0);
 }
 
+// planted: a static a proc-macro emits into its callers through `quote!`
+pub fn expand(name: proc_macro2::Ident) -> proc_macro2::TokenStream {
+    quote::quote! {
+        static #name: ::std::sync::Mutex<u8> = ::std::sync::Mutex::new(0);
+    }
+}
+
 // silent: `'static` is a lifetime, even when a name and `:` follow it
 other_macro! {
     fn name() -> &'static str { "flui" }
@@ -134,7 +141,7 @@ thread_local! {
 ";
 
 /// The finding each planted violation must produce, and no other.
-pub(super) const EXPECTED: [(&str, &str, &str); 13] = [
+pub(super) const EXPECTED: [(&str, &str, &str); 14] = [
     (HOST, "LOCKED", super::NEW),
     (HOST, "SHARED_ID", super::NEW),
     (HOST, "STORED", super::NEW),
@@ -142,6 +149,7 @@ pub(super) const EXPECTED: [(&str, &str, &str); 13] = [
     (HOST, "FEATURED", super::NEW),
     (HOST, "emit!::EMITTED", super::NEW),
     (HOST, "some_macro!::HIDDEN", super::NEW),
+    (HOST, "expand::quote!::#name", super::NEW),
     (HOST, "runner::QUEUE", super::NEW),
     (HOST, "runner::SECOND_HOST", super::SECOND_TRAMPOLINE),
     (HOST, "runner::GONE", super::STALE),

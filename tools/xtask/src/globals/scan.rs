@@ -524,8 +524,8 @@ fn thread_local_entries(tokens: TokenStream) -> syn::Result<Vec<Local>> {
 // macro tokens
 
 /// Every `static [mut|ref] NAME: <type>` in `tokens` at any depth: `(NAME,
-/// type)`, with `$name` for a metavariable. `'static` is a lifetime, not an
-/// item.
+/// type)`, with `$name` for a `macro_rules!` metavariable and `#name` for a
+/// `quote!` interpolation. `'static` is a lifetime, not an item.
 pub(super) fn macro_statics(tokens: TokenStream) -> Vec<(String, TypeInfo)> {
     let mut found = Vec::new();
     scan_macro_tokens(tokens, &mut found);
@@ -551,10 +551,11 @@ fn scan_macro_tokens(tokens: TokenStream, found: &mut Vec<(String, TypeInfo)>) {
                 }
                 let name = match trees.get(next) {
                     Some(TokenTree::Ident(name)) => name.to_string(),
-                    Some(TokenTree::Punct(dollar)) if dollar.as_char() == '$' => {
+                    // `$name` in `macro_rules!`, `#name` in `quote!`
+                    Some(TokenTree::Punct(sigil)) if matches!(sigil.as_char(), '$' | '#') => {
                         next += 1;
                         match trees.get(next) {
-                            Some(TokenTree::Ident(name)) => format!("${name}"),
+                            Some(TokenTree::Ident(name)) => format!("{}{name}", sigil.as_char()),
                             _ => continue,
                         }
                     }
