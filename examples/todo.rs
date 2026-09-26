@@ -8,7 +8,8 @@
 //! `init_state`, but reads go through `.with(|list| ...)` and mutation is
 //! in-place via `.update(|list| ...)` rather than `.get()`/`.set()`.
 //!
-//! No form/validation widget is used — none exists in this codebase yet.
+//! No form/validation widget is used — a single field needs none (see
+//! `examples/form.rs` for `Form` and `TextFormField`).
 //! Adding an item is a plain `TextField` (Material's, not `flui-widgets`'
 //! theme-free one — see the import below): pressing Enter
 //! (`TextField::on_submitted`) or the "Add" button both call the same

@@ -39,7 +39,13 @@ fn test_window() -> crate::app::presentation::PresentationWindow {
 }
 
 fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmError> {
-    UiRealm::new(wake, test_window(), 1.0, Arc::new(AtomicBool::new(false)))
+    UiRealm::new(
+        wake,
+        test_window(),
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
+    )
 }
 
 fn new_runtime_with_capacity(
@@ -52,6 +58,7 @@ fn new_runtime_with_capacity(
         test_window(),
         1.0,
         Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
     )
 }
 
@@ -261,8 +268,14 @@ fn platform_action_request_routes_through_the_wire_to_the_handler() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window =
         crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    let realm =
-        UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
+    let realm = UiRealm::new(
+        noop_wake(),
+        window,
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
+    )
+    .expect("realm");
 
     let render_id = RenderId::new(7);
     let target = AccessibilityNodeId::from(render_id);
@@ -312,8 +325,14 @@ fn platform_action_payload_reaches_the_handler_with_its_arguments() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window =
         crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    let realm =
-        UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
+    let realm = UiRealm::new(
+        noop_wake(),
+        window,
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
+    )
+    .expect("realm");
 
     let render_id = RenderId::new(7);
     let target = AccessibilityNodeId::from(render_id);
@@ -362,8 +381,14 @@ fn unroutable_platform_action_requests_are_dropped_at_the_listener() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window =
         crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    let realm =
-        UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
+    let realm = UiRealm::new(
+        noop_wake(),
+        window,
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
+    )
+    .expect("realm");
 
     let render_id = RenderId::new(7);
     let target = AccessibilityNodeId::from(render_id);
@@ -418,8 +443,14 @@ fn at_activation_drives_semantics_assembly_through_the_frame_reconcile() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window =
         crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    let realm =
-        UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
+    let realm = UiRealm::new(
+        noop_wake(),
+        window,
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
+    )
+    .expect("realm");
     let pipeline = realm.pipeline_for_test();
     let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
 
@@ -470,8 +501,14 @@ fn at_activation_requests_a_full_republish_and_the_reconcile_consumes_it() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window =
         crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    let realm =
-        UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
+    let realm = UiRealm::new(
+        noop_wake(),
+        window,
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
+    )
+    .expect("realm");
     let host_flag = realm
         .presentations
         .primary()
@@ -518,8 +555,14 @@ fn closing_the_presentation_withdraws_from_the_platform_bridge() {
     // while its window is alive, exactly as a production runner (which
     // owns the window) would still succeed.
     let _window = Arc::clone(window.window());
-    let realm =
-        UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
+    let realm = UiRealm::new(
+        noop_wake(),
+        window,
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
+    )
+    .expect("realm");
     let flag = realm
         .presentations
         .primary()
@@ -552,6 +595,7 @@ fn a_realm_built_from_a_host_window_publishes_through_its_accessibility() {
         crate::app::runner::presentation_window(host),
         1.0,
         Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
     )
     .expect("realm");
     let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
@@ -896,6 +940,7 @@ fn a_redraw_request_fires_the_platform_wake() {
         crate::app::presentation::test_platform_window(None),
         1.0,
         Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
     )
     .expect("test realm construction");
 

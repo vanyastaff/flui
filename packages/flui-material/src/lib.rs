@@ -102,6 +102,7 @@ pub mod tab_controller;
 pub mod tabs;
 pub mod text_button;
 pub mod text_field;
+pub mod text_form_field;
 pub mod text_theme;
 pub mod theme;
 pub mod theme_data;
@@ -145,6 +146,7 @@ pub use tab_controller::{DefaultTabController, DefaultTabControllerState, TabCon
 pub use tabs::{Tab, TabBar, TabBarState};
 pub use text_button::TextButton;
 pub use text_field::{MaterialTextFieldState, TextField};
+pub use text_form_field::{TextFormField, TextFormFieldState};
 pub use text_theme::TextTheme;
 pub use theme::Theme;
 pub use theme_data::{

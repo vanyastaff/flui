@@ -22,18 +22,24 @@
 //! [`Actions`] chain visible at its position on its node, so an `Actions`
 //! between the focused widget and the `Shortcuts` — a button's activation —
 //! is found (ADR-0079).
+//!
+//! Of `DefaultTextEditingShortcuts`, [`DefaultFocusTraversal`] binds only
+//! copy, cut and paste; select-all, the Insert-key clipboard chords
+//! (Ctrl/Shift+Insert, Shift+Delete) and the caret-movement intents are not
+//! bound (`EditableText`'s own key handler moves the caret).
 
 use std::any::Any;
 use std::rc::Rc;
 
 use flui_interaction::events::{Key, KeyEvent, NamedKey};
 use flui_interaction::routing::{FocusNode, KeyEventResult};
+use flui_types::platform::TargetPlatform;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 
 use super::actions::{
-    ActionChainProvider, Actions, ActivateIntent, Intent, NextFocusAction, NextFocusIntent,
-    PreviousFocusAction, PreviousFocusIntent, chain_at, resolve,
+    ActionChainProvider, Actions, ActivateIntent, CopySelectionTextIntent, Intent, NextFocusAction,
+    NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, chain_at, resolve,
 };
 use super::focus::Focus;
 
@@ -128,15 +134,33 @@ impl SingleActivator {
     /// Whether `event` triggers this activator — Flutter's `accepts`
     /// (`shortcuts.dart:576-581`): a key-down (or allowed repeat) of exactly
     /// the trigger key under exactly the required modifiers.
+    ///
+    /// An ASCII letter trigger matches either case: Flutter's
+    /// `LogicalKeyboardKey.keyC` names the key, not the character, while a
+    /// FLUI `Key::Character` carries what the key produced — `"C"` under Caps
+    /// Lock or Shift. The exact Shift check still tells Ctrl+Shift+C apart.
     #[must_use]
     pub fn matches(&self, event: &KeyEvent) -> bool {
         event.state.is_down()
             && (self.include_repeats || !event.repeat)
-            && event.key == self.trigger
+            && trigger_matches(&self.trigger, &event.key)
             && event.modifiers.ctrl() == self.control
             && event.modifiers.shift() == self.shift
             && event.modifiers.alt() == self.alt
             && event.modifiers.meta() == self.meta
+    }
+}
+
+/// `pressed` is `trigger`, an ASCII letter compared without case.
+fn trigger_matches(trigger: &Key, pressed: &Key) -> bool {
+    match (trigger, pressed) {
+        (Key::Character(trigger), Key::Character(pressed)) => {
+            trigger == pressed
+                || (trigger.len() == 1
+                    && trigger.bytes().all(|byte| byte.is_ascii_alphabetic())
+                    && trigger.eq_ignore_ascii_case(pressed))
+        }
+        _ => trigger == pressed,
     }
 }
 
@@ -371,15 +395,23 @@ impl ViewState<Shortcuts> for ShortcutsState {
 // ============================================================================
 
 /// Installs the standard keyboard bindings for a subtree: Tab and Shift+Tab
-/// move the focus, and Enter, Space and Select activate the focused control
-/// ([`ActivateIntent`]).
+/// move the focus, Enter, Space and Select activate the focused control
+/// ([`ActivateIntent`]), and Ctrl+C, Ctrl+X and Ctrl+V (Cmd on macOS and
+/// iOS) copy, cut and paste in the focused text field
+/// ([`CopySelectionTextIntent`], [`PasteTextIntent`]).
 ///
-/// Flutter's `WidgetsApp` supplies these bindings at the application root
-/// (`app.dart:1263-1276`, tag `3.44.0`). Numpad Enter reaches FLUI as the
+/// Flutter's `WidgetsApp` supplies the focus bindings at the application root
+/// (`app.dart:1263-1276`, tag `3.44.0`), and its `DefaultTextEditingShortcuts`
+/// the clipboard ones. Numpad Enter reaches FLUI as the
 /// same logical `Enter`, so one binding covers both; `GameButtonA` has no
 /// logical key in FLUI's key model and is not bound. The arrow-key
 /// directional traversal and `Escape` → dismiss bindings are not installed
 /// yet.
+///
+/// A clipboard chord resolves at the primary focus like every other binding
+/// here: an `EditableText` answers it on its own node, and with no text field
+/// focused nothing does, so the chord keeps bubbling to whatever else binds
+/// it.
 /// [`FocusRoot`](super::focus::FocusRoot) installs this widget automatically
 /// for every standard FLUI presentation. It remains public for custom
 /// embedders and deliberately isolated subtrees. Each instance binds actions
@@ -406,6 +438,36 @@ pub struct DefaultFocusTraversalState {
     /// The node the bindings' key handler lives on, which the focus owner
     /// starts a key's walk at while nothing is focused.
     keys: Rc<FocusNode>,
+    /// The platform whose clipboard chords are bound, resolved once in
+    /// `create_state` — the same single injection point `EditableText`'s
+    /// word-jump modifier uses.
+    platform: TargetPlatform,
+}
+
+/// Which clipboard intent a default binding carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipboardBinding {
+    Copy,
+    Cut,
+    Paste,
+}
+
+/// The clipboard chords `platform` uses: Cmd on macOS and iOS, Control
+/// everywhere else — Flutter's `DefaultTextEditingShortcuts` split
+/// (`default_text_editing_shortcuts.dart`, tag `3.44.0`).
+fn clipboard_activators(platform: TargetPlatform) -> [(SingleActivator, ClipboardBinding); 3] {
+    let chord = |key: &str| {
+        let activator = SingleActivator::character(key);
+        match platform {
+            TargetPlatform::MacOS | TargetPlatform::iOS => activator.meta(),
+            _ => activator.control(),
+        }
+    };
+    [
+        (chord("c"), ClipboardBinding::Copy),
+        (chord("x"), ClipboardBinding::Cut),
+        (chord("v"), ClipboardBinding::Paste),
+    ]
 }
 
 impl std::fmt::Debug for DefaultFocusTraversalState {
@@ -413,6 +475,7 @@ impl std::fmt::Debug for DefaultFocusTraversalState {
         f.debug_struct("DefaultFocusTraversalState")
             .field("initialized", &self.focus_owner.is_some())
             .field("keys", &self.keys.id())
+            .field("platform", &self.platform)
             .finish()
     }
 }
@@ -424,6 +487,7 @@ impl StatefulView for DefaultFocusTraversal {
         DefaultFocusTraversalState {
             focus_owner: None,
             keys: FocusNode::with_debug_label("Shortcuts"),
+            platform: TargetPlatform::current(),
         }
     }
 }
@@ -472,20 +536,30 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
             .as_ref()
             .expect("BUG: DefaultFocusTraversal built before init_state")
             .clone();
-        Actions::new(
-            Shortcuts::new(view.child.clone())
-                .focus_node(Rc::clone(&self.keys))
-                .shortcut(SingleActivator::named(NamedKey::Tab), NextFocusIntent)
-                .shortcut(
-                    SingleActivator::named(NamedKey::Tab).shift(),
-                    PreviousFocusIntent,
-                )
-                .shortcut(SingleActivator::named(NamedKey::Enter), ActivateIntent)
-                .shortcut(SingleActivator::character(" "), ActivateIntent)
-                .shortcut(SingleActivator::named(NamedKey::Select), ActivateIntent),
-        )
-        .action(NextFocusAction::new(Rc::clone(&focus_owner)))
-        .action(PreviousFocusAction::new(focus_owner))
+        let mut shortcuts = Shortcuts::new(view.child.clone())
+            .focus_node(Rc::clone(&self.keys))
+            .shortcut(SingleActivator::named(NamedKey::Tab), NextFocusIntent)
+            .shortcut(
+                SingleActivator::named(NamedKey::Tab).shift(),
+                PreviousFocusIntent,
+            )
+            .shortcut(SingleActivator::named(NamedKey::Enter), ActivateIntent)
+            .shortcut(SingleActivator::character(" "), ActivateIntent)
+            .shortcut(SingleActivator::named(NamedKey::Select), ActivateIntent);
+        for (activator, binding) in clipboard_activators(self.platform) {
+            shortcuts = match binding {
+                ClipboardBinding::Copy => {
+                    shortcuts.shortcut(activator, CopySelectionTextIntent::Copy)
+                }
+                ClipboardBinding::Cut => {
+                    shortcuts.shortcut(activator, CopySelectionTextIntent::Cut)
+                }
+                ClipboardBinding::Paste => shortcuts.shortcut(activator, PasteTextIntent),
+            };
+        }
+        Actions::new(shortcuts)
+            .action(NextFocusAction::new(Rc::clone(&focus_owner)))
+            .action(PreviousFocusAction::new(focus_owner))
     }
 }
 
@@ -557,5 +631,74 @@ mod tests {
             !ctrl_c.clone().allow_repeats(false).matches(&repeat),
             "allow_repeats(false) rejects repeats"
         );
+    }
+
+    /// A letter trigger names the key, not the character it produced: Caps
+    /// Lock turns Ctrl+C into a `"C"` event, which must still match, while
+    /// the exact Shift check keeps Ctrl+Shift+C apart.
+    #[test]
+    fn a_character_activator_matches_regardless_of_caps_lock() {
+        let ctrl_c = SingleActivator::character("c").control();
+
+        assert!(ctrl_c.matches(&key_down("C", Modifiers::CONTROL)));
+        assert!(
+            !ctrl_c.matches(&key_down("C", Modifiers::CONTROL | Modifiers::SHIFT)),
+            "Shift is still compared exactly"
+        );
+        assert!(
+            SingleActivator::character("c")
+                .control()
+                .shift()
+                .matches(&key_down("C", Modifiers::CONTROL | Modifiers::SHIFT)),
+            "Ctrl+Shift+C still has its own binding"
+        );
+        assert!(
+            !SingleActivator::character("+").matches(&key_down("=", Modifiers::empty())),
+            "a non-letter compares exactly"
+        );
+    }
+
+    /// Cmd on the Apple platforms, Control everywhere else — checked for
+    /// every platform, whichever host runs the suite.
+    #[test]
+    fn clipboard_activators_map_every_platform() {
+        let platforms = [
+            TargetPlatform::Android,
+            TargetPlatform::Fuchsia,
+            TargetPlatform::iOS,
+            TargetPlatform::Linux,
+            TargetPlatform::MacOS,
+            TargetPlatform::Windows,
+            TargetPlatform::Unknown,
+        ];
+        for platform in platforms {
+            let apple = matches!(platform, TargetPlatform::MacOS | TargetPlatform::iOS);
+            let modifier = if apple {
+                Modifiers::META
+            } else {
+                Modifiers::CONTROL
+            };
+            let bindings = clipboard_activators(platform);
+            for (key, expected) in [
+                ("c", ClipboardBinding::Copy),
+                ("x", ClipboardBinding::Cut),
+                ("v", ClipboardBinding::Paste),
+            ] {
+                let (activator, binding) = bindings
+                    .iter()
+                    .find(|(activator, _)| activator.matches(&key_down(key, modifier)))
+                    .unwrap_or_else(|| panic!("{platform:?}: no binding for {key}"));
+                assert_eq!(*binding, expected, "{platform:?}: {key}");
+                let other = if apple {
+                    Modifiers::CONTROL
+                } else {
+                    Modifiers::META
+                };
+                assert!(
+                    !activator.matches(&key_down(key, other)),
+                    "{platform:?}: {key} under the other platform's modifier"
+                );
+            }
+        }
     }
 }

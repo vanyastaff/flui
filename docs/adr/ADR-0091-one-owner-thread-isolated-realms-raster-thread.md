@@ -48,7 +48,7 @@ inline:
   only inside that file's test module, which starts at `raster_owner.rs:1668`. No production
   raster thread exists.
 - Web renders through `DirectSink`, the pre-mailbox path with no stamping or generation checks
-  (`crates/flui-app/src/app/raster_lane.rs:457-463`, constructed at
+  (`crates/flui-app/src/app/raster_lane.rs:394-406`, constructed at
   `crates/flui-app/src/app/ui_realm/frame.rs:478`), with the renderer in an
   `Arc<Mutex<Option<Renderer>>>` (`crates/flui-app/src/app/runner/web.rs:85`).
 - Every renderer creates its own `wgpu::Instance`, surface and adapter

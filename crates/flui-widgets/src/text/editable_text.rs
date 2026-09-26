@@ -18,7 +18,7 @@ use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
 };
-use flui_interaction::{ClientToken, TextInputHandle};
+use flui_interaction::{ClientToken, ClipboardHandle, TextInputHandle};
 use flui_objects::RenderEditable;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
@@ -33,6 +33,11 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, RenderView, impl_render_view};
 
 use crate::AnimatedBuilder;
+use crate::interaction::actions::{
+    Action, ActionChain, ActionChainProvider, ActionOutcome, CopySelectionTextIntent,
+    PasteTextIntent, as_node_context, erased_action, layered_chain,
+};
+use crate::semantics::Semantics;
 use crate::text::controller::TextEditingController;
 
 type ImeFocusTransition = Rc<dyn Fn(bool)>;
@@ -304,6 +309,30 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 /// lifetime) and ADR-0030 for the composing-rect-over-caret-rect fallback
 /// order this loop now applies.
 ///
+/// # Clipboard
+///
+/// The field answers [`CopySelectionTextIntent`] and [`PasteTextIntent`] on
+/// its own focus node — the chain a `Shortcuts` resolves an intent against
+/// when this field holds the primary focus — so the Ctrl/Cmd+C, X and V
+/// bindings [`DefaultFocusTraversal`](crate::DefaultFocusTraversal) installs
+/// under every `FocusRoot` reach it. Its actions are layered over the chain
+/// visible at its position, and are the nearest declaration of those two
+/// intent types, so they win over an ancestor `Actions` binding for them.
+///
+/// | Intent | Enabled when | Does |
+/// |---|---|---|
+/// | Copy | a clipboard is installed, the field is not obscured, and the selection is not empty | writes the selection; the selection stays |
+/// | Cut | as Copy, and the field is enabled | writes the selection, then deletes it |
+/// | Paste | a clipboard is installed, the field is enabled, and no IME composition is active | replaces the selection with the clipboard's text, line breaks removed |
+///
+/// A disabled action leaves the key unconsumed, so an obscured field's
+/// Ctrl+C keeps bubbling. Paste consumes the key even when the clipboard is
+/// empty, as Flutter's does.
+///
+/// The clipboard is acquired in `init_state` through
+/// [`LifecycleContext::clipboard_handle`]. ADR-0084: acquired as
+/// `cx.capability::<Clipboard>()` once the capability registry lands.
+///
 /// # DEFERRED (v1)
 ///
 /// The following are absent in v1; do not use these features and expect them
@@ -319,7 +348,6 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 ///   double-tap case when one is wired above this.
 /// - **Selection handles and the selection toolbar** — the draggable
 ///   endpoints and the copy/paste menu Flutter shows on touch platforms.
-/// - **Clipboard** — copy / paste / cut (`Ctrl+C/V/X`) are not wired.
 /// - **Multi-line** — newlines are inserted as literal characters but line
 ///   wrapping, multi-line layout, and vertical scrolling are not implemented.
 /// - **Input formatters** — no validation or transformation pipeline.
@@ -372,7 +400,13 @@ pub struct EditableText {
     /// Called with the current text when Enter is pressed while this field
     /// has focus — see [`Self::on_submitted`]'s doc.
     pub(super) on_submitted: Option<SubmitCallback>,
+    /// Called with the new text after each edit the user makes — see
+    /// [`Self::on_changed`]'s doc.
+    pub(super) on_changed: Option<TextChanged>,
 }
+
+/// Callback for [`EditableText::on_changed`].
+pub(crate) type TextChanged = Rc<dyn Fn(&str)>;
 
 impl EditableText {
     /// Create an `EditableText` driven by `controller` and `focus_node`.
@@ -392,6 +426,7 @@ impl EditableText {
             obscure_text: false,
             obscuring_character: DEFAULT_OBSCURING_CHARACTER,
             on_submitted: None,
+            on_changed: None,
         }
     }
 
@@ -498,6 +533,20 @@ impl EditableText {
         self.on_submitted = Some(Rc::new(callback));
         self
     }
+
+    /// Call `callback` with the new text after each edit the user makes —
+    /// typing, deleting, an IME commit, a cut or a paste — Flutter's
+    /// `EditableText.onChanged`.
+    ///
+    /// Only user edits: a caller changing the controller itself
+    /// (`set_text`, `clear`) does not call it, which is what keeps a form
+    /// field's reset from counting as the user's input. Runs after the edit,
+    /// with no borrow of the field held.
+    #[must_use]
+    pub fn on_changed(mut self, callback: impl Fn(&str) + 'static) -> Self {
+        self.on_changed = Some(Rc::new(callback));
+        self
+    }
 }
 
 // Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
@@ -518,6 +567,7 @@ impl std::fmt::Debug for EditableText {
             .field("obscure_text", &self.obscure_text)
             .field("obscuring_character", &self.obscuring_character)
             .field("on_submitted", &self.on_submitted.is_some())
+            .field("on_changed", &self.on_changed.is_some())
             .finish()
     }
 }
@@ -639,6 +689,23 @@ pub struct EditableTextState {
     /// closure has no meaningful identity to compare, so it is simply
     /// overwritten every rebuild, which is cheap and always correct.
     on_submitted: Rc<RefCell<Option<SubmitCallback>>>,
+    /// The current [`EditableText::on_changed`] callback, read at edit time
+    /// through a shared cell for the reason `on_submitted` is.
+    on_changed: Rc<RefCell<Option<TextChanged>>>,
+    /// The presentation's clipboard, acquired in `init_state`. `None` only
+    /// on a bare owner; the clipboard actions are then disabled.
+    clipboard: Option<ClipboardHandle>,
+    /// Whether the field is obscured, read by the copy action at key time
+    /// and kept current by `did_update_view`.
+    obscure: Rc<Cell<bool>>,
+    /// The enclosing `Actions` chain the recorded one was layered over, so a
+    /// changed ancestor chain is recorded again.
+    enclosing_action_chain: Option<ActionChain>,
+    /// This field's clipboard actions layered over the enclosing chain: the
+    /// record on its focus node that a `Shortcuts` resolves intents against.
+    action_chain: Option<ActionChain>,
+    /// Generation-checked ownership of that record on the node.
+    action_chain_registration: Option<FocusNodeRegistration>,
 }
 
 impl std::fmt::Debug for EditableTextState {
@@ -678,6 +745,12 @@ impl StatefulView for EditableText {
             local_post_frame_handle: None,
             cursor_area_alive: Rc::new(RefCell::new(None)),
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
+            on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
+            clipboard: None,
+            obscure: Rc::new(Cell::new(self.obscure_text)),
+            enclosing_action_chain: None,
+            action_chain: None,
+            action_chain_registration: None,
         }
     }
 }
@@ -880,6 +953,190 @@ impl EditableTextState {
             "BUG: EditableText lifecycle used before init_state installed its focus manager",
         )
     }
+
+    /// The key handler for `node`: [`build_key_handler`], reporting each
+    /// edit it makes through `on_changed`.
+    fn key_handler(&self, node: &Rc<FocusNode>) -> KeyEventHandler {
+        let handler = build_key_handler(
+            Rc::clone(&self.controller),
+            Rc::clone(node),
+            Rc::clone(&self.on_submitted),
+        );
+        let edits = EditObserver {
+            controller: Rc::clone(&self.controller),
+            on_changed: Rc::clone(&self.on_changed),
+        };
+        Rc::new(move |event| {
+            // Enter only submits; a controller change there is the submit
+            // callback's own programmatic edit, not the user's.
+            if matches!(event.key, Key::Named(NamedKey::Enter)) {
+                return handler(event);
+            }
+            edits.around(|| handler(event))
+        })
+    }
+
+    /// This field's clipboard actions layered over the `Actions` chain at
+    /// its position, recorded on its focus node — where a `Shortcuts` looks
+    /// an intent up while this field holds the primary focus. Depends on the
+    /// enclosing chain, so a changed one is recorded again; the same record
+    /// `Focus` keeps (ADR-0079).
+    fn record_action_chain(&mut self, ctx: &dyn BuildContext) {
+        let enclosing = ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone());
+        let unchanged = match (&enclosing, &self.enclosing_action_chain) {
+            (Some(new), Some(held)) => Rc::ptr_eq(new, held),
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged
+            && self
+                .action_chain_registration
+                .as_ref()
+                .is_some_and(FocusNodeRegistration::is_current)
+        {
+            return;
+        }
+        let action = ClipboardTextAction {
+            controller: Rc::clone(&self.controller),
+            focus_node: Rc::clone(&self.observed_focus_node),
+            obscure: Rc::clone(&self.obscure),
+            clipboard: self.clipboard.clone(),
+            edits: EditObserver {
+                controller: Rc::clone(&self.controller),
+                on_changed: Rc::clone(&self.on_changed),
+            },
+        };
+        let chain = layered_chain(
+            enclosing.clone(),
+            &[
+                erased_action::<CopySelectionTextIntent>(action.clone()),
+                erased_action::<PasteTextIntent>(action),
+            ],
+        );
+        // Register the new record before the old token drops: the old one is
+        // no longer current then, so dropping it leaves the new one in place.
+        self.action_chain_registration =
+            Some(self.focus_node.register_context(as_node_context(&chain)));
+        self.action_chain = Some(chain);
+        self.enclosing_action_chain = enclosing;
+    }
+}
+
+/// Reports a user edit through [`EditableText::on_changed`]: compares the
+/// text before and after the edit, and calls the callback with no borrow
+/// held when they differ.
+#[derive(Clone)]
+struct EditObserver {
+    controller: Rc<RefCell<TextEditingController>>,
+    on_changed: Rc<RefCell<Option<TextChanged>>>,
+}
+
+impl EditObserver {
+    fn around<R>(&self, edit: impl FnOnce() -> R) -> R {
+        if self.on_changed.borrow().is_none() {
+            return edit();
+        }
+        let before = self.controller.borrow().text();
+        let result = edit();
+        self.report_if_changed(&before);
+        result
+    }
+
+    fn report_if_changed(&self, before: &str) {
+        let after = self.controller.borrow().text();
+        if after == before {
+            return;
+        }
+        let callback = self.on_changed.borrow().clone();
+        if let Some(callback) = callback {
+            callback(&after);
+        }
+    }
+}
+
+/// Copy, cut and paste for one mounted field — see [`EditableText`]'s
+/// `# Clipboard` section for when each is enabled.
+///
+/// Reads the controller, node and obscuring flag through the state's shared
+/// cells at key time, so a swapped controller or node is the one acted on.
+#[derive(Clone)]
+struct ClipboardTextAction {
+    controller: Rc<RefCell<TextEditingController>>,
+    /// The field's current node; its `can_request_focus` tracks `enabled`.
+    focus_node: Rc<RefCell<Rc<FocusNode>>>,
+    obscure: Rc<Cell<bool>>,
+    clipboard: Option<ClipboardHandle>,
+    /// Cut and paste are user edits.
+    edits: EditObserver,
+}
+
+impl ClipboardTextAction {
+    fn enabled(&self) -> bool {
+        self.focus_node.borrow().can_request_focus()
+    }
+
+    /// The controller, cloned out of its cell so no borrow is held while the
+    /// clipboard or the controller's listeners run.
+    fn controller(&self) -> TextEditingController {
+        self.controller.borrow().clone()
+    }
+}
+
+impl Action<CopySelectionTextIntent> for ClipboardTextAction {
+    fn is_enabled(&self, intent: &CopySelectionTextIntent) -> bool {
+        self.clipboard.is_some()
+            && !self.obscure.get()
+            && (*intent == CopySelectionTextIntent::Copy || self.enabled())
+            && self.controller.borrow().has_selection()
+    }
+
+    fn invoke(&self, intent: &CopySelectionTextIntent) -> ActionOutcome {
+        let Some(clipboard) = &self.clipboard else {
+            return ActionOutcome::NotPerformed;
+        };
+        let controller = self.controller();
+        let selected = controller.selected_text();
+        if selected.is_empty() {
+            return ActionOutcome::NotPerformed;
+        }
+        clipboard.write_text(selected);
+        if *intent == CopySelectionTextIntent::Cut {
+            // Replacing the selection with nothing deletes it and leaves the
+            // caret at its start.
+            self.edits.around(|| controller.insert_str(""));
+        }
+        ActionOutcome::Performed
+    }
+}
+
+impl Action<PasteTextIntent> for ClipboardTextAction {
+    fn is_enabled(&self, _intent: &PasteTextIntent) -> bool {
+        self.clipboard.is_some() && self.enabled() && !self.controller.borrow().is_composing()
+    }
+
+    fn invoke(&self, _intent: &PasteTextIntent) -> ActionOutcome {
+        let Some(clipboard) = &self.clipboard else {
+            return ActionOutcome::NotPerformed;
+        };
+        let controller = self.controller();
+        let edits = self.edits.clone();
+        // May complete before `read_text` returns: nothing is borrowed here.
+        clipboard.read_text(move |text| {
+            let Some(text) = text else {
+                return;
+            };
+            // A single-line field: line breaks are dropped, `\r` included,
+            // so a Windows `\r\n` leaves nothing behind.
+            let line: String = text
+                .chars()
+                .filter(|&character| character != '\n' && character != '\r')
+                .collect();
+            if !line.is_empty() {
+                edits.around(|| controller.insert_str(&line));
+            }
+        });
+        ActionOutcome::Performed
+    }
 }
 
 impl ViewState<EditableText> for EditableTextState {
@@ -902,12 +1159,16 @@ impl ViewState<EditableText> for EditableTextState {
         //    `can_request_focus` (kept in sync with `enabled` in
         //    `did_update_view`) so a stray dispatch to an already-focused
         //    field that has since been disabled is a no-op.
-        self.key_handler_registration =
-            Some(self.focus_node.register_on_key_event(build_key_handler(
-                Rc::clone(&self.controller),
-                Rc::clone(&self.focus_node),
-                Rc::clone(&self.on_submitted),
-            )));
+        self.key_handler_registration = Some(
+            self.focus_node
+                .register_on_key_event(self.key_handler(&self.focus_node)),
+        );
+
+        // 2b. The clipboard actions, recorded on the node beside the key
+        //     handler: a clipboard chord the handler leaves unconsumed
+        //     reaches the `Shortcuts` above, which resolves it here.
+        self.clipboard = ctx.clipboard_handle();
+        self.record_action_chain(ctx);
 
         // 3. Forward controller change events into the rebuild notifier so the
         //    inner AnimatedBuilder rebuilds on every keystroke.
@@ -955,6 +1216,10 @@ impl ViewState<EditableText> for EditableTextState {
         self.pipeline_owner.clone_from(&pipeline_owner_for_focus);
         let inner_anchor_for_focus = self.inner_anchor.clone();
         let controller_for_ime = Rc::clone(&self.controller);
+        let edits_for_ime = EditObserver {
+            controller: Rc::clone(&self.controller),
+            on_changed: Rc::clone(&self.on_changed),
+        };
         let ime_token_for_focus = Rc::clone(&self.ime_token);
         let cursor_area_alive_for_focus = Rc::clone(&self.cursor_area_alive);
         let ime_focus_transition: ImeFocusTransition = Rc::new(move |now_focused| {
@@ -975,9 +1240,10 @@ impl ViewState<EditableText> for EditableTextState {
                     .replace(Rc::clone(&alive));
 
                 let controller_for_callback = Rc::clone(&controller_for_ime);
+                let edits = edits_for_ime.clone();
                 let last_sent_for_ime_event = Rc::clone(&last_sent);
                 let token = match handle.attach(Rc::new(move |event: &ImeEvent| {
-                    apply_ime_event(&controller_for_callback.borrow(), event);
+                    edits.around(|| apply_ime_event(&controller_for_callback.borrow(), event));
                     // The backend may have restarted the IME session
                     // (`Enabled` re-fires on that restart) — clearing
                     // `last_sent` guarantees the new session gets a
@@ -1066,6 +1332,10 @@ impl ViewState<EditableText> for EditableTextState {
         self.on_submitted
             .borrow_mut()
             .clone_from(&new_view.on_submitted);
+        self.on_changed
+            .borrow_mut()
+            .clone_from(&new_view.on_changed);
+        self.obscure.set(new_view.obscure_text);
 
         // A parent rebuilding with a DIFFERENT controller retargets the
         // mounted field onto it, rather than the field silently going on
@@ -1105,15 +1375,15 @@ impl ViewState<EditableText> for EditableTextState {
             let replacement = Rc::clone(&new_view.focus_node);
             replacement.set_can_request_focus(new_view.enabled);
             let replacement_key_handler_registration =
-                replacement.register_on_key_event(build_key_handler(
-                    self.controller.clone(),
-                    Rc::clone(&replacement),
-                    Rc::clone(&self.on_submitted),
-                ));
+                replacement.register_on_key_event(self.key_handler(&replacement));
             let replacement_rect_provider_registration = self
                 .rect_provider
                 .as_ref()
                 .map(|provider| replacement.register_rect_provider(Rc::clone(provider)));
+            let replacement_action_chain_registration = self
+                .action_chain
+                .as_ref()
+                .map(|chain| replacement.register_context(as_node_context(chain)));
 
             // Keep observing the old node while the transaction reports an
             // exact-primary loss, so the current IME session is detached.
@@ -1130,9 +1400,11 @@ impl ViewState<EditableText> for EditableTextState {
 
             self.key_handler_registration.take();
             self.rect_provider_registration.take();
+            self.action_chain_registration.take();
             self.focus_node = replacement;
             self.key_handler_registration = Some(replacement_key_handler_registration);
             self.rect_provider_registration = replacement_rect_provider_registration;
+            self.action_chain_registration = replacement_action_chain_registration;
             let _prev = std::mem::replace(
                 &mut *self.observed_focus_node.borrow_mut(),
                 Rc::clone(&self.focus_node),
@@ -1171,6 +1443,7 @@ impl ViewState<EditableText> for EditableTextState {
                 .expect("BUG: EditableText could not reparent within its presentation");
             self.parent = Some(parent);
         }
+        self.record_action_chain(ctx);
     }
 
     fn build(&self, view: &EditableText, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -1221,6 +1494,7 @@ impl ViewState<EditableText> for EditableTextState {
         if owns_attachment {
             self.rect_provider_registration.take();
             self.key_handler_registration.take();
+            self.action_chain_registration.take();
         } else {
             if let Some(registration) = self.rect_provider_registration.take() {
                 registration.relinquish();
@@ -1228,7 +1502,12 @@ impl ViewState<EditableText> for EditableTextState {
             if let Some(registration) = self.key_handler_registration.take() {
                 registration.relinquish();
             }
+            if let Some(registration) = self.action_chain_registration.take() {
+                registration.relinquish();
+            }
         }
+        self.action_chain = None;
+        self.enclosing_action_chain = None;
         // Remove the focus-change listener we registered in init_state.
         if let Some(id) = self.focus_listener_id.take() {
             self.manager().remove_listener(id);
@@ -1565,14 +1844,16 @@ fn build_key_handler(
             // `FocusManager::dispatch_key_event`'s leaf->root walk reaches the
             // enclosing `Shortcuts`/`CallbackShortcuts` — consuming it here is
             // what makes Ctrl+S type "s" and every app shortcut dead while a
-            // field is focused.
+            // field is focused. The clipboard chords take this path too:
+            // `DefaultFocusTraversal` binds them, and its `Shortcuts` resolves
+            // them against the clipboard actions this field records on its
+            // own node.
             //
             // Scoped to character insertion ON PURPOSE. The named-key arms
-            // below have no ancestor to fall through to: `DefaultFocusTraversal`
-            // binds only Tab/Shift+Tab and FLUI has no default-text-shortcuts
-            // layer, so guarding them would not route Ctrl+Home somewhere
-            // better — it would make it a no-op. Widen this the day such a
-            // layer exists, together with it.
+            // below have no ancestor to fall through to: the default bindings
+            // cover no caret-movement intent, so guarding them would not route
+            // Ctrl+Home somewhere better — it would make it a no-op. Widen
+            // this together with the binding that would answer them.
             Key::Character(_) if is_command_chord(event.modifiers) => KeyEventResult::Ignored,
             Key::Character(character_string) => {
                 // Suppression contract (`ImeEvent`'s doc): suppress
@@ -1854,7 +2135,19 @@ fn build_field_view(
     // A collapsed selection is the caret's business, and the render object
     // skips it anyway — `None` says so at the seam rather than relying on it.
     let selection = (!selection.is_empty()).then_some(selection);
-    crate::__private::AnchoredBox::new(
+    // The field's node for assistive technology: Flutter's
+    // `RenderEditable.describeSemanticsConfiguration` (`isTextField`,
+    // `isObscured`, `value`, tag `3.44.0`), outside the inner anchor so the
+    // IME loop still finds the editable as that anchor's first child. The
+    // value is the text the render object shows — the mask when obscured.
+    let semantics = Semantics::new()
+        .container(true)
+        .text_field(true)
+        .obscured(appearance.obscure_text)
+        .enabled(enabled)
+        .focused(focused)
+        .value(text.clone());
+    let field = crate::__private::AnchoredBox::new(
         inner_anchor,
         EditableTextRenderView {
             text,
@@ -1886,8 +2179,8 @@ fn build_field_view(
             selection_color: appearance.selection_color,
             text_style: appearance.text_style.clone(),
         },
-    )
-    .boxed()
+    );
+    semantics.child(field).boxed()
 }
 
 // The key handler, the obscuring mask and the render-view assembly, tested

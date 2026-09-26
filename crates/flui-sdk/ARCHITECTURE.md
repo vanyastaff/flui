@@ -65,7 +65,10 @@ tests under `tests/` also use `flui-widgets`' and `flui-interaction`'s `testing`
 - **`flui-material`** (`packages/flui-material`) builds on this crate alone: its normal
   dependencies are `flui-sdk` and `tracing`, and every path in its `src`, doctests and tests goes
   through `flui_sdk::` (`flui_material_builds_on_the_sdk_alone` in `tools/xtask` pins the
-  manifest). The port needed no new item.
+  manifest). The port needed no new item. `TextFormField` added four paths inside the whole
+  `widgets` re-export, so no new line in `src/lib.rs`: `AutovalidateMode`, `FormFieldHandle` and
+  the `__private` seams `TextFormFieldConfig` and `TextFormFieldCore`, which the `measured`
+  module names.
 - **`flui-cupertino`** moves next (ADR-0088 move 3).
 
 An item a package needs that is not here is added by ADR-0088 §4 (at the facade's path when the
