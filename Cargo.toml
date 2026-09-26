@@ -300,6 +300,11 @@ regex = "1"
 walkdir = "2.5"
 clap = { version = "4.5", features = ["derive"] }
 
+# SOURCE ANALYSIS - flui-macros' derives and xtask's source gates. Each member
+# names the features it needs (`full`, `visit`, `span-locations`).
+proc-macro2 = "1"
+syn = "3"
+
 # === Engine-specific dependencies (NOT in workspace) ===
 # These are ONLY used in flui-engine:
 # - etagere (glyph atlas packing)

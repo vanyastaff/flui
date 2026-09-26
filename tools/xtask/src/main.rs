@@ -14,7 +14,9 @@ mod change_scope;
 mod doc_strict;
 mod docs_links;
 mod doctor;
+mod file_length;
 mod fonts;
+mod ratchet;
 mod toolchain;
 mod wasm;
 mod wgsl;
@@ -99,6 +101,8 @@ enum Command {
     DocsLinks(docs_links::DocsLinksArgs),
     /// Check or list the bundled font assets.
     FontAssets(fonts::FontAssetsArgs),
+    /// Check that no .rs file exceeds 3000 production lines (ADR-0081 §5).
+    FileLength(file_length::FileLengthArgs),
     /// List missing tools for `ci` / `ci-full`.
     Doctor(doctor::DoctorArgs),
     /// Collect benchmark results.
@@ -145,6 +149,7 @@ fn main() -> ExitCode {
         Command::DocStrict(args) => doc_strict::doc_strict(&args),
         Command::DocsLinks(args) => docs_links::docs_links(&args),
         Command::FontAssets(args) => fonts::font_assets(&args),
+        Command::FileLength(args) => file_length::file_length(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
     };

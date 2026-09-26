@@ -1,0 +1,10 @@
+# Rust files over the production-line limit (ADR-0081 §5), written by
+# `cargo xtask file-length --seed`. Counts are exact and only go down: the scan
+# fails when a file grows past its entry, shrinks below it, or comes under the
+# limit. `exit` names the ADR or migration-plan step whose change removes the entry.
+
+[[allow]]
+path = "crates/flui-scheduler/src/scheduler.rs"
+lines = 3569
+reason = "the production impl of UpdateScheduler is one block of about 2400 lines"
+exit = "W1-A5"

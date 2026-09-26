@@ -1,0 +1,11 @@
+accept W1-A5
+accept W1-A14
+accept W2-P1
+accept ADR-0081
+reject W9-Z9
+reject W9-A9
+reject W3-A1
+reject ADR-9999
+reject ""
+reject ?
+reject W1-A5 and more

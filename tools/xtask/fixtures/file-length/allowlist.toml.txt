@@ -1,0 +1,43 @@
+# The allowlist `cargo xtask file-length --self-test` scans the planted tree with.
+
+# exactly at its count: silent
+[[allow]]
+path = "src/granted.rs"
+lines = 3100
+reason = "planted: grandfathered at its exact count"
+exit = "W1-A5"
+
+# 3105 lines today
+[[allow]]
+path = "src/grew.rs"
+lines = 3100
+reason = "planted: grew past its entry"
+exit = "W1-A5"
+
+# 3050 lines today
+[[allow]]
+path = "src/shrank.rs"
+lines = 3100
+reason = "planted: shrank below its entry"
+exit = "ADR-0081"
+
+# 2000 lines today
+[[allow]]
+path = "src/fixed.rs"
+lines = 3100
+reason = "planted: now within the limit"
+exit = "W1-A5"
+
+# no such file
+[[allow]]
+path = "src/gone.rs"
+lines = 3100
+reason = "planted: the file is gone"
+exit = "W1-A5"
+
+# at its count, but the exit names no plan row
+[[allow]]
+path = "src/badexit.rs"
+lines = 3100
+reason = "planted: an exit that names nothing"
+exit = "W9-A9"
