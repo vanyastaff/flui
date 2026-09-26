@@ -121,7 +121,7 @@ layers = [
 
 # What no crate of a tier may reach in any root build, over normal and build
 # edges on every target (ADR-0081 §2), checked by `cargo xtask reach`. A tier's
-# set is its `extends` set less `except`, plus `forbid`; H has no table and
+# set is its `extends` set plus `forbid`; H has no table and
 # forbids nothing. A pattern is a package name or a `*` glob over the whole
 # name. A crate adds names with `reach-forbid` and is excused only by its own
 # `reach-exceptions` entry, which covers the paths that run through it.
@@ -167,9 +167,8 @@ extends = "S"
 forbid = ["tokio"]
 
 [workspace.metadata.flui.reach.tier.R]
+# wgpu stays forbidden here: flui-engine alone reaches it, through its grant
 extends = "K"
-# only flui-engine may reach wgpu; it carries the grant
-except = ["wgpu"]
 
 [workspace.metadata.flui.reach.tier.pkg]
 extends = "K"

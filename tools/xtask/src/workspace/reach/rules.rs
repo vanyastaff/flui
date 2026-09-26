@@ -5,13 +5,16 @@
 //! generic-ffi = [{ name = "windows-sys", reason = "…" }, …]
 //! [workspace.metadata.flui.reach.tier.K]
 //! forbid = ["winit", …]
-//! [workspace.metadata.flui.reach.tier.R]
-//! extends = "K"
-//! except = ["wgpu"]
+//! [workspace.metadata.flui.reach.tier.V]
+//! extends = "S"
+//! forbid = ["tokio"]
 //! ```
 //!
-//! A tier's set is the set of the tier it `extends`, less its `except`, plus
-//! its `forbid`; a tier with no table forbids nothing. A pattern is a package
+//! A tier's set is the set of the tier it `extends` plus its `forbid`; a tier
+//! with no table forbids nothing. A tier never drops an inherited name: the
+//! one crate that may reach one says so with its own `grant` in
+//! `reach-exceptions`, which leaves the name forbidden to the rest of its
+//! tier. A pattern is a package
 //! name or a glob whose only wildcard is `*`, matched against the whole name.
 //! A name on the `generic-ffi` allowlist matches no pattern: those crates name
 //! no windowing backend (ADR-0081 §2), and a pattern that names one exactly
@@ -96,13 +99,12 @@ pub(super) struct Rules {
 }
 
 const REACH_KEYS: [&str; 2] = ["generic-ffi", "tier"];
-const TIER_KEYS: [&str; 3] = ["extends", "forbid", "except"];
+const TIER_KEYS: [&str; 2] = ["extends", "forbid"];
 
 impl Rules {
     /// Reads `[workspace.metadata.flui.reach]`; `tiers` are the root's tier
-    /// names. An unknown key, an unknown or cyclic `extends`, an `except` the
-    /// tier does not inherit, and an exact pattern naming a generic-FFI crate
-    /// are errors.
+    /// names. An unknown key, an unknown or cyclic `extends`, and an exact
+    /// pattern naming a generic-FFI crate are errors.
     pub(super) fn from_workspace_metadata(
         workspace_metadata: &Json,
         tiers: &[String],
@@ -236,7 +238,7 @@ fn refuse_unknown(table: &Map<String, Json>, known: &[&str], what: &str) -> anyh
     Ok(())
 }
 
-/// `tier`'s set: its `extends` expanded, less `except`, plus `forbid`.
+/// `tier`'s set: its `extends` expanded, plus `forbid`.
 /// `visiting` holds the chain being expanded, to refuse a cycle.
 fn expand(
     tier: &str,
@@ -279,14 +281,6 @@ fn expand(
             expand(parent, tables, visiting)?
         }
     };
-    for except in list("except")? {
-        let before = set.len();
-        set.retain(|pattern| pattern.text() != except);
-        ensure!(
-            set.len() < before,
-            "`reach.tier.{tier}` excepts `{except}`, which it does not inherit"
-        );
-    }
     for text in list("forbid")? {
         let pattern =
             Pattern::parse(&text).with_context(|| format!("`reach.tier.{tier}.forbid`"))?;

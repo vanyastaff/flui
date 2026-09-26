@@ -95,8 +95,8 @@ engine (`crates/flui-engine/src/damage.rs:22`) with `mark_dirty`, `mark_full_rep
 - `flui-engine` (wgpu) and a new `flui-engine-cpu` both implement `flui_layer::RasterBackend` and
   consume `flui_layer::lower`. `flui-engine-cpu` sits in the render tier, kind internal,
   `publish = false` until the golden-image API is settled at B3, and must not reach `wgpu` in its
-  normal dependency graph (a per-crate `reach-forbid` fact, ADR-0081 §2, since tier R's set
-  leaves `wgpu` to `flui-engine`).
+  normal dependency graph (tier R's reach fact, ADR-0081 §2: R's set forbids `wgpu`, and only
+  `flui-engine` holds a `grant` for it).
 - A conformance suite in `flui-layer` renders the same scenes through every backend. A behaviour
   one backend cannot provide is a named capability gap with a fallback, on the model of
   ADR-0057, never a silent approximation.
@@ -176,8 +176,9 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
 
 None of these exist yet.
 
-- `wgpu` is absent from the normal closures of `flui-layer` and `flui-engine-cpu`, stated as
-  per-crate `reach-forbid` facts of the ADR-0081 reach gate (§2). `cargo tree -i` is not the
+- `wgpu` is absent from the normal closures of `flui-layer` and `flui-engine-cpu`, stated by
+  tier R's set in the ADR-0081 reach gate (§2), which only `flui-engine`'s grant excuses.
+  `cargo tree -i` is not the
   check: it errors on an absent package.
 - The `flui-layer` conformance suite passes on both backends, including `BackdropFilter`,
   `ShaderMask` and `Follower`, or lists each as a named gap.
