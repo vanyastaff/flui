@@ -50,10 +50,9 @@ use crate::{
         hwnd_affinity::{ContextLedger, UserDataRefusal},
     },
     traits::{
-        Clipboard, DesktopCapabilities, OpenWindowError, OwnerPlatform, Platform,
+        Clipboard, DesktopCapabilities, HostWindow, OpenWindowError, OwnerPlatform, Platform,
         PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformReadyCallback,
-        PlatformWindow, WindowAppearance, WindowEvent, WindowId, WindowMode, WindowOptions,
-        owner::OwnerHooks,
+        WindowAppearance, WindowEvent, WindowId, WindowMode, WindowOptions, owner::OwnerHooks,
     },
 };
 
@@ -1660,10 +1659,7 @@ impl Platform for WindowsPlatform {
         enumerate_displays().into_iter().find(|d| d.is_primary())
     }
 
-    fn open_window(
-        &self,
-        options: WindowOptions,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         if !self.owner_control.signal.accepting() {
             return Err(OpenWindowError::OwnerGone {
                 rejected: Some(options),

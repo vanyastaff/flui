@@ -86,19 +86,18 @@ wasm-bindgen-test = "=0.3.77"
 [package.metadata.docs.rs]
 all-features = true
 
-# Tier K, order 5: the frame runtime of ADR-0083 §1 sits in the spine tier
-# above `flui-view` (1), `flui-testing` (2), `flui-widgets` (3) and
-# `flui-localizations` (4), because the realm it will own drives a widget
-# tree; `flui-app` (tier H) is its only normal dependent. Internal: it is not
-# an embedder API (ADR-0027 §9), except the execution host-injection seam that
-# `flui-app` re-exports (ADR-0089 §1). Layer 6 is the widget catalog's: its
-# future `flui-widgets` edge allows layers 6 to 9 (`flui-app` is 9), and 6 is
-# the lowest of them.
+# Tier K, order 4: the frame runtime of ADR-0083 §1 sits in the spine tier
+# above `flui-view` (1), `flui-testing` (2) and `flui-widgets` (3), because
+# the realm it will own drives a widget tree; `flui-app` (tier H) is its only
+# normal dependent. Internal: it is not an embedder API (ADR-0027 §9), except
+# the execution host-injection seam that `flui-app` re-exports (ADR-0089 §1).
+# Layer 6 is the widget catalog's: its future `flui-widgets` edge allows layers
+# 6 to 9 (`flui-app` is 9), and 6 is the lowest of them.
 [package.metadata.flui]
 layer = 6
 tier = "K"
 tier-kind = "internal"
-order = 5
+order = 4
 # ADR-0047: only a host crate constructs the execution services, and no other
 # workspace crate reaches their pools. They are `pub` here only so the host can
 # construct them, so the hosts are the crates allowed a normal edge; ADR-0083 §4

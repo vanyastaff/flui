@@ -54,7 +54,7 @@
 //!   placed. An app starting with an opaque entry above another announced a
 //!   route the user could neither see nor touch.
 
-use flui_tree::Variable;
+use flui_foundation::Variable;
 use flui_types::{Offset, Size};
 
 use flui_rendering::{

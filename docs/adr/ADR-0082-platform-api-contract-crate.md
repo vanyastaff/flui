@@ -1,11 +1,13 @@
 # ADR-0082: `flui-platform-api` is the contract crate; OS backends stay in `flui-platform`
 
-- **Status:** Accepted in part (2026-09-26): §1 for the items §3's first change moves; §2's rule
-  that only composition roots depend on `flui-platform` (its `allowed-dependents`); §3's first
-  change. `PlatformWindow`'s move with a host-side window subtrait for `accessibility()` and the
-  removal of `as_winit` (§3, second change), §4 and §5 remain Proposed. §4 was revised in place
-  on 2026-09-26, while still Proposed: what step one requires, the precondition for step two, and
-  the order of the headless and Win32 backends. Win32 has completed step one.
+- **Status:** Accepted in part (2026-09-26): §1 for the items both of §3's changes move; §2's
+  rule that only composition roots depend on `flui-platform` (its `allowed-dependents`); §3's
+  first change. §3's second change (`PlatformWindow`'s move with the host-side window subtrait
+  `HostWindow` for `accessibility()`, and the removal of `as_winit`) is accepted on merge,
+  pending the evidence Verification lists as outstanding for it. §4 and §5 remain Proposed. §4
+  was revised in place on 2026-09-26, while still Proposed: what step one requires, the
+  precondition for step two, and the order of the headless and Win32 backends. Win32 has
+  completed step one.
 - **Date:** 2026-09-25
 - **Amends (on acceptance):** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,
   [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §1–§3,
@@ -53,19 +55,21 @@ The contracts themselves carry backend and threading assumptions that a contract
 keep:
 
 - `Platform: Send + Sync + 'static` (`crates/flui-platform/src/traits/platform.rs:92`) and
-  `PlatformWindow: Send + Sync` (`crates/flui-platform/src/traits/window.rs:80`) register
-  callbacks as `Box<dyn FnMut(..) + Send>`: `set_exit_policy_hook`, `set_wake_deadline_hook`,
-  `on_keyboard_layout_change`, `on_quit`, `on_reopen`, `on_window_event`, `on_open_urls`
-  (`platform.rs:158,219,362-389`) and the window's `on_input`, `on_request_frame`, `on_resize`,
-  `on_close` and the rest (`window.rs:392-568`). `OwnerPlatform::on_wake` and `SharedPlatform`'s
+  `PlatformWindow: Send + Sync` (`crates/flui-platform/src/traits/window.rs:80` when this was
+  written) register callbacks as `Box<dyn FnMut(..) + Send>`: `set_exit_policy_hook`,
+  `set_wake_deadline_hook`, `on_keyboard_layout_change`, `on_quit`, `on_reopen`,
+  `on_window_event`, `on_open_urls` (`platform.rs:158,219,359-386`) and the window's `on_input`,
+  `on_request_frame`, `on_resize`, `on_close` and the rest (`window.rs:392-570`; this and the
+  next two `window.rs` citations are to `crates/flui-platform/src/traits/window.rs` as it was
+  before §3's second change removed it). `OwnerPlatform::on_wake` and `SharedPlatform`'s
   forwarding registrations (`traits/owner.rs:95,258-307`) carry the same bound. Delivery is on
   the owner thread by construction (ADR-0039 §2), so the bound only forces callers to be `Send`.
   The runner's own comment names the consequence: "the platform callback surface still requires
   `Send`, so the `!Send` realm this holds remains in owner TLS"
   (`crates/flui-app/src/app/runner/host.rs:32-34`).
 - `PlatformWindow` names winit under a feature (`fn as_winit(&self) -> Option<&Arc<Window>>`,
-  `window.rs:680`) and returns `PlatformAccessibility`, which speaks AccessKit
-  (`window.rs:263`).
+  `window.rs:679-683`) and returns `PlatformAccessibility`, which speaks AccessKit
+  (`window.rs:263-265`).
 - A second, older window family (`Window`, `WindowManager`, `WindowBuilder`, a crate-local
   `RawWindowHandle` enum, `crates/flui-platform/src/window.rs:53,265,340,452`) exposes
   `fn raw_window_handle(&self) -> RawWindowHandle` (`window.rs:196`). Nothing outside the crate
@@ -108,8 +112,17 @@ release, not in the move.
 
 `flui-platform` becomes tier H, kind `internal`. It keeps every OS backend, the host-facing
 `Platform` trait, `OwnerPlatform`, `SharedPlatform`, `PlatformProxy`, `PendingWindow`/`WindowOpen`,
-the prompt APIs, and `PlatformAccessibility` (its only consumer is the runner, and its signatures
-are AccessKit's). Only composition roots depend on it: `flui-app`, and tests that drive a backend.
+the prompt APIs, and `PlatformAccessibility` (its signatures are AccessKit's). Only composition
+roots depend on it: `flui-app`, and tests that drive a backend.
+
+`PlatformAccessibility` has two consumers in `flui-app`, not one: the runner reads the bridge from
+`HostWindow::accessibility` when a window opens, and the realm core (`PresentationWindow`, and
+`PresentationState`, which wires and withdraws the bridge) holds it. It is the one
+`flui_platform` name the realm core's production code still uses, so moving the realm core into
+`flui-runtime` (ADR-0083) has to amend this section first: either a runtime-owned accessibility
+port, typed through `flui_semantics`, that a host adapter implements over
+`Arc<dyn PlatformAccessibility>`, or `PlatformAccessibility` itself moved to a crate at tier S
+or below that may depend on `accesskit`.
 
 `Platform` stays effectively sealed, as ADR-0039 §1 describes: an out-of-crate backend cannot mint
 the `OwnerPlatform` its `run()` hands to `on_ready`. This record does not open that minting seam;
@@ -137,9 +150,17 @@ subtrait returned by `Platform::open_window`, `WindowOpen::Ready` and `PendingWi
 about fifty `dyn PlatformWindow` sites in `flui-app` across four backends, two of which CI only
 type-checks.
 
-**Second change (proposed).** `PlatformWindow` moves without `as_winit` (nothing calls it) and
+**Second change (accepted on merge, verification pending).** `PlatformWindow` moves without `as_winit` (nothing calls it) and
 without `accessibility()`, which becomes a method of a backend-side extension trait in
-`flui-platform` that the runner uses.
+`flui-platform` that the runner uses: `HostWindow: PlatformWindow`. `Platform::open_window`,
+`WindowOpen::Ready`/`try_ready` and `PendingWindow` return `Arc<dyn HostWindow>`, which upcasts
+to `Arc<dyn PlatformWindow>`, and `dyn HostWindow` repeats the raw-handle impls so an
+`open_window` result stays a renderer target. The runner reads the bridge once, when it turns an
+open result into a realm, and hands the realm the window with its bridge beside it; production
+code has no implicit conversion from a bare window, so dropping the bridge takes an explicit
+`None` rather than a `.into()`. The
+contract crate gains `cursor-icon` (re-exported as `CursorIcon`) and `raw-window-handle`, both
+allowed by ADR-0089, and its manifest adds `reach-forbid = ["accesskit", "tokio"]`.
 
 Acceptance of the first change, until `cargo xtask reach` (ADR-0081 §2) exists to state it as
 a reach fact:
@@ -263,14 +284,32 @@ goes with ADR-0047's consolidation, not here.
 
 The first change is held by `flui-platform`'s `allowed-dependents` (`cargo xtask workspace`) and
 by the `flui_platform_api` crate doctest, which implements `PlatformTextInput` and
-`PlatformHaptics` with no `flui-platform` in scope. None of the following exist yet.
+`PlatformHaptics` with no `flui-platform` in scope. The second change is held by:
 
 - `cargo xtask reach` (ADR-0081) with `flui-platform`, `winit`, `windows`, `objc2-app-kit`,
-  `objc2-ui-kit`, `android-activity` and `ndk` forbidden for tier K; red before the first change,
-  green after.
-- A reach fact for `flui-platform-api` itself: its tier C set forbids the OS crates and winit,
-  and its own `reach-forbid` entry (ADR-0081 §2) adds `tokio` and `accesskit`.
-- `cargo xtask cross-typecheck` for Win32, AppKit, Android and iOS on every backend change.
+  `objc2-ui-kit`, `android-activity` and `ndk` forbidden for tier K, and a reach fact for
+  `flui-platform-api` itself: its tier C set forbids the OS crates and winit, and its own
+  `reach-forbid` entry (ADR-0081 §2) adds `tokio` and `accesskit`;
+- the doctests on `PlatformWindow`: one implements it with no `flui-platform` in scope, and its
+  `compile_fail` twin, identical but for an `accessibility` method, is rejected with E0407;
+- `flui-platform`'s `host_window` tests (a headless `open_window` result keeps its bridge and
+  upcasts to the same window; `Arc<dyn HostWindow>` is a raw-handle source) and `flui-app`'s
+  `a_realm_built_from_a_host_window_publishes_through_its_accessibility`, which fails if the
+  runner drops the bridge on the way to the realm.
+
+A backend change is checked by `cargo xtask cross-typecheck` for Win32, AppKit, Android and iOS.
+For the second change only Win32 and AppKit (`aarch64-apple-darwin`, with `a11y`) and the Linux
+`winit-backend` build of `flui-platform` with `a11y` were type-checked. Outstanding for it:
+
+- `cargo xtask cross-typecheck` for Android and iOS (the `android` and `ios` backends, the
+  `android.rs`/`ios.rs` runners and `session_controller`), and a wasm32 check of the web
+  backend and the `web.rs` runner;
+- a recorded live run on Windows (`cargo xtask device windows-input`), and a UIA check that a
+  real Win32 window still publishes its tree now that its `accessibility` override lives in
+  `impl HostWindow`.
+
+Not yet in place:
+
 - A compile-time pin that registered callbacks accept `!Send` closures once step 2 lands: a
   doctest on `PlatformWindow::on_input` that registers a closure capturing an `Rc`.
 - The API-closure gate of ADR-0089 run over `flui-platform-api`, with a planted

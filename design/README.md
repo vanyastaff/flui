@@ -8,7 +8,8 @@
   status names. ADR-0082: `flui-platform-api` exists and holds the capability traits and the
   window and input vocabulary, and only `flui-app` depends on `flui-platform`; its `Send`
   removal is still Proposed, but Win32 has done its first step (owner-only callbacks, off-owner
-  registration refused). ADR-0095: the `flui-protocol` crate exists and holds `SemanticsRole`,
+  registration refused). ADR-0081's deletions of `flui-tree` and `flui-localizations` landed on
+  2026-09-26. ADR-0095: the `flui-protocol` crate exists and holds `SemanticsRole`,
   `SemanticsAction` and the ADR-0080 wire vocabulary. ADR-0097: `cargo xtask globals` gates
   process-global state against the seeded `globals` entries in each manifest. ADR-0083:
   `flui-runtime` exists (tier K, internal, above `flui-widgets`) and holds the held-input lane,
@@ -96,7 +97,7 @@ older ADRs it amends or supersedes get their back-links then.
 | ADR | Decision |
 |---|---|
 | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) | Workspace tiers, reach facts, stability kinds, feature policy and the B0 exit |
-| [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` (accepted in part: the first move; `PlatformWindow`, `Send` removal and deletions remain proposed, and Win32 has done the `Send` removal's first step) |
+| [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` (accepted in part: the capability and vocabulary move; `PlatformWindow`'s move, with `HostWindow` carrying accessibility, is accepted on merge pending Android/iOS/wasm32 type-checks and a live Windows run; `Send` removal and deletions remain proposed, and Win32 has done the `Send` removal's first step) |
 | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) | One frame transaction lives in `flui-runtime` above `flui-widgets` (accepted in part: the crate's placement and its first move) |
 | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) | Platform capabilities are an open, typed set in two classes (core-required backend methods, optional plugins) behind one door |
 | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) | The reactive graph is realm-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation` |

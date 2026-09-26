@@ -10,7 +10,11 @@
 
 use flui_types::platform::Locale;
 use flui_types::typography::TextDirection;
-use flui_widgets::{DefaultWidgetsLocalizations, LocalizationsDelegate, WidgetsLocalizations};
+
+use super::{
+    BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, LocalizationsDelegate,
+    WidgetsLocalizations,
+};
 
 /// The set of [`Locale::language`] codes the oracle's generated
 /// `WidgetsLocalization*` classes construct with `TextDirection.rtl`:
@@ -38,9 +42,8 @@ pub const RTL_LANGUAGES: &[&str] = &["ar", "fa", "he", "ps", "ur"];
 /// [`DefaultWidgetsLocalizations`] — only [`text_direction`](Self::text_direction)
 /// differs by locale. This is a real, user-visible gap (an Arabic-locale app
 /// gets RTL layout with English button labels), not a silent one: it is
-/// named here and in the crate root docs as the next slice of this
-/// substrate, gated on a decision for where FLUI sources per-language
-/// translations from.
+/// named here as the next step for this type, gated on a decision for
+/// where FLUI sources per-language translations from.
 #[derive(Debug, Clone, Copy)]
 pub struct GlobalWidgetsLocalizations {
     text_direction: TextDirection,
@@ -121,7 +124,7 @@ impl WidgetsLocalizations for GlobalWidgetsLocalizations {
 
 /// A [`LocalizationsDelegate`] that resolves a [`GlobalWidgetsLocalizations`]
 /// for any locale — the multi-language counterpart of
-/// `flui_widgets::DefaultWidgetsLocalizationsDelegate`, which is always LTR.
+/// [`DefaultWidgetsLocalizationsDelegate`](super::DefaultWidgetsLocalizationsDelegate), which is always LTR.
 ///
 /// Flutter parity: `GlobalWidgetsLocalizations.delegate`
 /// (`_WidgetsLocalizationsDelegate` in `widgets_localizations.dart`).
@@ -129,7 +132,7 @@ impl WidgetsLocalizations for GlobalWidgetsLocalizations {
 pub struct GlobalWidgetsLocalizationsDelegate;
 
 impl LocalizationsDelegate for GlobalWidgetsLocalizationsDelegate {
-    type Resources = flui_widgets::BoxedWidgetsLocalizations;
+    type Resources = BoxedWidgetsLocalizations;
 
     /// Always `true` — every locale gets a [`GlobalWidgetsLocalizations`]
     /// (correct direction, English strings). Flutter's own delegate instead
@@ -143,7 +146,7 @@ impl LocalizationsDelegate for GlobalWidgetsLocalizationsDelegate {
     }
 
     fn load(&self, locale: &Locale) -> Self::Resources {
-        flui_widgets::BoxedWidgetsLocalizations::new(GlobalWidgetsLocalizations::for_locale(locale))
+        BoxedWidgetsLocalizations::new(GlobalWidgetsLocalizations::for_locale(locale))
     }
 }
 

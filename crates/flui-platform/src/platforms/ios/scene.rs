@@ -1,5 +1,5 @@
 //! UIKit session identities and the platform-to-runner installation boundary.
-use crate::{BootstrapError, PlatformWindow};
+use crate::{BootstrapError, HostWindow};
 use std::sync::Arc;
 
 /// UIKit's persistent logical scene-session identity, independent of attachments.
@@ -26,7 +26,7 @@ pub enum IOSSceneEvent {
         /// Origin of this native connection.
         attachment: IOSSceneAttachmentId,
         /// Stable logical window, also retained across reconnects.
-        window: Arc<dyn PlatformWindow>,
+        window: Arc<dyn HostWindow>,
         /// Whether this session already installed its application tree.
         reconnect: bool,
     },

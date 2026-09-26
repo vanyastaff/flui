@@ -45,6 +45,7 @@ pub(super) const DOCS_ONLY: &[&str] = &[
     ".editorconfig",
     "crates/*/ARCHITECTURE.md",
     "crates/*/CHANGELOG.md",
+    "changelog.d/**", // changelog fragments; `changelog --check` in `checks` judges them
 ];
 
 /// Inputs whose breakage only the wide lane's jobs block on (feature-matrix,
@@ -762,6 +763,8 @@ pub(super) mod tests {
             ".github/PULL_REQUEST_TEMPLATE.md",
             "crates/flui-view/ARCHITECTURE.md",
             "crates/flui-view/CHANGELOG.md",
+            "changelog.d/tools-changelog-fragments.md",
+            "changelog.d/README.md",
         ] {
             assert!(is_docs_only(path), "{path}");
         }
@@ -1008,11 +1011,6 @@ pub(super) mod tests {
         // declared but feature-gated: the resolved graph would miss these
         assert!(
             scope(&["crates/flui-cupertino/src/lib.rs"])
-                .packages
-                .contains(&"flui".to_owned())
-        );
-        assert!(
-            scope(&["crates/flui-localizations/src/lib.rs"])
                 .packages
                 .contains(&"flui".to_owned())
         );

@@ -1,6 +1,6 @@
 //! RenderSliver trait for scrollable content layout.
 
-use flui_tree::Arity;
+use flui_foundation::Arity;
 use flui_types::{Size, geometry::px, prelude::AxisDirection};
 
 use crate::{
@@ -714,7 +714,7 @@ pub trait RenderProxySliver<C: RenderSliver>: RenderSliver {
 
 #[cfg(test)]
 mod tests {
-    use flui_tree::{Leaf, Single};
+    use flui_foundation::{Leaf, Single};
     use flui_types::layout::{AxisDirection, AxisDirection::*};
 
     use super::*;

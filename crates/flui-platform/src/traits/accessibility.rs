@@ -1,12 +1,14 @@
 //! Platform accessibility capability.
 //!
 //! [`PlatformAccessibility`] is reached through
-//! [`PlatformWindow::accessibility`](super::window::PlatformWindow::accessibility),
+//! [`HostWindow::accessibility`](super::HostWindow::accessibility),
 //! the same fallible `Option<Arc<dyn _>>` discovery used by
 //! [`PlatformTextInput`](crate::traits::PlatformTextInput) (ADR-0030) and
 //! [`PlatformHaptics`](crate::traits::PlatformHaptics) (ADR-0031). A backend
 //! with no accessibility integration returns `None` rather than every
-//! `PlatformWindow` implementor inheriting methods it cannot honor.
+//! `HostWindow` implementor inheriting methods it cannot honor. It is on the
+//! host-side subtrait, not on `PlatformWindow`, because its signatures are
+//! AccessKit's and the window contract names none (ADR-0082 §1).
 //!
 //! # It speaks AccessKit, never semantics types
 //!

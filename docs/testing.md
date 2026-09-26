@@ -124,7 +124,7 @@ cargo xtask ci
 It runs, in order (`tools/xtask/src/tasks.rs` is the authority):
 
 ```bash
-cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), the docs-only allowlist, font assets, file-length and markers (each with its self-test); builds only xtask
+cargo xtask checks                        # fmt, typos, taplo, markdown links (docs-links: lychee, offline), workspace (tiers, layers, manifests, test reachability, ADR numbers), reach (what each crate's resolved graph may contain, and the hot-reload facts), module-dag (import direction between a crate's modules), toolchain, wgsl, globals (process-global state, ADR-0097), the docs-only allowlist, font assets, file-length, markers and changelog fragments (each with its self-test); builds only xtask
 cargo xtask lint                          # clippy -D warnings, as the CI clippy job runs it: the workspace, then flui-engine's `testing` code
 cargo xtask doc-strict                    # cargo doc --workspace --no-deps --locked --document-private-items with every workspace `testing` feature on
 cargo xtask test                          # nextest over the local scope, flui-platform headless, then the nested-cargo group (see "What `cargo xtask test` runs")
@@ -148,18 +148,18 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
---features flui/cupertino,flui/localizations`, run as the two stages below.
+--features flui/cupertino`, run as the two stages below.
 Two choices in it differ from CI on purpose:
 
-- **One feature slice.** The facade's non-default catalogs (`cupertino`,
-  `localizations`) join the workspace run through feature unification. The
+- **One feature slice.** The facade's non-default catalog (`cupertino`)
+  joins the workspace run through feature unification. The
   alternative, a second `cargo nextest run -p flui --features ...`, resolves
   features for `flui`'s own graph, without the dev-dependency features other
   members switch on (`testing` and friends), so every crate the two runs share
   was built twice under different hashes. No test is lost: the root crate has
   no `cfg(not(feature = ...))` code, so the default-feature facade's tests are
   a subset of these. **Not covered locally:** the facade in its default
-  configuration (Material only, no Cupertino or localizations). CI's `test`
+  configuration (Material only, no Cupertino). CI's `test`
   job and `feature-matrix` build and test it; `cargo xtask feature-matrix` does too.
 - **Examples are not linked.** `cargo nextest run` with no target flags builds
   every example of every package it tests: about 60 binaries, each linking the
@@ -306,16 +306,15 @@ cargo test --workspace --release                  # run tests against the releas
 ```bash
 cargo test -p flui-types
 cargo test -p flui-foundation
-cargo test -p flui-tree
 cargo test -p flui-platform
 ```
 
 ### A single test or filter
 
 ```bash
-cargo test -p flui-tree element_id_offset                 # filter by name
-cargo test -p flui-tree element_id_offset -- --nocapture  # surface stdout/println from tests
-cargo test -p flui-tree -- --test-threads=1               # serialize tests (debugging)
+cargo test -p flui-foundation indexed_slot                 # filter by name
+cargo test -p flui-foundation indexed_slot -- --nocapture  # surface stdout/println from tests
+cargo test -p flui-foundation -- --test-threads=1          # serialize tests (debugging)
 ```
 
 ### With logging
@@ -333,7 +332,7 @@ The constitution sets minimum coverage thresholds per crate category:
 
 | Category | Minimum | Examples |
 |----------|---------|----------|
-| Core | 80 % | `flui-types`, `flui-foundation`, `flui-tree`, `flui-rendering`, `flui-view` |
+| Core | 80 % | `flui-types`, `flui-foundation`, `flui-rendering`, `flui-view` |
 | Platform | 70 % | `flui-platform` |
 | Widget | 85 % | (future widget crates) |
 
@@ -784,8 +783,8 @@ stops being emitted, a clip that disappears, a subtree that stops being built:
 each changes those lines and fails the matching test, naming the layer and the
 command.
 
-No GPU, no device-specific baseline: CI's "facade non-default catalogs" step
-(`cargo nextest run -p flui --features cupertino,localizations`) runs the suite
+No GPU, no device-specific baseline: CI's `test` job (its scope turns
+`flui/cupertino` on) runs the suite
 like any other test, and it takes about a tenth of a second.
 
 ### Why structural and not pixels
@@ -866,7 +865,7 @@ check; all cargo commands run `--locked`; actions are SHA-pinned and the
 workflow files themselves are linted:
 
 ```bash
-cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace layers, module-dag, toolchain, wgsl, globals, ...; a missing tool fails
+cargo xtask checks --strict                                   # fmt, taplo, typos, markdown links, workspace layers, module-dag, toolchain, wgsl, globals, changelog fragments, ...; a missing tool fails
 cargo test -p xtask --locked                                  # xtask's own tests, lane classification included
 actionlint                                                    # workflow semantics
 zizmor .                                                      # workflow security audit

@@ -168,7 +168,6 @@ cargo ndk -t arm64-v8a build -p flui-android-demo
 ```bash
 cargo check -p flui-types
 cargo check -p flui-foundation
-cargo check -p flui-tree
 cargo check -p flui-platform
 ```
 

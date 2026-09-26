@@ -13,7 +13,7 @@
 //! comment on each says "the Material Design 3 specification does not include
 //! a 'dense'/'tall' text theme, so this is just here to be consistent with the
 //! API" — `typography.dart`, oracle tag `3.44.0`) and script-category
-//! resolution has no consumer yet (`flui-localizations` does not resolve
+//! resolution has no consumer yet (no localizations resolve
 //! `ScriptCategory`). Deferred until a localization consumer exists to pin the
 //! API against, tracked alongside the crate's other named deferrals (see the
 //! crate root docs).

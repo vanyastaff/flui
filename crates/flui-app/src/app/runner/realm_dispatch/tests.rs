@@ -11,7 +11,7 @@ use flui_interaction::{
     HitTestResult,
     events::{PointerType, make_down_event},
 };
-use flui_platform::traits::PlatformInput;
+use flui_platform::traits::{PlatformInput, PlatformWindow};
 use flui_types::geometry::{Offset, Pixels};
 use flui_view::View;
 
@@ -36,6 +36,13 @@ fn down_input(offset: f32) -> PlatformInput {
 
 fn test_window() -> std::sync::Arc<dyn flui_platform::traits::PlatformWindow> {
     crate::app::window_test_support::headless_test_window()
+}
+
+/// A fresh headless window as a runner hands it to
+/// `install_presentation_alongside`: through `presentation_window`, so the
+/// headless backend's accessibility bridge is wired as in production.
+fn test_presentation_window() -> crate::app::presentation::PresentationWindow {
+    super::super::presentation_window(crate::app::window_test_support::headless_test_host_window())
 }
 
 fn install_test_realm() -> RealmDispatcher {
@@ -214,7 +221,8 @@ fn window_execution_is_local_reversible_and_cannot_override_host_or_terminal_sto
     use flui_platform::WindowExecutionState::{Detached, Running, Suspended};
     with_quit_notification_loop(|_, _| {
         let a = install_test_realm();
-        let b = install_presentation_alongside(a, &test_window()).expect("shared presentation");
+        let b = install_presentation_alongside(a, test_presentation_window())
+            .expect("shared presentation");
         resume_for_quit(a);
         dispatch_platform_realm(
             a,
@@ -365,7 +373,8 @@ fn window_lifecycle_separate_realms_do_not_share_visibility_facts() {
 fn window_lifecycle_shared_realm_visible_sibling_keeps_frames_enabled() {
     with_quit_notification_loop(|_, _| {
         let a = install_test_realm();
-        let b = install_presentation_alongside(a, &test_window()).expect("shared presentation");
+        let b = install_presentation_alongside(a, test_presentation_window())
+            .expect("shared presentation");
         resume_for_quit(a);
         dispatch_platform_realm(b, RealmTask::Event(PlatformToUi::WindowFocus(true)))
             .expect("focus B");
@@ -448,7 +457,7 @@ fn window_lifecycle_close_unregisters_after_terminal_observer_panics() {
         with_quit_notification_loop(move |_, _| {
             let a = install_test_realm();
             let closing = if shared {
-                install_presentation_alongside(a, &test_window()).expect("B")
+                install_presentation_alongside(a, test_presentation_window()).expect("B")
             } else {
                 a
             };
@@ -530,8 +539,9 @@ fn quit_notification_survives_primary_removal_and_visits_shared_realm_once() {
         let secondary =
             install_realm_alongside(crate::app::ui_realm::UiRealm::for_test(), &test_window())
                 .expect("secondary");
-        let _other_presentation = install_presentation_alongside(secondary, &test_window())
-            .expect("shared realm presentation");
+        let _other_presentation =
+            install_presentation_alongside(secondary, test_presentation_window())
+                .expect("shared realm presentation");
         resume_for_quit(secondary);
         let detached = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed = Arc::clone(&detached);
@@ -893,7 +903,7 @@ fn keep_alive_completion_reopens_the_exit_question_after_the_last_window_closed(
                 }));
             });
 
-            let window = with_owner_platform(|owner| {
+            let window: Arc<dyn PlatformWindow> = with_owner_platform(|owner| {
                 owner.open_window(flui_platform::WindowOptions::default())
             })
             .expect("owner installed above")
@@ -1174,10 +1184,10 @@ fn install_platform_realm_never_touches_owner_platform() {
 #[test]
 fn reinstall_with_a_different_window_removes_the_old_windows_registry_mapping() {
     let platform = flui_platform::headless_platform();
-    let first_window = platform
+    let first_window: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create the first test window");
-    let second_window = platform
+    let second_window: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create the second test window");
     let first_window_id = first_window.id();
@@ -1444,7 +1454,7 @@ fn queued_events_for_a_removed_presentation_never_deliver() {
 #[test]
 fn queued_safe_area_for_a_closed_sibling_presentation_is_dropped() {
     let platform = flui_platform::headless_platform();
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
     let window_b: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::new(
@@ -1956,10 +1966,10 @@ fn frames_reenable_redirties_root_when_dispatched_through_the_realm_queue() {
 /// A's window mapping the moment realm B's aliased-id window installs.
 fn install_two_test_realms() -> (RealmDispatcher, RealmDispatcher) {
     let platform = flui_platform::headless_platform();
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
-    let window_b = platform
+    let window_b: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window b");
     let dispatcher_a = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
@@ -2264,7 +2274,7 @@ fn teardown_realm_a_mid_dispatch_leaves_realm_b_frame_producing() {
 #[test]
 fn install_realm_alongside_refuses_a_colliding_window_id_instead_of_silently_rerouting() {
     let platform = flui_platform::headless_platform();
-    let window = platform
+    let window: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create a test window");
     let dispatcher_a = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window);
@@ -2308,7 +2318,7 @@ fn install_realm_alongside_refuses_a_colliding_window_id_instead_of_silently_rer
 #[test]
 fn deferred_install_collision_is_refused_without_corrupting_the_registry() {
     let platform = flui_platform::headless_platform();
-    let window = platform
+    let window: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create a test window");
     let dispatcher_a = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window);
@@ -2411,7 +2421,7 @@ fn install_realm_a_through_a_real_owner_platform() -> (RealmDispatcher, OwnerHos
     let dispatcher_a_slot_for_on_ready = Rc::clone(&dispatcher_a_slot);
     let ready = platform.run(Box::new(move |owner| {
         install_owner_platform(owner).expect("install owner wake transport");
-        let window_a =
+        let window_a: Arc<dyn PlatformWindow> =
             with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
                 .expect("BUG: install_owner_platform just ran above")
                 .and_then(flui_platform::WindowOpen::try_ready)
@@ -2584,12 +2594,12 @@ fn closing_one_of_two_windows_does_not_exit_through_the_real_platform_hook_closi
             }));
         });
 
-        let window_a =
+        let window_a: Arc<dyn PlatformWindow> =
             with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
                 .expect("owner installed above")
                 .and_then(flui_platform::WindowOpen::try_ready)
                 .expect("headless open_window is always Ready");
-        let window_b =
+        let window_b: Arc<dyn PlatformWindow> =
             with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
                 .expect("owner installed above")
                 .and_then(flui_platform::WindowOpen::try_ready)
@@ -2743,7 +2753,7 @@ fn install_realm_a_with_exit_policy_quit_counter_and_reevaluation() -> (
             }));
         });
 
-        let window_a =
+        let window_a: Arc<dyn PlatformWindow> =
             with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
                 .expect("owner installed above")
                 .and_then(flui_platform::WindowOpen::try_ready)
@@ -3063,6 +3073,7 @@ fn open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_o
             "resolve_next's own return value must be the SAME window it delivered \
              through the PendingWindow"
         );
+        let window_a: Arc<dyn PlatformWindow> = window_a;
 
         let dispatcher_a =
             install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
@@ -3244,6 +3255,7 @@ fn shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane
             "resolve_next's own return value must be the SAME window it delivered \
              through the PendingWindow"
         );
+        let window_a: Arc<dyn PlatformWindow> = window_a;
 
         let dispatcher_a =
             install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
@@ -3404,6 +3416,7 @@ fn pending_open_survives_origin_realm_close_and_worker_resolution() {
             .expect("resolve_next delivers synchronously")
             .expect("mock window creation cannot fail");
         assert!(Arc::ptr_eq(&resolved_a, &window_a));
+        let window_a: Arc<dyn PlatformWindow> = window_a;
 
         let dispatcher_a =
             install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
@@ -3594,7 +3607,7 @@ fn close_splash_then_open_main_does_not_exit() {
     let splash_id = splash.address.realm_id;
 
     let platform = flui_platform::headless_platform();
-    let main_window = platform
+    let main_window: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create the main window");
     let main_realm = crate::app::ui_realm::UiRealm::for_test();
@@ -3669,14 +3682,14 @@ fn frame_callback_opening_a_window_installs_second_realm_without_nested_dispatch
     // `install_two_test_realms`'s doc for why two separate
     // `test_window()` calls would risk an aliased id here.
     let platform = flui_platform::headless_platform();
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
     let dispatcher_a = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
 
     let second_realm = crate::app::ui_realm::UiRealm::for_test();
     let second_realm_id = second_realm.realm_id();
-    let second_window = platform
+    let second_window: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create the second window");
     let mut second_realm = Some(second_realm);
@@ -3889,14 +3902,14 @@ fn owner_platform_accessor_fences_correctly_with_a_second_idle_realm_present() {
     // scan were ever deleted. Only the real scan, checking every
     // resident slot rather than assuming the first one is representative,
     // makes this test kill that mutant.
-    let window_b = platform
+    let window_b: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window b");
     // Realm B is installed and then never touched again for the rest of
     // this test -- it stays resident and Idle throughout.
     let _dispatcher_b =
         install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_b);
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
     let dispatcher_a =
@@ -4044,13 +4057,13 @@ fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter() {
     // `install_two_test_realms`'s doc for why two independent
     // `headless_platform()` calls would risk an aliased window id.
     let platform = flui_platform::headless_platform();
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
-    let window_b = platform
+    let window_b: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window b");
-    let window_for_new_realm = platform
+    let window_for_new_realm: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create the second window");
 
@@ -4161,10 +4174,10 @@ fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter() {
 #[test]
 fn closing_a_presentation_unregisters_its_window_mapping() {
     let platform = flui_platform::headless_platform();
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
-    let window_b = platform
+    let window_b: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window b");
 
@@ -4317,10 +4330,10 @@ fn dispose_time_reentrant_dispatch_with_the_dying_presentations_own_dispatcher_i
     // `install_two_test_realms`'s doc for why two independent
     // `headless_platform()` calls would risk an aliased window id.
     let platform = flui_platform::headless_platform();
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
-    let window_b = platform
+    let window_b: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window b");
 
@@ -4448,7 +4461,7 @@ fn window_focus_true_moves_active_presentation_end_to_end_and_false_does_not() {
     // `install_two_test_realms`'s doc for why two independent
     // `headless_platform()` calls would risk an aliased window id.
     let platform = flui_platform::headless_platform();
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
     let window_b: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::new(
@@ -4572,7 +4585,7 @@ fn window_focus_true_moves_active_presentation_end_to_end_and_false_does_not() {
 #[test]
 fn window_focus_loss_cancels_the_addressed_presentations_sequences_only() {
     let platform = flui_platform::headless_platform();
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
     let window_b: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::new(
@@ -4722,10 +4735,10 @@ fn window_focus_loss_cancels_the_addressed_presentations_sequences_only() {
 #[test]
 fn window_visibility_gates_exactly_the_addressed_presentations_clock() {
     let platform = flui_platform::headless_platform();
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
-    let window_b = platform
+    let window_b: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window b");
 
@@ -4861,13 +4874,13 @@ fn install_presentation_alongside_refuses_a_stale_dispatcher_even_though_its_rea
     // `install_two_test_realms`'s doc for why two independent
     // `headless_platform()` calls would risk an aliased window id.
     let platform = flui_platform::headless_platform();
-    let window_p = platform
+    let window_p: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window p");
-    let window_a = platform
+    let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window a");
-    let window_c = platform
+    let window_c: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
         .expect("headless platform should create window c");
 

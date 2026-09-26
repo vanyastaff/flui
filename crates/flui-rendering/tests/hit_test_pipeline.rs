@@ -12,6 +12,7 @@
 //!    matrix; child descent records paint offsets on the result
 //!    transform stack for gesture dispatch.
 
+use flui_foundation::{Leaf, Variable};
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderPadding, RenderSliverIgnorePointer, RenderSliverOpacity,
     RenderSliverPadding, RenderTransform,
@@ -26,7 +27,6 @@ use flui_rendering::{
     traits::{RenderBox, RenderSliver},
     view::ScrollDirection,
 };
-use flui_tree::{Leaf, Variable};
 use flui_types::{Matrix4, Offset, Size, geometry::px, layout::AxisDirection};
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject, laid_out_loose_200x200 as laid_out};
@@ -360,12 +360,12 @@ impl ConditionalOffsetSliverParent {
 impl flui_foundation::Diagnosticable for ConditionalOffsetSliverParent {}
 
 impl RenderSliver for ConditionalOffsetSliverParent {
-    type Arity = flui_tree::Single;
+    type Arity = flui_foundation::Single;
     type ParentData = SliverParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut SliverLayoutContext<'_, flui_tree::Single, Self::ParentData>,
+        ctx: &mut SliverLayoutContext<'_, flui_foundation::Single, Self::ParentData>,
     ) -> SliverGeometry {
         let constraints = *ctx.constraints();
         let child_geometry = ctx.layout_child(0, constraints);
@@ -384,7 +384,7 @@ impl RenderSliver for ConditionalOffsetSliverParent {
 
     fn hit_test(
         &self,
-        ctx: &mut SliverHitTestContext<'_, flui_tree::Single, Self::ParentData>,
+        ctx: &mut SliverHitTestContext<'_, flui_foundation::Single, Self::ParentData>,
     ) -> bool {
         ctx.hit_test_child_at_layout_offset(0)
     }

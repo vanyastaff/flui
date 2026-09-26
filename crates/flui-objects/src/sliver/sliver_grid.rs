@@ -58,8 +58,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
+use flui_foundation::Variable;
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-use flui_tree::Variable;
 use flui_types::geometry::px;
 
 use flui_rendering::{

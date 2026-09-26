@@ -21,7 +21,7 @@
 //!   coordination lands with the semantics-pipeline workstream; the
 //!   pointer-side toggle is a self-contained boolean here.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 
 use flui_rendering::{
     constraints::SliverGeometry,

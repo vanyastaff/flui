@@ -6,7 +6,7 @@
 
 use std::{fmt::Debug, hash::Hash};
 
-use flui_tree::Arity;
+use flui_foundation::Arity;
 use flui_types::geometry::Offset;
 
 use crate::parent_data::ParentData;

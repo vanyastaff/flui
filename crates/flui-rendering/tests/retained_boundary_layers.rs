@@ -151,12 +151,12 @@ fn a_retained_frame_matches_what_a_full_repaint_produces() {
 /// test reading it would always see zero.
 #[test]
 fn the_content_of_a_clean_boundary_is_not_repainted() {
+    use flui_foundation::Leaf;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
         parent_data::BoxParentData,
         traits::RenderBox,
     };
-    use flui_tree::Leaf;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -276,12 +276,12 @@ fn removing_a_boundary_drops_its_retained_output() {
 /// not retry either.
 #[test]
 fn a_dirty_boundary_nested_in_a_clean_one_still_repaints() {
+    use flui_foundation::Leaf;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
         parent_data::BoxParentData,
         traits::RenderBox,
     };
-    use flui_tree::Leaf;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -728,21 +728,21 @@ struct PaintCounter(Arc<AtomicUsize>);
 impl flui_foundation::Diagnosticable for PaintCounter {}
 
 impl flui_rendering::traits::RenderBox for PaintCounter {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> Size {
         ctx.constrain(Size::new(px(10.0), px(10.0)))
     }
 
-    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+    fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
         self.0.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -750,7 +750,7 @@ impl flui_rendering::traits::RenderBox for PaintCounter {
         &self,
         _ctx: &mut flui_rendering::context::BoxHitTestContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> bool {
@@ -1246,21 +1246,21 @@ fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
     impl flui_foundation::Diagnosticable for PoisonOnDemand {}
 
     impl flui_rendering::traits::RenderBox for PoisonOnDemand {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
             ctx.constrain(Size::new(px(10.0), px(10.0)))
         }
 
-        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
             assert!(
                 !self.0.load(Ordering::Relaxed),
                 "PoisonOnDemand: armed, poisoning this paint pass on purpose",
@@ -1271,7 +1271,7 @@ fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {
@@ -1350,21 +1350,21 @@ fn poisoned_frame_keeps_the_update(repaint_arm: bool) {
     impl flui_foundation::Diagnosticable for PoisonOnDemand {}
 
     impl flui_rendering::traits::RenderBox for PoisonOnDemand {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
             ctx.constrain(Size::new(px(10.0), px(10.0)))
         }
 
-        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
             assert!(
                 !self.0.load(Ordering::Relaxed),
                 "PoisonOnDemand: armed, poisoning this paint pass on purpose",
@@ -1375,7 +1375,7 @@ fn poisoned_frame_keeps_the_update(repaint_arm: bool) {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {
@@ -1465,14 +1465,14 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
     impl flui_foundation::Diagnosticable for AppearingTransform {}
 
     impl flui_rendering::traits::RenderBox for AppearingTransform {
-        type Arity = flui_tree::Single;
+        type Arity = flui_foundation::Single;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Single,
+                flui_foundation::Single,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
@@ -1490,7 +1490,7 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Single,
+                flui_foundation::Single,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {
@@ -1602,14 +1602,14 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
     impl flui_foundation::Diagnosticable for ShapeShifter {}
 
     impl flui_rendering::traits::RenderBox for ShapeShifter {
-        type Arity = flui_tree::Single;
+        type Arity = flui_foundation::Single;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Single,
+                flui_foundation::Single,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
@@ -1627,7 +1627,7 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Single,
+                flui_foundation::Single,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {
@@ -1760,21 +1760,21 @@ fn a_repaint_queued_before_an_update_keeps_its_precedence_across_a_failure() {
     impl flui_foundation::Diagnosticable for PoisonOnDemand {}
 
     impl flui_rendering::traits::RenderBox for PoisonOnDemand {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
             ctx.constrain(Size::new(px(10.0), px(10.0)))
         }
 
-        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
             assert!(
                 !self.0.load(Ordering::Relaxed),
                 "PoisonOnDemand: armed, poisoning this paint pass on purpose",
@@ -1785,7 +1785,7 @@ fn a_repaint_queued_before_an_update_keeps_its_precedence_across_a_failure() {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {
@@ -1883,14 +1883,14 @@ fn unreached_update_boundary_loses_its_capture(nested: bool) {
     impl flui_foundation::Diagnosticable for GainsATransform {}
 
     impl flui_rendering::traits::RenderBox for GainsATransform {
-        type Arity = flui_tree::Single;
+        type Arity = flui_foundation::Single;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Single,
+                flui_foundation::Single,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
@@ -1908,7 +1908,7 @@ fn unreached_update_boundary_loses_its_capture(nested: bool) {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Single,
+                flui_foundation::Single,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {
@@ -2082,14 +2082,14 @@ fn a_patched_transform_uses_the_origin_it_was_captured_at() {
     impl flui_foundation::Diagnosticable for Shifter {}
 
     impl flui_rendering::traits::RenderBox for Shifter {
-        type Arity = flui_tree::Single;
+        type Arity = flui_foundation::Single;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Single,
+                flui_foundation::Single,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
@@ -2107,7 +2107,7 @@ fn a_patched_transform_uses_the_origin_it_was_captured_at() {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Single,
+                flui_foundation::Single,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {
@@ -2279,21 +2279,21 @@ fn a_mark_arriving_after_a_failed_pass_does_not_downgrade_the_repaint() {
     impl flui_foundation::Diagnosticable for PoisonOnDemand {}
 
     impl flui_rendering::traits::RenderBox for PoisonOnDemand {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
             ctx.constrain(Size::new(px(10.0), px(10.0)))
         }
 
-        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
             assert!(
                 !self.0.load(Ordering::Relaxed),
                 "PoisonOnDemand: armed, poisoning this paint pass on purpose",
@@ -2304,7 +2304,7 @@ fn a_mark_arriving_after_a_failed_pass_does_not_downgrade_the_repaint() {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {
@@ -2795,14 +2795,14 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
     impl flui_foundation::Diagnosticable for Grower {}
 
     impl flui_rendering::traits::RenderBox for Grower {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
@@ -2813,7 +2813,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {
@@ -2920,14 +2920,14 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
     impl flui_foundation::Diagnosticable for Grower {}
 
     impl flui_rendering::traits::RenderBox for Grower {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
@@ -2938,7 +2938,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {
@@ -3082,21 +3082,21 @@ struct DrawingPaintCounter {
 impl flui_foundation::Diagnosticable for DrawingPaintCounter {}
 
 impl flui_rendering::traits::RenderBox for DrawingPaintCounter {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> Size {
         ctx.constrain(self.size)
     }
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
         self.count.fetch_add(1, Ordering::Relaxed);
         let rect = flui_types::Rect::from_origin_size(flui_types::Point::ZERO, ctx.size());
         ctx.canvas()
@@ -3107,7 +3107,7 @@ impl flui_rendering::traits::RenderBox for DrawingPaintCounter {
         &self,
         _ctx: &mut flui_rendering::context::BoxHitTestContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> bool {
@@ -4412,14 +4412,14 @@ struct SliverBoundary;
 impl flui_foundation::Diagnosticable for SliverBoundary {}
 
 impl flui_rendering::traits::RenderSliver for SliverBoundary {
-    type Arity = flui_tree::Single;
+    type Arity = flui_foundation::Single;
     type ParentData = flui_rendering::parent_data::SliverParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::SliverLayoutContext<
             '_,
-            flui_tree::Single,
+            flui_foundation::Single,
             flui_rendering::parent_data::SliverParentData,
         >,
     ) -> flui_rendering::constraints::SliverGeometry {
@@ -4435,7 +4435,7 @@ impl flui_rendering::traits::RenderSliver for SliverBoundary {
         &self,
         ctx: &mut flui_rendering::context::SliverHitTestContext<
             '_,
-            flui_tree::Single,
+            flui_foundation::Single,
             flui_rendering::parent_data::SliverParentData,
         >,
     ) -> bool {
@@ -4462,14 +4462,14 @@ struct SliverPaintCounter(Arc<AtomicUsize>);
 impl flui_foundation::Diagnosticable for SliverPaintCounter {}
 
 impl flui_rendering::traits::RenderSliver for SliverPaintCounter {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::SliverParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::SliverLayoutContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             flui_rendering::parent_data::SliverParentData,
         >,
     ) -> flui_rendering::constraints::SliverGeometry {
@@ -4477,7 +4477,7 @@ impl flui_rendering::traits::RenderSliver for SliverPaintCounter {
         flui_rendering::constraints::SliverGeometry::new(extent, extent, 0.0)
     }
 
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
         self.0.fetch_add(1, Ordering::Relaxed);
         let rect = flui_types::Rect::from_origin_size(flui_types::Point::ZERO, ctx.size());
         let color = flui_types::Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0]);
@@ -4489,7 +4489,7 @@ impl flui_rendering::traits::RenderSliver for SliverPaintCounter {
         &self,
         _ctx: &mut flui_rendering::context::SliverHitTestContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             flui_rendering::parent_data::SliverParentData,
         >,
     ) -> bool {

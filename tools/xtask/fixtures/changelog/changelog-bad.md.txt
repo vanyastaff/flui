@@ -1,0 +1,25 @@
+# Changelog
+
+## [Unreleased]
+
+The preamble.
+
+### Added
+
+- A bullet.
+
+### Notes <!-- expect: changelog -->
+
+- A heading Keep a Changelog does not know.
+
+### Added <!-- expect: changelog -->
+
+- The same heading a second time.
+
+## [Unreleased] <!-- expect: changelog -->
+
+## [0.1.0] - 2026-01-01
+
+### Anything
+
+- Outside the region, not judged.

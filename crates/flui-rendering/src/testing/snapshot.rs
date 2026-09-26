@@ -1103,7 +1103,7 @@ mod tests {
     // (concrete objects moved there as part of the flui-objects extraction).
 
     mod layer_tree_helpers {
-        use flui_tree::Leaf;
+        use flui_foundation::Leaf;
         use flui_types::{Color, Point, Rect, Size, geometry::px};
 
         use crate::{

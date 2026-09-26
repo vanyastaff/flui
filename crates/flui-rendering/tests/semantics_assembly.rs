@@ -13,6 +13,7 @@
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
+use flui_foundation::{Leaf, Variable};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::BoxLayoutContext,
@@ -25,7 +26,6 @@ use flui_rendering::{
     testing::{FrameRun, Probe, RenderTester, box_node},
     traits::RenderBox,
 };
-use flui_tree::{Leaf, Variable};
 use flui_types::{
     Offset, Point, Rect, Size,
     geometry::{Pixels, px},

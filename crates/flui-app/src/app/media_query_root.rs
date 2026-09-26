@@ -45,7 +45,7 @@ impl MediaQuerySource {
         }
     }
 
-    pub(crate) fn from_window(window: &dyn flui_platform::PlatformWindow) -> Self {
+    pub(crate) fn from_window(window: &dyn flui_platform_api::PlatformWindow) -> Self {
         Self {
             data: RefCell::new(MediaQueryData {
                 size: window.logical_size(),

@@ -20,7 +20,7 @@
 //! `computeDryBaseline` to return null and inherits everything else from
 //! `RenderProxyBox`.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Offset, Size};
 
 use flui_rendering::{

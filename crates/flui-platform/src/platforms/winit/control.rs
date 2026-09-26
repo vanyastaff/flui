@@ -11,7 +11,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_foundation::{ClaimHandle, ClaimSlot, claim_slot};
 use parking_lot::Mutex;
 
-use crate::traits::{PlatformWindow, WindowId, WindowOptions, owner::OpenWindowError};
+use crate::traits::{HostWindow, WindowId, WindowOptions, owner::OpenWindowError};
 
 pub(super) const CONTROL_CAPACITY: usize = 256;
 
@@ -20,8 +20,8 @@ type WakeOwner = Arc<dyn Fn() + Send + Sync>;
 /// The lane's reply payload: the fully resolved window handle, or a typed
 /// failure — exactly `OwnerPlatform`/`PlatformProxy`'s `PendingWindow`
 /// payload (ADR-0039 §3). The owner resolves `WindowId -> Arc<dyn
-/// PlatformWindow>` before delivering, so no caller needs a second lookup.
-pub(super) type OpenWindowResult = Result<Arc<dyn PlatformWindow>, OpenWindowError>;
+/// HostWindow>` before delivering, so no caller needs a second lookup.
+pub(super) type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
 
 pub(super) enum ControlCommand {
     OpenWindow {
@@ -253,7 +253,7 @@ impl ControlSender {
     }
 
     /// Asks the owner to run the close teardown for `window_id` — the
-    /// programmatic [`PlatformWindow::close`] route (issue #919). The owner
+    /// programmatic [`PlatformWindow::close`](crate::traits::PlatformWindow::close) route (issue #919). The owner
     /// answers on its next turn with the SAME teardown a compositor close
     /// takes after its should-close veto (per-window close callback, map
     /// removal, cursor/drag cleanup, callback clear, exit-policy consult),
@@ -405,10 +405,11 @@ mod tests {
         }
     }
 
-    /// A tiny stand-in `PlatformWindow` so tests can build an
-    /// `Arc<dyn PlatformWindow>` reply payload without depending on a real
-    /// winit window.
+    /// A tiny stand-in window so tests can build an `Arc<dyn HostWindow>`
+    /// reply payload without depending on a real winit window.
     struct StubWindow;
+
+    impl crate::traits::HostWindow for StubWindow {}
 
     impl crate::traits::PlatformWindow for StubWindow {
         fn id(&self) -> crate::traits::WindowId {

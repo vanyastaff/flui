@@ -26,7 +26,7 @@
 //!   Implementing them would require identifying a child's index from a
 //!   `&dyn` reference, which the trait surface does not offer.
 
-use flui_tree::Variable;
+use flui_foundation::Variable;
 use flui_types::layout::Axis;
 use flui_types::{Offset, geometry::px};
 

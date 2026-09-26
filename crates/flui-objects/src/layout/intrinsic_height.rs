@@ -20,7 +20,7 @@
 //! `child_constraints` helper that issues the real child-intrinsic query through
 //! the appropriate context channel — dry ≡ committed.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Offset, Size, geometry::px};
 
 use flui_rendering::{

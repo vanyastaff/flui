@@ -122,8 +122,8 @@ use crate::{
     executor::BackgroundExecutor,
     shared::PlatformHandlers,
     traits::{
-        Clipboard, DesktopCapabilities, OpenWindowError, OwnerPlatform, PendingWindow, Platform,
-        PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput,
+        Clipboard, DesktopCapabilities, HostWindow, OpenWindowError, OwnerPlatform, PendingWindow,
+        Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor, PlatformInput,
         PlatformReadyCallback, PlatformWindow, ProxySendError, WindowEvent, WindowId, WindowOpen,
         WindowOptions,
         owner::{OwnerHooks, ProxyTransport},
@@ -616,13 +616,10 @@ impl WinitPlatform {
     }
 
     /// Look up a previously-created window by [`WindowId`] and return the
-    /// exact stored allocation as a [`PlatformWindow`]. Named `window_by_id`
+    /// exact stored allocation as a [`HostWindow`]. Named `window_by_id`
     /// (not `window_handle`) to avoid colliding with the unrelated
     /// [`PlatformWindow::window_handle`] raw GPU-handle accessor.
-    fn window_by_id(
-        &self,
-        window_id: WindowId,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
+    fn window_by_id(&self, window_id: WindowId) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         self.with_state(|state| {
             state
                 .windows
@@ -630,7 +627,7 @@ impl WinitPlatform {
                 .ok_or_else(|| OpenWindowError::Backend {
                     message: "Window not found in state".to_string(),
                 })
-                .map(|window| Arc::clone(window) as Arc<dyn PlatformWindow>)
+                .map(|window| Arc::clone(window) as Arc<dyn HostWindow>)
         })
     }
 
@@ -2178,10 +2175,7 @@ impl Platform for WinitPlatform {
         });
     }
 
-    fn open_window(
-        &self,
-        options: WindowOptions,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(?options, "Requesting window creation");
 
         // Same-thread fast path: called synchronously from inside `on_ready`

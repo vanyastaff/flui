@@ -1,0 +1,3 @@
+### Fixed
+
+- A valid bullet in a file whose name is not a slug.

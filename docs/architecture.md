@@ -17,7 +17,7 @@ Layer 10 ── flui                       (facade)
                 │
 Layer 9  ── flui-app, flui-devtools, flui-cli
                 │
-Layer 8  ── flui-localizations         (implements the catalogs' delegate contracts)
+Layer 8  ── (empty: flui-localizations deleted, ADR-0081)
                 │
 Layer 7  ── flui-material, flui-cupertino
                 │
@@ -29,7 +29,7 @@ Layer 4  ── flui-engine, flui-rendering, flui-objects
                 │   (objects → rendering, never the reverse)
 Layer 3  ── flui-layer, flui-semantics, flui-animation
                 │
-Layer 2  ── flui-tree, flui-platform, flui-scheduler, flui-painting,
+Layer 2  ── flui-platform, flui-scheduler, flui-painting,
                 │  flui-interaction, flui-assets
                 │  (flui-platform = OS backends; only flui-app depends on it)
 Layer 1  ── flui-foundation, flui-macros, flui-platform-api, flui-protocol
@@ -44,7 +44,7 @@ Layer 0  ── flui-geometry, flui-types
                  platform value types; base units)
 ```
 
-**This is not enforced by convention.** Each crate declares its layer in its manifest (`[package.metadata.flui] layer`, named in the root `[workspace.metadata.flui] layers`), and `cargo xtask workspace` (part of `cargo xtask checks` and the CI `checks` job) validates every **normal** and build Cargo edge against it: same layer or lower, never an example or tool, and every crate layered. Cargo rejects cycles itself. See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md). Dev-dependencies may cross layers — a test fixture is not an architectural claim — except where a crate restricts them with `allowed-dev-dependents`: nothing but `flui-localizations`, `flui-app` and the facade depends on Material or Cupertino in any form ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)).
+**This is not enforced by convention.** Each crate declares its layer in its manifest (`[package.metadata.flui] layer`, named in the root `[workspace.metadata.flui] layers`), and `cargo xtask workspace` (part of `cargo xtask checks` and the CI `checks` job) validates every **normal** and build Cargo edge against it: same layer or lower, never an example or tool, and every crate layered. Cargo rejects cycles itself. See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md). Dev-dependencies may cross layers — a test fixture is not an architectural claim — except where a crate restricts them with `allowed-dev-dependents`: nothing but `flui-app` and the facade depends on Material or Cupertino in any form ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)).
 
 Note on `flui-foundation` placement: in the current workspace its Cargo deps are leaf (no internal-crate runtime deps), but its *responsibility* is framework primitives that operate on top of `flui-types`' value types — so it is placed above `flui-types` in the layered table. The target crate graph in [`FOUNDATIONS.md`](FOUNDATIONS.md) Part IV draws that placement as a dashed (not-yet-real) edge.
 

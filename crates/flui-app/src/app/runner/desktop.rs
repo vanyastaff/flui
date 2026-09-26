@@ -1,6 +1,6 @@
 use crate::app::hot_reload::{RebuildHookGuard, WorkerReload};
 use flui_engine::Renderer;
-use flui_platform::traits::{DispatchEventResult, PlatformInput, PlatformWindow};
+use flui_platform::traits::{DispatchEventResult, HostWindow, PlatformInput, PlatformWindow};
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 use parking_lot::Mutex;
@@ -67,12 +67,14 @@ pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
     worker_reload: WorkerReload,
-    window: Arc<dyn PlatformWindow>,
+    host: Arc<dyn HostWindow>,
     host_lifecycle: AppLifecycleState,
 ) -> Result<RenderedMain, crate::app::AppWindowError>
 where
     V: View + Clone + 'static,
 {
+    let presentation_window = super::presentation_window(host);
+    let window = Arc::clone(presentation_window.window());
     let mut rollback = InstallRollback {
         window: Arc::clone(&window),
         dispatcher: None,
@@ -123,7 +125,7 @@ where
     let wake = runtime_wake_callback();
     let ui_realm = match crate::app::ui_realm::UiRealm::new(
         Arc::clone(&wake),
-        Arc::clone(&window),
+        presentation_window,
         scale_factor,
         runtime_needs_redraw_handle(),
     ) {

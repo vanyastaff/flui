@@ -26,7 +26,7 @@
 
 use std::{any::Any, fmt, sync::Arc};
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::Offset;
 
 use flui_rendering::{
