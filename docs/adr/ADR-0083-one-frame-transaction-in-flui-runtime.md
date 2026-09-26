@@ -243,10 +243,10 @@ The crate is created first and filled in five moves, each independently mergeabl
 §2 (sealing the entry points), §4 (`flui-testing` above the runtime, taking an `order` after it)
 and the widgets' inline test modules follow move 5.
 
-Until `cargo xtask reach` is on `main`, the K-set fact is checked by
-`cargo tree -p flui-runtime -e normal --target all`, which names none of `flui-platform`,
-`winit`, `android-activity`, `ndk`, `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`,
-`flui-engine` or `flui-app`.
+`cargo xtask reach` (ADR-0081 §2) checks the K-set fact for `flui-runtime` over every root
+build: its tier K forbids `flui-platform`, `winit`, `android-activity`, `ndk`, `windows`,
+`objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine` and `flui-app`, and no
+`reach-exceptions` entry excuses any of them.
 
 Two defects the realm core would have carried across are fixed with move 1, each pinned by a
 test that failed before the fix:
@@ -271,7 +271,8 @@ test that failed before the fix:
 
 ## Verification
 
-None of these exist yet.
+Only the first exists: both crates are tier K, and `cargo xtask reach` checks them on every
+change.
 
 - `cargo xtask reach` (ADR-0081): `flui-runtime` and `flui-testing` reach none of the K set.
 - `cargo xtask frame-entry --self-test` (if option 2 of §2 is used): a planted call to

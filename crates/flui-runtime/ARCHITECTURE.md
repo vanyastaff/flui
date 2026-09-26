@@ -11,8 +11,9 @@ lists them and what each waits on.
 - **No host, platform or GPU edge.** The crate's normal dependency closure
   names none of `flui-platform`, `winit`, `android-activity`, `ndk`,
   `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine` or
-  `flui-app`. Check with
-  `cargo tree -p flui-runtime -e normal --target all`. A seam that needs a
+  `flui-app`: tier K's forbid set in the root
+  `[workspace.metadata.flui.reach]`, checked by `cargo xtask reach` over
+  every root build. A seam that needs a
   host type (the frame sink, the platform window) crosses as a trait this
   crate defines or one from `flui-platform-api`.
 - **Internal.** Tier K, `tier-kind = "internal"`: nothing here is an embedder
