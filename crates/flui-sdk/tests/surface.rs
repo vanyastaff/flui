@@ -109,12 +109,17 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::rendering::BoxProtocol) -> flui_sdk::rendering::BoxProtocol = |x| x;
 }
 
-/// The `pub use` and `pub mod` lines of `src/lib.rs`, trimmed and sorted.
+/// Every line of `src/lib.rs` that declares public surface, trimmed and sorted.
+///
+/// Any `pub` item counts, not only `pub use` and `pub mod`, and so does
+/// `#[macro_export]`. Because the list compares whole lines, a re-export must
+/// name one item per line: a brace group spread over lines shows up as its
+/// `pub use x::{` line, which is not in the list.
 fn declared_surface() -> Vec<&'static str> {
     let mut lines: Vec<&str> = include_str!("../src/lib.rs")
         .lines()
         .map(str::trim)
-        .filter(|line| line.starts_with("pub use ") || line.starts_with("pub mod "))
+        .filter(|line| line.starts_with("pub ") || line.starts_with("#[macro_export]"))
         .collect();
     lines.sort_unstable();
     lines
