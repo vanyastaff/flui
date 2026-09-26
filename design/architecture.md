@@ -543,15 +543,16 @@ change that adds the gate, and can only shrink
 [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) amend ADR-0074; owner
 decisions 5 and 7.
 
-- **The instance belongs to the realm.** Today the graph is a field of each presentation's
-  `BuildOwner` (`crates/flui-view/src/owner/build_owner.rs:444`, exposed at `:973`), and
-  `UiCommand::SignalWrite` applies to the primary presentation's graph
-  (`crates/flui-app/src/app/ui_realm/commands.rs:450-455` through
-  `crates/flui-app/src/app/ui_realm/presentations.rs:357-358`). That is a conformance defect
-  against ADR-0074, which already says "realm-scoped". `SignalSlot` carries its graph
-  (`crates/flui-view/src/reactive/mod.rs:78-82`) and `ForeignGraph` already catches the mismatch
-  (`mod.rs:267-273`). The fix routes writes by `SignalSlot.graph` to the owning realm, starting
-  from a multi-window test that fails today, and it lands before the write-signature change.
+- **The instance belongs to the realm.** The graph is a field of each presentation's
+  `BuildOwner` (`crates/flui-view/src/owner/build_owner.rs:444`, exposed at `:973`).
+  `UiCommand::SignalWrite` used to apply to the primary presentation's graph, a conformance
+  defect against ADR-0074, which already says "realm-scoped". It now carries its target slot and
+  is routed by `SignalSlot::graph` to the presentation whose graph minted it
+  (`UiRealm::signal_graph_for` in `crates/flui-app/src/app/ui_realm/presentations.rs`); a write
+  no presentation of the realm owns is dropped and counted as stale. The multi-window test that
+  failed with `ForeignGraph` before the fix is
+  `crates/flui-app/src/app/ui_realm/tests/signal_write_routing.rs`. This landed before the
+  write-signature change.
 - **Reads go through `ReadScope`.** `Signal::get/with/try_*` take `&dyn ReadScope`, and
   `BuildContext: ReadScope`, so `count.get(cx)` keeps its spelling. Today `get` takes
   `&dyn crate::BuildContext` (`mod.rs:752`). `ReadScope` is read-only: it registers the read and

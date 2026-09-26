@@ -56,7 +56,7 @@ impl CommandSendError {
 
 /// A command enqueued for the owner thread.
 ///
-/// Two addressing classes, by design, not oversight:
+/// Three addressing classes, by design, not oversight:
 ///
 /// - **Presentation-scoped** commands ([`Self::SemanticsAction`]) carry an
 ///   explicit `presentation_id` stamp and are validated against the live
@@ -69,6 +69,11 @@ impl CommandSendError {
 ///   a recreated realm mints new channels, and a sender into the dead realm
 ///   already gets `OwnerGone` at send — re-stamping realm identity on top of
 ///   that would duplicate a structural fact the channel already enforces.
+/// - **Graph-addressed** commands (`SignalWrite`) carry the signal slot they
+///   target and are routed by `SignalSlot::graph` to the presentation whose
+///   `BuildOwner` minted it (ADR-0085 §1). They need no presentation stamp:
+///   graph ids are process-unique, so two presentation incarnations never
+///   share one.
 pub(crate) enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
     // Only constructed by `request_hot_reload`, whose consumer is the
@@ -93,10 +98,11 @@ pub(crate) enum UiCommand {
     },
     /// Apply a typed navigator mutation on the owner thread.
     Navigation(NavigatorCommand),
-    /// Run a closure against the realm's reactive graph on the owner thread
-    /// (ADR-0074 §5.8): the cross-thread way to write a signal. Readers it
-    /// marks land in the owner's inbox for the next frame — enqueue-and-wake,
-    /// never touch the tree.
+    /// Run a write against the reactive graph that minted `target` (ADR-0074
+    /// §5.8, routed per ADR-0085 §1) on the owner thread: the cross-thread
+    /// way to write a signal. Readers it marks land in the owning
+    /// presentation's inbox for the next frame — enqueue-and-wake, never
+    /// touch the tree.
     #[cfg(feature = "signals")]
     #[cfg_attr(
         not(test),
@@ -105,7 +111,12 @@ pub(crate) enum UiCommand {
             reason = "constructed by send_signal_write, whose public vending lands with the realm API"
         )
     )]
-    SignalWrite(Box<dyn FnOnce(&flui_view::Reactive) + Send>),
+    SignalWrite {
+        /// The slot the write targets; its `graph()` selects the presentation.
+        target: flui_view::SignalSlot,
+        /// Runs against the graph that minted `target`, and against no other.
+        apply: Box<dyn FnOnce(&flui_view::Reactive) + Send>,
+    },
 }
 
 impl std::fmt::Debug for UiCommand {
@@ -128,7 +139,10 @@ impl std::fmt::Debug for UiCommand {
                 .field(command)
                 .finish(),
             #[cfg(feature = "signals")]
-            UiCommand::SignalWrite(_) => f.write_str("UiCommand::SignalWrite(..)"),
+            UiCommand::SignalWrite { target, .. } => f
+                .debug_struct("UiCommand::SignalWrite")
+                .field("target", target)
+                .finish_non_exhaustive(),
         }
     }
 }
@@ -253,9 +267,15 @@ impl UiCommandSender {
         self.send(UiCommand::Navigation(command))
     }
 
-    /// Enqueue a signal write for the owner thread (ADR-0074 §5.8). `apply`
-    /// receives the realm's `Reactive` graph at the next Idle drain; a write
-    /// it performs marks readers for the following frame.
+    /// Enqueue a signal write for the owner thread (ADR-0074 §5.8). At the
+    /// next Idle drain `apply` receives `target` re-attached and the graph
+    /// that minted it (ADR-0085 §1), wherever in this realm that graph lives;
+    /// a write it performs marks readers for the following frame. If no
+    /// presentation of this realm owns that graph any more, `apply` is
+    /// dropped without running and the drain counts the command as stale.
+    ///
+    /// The routing key comes from `target` itself, so a caller cannot
+    /// address a write to one graph and perform it against another.
     #[cfg(feature = "signals")]
     #[cfg_attr(
         not(test),
@@ -264,11 +284,15 @@ impl UiCommandSender {
             reason = "cross-thread signal write sender is wired before public runtime vending"
         )
     )]
-    pub(crate) fn send_signal_write(
+    pub(crate) fn send_signal_write<T: 'static>(
         &self,
-        apply: Box<dyn FnOnce(&flui_view::Reactive) + Send>,
+        target: flui_view::SignalSender<T>,
+        apply: impl FnOnce(flui_view::Signal<T>, &flui_view::Reactive) + Send + 'static,
     ) -> Result<(), CommandSendError> {
-        self.send(UiCommand::SignalWrite(apply))
+        self.send(UiCommand::SignalWrite {
+            target: target.slot(),
+            apply: Box::new(move |reactive| apply(target.attach(), reactive)),
+        })
     }
 
     /// Request a redraw of the realm's presentation, coalesced: any number of pending
@@ -447,11 +471,24 @@ impl UiRealm {
                     }
                 },
                 #[cfg(feature = "signals")]
-                UiCommand::SignalWrite(apply) => {
-                    let reactive = self
-                        .widgets()
-                        .with_build_owner(|owner| owner.reactive().clone());
+                UiCommand::SignalWrite { target, apply } => {
+                    let Some((presentation, reactive)) = self.signal_graph_for(target) else {
+                        tracing::warn!(
+                            target: "flui::signals",
+                            graph = target.graph(),
+                            slot = ?target,
+                            "dropping a cross-thread signal write: no presentation of this \
+                             realm owns the slot's graph (its presentation closed, or the \
+                             handle belongs to another realm)"
+                        );
+                        report.dropped_stale += 1;
+                        continue;
+                    };
                     apply(&reactive);
+                    // A secondary presentation's BuildOwner has no wake hook,
+                    // so the owning presentation's frame is requested here.
+                    presentation.mark_redraw_pending();
+                    self.redraw_pending.store(true, Ordering::Release);
                     report.invoked += 1;
                 }
             }

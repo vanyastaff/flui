@@ -358,6 +358,29 @@ impl UiRealm {
         self.presentations.primary().widgets()
     }
 
+    /// The presentation whose `BuildOwner` holds the graph that minted `slot`,
+    /// with a handle to that graph. `None` once that presentation has closed,
+    /// or for a slot minted outside this realm.
+    ///
+    /// Each binding's read lock is released before this returns, so the
+    /// caller runs the write with no lock held.
+    #[cfg(feature = "signals")]
+    pub(super) fn signal_graph_for(
+        &self,
+        slot: flui_view::SignalSlot,
+    ) -> Option<(&PresentationState, flui_view::Reactive)> {
+        let graph = slot.graph();
+        self.presentations.iter().find_map(|presentation| {
+            presentation
+                .widgets()
+                .with_build_owner(|owner| {
+                    let reactive = owner.reactive();
+                    (reactive.id() == graph).then(|| reactive.clone())
+                })
+                .map(|reactive| (presentation, reactive))
+        })
+    }
+
     /// The PRIMARY presentation's live root media-query source (see the field
     /// doc).
     ///

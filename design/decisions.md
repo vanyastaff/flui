@@ -154,11 +154,10 @@ classification rule and how a capability moves between classes; see [A8](#a8-cap
 
 **Context.** ADR-0074 says the graph is realm-scoped. In the code the graph is a field of each
 presentation's `BuildOwner` (`crates/flui-view/src/owner/build_owner.rs:444`, exposed at `:973`),
-and `UiCommand::SignalWrite` applies to the primary presentation's graph
-(`crates/flui-app/src/app/ui_realm/commands.rs:450-455`, through
-`crates/flui-app/src/app/ui_realm/presentations.rs:357-358`). A write from window B reaches
-window A's graph; `SignalError::ForeignGraph` already detects the mismatch
-(`crates/flui-view/src/reactive/mod.rs:267-273`).
+and `UiCommand::SignalWrite` applied to the primary presentation's graph, so a write from
+window B reached window A's graph and failed with `SignalError::ForeignGraph`
+(`crates/flui-view/src/reactive/mod.rs`). Fixed: the command now carries its slot and is routed
+by `SignalSlot::graph` to the owning presentation (ADR-0085 §1).
 
 **Decision.** Each presentation keeps its own graph, owned by the realm with the presentation;
 a cross-thread write is routed to the graph whose id the slot carries, never to the primary

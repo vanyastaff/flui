@@ -55,22 +55,20 @@ exposed by `pub fn reactive` (`:972-974`). ADR-0043 gives every presentation its
 `BuildOwner`, so a realm with two windows has two graphs, each with its own process-unique id
 (`static NEXT_GRAPH_ID`, `mod.rs:72`).
 
-The cross-thread write path picks one of them without looking at the slot.
-`UiCommand::SignalWrite` (`crates/flui-app/src/app/ui_realm/commands.rs:449-455`) takes the
-graph from `self.widgets()`, which is `self.presentations.primary().widgets()`
-(`crates/flui-app/src/app/ui_realm/presentations.rs:353-358`); that accessor is also compiled
-out on Android, iOS and wasm (`presentations.rs:353-356`). The slot knows which graph minted it
-(`SignalSlot::graph`, `mod.rs:78-82`), and the graph already refuses a foreign slot
-(`SignalError::ForeignGraph`, `mod.rs:267-273`).
+Until §1 shipped, the cross-thread write path picked one of them without looking at the slot:
+`UiCommand::SignalWrite` took the graph from `self.widgets()`, which is
+`self.presentations.primary().widgets()`, an accessor that is also compiled out on Android, iOS
+and wasm. The slot knows which graph minted it (`SignalSlot::graph`), and the graph already
+refuses a foreign slot (`SignalError::ForeignGraph`).
 
-**Failure scenario.** A view in a secondary window creates a signal in `init_state`; its slot
-carries window B's graph id. A worker detaches it (`SignalSender`, `mod.rs:810`), and the write
-arrives as `UiCommand::SignalWrite`. The command re-attaches the sender against the primary
-window's graph, `set` returns `ForeignGraph`, and window B's readers never rebuild. This is a
-conformance defect against ADR-0074. It is latent today: `send_signal_write` has no production
-caller (`commands.rs:262-267` carries `expect(dead_code, reason = "cross-thread signal write
-sender is wired before public runtime vending")`), and no test opens two presentations and
-writes through the command.
+**Failure scenario (before §1).** A view in a secondary window creates a signal in
+`init_state`; its slot carries window B's graph id. A worker detaches it (`SignalSender`), and
+the write arrives as `UiCommand::SignalWrite`. The command re-attached the sender against the
+primary window's graph, `set` returned `ForeignGraph`, and window B's readers never rebuilt.
+This was a conformance defect against ADR-0074, fixed by §1. It was latent: `send_signal_write`
+has no production caller (it carries `expect(dead_code, reason = "cross-thread signal write
+sender is wired before public runtime vending")`), and no test opened two presentations and
+wrote through the command.
 
 ### The feature gate
 
@@ -108,10 +106,19 @@ crate itself; wall-clock cost is unmeasured).
 Each presentation keeps its own graph, as today (one `BuildOwner` and one `PipelineOwner` per
 presentation, ADR-0043), and the realm owns every presentation, so every graph is realm-owned and
 dropped with its realm. A write is routed by the slot, never by "the primary presentation": the
-command applies to the graph in this realm whose id equals `SignalSlot::graph`, and a slot whose
-graph is not in this realm is `ForeignGraph`. Merging the per-presentation graphs into one graph
-per realm is not decided here; it would need its own scheduled step and a reason a cross-window
-read needs it.
+command applies to the graph in this realm whose id equals `SignalSlot::graph`. A slot whose
+graph no presentation of this realm owns (its presentation closed, or it was minted by another
+realm; process-unique graph ids cannot tell the two apart) is dropped without running the
+write, counted as stale by the drain and logged as a `warn` on `flui::signals`; the writer is
+not told until ADR-0086 gives writes a return path. Merging the per-presentation graphs into
+one graph per realm is not decided here; it would need its own scheduled step and a reason a
+cross-window read needs it.
+
+The command carries its routing key: `UiCommand::SignalWrite { target: SignalSlot, apply }`,
+built by `send_signal_write(target: SignalSender<T>, apply: impl FnOnce(Signal<T>, &Reactive))`,
+which takes the slot from the handle so a write cannot be addressed to one graph and performed
+against another. The drain requests the owning presentation's frame itself, because a
+secondary presentation's `BuildOwner` has no wake hook of its own.
 
 This half ships first and on its own, before any other step here: a failing test that writes
 from a secondary presentation and asserts that the reader in that presentation rebuilds, then
@@ -248,11 +255,14 @@ the same edit placed in `flui-foundation`. A single-unit `--timings` figure does
 
 ## Verification
 
-None of these exist yet.
+Only the first exists.
 
-- A headless test with two presentations in one realm: a signal created by a view in the second
-  presentation, written through `UiCommand::SignalWrite`, rebuilds that view. It fails on the
-  current routing (§1).
+- §1: `a_write_to_a_secondary_presentations_signal_rebuilds_its_reader` in
+  `crates/flui-app/src/app/ui_realm/tests/signal_write_routing.rs` writes, through
+  `UiCommand::SignalWrite`, a signal minted by the second presentation of a realm and asserts
+  that its reader rebuilds and the primary's does not. It failed with `ForeignGraph` on the
+  primary-only routing. Its siblings pin the dropped-and-counted case for a closed presentation
+  and for a foreign graph, and the owning presentation's frame request.
 - `compile_fail` doctests: `ReadScope` exposes no write or create method; neither driver is
   `Clone`; a `ReadScope` cannot reach a driver hook.
 - A module-dependency check that the reactive module imports nothing else from `flui-view`
