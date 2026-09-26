@@ -25,7 +25,7 @@ argue with it.
    decisions O1–O8 and the owner's decisions of 2026-09-25) to its ADR, with the alternatives
    rejected and what verification or the owner changed.
 3. [open-questions.md](open-questions.md) — the questions the owner resolved, and what is still
-   open (unverified claims, the CI redesign, the build-footprint study).
+   open (unverified claims, the sign-off of the CI design, the gaps of the build-footprint study).
 4. The ADRs below, for the decision you care about.
 5. The [migration plan](../docs/plans/2026-09-25-architecture-migration-plan.md), for the order of
    the work and how each step proves it is done.
@@ -61,9 +61,9 @@ study and a CI redesign take up the build cost instead.
 |---|---|
 | [architecture.md](architecture.md) | The target architecture: tiers and crates, feature policy, facade and SDK, runtime, state, rendering, platform, extension points, API sketches, performance and safety gates |
 | [decisions.md](decisions.md) | Decision index D1–D17, G (process-global state), L (dynamic linking), panel decisions O1–O8 and the owner's decisions of 2026-09-25 (strategy, architecture, process), each linked to its record |
-| [open-questions.md](open-questions.md) | The 22 owner questions, each resolved on 2026-09-25, and what is still open: unverified claims, ADR conflicts, the CI redesign and the build-footprint study |
+| [open-questions.md](open-questions.md) | The 22 owner questions, each resolved on 2026-09-25, and what is still open: unverified claims, ADR conflicts, the sign-off of the CI design ([ci.md](ci.md)) and the gaps of the build-footprint study ([build-footprint.md](build-footprint.md)) |
 | [dynamic-linking.md](dynamic-linking.md) | The Bevy-style `dynamic_linking` study: how Bevy does it, what was measured on Windows, the export-count ceiling, and the shape if adopted |
-| [build-footprint.md](build-footprint.md) | The build-footprint study: `target/` by artifact kind, test binaries, duplicate builds, peak memory and a warm edit on the Windows host, and each lever kept or rejected on its measured effect |
+| [build-footprint.md](build-footprint.md) | The build-footprint study: `target/` by artifact kind, test binaries, duplicate builds, peak memory and a warm edit on the Windows host, and each lever kept or rejected, with the ones not measured named |
 | [ci.md](ci.md) | The CI design: today's jobs with measured durations, the target lanes, where each job and each workflow need of the migration plan runs, the levers adopted, costs, migration steps and the points awaiting the owner's sign-off |
 | [research-findings.md](research-findings.md) | Findings from the raw research that no report or ADR acts on yet, re-checked claims, contradictions and unverified claims |
 | [Migration plan](../docs/plans/2026-09-25-architecture-migration-plan.md) | Ordered steps with acceptance commands, risks and rollbacks, mapped to milestones B0–B4 and horizons H0–H4 |

@@ -314,7 +314,7 @@ Two unrun hypotheses: the old image is unloaded before the realm drops its views
 | `KEYEVENTF_UNICODE` bypasses the IME; `windows-a11y` passes on hosted `windows-latest` | a hosted trial run, scheduled by the CI redesign | ADR-0090 |
 | GameActivity is needed for the Android soft-keyboard IME (today `native-activity`, `crates/flui-platform/Cargo.toml:162`) | Android spike | ADR-0090 |
 | The image GPU cache keyed by `Arc` pointer (`crates/flui-engine/src/texture_cache.rs:65-73`) can alias a freed and reallocated image | a test that drops and reallocates | ADR-0087 |
-| Per-crate `testing` features build the upper stack more than once | count distinct `libflui_rendering-*` hashes | the build-footprint study |
+| Per-crate `testing` features build the upper stack more than once | count distinct `libflui_rendering-*` hashes | the build-footprint study (checked: one hash after a workspace build, more for every other package set; [build-footprint.md](build-footprint.md#duplicate-builds)) |
 
 ### ADR conflicts for the named ADR's author
 
@@ -337,6 +337,9 @@ The ADR audit found these; each is settled when the named ADR is accepted.
 A follow-up task created by items 5 and 19, done together with the build-footprint study and
 related to the open issue #1279.
 
+- **Status.** Designed in [ci.md](ci.md); still open until the owner signs off its open points
+  (C1–C8, [ci.md §9](ci.md#9-open-points-for-the-owner)), and not implemented.
+
 - **What it covers.** One design for the workflows instead of edits step by step: a fast PR lane
   that covers the changed crates and their dependents; full runs only when a change needs them
   (the `full-ci` label, `main`, nightly, release); and no platform-specific heavy runs while work
@@ -356,6 +359,11 @@ related to the open issue #1279.
 ### Build-footprint study
 
 A follow-up task created by item 20, done together with the CI redesign.
+
+- **Status.** Measured in [build-footprint.md](build-footprint.md), with recommendations R1–R7.
+  Some levers and measures below were not run (sccache, cargo-sweep, a shared target, peak
+  memory per compiling job); the owner accepts or asks for them as C8 in
+  [ci.md §9](ci.md#9-open-points-for-the-owner).
 
 - **What it measures.** The size of `target/` by artifact kind (rlibs and rmeta, test binaries,
   incremental caches, debug info); the number of test binaries; duplicate builds of the upper stack
