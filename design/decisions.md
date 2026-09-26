@@ -37,8 +37,8 @@ answers settle the open questions; acceptance still happens ADR by ADR.
 |---|---|---|---|
 | D1 | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` | Changed by verification (split into a mechanical move and a per-backend `Send` removal) | [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) |
 | D2 | One frame transaction in `flui-runtime`, above `flui-widgets` | Changed by verification (test modules move; transaction defined by type); owner confirmed it in B0 | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) |
-| D3 | An open, typed capability set registered by plugins | Verified (seam shape); registration specified by verification; **changed by the owner** (two classes, core-required and optional, behind one door) | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) |
-| D4 | The reactive graph is realm-owned and read through `ReadScope` | Changed by verification and by owner decision O5; owner confirmed removing the `signals` feature | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md), [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) |
+| D3 | An open, typed capability set registered by plugins | Verified (seam shape); registration specified by verification; **changed by the owner** (two classes, core-required and optional, behind one door); a prototype (2026-09-26) confirmed the seam and corrected the provider signature, the registry's lifetime (per realm) and the conflict rules; cursor, text input and accessibility are not widget capabilities | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) |
+| D4 | The reactive graph is realm-owned and read through `ReadScope` | Changed by verification and by owner decision O5; owner confirmed removing the `signals` feature; a prototype (2026-09-26) placed the read contract in `flui-foundation` and withdrew the `flui-reactive` extraction | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md), [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) |
 | D5 | One raster contract in `flui-layer`; wgpu and CPU backends | Changed by verification (`RasterBackend` moves first; `RasterOwner` stays) | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |
 | D6 | Retained layer identity drives damage | Verified; retained target made conditional | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |
 | D7 | Where official packages live | Changed by owner decision O1 (one workspace, not a nested one) | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
@@ -58,7 +58,7 @@ answers settle the open questions; acceptance still happens ADR by ADR.
 | O2 | `flui-sdk` is a separate Evolving crate, tied to the release train | Changed by verification | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md), [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) |
 | O3 | raw-window-handle is the one named upstream exception | Changed by verification | [ADR-0089](../docs/adr/ADR-0089-upstream-types-in-stable-signatures.md) |
 | O4 | Exit B0 is gates, structure and ratchets, not a crate count | Changed by verification | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) §5; the one-transaction definition lives in [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) |
-| O5 | The reactive core moves in three steps | Changed by verification | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) |
+| O5 | The reactive core moves in three steps | Changed by verification; step 3's extraction withdrawn after a prototype | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) |
 | O6 | The facade has no default design system | Changed by verification | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
 | O7 | Signal writes go through `EventCx` opened by a `WriterSource` | Changed by verification (verdict `holds: false`); owner chose the typed form, pilot widened to `counter` and `todo` | [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) |
 | O8 | Windows IME + Narrator is not an H0 gate; a text-store conformance kit is | Changed by verification |
@@ -150,6 +150,18 @@ input, accessibility, cursor, window chrome basics) and optional plugins with a 
 `Unsupported` (haptics, camera, geolocation, notifications, file dialogs). ADR-0084 §5 records the
 classification rule and how a capability moves between classes; see [A8](#a8-capability-model).
 
+**Changed by a prototype (2026-09-26).** A prototype of the seam compiled against the 136 sites
+unchanged and served a capability to a crate outside the workspace; ADR-0084's Context records
+what it showed and what it did not. The revision keeps the seam and corrects the rest: a provider
+takes `&Arc<dyn PlatformWindow>` so a handle can keep a `Weak` window; the registry is a
+parameter of each realm's construction, sharing one table validated by `Application::run` before
+the platform starts, never an application-wide cell; a plugin over a built-in, two plugins on one
+capability and one plugin registering twice are conflicts, reported in installation order as
+`AppRunError::CapabilityConflict`; core `text_input()` and `accessibility()` return inert objects
+instead of `Option`, and `accessibility()` sits on the backend extension trait of ADR-0082 §3.
+Cursor, text input and accessibility are core-required backend methods but not widget
+capabilities: the framework keeps its one route to each.
+
 ### D4. The reactive graph is realm-owned
 
 **Context.** ADR-0074 says the graph is realm-scoped. In the code the graph is a field of each
@@ -167,10 +179,11 @@ Signals stop being a feature. `BuildContext::reactive()` (`build_context.rs:132`
 Writes are narrowed to callbacks (D4's write half is O7), and the ADR-0074 runtime guard stays
 authoritative.
 
-**Alternatives rejected.** The core in `flui-foundation` (invalidates 27 crates per edit against
-16, and puts element lifecycle in the lowest tier). Keeping it in `flui-view` forever (render and
-animation could never name `Signal<T>`, because `Signal::get` is an inherent method,
-`reactive/mod.rs:752`). A new `create(cx)` hook (merges `create_state` and `init_state`).
+**Alternatives rejected.** The graph in `flui-foundation` (a warm edit re-checks 15 crates in
+5.74 s there against 3 crates in 3.07 s in `flui-view`, and it puts build scheduling in the
+lowest tier). A new `create(cx)` hook (merges `create_state` and `init_state`). The graph stays
+in `flui-view`; the read contract is in foundation, so render and animation code can name
+`Signal<T>` even though `Signal::get` is an inherent method today (`reactive/mod.rs:752`).
 
 **Evidence.** Lines above; `SignalSlot` carries its graph id (`reactive/mod.rs:78-82`), which is
 what routing by owner needs.
@@ -178,6 +191,17 @@ what routing by owner needs.
 **Changed by verification and by O5.** The conformance defect is fixed first and separately,
 with a multi-window test that fails today, not "by construction" through typed writes. The crate
 extraction became three steps (O5).
+
+**Changed by a prototype (2026-09-26).** A prototype moved the read vocabulary into
+`flui_foundation::read_scope` (427 lines, no new dependency) and left the graph in `flui-view`,
+with no change in `flui-widgets`, `flui-app`, `flui-testing`, the facade or the examples. Reads
+take `&S where S: ReadScope + ?Sized`, which accepts every context shape that compiles today;
+subscription goes through sinks the drivers mint, so the graph handle cannot subscribe anyone;
+a handle of the wrong type is `SignalError::TypeMismatch`, not a `BUG:` panic. The warm edit it
+measured (15 crates in 5.74 s for the contract, 3 crates in 3.07 s for the graph) withdrew the
+`flui-reactive` extraction: the contract already lets render code name `Signal<T>`, and a crate
+below `flui-rendering` would put the graph's frequent edits on the foundation-level rebuild set.
+ADR-0085 records the numbers and the holes the prototype opened.
 
 ### D5. One raster contract in `flui-layer`
 
@@ -569,16 +593,17 @@ replaces the roadmap's exit text with gates that record defines, and the
 `flui_foundation` identifiers, smallvec, thiserror and two `flui-view` items. D4 placed it in a
 new `flui-reactive` crate in tier V.
 
-**Decision.** Step 1, inside `flui-view`: `Signal::get` takes `&dyn ReadScope`, read-only;
+**Decision.** Step 1: `Signal::get` takes `&S where S: ReadScope + ?Sized`, read-only, with the
+read contract in `flui_foundation::read_scope` and the graph in `flui-view`;
 `BuildContext: ReadScope`; non-Clone element and render drivers; signals stop being a feature.
 Step 2a: readers become `Element | Layout | Paint`, with guards against writes during layout or
-paint. Step 2b: the module moves to `flui-reactive` in one change together with its first render
-subscriber and a test that shows the repaint. If no render consumer exists by then, the graph
-stays in `flui-view` and D4 is amended explicitly.
+paint. Step 2b: the first render subscriber, with a test that shows the repaint, and no move. If
+no render consumer exists by then, the render-phase readers and `RenderDriver` are removed
+rather than kept unwired.
 
 **Alternatives rejected.** The crate now (no second consumer). A module in `flui-foundation`
-(27 crates invalidated per edit against 16). Staying in `flui-view` with an erased render trait
-(two observation systems forever).
+(15 crates re-checked in 5.74 s per edit against 3 in 3.07 s in `flui-view`, measured). Staying
+in `flui-view` with an erased render trait (two observation systems forever).
 
 **Evidence.** Readers are hard-wired to `ElementId` today; `ScrollPosition` is not a first
 consumer because it is written inside `perform_layout`.
@@ -592,6 +617,12 @@ See [open-questions.md](open-questions.md#14-is-the-signals-precondition-already
 
 **Owner (2026-09-25).** Confirmed: the `signals` feature is removed, and ADR-0085 §5 states the
 preconditions as met, with the evidence ([A12](#a12-the-signals-feature-is-removed)).
+
+**Changed by a prototype (2026-09-26).** A prototype of step 1 put the read contract in
+`flui-foundation` and measured the warm edit: 15 crates in 5.74 s for an edit to the contract,
+3 crates in 3.07 s for one to the graph in `flui-view`. Since the contract already lets render
+and animation code name `Signal<T>`, the move to `flui-reactive` is withdrawn; the graph stays in
+`flui-view`, and ADR-0085 §6 records the reasoning and the trigger for reopening it.
 
 ### O6. The facade has no default design system
 
@@ -759,6 +790,10 @@ Two classes of platform capability behind one door, `cx.capability::<C>()` (#11)
 class a capability belongs to and how one moves between classes. **Changed**: the default only kept
 clipboard core-required; the owner generalised it into a model.
 
+Core-required is a backend obligation; clipboard and data transfer are the only core capabilities
+reachable through `cx.capability::<C>()`. Text input, accessibility and the cursor stay on the
+framework's own routes (ADR-0084 §5).
+
 #### A9. Escape modules on demand
 
 Versioned upstream escape modules exist only with a consumer, except `flui_sdk::gpu` (#2).
@@ -842,4 +877,6 @@ form.
 - The runtime-contract ratchet did not "vanish": `cf46dfe20` (#1283) deleted it on purpose,
   together with the publish dry-run and the panic allowlist.
 - The rebuild-weight figures (engine 74.0k lines, widgets 82.7k) include test code; `flui-engine`
-  carries at least 19k lines in test files alone. The `flui-reactive` warm-edit gain is an estimate.
+  carries at least 19k lines in test files alone. The reactive warm-edit cost is measured, not
+  estimated: 15 crates in 5.74 s for an edit to a foundation module against 3 crates in 3.07 s
+  for one to the graph in `flui-view` (ADR-0085, Context).
