@@ -620,4 +620,195 @@ pub enum PlaceholderAlignment {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::Color;
+
+    /// `root("a") -> [b -> [c], d]`, texts chosen so pre-order is "abcd".
+    fn tree() -> TextSpan {
+        TextSpan::new("a")
+            .with_child(TextSpan::new("b").with_child(TextSpan::new("c")))
+            .with_child(TextSpan::new("d"))
+    }
+
+    #[test]
+    fn plain_text_counts_and_structure() {
+        let t = tree();
+        assert_eq!(t.to_plain_text(), "abcd");
+        assert_eq!((t.child_count(), t.total_span_count()), (2, 4));
+        assert!(!t.is_leaf() && t.children[1].is_leaf());
+        assert_eq!(
+            TextSpan::with_children(vec![TextSpan::new("x")]).text(),
+            None
+        );
+        // Bytes, not characters.
+        assert_eq!(TextSpan::new("é").text_length(), 2);
+    }
+
+    /// Pre-order; returning false skips that span's children only.
+    #[test]
+    fn visit_is_pre_order_and_prunes_per_span() {
+        let mut seen = Vec::new();
+        tree().visit(&mut |s| {
+            seen.push(s.text().unwrap_or("").to_owned());
+            true
+        });
+        assert_eq!(seen, ["a", "b", "c", "d"]);
+
+        let mut pruned = Vec::new();
+        tree().visit(&mut |s| {
+            pruned.push(s.text().unwrap_or("").to_owned());
+            s.text() != Some("b")
+        });
+        assert_eq!(pruned, ["a", "b", "d"]);
+    }
+
+    #[test]
+    fn builders_and_queries() {
+        let style = TextStyle::new().with_font_size(12.0);
+        let span = TextSpan::styled("x", style.clone())
+            .with_semantics_label("label")
+            .with_mouse_cursor(MouseCursor::Pointer);
+        assert_eq!(span.style(), Some(&style));
+        assert_eq!(span.semantics_label.as_deref(), Some("label"));
+        assert_eq!(span.mouse_cursor, Some(MouseCursor::Pointer));
+        assert!(span.has_semantics() && !span.is_interactive());
+        assert_eq!(
+            TextSpan::new("x").with_style(style.clone()).style,
+            Some(style)
+        );
+
+        let tappable = TextSpan::new("x").with_on_tap(|| {});
+        assert!(tappable.is_interactive());
+        assert!(format!("{tappable:?}").contains("<callback>"));
+        assert!(!TextSpan::new("x").has_semantics());
+        assert!(!InlineSpan::new(TextSpan::new("x")).has_semantics());
+        assert_eq!(
+            format!("{:?}", TextSpan::new("x")),
+            "TextSpan { text: Some(\"x\"), style: None, children: [], semantics_label: None, \
+             mouse_cursor: None, on_tap: None }"
+        );
+        assert_eq!(
+            TextSpan::with_children(vec![TextSpan::new("x")]).child_count(),
+            1
+        );
+    }
+
+    /// Equality compares every field but the callback: a span differing
+    /// in any one of them is unequal.
+    #[test]
+    fn equality_ignores_only_the_callback() {
+        let base = || {
+            TextSpan::styled("x", TextStyle::new().with_font_size(12.0))
+                .with_child(TextSpan::new("c"))
+                .with_semantics_label("l")
+                .with_mouse_cursor(MouseCursor::Pointer)
+        };
+        assert_eq!(base().with_on_tap(|| {}), base());
+        let mut variants = [base(), base(), base(), base(), base()];
+        variants[0].text = Some("y".into());
+        variants[1].style = None;
+        variants[2].children.clear();
+        variants[3].semantics_label = None;
+        variants[4].mouse_cursor = None;
+        for changed in variants {
+            assert_ne!(changed, base(), "{changed:?}");
+        }
+    }
+
+    /// Layout equality ignores paint-only style changes but not text,
+    /// structure, a style appearing, or a nested layout change.
+    #[test]
+    fn layout_affecting_eq() {
+        let sized = |size| TextStyle::new().with_font_size(size);
+        let base =
+            TextSpan::styled("a", sized(12.0)).with_child(TextSpan::styled("b", sized(10.0)));
+        let recolored = TextSpan::styled("a", sized(12.0).with_color(Color::RED))
+            .with_child(TextSpan::styled("b", sized(10.0).with_color(Color::BLUE)));
+        assert!(base.layout_affecting_eq(&recolored));
+        assert!(TextSpan::new("a").layout_affecting_eq(&TextSpan::new("a")));
+
+        let other_text =
+            TextSpan::styled("z", sized(12.0)).with_child(TextSpan::styled("b", sized(10.0)));
+        let extra_child = base.clone().with_child(TextSpan::new("c"));
+        let resized =
+            TextSpan::styled("a", sized(14.0)).with_child(TextSpan::styled("b", sized(10.0)));
+        let unstyled = TextSpan::new("a").with_child(TextSpan::styled("b", sized(10.0)));
+        let deep =
+            TextSpan::styled("a", sized(12.0)).with_child(TextSpan::styled("b", sized(11.0)));
+        for changed in [other_text, extra_child, resized, unstyled, deep] {
+            assert!(!base.layout_affecting_eq(&changed), "{changed:?}");
+            assert!(!changed.layout_affecting_eq(&base), "{changed:?}");
+        }
+    }
+
+    #[test]
+    fn inline_span_dispatch() {
+        let style = TextStyle::new().with_font_size(12.0);
+        let text = InlineSpan::new(TextSpan::styled("hi", style.clone()).with_semantics_label("l"));
+        let placeholder =
+            InlineSpan::new(PlaceholderSpan::new(4.0, 2.0, PlaceholderAlignment::Middle));
+        assert_eq!(
+            (text.style(), text.to_plain_text(), text.has_semantics()),
+            (Some(&style), "hi".into(), true)
+        );
+        assert_eq!(
+            (
+                placeholder.style(),
+                placeholder.to_plain_text(),
+                placeholder.has_semantics()
+            ),
+            (None, "\u{FFFC}".into(), false)
+        );
+
+        assert!(text.layout_affecting_eq(&text.clone()));
+        assert!(placeholder.layout_affecting_eq(&placeholder.clone()));
+        assert!(!text.layout_affecting_eq(&placeholder) && !placeholder.layout_affecting_eq(&text));
+        let wider = InlineSpan::new(PlaceholderSpan::new(5.0, 2.0, PlaceholderAlignment::Middle));
+        assert!(!placeholder.layout_affecting_eq(&wider));
+        let resized = InlineSpan::new(TextSpan::styled("hi", style.with_font_size(20.0)));
+        assert!(!text.layout_affecting_eq(&resized));
+    }
+
+    #[test]
+    fn placeholder_geometry() {
+        let p = PlaceholderSpan::new(6.0, 3.0, PlaceholderAlignment::Top)
+            .with_baseline(TextBaseline::Ideographic, 1.5);
+        assert_eq!(
+            (p.width(), p.height(), p.alignment()),
+            (6.0, 3.0, PlaceholderAlignment::Top)
+        );
+        assert_eq!(
+            (p.baseline, p.baseline_offset),
+            (Some(TextBaseline::Ideographic), 1.5)
+        );
+        assert_eq!((p.area(), p.aspect_ratio()), (18.0, 2.0));
+        assert_eq!(
+            PlaceholderSpan::new(6.0, 0.0, PlaceholderAlignment::Top).aspect_ratio(),
+            f64::INFINITY
+        );
+
+        let d = PlaceholderDimensions::new(6.0, 3.0, PlaceholderAlignment::Bottom, None, 0.5);
+        assert_eq!(
+            (d.width(), d.height(), d.alignment()),
+            (6.0, 3.0, PlaceholderAlignment::Bottom)
+        );
+        assert_eq!((d.area(), d.aspect_ratio()), (18.0, 2.0));
+        let flat = PlaceholderDimensions::new(6.0, 0.0, PlaceholderAlignment::Bottom, None, 0.0);
+        assert_eq!(flat.aspect_ratio(), f64::INFINITY);
+        // Zero by zero is still infinite, not NaN.
+        let empty = PlaceholderDimensions::new(0.0, 0.0, PlaceholderAlignment::Bottom, None, 0.0);
+        assert_eq!(empty.aspect_ratio(), f64::INFINITY);
+        let empty = PlaceholderSpan::new(0.0, 0.0, PlaceholderAlignment::Top);
+        assert_eq!(empty.aspect_ratio(), f64::INFINITY);
+        assert_eq!(empty.baseline, None);
+
+        // A placeholder has no children: visiting it visits it once.
+        let mut visits = 0;
+        empty.visit(&mut |_| {
+            visits += 1;
+            true
+        });
+        assert_eq!(visits, 1);
+    }
+}

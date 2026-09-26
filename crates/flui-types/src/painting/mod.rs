@@ -22,9 +22,7 @@ pub use canvas::{
     BlurStyle, FilterQuality, PaintingStyle, PathFillType, PathOperation, PointMode, StrokeCap,
     StrokeJoin, TextureId, TileMode, VertexMode,
 };
-pub use clipping::{
-    AutomaticNotchedShape, CircularNotchedRectangle, Clip, ClipBehavior, ClipOp, NotchedShape,
-};
+pub use clipping::{Clip, ClipBehavior, ClipOp};
 pub use effects::{
     BlurMode, BlurQuality, ColorAdjustment, ColorMatrix, ImageFilter, PathPaintMode, StrokeOptions,
 };

@@ -139,3 +139,58 @@ impl DeviceOrientation {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DeviceOrientation::{self, *};
+
+    const ALL: [DeviceOrientation; 4] = [PortraitUp, LandscapeLeft, PortraitDown, LandscapeRight];
+
+    /// `ALL` is in counter-clockwise order, 90° apart: `rotation_degrees`
+    /// counts counter-clockwise from `PortraitUp` (`LandscapeLeft` is the
+    /// device turned with its top to the left), so a clockwise turn subtracts
+    /// 90° and a counter-clockwise one adds it.
+    #[test]
+    fn rotations_follow_the_degree_table() {
+        for (i, o) in ALL.iter().enumerate() {
+            assert_eq!(o.rotation_degrees(), i as f32 * 90.0, "{o:?}");
+            assert!((o.rotation_radians() - (i as f32 * 90.0).to_radians()).abs() < 1e-6);
+            assert_eq!(
+                o.rotate_counter_clockwise().as_str(),
+                ALL[(i + 1) % 4].as_str()
+            );
+            assert_eq!(o.rotate_clockwise().as_str(), ALL[(i + 3) % 4].as_str());
+            assert_eq!(o.opposite().as_str(), ALL[(i + 2) % 4].as_str());
+        }
+    }
+
+    #[test]
+    fn predicates() {
+        for (o, (portrait, landscape, upside_down)) in [
+            (PortraitUp, (true, false, false)),
+            (PortraitDown, (true, false, true)),
+            (LandscapeLeft, (false, true, false)),
+            (LandscapeRight, (false, true, false)),
+        ] {
+            assert_eq!(
+                (o.is_portrait(), o.is_landscape(), o.is_upside_down()),
+                (portrait, landscape, upside_down),
+                "{o:?}"
+            );
+        }
+    }
+
+    /// Accepts the `as_str` spelling, the same without underscores, and any
+    /// case.
+    #[test]
+    fn parse_and_as_str() {
+        for o in ALL {
+            let name = o.as_str();
+            let parsed = |s: &str| DeviceOrientation::parse(s).map(|p| p.as_str());
+            assert_eq!(parsed(name), Some(name));
+            assert_eq!(parsed(&name.replace('_', "")), Some(name));
+            assert_eq!(parsed(&name.to_uppercase()), Some(name));
+        }
+        assert!(DeviceOrientation::parse("sideways").is_none());
+    }
+}

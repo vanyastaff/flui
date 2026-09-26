@@ -148,46 +148,78 @@ impl Default for Tolerance {
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------------
-    // Default values — parity with Flutter's `Tolerance()` default
-    //
-    // Flutter: `_epsilonDefault = 1e-3` for all three fields.
-    // Source: packages/flutter/lib/src/physics/tolerance.dart, line 15.
-    //
-    // A previous FLUI version had `velocity: 0.01` (10× too large), causing
-    // simulations to stop prematurely.  These tests guard against regression.
-    // -----------------------------------------------------------------------
-
+    /// Flutter's `Tolerance()` uses 1e-3 for all three fields
+    /// (`physics/tolerance.dart`); an earlier velocity of 0.01 stopped
+    /// simulations early.
     #[test]
-    fn tolerance_default_distance_matches_flutter() {
+    fn constants_match_flutter_defaults() {
+        assert_eq!(Tolerance::DEFAULT, Tolerance::new(1e-3, 1e-3, 1e-3));
+        assert_eq!(Tolerance::default(), Tolerance::DEFAULT);
+        assert_eq!(Tolerance::ZERO, Tolerance::new(0.0, 0.0, 0.0));
+        assert_eq!(Tolerance::RELAXED, Tolerance::new(0.1, 0.5, 0.01));
         assert_eq!(
-            Tolerance::DEFAULT.distance,
-            1e-3,
-            "distance default must match Flutter's 1e-3"
+            Tolerance::from_distance_velocity(2.0, 3.0),
+            Tolerance::new(2.0, 3.0, 1e-3)
         );
     }
 
+    /// Each field on its own can make a tolerance non-finite or invalid.
     #[test]
-    fn tolerance_default_velocity_matches_flutter() {
-        assert_eq!(
-            Tolerance::DEFAULT.velocity,
-            1e-3,
-            "velocity default must match Flutter's 1e-3 (was incorrectly 0.01)"
-        );
+    fn finiteness_and_validity_per_field() {
+        let t = Tolerance::new(1.0, 2.0, 3.0);
+        assert!(t.is_finite() && t.is_valid());
+        assert!(Tolerance::ZERO.is_valid());
+        for broken in [
+            Tolerance {
+                distance: f32::NAN,
+                ..t
+            },
+            Tolerance {
+                velocity: f32::INFINITY,
+                ..t
+            },
+            Tolerance {
+                time: f32::NAN,
+                ..t
+            },
+        ] {
+            assert!(!broken.is_finite() && !broken.is_valid(), "{broken:?}");
+        }
+        for negative in [
+            Tolerance {
+                distance: -1.0,
+                ..t
+            },
+            Tolerance {
+                velocity: -1.0,
+                ..t
+            },
+            Tolerance { time: -1.0, ..t },
+        ] {
+            assert!(negative.is_finite() && !negative.is_valid(), "{negative:?}");
+        }
+    }
+
+    /// Strictly inside, on magnitude: the bound itself is outside.
+    #[test]
+    fn within_checks_are_strict_on_magnitude() {
+        let t = Tolerance::new(1.0, 2.0, 3.0);
+        let checks: [fn(&Tolerance, f32) -> bool; 3] = [
+            Tolerance::is_distance_within,
+            Tolerance::is_velocity_within,
+            Tolerance::is_time_within,
+        ];
+        for (within, bound) in checks.into_iter().zip([1.0, 2.0, 3.0]) {
+            assert!(within(&t, bound * 0.5) && within(&t, -bound * 0.5));
+            assert!(!within(&t, bound) && !within(&t, -bound));
+        }
     }
 
     #[test]
-    fn tolerance_default_time_matches_flutter() {
+    fn scale_scales_every_field() {
         assert_eq!(
-            Tolerance::DEFAULT.time,
-            1e-3,
-            "time default must match Flutter's 1e-3"
+            Tolerance::new(1.0, 2.0, 3.0).scale(3.0),
+            Tolerance::new(3.0, 6.0, 9.0)
         );
-    }
-
-    #[test]
-    fn tolerance_default_via_default_trait() {
-        let t = Tolerance::default();
-        assert_eq!(t, Tolerance::DEFAULT);
     }
 }

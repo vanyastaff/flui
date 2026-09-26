@@ -91,8 +91,7 @@ impl From<Color> for HSLColor {
             60.0 * (((r - g) / delta) + 4.0)
         };
 
-        let hue = if hue < 0.0 { hue + 360.0 } else { hue };
-
+        // `% 6.0` leaves the red sector negative below 0°; `new` wraps it.
         Self::new(hue, saturation, lightness, a)
     }
 }
@@ -118,11 +117,13 @@ impl From<HSLColor> for Color {
             (c, 0.0, x)
         };
 
+        // Round like Flutter's `_colorFromHue`; truncating loses a unit
+        // whenever the float lands just under an integer.
         Color::rgba(
-            ((r + m) * 255.0) as u8,
-            ((g + m) * 255.0) as u8,
-            ((b + m) * 255.0) as u8,
-            (hsl.alpha * 255.0) as u8,
+            ((r + m) * 255.0).round() as u8,
+            ((g + m) * 255.0).round() as u8,
+            ((b + m) * 255.0).round() as u8,
+            (hsl.alpha * 255.0).round() as u8,
         )
     }
 }
@@ -207,8 +208,7 @@ impl From<Color> for HSVColor {
             60.0 * (((r - g) / delta) + 4.0)
         };
 
-        let hue = if hue < 0.0 { hue + 360.0 } else { hue };
-
+        // `% 6.0` leaves the red sector negative below 0°; `new` wraps it.
         Self::new(hue, saturation, value, a)
     }
 }
@@ -234,11 +234,102 @@ impl From<HSVColor> for Color {
             (c, 0.0, x)
         };
 
+        // Round like Flutter's `_colorFromHue`; truncating loses a unit
+        // whenever the float lands just under an integer.
         Color::rgba(
-            ((r + m) * 255.0) as u8,
-            ((g + m) * 255.0) as u8,
-            ((b + m) * 255.0) as u8,
-            (hsv.alpha * 255.0) as u8,
+            ((r + m) * 255.0).round() as u8,
+            ((g + m) * 255.0).round() as u8,
+            ((b + m) * 255.0).round() as u8,
+            (hsv.alpha * 255.0).round() as u8,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_color() -> impl Strategy<Value = Color> {
+        (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>())
+            .prop_map(|(r, g, b, a)| Color::rgba(r, g, b, a))
+    }
+
+    proptest! {
+        /// Converting to HSL or HSV and back is lossless for every 8-bit
+        /// color, alpha included.
+        #[test]
+        fn roundtrips_are_exact(c in arb_color()) {
+            prop_assert_eq!(Color::from(HSLColor::from(c)), c);
+            prop_assert_eq!(Color::from(HSVColor::from(c)), c);
+        }
+    }
+
+    /// One primary or secondary color per 60° sector, so every branch of
+    /// both directions is taken.
+    #[test]
+    fn hue_sectors() {
+        for (color, hue) in [
+            (Color::rgb(255, 0, 0), 0.0),
+            (Color::rgb(255, 255, 0), 60.0),
+            (Color::rgb(0, 255, 0), 120.0),
+            (Color::rgb(0, 255, 255), 180.0),
+            (Color::rgb(0, 0, 255), 240.0),
+            (Color::rgb(255, 0, 255), 300.0),
+            (Color::rgb(255, 0, 128), 330.0),
+        ] {
+            let (hsl, hsv) = (HSLColor::from(color), HSVColor::from(color));
+            assert!(
+                (hsl.hue - hue).abs() < 0.5 && (hsv.hue - hue).abs() < 0.5,
+                "{color:?}: {hsl:?}"
+            );
+            assert_eq!(
+                (hsl.saturation, hsl.lightness),
+                (1.0, if hue == 330.0 { hsl.lightness } else { 0.5 })
+            );
+            assert_eq!((hsv.saturation, hsv.value), (1.0, 1.0));
+        }
+        // Grays have no hue or saturation, black and white included, where
+        // the HSL saturation formula would divide zero by zero.
+        for gray in [Color::BLACK, Color::rgb(128, 128, 128), Color::WHITE] {
+            let hsl = HSLColor::from(gray);
+            assert_eq!((hsl.hue, hsl.saturation), (0.0, 0.0), "{gray:?}");
+            assert_eq!(Color::from(hsl), gray);
+            let hsv = HSVColor::from(gray);
+            assert_eq!((hsv.hue, hsv.saturation), (0.0, 0.0), "{gray:?}");
+            assert_eq!(Color::from(hsv), gray);
+        }
+    }
+
+    /// Hue wraps into `0..360`, the rest clamps into `0..=1`.
+    #[test]
+    fn constructors_wrap_and_clamp() {
+        let hsl = HSLColor::new(-30.0, 1.5, -0.5, 2.0);
+        assert_eq!(
+            (hsl.hue, hsl.saturation, hsl.lightness, hsl.alpha),
+            (330.0, 1.0, 0.0, 1.0)
+        );
+        let hsv = HSVColor::new(390.0, -1.0, 1.5, -1.0);
+        assert_eq!(
+            (hsv.hue, hsv.saturation, hsv.value, hsv.alpha),
+            (30.0, 0.0, 1.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn setters_replace_one_component() {
+        let hsl = HSLColor::new(10.0, 0.2, 0.3, 0.4);
+        let get = |c: HSLColor| (c.hue, c.saturation, c.lightness, c.alpha);
+        assert_eq!(get(hsl.with_hue(370.0)), (10.0, 0.2, 0.3, 0.4));
+        assert_eq!(get(hsl.with_saturation(0.9)), (10.0, 0.9, 0.3, 0.4));
+        assert_eq!(get(hsl.with_lightness(0.9)), (10.0, 0.2, 0.9, 0.4));
+        assert_eq!(get(hsl.with_alpha(0.9)), (10.0, 0.2, 0.3, 0.9));
+
+        let hsv = HSVColor::new(10.0, 0.2, 0.3, 0.4);
+        let get = |c: HSVColor| (c.hue, c.saturation, c.value, c.alpha);
+        assert_eq!(get(hsv.with_hue(20.0)), (20.0, 0.2, 0.3, 0.4));
+        assert_eq!(get(hsv.with_saturation(0.9)), (10.0, 0.9, 0.3, 0.4));
+        assert_eq!(get(hsv.with_value(0.9)), (10.0, 0.2, 0.9, 0.4));
+        assert_eq!(get(hsv.with_alpha(0.9)), (10.0, 0.2, 0.3, 0.9));
     }
 }

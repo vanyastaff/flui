@@ -140,163 +140,45 @@ impl From<ClipBehavior> for Clip {
     }
 }
 
-/// A shape with a notch in its outline.
-///
-/// Similar to Flutter's `NotchedShape`.
-///
-/// Typically used with `BottomAppBar` to create a notch for a
-/// `FloatingActionButton`.
-pub trait NotchedShape: std::fmt::Debug {
-    /// Creates a path for the outer edge of the shape.
-    ///
-    /// The `host` is the bounding rectangle of the shape.
-    /// The `guest` is the bounding rectangle of the notch.
-    ///
-    /// Returns a path that describes the outer edge of the shape with the
-    /// notch.
-    fn get_outer_path(
-        &self,
-        host: Rect<Pixels>,
-        guest: Option<Rect<Pixels>>,
-    ) -> Vec<Offset<Pixels>>;
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// A rectangle with a semi-circular notch cut out of its top edge.
-///
-/// Similar to Flutter's `CircularNotchedRectangle`; used by a bottom app bar
-/// to make room for a circular floating action button.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CircularNotchedRectangle {
-    /// The margin around the guest rectangle.
-    pub margin: f32,
-}
-
-impl CircularNotchedRectangle {
-    /// Creates a circular notched rectangle with the default margin (4.0).
-    #[must_use]
-    #[inline]
-    pub const fn new() -> Self {
-        Self { margin: 4.0 }
-    }
-
-    /// Creates a circular notched rectangle with the given margin around the
-    /// guest.
-    #[must_use]
-    #[inline]
-    pub const fn with_margin(margin: f32) -> Self {
-        Self { margin }
-    }
-}
-
-impl Default for CircularNotchedRectangle {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl NotchedShape for CircularNotchedRectangle {
-    #[inline]
-    fn get_outer_path(
-        &self,
-        host: Rect<Pixels>,
-        guest: Option<Rect<Pixels>>,
-    ) -> Vec<Offset<Pixels>> {
-        let Some(guest) = guest else {
-            // No notch, just return the rectangle corners
-            return vec![
-                Offset::new(host.left(), host.top()),
-                Offset::new(host.right(), host.top()),
-                Offset::new(host.right(), host.bottom()),
-                Offset::new(host.left(), host.bottom()),
-            ];
-        };
-
-        let mut path = Vec::new();
-
-        // Start from top-left
-        path.push(Offset::new(host.left(), host.top()));
-
-        // Check if the guest intersects with the top edge
-        let guest_center_x = guest.left() + guest.width() / 2.0;
-        let guest_center_y = guest.top() + guest.height() / 2.0;
-
-        // Only create notch if guest is near the top edge
-        if (guest_center_y - host.top()).abs() < guest.height() / 2.0 + px(self.margin) {
-            let notch_radius = guest.width() / 2.0 + px(self.margin);
-
-            // Left part of top edge (before notch)
-            path.push(Offset::new(guest_center_x - notch_radius, host.top()));
-
-            // Create circular notch (simplified - in reality would use bezier curves)
-            let steps = 16;
-            for i in 0..=steps {
-                let angle = std::f32::consts::PI + (i as f32 / steps as f32) * std::f32::consts::PI;
-                let x = guest_center_x + notch_radius * angle.cos();
-                let y = host.top() + notch_radius * (1.0 + angle.sin());
-                path.push(Offset::new(x, y));
-            }
-
-            // Right part of top edge (after notch)
-            path.push(Offset::new(guest_center_x + notch_radius, host.top()));
+    /// `(anti-aliased, saves layer, clips, efficient)` per variant, and the
+    /// `ClipBehavior` -> `Clip` mapping.
+    #[test]
+    fn clip_predicates_and_conversion() {
+        for (behavior, clip, expected) in [
+            (ClipBehavior::None, Clip::None, (false, false, false, true)),
+            (
+                ClipBehavior::HardEdge,
+                Clip::HardEdge,
+                (false, false, true, true),
+            ),
+            (
+                ClipBehavior::AntiAlias,
+                Clip::AntiAlias,
+                (true, false, true, false),
+            ),
+            (
+                ClipBehavior::AntiAliasWithSaveLayer,
+                Clip::AntiAliasWithSaveLayer,
+                (true, true, true, false),
+            ),
+        ] {
+            let got = (
+                clip.is_anti_aliased(),
+                clip.saves_layer(),
+                clip.clips(),
+                clip.is_efficient(),
+            );
+            assert_eq!(got, expected, "{clip:?}");
+            assert_eq!(behavior.to_clip(), clip);
+            assert_eq!(Clip::from(behavior), clip);
+            assert_eq!(
+                (behavior.is_anti_aliased(), behavior.clips()),
+                (expected.0, expected.2)
+            );
         }
-
-        // Top-right corner
-        path.push(Offset::new(host.right(), host.top()));
-
-        // Right edge
-        path.push(Offset::new(host.right(), host.bottom()));
-
-        // Bottom edge
-        path.push(Offset::new(host.left(), host.bottom()));
-
-        path
-    }
-}
-
-/// A [`NotchedShape`] wrapper that scales the guest rectangle around its
-/// center before delegating to the inner shape.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct AutomaticNotchedShape<T: NotchedShape> {
-    /// The inner notched shape.
-    pub inner: T,
-
-    /// Scale factor for the notch size.
-    pub scale: f32,
-}
-
-impl<T: NotchedShape> AutomaticNotchedShape<T> {
-    /// Wraps `inner` without scaling the guest (scale factor 1.0).
-    #[must_use]
-    #[inline]
-    pub const fn new(inner: T) -> Self {
-        Self { inner, scale: 1.0 }
-    }
-
-    /// Wraps `inner`, scaling the guest rectangle by `scale` around its
-    /// center before computing the notch.
-    #[must_use]
-    #[inline]
-    pub const fn with_scale(inner: T, scale: f32) -> Self {
-        Self { inner, scale }
-    }
-}
-
-impl<T: NotchedShape> NotchedShape for AutomaticNotchedShape<T> {
-    #[inline]
-    fn get_outer_path(
-        &self,
-        host: Rect<Pixels>,
-        guest: Option<Rect<Pixels>>,
-    ) -> Vec<Offset<Pixels>> {
-        let scaled_guest = guest.map(|g| {
-            let center = g.center();
-            let scaled_size = Size::new(g.width() * self.scale, g.height() * self.scale);
-            Rect::from_center_size(center, scaled_size)
-        });
-
-        self.inner.get_outer_path(host, scaled_guest)
     }
 }

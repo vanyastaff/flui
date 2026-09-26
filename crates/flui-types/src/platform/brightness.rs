@@ -111,3 +111,32 @@ impl Brightness {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn light_and_dark() {
+        let (l, d) = (Brightness::Light, Brightness::Dark);
+        assert_eq!((l.is_light(), l.is_dark(), l.invert()), (true, false, d));
+        assert_eq!((d.is_light(), d.is_dark(), d.invert()), (false, true, l));
+
+        assert_eq!(l.background_color(), Color::WHITE);
+        assert_eq!(d.background_color(), Color::rgb(18, 18, 18));
+        assert_eq!(l.foreground_color(), Color::BLACK);
+        assert_eq!(d.foreground_color(), Color::WHITE);
+        assert_eq!(l.surface_color(), Color::WHITE);
+        assert_eq!(d.surface_color(), Color::rgb(30, 30, 30));
+        assert_eq!((l.shadow_opacity(), d.shadow_opacity()), (0.2, 0.4));
+    }
+
+    #[test]
+    fn parse_and_as_str() {
+        for b in [Brightness::Light, Brightness::Dark] {
+            assert_eq!(Brightness::parse(b.as_str()), Some(b));
+            assert_eq!(Brightness::parse(&b.as_str().to_uppercase()), Some(b));
+        }
+        assert_eq!(Brightness::parse("dim"), None);
+    }
+}

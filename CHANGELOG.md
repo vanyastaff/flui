@@ -110,6 +110,12 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   known Thai/Lao/Khmer/Myanmar/Chinese/Japanese segmentation
   limitations.
 
+- **Bézier curves on `Path`** (`flui-types`): `quadratic_bezier_to` and `cubic_to`, Flutter's
+  `quadraticBezierTo`/`cubicTo`. `flui-engine` already tessellated both commands; nothing could
+  create them. Hit testing flattens a curve by Wang's formula to the same 0.1 px tolerance as
+  arcs, instead of a fixed four or eight chords that drifted from the painted curve in
+  proportion to its size.
+
 ### Changed
 
 - **`flui_widgets::TextField` renamed to `RawTextField`** (and
@@ -148,8 +154,38 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 - `flui_rendering::slivers`, a public module with no items: the sliver windowing math lives in
   `flui_rendering::virtualization`.
+- Unused public API in `flui-types`, none of it called anywhere in the workspace:
+  - `Color32`, a packed premultiplied colour that `Color`'s docs said the renderer used; it
+    never did (`flui-engine` premultiplies itself when it converts a `Color`).
+  - `NotchedShape`, `CircularNotchedRectangle` and `AutomaticNotchedShape`, for a
+    `BottomAppBar` FLUI does not have. They returned a 16-segment polyline, not Flutter's
+    curved `Path`, and drew the notch upside down until a test found it; the port belongs with
+    `BottomAppBar`, built on `Path::cubic_to`.
+  - `TextScaler` and its linear and clamped implementations. Text scaling is the flat
+    `text_scale_factor` in `MediaQueryData` and `TextPainter`, and a `dyn` trait cannot be the
+    replacement: `MediaQueryData` compares values to decide which dependents rebuild. Flutter's
+    nonlinear scaling should come back as a `Copy + PartialEq` value wired from the platform.
+- `PathCommand::AddCircle`: no `Path` method produced it (`Path::circle` adds an oval), and
+  Flutter has no `addCircle`.
 
 ### Fixed
+
+- **`Color::with_opacity` rounds the alpha** (`flui-types`): `0.5` gives 128 and `0.12` gives
+  31, the nearest of the 256 steps; it truncated, so a colour built from an opacity could be
+  one step more transparent than asked. Flutter's `withOpacity` rounds the same way.
+- **Gradients interpolate across colour counts** (`flui-types`): `Gradient::lerp` and the
+  linear, radial and sweep `lerp`s returned `None` for different colour counts, so
+  `BoxDecoration::lerp` between such gradients painted none for the whole transition. They
+  now put a stop wherever either side has one and lerp both sides sampled there, as Flutter's
+  `_interpolateColorsAndStops` does; radii and sweep angles no longer lerp below zero. A focal
+  point set on one side moves to or from the other gradient's center, so the transition ends
+  on exactly the other gradient (Flutter pulls it toward `Alignment(0, 0)`; see
+  `crates/flui-types/ARCHITECTURE.md`).
+
+- **Where an unanchored segment starts** (`flui-engine`): a `line_to` or curve with no contour
+  open began at the line's own end or the curve's first control point. It now starts from
+  Skia's pen, as Flutter does and as `Path::contains` already assumed: the origin on a fresh
+  path or after a standalone shape, the start of the contour just closed after a close.
 
 - **`Image::from_rgba8` length check could wrap** (`flui-types`): the expected length
   `width * height * 4` was computed in `u32`, so it panicked on overflow in debug builds and

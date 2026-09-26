@@ -182,28 +182,44 @@ impl<T: NumericUnit> BorderSide<T>
 where
     T: std::ops::Mul<f32, Output = T>,
 {
-    /// Linearly interpolate between two border sides.
+    /// Linearly interpolate between two border sides (Flutter's
+    /// `BorderSide.lerp`, `t` clamped to `0..=1`).
     ///
-    /// If the two sides have different styles, the interpolation switches
-    /// abruptly at t = 0.5.
+    /// When the styles differ, a `None` side takes part as its own color
+    /// made fully transparent and the result is `Solid`, so a border fades
+    /// in or out instead of vanishing at `t = 0.5`.
     #[inline]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
-
-        if t < 0.5 {
-            Self {
+        if t == 0.0 {
+            return a;
+        }
+        if t == 1.0 {
+            return b;
+        }
+        let width = a.width * (1.0 - t) + b.width * t;
+        if width < T::zero() {
+            return Self::none();
+        }
+        let stroke_align = a.stroke_align + (b.stroke_align - a.stroke_align) * t;
+        #[expect(clippy::float_cmp, reason = "Flutter's exact-equality shortcut")]
+        if a.style == b.style && a.stroke_align == b.stroke_align {
+            return Self {
                 color: Color::lerp(a.color, b.color, t),
-                width: a.width * (1.0 - t) + b.width * t,
+                width,
                 style: a.style,
-                stroke_align: a.stroke_align + (b.stroke_align - a.stroke_align) * t,
-            }
-        } else {
-            Self {
-                color: Color::lerp(a.color, b.color, t),
-                width: a.width * (1.0 - t) + b.width * t,
-                style: b.style,
-                stroke_align: a.stroke_align + (b.stroke_align - a.stroke_align) * t,
-            }
+                stroke_align,
+            };
+        }
+        let visible = |side: &Self| match side.style {
+            BorderStyle::Solid => side.color,
+            BorderStyle::None => side.color.with_alpha(0),
+        };
+        Self {
+            color: Color::lerp(visible(&a), visible(&b), t),
+            width,
+            style: BorderStyle::Solid,
+            stroke_align,
         }
     }
 
@@ -260,5 +276,115 @@ impl BorderPosition {
     #[inline]
     pub const fn is_vertical(&self) -> bool {
         matches!(self, Self::Left | Self::Right)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::px;
+
+    fn solid(color: Color, width: f32) -> BorderSide<Pixels> {
+        BorderSide::new(color, px(width), BorderStyle::Solid)
+    }
+
+    #[test]
+    fn style_predicates() {
+        assert!(BorderStyle::Solid.is_solid() && !BorderStyle::Solid.is_none());
+        assert!(BorderStyle::None.is_none() && !BorderStyle::None.is_solid());
+    }
+
+    #[test]
+    fn constructors_and_setters() {
+        let side = solid(Color::RED, 2.0);
+        assert_eq!(side.stroke_align, 0.0);
+        assert_eq!(
+            BorderSide::with_stroke_align(Color::RED, px(2.0), BorderStyle::Solid, 1.0),
+            side.with_stroke_alignment(1.0)
+        );
+        assert_eq!(side.with_color(Color::BLUE).color, Color::BLUE);
+        assert_eq!(side.with_width(px(5.0)).width, px(5.0));
+        assert_eq!(side.with_style(BorderStyle::None).style, BorderStyle::None);
+        assert_eq!(side.scale(1.5).width, px(3.0));
+        assert_eq!(BorderSide::<Pixels>::none(), BorderSide::NONE);
+        assert_eq!(BorderSide::<Pixels>::default(), BorderSide::HAIRLINE);
+    }
+
+    /// Visible means solid and wider than zero.
+    #[test]
+    fn is_visible() {
+        assert!(solid(Color::RED, 1.0).is_visible());
+        assert!(!solid(Color::RED, 0.0).is_visible());
+        assert!(
+            !solid(Color::RED, 1.0)
+                .with_style(BorderStyle::None)
+                .is_visible()
+        );
+    }
+
+    /// Flutter's `BorderSide.lerp`: same style and alignment lerps color and
+    /// width; otherwise a `None` side takes part as its color at zero alpha
+    /// and the result is solid.
+    #[test]
+    fn lerp_follows_flutter() {
+        let a = solid(Color::rgb(0, 0, 0), 2.0);
+        let b = solid(Color::rgb(200, 100, 50), 6.0);
+        assert_eq!(BorderSide::lerp(a, b, 0.0), a);
+        assert_eq!(BorderSide::lerp(a, b, 1.0), b);
+        assert_eq!(
+            BorderSide::lerp(a, b, 0.5),
+            solid(Color::rgb(100, 50, 25), 4.0)
+        );
+        assert_eq!(BorderSide::lerp(a, b, 5.0), b);
+
+        // Fading a red border out to `none` (black, 0px) keeps its red and
+        // lowers its alpha, instead of darkening toward black and vanishing
+        // at t = 0.5.
+        let red = solid(Color::rgb(200, 0, 0), 4.0);
+        let faded = solid(Color::rgba(50, 0, 0, 64), 1.0);
+        assert_eq!(BorderSide::lerp(red, BorderSide::none(), 0.75), faded);
+        assert_eq!(BorderSide::lerp(BorderSide::none(), red, 0.25), faded);
+
+        // A different stroke alignment alone also takes the fading path.
+        let inside = BorderSide::<Pixels>::none();
+        let outside = inside.with_stroke_alignment(1.0);
+        let mid = BorderSide::lerp(inside, outside, 0.5);
+        assert_eq!(
+            (mid.style, mid.stroke_align, mid.color.a),
+            (BorderStyle::Solid, 0.5, 0)
+        );
+        assert_eq!(BorderSide::lerp(outside, inside, 0.5).stroke_align, 0.5);
+
+        // The endpoints are returned as they are, style change or not.
+        assert_eq!(
+            BorderSide::lerp(BorderSide::none(), red, 0.0),
+            BorderSide::none()
+        );
+        assert_eq!(
+            BorderSide::lerp(red, BorderSide::none(), 1.0),
+            BorderSide::none()
+        );
+        // Two `None` sides stay `None`.
+        let hidden = |w| BorderSide::none().with_width(px(w));
+        assert_eq!(
+            BorderSide::lerp(hidden(2.0), hidden(6.0), 0.5).style,
+            BorderStyle::None
+        );
+        // A width that interpolates below zero gives no border at all.
+        let negative = solid(Color::rgb(0, 0, 0), -4.0);
+        assert_eq!(BorderSide::lerp(negative, a, 0.25), BorderSide::none());
+    }
+
+    #[test]
+    fn positions() {
+        use BorderPosition::*;
+        assert_eq!(BorderPosition::all(), [Top, Right, Bottom, Left]);
+        for (p, horizontal) in [(Top, true), (Right, false), (Bottom, true), (Left, false)] {
+            assert_eq!(
+                (p.is_horizontal(), p.is_vertical()),
+                (horizontal, !horizontal),
+                "{p:?}"
+            );
+        }
     }
 }

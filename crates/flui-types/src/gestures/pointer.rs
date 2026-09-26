@@ -646,6 +646,8 @@ mod tests {
         assert_eq!(data.pointer, 0);
         assert_eq!(data.device_kind, PointerDeviceKind::Touch);
         assert_eq!(data.delta, Offset::ZERO);
+        assert_eq!((data.platform_data, data.buttons), (0, 0));
+        assert!(!data.obscured && !data.synthesized);
     }
 
     #[test]
@@ -658,7 +660,7 @@ mod tests {
         )
         .with_pressure(0.8, 0.0, 1.0)
         .with_distance(5.0, 10.0)
-        .with_radius(10.0, 5.0, 0.0, 20.0)
+        .with_radius(10.0, 5.0, 2.0, 20.0)
         .with_orientation(0.5)
         .with_tilt(0.3)
         .with_delta(Offset::new(px(2.0), px(3.0)))
@@ -666,7 +668,15 @@ mod tests {
 
         assert_eq!(data.pressure, 0.8);
         assert_eq!(data.distance, 5.0);
-        assert_eq!(data.radius_major, 10.0);
+        assert_eq!(
+            (
+                data.radius_major,
+                data.radius_minor,
+                data.radius_min,
+                data.radius_max
+            ),
+            (10.0, 5.0, 2.0, 20.0)
+        );
         assert_eq!(data.orientation, 0.5);
         assert_eq!(data.tilt, 0.3);
         assert_eq!(data.delta, Offset::new(px(2.0), px(3.0)));
@@ -692,5 +702,165 @@ mod tests {
         )
         .with_distance(5.0, 10.0);
         assert!(!hover.is_down());
+    }
+
+    fn touch() -> PointerData {
+        PointerData::new(Duration::ZERO, Offset::ZERO, 0, PointerDeviceKind::Touch)
+    }
+
+    #[test]
+    fn offset_pair_delta_and_finiteness() {
+        let pair = OffsetPair::new(
+            Offset::new(px(10.0), px(20.0)),
+            Offset::new(px(100.0), px(250.0)),
+        );
+        assert_eq!(pair.delta(), Offset::new(px(90.0), px(230.0)));
+        assert!(pair.is_finite());
+
+        let nan = px(f32::NAN);
+        for broken in [
+            OffsetPair::new(Offset::new(nan, px(0.0)), Offset::ZERO),
+            OffsetPair::new(Offset::new(px(0.0), nan), Offset::ZERO),
+            OffsetPair::new(Offset::ZERO, Offset::new(nan, px(0.0))),
+            OffsetPair::new(Offset::ZERO, Offset::new(px(0.0), nan)),
+        ] {
+            assert!(!broken.is_finite(), "{broken:?}");
+        }
+    }
+
+    /// Down means touching (zero hover distance) or pressing; each side of
+    /// the `||` is exercised alone.
+    #[test]
+    fn is_down_and_is_hovering() {
+        for (data, down) in [
+            (touch(), true),
+            (touch().with_distance(5.0, 10.0), false),
+            (
+                touch()
+                    .with_distance(5.0, 10.0)
+                    .with_pressure(0.5, 0.0, 1.0),
+                true,
+            ),
+        ] {
+            assert_eq!(data.is_down(), down, "{data:?}");
+            assert_eq!(data.is_hovering(), !down, "{data:?}");
+        }
+    }
+
+    /// Pressure is normalized against a non-zero minimum and clamped; an
+    /// empty or inverted range reads as zero.
+    #[test]
+    fn normalized_pressure() {
+        for ((pressure, min, max), expected) in [
+            ((75.0, 50.0, 150.0), 0.25),
+            ((200.0, 50.0, 150.0), 1.0),
+            ((0.0, 50.0, 150.0), 0.0),
+            ((5.0, 5.0, 5.0), 0.0),
+            ((5.0, 10.0, 5.0), 0.0),
+        ] {
+            let data = touch().with_pressure(pressure, min, max);
+            assert_eq!(
+                data.normalized_pressure(),
+                expected,
+                "{pressure} in {min}..{max}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_distance() {
+        for ((distance, max), expected) in
+            [((2.5, 10.0), 0.25), ((20.0, 10.0), 1.0), ((3.0, 0.0), 0.0)]
+        {
+            let data = touch().with_distance(distance, max);
+            assert_eq!(data.normalized_distance(), expected, "{distance} of {max}");
+        }
+    }
+
+    #[test]
+    fn touch_area_and_speed() {
+        let data = touch()
+            .with_radius(10.0, 5.0, 0.0, 20.0)
+            .with_delta(Offset::new(px(3.0), px(4.0)));
+        assert!((data.touch_area() - 50.0 * std::f32::consts::PI).abs() < 1e-4);
+        assert_eq!(data.speed(), 5.0);
+    }
+
+    /// Every numeric field participates: one non-finite field is enough.
+    #[test]
+    fn pointer_data_is_finite_checks_every_field() {
+        let nan = f32::NAN;
+        let nan_offset = |x: bool| {
+            if x {
+                Offset::new(px(nan), px(0.0))
+            } else {
+                Offset::new(px(0.0), px(nan))
+            }
+        };
+        assert!(touch().is_finite());
+        for broken in [
+            PointerData {
+                position: nan_offset(true),
+                ..touch()
+            },
+            PointerData {
+                position: nan_offset(false),
+                ..touch()
+            },
+            PointerData {
+                delta: nan_offset(true),
+                ..touch()
+            },
+            PointerData {
+                delta: nan_offset(false),
+                ..touch()
+            },
+            PointerData {
+                pressure: nan,
+                ..touch()
+            },
+            PointerData {
+                pressure_min: nan,
+                ..touch()
+            },
+            PointerData {
+                pressure_max: nan,
+                ..touch()
+            },
+            PointerData {
+                distance: nan,
+                ..touch()
+            },
+            PointerData {
+                distance_max: nan,
+                ..touch()
+            },
+            PointerData {
+                radius_major: nan,
+                ..touch()
+            },
+            PointerData {
+                radius_minor: nan,
+                ..touch()
+            },
+            PointerData {
+                radius_min: nan,
+                ..touch()
+            },
+            PointerData {
+                radius_max: nan,
+                ..touch()
+            },
+            PointerData {
+                orientation: nan,
+                ..touch()
+            },
+            PointerData {
+                tilt: nan,
+                ..touch()
+            },
+        ] {
+            assert!(!broken.is_finite(), "{broken:?}");
+        }
     }
 }

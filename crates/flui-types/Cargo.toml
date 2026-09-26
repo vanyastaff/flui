@@ -41,8 +41,11 @@ serde = { workspace = true, optional = true, features = ["rc"] }
 
 [dev-dependencies]
 criterion = { workspace = true }
-# Property-based tests in tests/geometry_property_tests.rs
+# Property-based tests: tests/color_property_tests.rs and the in-source
+# color, locale and path tests
 proptest = "1.5"
+# #[case] tables in tests/color_blend_tests.rs and color_operations_tests.rs
+rstest = { workspace = true }
 trybuild = { workspace = true }
 # `serde` feature round-trip tests (platform::locale's canonicalizing
 # `Deserialize` impl) — a real JSON round-trip, not a hand-built `Value`.

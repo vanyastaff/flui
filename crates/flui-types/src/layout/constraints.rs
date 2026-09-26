@@ -267,11 +267,15 @@ impl BoxConstraints {
     /// Ensures: 0 <= min <= max <= infinity
     #[inline]
     pub fn normalize(&self) -> Self {
+        // The maximum is raised to the *normalized* minimum, as in Flutter;
+        // raising it to a negative original minimum could leave max < min.
+        let min_width = self.min_width.0.max(0.0);
+        let min_height = self.min_height.0.max(0.0);
         Self::new(
-            Pixels(self.min_width.0.max(0.0)),
-            Pixels(self.max_width.0.max(self.min_width.0)),
-            Pixels(self.min_height.0.max(0.0)),
-            Pixels(self.max_height.0.max(self.min_height.0)),
+            Pixels(min_width),
+            Pixels(self.max_width.0.max(min_width)),
+            Pixels(min_height),
+            Pixels(self.max_height.0.max(min_height)),
         )
     }
 }
@@ -375,19 +379,90 @@ mod tests {
         assert_eq!(loose.max_height, px(200.0));
     }
 
+    fn c(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
+        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    }
+
+    /// `normalize` lifts negative minimums to zero and raises each maximum
+    /// to at least its minimum; `enforce` only does the latter.
     #[test]
-    #[inline]
-    fn test_normalize() {
-        // Invalid constraints (min > max)
-        let invalid = BoxConstraints::new(
-            px(100.0),
-            px(50.0), // min > max
-            px(200.0),
-            px(100.0), // min > max
+    fn normalize_and_enforce() {
+        assert_eq!(
+            c(100.0, 50.0, -5.0, -10.0).normalize(),
+            c(100.0, 100.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            c(100.0, 50.0, -5.0, -10.0).enforce(),
+            c(100.0, 100.0, -5.0, -5.0)
+        );
+        assert_eq!(c(1.0, 2.0, 3.0, 4.0).normalize(), c(1.0, 2.0, 3.0, 4.0));
+    }
+
+    /// Each predicate on one axis at a time, so an `&&` that became `||`
+    /// (or the reverse) shows. `Pixels::MAX` itself counts as unbounded.
+    #[test]
+    fn per_axis_predicates() {
+        let tight_w = BoxConstraints::tight_width(px(10.0));
+        assert!(tight_w.has_tight_width() && !tight_w.has_tight_height() && !tight_w.is_tight());
+        let tight_h = BoxConstraints::tight_height(px(10.0));
+        assert!(!tight_h.has_tight_width() && tight_h.has_tight_height() && !tight_h.is_tight());
+
+        let bounded_w = c(0.0, 10.0, 0.0, f32::MAX);
+        assert!(
+            bounded_w.has_bounded_width()
+                && !bounded_w.has_bounded_height()
+                && !bounded_w.is_bounded()
+        );
+        let bounded_h = c(0.0, f32::MAX, 0.0, 10.0);
+        assert!(
+            !bounded_h.has_bounded_width()
+                && bounded_h.has_bounded_height()
+                && !bounded_h.is_bounded()
         );
 
-        let normalized = invalid.normalize();
-        assert!(normalized.min_width.0 <= normalized.max_width.0);
-        assert!(normalized.min_height.0 <= normalized.max_height.0);
+        assert!(c(0.0, 0.0, 0.0, 0.0).is_zero());
+        assert!(!c(0.0, 0.0, 0.0, 1.0).is_zero());
+        assert!(!c(0.0, 1.0, 0.0, 0.0).is_zero());
+    }
+
+    #[test]
+    fn tighten() {
+        let loose = c(20.0, 100.0, 30.0, 200.0);
+        assert_eq!(
+            loose.tighten_width(Some(px(10.0))),
+            c(10.0, 10.0, 30.0, 200.0)
+        );
+        assert_eq!(loose.tighten_width(None), loose);
+        assert_eq!(
+            loose.tighten_height(Some(px(50.0))),
+            c(20.0, 100.0, 30.0, 50.0)
+        );
+        assert_eq!(loose.tighten_height(None), loose);
+        assert_eq!(
+            loose.tighten(Some(Size::new(px(7.0), px(8.0)))),
+            c(7.0, 7.0, 8.0, 8.0)
+        );
+        assert_eq!(loose.tighten(None), loose);
+    }
+
+    #[test]
+    fn display() {
+        assert_eq!(c(7.0, 7.0, 8.0, 8.0).to_string(), "BoxConstraints(7x8)");
+        assert_eq!(
+            c(1.0, 2.0, 3.0, 4.0).to_string(),
+            "BoxConstraints(1 <= w <= 2, 3 <= h <= 4)"
+        );
+    }
+
+    /// Each bound shrinks by its axis's total inset, floored at zero.
+    #[test]
+    fn deflate_subtracts_the_insets_per_axis() {
+        let insets = crate::geometry::Edges::new(px(1.0), px(2.0), px(4.0), px(8.0));
+        let deflated = c(20.0, 100.0, 30.0, 200.0).deflate(insets);
+        assert_eq!(deflated, c(10.0, 90.0, 25.0, 195.0));
+        assert_eq!(
+            c(5.0, 12.0, 3.0, 7.0).deflate(insets),
+            c(0.0, 2.0, 0.0, 2.0)
+        );
     }
 }

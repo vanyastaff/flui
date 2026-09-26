@@ -838,4 +838,209 @@ mod tests {
         assert!((cx - 0.5).abs() < 1e-6, "cx should be 0.5, got {cx}");
         assert!((cy - 0.5).abs() < 1e-6, "cy should be 0.5, got {cy}");
     }
+
+    mod uniforms {
+        use super::super::*;
+        use crate::geometry::{Rect, px};
+
+        fn floats(bytes: &[u8]) -> Vec<f32> {
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| f32::from_le_bytes(*b))
+                .collect()
+        }
+
+        fn off(x: f32, y: f32) -> Offset<Pixels> {
+            Offset::new(px(x), px(y))
+        }
+
+        /// A 200×100 box at (100, 50).
+        fn bounds() -> Rect<Pixels> {
+            Rect::from_ltrb(px(100.0), px(50.0), px(300.0), px(150.0))
+        }
+
+        const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+        const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+        /// Endpoints normalized into the box, then the first two colors.
+        #[test]
+        fn linear_layout() {
+            let s = Shader::simple_linear(
+                off(150.0, 75.0),
+                off(250.0, 125.0),
+                vec![Color::RED, Color::BLUE, Color::GREEN],
+            );
+            let v = floats(&s.to_mask_uniform_data(bounds()));
+            assert_eq!(v[..4], [0.25, 0.25, 0.75, 0.75]);
+            assert_eq!(v[4..8], RED);
+            assert_eq!(v[8..12], BLUE);
+        }
+
+        /// Center normalized into the box, radius over the mean of width and
+        /// height, then padding and the first two colors.
+        #[test]
+        fn radial_layout() {
+            let s = Shader::simple_radial(off(200.0, 75.0), 75.0, vec![Color::RED, Color::BLUE]);
+            let v = floats(&s.to_mask_uniform_data(bounds()));
+            assert_eq!(v[..4], [0.5, 0.25, 0.5, 0.0]);
+            assert_eq!(v[4..8], RED);
+            assert_eq!(v[8..12], BLUE);
+            // The simple form is a clamped gradient with no stops or focal.
+            let full = Shader::radial_gradient(
+                off(200.0, 75.0),
+                75.0,
+                vec![Color::RED, Color::BLUE],
+                None,
+                TileMode::Clamp,
+                None,
+                None,
+            );
+            assert_eq!(s, full);
+        }
+
+        #[test]
+        fn sweep_layout_keeps_its_angles() {
+            let s = Shader::sweep_gradient(
+                off(150.0, 125.0),
+                vec![Color::RED, Color::BLUE],
+                None,
+                TileMode::Clamp,
+                0.5,
+                2.5,
+            );
+            let v = floats(&s.to_mask_uniform_data(bounds()));
+            assert_eq!(v[..4], [0.25, 0.75, 0.5, 2.5]);
+            assert_eq!(v[4..8], RED);
+            assert_eq!(v[8..12], BLUE);
+        }
+
+        /// A zero-size box falls back to 0 (linear) or the center (radial,
+        /// sweep); one color is used for both ends; none is opaque black.
+        #[test]
+        fn degenerate_boxes_and_color_lists() {
+            let empty = Rect::from_ltrb(px(10.0), px(10.0), px(10.0), px(10.0));
+            let linear = Shader::simple_linear(off(1.0, 2.0), off(3.0, 4.0), vec![Color::RED]);
+            let v = floats(&linear.to_mask_uniform_data(empty));
+            assert_eq!(v[..4], [0.0; 4]);
+            assert_eq!((&v[4..8], &v[8..12]), (&RED[..], &RED[..]));
+
+            let radial = Shader::simple_radial(off(1.0, 2.0), 3.0, vec![]);
+            let v = floats(&radial.to_mask_uniform_data(empty));
+            assert_eq!(v[..3], [0.5, 0.5, 0.5]);
+            assert_eq!(
+                (&v[4..8], &v[8..12]),
+                (&[0.0, 0.0, 0.0, 1.0][..], &[0.0, 0.0, 0.0, 1.0][..])
+            );
+
+            let sweep = Shader::simple_sweep(off(1.0, 2.0), vec![Color::BLUE]);
+            let v = floats(&sweep.to_mask_uniform_data(empty));
+            assert_eq!(v[..4], [0.5, 0.5, 0.0, std::f32::consts::TAU]);
+            assert_eq!(v[8..12], BLUE);
+            // Only one axis collapsed still normalizes the other.
+            let flat = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(0.0));
+            let v = floats(
+                &Shader::simple_linear(off(25.0, 9.0), off(75.0, 9.0), vec![])
+                    .to_mask_uniform_data(flat),
+            );
+            assert_eq!(v[..4], [0.25, 0.0, 0.75, 0.0]);
+            let v = floats(
+                &Shader::simple_radial(off(25.0, 9.0), 10.0, vec![]).to_mask_uniform_data(flat),
+            );
+            assert_eq!(v[..3], [0.25, 0.5, 0.2]);
+        }
+
+        #[test]
+        fn solid_and_image() {
+            let v =
+                floats(&Shader::solid(Color::rgba(255, 102, 0, 51)).to_mask_uniform_data(bounds()));
+            assert_eq!(v, [1.0, 0.4, 0.0, 0.2]);
+            let image = Shader::image(ImageShader::new(TileMode::Clamp, TileMode::Repeat));
+            assert_eq!(floats(&image.to_mask_uniform_data(bounds())), [1.0; 4]);
+        }
+
+        #[test]
+        fn color_count_and_stops() {
+            let stops = Some(vec![0.0, 1.0]);
+            let c = || vec![Color::RED, Color::BLUE, Color::GREEN];
+            for s in [
+                Shader::linear_gradient(
+                    off(0.0, 0.0),
+                    off(1.0, 1.0),
+                    c(),
+                    stops.clone(),
+                    TileMode::Clamp,
+                ),
+                Shader::radial_gradient(
+                    off(0.0, 0.0),
+                    1.0,
+                    c(),
+                    stops.clone(),
+                    TileMode::Clamp,
+                    None,
+                    None,
+                ),
+                Shader::sweep_gradient(
+                    off(0.0, 0.0),
+                    c(),
+                    stops.clone(),
+                    TileMode::Clamp,
+                    0.0,
+                    1.0,
+                ),
+            ] {
+                assert_eq!((s.color_count(), s.has_stops()), (3, true), "{s:?}");
+            }
+            for s in [
+                Shader::simple_linear(off(0.0, 0.0), off(1.0, 1.0), c()),
+                Shader::simple_radial(off(0.0, 0.0), 1.0, c()),
+                Shader::simple_sweep(off(0.0, 0.0), c()),
+            ] {
+                assert_eq!((s.color_count(), s.has_stops()), (3, false), "{s:?}");
+            }
+            assert_eq!(
+                (
+                    Shader::solid(Color::RED).color_count(),
+                    Shader::solid(Color::RED).has_stops()
+                ),
+                (1, false)
+            );
+            let image = Shader::image(ImageShader::new(TileMode::Clamp, TileMode::Clamp));
+            assert_eq!((image.color_count(), image.has_stops()), (0, false));
+        }
+
+        /// `(interior, exterior)` per blur style; radius is twice sigma.
+        #[test]
+        fn mask_filters() {
+            for (filter, style, interior, exterior) in [
+                (MaskFilter::normal(2.0), BlurStyle::Normal, true, true),
+                (MaskFilter::solid(2.0), BlurStyle::Solid, false, true),
+                (MaskFilter::outer(2.0), BlurStyle::Outer, false, true),
+                (MaskFilter::inner(2.0), BlurStyle::Inner, true, false),
+            ] {
+                assert_eq!(filter, MaskFilter::blur(style, 2.0));
+                assert_eq!(
+                    (filter.affects_interior(), filter.affects_exterior()),
+                    (interior, exterior),
+                    "{style:?}"
+                );
+                assert_eq!(filter.blur_radius(), 4.0);
+            }
+            let shader = ImageShader::new(TileMode::Clamp, TileMode::Clamp);
+            assert!(!shader.has_transform());
+            assert_eq!(
+                shader.effective_filter_quality(),
+                crate::painting::FilterQuality::Low
+            );
+            let full = shader
+                .with_transform([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+                .with_filter_quality(crate::painting::FilterQuality::High);
+            assert!(full.has_transform());
+            assert_eq!(
+                full.effective_filter_quality(),
+                crate::painting::FilterQuality::High
+            );
+        }
+    }
 }

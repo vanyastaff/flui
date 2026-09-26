@@ -143,43 +143,42 @@ pub enum TextAffinity {
 mod tests {
     use super::*;
 
+    /// `(resolved in LTR, resolved in RTL, direction dependent, factor)`.
     #[test]
-    fn test_text_align_variants() {
-        let variants = [
-            TextAlign::Left,
-            TextAlign::Right,
-            TextAlign::Center,
-            TextAlign::Justify,
-            TextAlign::Start,
-            TextAlign::End,
-        ];
-        // Ensure all variants are distinct
-        for (i, v1) in variants.iter().enumerate() {
-            for (j, v2) in variants.iter().enumerate() {
-                if i == j {
-                    assert_eq!(v1, v2);
-                } else {
-                    assert_ne!(v1, v2);
-                }
-            }
+    fn text_align() {
+        use TextAlign::*;
+        for (align, ltr, rtl, dependent, factor) in [
+            (Left, Left, Left, false, 0.0),
+            (Right, Right, Right, false, 1.0),
+            (Center, Center, Center, false, 0.5),
+            (Justify, Justify, Justify, false, 0.0),
+            (Start, Left, Right, true, 0.0),
+            (End, Right, Left, true, 1.0),
+        ] {
+            assert_eq!(align.resolve(TextDirection::Ltr), ltr, "{align:?}");
+            assert_eq!(align.resolve(TextDirection::Rtl), rtl, "{align:?}");
+            assert_eq!(align.is_direction_dependent(), dependent, "{align:?}");
+            assert_eq!(align.horizontal_factor(), factor, "{align:?}");
         }
+        assert_eq!(TextAlign::default(), Left);
     }
 
     #[test]
-    fn test_text_align_vertical_variants() {
-        let variants = [
-            TextAlignVertical::Top,
-            TextAlignVertical::Center,
-            TextAlignVertical::Bottom,
-        ];
-        for (i, v1) in variants.iter().enumerate() {
-            for (j, v2) in variants.iter().enumerate() {
-                if i == j {
-                    assert_eq!(v1, v2);
-                } else {
-                    assert_ne!(v1, v2);
-                }
-            }
-        }
+    fn vertical_factor() {
+        use TextAlignVertical::*;
+        assert_eq!(
+            [Top, Center, Bottom].map(|v| v.vertical_factor()),
+            [0.0, 0.5, 1.0]
+        );
+        assert_eq!(TextAlignVertical::default(), Center);
+    }
+
+    #[test]
+    fn text_direction() {
+        let (l, r) = (TextDirection::Ltr, TextDirection::Rtl);
+        assert_eq!((l.is_ltr(), l.is_rtl(), l.opposite()), (true, false, r));
+        assert_eq!((r.is_ltr(), r.is_rtl(), r.opposite()), (false, true, l));
+        assert_eq!(TextDirection::default(), l);
+        assert_eq!(TextAffinity::default(), TextAffinity::Upstream);
     }
 }

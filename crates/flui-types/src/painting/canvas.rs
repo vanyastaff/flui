@@ -290,3 +290,36 @@ impl PointMode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn texture_id() {
+        let id = TextureId::new(42);
+        assert_eq!(id.get(), 42);
+        assert!(!id.is_null());
+        assert!(TextureId::new(0).is_null());
+        assert_eq!(TextureId::from(7u64), TextureId::new(7));
+        assert_eq!(u64::from(id), 42);
+    }
+
+    /// `(points, lines, polygon, min points)` per mode.
+    #[test]
+    fn point_mode() {
+        for (mode, expected) in [
+            (PointMode::Points, (true, false, false, 1)),
+            (PointMode::Lines, (false, true, false, 2)),
+            (PointMode::Polygon, (false, false, true, 3)),
+        ] {
+            let got = (
+                mode.is_points(),
+                mode.is_lines(),
+                mode.is_polygon(),
+                mode.min_points(),
+            );
+            assert_eq!(got, expected, "{mode:?}");
+        }
+    }
+}

@@ -292,11 +292,15 @@ impl Paint {
         }
     }
 
-    /// Returns true if the paint is fully opaque.
+    /// Returns true if the paint is known to be fully opaque: an opaque
+    /// color, a blend mode that replaces what is below, and no shader (a
+    /// shader's own colors may be translucent whatever `color` says).
     #[must_use]
     #[inline]
     pub const fn is_opaque(&self) -> bool {
-        self.color.a == 255 && matches!(self.blend_mode, BlendMode::SrcOver | BlendMode::Src)
+        self.color.a == 255
+            && matches!(self.blend_mode, BlendMode::SrcOver | BlendMode::Src)
+            && self.shader.is_none()
     }
 
     /// Returns true if the paint is fully transparent.
@@ -458,5 +462,109 @@ impl Default for PaintBuilder {
     #[inline]
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::Offset;
+
+    fn shader() -> Shader {
+        Shader::simple_linear(Offset::ZERO, Offset::ZERO, vec![Color::RED, Color::BLUE])
+    }
+
+    #[test]
+    fn dash_pattern() {
+        let dash = DashPattern::new(vec![4.0, 2.5, 1.5], 3.0);
+        assert_eq!((dash.cycle_length(), dash.phase), (8.0, 3.0));
+        assert!(dash.is_valid());
+        assert!(!DashPattern::new(vec![], 0.0).is_valid());
+        assert!(!DashPattern::new(vec![4.0, 0.0], 0.0).is_valid());
+        assert!(!DashPattern::new(vec![4.0, -1.0], 0.0).is_valid());
+    }
+
+    #[test]
+    fn fill_and_stroke() {
+        let fill = Paint::fill(Color::RED);
+        assert_eq!(fill, Paint::default().with_color(Color::RED));
+        assert!(fill.is_fill() && !fill.is_stroke() && fill.style.is_fill());
+        assert_eq!(fill.effective_stroke_width(), 0.0);
+
+        let stroke = Paint::stroke(Color::RED, 3.0);
+        assert_eq!(
+            stroke,
+            fill.clone()
+                .with_style(PaintStyle::Stroke)
+                .with_stroke_width(3.0)
+        );
+        assert!(stroke.is_stroke() && !stroke.is_fill() && stroke.style.is_stroke());
+        assert_eq!(stroke.effective_stroke_width(), 3.0);
+        // A fill ignores whatever stroke width it carries.
+        assert_eq!(
+            stroke.with_style(PaintStyle::Fill).effective_stroke_width(),
+            0.0
+        );
+        assert!(!PaintStyle::Fill.is_stroke() && !PaintStyle::Stroke.is_fill());
+    }
+
+    /// The builder and the `with_*` chain set the same fields.
+    #[test]
+    fn builder_matches_setters() {
+        let built = Paint::builder()
+            .style(PaintStyle::Stroke)
+            .color(Color::GREEN)
+            .stroke_width(2.0)
+            .stroke_cap(StrokeCap::Round)
+            .stroke_join(StrokeJoin::Bevel)
+            .blend_mode(BlendMode::Multiply)
+            .anti_alias(false)
+            .shader(shader())
+            .dash(vec![1.0, 2.0], 0.5)
+            .build();
+        let chained = Paint::default()
+            .with_style(PaintStyle::Stroke)
+            .with_color(Color::GREEN)
+            .with_stroke_width(2.0)
+            .with_stroke_cap(StrokeCap::Round)
+            .with_stroke_join(StrokeJoin::Bevel)
+            .with_blend_mode(BlendMode::Multiply)
+            .with_anti_alias(false)
+            .with_shader(shader())
+            .with_dash(vec![1.0, 2.0], 0.5);
+        assert_eq!(built, chained);
+        assert_eq!(built.stroke_cap, StrokeCap::Round);
+        assert_eq!(built.stroke_join, StrokeJoin::Bevel);
+        assert_eq!(built.blend_mode, BlendMode::Multiply);
+        assert!(built.has_shader() && built.has_dash() && !built.is_anti_aliased());
+        assert_eq!(
+            built.dash_pattern,
+            Some(DashPattern::new(vec![1.0, 2.0], 0.5))
+        );
+
+        let plain = PaintBuilder::default().build();
+        assert_eq!(plain, Paint::fill(Color::BLACK));
+        assert!(!plain.has_shader() && !plain.has_dash() && plain.is_anti_aliased());
+    }
+
+    /// Opaque needs an opaque color, a replacing blend mode and no shader.
+    #[test]
+    fn opacity_queries() {
+        let opaque = Paint::fill(Color::RED);
+        assert!(opaque.is_opaque() && !opaque.is_transparent());
+        assert!(opaque.clone().with_blend_mode(BlendMode::Src).is_opaque());
+        assert!(
+            !opaque
+                .clone()
+                .with_blend_mode(BlendMode::Multiply)
+                .is_opaque()
+        );
+        assert!(!opaque.clone().with_alpha(254).is_opaque());
+        assert!(!opaque.clone().with_shader(shader()).is_opaque());
+
+        let clear = opaque.clone().with_alpha(0);
+        assert!(clear.is_transparent() && !clear.is_opaque());
+        assert_eq!(clear.color, Color::RED.with_alpha(0));
+        assert_eq!(opaque.with_opacity(0.5).color, Color::RED.with_opacity(0.5));
     }
 }

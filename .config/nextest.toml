@@ -47,7 +47,7 @@ leak-timeout = "1s"
 # run to run with cache state -- a 4-minute global killed both template tests
 # once.
 [[profile.default.overrides]]
-filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::ui) | test(=trybuild_ui::ui_tests) | (binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer)'
+filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | test(=unit_mixing_compile_fail::trybuild_ui) | test(=trybuild_ui::ui_tests) | (binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer)'
 slow-timeout = { period = "300s", terminate-after = 4 }
 test-group = 'nested-cargo'
 

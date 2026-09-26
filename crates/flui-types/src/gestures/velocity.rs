@@ -664,4 +664,117 @@ mod tests {
             VelocityEstimate::new(Offset::ZERO, Offset::ZERO, Duration::from_millis(16), 0.3);
         assert!(!unreliable.is_reliable());
     }
+
+    fn v(dx: f32, dy: f32) -> Velocity {
+        Velocity::from_components(dx, dy)
+    }
+
+    #[test]
+    fn constructors() {
+        assert_eq!(
+            v(3.0, -4.0).pixels_per_second,
+            Offset::new(px(3.0), px(-4.0))
+        );
+        let east = Velocity::from_direction(10.0, 0.0);
+        assert!(
+            (east.dx() - 10.0).abs() < 1e-5 && east.dy().abs() < 1e-5,
+            "{east:?}"
+        );
+        let south = Velocity::from_direction(10.0, std::f32::consts::FRAC_PI_2);
+        assert!(
+            south.dx().abs() < 1e-5 && (south.dy() - 10.0).abs() < 1e-5,
+            "{south:?}"
+        );
+        assert_eq!(
+            Velocity::from_offset_over_duration(
+                Offset::new(px(100.0), px(50.0)),
+                Duration::from_millis(500)
+            ),
+            v(200.0, 100.0)
+        );
+        assert_eq!(
+            Velocity::from_offset_over_duration(Offset::new(px(100.0), px(50.0)), Duration::ZERO),
+            Velocity::ZERO
+        );
+    }
+
+    #[test]
+    fn arithmetic_and_accessors() {
+        let vel = v(3.0, -4.0);
+        assert_eq!((vel.dx(), vel.dy()), (3.0, -4.0));
+        assert_eq!(vel.negate(), v(-3.0, 4.0));
+        assert_eq!(vel.scale(2.0), v(6.0, -8.0));
+        assert_eq!(
+            v(100.0, 50.0).distance_over_duration(Duration::from_millis(500)),
+            Offset::new(px(50.0), px(25.0))
+        );
+    }
+
+    #[test]
+    fn zero_and_finiteness() {
+        assert!(Velocity::ZERO.is_zero());
+        assert!(!v(1.0, 0.0).is_zero());
+        assert!(v(1.0, 2.0).is_finite());
+        assert!(!v(f32::NAN, 0.0).is_finite());
+        assert!(!v(0.0, f32::INFINITY).is_finite());
+    }
+
+    fn estimate(confidence: f32) -> VelocityEstimate {
+        VelocityEstimate::new(
+            Offset::new(px(1.0), px(2.0)),
+            Offset::new(px(3.0), px(4.0)),
+            Duration::from_millis(16),
+            confidence,
+        )
+    }
+
+    /// Reliable strictly above 0.5; valid when finite with confidence in
+    /// `0..=1`, bounds included.
+    #[test]
+    fn estimate_reliability_and_validity() {
+        assert!(!estimate(0.5).is_reliable());
+        assert!(estimate(0.51).is_reliable());
+        for (confidence, valid) in [
+            (0.0, true),
+            (1.0, true),
+            (-0.01, false),
+            (1.01, false),
+            (f32::NAN, false),
+        ] {
+            assert_eq!(
+                estimate(confidence).is_valid(),
+                valid,
+                "confidence {confidence}"
+            );
+        }
+        assert_eq!(estimate(1.0).magnitude(), 5.0);
+    }
+
+    #[test]
+    fn estimate_is_finite_checks_every_field() {
+        let nan = px(f32::NAN);
+        assert!(estimate(0.5).is_finite());
+        for broken in [
+            VelocityEstimate {
+                offset: Offset::new(nan, px(0.0)),
+                ..estimate(0.5)
+            },
+            VelocityEstimate {
+                offset: Offset::new(px(0.0), nan),
+                ..estimate(0.5)
+            },
+            VelocityEstimate {
+                pixels_per_second: Offset::new(nan, px(0.0)),
+                ..estimate(0.5)
+            },
+            VelocityEstimate {
+                pixels_per_second: Offset::new(px(0.0), nan),
+                ..estimate(0.5)
+            },
+            estimate(f32::NAN),
+        ] {
+            assert!(!broken.is_finite(), "{broken:?}");
+            assert!(!broken.is_valid(), "{broken:?}");
+        }
+    }
 }

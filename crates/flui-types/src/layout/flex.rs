@@ -46,3 +46,15 @@ impl FlexFit {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn predicates_and_flip() {
+        let (t, l) = (FlexFit::Tight, FlexFit::Loose);
+        assert_eq!((t.is_tight(), t.is_loose(), t.flip()), (true, false, l));
+        assert_eq!((l.is_tight(), l.is_loose(), l.flip()), (false, true, t));
+    }
+}

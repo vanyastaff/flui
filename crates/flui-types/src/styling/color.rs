@@ -5,9 +5,8 @@
 
 /// An RGBA color with four 8-bit channels and straight (unmultiplied) alpha.
 ///
-/// Channels are in sRGB gamma space, matching Flutter's `Color`. For the
-/// packed premultiplied-alpha representation used by the renderer, see
-/// `Color32`.
+/// Channels are in sRGB gamma space, matching Flutter's `Color`. The
+/// renderer premultiplies when it converts a color for the GPU.
 // `Color` is a plain RGBA quadruple of independent `u8` channels — every bit
 // pattern is a valid `Color`. The derived `Deserialize` therefore cannot
 // produce an instance that violates any invariant the `unsafe` SIMD helpers
@@ -179,7 +178,9 @@ impl Color {
 
     /// Returns a new color with the specified opacity (0.0-1.0).
     ///
-    /// Values are clamped to the valid range.
+    /// Values are clamped to the valid range, and the alpha rounds to the
+    /// nearest of its 256 steps, as Flutter's `withOpacity` does
+    /// (`(255 * opacity).round()`).
     ///
     /// # Examples
     ///
@@ -189,11 +190,13 @@ impl Color {
     /// let opaque = Color::rgb(255, 0, 0);
     /// let half = opaque.with_opacity(0.5);
     ///
-    /// assert_eq!(half.a, 127); // 0.5 * 255
+    /// assert_eq!(half.a, 128); // 127.5 rounds up
     /// ```
     #[inline]
     pub fn with_opacity(&self, opacity: f32) -> Self {
-        let alpha = (opacity.clamp(0.0, 1.0) * 255.0) as u8;
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        // 0..=255 after the clamp
+        let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
         self.with_alpha(alpha)
     }
 
@@ -273,7 +276,12 @@ impl Color {
 
     #[inline]
     #[cfg_attr(
-        all(feature = "simd", target_arch = "x86_64", not(target_family = "wasm")),
+        all(
+            feature = "simd",
+            any(target_arch = "x86_64", target_arch = "aarch64"),
+            not(target_family = "wasm"),
+            not(test)
+        ),
         expect(
             dead_code,
             reason = "scalar fallback for `lerp`; unused when the SIMD path is compiled in, used on every other target"
@@ -298,7 +306,7 @@ impl Color {
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
     #[cfg_attr(
-        not(feature = "simd"),
+        all(not(feature = "simd"), not(test)),
         expect(
             dead_code,
             reason = "SIMD twin of `lerp_scalar`: compiled on every x86_64 build but only called when the `simd` feature selects it in `lerp`"
@@ -329,7 +337,13 @@ impl Color {
             let mut out = [0.0f32; 4];
             _mm_storeu_ps(out.as_mut_ptr(), result);
 
-            Color::rgba(out[0] as u8, out[1] as u8, out[2] as u8, out[3] as u8)
+            // Round like `lerp_scalar`; a bare `as u8` truncates.
+            Color::rgba(
+                out[0].round() as u8,
+                out[1].round() as u8,
+                out[2].round() as u8,
+                out[3].round() as u8,
+            )
         }
 
         #[cfg(not(target_feature = "sse2"))]
@@ -340,11 +354,14 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
-    #[expect(
-        dead_code,
-        unsafe_code,
-        reason = "SIMD twin of `lerp_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `lerp`; NEON intrinsics require unsafe"
+    #[cfg_attr(
+        all(not(feature = "simd"), not(test)),
+        expect(
+            dead_code,
+            reason = "SIMD twin of `lerp_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `lerp`"
+        )
     )]
+    #[expect(unsafe_code, reason = "NEON intrinsics require unsafe")]
     fn lerp_simd_neon(a: Color, b: Color, t: f32) -> Color {
         // SAFETY: gated on `target_feature = "neon"`, so the intrinsics are
         // available; `vld1q_f32`/`vst1q_f32` load/store 4 f32s from/into live
@@ -369,7 +386,13 @@ impl Color {
             let mut out = [0.0f32; 4];
             vst1q_f32(out.as_mut_ptr(), result);
 
-            Color::rgba(out[0] as u8, out[1] as u8, out[2] as u8, out[3] as u8)
+            // Round like `lerp_scalar`; a bare `as u8` truncates.
+            Color::rgba(
+                out[0].round() as u8,
+                out[1].round() as u8,
+                out[2].round() as u8,
+                out[3].round() as u8,
+            )
         }
 
         #[cfg(not(target_feature = "neon"))]
@@ -500,11 +523,15 @@ impl Color {
     // ===== Helper methods for rendering =====
 
     /// Alpha-blends this color over `background` (Porter-Duff "source over",
-    /// straight alpha, gamma space).
+    /// straight alpha, gamma space): Flutter's `Color.alphaBlend`.
     ///
-    /// Fully opaque returns `self` and fully transparent returns
-    /// `background`; other alphas take a SIMD path when the `simd` feature
-    /// and target support are available.
+    /// Follows Flutter's float formulation: the background keeps
+    /// `back = a_bg · (1 − a_fg)` of its alpha, the result's alpha is
+    /// `a_fg + back` (exactly 1 over an opaque background), each channel is
+    /// `(fg · a_fg + bg · back) / alpha`, and channels round to nearest when
+    /// stored as 8 bits. Fully opaque returns `self` and fully transparent
+    /// returns `background`; other alphas take a SIMD path when the `simd`
+    /// feature and target support are available.
     #[must_use]
     #[inline]
     pub fn blend_over(&self, background: Color) -> Color {
@@ -538,38 +565,53 @@ impl Color {
         }
     }
 
+    /// `(a_fg, back, alpha)` for [`Color::blend_over`], or `None` when the
+    /// result is fully transparent. The scalar and SIMD paths share it and
+    /// then perform the same operations in the same order, so they agree
+    /// bit for bit.
+    #[inline]
+    fn blend_over_factors(&self, background: Color) -> Option<(f32, f32, f32)> {
+        let alpha = f32::from(self.a) / 255.0;
+        let inv_alpha = 1.0 - alpha;
+        if background.a == 255 {
+            return Some((alpha, inv_alpha, 1.0));
+        }
+        let back = f32::from(background.a) / 255.0 * inv_alpha;
+        let out = alpha + back;
+        (out > 0.0).then_some((alpha, back, out))
+    }
+
     #[inline]
     #[cfg_attr(
-        all(feature = "simd", target_arch = "x86_64", not(target_family = "wasm")),
+        all(
+            feature = "simd",
+            any(target_arch = "x86_64", target_arch = "aarch64"),
+            not(target_family = "wasm"),
+            not(test)
+        ),
         expect(
             dead_code,
             reason = "scalar fallback for `blend_over`; unused when the SIMD path is compiled in, used on every other target"
         )
     )]
     fn blend_over_scalar(&self, background: Color) -> Color {
-        let alpha_src = self.a as f32 / 255.0;
-        let alpha_dst = background.a as f32 / 255.0;
-        let alpha_out = alpha_src + alpha_dst * (1.0 - alpha_src);
-
-        if alpha_out == 0.0 {
+        let Some((alpha, back, out)) = self.blend_over_factors(background) else {
             return Color::TRANSPARENT;
-        }
-
-        let r = ((self.r as f32 * alpha_src + background.r as f32 * alpha_dst * (1.0 - alpha_src))
-            / alpha_out) as u8;
-        let g = ((self.g as f32 * alpha_src + background.g as f32 * alpha_dst * (1.0 - alpha_src))
-            / alpha_out) as u8;
-        let b = ((self.b as f32 * alpha_src + background.b as f32 * alpha_dst * (1.0 - alpha_src))
-            / alpha_out) as u8;
-        let a = (alpha_out * 255.0) as u8;
-
-        Color::rgba(r, g, b, a)
+        };
+        let channel =
+            |fg: u8, bg: u8| ((f32::from(fg) * alpha + f32::from(bg) * back) / out).round() as u8;
+        Color::rgba(
+            channel(self.r, background.r),
+            channel(self.g, background.g),
+            channel(self.b, background.b),
+            (out * 255.0).round() as u8,
+        )
     }
 
     #[inline]
     #[cfg(all(target_arch = "x86_64", not(target_family = "wasm")))]
     #[cfg_attr(
-        not(feature = "simd"),
+        all(not(feature = "simd"), not(test)),
         expect(
             dead_code,
             reason = "SIMD twin of `blend_over_scalar`: compiled on every x86_64 build but only called when the `simd` feature selects it in `blend_over`"
@@ -584,43 +626,29 @@ impl Color {
         unsafe {
             use std::arch::x86_64::*;
 
-            let alpha_src = self.a as f32 / 255.0;
-            let alpha_dst = background.a as f32 / 255.0;
-            let alpha_out = alpha_src + alpha_dst * (1.0 - alpha_src);
-
-            if alpha_out == 0.0 {
+            let Some((alpha, back, out)) = self.blend_over_factors(background) else {
                 return Color::TRANSPARENT;
-            }
-
-            // Load colors as f32 vectors
-            let src_vec = _mm_set_ps(self.a as f32, self.b as f32, self.g as f32, self.r as f32);
-            let dst_vec = _mm_set_ps(
-                background.a as f32,
+            };
+            let fg = _mm_set_ps(0.0, self.b as f32, self.g as f32, self.r as f32);
+            let bg = _mm_set_ps(
+                0.0,
                 background.b as f32,
                 background.g as f32,
                 background.r as f32,
             );
+            let sum = _mm_add_ps(
+                _mm_mul_ps(fg, _mm_set1_ps(alpha)),
+                _mm_mul_ps(bg, _mm_set1_ps(back)),
+            );
+            let result = _mm_div_ps(sum, _mm_set1_ps(out));
 
-            // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) /
-            // alpha_out
-            let alpha_src_vec = _mm_set1_ps(alpha_src);
-            let alpha_dst_factor = _mm_set1_ps(alpha_dst * (1.0 - alpha_src));
-            let alpha_out_vec = _mm_set1_ps(alpha_out);
-
-            let src_contrib = _mm_mul_ps(src_vec, alpha_src_vec);
-            let dst_contrib = _mm_mul_ps(dst_vec, alpha_dst_factor);
-            let sum = _mm_add_ps(src_contrib, dst_contrib);
-            let result = _mm_div_ps(sum, alpha_out_vec);
-
-            // Convert back to u8
-            let mut out = [0.0f32; 4];
-            _mm_storeu_ps(out.as_mut_ptr(), result);
-
+            let mut o = [0.0f32; 4];
+            _mm_storeu_ps(o.as_mut_ptr(), result);
             Color::rgba(
-                out[0] as u8,
-                out[1] as u8,
-                out[2] as u8,
-                (alpha_out * 255.0) as u8,
+                o[0].round() as u8,
+                o[1].round() as u8,
+                o[2].round() as u8,
+                (out * 255.0).round() as u8,
             )
         }
 
@@ -632,11 +660,14 @@ impl Color {
 
     #[inline]
     #[cfg(all(target_arch = "aarch64", not(target_family = "wasm")))]
-    #[expect(
-        dead_code,
-        unsafe_code,
-        reason = "SIMD twin of `blend_over_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `blend_over`; NEON intrinsics require unsafe"
+    #[cfg_attr(
+        all(not(feature = "simd"), not(test)),
+        expect(
+            dead_code,
+            reason = "SIMD twin of `blend_over_scalar`: compiled on every aarch64 build but only called when the `simd` feature selects it in `blend_over`"
+        )
     )]
+    #[expect(unsafe_code, reason = "NEON intrinsics require unsafe")]
     fn blend_over_simd_neon(&self, background: Color) -> Color {
         // SAFETY: gated on `target_feature = "neon"`, so the intrinsics are
         // available; `vld1q_f32`/`vst1q_f32` load/store 4 f32s from/into live
@@ -645,47 +676,32 @@ impl Color {
         unsafe {
             use std::arch::aarch64::*;
 
-            let alpha_src = self.a as f32 / 255.0;
-            let alpha_dst = background.a as f32 / 255.0;
-            let alpha_out = alpha_src + alpha_dst * (1.0 - alpha_src);
-
-            if alpha_out == 0.0 {
+            let Some((alpha, back, out)) = self.blend_over_factors(background) else {
                 return Color::TRANSPARENT;
-            }
-
-            // Load colors as f32 vectors
-            let src_vec =
-                vld1q_f32([self.r as f32, self.g as f32, self.b as f32, self.a as f32].as_ptr());
-            let dst_vec = vld1q_f32(
+            };
+            let fg = vld1q_f32([self.r as f32, self.g as f32, self.b as f32, 0.0].as_ptr());
+            let bg = vld1q_f32(
                 [
                     background.r as f32,
                     background.g as f32,
                     background.b as f32,
-                    background.a as f32,
+                    0.0,
                 ]
                 .as_ptr(),
             );
+            let sum = vaddq_f32(
+                vmulq_f32(fg, vdupq_n_f32(alpha)),
+                vmulq_f32(bg, vdupq_n_f32(back)),
+            );
+            let result = vdivq_f32(sum, vdupq_n_f32(out));
 
-            // Blend formula: (src * alpha_src + dst * alpha_dst * (1 - alpha_src)) /
-            // alpha_out
-            let alpha_src_vec = vdupq_n_f32(alpha_src);
-            let alpha_dst_factor = vdupq_n_f32(alpha_dst * (1.0 - alpha_src));
-            let alpha_out_vec = vdupq_n_f32(alpha_out);
-
-            let src_contrib = vmulq_f32(src_vec, alpha_src_vec);
-            let dst_contrib = vmulq_f32(dst_vec, alpha_dst_factor);
-            let sum = vaddq_f32(src_contrib, dst_contrib);
-            let result = vdivq_f32(sum, alpha_out_vec);
-
-            // Convert back to u8
-            let mut out = [0.0f32; 4];
-            vst1q_f32(out.as_mut_ptr(), result);
-
+            let mut o = [0.0f32; 4];
+            vst1q_f32(o.as_mut_ptr(), result);
             Color::rgba(
-                out[0] as u8,
-                out[1] as u8,
-                out[2] as u8,
-                (alpha_out * 255.0) as u8,
+                o[0].round() as u8,
+                o[1].round() as u8,
+                o[2].round() as u8,
+                (out * 255.0).round() as u8,
             )
         }
 
@@ -995,12 +1011,14 @@ impl Color {
         if out_a <= 0.0 {
             return Color::TRANSPARENT;
         }
-        let unpremul = |channel_pm: f32| ((channel_pm / out_a).clamp(0.0, 1.0) * 255.0) as u8;
+        // Round to nearest, as the GPU's float -> unorm8 conversion does;
+        // truncating made `Src`/`Dst` drift by one on ~13% of translucent inputs.
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         Color::rgba(
-            unpremul(out_r_pm),
-            unpremul(out_g_pm),
-            unpremul(out_b_pm),
-            (out_a.clamp(0.0, 1.0) * 255.0) as u8,
+            to_u8(out_r_pm / out_a),
+            to_u8(out_g_pm / out_a),
+            to_u8(out_b_pm / out_a),
+            to_u8(out_a),
         )
     }
 
@@ -1313,13 +1331,15 @@ impl crate::geometry::ApproxEq for Color {
     /// ```
     #[inline]
     fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-        let (r1, g1, b1, a1) = self.to_rgba_f32();
-        let (r2, g2, b2, a2) = other.to_rgba_f32();
-
-        (r1 - r2).abs() <= epsilon
-            && (g1 - g2).abs() <= epsilon
-            && (b1 - b2).abs() <= epsilon
-            && (a1 - a2).abs() <= epsilon
+        // Distances are taken in 8-bit units before normalizing: subtracting
+        // two normalized channels can land just above `n / 255` (4/255 - 3/255
+        // does in f32), which would reject a one-unit difference at the
+        // default epsilon.
+        let within = |x: u8, y: u8| f32::from(x.abs_diff(y)) / 255.0 <= epsilon;
+        within(self.r, other.r)
+            && within(self.g, other.g)
+            && within(self.b, other.b)
+            && within(self.a, other.a)
     }
 }
 
@@ -1354,149 +1374,52 @@ impl std::error::Error for ParseColorError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::ApproxEq;
-    use crate::painting::BlendMode;
 
-    /// Assert each RGBA channel of `actual` is within `tol` units of `expected`.
-    #[track_caller]
-    fn assert_blend_close(actual: Color, expected: Color, tol: i32) {
-        let diff = |a: u8, b: u8| (i32::from(a) - i32::from(b)).abs();
-        assert!(
-            diff(actual.r, expected.r) <= tol
-                && diff(actual.g, expected.g) <= tol
-                && diff(actual.b, expected.b) <= tol
-                && diff(actual.a, expected.a) <= tol,
-            "blend mismatch: actual={actual:?} expected={expected:?} tol={tol}"
-        );
-    }
+    // The SIMD twins compile on every x86_64/aarch64 build but `lerp` and
+    // `blend_over` only call them under the `simd` feature, which the default
+    // test run doesn't enable. Checking each twin against its scalar
+    // original keeps them honest without that feature.
+    #[cfg(any(
+        all(target_arch = "x86_64", not(target_family = "wasm")),
+        all(target_arch = "aarch64", not(target_family = "wasm"))
+    ))]
+    mod simd_matches_scalar {
+        use super::*;
+        use proptest::prelude::*;
 
-    #[test]
-    fn blend_srcover_matches_blend_over() {
-        // The general `blend` SrcOver path must agree with the dedicated
-        // (SIMD-accelerated) `blend_over` across opaque, transparent, and
-        // semi-transparent sources.
-        let backdrop = Color::rgba(20, 60, 120, 255);
-        for src in [
-            Color::rgba(255, 0, 0, 255),
-            Color::rgba(255, 0, 0, 0),
-            Color::rgba(0, 200, 50, 128),
-            Color::rgba(255, 255, 255, 64),
-        ] {
-            assert_blend_close(
-                src.blend(backdrop, BlendMode::SrcOver),
-                src.blend_over(backdrop),
-                2,
-            );
+        fn arb_color() -> impl Strategy<Value = Color> {
+            (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>())
+                .prop_map(|(r, g, b, a)| Color::rgba(r, g, b, a))
         }
-    }
 
-    #[test]
-    fn blend_porter_duff_basics() {
-        let src = Color::rgba(255, 0, 0, 255);
-        let dst = Color::rgba(0, 0, 255, 255);
-        // Clear drops everything.
-        assert_blend_close(src.blend(dst, BlendMode::Clear), Color::TRANSPARENT, 0);
-        // Src keeps only the source; Dst keeps only the destination.
-        assert_blend_close(src.blend(dst, BlendMode::Src), src, 1);
-        assert_blend_close(src.blend(dst, BlendMode::Dst), dst, 1);
-        // SrcOver with an opaque source fully replaces the destination.
-        assert_blend_close(src.blend(dst, BlendMode::SrcOver), src, 1);
-    }
+        #[cfg(target_arch = "x86_64")]
+        fn lerp_simd(a: Color, b: Color, t: f32) -> Color {
+            Color::lerp_simd_sse(a, b, t)
+        }
+        #[cfg(target_arch = "aarch64")]
+        fn lerp_simd(a: Color, b: Color, t: f32) -> Color {
+            Color::lerp_simd_neon(a, b, t)
+        }
+        #[cfg(target_arch = "x86_64")]
+        fn blend_over_simd(src: Color, dst: Color) -> Color {
+            src.blend_over_simd_sse(dst)
+        }
+        #[cfg(target_arch = "aarch64")]
+        fn blend_over_simd(src: Color, dst: Color) -> Color {
+            src.blend_over_simd_neon(dst)
+        }
 
-    #[test]
-    fn blend_srcin_uses_destination_alpha() {
-        // SrcIn keeps the source color but clipped to the destination's alpha
-        // shape — the canonical icon-tint mode.
-        let red = Color::rgba(255, 0, 0, 255);
-        // Over an opaque destination → solid source color.
-        assert_blend_close(
-            red.blend(Color::rgba(0, 0, 255, 255), BlendMode::SrcIn),
-            red,
-            1,
-        );
-        // Over a fully transparent destination → nothing (alpha 0).
-        assert_blend_close(
-            red.blend(Color::rgba(0, 0, 255, 0), BlendMode::SrcIn),
-            Color::TRANSPARENT,
-            1,
-        );
-    }
+        proptest! {
+            #[test]
+            fn lerp(a in arb_color(), b in arb_color(), t in -0.5f32..=1.5) {
+                prop_assert_eq!(lerp_simd(a, b, t), Color::lerp_scalar(a, b, t));
+            }
 
-    #[test]
-    fn blend_modulate_white_is_identity() {
-        // Modulate (premultiplied component product) by white returns the
-        // destination unchanged; by black it returns black.
-        let dst = Color::rgba(100, 150, 200, 255);
-        assert_blend_close(Color::WHITE.blend(dst, BlendMode::Modulate), dst, 1);
-        assert_blend_close(
-            Color::BLACK.blend(dst, BlendMode::Modulate),
-            Color::rgba(0, 0, 0, 255),
-            1,
-        );
-    }
-
-    #[test]
-    fn blend_plus_saturates() {
-        // Plus is additive and clamps at the channel ceiling.
-        let result =
-            Color::rgba(200, 0, 0, 255).blend(Color::rgba(100, 0, 0, 255), BlendMode::Plus);
-        assert_blend_close(result, Color::rgba(255, 0, 0, 255), 1);
-    }
-
-    #[test]
-    fn blend_multiply_opaque_is_channel_product() {
-        // With opaque source and destination the separable composite reduces to
-        // B(cb, cs); for Multiply that is the per-channel product.
-        let result = Color::rgba(255, 128, 0, 255)
-            .blend(Color::rgba(128, 255, 255, 255), BlendMode::Multiply);
-        assert_blend_close(result, Color::rgba(128, 128, 0, 255), 2);
-    }
-
-    #[test]
-    fn blend_difference_opaque() {
-        // Difference = |cb - cs| per channel for opaque inputs.
-        let result =
-            Color::rgba(255, 0, 100, 255).blend(Color::rgba(0, 0, 200, 255), BlendMode::Difference);
-        // |0-255|=255, |0-0|=0, |200-100|=100.
-        assert_blend_close(result, Color::rgba(255, 0, 100, 255), 2);
-    }
-
-    #[test]
-    fn blend_luminosity_takes_source_luma_dest_chroma() {
-        // Luminosity keeps the destination hue/saturation but the source's luma.
-        // A grey source against a saturated destination yields a desaturated-
-        // toward-grey destination at the source's luminosity. Sanity-check that
-        // the output luminosity tracks the grey source rather than the dest.
-        let src = Color::rgba(128, 128, 128, 255);
-        let dst = Color::rgba(200, 50, 50, 255);
-        let result = src.blend(dst, BlendMode::Luminosity);
-        let result_lum =
-            0.3 * result.red_f32() + 0.59 * result.green_f32() + 0.11 * result.blue_f32();
-        // Source luma = 0.502; allow rounding slack.
-        assert!(
-            (result_lum - 0.502).abs() < 0.04,
-            "luminosity blend should adopt the source luma; got {result_lum} from {result:?}"
-        );
-    }
-
-    #[test]
-    fn test_approx_eq_identical() {
-        let c1 = Color::rgb(100, 150, 200);
-        let c2 = Color::rgb(100, 150, 200);
-        assert!(c1.approx_eq(&c2));
-    }
-
-    #[test]
-    fn test_approx_eq_one_unit_difference() {
-        let c1 = Color::rgb(100, 150, 200);
-        let c2 = Color::rgb(100, 151, 200);
-        let c3 = Color::rgb(101, 150, 200);
-        let c4 = Color::rgb(100, 150, 201);
-
-        // 1 unit difference should be within default epsilon
-        assert!(c1.approx_eq(&c2));
-        assert!(c1.approx_eq(&c3));
-        assert!(c1.approx_eq(&c4));
+            #[test]
+            fn blend_over(src in arb_color(), dst in arb_color()) {
+                prop_assert_eq!(blend_over_simd(src, dst), src.blend_over_scalar(dst));
+            }
+        }
     }
 
     #[test]
@@ -1561,106 +1484,6 @@ mod tests {
         let a = Color::rgba(255, 0, 0, 0);
         let b = Color::rgba(255, 0, 0, 200);
         assert_eq!(Color::lerp_oklab(a, b, 0.5).a, 100);
-    }
-
-    #[test]
-    fn test_approx_eq_alpha_channel() {
-        let c1 = Color::rgba(100, 150, 200, 255);
-        let c2 = Color::rgba(100, 150, 200, 254);
-
-        // 1 unit alpha difference should be within epsilon
-        assert!(c1.approx_eq(&c2));
-    }
-
-    #[test]
-    fn test_approx_eq_large_difference() {
-        let c1 = Color::rgb(100, 150, 200);
-        let c2 = Color::rgb(105, 150, 200);
-
-        // 5 unit difference should exceed default epsilon
-        assert!(!c1.approx_eq(&c2));
-    }
-
-    #[test]
-    fn test_approx_eq_eps_custom_epsilon() {
-        let c1 = Color::rgb(100, 150, 200);
-        let c2 = Color::rgb(110, 150, 200);
-
-        // 10 units = 10/255 ≈ 0.039
-        assert!(!c1.approx_eq(&c2));
-
-        // But should pass with larger epsilon
-        assert!(c1.approx_eq_eps(&c2, 0.05));
-    }
-
-    #[test]
-    fn test_approx_eq_hsl_conversion_roundtrip() {
-        use crate::styling::HSLColor;
-
-        let original = Color::rgb(120, 180, 200);
-        let roundtrip = Color::from(HSLColor::from(original));
-
-        // HSL conversion may introduce small rounding errors.
-        assert!(original.approx_eq(&roundtrip));
-    }
-
-    #[test]
-    fn test_approx_eq_hsv_conversion_roundtrip() {
-        use crate::styling::HSVColor;
-
-        let original = Color::rgb(80, 120, 160);
-        let roundtrip = Color::from(HSVColor::from(original));
-
-        // HSV conversion may introduce small rounding errors.
-        assert!(original.approx_eq(&roundtrip));
-    }
-
-    #[test]
-    fn test_approx_eq_lerp_precision() {
-        let c1 = Color::rgb(0, 0, 0);
-        let c2 = Color::rgb(100, 100, 100);
-
-        // Lerp at 0.5 should give (50, 50, 50)
-        let mid = Color::lerp(c1, c2, 0.5);
-        let expected = Color::rgb(50, 50, 50);
-
-        assert!(mid.approx_eq(&expected));
-    }
-
-    #[test]
-    fn test_approx_eq_blend_precision() {
-        let foreground = Color::rgba(255, 0, 0, 128); // 50% transparent red
-        let background = Color::rgb(0, 0, 255); // opaque blue
-
-        let blended = foreground.blend_over(background);
-
-        // Expected: roughly purple (127, 0, 127)
-        let expected = Color::rgb(127, 0, 127);
-
-        // Blending calculations may have rounding errors
-        assert!(blended.approx_eq_eps(&expected, 0.01));
-    }
-
-    #[test]
-    fn test_approx_eq_epsilon_boundary() {
-        let c1 = Color::rgb(100, 100, 100);
-
-        // Test at exactly 1/255 difference
-        let c2 = Color::from_rgba_f32_array([
-            100.0 / 255.0 + 1.0 / 255.0,
-            100.0 / 255.0,
-            100.0 / 255.0,
-            1.0,
-        ]);
-
-        // Should be within epsilon
-        assert!(c1.approx_eq(&c2));
-    }
-
-    #[test]
-    fn test_default_epsilon_value() {
-        // Verify default epsilon is 1/255
-        assert!((Color::DEFAULT_EPSILON - 1.0 / 255.0).abs() < 1e-10);
     }
 
     /// Characterization golden for `Color::blend` advanced modes.

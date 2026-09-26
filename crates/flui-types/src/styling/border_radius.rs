@@ -239,7 +239,8 @@ impl BorderRadiusExt for BorderRadius {
 
     #[inline]
     fn horizontal(left: Radius<Pixels>, right: Radius<Pixels>) -> Self {
-        Corners::new(left, right, left, right)
+        // `Corners::new` takes the corners clockwise from the top left.
+        Corners::new(left, right, right, left)
     }
 
     #[inline]
@@ -433,5 +434,98 @@ impl Default for BorderRadiusDirectional {
     #[inline]
     fn default() -> Self {
         Self::ZERO
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::px;
+
+    fn r(v: f32) -> Radius<Pixels> {
+        Radius::circular(px(v))
+    }
+
+    /// `(top_left, top_right, bottom_right, bottom_left)`, with a distinct
+    /// radius per argument so any swapped corner shows.
+    fn corners(b: BorderRadius) -> [Radius<Pixels>; 4] {
+        [b.top_left, b.top_right, b.bottom_right, b.bottom_left]
+    }
+
+    #[test]
+    fn constructors_place_each_radius() {
+        let z = Radius::ZERO;
+        let (a, b, c, d) = (r(1.0), r(2.0), r(3.0), r(4.0));
+        for (got, expected) in [
+            (BorderRadius::only(a, b, c, d), [a, b, c, d]),
+            (BorderRadius::top_left_only(a), [a, z, z, z]),
+            (BorderRadius::top_right_only(a), [z, a, z, z]),
+            (BorderRadius::bottom_right_only(a), [z, z, a, z]),
+            (BorderRadius::bottom_left_only(a), [z, z, z, a]),
+            (BorderRadius::vertical(a, b), [a, a, b, b]),
+            (BorderRadius::horizontal(a, b), [a, b, b, a]),
+            (BorderRadius::top(a), [a, a, z, z]),
+            (BorderRadius::bottom(a), [z, z, a, a]),
+            (BorderRadius::all(a), [a; 4]),
+            (BorderRadius::circular(px(1.0)), [a; 4]),
+            (
+                BorderRadius::elliptical(px(1.0), px(2.0)),
+                [Radius::elliptical(px(1.0), px(2.0)); 4],
+            ),
+            (BorderRadius::pill(), [r(9999.0); 4]),
+            (<BorderRadius as BorderRadiusExt>::ZERO, [z; 4]),
+        ] {
+            assert_eq!(corners(got), expected);
+        }
+    }
+
+    #[test]
+    fn setters_replace_one_corner() {
+        let base = BorderRadius::all(r(1.0));
+        let (x, o) = (r(9.0), r(1.0));
+        assert_eq!(corners(base.with_top_left(x)), [x, o, o, o]);
+        assert_eq!(corners(base.with_top_right(x)), [o, x, o, o]);
+        assert_eq!(corners(base.with_bottom_right(x)), [o, o, x, o]);
+        assert_eq!(corners(base.with_bottom_left(x)), [o, o, o, x]);
+    }
+
+    #[test]
+    fn lerp_each_corner_with_clamped_t() {
+        let a = BorderRadius::only(r(0.0), r(2.0), r(4.0), r(6.0));
+        let b = BorderRadius::only(r(2.0), r(6.0), r(0.0), r(10.0));
+        assert_eq!(
+            corners(BorderRadius::lerp(a, b, 0.5)),
+            [r(1.0), r(4.0), r(2.0), r(8.0)]
+        );
+        assert_eq!(BorderRadius::lerp(a, b, -1.0), a);
+        assert_eq!(BorderRadius::lerp(a, b, 2.0), b);
+    }
+
+    #[test]
+    fn directional_resolves_start_and_end_per_direction() {
+        let (a, b, c, d) = (r(1.0), r(2.0), r(3.0), r(4.0));
+        let dir = BorderRadiusDirectional::only(a, b, c, d);
+        assert_eq!(corners(dir.resolve(true)), [a, b, d, c]);
+        assert_eq!(corners(dir.resolve(false)), [b, a, c, d]);
+
+        assert_eq!(
+            BorderRadiusDirectional::circular(px(1.0)),
+            BorderRadiusDirectional::all(a)
+        );
+        assert_eq!(
+            BorderRadiusDirectional::elliptical(px(1.0), px(2.0)),
+            BorderRadiusDirectional::all(Radius::elliptical(px(1.0), px(2.0)))
+        );
+        assert_eq!(
+            BorderRadiusDirectional::default(),
+            BorderRadiusDirectional::all(Radius::ZERO)
+        );
+
+        let other = BorderRadiusDirectional::only(r(3.0), r(4.0), r(5.0), r(6.0));
+        assert_eq!(
+            BorderRadiusDirectional::lerp(dir, other, 0.5),
+            BorderRadiusDirectional::only(r(2.0), r(3.0), r(4.0), r(5.0))
+        );
+        assert_eq!(BorderRadiusDirectional::lerp(dir, other, 2.0), other);
     }
 }

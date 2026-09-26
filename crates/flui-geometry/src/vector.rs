@@ -1497,4 +1497,12 @@ mod typed_tests {
         assert!(!Vec2::<Pixels>::INFINITY.is_valid());
         assert!(!Vec2::<Pixels>::NAN.is_valid());
     }
+
+    #[test]
+    fn to_array_keeps_the_order() {
+        assert_eq!(
+            Vec2::new(crate::px(1.0), crate::px(2.0)).to_array(),
+            [1.0, 2.0]
+        );
+    }
 }

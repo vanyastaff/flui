@@ -36,11 +36,6 @@ pub enum PathCommand {
     /// Add a rectangle.
     AddRect(Rect<Pixels>),
 
-    /// Add a circle.
-    ///
-    /// Arguments: center, radius
-    AddCircle(Point<Pixels>, f32),
-
     /// Add an oval (ellipse).
     ///
     /// Arguments: bounding rectangle
@@ -350,6 +345,32 @@ impl Path {
         self.bounds = None;
     }
 
+    /// Adds a quadratic Bézier curve from the current position to `end`,
+    /// pulled toward `control` (Flutter's `quadraticBezierTo`).
+    ///
+    /// Like [`Self::line_to`], with no contour open it starts from the
+    /// current position: the origin on a fresh path, or the start of the
+    /// contour just closed.
+    #[inline]
+    pub fn quadratic_bezier_to(&mut self, control: Point<Pixels>, end: Point<Pixels>) {
+        Arc::make_mut(&mut self.commands).push(PathCommand::QuadraticTo(control, end));
+        self.bounds = None;
+    }
+
+    /// Adds a cubic Bézier curve from the current position to `end`, with
+    /// `control1` shaping its start and `control2` its end (Flutter's
+    /// `cubicTo`). Starts where [`Self::quadratic_bezier_to`] does.
+    #[inline]
+    pub fn cubic_to(
+        &mut self,
+        control1: Point<Pixels>,
+        control2: Point<Pixels>,
+        end: Point<Pixels>,
+    ) {
+        Arc::make_mut(&mut self.commands).push(PathCommand::CubicTo(control1, control2, end));
+        self.bounds = None;
+    }
+
     /// Closes the current subpath with a line back to its starting point.
     #[inline]
     pub fn close(&mut self) {
@@ -489,12 +510,6 @@ impl Path {
                     max_x = max_x.max(r.right().0);
                     max_y = max_y.max(r.bottom().0);
                 }
-                PathCommand::AddCircle(center, radius) => {
-                    min_x = min_x.min(center.x.0 - radius);
-                    min_y = min_y.min(center.y.0 - radius);
-                    max_x = max_x.max(center.x.0 + radius);
-                    max_y = max_y.max(center.y.0 + radius);
-                }
                 PathCommand::Close => {}
             }
         }
@@ -542,9 +557,6 @@ impl Path {
                     PathCommand::CubicTo(c1 + delta, c2 + delta, e + delta)
                 }
                 PathCommand::AddRect(r) => PathCommand::AddRect(r.translate(delta)),
-                PathCommand::AddCircle(center, radius) => {
-                    PathCommand::AddCircle(center + delta, radius)
-                }
                 PathCommand::AddOval(r) => PathCommand::AddOval(r.translate(delta)),
                 PathCommand::AddArc(r, start, sweep) => {
                     PathCommand::AddArc(r.translate(delta), start, sweep)
@@ -632,22 +644,6 @@ impl Path {
                     );
                     // Simple rectangle test
                     if rect.contains(point) {
-                        crossings += 1;
-                    }
-                }
-                PathCommand::AddCircle(center, radius) => {
-                    // Standalone shape — see the `AddRect` arm.
-                    Self::end_open_contour_even_odd(
-                        point,
-                        &mut crossings,
-                        &mut current_pos,
-                        &mut subpath_start,
-                        &mut subpath_open,
-                    );
-                    // Simple circle test
-                    let dx = point.x - center.x;
-                    let dy = point.y - center.y;
-                    if dx.0 * dx.0 + dy.0 * dy.0 <= radius * radius {
                         crossings += 1;
                     }
                 }
@@ -752,22 +748,6 @@ impl Path {
                         &mut subpath_open,
                     );
                     if rect.contains(point) {
-                        winding += 1;
-                    }
-                }
-                PathCommand::AddCircle(center, radius) => {
-                    // Standalone shape ends the open contour — see the
-                    // even-odd walker's `AddRect` arm.
-                    Self::end_open_contour_non_zero(
-                        point,
-                        &mut winding,
-                        &mut current_pos,
-                        &mut subpath_start,
-                        &mut subpath_open,
-                    );
-                    let dx = point.x - center.x;
-                    let dy = point.y - center.y;
-                    if dx.0 * dx.0 + dy.0 * dy.0 <= radius * radius {
                         winding += 1;
                     }
                 }
@@ -1023,7 +1003,53 @@ impl Path {
         winding
     }
 
-    /// Count crossings for quadratic bezier curve (approximated).
+    /// How many chords to flatten a Bézier curve into so no point of it lies
+    /// farther than [`Self::ARC_FLATTENING_TOLERANCE`] from them.
+    ///
+    /// Wang's formula: a degree-`d` curve whose largest second difference of
+    /// control points has length `M` needs `ceil(sqrt(d(d - 1) M / (8 tol)))`
+    /// uniform steps in `t`. It is the bound lyon and Skia flatten by, so the
+    /// hittable curve tracks the painted one; a fixed step count would drift
+    /// from it in proportion to the curve's size. A straight curve (`M = 0`)
+    /// and non-finite input cost one chord; the count saturates at
+    /// [`Self::MAX_ARC_CHORDS`].
+    fn bezier_chord_count(degree: f32, points: &[Point<Pixels>]) -> usize {
+        let largest_second_difference = points
+            .windows(3)
+            .map(|w| {
+                let dx = w[0].x.0 - 2.0 * w[1].x.0 + w[2].x.0;
+                let dy = w[0].y.0 - 2.0 * w[1].y.0 + w[2].y.0;
+                dx.hypot(dy)
+            })
+            .fold(0.0_f32, f32::max);
+        if !largest_second_difference.is_finite() {
+            return 1;
+        }
+        let wanted = (degree * (degree - 1.0) * largest_second_difference
+            / (8.0 * Self::ARC_FLATTENING_TOLERANCE))
+            .sqrt()
+            .ceil();
+        if wanted.is_finite() {
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            // non-negative, clamped
+            let wanted = wanted as usize;
+            wanted.clamp(1, Self::MAX_ARC_CHORDS)
+        } else {
+            Self::MAX_ARC_CHORDS
+        }
+    }
+
+    /// The chords of a curve sampled at `chords` uniform steps of `t`.
+    fn curve_chords(
+        chords: usize,
+        eval: impl Fn(f32) -> Point<Pixels>,
+    ) -> impl Iterator<Item = (Point<Pixels>, Point<Pixels>)> {
+        #[expect(clippy::cast_precision_loss)] // at most MAX_ARC_CHORDS
+        let step = move |i: usize| i as f32 / chords as f32;
+        (1..=chords).map(move |i| (eval(step(i - 1)), eval(step(i))))
+    }
+
+    /// Ray crossings of a quadratic curve, flattened within tolerance.
     #[inline]
     fn count_curve_crossings_quad(
         point: Point<Pixels>,
@@ -1031,26 +1057,13 @@ impl Path {
         p1: Point<Pixels>,
         p2: Point<Pixels>,
     ) -> usize {
-        // Simple approximation: subdivide into 4 line segments
-        let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
-        let mut crossings = 0;
-
-        for i in 0..4 {
-            let t1 = t_values[i];
-            let t2 = t_values[i + 1];
-
-            let start = Self::eval_quadratic(p0, p1, p2, t1);
-            let end = Self::eval_quadratic(p0, p1, p2, t2);
-
-            if Self::ray_intersects_segment(point, start, end) {
-                crossings += 1;
-            }
-        }
-
-        crossings
+        let chords = Self::bezier_chord_count(2.0, &[p0, p1, p2]);
+        Self::curve_chords(chords, |t| Self::eval_quadratic(p0, p1, p2, t))
+            .filter(|&(a, b)| Self::ray_intersects_segment(point, a, b))
+            .count()
     }
 
-    /// Count crossings for cubic bezier curve (approximated).
+    /// Ray crossings of a cubic curve, flattened within tolerance.
     #[inline]
     fn count_curve_crossings_cubic(
         point: Point<Pixels>,
@@ -1059,26 +1072,13 @@ impl Path {
         p2: Point<Pixels>,
         p3: Point<Pixels>,
     ) -> usize {
-        // Simple approximation: subdivide into 8 line segments
-        let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
-        let mut crossings = 0;
-
-        for i in 0..8 {
-            let t1 = t_values[i];
-            let t2 = t_values[i + 1];
-
-            let start = Self::eval_cubic(p0, p1, p2, p3, t1);
-            let end = Self::eval_cubic(p0, p1, p2, p3, t2);
-
-            if Self::ray_intersects_segment(point, start, end) {
-                crossings += 1;
-            }
-        }
-
-        crossings
+        let chords = Self::bezier_chord_count(3.0, &[p0, p1, p2, p3]);
+        Self::curve_chords(chords, |t| Self::eval_cubic(p0, p1, p2, p3, t))
+            .filter(|&(a, b)| Self::ray_intersects_segment(point, a, b))
+            .count()
     }
 
-    /// Winding number for quadratic curve.
+    /// Winding contribution of a quadratic curve, flattened within tolerance.
     #[inline]
     fn curve_winding_quad(
         point: Point<Pixels>,
@@ -1086,23 +1086,13 @@ impl Path {
         p1: Point<Pixels>,
         p2: Point<Pixels>,
     ) -> i32 {
-        let t_values: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
-        let mut winding = 0;
-
-        for i in 0..4 {
-            let t1 = t_values[i];
-            let t2 = t_values[i + 1];
-
-            let start = Self::eval_quadratic(p0, p1, p2, t1);
-            let end = Self::eval_quadratic(p0, p1, p2, t2);
-
-            winding += Self::segment_winding(point, start, end);
-        }
-
-        winding
+        let chords = Self::bezier_chord_count(2.0, &[p0, p1, p2]);
+        Self::curve_chords(chords, |t| Self::eval_quadratic(p0, p1, p2, t))
+            .map(|(a, b)| Self::segment_winding(point, a, b))
+            .sum()
     }
 
-    /// Winding number for cubic curve.
+    /// Winding contribution of a cubic curve, flattened within tolerance.
     #[inline]
     fn curve_winding_cubic(
         point: Point<Pixels>,
@@ -1111,20 +1101,10 @@ impl Path {
         p2: Point<Pixels>,
         p3: Point<Pixels>,
     ) -> i32 {
-        let t_values: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
-        let mut winding = 0;
-
-        for i in 0..8 {
-            let t1 = t_values[i];
-            let t2 = t_values[i + 1];
-
-            let start = Self::eval_cubic(p0, p1, p2, p3, t1);
-            let end = Self::eval_cubic(p0, p1, p2, p3, t2);
-
-            winding += Self::segment_winding(point, start, end);
-        }
-
-        winding
+        let chords = Self::bezier_chord_count(3.0, &[p0, p1, p2, p3]);
+        Self::curve_chords(chords, |t| Self::eval_cubic(p0, p1, p2, p3, t))
+            .map(|(a, b)| Self::segment_winding(point, a, b))
+            .sum()
     }
 
     /// Evaluate quadratic bezier at parameter t.
@@ -1400,7 +1380,7 @@ mod tests {
     /// A standalone shape ends any open contour, so a following arc starts
     /// its own instead of chording back across the shape.
     ///
-    /// The renderer already behaves this way — every `AddRect`/`AddCircle`/
+    /// The renderer already behaves this way — every `AddRect`/
     /// `AddOval` arm in `flui-engine`'s tessellator ends the builder's
     /// contour and clears `has_begun`. If containment kept the contour open
     /// it would chord from the stale pre-shape position to the arc's start,
@@ -1485,5 +1465,662 @@ mod tests {
             )),
             "a point 5 units outside the same rim stays outside"
         );
+    }
+
+    mod geometry_oracles {
+        use super::super::*;
+        use crate::geometry::{Offset, Point, RRect, Radius, px};
+        use proptest::prelude::*;
+
+        fn p(x: f32, y: f32) -> Point<Pixels> {
+            Point::new(px(x), px(y))
+        }
+
+        fn rect(l: f32, t: f32, r: f32, b: f32) -> Rect<Pixels> {
+            Rect::from_ltrb(px(l), px(t), px(r), px(b))
+        }
+
+        fn with(fill: PathFillType, mut path: Path) -> Path {
+            path.set_fill_type(fill);
+            path
+        }
+
+        const FILLS: [PathFillType; 2] = [PathFillType::NonZero, PathFillType::EvenOdd];
+
+        /// Twice the signed area of `abc`.
+        fn cross(a: (f32, f32), b: (f32, f32), c: (f32, f32)) -> f32 {
+            (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+        }
+
+        proptest! {
+            /// A triangle contains exactly the points on the inner side of
+            /// all three edges, under either fill rule and either winding.
+            /// Points within a small band of an edge are skipped: which
+            /// side of the boundary they land on is not specified.
+            #[test]
+            fn triangle_containment_matches_barycentric(
+                v in proptest::array::uniform3((-50.0f32..50.0, -50.0f32..50.0)),
+                q in (-60.0f32..60.0, -60.0f32..60.0),
+            ) {
+                let area = cross(v[0], v[1], v[2]);
+                prop_assume!(area.abs() > 50.0);
+                let d = [cross(v[0], v[1], q), cross(v[1], v[2], q), cross(v[2], v[0], q)];
+                let edge_len = |a: (f32, f32), b: (f32, f32)| ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+                let lens = [edge_len(v[0], v[1]), edge_len(v[1], v[2]), edge_len(v[2], v[0])];
+                prop_assume!(d.iter().zip(lens).all(|(d, l)| d.abs() / l > 0.01));
+                let inside = d.iter().all(|x| x.signum() == area.signum());
+                let points = v.map(|(x, y)| p(x, y));
+                for fill in FILLS {
+                    let path = with(fill, Path::polygon(&points));
+                    prop_assert_eq!(path.contains(p(q.0, q.1)), inside);
+                }
+            }
+        }
+
+        /// Two squares overlapping in [10, 20]². Wound the same way the
+        /// overlap has winding 2: filled by non-zero, a hole for even-odd.
+        /// Wound oppositely it has winding 0: a hole for both.
+        #[test]
+        fn fill_rules_differ_on_the_overlap() {
+            let square = |path: &mut Path, l: f32, t: f32, s: f32, clockwise: bool| {
+                let mut corners = [p(l, t), p(l + s, t), p(l + s, t + s), p(l, t + s)];
+                if !clockwise {
+                    corners.reverse();
+                }
+                path.move_to(corners[0]);
+                for c in &corners[1..] {
+                    path.line_to(*c);
+                }
+                path.close();
+            };
+            for (same_way, overlap_nonzero) in [(true, true), (false, false)] {
+                for fill in FILLS {
+                    let mut path = Path::with_fill_type(fill);
+                    square(&mut path, 0.0, 0.0, 20.0, true);
+                    square(&mut path, 10.0, 10.0, 20.0, same_way);
+                    let expected_overlap = fill == PathFillType::NonZero && overlap_nonzero;
+                    assert_eq!(
+                        path.contains(p(15.0, 15.0)),
+                        expected_overlap,
+                        "{fill:?} same_way={same_way}"
+                    );
+                    assert!(
+                        path.contains(p(5.0, 5.0)) && path.contains(p(25.0, 25.0)),
+                        "{fill:?}"
+                    );
+                    assert!(
+                        !path.contains(p(25.0, 5.0)) && !path.contains(p(-1.0, 5.0)),
+                        "{fill:?}"
+                    );
+                }
+            }
+        }
+
+        /// Standalone shapes add one to the winding inside them.
+        #[test]
+        fn standalone_shapes_under_both_fill_rules() {
+            for fill in FILLS {
+                let mut path = Path::with_fill_type(fill);
+                path.add_rect(rect(0.0, 0.0, 40.0, 20.0));
+                path.add_oval(rect(30.0, 0.0, 70.0, 20.0));
+                assert!(path.contains(p(5.0, 10.0)), "{fill:?}"); // rect only
+                assert!(path.contains(p(60.0, 10.0)), "{fill:?}"); // oval only
+                assert_eq!(path.contains(p(35.0, 10.0)), fill == PathFillType::NonZero); // both
+                assert!(!path.contains(p(69.0, 1.0)), "{fill:?}"); // oval's box corner
+                assert!(!path.contains(p(80.0, 10.0)), "{fill:?}");
+            }
+            // An oval is its ellipse: in at the rim's inner side, out beyond it.
+            let oval = Path::oval(rect(0.0, 0.0, 40.0, 20.0));
+            assert!(oval.contains(p(38.0, 10.0)) && !oval.contains(p(20.0, 21.0)));
+            let circle = Path::circle(p(10.0, 10.0), 5.0);
+            assert!(circle.contains(p(14.0, 10.0)) && !circle.contains(p(14.0, 14.0)));
+            assert!(Path::rectangle(rect(0.0, 0.0, 4.0, 4.0)).contains(p(3.0, 3.0)));
+            assert!(!Path::new().contains(p(0.0, 0.0)));
+        }
+
+        /// Distinct radii per corner (tl 20, tr 5, br 10, bl 0) on a 100×60
+        /// rect: each corner cuts away exactly its own quarter circle.
+        #[test]
+        fn from_rrect_rounds_each_corner_by_its_own_radius() {
+            let r = |v: f32| Radius::circular(px(v));
+            let rrect = RRect::from_rect_and_corners(
+                rect(0.0, 0.0, 100.0, 60.0),
+                r(20.0),
+                r(5.0),
+                r(10.0),
+                r(0.0),
+            );
+            let path = Path::from_rrect(rrect);
+            for (point, inside) in [
+                ((50.0, 30.0), true),
+                ((4.0, 4.0), false),   // tl: 22.6 from (20, 20)
+                ((10.0, 10.0), true),  // tl: 14.1 from (20, 20)
+                ((99.0, 1.0), false),  // tr: 5.7 from (95, 5)
+                ((96.0, 4.0), true),   // tr: 1.4 from (95, 5)
+                ((99.0, 59.0), false), // br: 12.7 from (90, 50)
+                ((95.0, 55.0), true),  // br: 7.1 from (90, 50)
+                ((1.0, 59.0), true),   // bl: square
+                ((1.0, 30.0), true),   // on the left edge's inner side
+                ((50.0, 1.0), true),   // on the top edge's inner side
+            ] {
+                assert_eq!(path.contains(p(point.0, point.1)), inside, "{point:?}");
+            }
+            assert_eq!(path.compute_bounds(), rect(0.0, 0.0, 100.0, 60.0));
+            // No rounding at all is a plain rectangle.
+            let square = Path::from_rrect(RRect::from_rect(rect(0.0, 0.0, 10.0, 10.0)));
+            assert_eq!(
+                square.commands(),
+                Path::rectangle(rect(0.0, 0.0, 10.0, 10.0)).commands()
+            );
+        }
+
+        #[test]
+        fn bounds_translate_and_reset() {
+            let mut path = Path::polygon(&[p(-5.0, 2.0), p(10.0, -3.0), p(4.0, 8.0)]);
+            let bounds = rect(-5.0, -3.0, 10.0, 8.0);
+            assert_eq!(path.cached_bounds(), None);
+            assert_eq!(path.compute_bounds(), bounds);
+            assert_eq!(path.bounds(), bounds);
+            assert_eq!(path.cached_bounds(), Some(bounds));
+
+            let moved = path.translate(Offset::new(px(10.0), px(20.0)));
+            assert_eq!(moved.compute_bounds(), rect(5.0, 17.0, 20.0, 28.0));
+            assert_eq!(moved.cached_bounds(), None);
+            assert!(moved.contains(p(13.0, 21.0)) && !path.contains(p(13.0, 21.0)));
+            let shapes = {
+                let mut s = Path::new();
+                s.add_rect(rect(0.0, 0.0, 2.0, 2.0));
+                s.add_oval(rect(4.0, 0.0, 6.0, 2.0));
+                s.add_arc(rect(8.0, 0.0, 10.0, 2.0), 0.0, 1.0);
+                s.translate(Offset::new(px(1.0), px(1.0)))
+            };
+            assert_eq!(shapes.compute_bounds(), rect(1.0, 1.0, 11.0, 3.0));
+
+            assert!(!path.is_empty());
+            path.reset();
+            assert!(path.is_empty());
+            assert_eq!(path.cached_bounds(), None);
+            assert_eq!(path.compute_bounds(), Rect::ZERO);
+        }
+
+        #[test]
+        fn fill_type_and_constructors() {
+            assert_eq!(
+                Path::with_fill_type(PathFillType::EvenOdd).fill_type(),
+                PathFillType::EvenOdd
+            );
+            let mut path = Path::new();
+            assert_eq!(path.fill_type(), PathFillType::NonZero);
+            path.set_fill_type(PathFillType::EvenOdd);
+            assert_eq!(path.fill_type(), PathFillType::EvenOdd);
+            assert_eq!(
+                Path::arc(rect(0.0, 0.0, 4.0, 4.0), 0.0, 1.0).compute_bounds(),
+                rect(0.0, 0.0, 4.0, 4.0)
+            );
+            assert_eq!(
+                Path::circle(p(5.0, 5.0), 2.0).compute_bounds(),
+                rect(3.0, 3.0, 7.0, 7.0)
+            );
+            assert!(Path::polygon(&[]).is_empty());
+        }
+
+        /// Every mutation drops the cached bounds, so the next query sees
+        /// the new command.
+        #[test]
+        fn mutations_invalidate_the_cached_bounds() {
+            /// A named edit and the bounds it leaves.
+            type Edit = (&'static str, fn(&mut Path), Rect<Pixels>);
+            let edits: [Edit; 8] = [
+                // Curve bounds include the control points (conservative).
+                (
+                    "quadratic_bezier_to",
+                    |path| path.quadratic_bezier_to(p(-4.0, 30.0), p(12.0, 1.0)),
+                    rect(-4.0, 0.0, 12.0, 30.0),
+                ),
+                (
+                    "cubic_to",
+                    |path| path.cubic_to(p(1.0, -6.0), p(15.0, 2.0), p(3.0, 3.0)),
+                    rect(0.0, -6.0, 15.0, 10.0),
+                ),
+                (
+                    "move_to",
+                    |path| path.move_to(p(20.0, 20.0)),
+                    rect(0.0, 0.0, 20.0, 20.0),
+                ),
+                (
+                    "line_to",
+                    |path| path.line_to(p(-5.0, 3.0)),
+                    rect(-5.0, 0.0, 10.0, 10.0),
+                ),
+                (
+                    "add_rect",
+                    |path| path.add_rect(rect(0.0, 0.0, 30.0, 5.0)),
+                    rect(0.0, 0.0, 30.0, 10.0),
+                ),
+                (
+                    "add_oval",
+                    |path| path.add_oval(rect(-1.0, -1.0, 2.0, 2.0)),
+                    rect(-1.0, -1.0, 10.0, 10.0),
+                ),
+                (
+                    "add_arc",
+                    |path| path.add_arc(rect(0.0, 0.0, 10.0, 40.0), 0.0, 1.0),
+                    rect(0.0, 0.0, 10.0, 40.0),
+                ),
+                ("reset", Path::reset, Rect::ZERO),
+            ];
+            for (name, edit, expected) in edits {
+                let mut path = Path::rectangle(rect(0.0, 0.0, 10.0, 10.0));
+                assert_eq!(path.bounds(), rect(0.0, 0.0, 10.0, 10.0));
+                edit(&mut path);
+                assert_eq!(path.cached_bounds(), None, "{name}");
+                assert_eq!(path.bounds(), expected, "{name}");
+            }
+            assert_eq!(Path::new().cached_bounds(), None);
+            assert_eq!(
+                Path::with_fill_type(PathFillType::EvenOdd).cached_bounds(),
+                None
+            );
+            assert_eq!(
+                Path::circle(p(5.0, 5.0), 3.0).compute_bounds(),
+                rect(2.0, 2.0, 8.0, 8.0)
+            );
+            let triangle = Path::polygon(&[p(0.0, 0.0), p(4.0, 0.0), p(0.0, 4.0)]);
+            assert_eq!(triangle.commands().last(), Some(&PathCommand::Close));
+        }
+
+        /// The quarter arc used below: on the circle of radius 50 about
+        /// (150, 50), from (200, 50) clockwise (y-down) to (150, 100).
+        fn quarter(path: &mut Path) {
+            path.add_arc(
+                rect(100.0, 0.0, 200.0, 100.0),
+                0.0,
+                std::f32::consts::FRAC_PI_2,
+            );
+        }
+
+        fn check(
+            name: &str,
+            build: impl Fn(&mut Path),
+            inside: &[(f32, f32)],
+            outside: &[(f32, f32)],
+        ) {
+            for fill in FILLS {
+                let mut path = Path::with_fill_type(fill);
+                build(&mut path);
+                for &(x, y) in inside {
+                    assert!(
+                        path.contains(p(x, y)),
+                        "{name} {fill:?}: ({x}, {y}) should be inside"
+                    );
+                }
+                for &(x, y) in outside {
+                    assert!(
+                        !path.contains(p(x, y)),
+                        "{name} {fill:?}: ({x}, {y}) should be outside"
+                    );
+                }
+            }
+        }
+
+        /// Whether an arc joins the open contour by a chord or starts its
+        /// own decides the filled shape: a wedge from the joining point, or
+        /// only the segment between the arc and its own chord.
+        #[test]
+        fn an_arc_joins_an_open_contour_and_starts_a_closed_one_fresh() {
+            // Alone, the arc fills the segment cut off by its chord
+            // x + y = 250; (150, 70) lies in the wedge an origin-anchored
+            // contour would add.
+            check(
+                "leading arc",
+                quarter,
+                &[(185.0, 85.0)],
+                &[(150.0, 70.0), (160.0, 60.0)],
+            );
+
+            // From the centre it is a pie slice: the quadrant of the disc.
+            let pie = |path: &mut Path| {
+                path.move_to(p(150.0, 50.0));
+                quarter(path);
+                path.close();
+            };
+            check(
+                "pie",
+                pie,
+                &[(160.0, 60.0), (185.0, 85.0)],
+                &[(140.0, 60.0), (190.0, 95.0)],
+            );
+            let open_pie = |path: &mut Path| {
+                path.move_to(p(150.0, 50.0));
+                quarter(path);
+            };
+            check("open pie", open_pie, &[(160.0, 60.0)], &[(140.0, 60.0)]);
+
+            // After a closed contour the arc starts fresh.
+            let after_close = |path: &mut Path| {
+                path.move_to(p(0.0, 0.0));
+                path.line_to(p(10.0, 0.0));
+                path.line_to(p(0.0, 10.0));
+                path.close();
+                quarter(path);
+            };
+            check(
+                "after close",
+                after_close,
+                &[(2.0, 2.0), (185.0, 85.0)],
+                &[(150.0, 70.0)],
+            );
+
+            // A standalone shape closes the open triangle before it and the
+            // arc after it starts fresh. The triangle's closing edge is its
+            // right side, the only edge (8, 203)'s ray crosses.
+            let open_triangle = |path: &mut Path| {
+                path.move_to(p(10.0, 200.0));
+                path.line_to(p(0.0, 200.0));
+                path.line_to(p(10.0, 210.0));
+            };
+            let shapes: [fn(&mut Path); 2] = [
+                |path| path.add_rect(rect(300.0, 300.0, 310.0, 310.0)),
+                |path| path.add_oval(rect(300.0, 300.0, 310.0, 310.0)),
+            ];
+            for shape in shapes {
+                let after_shape = |path: &mut Path| {
+                    open_triangle(path);
+                    shape(path);
+                    quarter(path);
+                };
+                check(
+                    "after shape",
+                    after_shape,
+                    &[(8.0, 203.0), (305.0, 305.0), (185.0, 85.0)],
+                    // (42, 180) lies in the wedge a chord from the
+                    // triangle to the arc would enclose.
+                    &[(2.0, 208.0), (150.0, 70.0), (42.0, 180.0)],
+                );
+            }
+
+            // So does a move_to: the open triangle is closed before the next
+            // contour begins.
+            let two_open = |path: &mut Path| {
+                open_triangle(path);
+                path.move_to(p(0.0, 300.0));
+                path.line_to(p(10.0, 300.0));
+            };
+            check(
+                "two open contours",
+                two_open,
+                &[(8.0, 203.0)],
+                &[(2.0, 208.0)],
+            );
+            // The implicit close at the end can be the only crossing.
+            let only_the_close = |path: &mut Path| {
+                path.move_to(p(100.0, 0.0));
+                path.line_to(p(0.0, 50.0));
+                path.line_to(p(100.0, 100.0));
+            };
+            check(
+                "closing edge",
+                only_the_close,
+                &[(80.0, 60.0)],
+                &[(10.0, 60.0)],
+            );
+
+            // The chord into the arc counts when it is not level: from
+            // (100, 100) up to the arc start (200, 50).
+            let chord = |path: &mut Path| {
+                path.move_to(p(100.0, 100.0));
+                quarter(path);
+            };
+            check("slanted chord", chord, &[(140.0, 85.0)], &[(105.0, 90.0)]);
+
+            // An arc continues the contour a previous arc left open: the
+            // chord from (150, 100) to (100, 50) cuts off the lower left.
+            let two_arcs = |path: &mut Path| {
+                quarter(path);
+                path.add_arc(
+                    rect(100.0, 0.0, 200.0, 100.0),
+                    std::f32::consts::PI,
+                    std::f32::consts::FRAC_PI_2,
+                );
+            };
+            check("two arcs", two_arcs, &[(145.0, 55.0)], &[(110.0, 80.0)]);
+
+            // Just below the arc start the ray meets only the arc's first
+            // chord.
+            check("first chord", pie, &[(190.0, 53.0)], &[]);
+        }
+
+        /// Standalone shapes add one crossing, or wind once, where they
+        /// contain the point: three overlapping rects are odd, two even,
+        /// and a rect or oval cancels against a square wound the other way.
+        #[test]
+        fn shapes_count_once_per_containment() {
+            let mut three = Path::new();
+            three.add_rect(rect(0.0, 0.0, 30.0, 30.0));
+            three.add_rect(rect(10.0, 10.0, 40.0, 40.0));
+            three.add_rect(rect(20.0, 20.0, 50.0, 50.0));
+            for (fill, in_three, in_two) in [
+                (PathFillType::NonZero, true, true),
+                (PathFillType::EvenOdd, true, false),
+            ] {
+                let path = with(fill, three.clone());
+                assert_eq!(path.contains(p(25.0, 25.0)), in_three, "{fill:?}");
+                assert_eq!(path.contains(p(15.0, 15.0)), in_two, "{fill:?}");
+            }
+
+            // (0,0) -> (0,10) -> (10,10) -> (10,0) winds -1 about (5, 5);
+            // the reverse winds +1.
+            let square = [p(0.0, 0.0), p(0.0, 10.0), p(10.0, 10.0), p(10.0, 0.0)];
+            let reversed = [square[3], square[2], square[1], square[0]];
+            let shapes: [fn(&mut Path); 2] = [
+                |path| path.add_rect(rect(0.0, 0.0, 10.0, 10.0)),
+                |path| path.add_oval(rect(0.0, 0.0, 10.0, 10.0)),
+            ];
+            for shape in shapes {
+                for (points, non_zero) in [(square, false), (reversed, true)] {
+                    for fill in FILLS {
+                        let mut path = Path::polygon(&points);
+                        path.set_fill_type(fill);
+                        shape(&mut path);
+                        let expected = fill == PathFillType::NonZero && non_zero;
+                        assert_eq!(path.contains(p(5.0, 5.0)), expected, "{fill:?} {points:?}");
+                    }
+                }
+            }
+        }
+
+        /// Each corner with any radius gets one arc and each square corner
+        /// none, whichever corner it is and whichever axis is zero.
+        #[test]
+        fn from_rrect_emits_an_arc_exactly_for_each_rounded_corner() {
+            let arcs = |corners: [Radius<Pixels>; 4]| {
+                let [tl, tr, br, bl] = corners;
+                let rrect =
+                    RRect::from_rect_and_corners(rect(0.0, 0.0, 100.0, 60.0), tl, tr, br, bl);
+                Path::from_rrect(rrect)
+                    .commands()
+                    .iter()
+                    .filter(|c| matches!(c, PathCommand::AddArc(..)))
+                    .count()
+            };
+            let zero = Radius::circular(px(0.0));
+            for k in 0..4 {
+                let mut one_square = [Radius::circular(px(8.0)); 4];
+                one_square[k] = zero;
+                assert_eq!(arcs(one_square), 3, "corner {k} square");
+                for radius in [Radius::new(px(6.0), px(0.0)), Radius::new(px(0.0), px(6.0))] {
+                    let mut only = [zero; 4];
+                    only[k] = radius;
+                    assert_eq!(arcs(only), 1, "corner {k} alone with {radius:?}");
+                }
+            }
+        }
+
+        /// A quarter circle bulges past the chamfer between its ends:
+        /// 0.85 r from the corner circle centre, towards the corner, is
+        /// inside the arc but outside the chamfer; 1.15 r is outside both.
+        #[test]
+        fn from_rrect_corners_are_arcs_not_chamfers() {
+            let path = Path::from_rrect(RRect::from_rect_and_corners(
+                rect(0.0, 0.0, 100.0, 60.0),
+                Radius::circular(px(10.0)),
+                Radius::circular(px(12.0)),
+                Radius::circular(px(14.0)),
+                Radius::circular(px(16.0)),
+            ));
+            let s = std::f32::consts::FRAC_1_SQRT_2;
+            // (centre, radius, direction towards the corner)
+            for (c, r, d) in [
+                ((10.0, 10.0), 10.0, (-s, -s)),
+                ((88.0, 12.0), 12.0, (s, -s)),
+                ((86.0, 46.0), 14.0, (s, s)),
+                ((16.0, 44.0), 16.0, (-s, s)),
+            ] {
+                let at = |k: f32| p(c.0 + d.0 * k * r, c.1 + d.1 * k * r);
+                assert!(path.contains(at(0.85)), "{c:?} inside the arc");
+                assert!(!path.contains(at(1.15)), "{c:?} outside the arc");
+            }
+        }
+
+        /// The fewest chords whose sagitta, `r (1 - cos(sweep / 2n))`, is
+        /// within the flattening tolerance; the larger semi-axis of an
+        /// ellipse; one chord for degenerate input; the ceiling for a
+        /// radius too large to resolve.
+        #[test]
+        fn arc_chord_count_is_the_fewest_within_tolerance() {
+            let tol = Path::ARC_FLATTENING_TOLERANCE;
+            let sagitta =
+                |r: f32, sweep: f32, n: usize| r * (1.0 - (sweep / (2.0 * n as f32)).cos());
+            for r in [0.5_f32, 10.0, 100.0, 1000.0] {
+                for sweep in [0.3_f32, std::f32::consts::FRAC_PI_2, std::f32::consts::TAU] {
+                    let circle = rect(0.0, 0.0, 2.0 * r, 2.0 * r);
+                    let n = Path::arc_chord_count(circle, sweep);
+                    assert!(
+                        sagitta(r, sweep, n) <= tol * 1.001,
+                        "r {r} sweep {sweep}: {n} chords"
+                    );
+                    if n > 1 {
+                        assert!(
+                            sagitta(r, sweep, n - 1) > tol,
+                            "r {r} sweep {sweep}: {n} is not the fewest"
+                        );
+                    }
+                    assert_eq!(Path::arc_chord_count(circle, -sweep), n);
+                }
+            }
+            let pi = std::f32::consts::PI;
+            let wide = Path::arc_chord_count(rect(0.0, 0.0, 200.0, 2.0), pi);
+            assert_eq!(
+                wide,
+                Path::arc_chord_count(rect(0.0, 0.0, 200.0, 200.0), pi)
+            );
+            assert_eq!(Path::arc_chord_count(rect(0.0, 0.0, 2.0, 200.0), pi), wide);
+
+            let unit = rect(0.0, 0.0, 2.0, 2.0);
+            assert_eq!(Path::arc_chord_count(rect(0.0, 0.0, 0.0, 0.0), 3.0 * pi), 1);
+            assert_eq!(Path::arc_chord_count(unit, 0.0), 1);
+            assert_eq!(Path::arc_chord_count(unit, f32::NAN), 1);
+            assert_eq!(Path::arc_chord_count(unit, f32::INFINITY), 1);
+            let huge = rect(0.0, 0.0, 2.0e9, 2.0e9);
+            assert_eq!(Path::arc_chord_count(huge, 1.0), Path::MAX_ARC_CHORDS);
+            // Resolvable, but wanting more chords than the ceiling.
+            let wide_turn = rect(0.0, 0.0, 2.0e6, 2.0e6);
+            assert_eq!(
+                Path::arc_chord_count(wide_turn, std::f32::consts::TAU),
+                Path::MAX_ARC_CHORDS
+            );
+            assert_eq!(Path::MAX_ARC_CHORDS, 2048);
+        }
+
+        /// Where the curve regions below sit: off the origin, so no control
+        /// point has a zero coordinate that would hide a term of the
+        /// Bézier polynomial.
+        const OFFSET: (f32, f32) = (37.0, 53.0);
+
+        /// Curves whose control points are evenly spaced in x, so x = w u
+        /// and each curve is the graph of a function of x: the region
+        /// between it and its baseline has an exact inside test. Returns
+        /// the path and, for `u` in `0..1`, the curve's height and slope.
+        ///
+        /// - quadratic (0, 0), (w/2, h), (w, 0): y = 2 h u (1 - u);
+        /// - cubic (0, 0), (w/3, a), (2w/3, b), (w, 0):
+        ///   y = 3 a u (1 - u)^2 + 3 b u^2 (1 - u).
+        fn under_curve(cubic: bool, w: f32) -> (Path, impl Fn(f32) -> (f32, f32)) {
+            let (h, a, b) = (w, 1.2 * w, 0.6 * w);
+            let at = |x: f32, y: f32| p(OFFSET.0 + x, OFFSET.1 + y);
+            let mut path = Path::new();
+            path.move_to(at(0.0, 0.0));
+            if cubic {
+                path.cubic_to(at(w / 3.0, a), at(2.0 * w / 3.0, b), at(w, 0.0));
+            } else {
+                path.quadratic_bezier_to(at(w / 2.0, h), at(w, 0.0));
+            }
+            path.close();
+            let curve = move |u: f32| {
+                let (height, per_u) = if cubic {
+                    (
+                        3.0 * a * u * (1.0 - u).powi(2) + 3.0 * b * u * u * (1.0 - u),
+                        3.0 * a * ((1.0 - u).powi(2) - 2.0 * u * (1.0 - u))
+                            + 3.0 * b * (2.0 * u * (1.0 - u) - u * u),
+                    )
+                } else {
+                    (2.0 * h * u * (1.0 - u), 2.0 * h * (1.0 - 2.0 * u))
+                };
+                (height, per_u / w)
+            };
+            (path, curve)
+        }
+
+        proptest! {
+            /// Containment matches the exact region at every scale, down
+            /// to 0.15 px from the curve along its normal: the flattening
+            /// stays within its 0.1 px tolerance however large the curve
+            /// is (four fixed chords were three pixels off at w = 100).
+            /// Half the points are drawn within 3 px of the curve, where
+            /// under-flattening shows; the rest anywhere over the region.
+            #[test]
+            fn curve_containment_matches_the_exact_region(
+                cubic in any::<bool>(),
+                scale in prop::sample::select(vec![1.0_f32, 100.0, 1000.0]),
+                // A third of the samples near each end, where the first and
+                // last chords are.
+                u in prop_oneof![0.001_f32..0.05, 0.01_f32..0.99, 0.95_f32..0.999],
+                near in any::<bool>(),
+                offset in -3.0_f32..3.0,
+                v in -0.2_f32..1.2,
+            ) {
+                let w = 100.0 * scale;
+                let (path, curve) = under_curve(cubic, w);
+                let (top, slope) = curve(u);
+                // Vertical distance per unit of distance along the normal.
+                let stretch = slope.hypot(1.0);
+                let y = if near { top + offset * stretch } else { v * top };
+                prop_assume!((y - top).abs() > 0.15 * stretch && y.abs() > 0.15);
+                let inside = y > 0.0 && y < top;
+                let probe = p(OFFSET.0 + u * w, OFFSET.1 + y);
+                for fill in FILLS {
+                    prop_assert_eq!(
+                        with(fill, path.clone()).contains(probe),
+                        inside,
+                        "{:?} {:?}",
+                        fill,
+                        probe
+                    );
+                }
+            }
+        }
+
+        /// One chord for a straight or non-finite curve; the ceiling for a
+        /// curve too large to flatten within the tolerance.
+        #[test]
+        fn bezier_chord_count_edges() {
+            let line = [p(0.0, 0.0), p(5.0, 5.0), p(10.0, 10.0), p(15.0, 15.0)];
+            assert_eq!(Path::bezier_chord_count(2.0, &line[..3]), 1);
+            assert_eq!(Path::bezier_chord_count(3.0, &line), 1);
+            let infinite = [p(0.0, 0.0), p(f32::INFINITY, 0.0), p(1.0, 0.0)];
+            assert_eq!(Path::bezier_chord_count(2.0, &infinite), 1);
+            let huge = [p(0.0, 0.0), p(1.0e12, 1.0e12), p(2.0e12, 0.0)];
+            assert_eq!(Path::bezier_chord_count(2.0, &huge), Path::MAX_ARC_CHORDS);
+        }
     }
 }

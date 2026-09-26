@@ -158,11 +158,15 @@ impl TextRange {
         TextRange::new(start, end)
     }
 
-    /// Returns true if this range overlaps with another.
+    /// Returns true if this range and `other` share at least one offset.
+    ///
+    /// Ranges are half-open, so an empty range overlaps nothing, not even a
+    /// range that encloses it; this is exactly when [`intersect`](Self::intersect)
+    /// returns `Some`.
     #[must_use]
     #[inline]
     pub const fn overlaps(&self, other: &TextRange) -> bool {
-        self.start < other.end && other.start < self.end
+        self.intersect(other).is_some()
     }
 
     /// Returns the start offset.
@@ -608,5 +612,138 @@ impl LineMetrics {
     #[inline]
     pub fn total_height(&self) -> f64 {
         self.ascent + self.descent
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::px;
+    use crate::typography::TextDirection;
+    use proptest::prelude::*;
+
+    /// Offsets a range contains, by definition of a half-open range.
+    fn members(r: TextRange) -> Vec<usize> {
+        (0..24).filter(|&o| r.contains(o)).collect()
+    }
+
+    fn range() -> impl Strategy<Value = TextRange> {
+        (0usize..20, 0usize..20).prop_map(|(a, b)| TextRange::new(a, b))
+    }
+
+    proptest! {
+        /// Checked against the sets of contained offsets: `contains` is the
+        /// half-open definition, and every other query must agree with it.
+        #[test]
+        fn range_set_semantics(a in range(), b in range()) {
+            let (ma, mb) = (members(a), members(b));
+            let both: Vec<usize> = ma.iter().copied().filter(|o| mb.contains(o)).collect();
+
+            prop_assert_eq!(a.len(), ma.len());
+            prop_assert_eq!(a.is_empty(), ma.is_empty());
+            prop_assert_eq!(a.is_collapsed(), a.start() == a.end());
+            prop_assert_eq!(a.intersect(&b).map(members).unwrap_or_default(), both.clone());
+            prop_assert_eq!(a.overlaps(&b), !both.is_empty());
+            prop_assert_eq!(a.intersect(&b), b.intersect(&a));
+            prop_assert_eq!(a.union(&b), b.union(&a));
+            let union = members(a.union(&b));
+            prop_assert!(ma.iter().chain(&mb).all(|o| union.contains(o)));
+            prop_assert_eq!(a.union(&b), TextRange::new(a.start.min(b.start), a.end.max(b.end)));
+        }
+
+        /// A selection's range spans base and extent in either order.
+        #[test]
+        fn selection_follows_base_and_extent(base in 0usize..20, extent in 0usize..20) {
+            let s = TextSelection::new(TextPosition::downstream(base), TextPosition::upstream(extent));
+            prop_assert_eq!(s.range(), TextRange::new(base.min(extent), base.max(extent)));
+            prop_assert_eq!((s.start(), s.end()), (base.min(extent), base.max(extent)));
+            prop_assert_eq!(s.len(), base.abs_diff(extent));
+            prop_assert_eq!(s.is_reversed(), base > extent);
+            prop_assert_eq!(s.is_collapsed(), base == extent);
+            prop_assert_eq!(s.is_empty(), base == extent);
+            prop_assert_eq!((s.base(), s.extent()), (TextPosition::downstream(base), TextPosition::upstream(extent)));
+        }
+
+        /// Expanding covers both the selection and the range, and keeps the
+        /// base's and extent's affinities.
+        #[test]
+        fn expand_to_range(base in 0usize..20, extent in 0usize..20, r in range()) {
+            let s = TextSelection::new(TextPosition::downstream(base), TextPosition::upstream(extent));
+            let e = s.expand_to_range(&r);
+            prop_assert_eq!(e.range(), TextRange::new(s.start().min(r.start), s.end().max(r.end)));
+            prop_assert_eq!((e.base.affinity, e.extent.affinity), (TextAffinity::Downstream, TextAffinity::Upstream));
+        }
+    }
+
+    #[test]
+    fn empty_range_overlaps_nothing() {
+        let inside = TextRange::collapsed(5);
+        assert!(!inside.overlaps(&TextRange::new(0, 10)));
+        assert!(!TextRange::new(0, 10).overlaps(&inside));
+    }
+
+    #[test]
+    fn positions_and_defaults() {
+        assert_eq!(
+            TextPosition::upstream(3),
+            TextPosition::new(3, TextAffinity::Upstream)
+        );
+        assert_eq!(
+            TextPosition::downstream(3).affinity(),
+            TextAffinity::Downstream
+        );
+        assert_eq!(TextPosition::downstream(3).offset(), 3);
+        assert_eq!(TextPosition::default(), TextPosition::upstream(0));
+        assert_eq!(TextRange::default(), TextRange::collapsed(0));
+        let collapsed = TextSelection::collapsed_at(4, TextAffinity::Downstream);
+        assert_eq!(
+            (collapsed.base, collapsed.extent),
+            (TextPosition::downstream(4), TextPosition::downstream(4))
+        );
+        assert_eq!(TextSelection::default().base, TextPosition::default());
+    }
+
+    #[test]
+    fn text_box_edges_follow_direction() {
+        let rect = Rect::from_ltrb(px(10.0), px(20.0), px(50.0), px(35.0));
+        let ltr = TextBox::new(rect, TextDirection::Ltr);
+        let rtl = TextBox::new(rect, TextDirection::Rtl);
+        assert_eq!((ltr.start(), ltr.end()), (10.0, 50.0));
+        assert_eq!((rtl.start(), rtl.end()), (50.0, 10.0));
+        assert_eq!((ltr.width(), ltr.height()), (40.0, 15.0));
+        assert_eq!((*rtl.rect(), rtl.direction()), (rect, TextDirection::Rtl));
+    }
+
+    #[test]
+    fn glyph_info() {
+        let bounds = Rect::from_ltrb(px(1.0), px(2.0), px(9.0), px(14.0));
+        let g = GlyphInfo::new(7, 'x', bounds, 8.5);
+        assert_eq!(
+            (g.glyph_id(), g.code_point(), *g.bounds(), g.advance()),
+            (7, 'x', bounds, 8.5)
+        );
+        assert_eq!((g.width(), g.height()), (8.0, 12.0));
+    }
+
+    #[test]
+    fn line_metrics() {
+        let line = LineMetrics::new(
+            true, 12.0, 4.0, 11.0, 18.0, 100.0, 5.0, 30.0, 2, 10, 25, 24, 26,
+        );
+        assert_eq!(
+            (line.len(), line.is_empty(), line.range()),
+            (15, false, TextRange::new(10, 25))
+        );
+        assert_eq!(
+            (line.top(), line.bottom(), line.right()),
+            (18.0, 34.0, 105.0)
+        );
+        assert_eq!(
+            (line.ascent(), line.descent(), line.total_height()),
+            (12.0, 4.0, 16.0)
+        );
+        assert!(line.has_hard_break());
+        let empty = LineMetrics::new(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 7, 7, 7, 7);
+        assert!(empty.is_empty() && !empty.has_hard_break());
     }
 }

@@ -11,35 +11,11 @@
 //! (flui-types currently has none; see flui-view's error_view_recovery
 //! for the reference case.)
 
-#[path = "color_approx_eq_tests.rs"]
-mod color_approx_eq_tests;
+#[path = "color_blend_tests.rs"]
+mod color_blend_tests;
 #[path = "color_operations_tests.rs"]
 mod color_operations_tests;
-#[path = "corners_tests.rs"]
-mod corners_tests;
-#[path = "device_pixels_geometry_tests.rs"]
-mod device_pixels_geometry_tests;
-#[path = "edge_insets_tests.rs"]
-mod edge_insets_tests;
-#[path = "geometric_calculations_tests.rs"]
-mod geometric_calculations_tests;
-#[path = "geometry_property_tests.rs"]
-mod geometry_property_tests;
-#[path = "layout_tests.rs"]
-mod layout_tests;
-#[path = "rems_unit_tests.rs"]
-mod rems_unit_tests;
-#[path = "rtl_support_tests.rs"]
-mod rtl_support_tests;
-#[path = "scale_conversion_tests.rs"]
-mod scale_conversion_tests;
-#[path = "typed_geometry_integration.rs"]
-mod typed_geometry_integration;
-#[path = "typography_tests.rs"]
-mod typography_tests;
-#[path = "unit_conversions_tests.rs"]
-mod unit_conversions_tests;
+#[path = "color_property_tests.rs"]
+mod color_property_tests;
 #[path = "unit_mixing_compile_fail.rs"]
 mod unit_mixing_compile_fail;
-#[path = "unit_trait_tests.rs"]
-mod unit_trait_tests;

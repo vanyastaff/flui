@@ -86,6 +86,7 @@ pub(super) const TOOLING: &[&str] = &[
     "typos.toml",
     ".taplo.toml",
     "rustfmt.toml",
+    "gamma.toml", // cargo-gamma, run by hand (docs/testing.md "Mutation Testing")
     ".gitignore",
     ".gitattributes",
     "llms.txt",
@@ -838,7 +839,12 @@ pub(super) mod tests {
     #[test]
     fn checks_only_tooling_compiles_nothing() {
         assert_eq!(
-            scope(&["tools/device-checks/check-macos-a11y.py", "typos.toml"]).mode,
+            scope(&[
+                "tools/device-checks/check-macos-a11y.py",
+                "typos.toml",
+                "gamma.toml",
+            ])
+            .mode,
             Mode::None
         );
     }

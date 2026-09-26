@@ -345,154 +345,150 @@ impl Simulation for BoundedFrictionSimulation {
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
-
-    /// Assert two f32 values are within `epsilon` of each other.
     #[track_caller]
-    fn assert_approx(actual: f32, expected: f32, epsilon: f32) {
+    fn assert_approx(actual: f32, expected: f32) {
         assert!(
-            (actual - expected).abs() <= epsilon,
-            "expected {expected} ± {epsilon}, got {actual}"
+            (actual - expected).abs() <= 1e-3,
+            "expected {expected}, got {actual}"
         );
     }
 
-    // -----------------------------------------------------------------------
-    // FrictionSimulation — formula parity
-    //
-    // Convention: this type uses decay rate k (not Flutter's drag coefficient).
-    // k = −ln(cₓ) where cₓ is Flutter's drag.  Flutter's cₓ = 0.135 gives
-    // k ≈ 2.0.  All numeric expectations below are derived from
-    // v(t) = v₀·e^(−k·t)  and  x(t) = x₀ + v₀·(1−e^(−k·t))/k.
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn friction_position_at_t0_is_start() {
-        let sim = FrictionSimulation::new(2.0, 100.0, 100.0);
-        assert_approx(sim.position(0.0), 100.0, 1e-4);
+    /// Decay rate k (Flutter's drag c maps to k = -ln c; c = 0.135 is k ≈ 2):
+    /// `v(t) = v₀·e^(−kt)`, `x(t) = x₀ + v₀·(1 − e^(−kt))/k`, which settles at
+    /// `x₀ + v₀/k`.
+    fn sim() -> FrictionSimulation {
+        FrictionSimulation::new(2.0, 100.0, 100.0)
     }
 
     #[test]
-    fn friction_velocity_at_t0_is_initial() {
-        let sim = FrictionSimulation::new(2.0, 100.0, 100.0);
-        assert_approx(sim.velocity(0.0), 100.0, 1e-4);
+    fn trajectory() {
+        for (t, x, v) in [
+            (0.0, 100.0, 100.0),
+            (0.5, 131.606, 36.788),
+            (2.0, 149.084, 1.832),
+        ] {
+            assert_approx(sim().position(t), x);
+            assert_approx(sim().velocity(t), v);
+            assert_approx(sim().deceleration(t), -2.0 * v);
+        }
+        assert_approx(sim().final_position(), 150.0);
+    }
+
+    /// Throwing the other way mirrors the trajectory about the start.
+    #[test]
+    fn negative_velocity_mirrors() {
+        let back = FrictionSimulation::new(2.0, 100.0, -100.0);
+        for t in [0.0, 0.3, 1.0, 4.0] {
+            assert_eq!(back.velocity(t), -sim().velocity(t));
+            // Only up to rounding: adding the start back rounds 100 - d and 100 + d differently.
+            assert_approx(back.position(t) - 100.0, -(sim().position(t) - 100.0));
+        }
+        assert_eq!(back.final_position(), 50.0);
+    }
+
+    /// Done once the speed falls under the velocity tolerance.
+    #[test]
+    fn is_done_uses_the_velocity_tolerance() {
+        assert!(!sim().is_done(2.0) && sim().is_done(10.0));
+        let loose = sim().with_tolerance(Tolerance::new(0.001, 40.0, 0.001));
+        assert!(!loose.is_done(0.4)); // v ≈ 44.9
+        assert!(loose.is_done(0.5)); // v ≈ 36.8
+        assert_eq!(loose.tolerance().velocity, 40.0);
+        assert_eq!(sim().tolerance(), Tolerance::DEFAULT);
     }
 
     #[test]
-    fn friction_position_decays_over_time() {
-        // x(t) = 100 + 100·(1−e^(−2t))/2 = 100 + 50·(1−e^(−2t))
-        let sim = FrictionSimulation::new(2.0, 100.0, 100.0);
-        // t=0.1: 100 + 50·(1−e^−0.2) ≈ 100 + 50·0.1813 ≈ 109.07
-        assert_approx(sim.position(0.1), 109.07, 0.5);
-        // t=0.5: 100 + 50·(1−e^−1.0) ≈ 100 + 50·0.6321 ≈ 131.61
-        assert_approx(sim.position(0.5), 131.6, 1.0);
-        // t=2.0: 100 + 50·(1−e^−4.0) ≈ 100 + 50·0.9817 ≈ 149.08
-        assert_approx(sim.position(2.0), 149.1, 1.0);
-    }
-
-    #[test]
-    fn friction_velocity_decays_exponentially() {
-        // v(t) = 100·e^(−2t)
-        let sim = FrictionSimulation::new(2.0, 100.0, 100.0);
-        // t=0.5: 100·e^−1.0 ≈ 36.79
-        assert_approx(sim.velocity(0.5), 36.79, 0.5);
-        // t=2.0: 100·e^−4.0 ≈ 1.83
-        assert_approx(sim.velocity(2.0), 1.83, 0.1);
-    }
-
-    #[test]
-    fn friction_final_position_formula() {
-        // final_position = x₀ + v₀/k = 100 + 100/2 = 150
-        let sim = FrictionSimulation::new(2.0, 100.0, 100.0);
-        assert_approx(sim.final_position(), 150.0, 0.1);
-    }
-
-    #[test]
-    fn friction_is_done_when_velocity_below_tolerance() {
-        // With default velocity tolerance = 0.001, done when |v| < 0.001.
-        // v(t) = 100·e^(−2t) → need t ≈ ln(100/0.001)/2 ≈ 5.75 s.
-        let sim = FrictionSimulation::new(2.0, 0.0, 100.0);
-        assert!(!sim.is_done(2.0), "velocity still decaying at t=2");
-        assert!(sim.is_done(10.0), "velocity negligible at t=10");
-    }
-
-    #[test]
-    fn friction_negative_velocity_moves_in_negative_direction() {
-        // v(t) = −100·e^(−2t), x(t) = 100 + (−100)·(1−e^(−2t))/2 = 100 − 50·(1−e^(−2t))
-        let sim = FrictionSimulation::new(2.0, 100.0, -100.0);
-        assert_approx(sim.velocity(0.0), -100.0, 1e-4);
-        // At t=0.5: 100 − 50·(1−e^−1) ≈ 100 − 31.6 ≈ 68.4
-        assert_approx(sim.position(0.5), 68.4, 1.0);
-        // final: 100 − 50 = 50
-        assert_approx(sim.final_position(), 50.0, 0.5);
-    }
-
-    #[test]
-    fn friction_time_to_velocity_round_trip() {
-        let sim = FrictionSimulation::new(2.0, 0.0, 100.0);
-        // time_to_velocity(50) should satisfy v(t) = 50, i.e. t = ln(2)/2 ≈ 0.347
-        let t = sim.time_to_velocity(50.0).expect("valid target velocity");
-        assert_approx(t, 0.5_f32.ln() / (-2.0_f32), 1e-3);
-        assert_approx(sim.velocity(t), 50.0, 0.1);
-    }
-
-    // -----------------------------------------------------------------------
-    // BoundedFrictionSimulation — parity tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn bounded_friction_clamps_position_at_boundary() {
-        // final_position = x₀ + v₀/k = 0 + 100/2 = 50, which exceeds boundary = 40.
-        // At t=1.0, unclamped position ≈ 50·(1 − e^−2) ≈ 43.23 > 40 (boundary).
-        // The clamp must lower the observed position to the boundary.
-        let boundary = 40.0_f32;
-        let sim = BoundedFrictionSimulation::new(2.0, 0.0, 100.0, boundary);
-        let t = 1.0_f32;
-        let unclamped = sim.inner().position(t);
-        let clamped = sim.position(t);
-        assert!(
-            unclamped > boundary,
-            "unclamped position {unclamped} must exceed boundary {boundary}"
+    fn time_and_distance_to_a_velocity() {
+        let s = FrictionSimulation::new(2.0, 0.0, 100.0);
+        assert_approx(
+            s.time_to_velocity(50.0).unwrap(),
+            std::f32::consts::LN_2 / 2.0,
         );
-        assert!(
-            clamped <= boundary,
-            "clamped position {clamped} must not exceed boundary {boundary}"
+        assert_eq!(s.time_to_velocity(100.0), Some(0.0));
+        assert_eq!(s.time_to_velocity(0.0), Some(f32::INFINITY));
+        assert_eq!(s.time_to_velocity(150.0), None); // faster than it ever goes
+        assert_eq!(s.time_to_velocity(-50.0), None); // the wrong direction
+        assert_eq!(
+            FrictionSimulation::new(0.0, 0.0, 100.0).time_to_velocity(50.0),
+            None
         );
-        assert!(
-            clamped < unclamped,
-            "clamp must lower the position: clamped={clamped}, unclamped={unclamped}"
-        );
+        // Half the speed is shed over half the total distance.
+        assert_approx(s.distance_to_velocity(50.0), 25.0);
+        // An unreachable speed answers the whole remaining distance.
+        assert_approx(s.distance_to_velocity(150.0), 50.0);
+        // Distances are measured from the start, wherever it is.
+        let shifted = FrictionSimulation::new(2.0, 10.0, 100.0);
+        assert_approx(shifted.distance_to_velocity(50.0), 25.0);
+        assert_approx(shifted.distance_to_velocity(150.0), 50.0);
+        // Done means strictly below the velocity tolerance.
+        let at_tolerance = FrictionSimulation::new(2.0, 0.0, 40.0)
+            .with_tolerance(Tolerance::new(0.001, 40.0, 0.001));
+        assert!(!at_tolerance.is_done(0.0));
     }
 
     #[test]
-    fn bounded_friction_zeroes_velocity_at_boundary() {
-        // Intentional divergence from Flutter (documented in `new`): velocity is
-        // zeroed once the boundary is reached.  A Flutter `BoundedFrictionSimulation`
-        // would report the still-decaying friction velocity here.
-        let sim = BoundedFrictionSimulation::new(2.0, 0.0, 100.0, 50.0);
-        // At t=10 the unclamped position is far past 50; boundary is hit.
-        assert!(sim.is_at_boundary(10.0), "should be at boundary at t=10");
-        assert_approx(sim.velocity(10.0), 0.0, 1e-6);
+    fn accessors_and_validity() {
+        let s = FrictionSimulation::new(2.0, 3.0, 4.0);
+        assert_eq!(
+            (s.decay_rate(), s.start_position(), s.initial_velocity()),
+            (2.0, 3.0, 4.0)
+        );
+        assert!(s.is_valid());
+        let nan = f32::NAN;
+        for broken in [
+            FrictionSimulation::new(0.0, 3.0, 4.0),
+            FrictionSimulation::new(-1.0, 3.0, 4.0),
+            FrictionSimulation::new(f32::INFINITY, 3.0, 4.0),
+            FrictionSimulation::new(2.0, nan, 4.0),
+            FrictionSimulation::new(2.0, 3.0, nan),
+            FrictionSimulation::new(2.0, 3.0, 4.0).with_tolerance(Tolerance::new(-1.0, 0.0, 0.0)),
+        ] {
+            assert!(!broken.is_valid(), "{broken:?}");
+        }
     }
 
+    /// Clamped to the boundary in the direction of travel, velocity zero
+    /// once there. (Flutter keeps reporting the decaying friction velocity
+    /// at the boundary; zeroing it is a deliberate divergence.)
     #[test]
-    fn bounded_friction_is_done_at_boundary() {
-        let sim = BoundedFrictionSimulation::new(2.0, 0.0, 100.0, 50.0);
-        assert!(
-            sim.is_done(10.0),
-            "simulation ends when boundary is reached"
-        );
-    }
+    fn bounded_friction() {
+        let forward = BoundedFrictionSimulation::new(2.0, 0.0, 100.0, 40.0);
+        let backward = BoundedFrictionSimulation::new(2.0, 0.0, -100.0, -40.0);
+        for (sim, sign) in [(&forward, 1.0), (&backward, -1.0)] {
+            // Before the boundary it is plain friction.
+            assert_eq!(sim.position(0.1), sim.inner().position(0.1));
+            assert_eq!(sim.velocity(0.1), sim.inner().velocity(0.1));
+            assert!(!sim.is_at_boundary(0.1) && !sim.is_done(0.1));
+            // Unclamped it would be at ±43.2 by t = 1.
+            assert_eq!(sim.position(1.0), sign * 40.0);
+            assert_eq!(sim.velocity(1.0), 0.0);
+            assert!(sim.is_at_boundary(1.0) && sim.is_done(1.0));
+            assert!(sim.will_hit_boundary());
+            assert_eq!(sim.boundary(), sign * 40.0);
+            assert!(sim.is_valid());
+        }
 
-    #[test]
-    fn bounded_friction_negative_direction() {
-        let sim = BoundedFrictionSimulation::new(2.0, 0.0, -100.0, -50.0);
-        assert!(
-            sim.position(10.0) >= -50.0 - f32::EPSILON,
-            "position clamped at negative boundary"
-        );
-        assert!(sim.is_done(10.0));
-        assert_approx(sim.velocity(10.0), 0.0, 1e-6);
+        // Settling at ±50 short of a ±60 boundary: done by friction alone.
+        for far in [
+            BoundedFrictionSimulation::new(2.0, 0.0, 100.0, 60.0),
+            BoundedFrictionSimulation::new(2.0, 0.0, -100.0, -60.0),
+        ] {
+            assert!(!far.will_hit_boundary());
+            assert!(!far.is_done(2.0) && far.is_done(10.0) && !far.is_at_boundary(10.0));
+        }
+
+        // Reaching the boundary exactly counts, in either direction.
+        for velocity in [100.0, -100.0] {
+            let free = FrictionSimulation::new(2.0, 0.0, velocity);
+            let at_rest = BoundedFrictionSimulation::new(2.0, 0.0, velocity, free.final_position());
+            assert!(at_rest.will_hit_boundary(), "{velocity}");
+            let at_t = BoundedFrictionSimulation::new(2.0, 0.0, velocity, free.position(0.3));
+            assert!(at_t.is_at_boundary(0.3), "{velocity}");
+        }
+
+        let tol = Tolerance::new(0.25, 0.5, 0.75);
+        assert_eq!(forward.with_tolerance(tol).tolerance(), tol);
+        assert!(!BoundedFrictionSimulation::new(2.0, 0.0, 100.0, f32::NAN).is_valid());
+        assert!(!BoundedFrictionSimulation::new(0.0, 0.0, 100.0, 40.0).is_valid());
     }
 }

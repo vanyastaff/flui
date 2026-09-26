@@ -283,7 +283,7 @@ A docs-only change never needs a workspace build: `cargo xtask checks`, which bu
 xtask, is the full local gate for it, which is what lets a docs worktree stay green without
 contending for the shared build. One concrete consequence of the shared
 `CARGO_TARGET_DIR`: the trybuild suites (`flui-engine::compile_fail`, `flui-rendering::compile_fail`,
-`unit_mixing_compile_fail::ui`, `trybuild_ui::ui_tests` — see `.config/nextest.toml`) each drive a
+`unit_mixing_compile_fail::trybuild_ui`, `trybuild_ui::ui_tests` — see `.config/nextest.toml`) each drive a
 real `rustc` invocation per fixture into scratch output under `target/`, so two of them compiling
 concurrently from different worktrees against the same target dir can spuriously fail on artifact
 contention rather than on the fixture's actual `compile_fail` assertion — keep trybuild runs
@@ -345,6 +345,35 @@ cargo llvm-cov --workspace --html    # report: target/llvm-cov/html/index.html
 ```
 
 These thresholds are a target, not a gate: no CI job enforces them today.
+
+## Mutation Testing
+
+Coverage says a line ran; a mutation run says whether a test would notice it
+being wrong. [`cargo-gamma`](https://crates.io/crates/cargo-gamma) rewrites
+operators, conditions, constants and function bodies, and reports each mutant
+a test kills, one that survives, and one no test reaches. It compiles every
+mutant into one instrumented build and switches them on at run time, so a run
+over a whole crate takes minutes rather than a rebuild per mutant.
+`gamma.toml` at the workspace root holds the shared settings (the timeout
+floor, and skipping the nested-cargo tests).
+
+```bash
+cargo binstall cargo-gamma      # or: cargo install cargo-gamma --locked
+cargo gamma run -p flui-types --file crates/flui-types/src/styling/color.rs
+cargo gamma run -p flui-geometry # a whole crate
+# Also let another crate's tests judge the mutants (a re-exporting crate):
+cargo gamma run -p flui-geometry --test-package flui-types
+```
+
+The report is in `target/cargo-gamma/` (`gamma-report.html` to browse,
+`gamma-report.json` to diff two runs). Use it when a change rewrites or
+deletes tests: run it before and after on the files the tests cover, and
+every mutant the old tests killed should still be killed. A survivor is
+either a missing assertion or an equivalent mutant (one no input can tell
+apart, like `<` vs `<=` at a boundary both branches agree on); say which in
+the change. `const fn` bodies are not mutated.
+
+These runs are not a CI gate.
 
 ## Benchmarks
 

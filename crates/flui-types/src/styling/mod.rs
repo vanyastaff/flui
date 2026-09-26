@@ -7,7 +7,6 @@ pub mod border;
 pub mod border_radius;
 pub mod box_border;
 pub mod color;
-pub mod color32;
 pub mod decoration;
 pub mod gradient;
 pub mod hsl_hsv;
@@ -21,7 +20,6 @@ pub use border::{BorderPosition, BorderSide, BorderStyle};
 pub use border_radius::{BorderRadius, BorderRadiusDirectional, BorderRadiusExt};
 pub use box_border::{Border, BorderDirectional, BoxBorder};
 pub use color::{Color, Oklab, ParseColorError, linear_to_srgb, srgb_to_linear};
-pub use color32::Color32;
 pub use decoration::{
     BlendMode, BoxDecoration, BoxFit, ColorFilter, Decoration, DecorationImage, ImageRepeat,
 };

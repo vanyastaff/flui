@@ -216,118 +216,175 @@ impl Simulation for GravitySimulation {
 mod tests {
     use super::*;
 
-    /// Assert two f32 values are within `epsilon` of each other.
     #[track_caller]
-    fn assert_approx(actual: f32, expected: f32, epsilon: f32) {
+    fn assert_approx(actual: f32, expected: f32) {
         assert!(
-            (actual - expected).abs() <= epsilon,
-            "expected {expected} ± {epsilon}, got {actual}"
+            (actual - expected).abs() <= 1e-4,
+            "expected {expected}, got {actual}"
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Position and velocity — formulae verified against Flutter's gravity test
-    // (`packages/flutter/test/physics/gravity_simulation_test.dart`, line 14).
-    //
-    // Flutter test: GravitySimulation(-10, 0.0, 6.0, 10.0)
-    // FLUI mapping: acceleration=-10, start=0.0, end=-6.0, velocity=10.0
-    //   (end is the signed target in the direction of travel: the particle
-    //    starts going up, reverses, then falls; we stop it when x ≤ −6.0)
-    //
-    // x(t) = 0 + 10t + 0.5·(−10)·t² = 10t − 5t²
-    // v(t) = 10 + (−10)·t = 10 − 10t
-    // -----------------------------------------------------------------------
-
+    /// Flutter's gravity test (`test/physics/gravity_simulation_test.dart`):
+    /// `GravitySimulation(-10, 0.0, 6.0, 10.0)`. FLUI takes a signed end in
+    /// the direction of travel, so the same fall stops at -6:
+    /// `x(t) = 10t - 5t²`, `v(t) = 10 - 10t`, done once `x <= -6`.
     #[test]
-    fn gravity_position_at_t0() {
+    fn thrown_up_then_falling() {
         let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert_approx(sim.position(0.0), 0.0, 1e-4);
+        for (t, x, v, done) in [
+            (0.0, 0.0, 10.0, false),
+            (1.0, 5.0, 0.0, false),
+            (2.0, 0.0, -10.0, false),
+            (3.0, -15.0, -20.0, true),
+        ] {
+            assert_approx(sim.position(t), x);
+            assert_approx(sim.velocity(t), v);
+            assert_eq!(sim.is_done(t), done, "t = {t}");
+        }
+        // Flutter: GravitySimulation(9.81, 10.0, 0.0, 0.0) reaches 500.5 at t = 10.
+        assert_approx(
+            GravitySimulation::new(9.81, 10.0, 500.0, 0.0).position(10.0),
+            500.5,
+        );
+    }
+
+    /// Done means at or past `end` (within the distance tolerance) in the
+    /// direction of travel: the acceleration's sign, or the velocity's when
+    /// there is none, or exactly at `end` when not moving at all.
+    #[test]
+    fn is_done_follows_the_direction_of_travel() {
+        let tol = Tolerance::new(0.5, 0.001, 0.001);
+        for (sim, t, done) in [
+            (GravitySimulation::new(2.0, 0.0, 10.0, 0.0), 3.0, false), // x = 9
+            (GravitySimulation::new(2.0, 0.0, 10.0, 0.0), 3.2, true),  // x = 10.24
+            (GravitySimulation::new(0.0, 0.0, 10.0, 2.0), 4.0, false), // x = 8
+            (GravitySimulation::new(0.0, 0.0, 10.0, 2.0), 5.0, true),  // x = 10
+            (GravitySimulation::new(0.0, 0.0, -10.0, -2.0), 4.0, false),
+            (GravitySimulation::new(0.0, 0.0, -10.0, -2.0), 5.0, true),
+            // Past the end still counts, which a check for "at end" misses.
+            (GravitySimulation::new(0.0, 0.0, 10.0, 2.0), 6.0, true),
+            (GravitySimulation::new(0.0, 0.0, -10.0, -2.0), 6.0, true),
+            (GravitySimulation::new(0.0, 3.0, 3.0, 0.0), 9.0, true),
+            (GravitySimulation::new(0.0, 3.0, 4.0, 0.0), 9.0, false),
+            // Within the tolerance of the end counts as done, on each branch.
+            (
+                GravitySimulation::new(2.0, 0.0, 9.4, 0.0).with_tolerance(tol),
+                3.0,
+                true,
+            ),
+            (
+                GravitySimulation::new(-2.0, 0.0, -9.4, 0.0).with_tolerance(tol),
+                3.0,
+                true,
+            ),
+            (
+                GravitySimulation::new(0.0, 0.0, 8.4, 2.0).with_tolerance(tol),
+                4.0,
+                true,
+            ),
+            (
+                GravitySimulation::new(0.0, 0.0, -8.4, -2.0).with_tolerance(tol),
+                4.0,
+                true,
+            ),
+            (
+                GravitySimulation::new(0.0, 3.0, 3.4, 0.0).with_tolerance(tol),
+                0.0,
+                true,
+            ),
+            (
+                GravitySimulation::new(0.0, 3.0, 3.6, 0.0).with_tolerance(tol),
+                0.0,
+                false,
+            ),
+        ] {
+            assert_eq!(sim.is_done(t), done, "{sim:?} at t = {t}");
+        }
+    }
+
+    /// The earliest non-negative time the particle reaches `end`.
+    #[test]
+    fn time_at_end() {
+        let at = |a, end, v| GravitySimulation::new(a, 0.0, end, v).time_at_end();
+        // Linear motion.
+        assert_eq!(at(0.0, 10.0, 2.0), Some(5.0));
+        assert_eq!(at(0.0, 10.0, -2.0), None);
+        assert_eq!(at(0.0, 10.0, 0.0), None);
+        // x = t², reaching 9 at t = 3.
+        assert_eq!(at(2.0, 9.0, 0.0), Some(3.0));
+        // x = 10t - 5t² passes 3.2 at 0.4 and again at 1.6: the earlier one.
+        assert_approx(at(-10.0, 3.2, 10.0).unwrap(), 0.4);
+        // Only the later root is in the future: 10t - 5t² = -15 at t = 3 (and -1).
+        assert_approx(at(-10.0, -15.0, 10.0).unwrap(), 3.0);
+        // x = -5t² never reaches 5; x = 10t + 5t² reaches -1 only in the past.
+        assert_eq!(at(-10.0, 5.0, 0.0), None);
+        assert_eq!(at(10.0, -1.0, 10.0), None);
+        // Starting away from zero measures the distance from `start`.
+        assert_eq!(
+            GravitySimulation::new(0.0, 4.0, 10.0, 2.0).time_at_end(),
+            Some(3.0)
+        );
+        // Already at the end counts, on either root: x = t² - 2t and
+        // x = 2t - t² are 0 at t = 0 and again at t = 2.
+        assert_eq!(at(0.0, 0.0, 2.0), Some(0.0));
+        assert_eq!(at(2.0, 0.0, -2.0), Some(0.0));
+        assert_eq!(at(-2.0, 0.0, 2.0), Some(0.0));
+        // A trajectory that only touches the end: 2t - t² peaks at 1.
+        assert_eq!(at(-2.0, 1.0, 2.0), Some(1.0));
+    }
+
+    /// The tolerance bounds are inclusive on every branch, and a particle
+    /// with neither acceleration nor velocity is done only within the
+    /// tolerance of the end, never merely past it.
+    #[test]
+    fn is_done_boundaries() {
+        let tol = Tolerance::new(0.5, 0.001, 0.001);
+        let sim = |a, start, end, v| GravitySimulation::new(a, start, end, v).with_tolerance(tol);
+        // x = t² reaches 9 = 9.5 - 0.5 at t = 3; x = -t² reaches -9.
+        assert!(sim(2.0, 0.0, 9.5, 0.0).is_done(3.0));
+        assert!(sim(-2.0, 0.0, -9.5, 0.0).is_done(3.0));
+        // x = 2t reaches 10 = 10.5 - 0.5 at t = 5; x = -2t reaches -10.
+        assert!(sim(0.0, 0.0, 10.5, 2.0).is_done(5.0));
+        assert!(sim(0.0, 0.0, -10.5, -2.0).is_done(5.0));
+        // x = -t² is at -6 at t = √6: short of -9.5 + 0.5, however the
+        // bound is formed.
+        assert!(!sim(-2.0, 0.0, -9.5, 0.0).is_done(6.0_f32.sqrt()));
+        // At rest: exactly the tolerance away is not done, and being past
+        // the end does not count as arriving.
+        assert!(!sim(0.0, 3.0, 3.5, 0.0).is_done(1.0));
+        assert!(sim(0.0, 3.0, 3.25, 0.0).is_done(1.0));
+        assert!(!sim(0.0, 0.0, -5.0, 0.0).is_done(1.0));
     }
 
     #[test]
-    fn gravity_velocity_at_t0() {
-        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert_approx(sim.velocity(0.0), 10.0, 1e-4);
-    }
-
-    #[test]
-    fn gravity_position_at_t1() {
-        // x(1) = 10·1 − 5·1 = 5.0
-        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert_approx(sim.position(1.0), 5.0, 1e-4);
-    }
-
-    #[test]
-    fn gravity_velocity_at_t1() {
-        // v(1) = 10 − 10 = 0.0  (apex)
-        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert_approx(sim.velocity(1.0), 0.0, 1e-4);
-    }
-
-    #[test]
-    fn gravity_position_at_t2() {
-        // x(2) = 20 − 20 = 0.0  (back at origin)
-        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert_approx(sim.position(2.0), 0.0, 1e-4);
-    }
-
-    #[test]
-    fn gravity_velocity_at_t2() {
-        // v(2) = 10 − 20 = −10.0
-        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert_approx(sim.velocity(2.0), -10.0, 1e-4);
-    }
-
-    #[test]
-    fn gravity_position_at_t3() {
-        // x(3) = 30 − 45 = −15.0
-        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert_approx(sim.position(3.0), -15.0, 1e-4);
-    }
-
-    #[test]
-    fn gravity_velocity_at_t3() {
-        // v(3) = 10 − 30 = −20.0
-        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert_approx(sim.velocity(3.0), -20.0, 1e-4);
-    }
-
-    // -----------------------------------------------------------------------
-    // is_done — mirrors Flutter's isDone from the same test
-    // Flutter: isDone(t) = |x(t)| >= endDistance (6.0)
-    // FLUI:   is_done uses signed end = −6.0; acceleration < 0 → pos <= end+ε
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn gravity_not_done_at_t0() {
-        // x(0) = 0, not yet past −6
-        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert!(!sim.is_done(0.0));
-    }
-
-    #[test]
-    fn gravity_not_done_at_t2() {
-        // Flutter isDone(2.0) is false: |x(2)| = 0 < 6.
-        // FLUI: x(2) = 0 > −6 + ε → not done.
-        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert!(!sim.is_done(2.0));
-    }
-
-    #[test]
-    fn gravity_done_at_t3() {
-        // Flutter isDone(3.0) is true: |x(3)| = 15 >= 6.
-        // FLUI: x(3) = −15 <= −6 + ε → done.
-        let sim = GravitySimulation::new(-10.0, 0.0, -6.0, 10.0);
-        assert!(sim.is_done(3.0));
-    }
-
-    #[test]
-    fn gravity_positive_acceleration_example() {
-        // Flutter test: GravitySimulation(9.81, 10.0, 0.0, 0.0)
-        //   expects x(10) ≈ 50·9.81 + 10 = 500.5
-        // FLUI mapping: acceleration=9.81, start=10.0, end=500.0, velocity=0.0
-        let sim = GravitySimulation::new(9.81, 10.0, 500.0, 0.0);
-        // x(10) = 10 + 0 + 0.5·9.81·100 = 10 + 490.5 = 500.5
-        assert_approx(sim.position(10.0), 10.0 + 0.5 * 9.81 * 100.0, 1.0);
+    fn accessors_and_validity() {
+        let tol = Tolerance::new(0.25, 0.5, 0.75);
+        let sim = GravitySimulation::new(1.5, 2.0, 3.0, 4.0).with_tolerance(tol);
+        assert_eq!(
+            (
+                sim.acceleration(),
+                sim.start(),
+                sim.end(),
+                sim.initial_velocity()
+            ),
+            (1.5, 2.0, 3.0, 4.0)
+        );
+        assert_eq!(sim.tolerance(), tol);
+        assert_eq!(
+            GravitySimulation::new(1.0, 2.0, 3.0, 4.0).tolerance(),
+            Tolerance::DEFAULT
+        );
+        assert!(sim.is_valid());
+        let nan = f32::NAN;
+        for broken in [
+            GravitySimulation::new(nan, 2.0, 3.0, 4.0),
+            GravitySimulation::new(1.0, nan, 3.0, 4.0),
+            GravitySimulation::new(1.0, 2.0, nan, 4.0),
+            GravitySimulation::new(1.0, 2.0, 3.0, nan),
+            GravitySimulation::new(1.0, 2.0, 3.0, 4.0)
+                .with_tolerance(Tolerance::new(-1.0, 0.0, 0.0)),
+        ] {
+            assert!(!broken.is_valid(), "{broken:?}");
+        }
     }
 }

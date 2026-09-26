@@ -1,0 +1,454 @@
+# Mutation baseline: flui-geometry
+# Scope: cargo mutants -p flui-geometry -f rect.rs -f point.rs -f vector.rs -f units.rs -f corners.rs -f corner.rs --test-package flui-geometry --test-package flui-types (mutates the crate flui-types/tests/{geometric_calculations,unit_conversions,corners}_tests.rs actually exercise, per the inventory correction)
+# Generated: 2026-09-24T23:45:01Z via cargo mutants (config: .cargo/mutants.toml)
+
+Total mutants: 1230
+Caught:        534
+Missed:        438
+Timeout:       0  (counted as caught for the score below)
+Unviable:      258  (excluded from the score: doesn't compile)
+Mutation score (caught+timeout)/(caught+timeout+missed): 54.9%
+
+## Missed mutants (the gaps — primary target for Phase 3 not to widen)
+
+crates/flui-geometry/src/corner.rs:59:9: replace Corner::is_top -> bool with true
+crates/flui-geometry/src/corner.rs:59:9: replace Corner::is_top -> bool with false
+crates/flui-geometry/src/corner.rs:65:9: replace Corner::is_bottom -> bool with true
+crates/flui-geometry/src/corner.rs:65:9: replace Corner::is_bottom -> bool with false
+crates/flui-geometry/src/corner.rs:71:9: replace Corner::is_left -> bool with true
+crates/flui-geometry/src/corner.rs:71:9: replace Corner::is_left -> bool with false
+crates/flui-geometry/src/corner.rs:77:9: replace Corner::is_right -> bool with true
+crates/flui-geometry/src/corner.rs:77:9: replace Corner::is_right -> bool with false
+crates/flui-geometry/src/corners.rs:150:38: replace > with == in Corners<T>::max
+crates/flui-geometry/src/corners.rs:150:38: replace > with >= in Corners<T>::max
+crates/flui-geometry/src/corners.rs:155:41: replace > with == in Corners<T>::max
+crates/flui-geometry/src/corners.rs:155:41: replace > with < in Corners<T>::max
+crates/flui-geometry/src/corners.rs:155:41: replace > with >= in Corners<T>::max
+crates/flui-geometry/src/corners.rs:160:18: replace > with >= in Corners<T>::max
+crates/flui-geometry/src/corners.rs:169:38: replace < with <= in Corners<T>::min
+crates/flui-geometry/src/corners.rs:174:41: replace < with == in Corners<T>::min
+crates/flui-geometry/src/corners.rs:174:41: replace < with > in Corners<T>::min
+crates/flui-geometry/src/corners.rs:174:41: replace < with <= in Corners<T>::min
+crates/flui-geometry/src/corners.rs:179:18: replace < with <= in Corners<T>::min
+crates/flui-geometry/src/corners.rs:192:9: replace Corners<super::units::Pixels>::scale -> Corners<super::units::Pixels> with Corners::from(Default::default())
+crates/flui-geometry/src/point.rs:115:9: replace Point<T>::swap -> Self with Default::default()
+crates/flui-geometry/src/point.rs:151:22: replace > with >= in Point<T>::new_clamped
+crates/flui-geometry/src/point.rs:410:9: replace Point<Pixels>::abs -> Self with Default::default()
+crates/flui-geometry/src/point.rs:417:9: replace Point<Pixels>::min_element -> Pixels with Default::default()
+crates/flui-geometry/src/point.rs:424:9: replace Point<Pixels>::max_element -> Pixels with Default::default()
+crates/flui-geometry/src/point.rs:483:9: replace Point<Pixels>::fract -> Self with Default::default()
+crates/flui-geometry/src/point.rs:633:9: replace <impl MulAssign<Rhs> for Point<T>>::mul_assign with ()
+crates/flui-geometry/src/point.rs:645:9: replace <impl DivAssign<Rhs> for Point<T>>::div_assign with ()
+crates/flui-geometry/src/point.rs:768:74: replace * with + in Point<T>::saturating_mul
+crates/flui-geometry/src/point.rs:1010:26: replace && with || in <impl super::traits::IsZero for Point<T>>::is_zero
+crates/flui-geometry/src/point.rs:1024:9: replace <impl super::traits::Double for Point<T>>::double -> Self with Default::default()
+crates/flui-geometry/src/point.rs:1041:9: replace <impl Sum for Point<T>>::sum -> Self with Default::default()
+crates/flui-geometry/src/point.rs:1053:9: replace <impl Sum<&'a Point<T>> for Point<T>>::sum -> Self with Default::default()
+crates/flui-geometry/src/point.rs:1069:9: replace <impl super::traits::ApproxEq for Point<T>>::approx_eq_eps -> bool with true
+crates/flui-geometry/src/point.rs:1069:9: replace <impl super::traits::ApproxEq for Point<T>>::approx_eq_eps -> bool with false
+crates/flui-geometry/src/point.rs:1069:49: replace && with || in <impl super::traits::ApproxEq for Point<T>>::approx_eq_eps
+crates/flui-geometry/src/point.rs:1083:9: replace <impl super::traits::Sign for Point<T>>::is_positive -> bool with true
+crates/flui-geometry/src/point.rs:1083:9: replace <impl super::traits::Sign for Point<T>>::is_positive -> bool with false
+crates/flui-geometry/src/point.rs:1083:30: replace && with || in <impl super::traits::Sign for Point<T>>::is_positive
+crates/flui-geometry/src/point.rs:1088:9: replace <impl super::traits::Sign for Point<T>>::is_negative -> bool with true
+crates/flui-geometry/src/point.rs:1088:9: replace <impl super::traits::Sign for Point<T>>::is_negative -> bool with false
+crates/flui-geometry/src/point.rs:1088:30: replace && with || in <impl super::traits::Sign for Point<T>>::is_negative
+crates/flui-geometry/src/point.rs:1093:9: replace <impl super::traits::Sign for Point<T>>::signum -> Self with Default::default()
+crates/flui-geometry/src/point.rs:1135:9: replace Point<super::units::Pixels>::magnitude -> f32 with 0.0
+crates/flui-geometry/src/point.rs:1135:9: replace Point<super::units::Pixels>::magnitude -> f32 with 1.0
+crates/flui-geometry/src/point.rs:1135:9: replace Point<super::units::Pixels>::magnitude -> f32 with -1.0
+crates/flui-geometry/src/point.rs:1222:9: replace Point<T>::relative_to -> Point<T> with Point::from(Default::default())
+crates/flui-geometry/src/rect.rs:72:9: replace Rect<T>::zero -> Self with Default::default()
+crates/flui-geometry/src/rect.rs:214:9: replace Rect<Pixels>::from_center -> Self with Default::default()
+crates/flui-geometry/src/rect.rs:214:32: replace / with * in Rect<Pixels>::from_center
+crates/flui-geometry/src/rect.rs:215:34: replace / with * in Rect<Pixels>::from_center
+crates/flui-geometry/src/rect.rs:217:23: replace - with + in Rect<Pixels>::from_center
+crates/flui-geometry/src/rect.rs:218:23: replace - with + in Rect<Pixels>::from_center
+crates/flui-geometry/src/rect.rs:219:23: replace + with - in Rect<Pixels>::from_center
+crates/flui-geometry/src/rect.rs:220:23: replace + with - in Rect<Pixels>::from_center
+crates/flui-geometry/src/rect.rs:341:9: replace Rect<T>::shortest_side -> T with Default::default()
+crates/flui-geometry/src/rect.rs:382:9: replace Rect<T>::min_x -> T with Default::default()
+crates/flui-geometry/src/rect.rs:382:23: replace < with == in Rect<T>::min_x
+crates/flui-geometry/src/rect.rs:382:23: replace < with > in Rect<T>::min_x
+crates/flui-geometry/src/rect.rs:382:23: replace < with <= in Rect<T>::min_x
+crates/flui-geometry/src/rect.rs:393:9: replace Rect<T>::max_x -> T with Default::default()
+crates/flui-geometry/src/rect.rs:393:23: replace > with == in Rect<T>::max_x
+crates/flui-geometry/src/rect.rs:393:23: replace > with < in Rect<T>::max_x
+crates/flui-geometry/src/rect.rs:393:23: replace > with >= in Rect<T>::max_x
+crates/flui-geometry/src/rect.rs:404:9: replace Rect<T>::min_y -> T with Default::default()
+crates/flui-geometry/src/rect.rs:404:23: replace < with == in Rect<T>::min_y
+crates/flui-geometry/src/rect.rs:404:23: replace < with > in Rect<T>::min_y
+crates/flui-geometry/src/rect.rs:404:23: replace < with <= in Rect<T>::min_y
+crates/flui-geometry/src/rect.rs:415:9: replace Rect<T>::max_y -> T with Default::default()
+crates/flui-geometry/src/rect.rs:415:23: replace > with == in Rect<T>::max_y
+crates/flui-geometry/src/rect.rs:415:23: replace > with < in Rect<T>::max_y
+crates/flui-geometry/src/rect.rs:415:23: replace > with >= in Rect<T>::max_y
+crates/flui-geometry/src/rect.rs:449:30: replace && with || in Rect<T>::is_finite
+crates/flui-geometry/src/rect.rs:456:9: replace Rect<T>::is_nan -> bool with true
+crates/flui-geometry/src/rect.rs:456:9: replace Rect<T>::is_nan -> bool with false
+crates/flui-geometry/src/rect.rs:456:27: replace || with && in Rect<T>::is_nan
+crates/flui-geometry/src/rect.rs:485:13: replace && with || in Rect<T>::contains_rect
+crates/flui-geometry/src/rect.rs:493:27: replace < with <= in Rect<T>::overlaps
+crates/flui-geometry/src/rect.rs:494:27: replace > with >= in Rect<T>::overlaps
+crates/flui-geometry/src/rect.rs:495:27: replace < with <= in Rect<T>::overlaps
+crates/flui-geometry/src/rect.rs:517:9: replace Rect<Pixels>::contains_offset -> bool with true
+crates/flui-geometry/src/rect.rs:517:9: replace Rect<Pixels>::contains_offset -> bool with false
+crates/flui-geometry/src/rect.rs:520:13: replace && with || in Rect<Pixels>::contains_offset
+crates/flui-geometry/src/rect.rs:519:13: replace && with || in Rect<Pixels>::contains_offset
+crates/flui-geometry/src/rect.rs:518:13: replace && with || in Rect<Pixels>::contains_offset
+crates/flui-geometry/src/rect.rs:517:19: replace >= with < in Rect<Pixels>::contains_offset
+crates/flui-geometry/src/rect.rs:518:26: replace <= with > in Rect<Pixels>::contains_offset
+crates/flui-geometry/src/rect.rs:519:26: replace >= with < in Rect<Pixels>::contains_offset
+crates/flui-geometry/src/rect.rs:520:26: replace <= with > in Rect<Pixels>::contains_offset
+crates/flui-geometry/src/rect.rs:537:35: replace > with >= in Rect<T>::intersect
+crates/flui-geometry/src/rect.rs:542:35: replace > with >= in Rect<T>::intersect
+crates/flui-geometry/src/rect.rs:547:35: replace < with <= in Rect<T>::intersect
+crates/flui-geometry/src/rect.rs:552:35: replace < with <= in Rect<T>::intersect
+crates/flui-geometry/src/rect.rs:558:27: replace && with || in Rect<T>::intersect
+crates/flui-geometry/src/rect.rs:641:9: replace Rect<T>::inset_by -> Self with Default::default()
+crates/flui-geometry/src/rect.rs:642:40: replace + with - in Rect<T>::inset_by
+crates/flui-geometry/src/rect.rs:642:59: replace + with - in Rect<T>::inset_by
+crates/flui-geometry/src/rect.rs:643:40: replace - with + in Rect<T>::inset_by
+crates/flui-geometry/src/rect.rs:643:60: replace - with + in Rect<T>::inset_by
+crates/flui-geometry/src/rect.rs:664:9: replace Rect<T>::expand_to_include -> Self with Default::default()
+crates/flui-geometry/src/rect.rs:701:9: replace Rect<T>::scale_from_center -> Self with Default::default()
+crates/flui-geometry/src/rect.rs:701:59: replace * with / in Rect<T>::scale_from_center
+crates/flui-geometry/src/rect.rs:713:9: replace Rect<T>::abs -> Self with Default::default()
+crates/flui-geometry/src/rect.rs:749:9: replace Rect<Pixels>::ceil -> Self with Default::default()
+crates/flui-geometry/src/rect.rs:759:9: replace Rect<Pixels>::floor -> Self with Default::default()
+crates/flui-geometry/src/units.rs:173:9: replace Pixels::signum_raw -> f32 with 0.0
+crates/flui-geometry/src/units.rs:173:9: replace Pixels::signum_raw -> f32 with 1.0
+crates/flui-geometry/src/units.rs:173:9: replace Pixels::signum_raw -> f32 with -1.0
+crates/flui-geometry/src/units.rs:191:9: replace Pixels::pow -> Self with Default::default()
+crates/flui-geometry/src/units.rs:209:9: replace Pixels::is_nan -> bool with true
+crates/flui-geometry/src/units.rs:215:9: replace Pixels::is_infinite -> bool with true
+crates/flui-geometry/src/units.rs:233:19: replace > with == in Pixels::max_const
+crates/flui-geometry/src/units.rs:233:19: replace > with < in Pixels::max_const
+crates/flui-geometry/src/units.rs:233:19: replace > with >= in Pixels::max_const
+crates/flui-geometry/src/units.rs:239:19: replace < with == in Pixels::min_const
+crates/flui-geometry/src/units.rs:239:19: replace < with > in Pixels::min_const
+crates/flui-geometry/src/units.rs:239:19: replace < with <= in Pixels::min_const
+crates/flui-geometry/src/units.rs:251:9: replace Pixels::new_clamped -> Self with Default::default()
+crates/flui-geometry/src/units.rs:261:9: replace Pixels::try_new -> Option<Self> with None
+crates/flui-geometry/src/units.rs:261:9: replace Pixels::try_new -> Option<Self> with Some(Default::default())
+crates/flui-geometry/src/units.rs:261:30: replace && with || in Pixels::try_new
+crates/flui-geometry/src/units.rs:261:39: replace >= with < in Pixels::try_new
+crates/flui-geometry/src/units.rs:303:9: replace Pixels::map -> Self with Default::default()
+crates/flui-geometry/src/units.rs:311:9: replace Pixels::to_bits -> u32 with 0
+crates/flui-geometry/src/units.rs:311:9: replace Pixels::to_bits -> u32 with 1
+crates/flui-geometry/src/units.rs:366:9: replace <impl NumericUnit for Pixels>::abs -> Self with Default::default()
+crates/flui-geometry/src/units.rs:396:9: replace <impl AddAssign for Pixels>::add_assign with ()
+crates/flui-geometry/src/units.rs:396:16: replace += with -= in <impl AddAssign for Pixels>::add_assign
+crates/flui-geometry/src/units.rs:396:16: replace += with *= in <impl AddAssign for Pixels>::add_assign
+crates/flui-geometry/src/units.rs:411:9: replace <impl SubAssign for Pixels>::sub_assign with ()
+crates/flui-geometry/src/units.rs:411:16: replace -= with += in <impl SubAssign for Pixels>::sub_assign
+crates/flui-geometry/src/units.rs:411:16: replace -= with /= in <impl SubAssign for Pixels>::sub_assign
+crates/flui-geometry/src/units.rs:431:9: replace <impl Mul<usize> for Pixels>::mul -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:431:21: replace * with + in <impl Mul<usize> for Pixels>::mul
+crates/flui-geometry/src/units.rs:431:21: replace * with / in <impl Mul<usize> for Pixels>::mul
+crates/flui-geometry/src/units.rs:439:9: replace <impl Mul<Pixels> for usize>::mul -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:439:28: replace * with + in <impl Mul<Pixels> for usize>::mul
+crates/flui-geometry/src/units.rs:439:28: replace * with / in <impl Mul<Pixels> for usize>::mul
+crates/flui-geometry/src/units.rs:447:9: replace <impl Mul<i32> for Pixels>::mul -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:447:21: replace * with + in <impl Mul<i32> for Pixels>::mul
+crates/flui-geometry/src/units.rs:447:21: replace * with / in <impl Mul<i32> for Pixels>::mul
+crates/flui-geometry/src/units.rs:455:9: replace <impl Mul<Pixels> for i32>::mul -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:455:28: replace * with + in <impl Mul<Pixels> for i32>::mul
+crates/flui-geometry/src/units.rs:455:28: replace * with / in <impl Mul<Pixels> for i32>::mul
+crates/flui-geometry/src/units.rs:508:9: replace <impl Rem for Pixels>::rem -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:508:21: replace % with / in <impl Rem for Pixels>::rem
+crates/flui-geometry/src/units.rs:508:21: replace % with + in <impl Rem for Pixels>::rem
+crates/flui-geometry/src/units.rs:515:9: replace <impl RemAssign for Pixels>::rem_assign with ()
+crates/flui-geometry/src/units.rs:515:16: replace %= with /= in <impl RemAssign for Pixels>::rem_assign
+crates/flui-geometry/src/units.rs:515:16: replace %= with += in <impl RemAssign for Pixels>::rem_assign
+crates/flui-geometry/src/units.rs:551:9: replace <impl From<Pixels> for f64>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:594:9: replace <impl std::hash::Hash for Pixels>::hash with ()
+crates/flui-geometry/src/units.rs:601:9: replace <impl Sum for Pixels>::sum -> Self with Default::default()
+crates/flui-geometry/src/units.rs:601:46: replace + with - in <impl Sum for Pixels>::sum
+crates/flui-geometry/src/units.rs:607:9: replace <impl Sum<&'a Pixels> for Pixels>::sum -> Self with Default::default()
+crates/flui-geometry/src/units.rs:607:46: replace + with - in <impl Sum<&'a Pixels> for Pixels>::sum
+crates/flui-geometry/src/units.rs:649:9: replace PixelDelta::get -> f32 with 0.0
+crates/flui-geometry/src/units.rs:649:9: replace PixelDelta::get -> f32 with 1.0
+crates/flui-geometry/src/units.rs:649:9: replace PixelDelta::get -> f32 with -1.0
+crates/flui-geometry/src/units.rs:655:9: replace PixelDelta::floor -> Self with Default::default()
+crates/flui-geometry/src/units.rs:661:9: replace PixelDelta::round -> Self with Default::default()
+crates/flui-geometry/src/units.rs:667:9: replace PixelDelta::ceil -> Self with Default::default()
+crates/flui-geometry/src/units.rs:673:9: replace PixelDelta::trunc -> Self with Default::default()
+crates/flui-geometry/src/units.rs:679:9: replace PixelDelta::abs -> Self with Default::default()
+crates/flui-geometry/src/units.rs:685:9: replace PixelDelta::signum_raw -> f32 with 0.0
+crates/flui-geometry/src/units.rs:685:9: replace PixelDelta::signum_raw -> f32 with 1.0
+crates/flui-geometry/src/units.rs:685:9: replace PixelDelta::signum_raw -> f32 with -1.0
+crates/flui-geometry/src/units.rs:691:9: replace PixelDelta::is_finite -> bool with true
+crates/flui-geometry/src/units.rs:691:9: replace PixelDelta::is_finite -> bool with false
+crates/flui-geometry/src/units.rs:697:9: replace PixelDelta::is_nan -> bool with true
+crates/flui-geometry/src/units.rs:697:9: replace PixelDelta::is_nan -> bool with false
+crates/flui-geometry/src/units.rs:703:9: replace PixelDelta::is_infinite -> bool with true
+crates/flui-geometry/src/units.rs:703:9: replace PixelDelta::is_infinite -> bool with false
+crates/flui-geometry/src/units.rs:709:9: replace PixelDelta::min -> Self with Default::default()
+crates/flui-geometry/src/units.rs:715:9: replace PixelDelta::max -> Self with Default::default()
+crates/flui-geometry/src/units.rs:721:9: replace PixelDelta::clamp -> Self with Default::default()
+crates/flui-geometry/src/units.rs:727:9: replace PixelDelta::map -> Self with Default::default()
+crates/flui-geometry/src/units.rs:733:9: replace PixelDelta::to_pixels -> Pixels with Default::default()
+crates/flui-geometry/src/units.rs:746:9: replace <impl Unit for PixelDelta>::one -> Self with Default::default()
+crates/flui-geometry/src/units.rs:756:9: replace <impl NumericUnit for PixelDelta>::abs -> Self with Default::default()
+crates/flui-geometry/src/units.rs:761:9: replace <impl NumericUnit for PixelDelta>::min -> Self with Default::default()
+crates/flui-geometry/src/units.rs:766:9: replace <impl NumericUnit for PixelDelta>::max -> Self with Default::default()
+crates/flui-geometry/src/units.rs:778:9: replace <impl Add for PixelDelta>::add -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:778:21: replace + with - in <impl Add for PixelDelta>::add
+crates/flui-geometry/src/units.rs:778:21: replace + with * in <impl Add for PixelDelta>::add
+crates/flui-geometry/src/units.rs:785:9: replace <impl AddAssign for PixelDelta>::add_assign with ()
+crates/flui-geometry/src/units.rs:785:16: replace += with -= in <impl AddAssign for PixelDelta>::add_assign
+crates/flui-geometry/src/units.rs:785:16: replace += with *= in <impl AddAssign for PixelDelta>::add_assign
+crates/flui-geometry/src/units.rs:793:9: replace <impl Sub for PixelDelta>::sub -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:793:21: replace - with + in <impl Sub for PixelDelta>::sub
+crates/flui-geometry/src/units.rs:793:21: replace - with / in <impl Sub for PixelDelta>::sub
+crates/flui-geometry/src/units.rs:800:9: replace <impl SubAssign for PixelDelta>::sub_assign with ()
+crates/flui-geometry/src/units.rs:800:16: replace -= with += in <impl SubAssign for PixelDelta>::sub_assign
+crates/flui-geometry/src/units.rs:800:16: replace -= with /= in <impl SubAssign for PixelDelta>::sub_assign
+crates/flui-geometry/src/units.rs:808:9: replace <impl Mul<f32> for PixelDelta>::mul -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:808:21: replace * with + in <impl Mul<f32> for PixelDelta>::mul
+crates/flui-geometry/src/units.rs:808:21: replace * with / in <impl Mul<f32> for PixelDelta>::mul
+crates/flui-geometry/src/units.rs:816:9: replace <impl Mul<PixelDelta> for f32>::mul -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:816:25: replace * with + in <impl Mul<PixelDelta> for f32>::mul
+crates/flui-geometry/src/units.rs:816:25: replace * with / in <impl Mul<PixelDelta> for f32>::mul
+crates/flui-geometry/src/units.rs:823:9: replace <impl MulAssign<f32> for PixelDelta>::mul_assign with ()
+crates/flui-geometry/src/units.rs:823:16: replace *= with += in <impl MulAssign<f32> for PixelDelta>::mul_assign
+crates/flui-geometry/src/units.rs:823:16: replace *= with /= in <impl MulAssign<f32> for PixelDelta>::mul_assign
+crates/flui-geometry/src/units.rs:831:9: replace <impl Div for PixelDelta>::div -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:831:16: replace / with % in <impl Div for PixelDelta>::div
+crates/flui-geometry/src/units.rs:831:16: replace / with * in <impl Div for PixelDelta>::div
+crates/flui-geometry/src/units.rs:839:9: replace <impl Div<f32> for PixelDelta>::div -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:839:21: replace / with % in <impl Div<f32> for PixelDelta>::div
+crates/flui-geometry/src/units.rs:839:21: replace / with * in <impl Div<f32> for PixelDelta>::div
+crates/flui-geometry/src/units.rs:846:9: replace <impl DivAssign<f32> for PixelDelta>::div_assign with ()
+crates/flui-geometry/src/units.rs:846:16: replace /= with %= in <impl DivAssign<f32> for PixelDelta>::div_assign
+crates/flui-geometry/src/units.rs:846:16: replace /= with *= in <impl DivAssign<f32> for PixelDelta>::div_assign
+crates/flui-geometry/src/units.rs:854:9: replace <impl Rem for PixelDelta>::rem -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:854:21: replace % with / in <impl Rem for PixelDelta>::rem
+crates/flui-geometry/src/units.rs:854:21: replace % with + in <impl Rem for PixelDelta>::rem
+crates/flui-geometry/src/units.rs:861:9: replace <impl RemAssign for PixelDelta>::rem_assign with ()
+crates/flui-geometry/src/units.rs:861:16: replace %= with /= in <impl RemAssign for PixelDelta>::rem_assign
+crates/flui-geometry/src/units.rs:861:16: replace %= with += in <impl RemAssign for PixelDelta>::rem_assign
+crates/flui-geometry/src/units.rs:869:9: replace <impl Neg for PixelDelta>::neg -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:869:14: delete - in <impl Neg for PixelDelta>::neg
+crates/flui-geometry/src/units.rs:880:9: replace <impl From<Pixels> for PixelDelta>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:891:9: replace <impl From<f64> for PixelDelta>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:898:9: replace <impl From<PixelDelta> for f32>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:905:9: replace <impl From<PixelDelta> for f64>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:916:9: replace <impl Display for PixelDelta>::fmt -> fmt::Result with Ok(Default::default())
+crates/flui-geometry/src/units.rs:923:9: replace <impl Debug for PixelDelta>::fmt -> fmt::Result with Ok(Default::default())
+crates/flui-geometry/src/units.rs:936:9: replace <impl PartialOrd for PixelDelta>::partial_cmp -> Option<std::cmp::Ordering> with None
+crates/flui-geometry/src/units.rs:949:9: replace <impl std::hash::Hash for PixelDelta>::hash with ()
+crates/flui-geometry/src/units.rs:959:9: replace <impl Sum for PixelDelta>::sum -> Self with Default::default()
+crates/flui-geometry/src/units.rs:959:50: replace + with - in <impl Sum for PixelDelta>::sum
+crates/flui-geometry/src/units.rs:965:9: replace <impl Sum<&'a PixelDelta> for PixelDelta>::sum -> Self with Default::default()
+crates/flui-geometry/src/units.rs:965:50: replace + with - in <impl Sum<&'a PixelDelta> for PixelDelta>::sum
+crates/flui-geometry/src/units.rs:1006:9: replace DevicePixels::to_bytes -> u32 with 0
+crates/flui-geometry/src/units.rs:1006:9: replace DevicePixels::to_bytes -> u32 with 1
+crates/flui-geometry/src/units.rs:1006:25: replace * with + in DevicePixels::to_bytes
+crates/flui-geometry/src/units.rs:1006:25: replace * with / in DevicePixels::to_bytes
+crates/flui-geometry/src/units.rs:1018:9: replace DevicePixels::min -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1024:9: replace DevicePixels::max -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1030:9: replace DevicePixels::clamp -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1036:9: replace DevicePixels::signum -> i32 with 0
+crates/flui-geometry/src/units.rs:1036:9: replace DevicePixels::signum -> i32 with 1
+crates/flui-geometry/src/units.rs:1036:9: replace DevicePixels::signum -> i32 with -1
+crates/flui-geometry/src/units.rs:1042:19: replace > with == in DevicePixels::max_const
+crates/flui-geometry/src/units.rs:1042:19: replace > with < in DevicePixels::max_const
+crates/flui-geometry/src/units.rs:1042:19: replace > with >= in DevicePixels::max_const
+crates/flui-geometry/src/units.rs:1048:19: replace < with == in DevicePixels::min_const
+crates/flui-geometry/src/units.rs:1048:19: replace < with > in DevicePixels::min_const
+crates/flui-geometry/src/units.rs:1048:19: replace < with <= in DevicePixels::min_const
+crates/flui-geometry/src/units.rs:1060:9: replace DevicePixels::map -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1077:9: replace <impl AddAssign for DevicePixels>::add_assign with ()
+crates/flui-geometry/src/units.rs:1092:9: replace <impl SubAssign for DevicePixels>::sub_assign with ()
+crates/flui-geometry/src/units.rs:1116:9: replace <impl Mul<f32> for DevicePixels>::mul -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1116:29: replace * with + in <impl Mul<f32> for DevicePixels>::mul
+crates/flui-geometry/src/units.rs:1116:29: replace * with / in <impl Mul<f32> for DevicePixels>::mul
+crates/flui-geometry/src/units.rs:1132:9: replace <impl Neg for DevicePixels>::neg -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1132:14: delete - in <impl Neg for DevicePixels>::neg
+crates/flui-geometry/src/units.rs:1140:9: replace <impl From<i32> for DevicePixels>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1147:9: replace <impl From<u32> for DevicePixels>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1154:9: replace <impl From<usize> for DevicePixels>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1161:9: replace <impl From<DevicePixels> for i32>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1168:9: replace <impl From<DevicePixels> for u32>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1175:9: replace <impl From<DevicePixels> for u64>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1182:9: replace <impl From<DevicePixels> for usize>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1190:9: replace <impl Display for DevicePixels>::fmt -> fmt::Result with Ok(Default::default())
+crates/flui-geometry/src/units.rs:1197:9: replace <impl Debug for DevicePixels>::fmt -> fmt::Result with Ok(Default::default())
+crates/flui-geometry/src/units.rs:1220:9: replace <impl NumericUnit for DevicePixels>::abs -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1225:9: replace <impl NumericUnit for DevicePixels>::min -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1230:9: replace <impl NumericUnit for DevicePixels>::max -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1240:9: replace <impl Mul<Pixels> for DevicePixels>::mul -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1240:37: replace * with + in <impl Mul<Pixels> for DevicePixels>::mul
+crates/flui-geometry/src/units.rs:1240:37: replace * with / in <impl Mul<Pixels> for DevicePixels>::mul
+crates/flui-geometry/src/units.rs:1250:9: replace <impl Div<Pixels> for DevicePixels>::div -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1250:37: replace / with % in <impl Div<Pixels> for DevicePixels>::div
+crates/flui-geometry/src/units.rs:1250:37: replace / with * in <impl Div<Pixels> for DevicePixels>::div
+crates/flui-geometry/src/units.rs:1257:9: replace <impl Sum for DevicePixels>::sum -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1257:52: replace + with - in <impl Sum for DevicePixels>::sum
+crates/flui-geometry/src/units.rs:1263:9: replace <impl Sum<&'a DevicePixels> for DevicePixels>::sum -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1263:52: replace + with - in <impl Sum<&'a DevicePixels> for DevicePixels>::sum
+crates/flui-geometry/src/units.rs:1286:9: replace <impl Display for ParseLengthError>::fmt -> fmt::Result with Ok(Default::default())
+crates/flui-geometry/src/units.rs:1321:9: replace <impl std::str::FromStr for Pixels>::from_str -> Result<Self, Self::Err> with Ok(Default::default())
+crates/flui-geometry/src/units.rs:1355:9: replace <impl std::str::FromStr for DevicePixels>::from_str -> Result<Self, Self::Err> with Ok(Default::default())
+crates/flui-geometry/src/units.rs:1406:9: replace Radians::get -> f32 with 0.0
+crates/flui-geometry/src/units.rs:1406:9: replace Radians::get -> f32 with 1.0
+crates/flui-geometry/src/units.rs:1406:9: replace Radians::get -> f32 with -1.0
+crates/flui-geometry/src/units.rs:1431:9: replace Radians::is_finite -> bool with true
+crates/flui-geometry/src/units.rs:1431:9: replace Radians::is_finite -> bool with false
+crates/flui-geometry/src/units.rs:1437:9: replace Radians::abs -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1443:9: replace Radians::signum -> f32 with 0.0
+crates/flui-geometry/src/units.rs:1443:9: replace Radians::signum -> f32 with 1.0
+crates/flui-geometry/src/units.rs:1443:9: replace Radians::signum -> f32 with -1.0
+crates/flui-geometry/src/units.rs:1452:9: replace Radians::lerp -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1452:29: replace - with + in Radians::lerp
+crates/flui-geometry/src/units.rs:1452:29: replace - with / in Radians::lerp
+crates/flui-geometry/src/units.rs:1453:32: replace > with == in Radians::lerp
+crates/flui-geometry/src/units.rs:1453:32: replace > with < in Radians::lerp
+crates/flui-geometry/src/units.rs:1453:32: replace > with >= in Radians::lerp
+crates/flui-geometry/src/units.rs:1454:18: replace - with + in Radians::lerp
+crates/flui-geometry/src/units.rs:1454:18: replace - with / in Radians::lerp
+crates/flui-geometry/src/units.rs:1458:21: replace + with - in Radians::lerp
+crates/flui-geometry/src/units.rs:1458:21: replace + with * in Radians::lerp
+crates/flui-geometry/src/units.rs:1458:32: replace * with + in Radians::lerp
+crates/flui-geometry/src/units.rs:1458:32: replace * with / in Radians::lerp
+crates/flui-geometry/src/units.rs:1464:9: replace Radians::lerp_linear -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1464:21: replace + with - in Radians::lerp_linear
+crates/flui-geometry/src/units.rs:1464:21: replace + with * in Radians::lerp_linear
+crates/flui-geometry/src/units.rs:1464:42: replace * with + in Radians::lerp_linear
+crates/flui-geometry/src/units.rs:1464:42: replace * with / in Radians::lerp_linear
+crates/flui-geometry/src/units.rs:1464:32: replace - with + in Radians::lerp_linear
+crates/flui-geometry/src/units.rs:1464:32: replace - with / in Radians::lerp_linear
+crates/flui-geometry/src/units.rs:1471:9: replace <impl Display for Radians>::fmt -> fmt::Result with Ok(Default::default())
+crates/flui-geometry/src/units.rs:1478:9: replace <impl Debug for Radians>::fmt -> fmt::Result with Ok(Default::default())
+crates/flui-geometry/src/units.rs:1486:9: replace <impl From<Radians> for f32>::from -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1504:9: replace <impl Add for Radians>::add -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1504:21: replace + with - in <impl Add for Radians>::add
+crates/flui-geometry/src/units.rs:1504:21: replace + with * in <impl Add for Radians>::add
+crates/flui-geometry/src/units.rs:1511:9: replace <impl AddAssign for Radians>::add_assign with ()
+crates/flui-geometry/src/units.rs:1511:16: replace += with -= in <impl AddAssign for Radians>::add_assign
+crates/flui-geometry/src/units.rs:1511:16: replace += with *= in <impl AddAssign for Radians>::add_assign
+crates/flui-geometry/src/units.rs:1520:9: replace <impl Sub for Radians>::sub -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1520:21: replace - with + in <impl Sub for Radians>::sub
+crates/flui-geometry/src/units.rs:1520:21: replace - with / in <impl Sub for Radians>::sub
+crates/flui-geometry/src/units.rs:1527:9: replace <impl SubAssign for Radians>::sub_assign with ()
+crates/flui-geometry/src/units.rs:1527:16: replace -= with += in <impl SubAssign for Radians>::sub_assign
+crates/flui-geometry/src/units.rs:1527:16: replace -= with /= in <impl SubAssign for Radians>::sub_assign
+crates/flui-geometry/src/units.rs:1536:9: replace <impl Neg for Radians>::neg -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1536:14: delete - in <impl Neg for Radians>::neg
+crates/flui-geometry/src/units.rs:1545:9: replace <impl Mul<f32> for Radians>::mul -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1545:21: replace * with + in <impl Mul<f32> for Radians>::mul
+crates/flui-geometry/src/units.rs:1545:21: replace * with / in <impl Mul<f32> for Radians>::mul
+crates/flui-geometry/src/units.rs:1554:9: replace <impl Mul<Radians> for f32>::mul -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1554:22: replace * with + in <impl Mul<Radians> for f32>::mul
+crates/flui-geometry/src/units.rs:1554:22: replace * with / in <impl Mul<Radians> for f32>::mul
+crates/flui-geometry/src/units.rs:1561:9: replace <impl MulAssign<f32> for Radians>::mul_assign with ()
+crates/flui-geometry/src/units.rs:1561:16: replace *= with += in <impl MulAssign<f32> for Radians>::mul_assign
+crates/flui-geometry/src/units.rs:1561:16: replace *= with /= in <impl MulAssign<f32> for Radians>::mul_assign
+crates/flui-geometry/src/units.rs:1570:9: replace <impl Div<f32> for Radians>::div -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1570:21: replace / with % in <impl Div<f32> for Radians>::div
+crates/flui-geometry/src/units.rs:1570:21: replace / with * in <impl Div<f32> for Radians>::div
+crates/flui-geometry/src/units.rs:1577:9: replace <impl DivAssign<f32> for Radians>::div_assign with ()
+crates/flui-geometry/src/units.rs:1577:16: replace /= with %= in <impl DivAssign<f32> for Radians>::div_assign
+crates/flui-geometry/src/units.rs:1577:16: replace /= with *= in <impl DivAssign<f32> for Radians>::div_assign
+crates/flui-geometry/src/units.rs:1585:9: replace <impl Rem for Radians>::rem -> Self::Output with Default::default()
+crates/flui-geometry/src/units.rs:1585:21: replace % with / in <impl Rem for Radians>::rem
+crates/flui-geometry/src/units.rs:1585:21: replace % with + in <impl Rem for Radians>::rem
+crates/flui-geometry/src/units.rs:1592:9: replace <impl RemAssign for Radians>::rem_assign with ()
+crates/flui-geometry/src/units.rs:1592:16: replace %= with /= in <impl RemAssign for Radians>::rem_assign
+crates/flui-geometry/src/units.rs:1592:16: replace %= with += in <impl RemAssign for Radians>::rem_assign
+crates/flui-geometry/src/units.rs:1615:9: replace <impl NumericUnit for Radians>::abs -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1620:9: replace <impl NumericUnit for Radians>::min -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1625:9: replace <impl NumericUnit for Radians>::max -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1635:9: replace <impl PartialOrd for Radians>::partial_cmp -> Option<std::cmp::Ordering> with None
+crates/flui-geometry/src/units.rs:1649:9: replace <impl std::hash::Hash for Radians>::hash with ()
+crates/flui-geometry/src/units.rs:1656:9: replace <impl Sum for Radians>::sum -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1656:47: replace + with - in <impl Sum for Radians>::sum
+crates/flui-geometry/src/units.rs:1662:9: replace <impl Sum<&'a Radians> for Radians>::sum -> Self with Default::default()
+crates/flui-geometry/src/units.rs:1662:47: replace + with - in <impl Sum<&'a Radians> for Radians>::sum
+crates/flui-geometry/src/units.rs:1694:9: replace <impl std::str::FromStr for Radians>::from_str -> Result<Self, Self::Err> with Ok(Default::default())
+crates/flui-geometry/src/vector.rs:75:51: delete -
+crates/flui-geometry/src/vector.rs:90:9: replace Vec2<Pixels>::approx_eq -> bool with true
+crates/flui-geometry/src/vector.rs:90:9: replace Vec2<Pixels>::approx_eq -> bool with false
+crates/flui-geometry/src/vector.rs:90:53: replace && with || in Vec2<Pixels>::approx_eq
+crates/flui-geometry/src/vector.rs:90:34: replace < with == in Vec2<Pixels>::approx_eq
+crates/flui-geometry/src/vector.rs:90:34: replace < with > in Vec2<Pixels>::approx_eq
+crates/flui-geometry/src/vector.rs:90:34: replace < with <= in Vec2<Pixels>::approx_eq
+crates/flui-geometry/src/vector.rs:90:17: replace - with + in Vec2<Pixels>::approx_eq
+crates/flui-geometry/src/vector.rs:90:81: replace < with == in Vec2<Pixels>::approx_eq
+crates/flui-geometry/src/vector.rs:90:81: replace < with > in Vec2<Pixels>::approx_eq
+crates/flui-geometry/src/vector.rs:90:81: replace < with <= in Vec2<Pixels>::approx_eq
+crates/flui-geometry/src/vector.rs:90:64: replace - with + in Vec2<Pixels>::approx_eq
+crates/flui-geometry/src/vector.rs:147:9: replace Vec2<T>::from_array -> Self with Default::default()
+crates/flui-geometry/src/vector.rs:154:9: replace Vec2<T>::from_tuple -> Self with Default::default()
+crates/flui-geometry/src/vector.rs:185:9: replace Vec2<Pixels>::from_radians -> Self with Default::default()
+crates/flui-geometry/src/vector.rs:241:9: replace Vec2<T>::to_tuple -> (f32, f32) with (0.0, 0.0)
+crates/flui-geometry/src/vector.rs:241:9: replace Vec2<T>::to_tuple -> (f32, f32) with (0.0, 1.0)
+crates/flui-geometry/src/vector.rs:241:9: replace Vec2<T>::to_tuple -> (f32, f32) with (0.0, -1.0)
+crates/flui-geometry/src/vector.rs:241:9: replace Vec2<T>::to_tuple -> (f32, f32) with (1.0, 0.0)
+crates/flui-geometry/src/vector.rs:241:9: replace Vec2<T>::to_tuple -> (f32, f32) with (1.0, 1.0)
+crates/flui-geometry/src/vector.rs:241:9: replace Vec2<T>::to_tuple -> (f32, f32) with (1.0, -1.0)
+crates/flui-geometry/src/vector.rs:241:9: replace Vec2<T>::to_tuple -> (f32, f32) with (-1.0, 0.0)
+crates/flui-geometry/src/vector.rs:241:9: replace Vec2<T>::to_tuple -> (f32, f32) with (-1.0, 1.0)
+crates/flui-geometry/src/vector.rs:241:9: replace Vec2<T>::to_tuple -> (f32, f32) with (-1.0, -1.0)
+crates/flui-geometry/src/vector.rs:248:9: replace Vec2<T>::to_point -> Point<T> with Point::from(Default::default())
+crates/flui-geometry/src/vector.rs:331:16: replace > with >= in Vec2<T>::try_normalize
+crates/flui-geometry/src/vector.rs:357:9: replace Vec2<T>::is_normalized -> bool with true
+crates/flui-geometry/src/vector.rs:357:45: replace < with <= in Vec2<T>::is_normalized
+crates/flui-geometry/src/vector.rs:407:31: delete - in Vec2<T>::perp
+crates/flui-geometry/src/vector.rs:423:34: replace - with + in Vec2<T>::lerp
+crates/flui-geometry/src/vector.rs:424:34: replace - with + in Vec2<T>::lerp
+crates/flui-geometry/src/vector.rs:433:19: replace > with >= in Vec2<T>::project
+crates/flui-geometry/src/vector.rs:434:40: replace / with * in Vec2<T>::project
+crates/flui-geometry/src/vector.rs:437:43: replace * with / in Vec2<T>::project
+crates/flui-geometry/src/vector.rs:455:27: replace - with + in Vec2<T>::reflect
+crates/flui-geometry/src/vector.rs:455:32: replace * with / in Vec2<T>::reflect
+crates/flui-geometry/src/vector.rs:455:39: replace * with + in Vec2<T>::reflect
+crates/flui-geometry/src/vector.rs:455:39: replace * with / in Vec2<T>::reflect
+crates/flui-geometry/src/vector.rs:456:39: replace * with / in Vec2<T>::reflect
+crates/flui-geometry/src/vector.rs:495:9: replace Vec2<T>::angle_radians -> crate::Radians with Default::default()
+crates/flui-geometry/src/vector.rs:507:9: replace Vec2<T>::angle_between -> f32 with 0.0
+crates/flui-geometry/src/vector.rs:507:9: replace Vec2<T>::angle_between -> f32 with 1.0
+crates/flui-geometry/src/vector.rs:507:9: replace Vec2<T>::angle_between -> f32 with -1.0
+crates/flui-geometry/src/vector.rs:508:34: replace * with + in Vec2<T>::angle_between
+crates/flui-geometry/src/vector.rs:508:34: replace * with / in Vec2<T>::angle_between
+crates/flui-geometry/src/vector.rs:509:17: replace > with == in Vec2<T>::angle_between
+crates/flui-geometry/src/vector.rs:509:17: replace > with < in Vec2<T>::angle_between
+crates/flui-geometry/src/vector.rs:509:17: replace > with >= in Vec2<T>::angle_between
+crates/flui-geometry/src/vector.rs:510:18: replace / with % in Vec2<T>::angle_between
+crates/flui-geometry/src/vector.rs:510:18: replace / with * in Vec2<T>::angle_between
+crates/flui-geometry/src/vector.rs:510:32: delete - in Vec2<T>::angle_between
+crates/flui-geometry/src/vector.rs:534:9: replace Vec2<T>::angle_between_radians -> crate::Radians with Default::default()
+crates/flui-geometry/src/vector.rs:545:33: replace - with + in Vec2<T>::rotate
+crates/flui-geometry/src/vector.rs:545:37: replace * with / in Vec2<T>::rotate
+crates/flui-geometry/src/vector.rs:546:33: replace + with - in Vec2<T>::rotate
+crates/flui-geometry/src/vector.rs:546:27: replace * with / in Vec2<T>::rotate
+crates/flui-geometry/src/vector.rs:546:37: replace * with + in Vec2<T>::rotate
+crates/flui-geometry/src/vector.rs:546:37: replace * with / in Vec2<T>::rotate
+crates/flui-geometry/src/vector.rs:565:9: replace Vec2<T>::rotate_radians -> Self with Default::default()
+crates/flui-geometry/src/vector.rs:623:16: replace < with == in Vec2<T>::clamp_length
+crates/flui-geometry/src/vector.rs:623:16: replace < with <= in Vec2<T>::clamp_length
+crates/flui-geometry/src/vector.rs:625:23: replace < with <= in Vec2<T>::clamp_length
+crates/flui-geometry/src/vector.rs:631:23: replace > with >= in Vec2<T>::clamp_length
+crates/flui-geometry/src/vector.rs:741:9: replace Vec2<T>::fract -> Self with Default::default()
+crates/flui-geometry/src/vector.rs:761:23: replace && with || in Vec2<T>::is_finite
+crates/flui-geometry/src/vector.rs:768:9: replace Vec2<T>::is_nan -> bool with true
+crates/flui-geometry/src/vector.rs:770:20: replace || with && in Vec2<T>::is_nan
+crates/flui-geometry/src/vector.rs:782:31: replace < with <= in Vec2<T>::is_zero
+crates/flui-geometry/src/vector.rs:782:46: replace * with + in Vec2<T>::is_zero
+crates/flui-geometry/src/vector.rs:782:46: replace * with / in Vec2<T>::is_zero
+crates/flui-geometry/src/vector.rs:1022:9: replace <impl super::traits::IsZero for Vec2<T>>::is_zero -> bool with true
+crates/flui-geometry/src/vector.rs:1022:9: replace <impl super::traits::IsZero for Vec2<T>>::is_zero -> bool with false
+crates/flui-geometry/src/vector.rs:1022:26: replace && with || in <impl super::traits::IsZero for Vec2<T>>::is_zero
+crates/flui-geometry/src/vector.rs:1053:9: replace <impl super::traits::ApproxEq for Vec2<T>>::approx_eq_eps -> bool with true
+crates/flui-geometry/src/vector.rs:1053:49: replace && with || in <impl super::traits::ApproxEq for Vec2<T>>::approx_eq_eps
+crates/flui-geometry/src/vector.rs:1075:9: replace <impl super::traits::Sign for Vec2<T>>::is_positive -> bool with true
+crates/flui-geometry/src/vector.rs:1075:9: replace <impl super::traits::Sign for Vec2<T>>::is_positive -> bool with false
+crates/flui-geometry/src/vector.rs:1075:30: replace && with || in <impl super::traits::Sign for Vec2<T>>::is_positive
+crates/flui-geometry/src/vector.rs:1080:9: replace <impl super::traits::Sign for Vec2<T>>::is_negative -> bool with true
+crates/flui-geometry/src/vector.rs:1080:9: replace <impl super::traits::Sign for Vec2<T>>::is_negative -> bool with false
+crates/flui-geometry/src/vector.rs:1080:30: replace || with && in <impl super::traits::Sign for Vec2<T>>::is_negative
+
+## Timeout mutants
+

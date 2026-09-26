@@ -1,0 +1,132 @@
+# Mutation baseline: flui-material
+# Scope: cargo mutants -p flui-material -f checkbox.rs -f switch.rs -f chip.rs -f radio.rs -f data_table.rs -f theme_data.rs
+# Generated: 2026-09-24T23:45:01Z via cargo mutants (config: .cargo/mutants.toml)
+
+Total mutants: 388
+Caught:        199
+Missed:        115
+Timeout:       1  (counted as caught for the score below)
+Unviable:      73  (excluded from the score: doesn't compile)
+Mutation score (caught+timeout)/(caught+timeout+missed): 63.5%
+
+## Missed mutants (the gaps — primary target for Phase 3 not to widen)
+
+crates/flui-material/src/checkbox.rs:188:9: replace CheckboxMode::is_selected -> bool with true
+crates/flui-material/src/checkbox.rs:188:9: replace CheckboxMode::is_selected -> bool with false
+crates/flui-material/src/checkbox.rs:221:9: replace <impl std::fmt::Debug for Checkbox>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/checkbox.rs:333:9: replace <impl std::fmt::Debug for CheckboxState>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/checkbox.rs:365:9: replace <impl ViewState<Checkbox> for CheckboxState>::init_state with ()
+crates/flui-material/src/checkbox.rs:376:9: replace <impl ViewState<Checkbox> for CheckboxState>::did_update_view with ()
+crates/flui-material/src/checkbox.rs:376:34: replace != with == in <impl ViewState<Checkbox> for CheckboxState>::did_update_view
+crates/flui-material/src/checkbox.rs:474:9: replace <impl ViewState<Checkbox> for CheckboxState>::dispose with ()
+crates/flui-material/src/checkbox.rs:627:41: replace / with % in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:627:41: replace / with * in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:628:42: replace / with % in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:628:42: replace / with * in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:629:44: replace / with % in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:629:44: replace / with * in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:630:33: replace - with + in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:630:33: replace - with / in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:631:33: replace - with + in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:631:33: replace - with / in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:636:25: replace + with - in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:636:25: replace + with * in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:637:25: replace + with - in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:637:25: replace + with * in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:643:39: replace && with || in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:643:64: replace > with == in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:643:64: replace > with < in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:643:64: replace > with >= in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:644:54: delete - in <impl CustomPainter for CheckboxPainter>::paint
+crates/flui-material/src/checkbox.rs:672:59: replace + with - in draw_checkmark
+crates/flui-material/src/checkbox.rs:672:59: replace + with * in draw_checkmark
+crates/flui-material/src/checkbox.rs:672:78: replace + with - in draw_checkmark
+crates/flui-material/src/checkbox.rs:672:78: replace + with * in draw_checkmark
+crates/flui-material/src/checkbox.rs:674:43: replace * with + in draw_checkmark
+crates/flui-material/src/checkbox.rs:674:43: replace * with / in draw_checkmark
+crates/flui-material/src/checkbox.rs:674:70: replace * with + in draw_checkmark
+crates/flui-material/src/checkbox.rs:674:70: replace * with / in draw_checkmark
+crates/flui-material/src/checkbox.rs:675:43: replace * with + in draw_checkmark
+crates/flui-material/src/checkbox.rs:675:43: replace * with / in draw_checkmark
+crates/flui-material/src/checkbox.rs:675:69: replace * with + in draw_checkmark
+crates/flui-material/src/checkbox.rs:675:69: replace * with / in draw_checkmark
+crates/flui-material/src/checkbox.rs:676:43: replace * with + in draw_checkmark
+crates/flui-material/src/checkbox.rs:676:43: replace * with / in draw_checkmark
+crates/flui-material/src/checkbox.rs:676:70: replace * with + in draw_checkmark
+crates/flui-material/src/checkbox.rs:676:70: replace * with / in draw_checkmark
+crates/flui-material/src/checkbox.rs:684:50: replace + with - in draw_dash
+crates/flui-material/src/checkbox.rs:684:50: replace + with * in draw_dash
+crates/flui-material/src/checkbox.rs:684:69: replace + with - in draw_dash
+crates/flui-material/src/checkbox.rs:684:69: replace + with * in draw_dash
+crates/flui-material/src/checkbox.rs:684:90: replace * with + in draw_dash
+crates/flui-material/src/checkbox.rs:684:90: replace * with / in draw_dash
+crates/flui-material/src/checkbox.rs:686:34: replace * with + in draw_dash
+crates/flui-material/src/checkbox.rs:686:34: replace * with / in draw_dash
+crates/flui-material/src/checkbox.rs:687:34: replace * with + in draw_dash
+crates/flui-material/src/checkbox.rs:687:34: replace * with / in draw_dash
+crates/flui-material/src/chip.rs:424:62: replace + with - in chip_content_min_height
+crates/flui-material/src/chip.rs:462:9: replace <impl std::fmt::Debug for Chip>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/chip.rs:581:21: delete field size from struct IconThemeData expression in <impl StatelessView for Chip>::build
+crates/flui-material/src/chip.rs:582:21: delete field color from struct IconThemeData expression in <impl StatelessView for Chip>::build
+crates/flui-material/src/chip.rs:593:21: delete field size from struct IconThemeData expression in <impl StatelessView for Chip>::build
+crates/flui-material/src/chip.rs:594:21: delete field color from struct IconThemeData expression in <impl StatelessView for Chip>::build
+crates/flui-material/src/chip.rs:669:9: replace <impl std::fmt::Debug for FilterChip>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/chip.rs:857:25: delete field size from struct IconThemeData expression in <impl StatelessView for FilterChip>::build
+crates/flui-material/src/chip.rs:858:25: delete field color from struct IconThemeData expression in <impl StatelessView for FilterChip>::build
+crates/flui-material/src/chip.rs:871:21: delete field size from struct IconThemeData expression in <impl StatelessView for FilterChip>::build
+crates/flui-material/src/chip.rs:872:21: delete field color from struct IconThemeData expression in <impl StatelessView for FilterChip>::build
+crates/flui-material/src/chip.rs:951:5: replace chip_content_constraints -> BoxConstraints with Default::default()
+crates/flui-material/src/chip.rs:976:38: delete - in <impl CustomPainter for ChipBorderPainter>::paint
+crates/flui-material/src/chip.rs:981:9: replace <impl CustomPainter for ChipBorderPainter>::should_repaint -> bool with true
+crates/flui-material/src/chip.rs:1020:39: replace / with % in <impl CustomPainter for ChipCheckmarkPainter>::paint
+crates/flui-material/src/chip.rs:1020:39: replace / with * in <impl CustomPainter for ChipCheckmarkPainter>::paint
+crates/flui-material/src/chip.rs:1020:32: replace * with + in <impl CustomPainter for ChipCheckmarkPainter>::paint
+crates/flui-material/src/chip.rs:1020:32: replace * with / in <impl CustomPainter for ChipCheckmarkPainter>::paint
+crates/flui-material/src/chip.rs:1038:9: replace <impl CustomPainter for ChipCheckmarkPainter>::should_repaint -> bool with false
+crates/flui-material/src/data_table.rs:195:9: replace <impl std::fmt::Debug for DataCell>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/data_table.rs:236:9: replace <impl std::fmt::Debug for DataRow>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/data_table.rs:317:9: replace <impl std::fmt::Debug for DataTable>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/data_table.rs:730:5: replace row_border_side -> BorderSide<Pixels> with BorderSide::from(Default::default())
+crates/flui-material/src/data_table.rs:776:40: replace > with >= in selection_summary
+crates/flui-material/src/data_table.rs:855:67: delete ! in row_checkbox_cell
+crates/flui-material/src/data_table.rs:935:46: replace == with != in square_up_rows
+crates/flui-material/src/data_table.rs:950:31: replace < with <= in square_up_rows
+crates/flui-material/src/data_table.rs:968:47: replace + with - in <impl StatelessView for DataTable>::build
+crates/flui-material/src/data_table.rs:968:47: replace + with * in <impl StatelessView for DataTable>::build
+crates/flui-material/src/data_table.rs:982:39: replace + with * in <impl StatelessView for DataTable>::build
+crates/flui-material/src/data_table.rs:1047:50: replace && with || in <impl StatelessView for DataTable>::build
+crates/flui-material/src/data_table.rs:1093:27: replace + with * in <impl StatelessView for DataTable>::build
+crates/flui-material/src/radio.rs:182:9: replace <impl std::fmt::Debug for Radio<T>>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/radio.rs:254:9: replace <impl std::fmt::Debug for RadioState>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/radio.rs:280:9: replace <impl ViewState<Radio<T>> for RadioState>::init_state with ()
+crates/flui-material/src/radio.rs:287:9: replace <impl ViewState<Radio<T>> for RadioState>::did_update_view with ()
+crates/flui-material/src/radio.rs:289:25: replace != with == in <impl ViewState<Radio<T>> for RadioState>::did_update_view
+crates/flui-material/src/radio.rs:353:9: replace <impl ViewState<Radio<T>> for RadioState>::dispose with ()
+crates/flui-material/src/radio.rs:443:53: replace / with % in <impl CustomPainter for RadioPainter>::paint
+crates/flui-material/src/radio.rs:443:53: replace / with * in <impl CustomPainter for RadioPainter>::paint
+crates/flui-material/src/radio.rs:443:82: replace / with % in <impl CustomPainter for RadioPainter>::paint
+crates/flui-material/src/radio.rs:443:82: replace / with * in <impl CustomPainter for RadioPainter>::paint
+crates/flui-material/src/switch.rs:125:61: replace + with *
+crates/flui-material/src/switch.rs:125:93: replace * with +
+crates/flui-material/src/switch.rs:125:93: replace * with /
+crates/flui-material/src/switch.rs:175:9: replace <impl std::fmt::Debug for Switch>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/switch.rs:230:9: replace <impl std::fmt::Debug for SwitchState>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/flui-material/src/switch.rs:256:9: replace <impl ViewState<Switch> for SwitchState>::init_state with ()
+crates/flui-material/src/switch.rs:263:9: replace <impl ViewState<Switch> for SwitchState>::did_update_view with ()
+crates/flui-material/src/switch.rs:263:27: replace != with == in <impl ViewState<Switch> for SwitchState>::did_update_view
+crates/flui-material/src/switch.rs:341:9: replace <impl ViewState<Switch> for SwitchState>::dispose with ()
+crates/flui-material/src/switch.rs:399:9: replace || with && in switch_default_thumb_color
+crates/flui-material/src/switch.rs:498:31: replace + with - in <impl CustomPainter for SwitchPainter>::paint
+crates/flui-material/src/switch.rs:498:31: replace + with * in <impl CustomPainter for SwitchPainter>::paint
+crates/flui-material/src/switch.rs:499:31: replace + with - in <impl CustomPainter for SwitchPainter>::paint
+crates/flui-material/src/switch.rs:499:31: replace + with * in <impl CustomPainter for SwitchPainter>::paint
+crates/flui-material/src/switch.rs:501:88: replace / with % in <impl CustomPainter for SwitchPainter>::paint
+crates/flui-material/src/switch.rs:501:88: replace / with * in <impl CustomPainter for SwitchPainter>::paint
+crates/flui-material/src/switch.rs:505:32: replace > with == in <impl CustomPainter for SwitchPainter>::paint
+crates/flui-material/src/switch.rs:505:32: replace > with < in <impl CustomPainter for SwitchPainter>::paint
+crates/flui-material/src/switch.rs:505:32: replace > with >= in <impl CustomPainter for SwitchPainter>::paint
+crates/flui-material/src/switch.rs:506:54: delete - in <impl CustomPainter for SwitchPainter>::paint
+
+## Timeout mutants
+
+crates/flui-material/src/theme_data.rs:850:9: replace ThemeData::light -> Self with Default::default()

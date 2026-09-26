@@ -974,4 +974,165 @@ mod tests {
             );
         }
     }
+
+    #[track_caller]
+    fn assert_rgba(actual: [f32; 4], expected: [f32; 4]) {
+        for (a, e) in actual.iter().zip(expected) {
+            assert!((a - e).abs() < 1e-4, "{actual:?} vs {expected:?}");
+        }
+    }
+
+    /// Each of the 20 coefficients feeds exactly one output channel: row
+    /// `i / 5`, from input channel `i % 5` (the fifth column is the
+    /// constant offset).
+    #[test]
+    fn apply_reads_each_coefficient_from_its_position() {
+        let input = [0.2, 0.4, 0.6, 0.8];
+        for i in 0..20 {
+            let mut values = [0.0; 20];
+            values[i] = 0.5;
+            let mut expected = [0.0; 4];
+            expected[i / 5] = 0.5 * input.get(i % 5).copied().unwrap_or(1.0);
+            assert_rgba(ColorMatrix::new(values).apply(input), expected);
+        }
+        // Results clamp into 0..=1.
+        assert_rgba(
+            ColorMatrix::brightness(2.0).apply(input),
+            [1.0, 1.0, 1.0, 0.8],
+        );
+        assert_rgba(
+            ColorMatrix::brightness(-2.0).apply(input),
+            [0.0, 0.0, 0.0, 0.8],
+        );
+    }
+
+    /// `a.multiply(b)` applies `b` first, then `a`.
+    #[test]
+    fn multiply_composes() {
+        let mats = [
+            ColorMatrix::brightness(0.05),
+            ColorMatrix::contrast(0.8),
+            ColorMatrix::saturation(0.6),
+            ColorMatrix::hue_rotate(40.0),
+            ColorMatrix::opacity(0.7),
+            ColorMatrix::lerp_from_identity(&ColorMatrix::sepia(), 0.3),
+        ];
+        let color = [0.35, 0.5, 0.45, 0.9];
+        for a in &mats {
+            for b in &mats {
+                assert_rgba(a.multiply(b).apply(color), a.apply(b.apply(color)));
+            }
+            assert_eq!(a.multiply(&ColorMatrix::identity()).values, a.values);
+            assert_eq!(ColorMatrix::identity().multiply(a).values, a.values);
+        }
+        assert_eq!(
+            ColorMatrix::default().values,
+            ColorMatrix::identity().values
+        );
+    }
+
+    /// Hue rotation keeps grays (every row's cos and sin terms cancel) and
+    /// alpha, is the identity at 0° and 360°, and at 180° and 90° takes red
+    /// to the values the W3C matrix gives with Rec. 709 weights.
+    #[test]
+    fn hue_rotate() {
+        for degrees in [0.0, 37.0, 90.0, 180.0, 275.0] {
+            let m = ColorMatrix::hue_rotate(degrees);
+            assert_rgba(m.apply([0.4, 0.4, 0.4, 0.7]), [0.4, 0.4, 0.4, 0.7]);
+        }
+        for degrees in [0.0, 360.0] {
+            assert_rgba(
+                ColorMatrix::hue_rotate(degrees).apply([0.3, 0.6, 0.2, 1.0]),
+                [0.3, 0.6, 0.2, 1.0],
+            );
+        }
+        // 180°: rows 1 and 2 give 2·0.2126 for red, row 0 goes negative.
+        assert_rgba(
+            ColorMatrix::hue_rotate(180.0).apply([1.0, 0.0, 0.0, 1.0]),
+            [0.0, 0.4252, 0.4252, 1.0],
+        );
+        // 90°: only the sin column: row 1 gets 0.2126 + 0.143.
+        assert_rgba(
+            ColorMatrix::hue_rotate(90.0).apply([1.0, 0.0, 0.0, 1.0]),
+            [0.0, 0.3556, 0.0, 1.0],
+        );
+        // Green and blue exercise the other columns.
+        assert_rgba(
+            ColorMatrix::hue_rotate(90.0).apply([0.0, 1.0, 0.0, 1.0]),
+            [0.0, 0.8552, 1.0, 1.0],
+        );
+        assert_rgba(
+            ColorMatrix::hue_rotate(90.0).apply([0.0, 0.0, 1.0, 1.0]),
+            [1.0, 0.0, 0.1444, 1.0],
+        );
+        assert_rgba(
+            ColorMatrix::hue_rotate(180.0).apply([0.0, 1.0, 0.0, 1.0]),
+            [1.0, 0.4304, 1.0, 1.0],
+        );
+        assert_rgba(
+            ColorMatrix::hue_rotate(180.0).apply([0.0, 0.0, 1.0, 1.0]),
+            [0.1444, 0.1444, 0.0, 1.0],
+        );
+    }
+
+    /// 1 is the identity, 0 is grayscale; grays stay put in between.
+    #[test]
+    fn saturation() {
+        assert_eq!(
+            ColorMatrix::saturation(1.0).values,
+            ColorMatrix::identity().values
+        );
+        assert_eq!(
+            ColorMatrix::saturation(0.0).values,
+            ColorMatrix::grayscale().values
+        );
+        let half = ColorMatrix::saturation(0.5);
+        assert_rgba(half.apply([0.3, 0.3, 0.3, 1.0]), [0.3, 0.3, 0.3, 1.0]);
+        // Halfway between red and its luma (0.2126).
+        assert_rgba(
+            half.apply([1.0, 0.0, 0.0, 1.0]),
+            [0.6063, 0.1063, 0.1063, 1.0],
+        );
+        assert_rgba(
+            half.apply([0.0, 1.0, 0.0, 1.0]),
+            [0.3576, 0.8576, 0.3576, 1.0],
+        );
+        assert_rgba(
+            half.apply([0.0, 0.0, 1.0, 1.0]),
+            [0.0361, 0.0361, 0.5361, 1.0],
+        );
+    }
+
+    /// Contrast scales about mid-gray.
+    #[test]
+    fn contrast_and_invert() {
+        let c = ColorMatrix::contrast(2.0);
+        assert_rgba(c.apply([0.75, 0.25, 0.5, 0.6]), [1.0, 0.0, 0.5, 0.6]);
+        assert_rgba(
+            ColorMatrix::contrast(0.5).apply([1.0, 0.0, 0.5, 1.0]),
+            [0.75, 0.25, 0.5, 1.0],
+        );
+        assert_rgba(
+            ColorMatrix::contrast(0.0).apply([0.9, 0.1, 0.3, 1.0]),
+            [0.5, 0.5, 0.5, 1.0],
+        );
+        assert_rgba(
+            ColorMatrix::invert().apply([0.2, 0.4, 0.6, 0.8]),
+            [0.8, 0.6, 0.4, 0.8],
+        );
+    }
+
+    #[test]
+    fn stroke_options() {
+        let s = StrokeOptions::new()
+            .with_miter_limit(10.0)
+            .with_dash_offset(2.5);
+        assert_eq!((s.miter_limit, s.dash_offset), (10.0, 2.5));
+        let d = StrokeOptions::default();
+        assert_eq!((d.width, d.miter_limit, d.dash_offset), (1.0, 4.0, 0.0));
+        assert_eq!(
+            (d.cap, d.join, d.dash_pattern),
+            (StrokeCap::Butt, StrokeJoin::Miter, None)
+        );
+    }
 }

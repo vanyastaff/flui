@@ -120,7 +120,7 @@ pub use geometry::{EdgeInsets, Edges, Matrix4, Offset, Pixels, Point, RRect, Rec
 pub use haptics::HapticFeedback;
 pub use ime::ImeEvent;
 pub use layout::{Alignment, Axis};
-pub use styling::{Color, Color32, Oklab};
+pub use styling::{Color, Oklab};
 
 /// Prelude module for convenient glob imports
 ///
@@ -135,7 +135,7 @@ pub mod prelude {
         Orientation, VerticalDirection,
     };
     // Styling - Essential
-    pub use crate::styling::{Color, Color32, HSLColor, HSVColor};
+    pub use crate::styling::{Color, HSLColor, HSVColor};
     // Typography - Common
     pub use crate::typography::{
         FontStyle, FontWeight, TextAlign, TextBaseline, TextDirection, TextStyle,
@@ -186,14 +186,7 @@ pub mod size_assertions {
     );
 
     // Color types - single cache line
-    const _: () = assert!(
-        size_of::<crate::Color32>() <= 4,
-        "Color32 should be 4 bytes (RGBA8)"
-    );
-    const _: () = assert!(
-        size_of::<crate::Color>() <= 16,
-        "Color should be ≤16 bytes (4×f32 RGBA)"
-    );
+    const _: () = assert!(size_of::<crate::Color>() == 4, "Color is four u8 channels");
 
     // Matrix - should fit in 64 bytes (single cache line)
     const _: () = assert!(

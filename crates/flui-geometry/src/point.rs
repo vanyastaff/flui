@@ -1687,4 +1687,14 @@ mod arithmetic_tests {
         assert!(zero.is_zero());
         assert!(!p.is_zero());
     }
+
+    #[test]
+    fn scale_with_and_unscale() {
+        use crate::{DevicePixels, ScaleFactor, device_px};
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        let device = Point::new(px(10.0), px(-4.2)).scale_with(scale);
+        assert_eq!(device, Point::new(device_px(20), device_px(-8)));
+        let back = Point::new(device_px(21), device_px(-7)).unscale(scale);
+        assert_eq!(back, Point::new(px(10.5), px(-3.5)));
+    }
 }

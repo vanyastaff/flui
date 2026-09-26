@@ -1295,4 +1295,31 @@ mod typed_tests {
         assert!(zero.is_zero());
         assert!(!o.is_zero());
     }
+
+    #[test]
+    fn direction_normalize_and_zero() {
+        let o = Offset::from_direction(std::f32::consts::FRAC_PI_3, 2.0);
+        assert!((o.dx.0 - 1.0).abs() < 1e-6, "{o:?}");
+        assert!((o.dy.0 - 3.0_f32.sqrt()).abs() < 1e-6, "{o:?}");
+        assert_eq!(
+            Offset::new(px(3.0), px(-4.0)).normalize(),
+            Offset::new(px(0.6), px(-0.8))
+        );
+        assert_eq!(Offset::<Pixels>::ZERO.normalize(), Offset::ZERO);
+        assert!(Offset::<Pixels>::ZERO.is_zero());
+        assert!(!Offset::new(px(1.0), px(0.0)).is_zero());
+        assert!(!Offset::new(px(0.0), px(1.0)).is_zero());
+    }
+
+    /// Rounded to the nearest device pixel on the way in, divided exactly
+    /// on the way back.
+    #[test]
+    fn scale_with_and_unscale() {
+        use crate::{DevicePixels, ScaleFactor, device_px};
+        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
+        let device = Offset::new(px(10.0), px(-4.2)).scale_with(scale);
+        assert_eq!(device, Offset::new(device_px(20), device_px(-8)));
+        let back = Offset::new(device_px(21), device_px(-7)).unscale(scale);
+        assert_eq!(back, Offset::new(px(10.5), px(-3.5)));
+    }
 }

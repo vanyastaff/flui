@@ -142,9 +142,9 @@ mod tests {
         // At elevation 0, minimal blur
         assert_eq!(Elevation::blur_radius(0.0), 0.0);
 
-        // At elevation 4, moderate blur
+        // At elevation 4: 4 * 0.5 + sqrt(4) * 1.5.
         let blur_4 = Elevation::blur_radius(4.0);
-        assert!(blur_4 > 2.0 && blur_4 < 6.0);
+        assert_eq!(blur_4, 5.0);
 
         // Higher elevation = more blur
         let blur_12 = Elevation::blur_radius(12.0);
@@ -157,11 +157,9 @@ mod tests {
         let offset_0 = Elevation::shadow_offset(0.0);
         assert_eq!(offset_0, Offset::ZERO);
 
-        let offset_8 = Elevation::shadow_offset(8.0);
-        assert!(offset_8.dx > px(0.0) && offset_8.dy > px(0.0));
-
-        // Vertical offset should be larger than horizontal
-        assert!(offset_8.dy > offset_8.dx);
+        // A fifth of the elevation across, two fifths down.
+        let offset_10 = Elevation::shadow_offset(10.0);
+        assert_eq!(offset_10, Offset::new(px(2.0), px(4.0)));
     }
 
     #[test]

@@ -59,13 +59,17 @@ impl FontWeight {
 
     /// Converts a CSS numeric weight to the nearest `FontWeight` variant.
     ///
-    /// Values are bucketed to the closest hundred; out-of-range values
-    /// clamp to `W100` or `W900`.
+    /// Values round to the closest hundred and clamp to `W100`..=`W900`.
+    /// An exact half goes the way CSS Fonts 4's font matching algorithm
+    /// searches when a weight is missing: lighter below 400, heavier from
+    /// 400 up, so 350 is `W300` and 450 is `W500`. Flutter snaps with a
+    /// plain `round()` in `FontWeight.lerp`, which would send 350 to `W400`,
+    /// away from the direction a browser would pick for a CSS weight.
     #[must_use]
     #[inline]
     pub const fn from_css(value: i32) -> Self {
         match value {
-            0..=150 => Self::W100,
+            i32::MIN..=150 => Self::W100,
             151..=250 => Self::W200,
             251..=350 => Self::W300,
             351..=449 => Self::W400,
@@ -426,5 +430,254 @@ impl TextShadow {
             offset_y,
             blur_radius,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::typography::TextOverflow;
+
+    const WEIGHTS: [FontWeight; 9] = [
+        FontWeight::W100,
+        FontWeight::W200,
+        FontWeight::W300,
+        FontWeight::W400,
+        FontWeight::W500,
+        FontWeight::W600,
+        FontWeight::W700,
+        FontWeight::W800,
+        FontWeight::W900,
+    ];
+
+    #[test]
+    fn font_weight_values() {
+        for (i, w) in WEIGHTS.into_iter().enumerate() {
+            let value = 100 * (i as u16 + 1);
+            assert_eq!(w.value(), value, "{w:?}");
+            assert_eq!(w.is_bold(), value >= 600, "{w:?}");
+            assert_eq!(FontWeight::from_css(i32::from(value)), w, "{w:?}");
+        }
+        assert_eq!(
+            (FontWeight::NORMAL, FontWeight::BOLD),
+            (FontWeight::W400, FontWeight::W700)
+        );
+        assert_eq!(FontWeight::default(), FontWeight::NORMAL);
+    }
+
+    /// Each bucket's edges. Exact halves follow CSS font matching: down below
+    /// 400, up from 400 (350 is W300, 450 is W500); out of range clamps.
+    #[test]
+    fn font_weight_from_css_buckets() {
+        use FontWeight::*;
+        for (css, w) in [
+            (i32::MIN, W100),
+            (-5, W100),
+            (0, W100),
+            (150, W100),
+            (151, W200),
+            (250, W200),
+            (251, W300),
+            (350, W300),
+            (351, W400),
+            (449, W400),
+            (450, W500),
+            (549, W500),
+            (550, W600),
+            (649, W600),
+            (650, W700),
+            (749, W700),
+            (750, W800),
+            (849, W800),
+            (850, W900),
+            (i32::MAX, W900),
+        ] {
+            assert_eq!(FontWeight::from_css(css), w, "{css}");
+        }
+    }
+
+    #[test]
+    fn features_variations_and_defaults() {
+        assert_eq!(FontFeature::enable("liga"), FontFeature::new("liga", 1));
+        assert_eq!(FontFeature::disable("liga"), FontFeature::new("liga", 0));
+        let v = FontVariation::new("wght", 650.0);
+        assert_eq!((v.axis.as_str(), v.value), ("wght", 650.0));
+        assert_eq!(FontStyle::default(), FontStyle::Normal);
+        assert!(matches!(TextOverflow::default(), TextOverflow::Clip));
+        let shadow = TextShadow::new(Color::RED, 1.0, 2.0, 3.0);
+        assert_eq!(
+            (shadow.offset_x, shadow.offset_y, shadow.blur_radius),
+            (1.0, 2.0, 3.0)
+        );
+    }
+
+    #[test]
+    fn strut_style_builders() {
+        let s = StrutStyle::new()
+            .with_font_family("Inter")
+            .with_font_size(14.0)
+            .with_height(1.5)
+            .with_force_strut_height(true);
+        assert_eq!(s.font_family.as_deref(), Some("Inter"));
+        assert_eq!(
+            (s.font_size, s.height, s.force_strut_height),
+            (Some(14.0), Some(1.5), true)
+        );
+        assert_eq!(StrutStyle::new(), StrutStyle::default());
+    }
+
+    fn full() -> TextStyle {
+        TextStyle::new()
+            .with_color(Color::RED)
+            .with_font_size(14.0)
+            .with_font_weight(FontWeight::BOLD)
+            .with_font_style(FontStyle::Italic)
+            .with_font_family("Inter")
+            .with_letter_spacing(0.5)
+            .with_word_spacing(1.0)
+            .with_height(1.25)
+            .with_font_feature(FontFeature::enable("liga"))
+            .with_font_variation(FontVariation::new("wght", 650.0))
+            .with_shadow(TextShadow::new(Color::BLACK, 1.0, 1.0, 2.0))
+    }
+
+    #[test]
+    fn builders_set_their_field() {
+        let s = full();
+        assert_eq!(s.color, Some(Color::RED));
+        assert_eq!(s.font_size, Some(14.0));
+        assert_eq!(s.font_weight, Some(FontWeight::BOLD));
+        assert_eq!(s.font_style, Some(FontStyle::Italic));
+        assert_eq!(s.font_family.as_deref(), Some("Inter"));
+        assert_eq!(
+            (s.letter_spacing, s.word_spacing, s.height),
+            (Some(0.5), Some(1.0), Some(1.25))
+        );
+        assert_eq!(s.font_features, vec![FontFeature::enable("liga")]);
+        assert_eq!(s.font_variations, vec![FontVariation::new("wght", 650.0)]);
+        assert_eq!(
+            s.shadows,
+            vec![TextShadow::new(Color::BLACK, 1.0, 1.0, 2.0)]
+        );
+        assert_eq!(TextStyle::new(), TextStyle::default());
+    }
+
+    /// Every layout field breaks layout equality on its own; paint-only
+    /// fields never do.
+    #[test]
+    fn layout_affecting_eq_per_field() {
+        let base = full();
+        assert!(base.layout_affecting_eq(&base.clone()));
+        let layout_changes = [
+            TextStyle {
+                font_size: Some(15.0),
+                ..full()
+            },
+            TextStyle {
+                font_weight: None,
+                ..full()
+            },
+            TextStyle {
+                font_style: None,
+                ..full()
+            },
+            TextStyle {
+                letter_spacing: None,
+                ..full()
+            },
+            TextStyle {
+                word_spacing: None,
+                ..full()
+            },
+            TextStyle {
+                height: None,
+                ..full()
+            },
+            TextStyle {
+                font_family: None,
+                ..full()
+            },
+            TextStyle {
+                font_family_fallback: vec!["x".into()],
+                ..full()
+            },
+            TextStyle {
+                font_features: vec![],
+                ..full()
+            },
+            TextStyle {
+                font_variations: vec![],
+                ..full()
+            },
+        ];
+        for changed in &layout_changes {
+            assert!(!base.layout_affecting_eq(changed), "{changed:?}");
+        }
+        let paint_changes = [
+            TextStyle {
+                color: None,
+                ..full()
+            },
+            TextStyle {
+                background_color: Some(Color::BLUE),
+                ..full()
+            },
+            TextStyle {
+                foreground: Some(Color::BLUE),
+                ..full()
+            },
+            TextStyle {
+                background: Some(Color::BLUE),
+                ..full()
+            },
+            TextStyle {
+                shadows: vec![],
+                ..full()
+            },
+        ];
+        for changed in &paint_changes {
+            assert!(base.layout_affecting_eq(changed), "{changed:?}");
+        }
+    }
+
+    /// `other` wins wherever it sets something; lists replace rather than
+    /// append, and only when non-empty.
+    #[test]
+    fn merge() {
+        let base = TextStyle {
+            font_family_fallback: vec!["Noto".into()],
+            ..full()
+        };
+        assert_eq!(base.merge(&TextStyle::new()), base);
+        assert_eq!(TextStyle::new().merge(&base), base);
+
+        let over = TextStyle {
+            color: Some(Color::BLUE),
+            background_color: Some(Color::GREEN),
+            font_size: Some(20.0),
+            font_weight: Some(FontWeight::W300),
+            font_style: Some(FontStyle::Normal),
+            letter_spacing: Some(2.0),
+            word_spacing: Some(3.0),
+            height: Some(2.0),
+            font_family: Some("Mono".into()),
+            font_family_fallback: vec!["Fallback".into()],
+            font_features: vec![FontFeature::disable("kern")],
+            font_variations: vec![FontVariation::new("opsz", 12.0)],
+            foreground: Some(Color::WHITE),
+            background: Some(Color::BLACK),
+            shadows: vec![TextShadow::new(Color::RED, 0.0, 0.0, 1.0)],
+        };
+        assert_eq!(base.merge(&over), over);
+        let back = TextStyle {
+            foreground: Some(Color::GREEN),
+            background: Some(Color::GRAY),
+            ..full()
+        };
+        let merged = back.merge(&TextStyle::new());
+        assert_eq!(
+            (merged.foreground, merged.background),
+            (Some(Color::GREEN), Some(Color::GRAY))
+        );
     }
 }
