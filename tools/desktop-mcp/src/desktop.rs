@@ -2900,12 +2900,16 @@ mod tests {
     fn a_desktop_refuses_what_it_cannot_bind() {
         let mut desktop = Desktop::new();
         if desktop.input().is_ok() {
-            let combo = KeyCombo::parse("win+r").expect("BUG: parses");
+            // A lone Shift is a shell hotkey on every platform (five taps
+            // turn on Sticky Keys), unlike `win+r`, which on macOS is the
+            // application's own Cmd+R. Window 1 was never issued, so a
+            // binding check run first would answer `unknown_handle`.
+            let combo = KeyCombo::parse("shift").expect("BUG: parses");
             let err = desktop
                 .key(&combo, 1, TargetArg::Window(1))
-                .expect_err("BUG: must be refused")
-                .to_string();
-            assert!(err.contains("meta+r"), "{err}");
+                .expect_err("BUG: must be refused");
+            assert_eq!(err.code(), "not_supported", "{err}");
+            assert!(err.to_string().contains("`shift` is handled by"), "{err}");
             let err = desktop
                 .type_text("x", TargetArg::Window(123_456_789))
                 .expect_err("BUG: must be refused");
