@@ -1,11 +1,13 @@
 # ADR-0083: One frame transaction lives in `flui-runtime` above `flui-widgets`
 
 - **Status:** Accepted in part (2026-09-26): §1's placement (tier K, kind `internal`, above
-  `flui-widgets`, a normal graph that reaches none of the K set) and the first three moves (see
+  `flui-widgets`, a normal graph that reaches none of the K set) and the first four moves (see
   `## Migration`). §1's ordering before `flui-testing` follows §4 and is not yet in place
   (`flui-testing` still sits below the runtime). §1's ownership list is accepted for the items
-  those moves placed (the presentation lanes, the frame sink seam, `PerformanceStats` and
-  `ExecutionServices`); the rest of it and §2–§5 remain Proposed.
+  those moves placed (the presentation lanes, the frame sink seam, `PerformanceStats`,
+  `ExecutionServices`, and the realm core: `UiRealm`, `PresentationState`, the presentation
+  forest, the per-presentation lifecycle, frame-failure reporting and its ADR-0048
+  containment); the rest of it and §2–§5 remain Proposed.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md)
   (the paragraph "No `flui-runtime` without two consumers")
@@ -241,7 +243,7 @@ The crate is created first and filled in five moves, each independently mergeabl
 | 1. Lanes (done) | `flui-runtime` is created: tier K, `internal`, `order = 5`, layer 6, with no `flui-widgets` edge until the realm core needs one. It holds the presentation lanes that need nothing from the realm core: `epoch` (`TreeRevision`, `FrameCommitState`), `held_input` (`HeldPointerQueue`, `HeldPointerReplay`) and `semantics_host` (`SemanticsHost`). Items with no production caller compile only under `cfg(test)` or the `test-support` feature | — |
 | 2. Frame sink (done) | `FrameSink` and `SubmitVerdict` (engine-free; they name only `flui_layer::Scene`) move to `flui_runtime::sink`, and `PerformanceStats` to `flui_runtime::performance_stats` (it is fed while the layer tree is built, not at submit); `RasterLane<B>` and `DirectSink` stay in `flui-app` and implement the trait | move 1 |
 | 3. Execution (done) | `ExecutionServices` (ADR-0047) moves to `flui_runtime::execution`; `flui-app` re-exports `ComputeJob`, `DeterministicExecutors`, `HostComputePool`, `HostExecutors`, `HostIoPool`, `IoFuture` and `SpawnError`, so their public paths do not change. `allowed-dependents = ["flui-app"]` on the runtime keeps ADR-0047's invariant true now that the services are `pub`: only a host crate (one of the runtime's `allowed-dependents`) constructs `ExecutionServices`, and no other workspace crate reaches the pools | move 1 |
-| 4. Realm core | `ui_realm`, `presentation`, `presentation_forest`, `lifecycle_state`, `frame_failure`, and `media_query_root` minus its window constructor; the ADR-0048 `catch_unwind` moves unchanged and the realm tests move with a headless `FrameSink`; `UiRealm::enter_for_close` is deleted | `PlatformWindow` in `flui-platform-api` (ADR-0082 §3, second change), since `PresentationState` and `UiRealm` name it; moves 2 and 3 |
+| 4. Realm core (done) | `ui_realm` (with `attach`, whose root wrappers are `flui-widgets`'), `presentation`, `presentation_forest`, `lifecycle_state`, `frame_failure`, `media_query_root` (with its window constructor: it names only `PlatformWindow`, and its only callers are `PresentationState`'s constructors), `renderer_binding` (`RenderingFlutterBinding`) and the realm's `RealmServices`/`next_identity`; the ADR-0048 `catch_unwind` moves unchanged. The realm renders through `UiRealm::render_frame(&mut impl FrameSink)` and names no engine type: `flui-app`'s `RealmRaster` trait keeps the engine-backed entry points (`render_frame_entered` over a `DirectSink`, `render_frame_on_lane`). The realm tests move with a headless sink (`flui_runtime::testing::ScriptedSink`, under `test-support`), and `UiRealm::enter_for_close` is deleted. Items `flui-app` calls in production are `pub`; items only its tests call are `pub` under `test-support`. Three names the realm used that no runtime edge may carry moved down first: `PlatformAccessibility` to `flui-semantics` (ADR-0082 §2, amended), `REDACTED_VALUE` to `flui_foundation::diagnostics` (only composition roots may depend on `flui-log`), and the hot-reload tier, which the realm now takes as `flui_runtime::reload::ReloadTier` and `flui-app` translates from `flui-hot-reload`'s | `PlatformWindow` in `flui-platform-api` (ADR-0082 §3, second change), since `PresentationState` and `UiRealm` name it; moves 2 and 3 |
 | 5. Transaction | `Realm::pump` absorbs the runners' `drive_frame_with_lane` calls; `OwnerHost` replaces `AppRuntime`'s realm slot and is §3's one trampoline cell; the production part of `realm_dispatch.rs` moves; the two verification tests below land. Rollback: a `legacy-frame-driver` cargo feature on `flui-app` for one minor | move 4 |
 
 §2 (sealing the entry points), §4 (`flui-testing` above the runtime, taking an `order` after it)
@@ -260,8 +262,10 @@ test that failed before the fix:
   read it again from the same thread. The registry now reads without blocking and reports a
   busy member; the realm composite skips it, and `GlobalKey` resolves to `None` for keys of the
   presentation whose frame is running (a Flutter divergence recorded in `flui-view`'s
-  `ARCHITECTURE.md`). This makes the closing-presentation exclusion in
-  `UiRealm::enter_for_close` redundant; move 4 deletes it. Tests:
+  `ARCHITECTURE.md`). This made the closing-presentation exclusion in
+  `UiRealm::enter_for_close` redundant; move 4 deleted it, so a key of the closing
+  presentation now resolves while it detaches, before its teardown takes the lock
+  (`closing_presentations_own_key_resolves_while_it_detaches`). Tests:
   `global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking`,
   `global_key_in_a_sibling_binding_resolves_during_this_bindings_frame`,
   `global_key_lookup_from_dispose_during_detach_returns_instead_of_deadlocking` (`flui-view`),

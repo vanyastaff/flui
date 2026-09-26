@@ -193,7 +193,8 @@ it with one aggregate warning.
 
 ### Failure classification and the typed route
 
-`crates/flui-app/src/app/frame_failure.rs`:
+`crates/flui-runtime/src/frame_failure.rs` (moved from `flui-app` by ADR-0083; `flui_app`
+re-exports the types):
 
 - `FrameFailureKind::Pipeline { error: RenderError }` is a terminal
   `FrameDropped` report for a structured pipeline failure. The handler keeps

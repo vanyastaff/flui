@@ -1,5 +1,28 @@
 # Application runtime architecture
 
+`flui-app` is the composition root: the platform runners, the loop-scoped
+`AppRuntime`, the realm dispatch layer, the raster lane and the platform
+wiring. The realm itself (`UiRealm`, its presentations and their frame
+transaction) lives in `flui-runtime` (ADR-0083); `crate::app::ui_realm`,
+`presentation` and `lifecycle_state` alias its modules for the runners until
+the dispatch layer moves there too.
+
+## Invariants
+
+- **The engine stays here.** The realm renders through a
+  `flui_runtime::sink::FrameSink` and names no engine type. This crate's two
+  sinks are `RasterLane<B>` (the desktop and Android runners, ADR-0045) and
+  `DirectSink` (the web runner), and `raster_lane::RealmRaster` is the one
+  place a realm is rendered through either: `render_frame_on_lane` and
+  `render_frame_entered`. `DirectSink` alone maps `EngineError`s to
+  `SubmitVerdict`s for the web runner (pinned by
+  `direct_sink_classifies_each_engine_outcome`); the realm's own tests script
+  verdicts and never reach it.
+- **A window reaches a realm with its bridge.** `runner::presentation_window`
+  reads a host window's accessibility bridge once and pairs it with the
+  window in a `PresentationWindow` (pinned by
+  `a_realm_built_from_a_host_window_publishes_through_its_accessibility`).
+
 ## Mapping decisions
 
 ### Native execution caps remain presentation-local

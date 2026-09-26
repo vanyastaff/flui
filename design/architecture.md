@@ -194,11 +194,11 @@ Rules:
   mechanism (`crates/flui-material/Cargo.toml:87-88`) instead of adding a parallel rule.
 - **The crate count is not a goal.** It is a reported fact of the tier table.
 
-**Why the runtime sits above `flui-widgets`.** The realm composes widget-level roots:
-`flui-app`'s realm attach code imports `FocusRoot`, `GestureArenaScope` and `VsyncScope` from
-`flui_widgets` (`crates/flui-app/src/app/ui_realm/attach.rs:6`), and the command channel carries
-`NavigatorCommand` (`crates/flui-app/src/app/ui_realm/commands.rs:8,95`). Extracting the runtime above
-widgets needs no preparatory moves. `NavigatorCommand` later becomes a design-neutral navigation
+**Why the runtime sits above `flui-widgets`.** The realm composes widget-level roots: its
+attach code imports `FocusRoot`, `GestureArenaScope` and `VsyncScope` from `flui_widgets`
+(`crates/flui-runtime/src/ui_realm/attach.rs:6`), and the command channel carries
+`NavigatorCommand` (`crates/flui-runtime/src/ui_realm/commands.rs:8,91`). The realm moved above
+widgets with no preparatory moves. `NavigatorCommand` later becomes a design-neutral navigation
 intent (§10.4).
 
 **Types reached through `LifecycleContext` stay at the view layer or lower.** `LifecycleContext`
@@ -507,7 +507,7 @@ through `pub(crate)`, a sealed token or a capability type. A syn scan with `--se
 fallback if no type works. Banning `pub fn pump_frame` would not be enough: a rename defeats it,
 and `HeadlessBinding::pump_frame` already reaches the scheduler through `drive_frame_with_lane`
 (`crates/flui-testing/src/lib.rs:1017`). Per-presentation failure containment (ADR-0048,
-`draw_frame_entered` at `crates/flui-app/src/app/ui_realm/frame.rs:74`) moves with the transaction.
+`draw_frame_entered` at `crates/flui-runtime/src/ui_realm/frame.rs:74`) moved with the transaction.
 
 ### 8.4 Scheduling and demand
 
@@ -566,10 +566,10 @@ decisions 5 and 7.
   `UiCommand::SignalWrite` used to apply to the primary presentation's graph, a conformance
   defect against ADR-0074, which already says "realm-scoped". It now carries its target slot and
   is routed by `SignalSlot::graph` to the presentation whose graph minted it
-  (`UiRealm::signal_graph_for` in `crates/flui-app/src/app/ui_realm/presentations.rs`); a write
+  (`UiRealm::signal_graph_for` in `crates/flui-runtime/src/ui_realm/presentations.rs`); a write
   no presentation of the realm owns is dropped and counted as stale. The multi-window test that
   failed with `ForeignGraph` before the fix is
-  `crates/flui-app/src/app/ui_realm/tests/signal_write_routing.rs`. This landed before the
+  `crates/flui-runtime/src/ui_realm/tests/signal_write_routing.rs`. This landed before the
   write-signature change.
 - **Reads go through `ReadScope`.** The read contract (`Signal<T>`, `SignalSlot`, `SignalError`,
   `ReadGraph`, `ReaderSink`, `ScopeRef`, `ReadScope`) lives in `flui_foundation::read_scope`.

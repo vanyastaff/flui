@@ -1,10 +1,11 @@
 # flui-runtime Architecture
 
 The frame runtime of [ADR-0083](../../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §1: the
-per-presentation frame machinery a UI realm drives, placed below the hosts
-(`flui-app`'s runners, platform wiring and raster lane) and above the widget
-spine. The realm core moves here in steps; the ADR's `## Migration` section
-lists them and what each waits on.
+UI realm (`ui_realm::UiRealm`) and the per-presentation frame machinery it
+drives, placed below the hosts (`flui-app`'s runners, platform wiring, raster
+lane and realm dispatch layer) and above the widget spine. It arrived in
+steps; the ADR's `## Migration` section lists them, and what is still to move
+(`Realm::pump`, the owner host, the dispatch layer).
 
 ## Invariants
 
@@ -15,7 +16,33 @@ lists them and what each waits on.
   `[workspace.metadata.flui.reach]`, checked by `cargo xtask reach` over
   every root build. A seam that needs a
   host type (the frame sink, the platform window) crosses as a trait this
-  crate defines or one from `flui-platform-api`.
+  crate defines or one from `flui-platform-api`; a window's accessibility
+  bridge is `flui_semantics::platform::PlatformAccessibility` (ADR-0082 §2,
+  amended), and the development reload tier is this crate's own
+  `reload::ReloadTier`, which the host translates from its hot-reload driver.
+- **A realm is owner-affine.** `UiRealm` is `!Send + !Sync` (a raw-pointer
+  `PhantomData` marker; pinned by `assert_not_impl_any!` in the realm tests).
+  Everything that crosses a thread goes through a `UiCommandSender` into a
+  bounded inbox that the owner drains only while the scheduler is idle.
+- **Every entry composes every presentation.** `UiRealm::enter` activates a
+  `GlobalKey` registry composite over all the realm's presentations for the
+  whole dynamic extent of the call, closing included. A binding whose own
+  lock is held reports itself busy and the composite skips it (`flui-view`'s
+  `key::registry`), so no entry needs to exclude a presentation (pinned by
+  `closing_presentations_own_key_resolves_while_it_detaches` and
+  `drawer_style_state_read_during_the_realm_frame_does_not_deadlock`).
+- **A failed presentation segment is contained to that presentation.**
+  `draw_frame_entered` runs each presentation's segment under its own
+  `catch_unwind` (ADR-0048); a panic or structured pipeline error is
+  reported through `frame_failure` and re-dirties only that presentation,
+  and siblings still frame (pinned by
+  `an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames`).
+- **The realm renders through a sink, never an engine.** `UiRealm::render_frame`
+  takes any `FrameSink`; the host picks one (`flui-app`'s raster lane, or its
+  direct sink over a borrowed backend on the web runner, both through its
+  `RealmRaster` trait), and the realm tests pick
+  `testing::ScriptedSink`. How a host maps its backend's outcomes to verdicts
+  is that host's to test.
 - **Internal, and only the host depends on it.** Tier K,
   `tier-kind = "internal"`: nothing here is an embedder API (ADR-0027 §9)
   except the `execution` host-injection seam below.
@@ -39,29 +66,39 @@ lists them and what each waits on.
   The rest of `execution` (`ExecutionServices`) is reached
   only by `flui-app` and carries no promise. `execution_public_paths` in
   `flui-app` pins the re-exported paths.
-- **Per presentation or per host loop, never per process.** Every type here is
-  owned by one presentation (`HeldPointerQueue`, `SemanticsHost`,
-  `PerformanceStats`, the commit epoch) or, for `ExecutionServices`, by one
-  host loop, constructed only by the host's composition root. There is no
-  static, thread-local or process-global state.
+- **Per realm, per presentation or per host loop, never per process.** Every
+  type here is owned by one realm (`UiRealm`, its scheduler and command
+  inbox), one presentation (`PresentationState`, `HeldPointerQueue`,
+  `SemanticsHost`, `PerformanceStats`, the commit epoch) or, for
+  `ExecutionServices`, one host loop, constructed only by the host's
+  composition root. The one static is `realm_services`' incarnation counter,
+  a monotonic ID counter the globals gate exempts.
+- **The realm's surface is the host's, not an embedder's.** `UiRealm`,
+  `PresentationState` and their methods are `pub` only where `flui-app`
+  calls them; what only `flui-app`'s tests call is `pub` under
+  `test-support`; the rest is `pub(crate)`. `flui-app` re-exports none of
+  them, only `frame_failure`'s report types and `RenderingFlutterBinding`,
+  at their old `flui_app` paths.
 - **The frame sink is the host's, the verdict is the realm's.** A host
   implements `sink::FrameSink`; the realm reads its `SubmitVerdict` and
   classifies retry, device loss and not-shown (ADR-0068). The trait stays
-  object-safe: the realm is generic over its sink today
-  (`render_frame_with_sink<S: FrameSink>` in `flui-app`), and will drive it as
-  `&mut dyn FrameSink` through the proposed `Realm::pump` (ADR-0083)
-  (pinned by `sink::tests::a_host_sink_is_driven_through_dyn_frame_sink`).
+  object-safe: `UiRealm::render_frame<S: FrameSink + ?Sized>` accepts
+  `&mut dyn FrameSink` today, the shape the proposed `Realm::pump`
+  (ADR-0083) drives (pinned by
+  `sink::tests::a_host_sink_is_driven_through_dyn_frame_sink`).
   `SubmitVerdict` stays exhaustive, never `#[non_exhaustive]`: a new variant
-  must make the compiler name the realm's match site in `flui-app`, and a
-  wildcard arm there would swallow it (pinned by the enum's doctest, which
-  matches every variant from outside the crate).
+  must make the compiler name the realm's match site and every host's
+  mapping, and a wildcard arm would swallow it (pinned by the enum's
+  doctest, which matches every variant from outside the crate).
 - **Test hooks stay behind `test-support`.** Items that exist for tests, or
   that have no production caller yet (`HeldPointerQueue::append`/`len`,
   `SemanticsHost::ensure_semantics`, `outstanding_handles`,
   `ExecutionServices::with_limits`/`owns_default_pools`/`default_pools_started` and
-  `platform_semantics_enabled`, the announce/event delivery), compile
-  only under `cfg(test)` or the `test-support` feature, which only dev edges
-  enable. Wiring one into production removes its gate in the same change.
+  `platform_semantics_enabled`, the announce/event delivery, the realm's
+  `for_test` constructors and `*_for_test` probes, the `testing` doubles),
+  compile only under `cfg(test)` or the `test-support` feature, which only
+  dev edges enable. Wiring one into production removes its gate in the same
+  change.
 
 ## Mapping decisions
 
@@ -76,8 +113,7 @@ therefore lives in its own crate that names no host type, and the hosts depend
 on it. Semantics enablement follows: `SemanticsHost` is one per presentation
 instead of `SemanticsBinding`'s single instance, so two windows never share an
 enablement count or a platform callback. Pinned by
-`app::presentation::tests::semantics_host_is_exclusive_to_this_presentation`
-in `flui-app`.
+`presentation::tests::semantics_host_is_exclusive_to_this_presentation`.
 
 ### A submit returns a verdict
 

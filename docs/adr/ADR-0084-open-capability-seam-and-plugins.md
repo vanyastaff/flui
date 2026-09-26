@@ -42,10 +42,10 @@ The platform side already has more than the widget side can reach:
 
 - **Haptics.** `PlatformWindow::haptics()` exists (`crates/flui-platform-api/src/platform_window.rs`),
   and `PresentationState::perform_haptic_feedback` resolves it
-  (`crates/flui-app/src/app/presentation.rs:893`), but that method and its forwarder
-  `UiRealm::perform_haptic_feedback` (`crates/flui-app/src/app/ui_realm/frame_clock.rs:508`) carry
-  `expect(dead_code)` with "no production caller yet" (`presentation.rs:883-892`,
-  `frame_clock.rs:502-507`). ADR-0031 §4 deferred the widget-facing handle "with the first widget
+  (`crates/flui-runtime/src/presentation.rs:970`), but that method and its forwarder
+  `UiRealm::perform_haptic_feedback` (`crates/flui-runtime/src/ui_realm/frame_clock.rs:466`) carry
+  `expect(dead_code)` with "no production caller yet" (both moved from `flui-app` by
+  ADR-0083). ADR-0031 §4 deferred the widget-facing handle "with the first widget
   consumer, as a lifecycle capability".
 - **Clipboard.** `Platform::clipboard()` is a required method
   (`crates/flui-platform/src/traits/platform.rs:423`), resolved once per loop into `AppRuntime`

@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Frame runtime for FLUI: the per-presentation lanes a UI realm drives between the widget tree and a host, and the frame sink it submits through (internal)"
+description = "Frame runtime for FLUI: the UI realm, the per-presentation frame transaction it drives between the widget tree and a host, and the frame sink it submits through (internal)"
 documentation = "https://docs.rs/flui-runtime"
 keywords = ["gui", "ui", "runtime", "flui"]
 categories = ["gui"]
@@ -119,12 +119,12 @@ all-features = true
 
 # Tier K, order 5: the frame runtime of ADR-0083 §1 sits in the spine tier
 # above `flui-view` (1), `flui-testing` (2), `flui-widgets` (3) and
-# `flui-localizations` (4), because the realm it will own drives a widget
-# tree; `flui-app` (tier H) is its only normal dependent. Internal: it is not
-# an embedder API (ADR-0027 §9), except the execution host-injection seam that
-# `flui-app` re-exports (ADR-0089 §1). Layer 6 is the widget catalog's: its
-# future `flui-widgets` edge allows layers 6 to 9 (`flui-app` is 9), and 6 is
-# the lowest of them.
+# `flui-localizations` (4), because the realm it owns drives a widget tree;
+# `flui-app` (tier H) is its only normal dependent. Internal: it is not an
+# embedder API (ADR-0027 §9), except the execution host-injection seam and the
+# frame-failure report types that `flui-app` re-exports (ADR-0089 §1). Layer 6
+# is the widget catalog's: its `flui-widgets` edge allows layers 6 to 9
+# (`flui-app` is 9), and 6 is the lowest of them.
 [package.metadata.flui]
 layer = 6
 tier = "K"

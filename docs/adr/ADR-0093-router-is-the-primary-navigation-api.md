@@ -43,8 +43,8 @@ Navigator those two records describe:
   build context. The handle is owned and takes no second lock (ADR-0019 §2), which is right,
   but a build-time lookup is the pattern ADR-0078 moved every other capability away from.
 - **A thread-local routing table for commands.** Cross-thread navigation goes through
-  `UiCommand::Navigation(NavigatorCommand)` (`crates/flui-app/src/app/ui_realm/commands.rs:95`,
-  applied at `commands.rs:437`). `NavigatorCommand::apply_on_owner` resolves its target through
+  `UiCommand::Navigation(NavigatorCommand)` (`crates/flui-runtime/src/ui_realm/commands.rs:91`,
+  applied in `UiRealm::drain_commands` in the same file). `NavigatorCommand::apply_on_owner` resolves its target through
   `thread_local! NAVIGATOR_COMMAND_TARGETS` (`navigator.rs:90-93`, read at `navigator.rs:819`),
   a per-thread map from a process-wide counter (`NEXT_NAVIGATOR_COMMAND_TARGET_ID`,
   `navigator.rs:88`) to `Weak<NavigatorShared>`. The sender is `pub(crate)` and not wired

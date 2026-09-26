@@ -951,8 +951,8 @@ impl HeadlessBinding {
     ///    region that appears, moves, or disappears under a **motionless**
     ///    pointer emit enter/exit with no new pointer motion: the mechanism
     ///    production already wires
-    ///    (`UiRealm::render_frame_entered`,
-    ///    `crates/flui-app/src/app/ui_realm/`, driven from inside
+    ///    (`UiRealm::render_frame`,
+    ///    `crates/flui-runtime/src/ui_realm/`, driven from inside
     ///    the scheduler's frame closure —
     ///    `crates/flui-app/src/app/runner.rs`) right after layout/paint and
     ///    still inside that same closure, mirrored here against this
@@ -1061,8 +1061,8 @@ impl HeadlessBinding {
                     //    slot — i.e. BEFORE `end_frame` drains post-frame
                     //    callbacks below, not after `drive_frame` returns.
                     //    Placement matters: production
-                    //    (`UiRealm::render_frame_entered`,
-                    //    `crates/flui-app/src/app/ui_realm/`, invoked from
+                    //    (`UiRealm::render_frame`,
+                    //    `crates/flui-runtime/src/ui_realm/`, invoked from
                     //    `crates/flui-app/src/app/runner.rs`) calls
                     //    `update_all_devices` from inside the SAME
                     //    `drive_frame` pipeline closure it runs its own
