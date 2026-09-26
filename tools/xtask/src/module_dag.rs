@@ -726,7 +726,8 @@ const PLANTED: [Planted; 2] = [
         name: "a",
         declaration: r#"
 layers = [
-    ["base", "peer_a", "peer_b", "via_use", "via_root", "via_relay", "via_expr", "via_super",
+    ["base", "peer_a", "peer_b", "via_use", "via_root", "via_relay", "via_relay_plain",
+     "via_expr", "via_super",
      "via_macro", "via_macro_rules", "via_macro_export", "via_alias", "via_feature",
      "via_unknown", "via_admitted", "via_bad_exit", "via_missing_adr", "via_bad_date",
      "quiet", "quiet", "phantom", "top::inner"],
@@ -748,7 +749,8 @@ exceptions = [
                 "//! Planted crate.\n\
                  extern crate self as alias_a;\n\
                  pub mod base;\npub mod peer_a;\npub mod peer_b;\npub mod top;\n\
-                 pub mod via_use;\npub mod via_root;\npub mod via_relay;\npub mod via_expr;\n\
+                 pub mod via_use;\npub mod via_root;\npub mod via_relay;\n\
+                 pub mod via_relay_plain;\npub mod via_expr;\n\
                  pub mod via_super;\npub mod via_macro;\npub mod via_macro_rules;\n\
                  pub mod via_macro_export;\npub mod via_alias;\n\
                  #[cfg(any(test, feature = \"testing\"))]\npub mod via_feature;\n\
@@ -774,7 +776,12 @@ exceptions = [
             ("via_use.rs", "use crate::top::Top;\n"),
             ("via_root.rs", "use crate::Top;\n"),
             ("via_relay.rs", "use crate::relay::Deep;\n"),
-            ("relay.rs", "pub use crate::top::Deep;\npub fn stray() {}\n"),
+            (
+                "relay.rs",
+                "pub use crate::top::Deep;\nuse crate::top;\npub use top::Top as Plain;\n\
+                 pub fn stray() {}\n",
+            ),
+            ("via_relay_plain.rs", "use crate::relay::Plain;\n"),
             (
                 "via_expr.rs",
                 "pub fn f() { let _ = crate::top::Top::new(); }\n",
@@ -851,11 +858,12 @@ transparent = ["prelude"]
 ];
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 23] = [
+const EXPECTED: [(&str, &str, &str); 24] = [
     ("via_use", "top", "refused"),
     ("peer_a", "peer_b", "refused"),
     ("via_root", "top", "refused"),
     ("via_relay", "top", "refused"),
+    ("via_relay_plain", "top", "refused"),
     ("via_expr", "top", "refused"),
     ("via_super", "top", "refused"),
     ("via_macro", "top", "refused"),
