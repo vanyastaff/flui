@@ -273,6 +273,7 @@ layers = [
     ],
     [
         "testing",
+        "__test_access",
     ],
 ]
 # Modules of `use` items only: a path through them counts as a path to what they re-export.
