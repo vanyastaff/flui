@@ -11,7 +11,7 @@
 //! - tests exclude flui-platform (its suite needs a display server: a separate
 //!   headless leg runs it when it is in scope);
 //! - the facade's non-default catalogs join the run when `flui` is in scope
-//!   (`--features flui/cupertino,flui/localizations`);
+//!   (`--features flui/cupertino`);
 //! - cfg-gated code the Linux lane would never compile gets a check on its own
 //!   target: flui-platform's four backends, the flui-app/flui mobile runner,
 //!   the flui-cli Windows paths (mirroring the cross-typecheck job), and wasm32
@@ -488,7 +488,7 @@ pub(super) fn lane_args(
             }
         },
         features: if has("flui") {
-            "--features flui/cupertino,flui/localizations".to_owned()
+            "--features flui/cupertino".to_owned()
         } else {
             String::new()
         },
@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(
             a.ci_test_args,
             "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests \
-             --features flui/cupertino,flui/localizations \
+             --features flui/cupertino \
              -E package(flui)|package(flui-material)|package(flui-web-counter)"
         );
         // check-changed keeps the scoped build

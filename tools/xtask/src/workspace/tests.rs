@@ -729,9 +729,7 @@ fn the_design_systems_admit_only_the_adr_0028_dependents() {
     let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
     let members = super::Members::load(&util::repo_root(), &metadata).expect("manifests load");
     let by_name = members.by_name();
-    let expected: BTreeSet<String> = ["flui-localizations", "flui-app", "flui"]
-        .map(str::to_owned)
-        .into();
+    let expected: BTreeSet<String> = ["flui-app", "flui"].map(str::to_owned).into();
     for design_system in ["flui-material", "flui-cupertino"] {
         let member = by_name[design_system];
         assert_eq!(
@@ -747,29 +745,26 @@ fn the_design_systems_admit_only_the_adr_0028_dependents() {
     }
 }
 
-/// The two crates ADR-0081 deletes keep their dependents frozen: each list
-/// names exactly the crates that depend on it now, and never a crate outside
-/// the set it had when the record was accepted. Adding a dependent means
-/// editing this test; dropping an edge means dropping its entry.
+/// The crate ADR-0081 deletes keeps its dependents frozen: the list names
+/// exactly the crates that depend on it now, and never a crate outside the
+/// set it had when the record was accepted. Adding a dependent means editing
+/// this test; dropping an edge means dropping its entry.
 #[test]
 fn the_deleted_crates_admit_only_their_frozen_dependents() {
     let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
     let members = super::Members::load(&util::repo_root(), &metadata).expect("manifests load");
     let by_name = members.by_name();
-    let frozen: [(&str, &[&str]); 2] = [
-        (
-            "flui-tree",
-            &[
-                "flui",
-                "flui-layer",
-                "flui-objects",
-                "flui-rendering",
-                "flui-semantics",
-                "flui-view",
-            ],
-        ),
-        ("flui-localizations", &["flui"]),
-    ];
+    let frozen: [(&str, &[&str]); 1] = [(
+        "flui-tree",
+        &[
+            "flui",
+            "flui-layer",
+            "flui-objects",
+            "flui-rendering",
+            "flui-semantics",
+            "flui-view",
+        ],
+    )];
     for (target, admitted) in frozen {
         let admitted: BTreeSet<String> = admitted.iter().map(|&name| name.to_owned()).collect();
         let member = by_name[target];
@@ -850,13 +845,7 @@ fn the_tiers_match_the_adr_0081_table() {
         (
             "K",
             "internal",
-            &[
-                "flui-view",
-                "flui-testing",
-                "flui-widgets",
-                "flui-localizations",
-                "flui-runtime",
-            ],
+            &["flui-view", "flui-testing", "flui-widgets", "flui-runtime"],
         ),
         ("H", "internal", &["flui-platform", "flui-app"]),
         ("H", "tool", &["flui-cli"]),

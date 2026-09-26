@@ -248,7 +248,7 @@ mod tests {
             packages: "flui flui-material flui-web-counter".to_owned(),
             pkg_args: "-p flui -p flui-material -p flui-web-counter".to_owned(),
             test_args: "-p flui -p flui-material -p flui-web-counter".to_owned(),
-            features: "--features flui/cupertino,flui/localizations".to_owned(),
+            features: "--features flui/cupertino".to_owned(),
             platform: false,
             cross_platform: false,
             cross_app: true,
@@ -271,7 +271,7 @@ mod tests {
         let out = render(&sample(), 3, Format::Github);
         let expected = "lane=fast\nmode=packages\nheavy_required=false\nreason=changed: flui-material; plus 2 dependents\n\
              packages=flui flui-material flui-web-counter\npkg_args=-p flui -p flui-material -p flui-web-counter\n\
-             test_args=-p flui -p flui-material -p flui-web-counter\nfeatures=--features flui/cupertino,flui/localizations\n\
+             test_args=-p flui -p flui-material -p flui-web-counter\nfeatures=--features flui/cupertino\n\
              platform=false\ncross_platform=false\ncross_app=true\ncross_cli=false\ncross_desktop_mcp=false\ncross_ios=true\n\
              wasm_args=-p flui -p flui-material -p flui-web-counter\nwasm_facade=true\nhack_args=\n\
              doc_args=-p flui -p flui-material -p flui-web-counter --features flui/testing\n\
@@ -296,7 +296,7 @@ mod tests {
         );
         assert!(out.contains("\nHACK_ARGS=''\n"), "{out}");
         assert!(
-            out.contains("\nFEATURES='--features flui/cupertino,flui/localizations'\n"),
+            out.contains("\nFEATURES='--features flui/cupertino'\n"),
             "{out}"
         );
         assert_eq!(shell_quote("--workspace"), "--workspace");
