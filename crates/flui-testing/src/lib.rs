@@ -231,6 +231,9 @@ pub struct HeadlessBinding {
     last_frame_painted: bool,
     /// Number of frames that produced a fresh layer tree.
     painted_frame_count: u64,
+    /// What the most recent [`pump_frame`](Self::pump_frame) did, phase by
+    /// phase; all zeros before the first pump and for a gesture-only binding.
+    last_frame_report: FrameReport,
     /// The deterministic multi-presentation clock registry (issue #556)
     /// — additive to, and independent of, this binding's own single
     /// [`clock`](Self)/[`vsync`](Self::vsync) pair `pump_frame` drives.
@@ -297,6 +300,7 @@ impl HeadlessBinding {
             last_layer_tree: None,
             last_frame_painted: false,
             painted_frame_count: 0,
+            last_frame_report: FrameReport::default(),
             presentation_clocks: HashMap::new(),
         })
     }
@@ -535,6 +539,8 @@ impl HeadlessBinding {
         });
         self.last_frame_painted = committed_layer_tree.is_some();
         self.last_layer_tree = committed_layer_tree;
+        // The previous tree's last pump says nothing about this one.
+        self.last_frame_report = FrameReport::default();
         if self.last_frame_painted {
             self.painted_frame_count = self.painted_frame_count.saturating_add(1);
         }
@@ -746,6 +752,18 @@ impl HeadlessBinding {
     #[must_use]
     pub fn painted_frame_count(&self) -> u64 {
         self.painted_frame_count
+    }
+
+    /// What the most recent [`pump_frame`](Self::pump_frame) did: the build
+    /// owner's per-frame report and the pipeline's counters differenced across
+    /// the frame (the whole layout↔build fixpoint, the final `run_frame` and
+    /// the trailing lazy-sliver service pass).
+    ///
+    /// All zeros before the first pump, and on every pump of a gesture-only
+    /// binding. The mount's bootstrap frame is not a pump and is not reported.
+    #[must_use]
+    pub fn last_frame_report(&self) -> &FrameReport {
+        &self.last_frame_report
     }
 
     /// The virtual clock this binding advances each frame.
@@ -964,6 +982,7 @@ impl HeadlessBinding {
             last_layer_tree,
             last_frame_painted,
             painted_frame_count,
+            last_frame_report,
             ..
         } = self;
         interaction_lane.enter(|| {
@@ -1018,7 +1037,8 @@ impl HeadlessBinding {
                 vsync_time,
                 idle_deadline,
                 || {
-                    let painted_layer_tree = Self::run_pipeline(tree);
+                    let (painted_layer_tree, report) = Self::run_pipeline(tree);
+                    *last_frame_report = report;
                     *last_frame_painted = painted_layer_tree.is_some();
                     if let Some(layer_tree) = painted_layer_tree {
                         *last_layer_tree = Some(layer_tree);
@@ -1070,9 +1090,18 @@ impl HeadlessBinding {
     /// Returns the composited [`LayerTree`] this frame produced — `None` for a
     /// gesture-only binding, and `None` when nothing was dirty enough to
     /// repaint. `pump_frame` stores it in
-    /// [`last_layer_tree`](Self::last_layer_tree).
-    fn run_pipeline(tree: &mut Option<TreeBinding>) -> Option<LayerTree> {
-        let tree_binding = tree.as_mut()?;
+    /// [`last_layer_tree`](Self::last_layer_tree). Alongside it, the frame's
+    /// [`FrameReport`] (all zeros for a gesture-only binding).
+    fn run_pipeline(tree: &mut Option<TreeBinding>) -> (Option<LayerTree>, FrameReport) {
+        let Some(tree_binding) = tree.as_mut() else {
+            return (None, FrameReport::default());
+        };
+
+        // The pipeline counters are monotonic totals; the frame's work is the
+        // difference across everything below.
+        let before = tree_binding
+            .pipeline_owner
+            .with(flui_rendering::pipeline::PipelineOwner::counters);
 
         // Drain the build inbox, filled by the vsync tick and the async-driver
         // poll that ran before this closure.
@@ -1109,7 +1138,74 @@ impl HeadlessBinding {
             .build_owner
             .service_child_requests(&mut tree_binding.tree, &tree_binding.pipeline_owner);
 
-        layer_tree
+        let after = tree_binding
+            .pipeline_owner
+            .with(flui_rendering::pipeline::PipelineOwner::counters);
+        let report = FrameReport {
+            build: tree_binding.build_owner.last_frame_build_report(),
+            pipeline: after.since(before),
+        };
+        (layer_tree, report)
+    }
+}
+
+/// What one [`HeadlessBinding::pump_frame`] did, phase by phase — see
+/// [`HeadlessBinding::last_frame_report`].
+///
+/// Counts, not timings: every figure is a deterministic function of the tree
+/// and the change applied, which is what lets `cargo xtask perf` compare them
+/// exactly against a checked-in baseline.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FrameReport {
+    /// The build owner's report for the frame (distinct elements rebuilt,
+    /// builds run, per-reason split).
+    pub build: flui_view::FrameBuildReport,
+    /// The pipeline's work, differenced across the frame.
+    pub pipeline: flui_rendering::pipeline::PipelineCounters,
+}
+
+impl FrameReport {
+    /// The report as a stable `(name, value)` list, in a fixed order. The
+    /// names are the perf baseline's keys, so renaming one is a baseline
+    /// change.
+    #[must_use]
+    pub fn counters(&self) -> [(&'static str, u64); 10] {
+        let p = &self.pipeline;
+        [
+            ("elements_rebuilt", self.build.elements_built as u64),
+            ("builds_run", self.build.builds_run as u64),
+            ("layout_passes", p.layout_passes),
+            ("layout_roots", p.layout_roots),
+            ("nodes_laid_out", p.nodes_laid_out),
+            ("nodes_painted", p.nodes_painted),
+            ("layers_produced", p.layers_produced),
+            ("layers_reused", p.layers_reused),
+            ("semantics_nodes_updated", p.semantics_nodes_updated),
+            ("frames_produced", p.frames_produced),
+        ]
+    }
+}
+
+impl std::ops::AddAssign<&FrameReport> for FrameReport {
+    /// Sums two frames: every counter adds, and the per-reason split merges
+    /// by reason. `elements_rebuilt` of a sum is the sum of the per-frame
+    /// distinct counts, not a distinct count across frames.
+    fn add_assign(&mut self, rhs: &FrameReport) {
+        self.build.elements_built += rhs.build.elements_built;
+        self.build.builds_run += rhs.build.builds_run;
+        for &(reason, count) in &rhs.build.by_reason {
+            match self
+                .build
+                .by_reason
+                .iter_mut()
+                .find(|(existing, _)| *existing == reason)
+            {
+                Some((_, total)) => *total += count,
+                None => self.build.by_reason.push((reason, count)),
+            }
+        }
+        self.pipeline += rhs.pipeline;
     }
 }
 
@@ -1320,6 +1416,82 @@ mod auto_trait_tests {
     use super::HeadlessBinding;
 
     assert_not_impl_any!(HeadlessBinding: Send, Sync);
+}
+
+#[cfg(test)]
+mod frame_report_tests {
+    use std::time::Duration;
+
+    use flui_view::RebuildReason;
+
+    use super::{FrameReport, HeadlessBinding};
+
+    fn report(elements: usize, reasons: &[(RebuildReason, usize)], painted: u64) -> FrameReport {
+        let mut report = FrameReport::default();
+        report.build.elements_built = elements;
+        report.build.builds_run = elements;
+        report.build.by_reason = reasons.to_vec();
+        report.pipeline.nodes_painted = painted;
+        report.pipeline.frames_produced = 1;
+        report
+    }
+
+    #[test]
+    fn adding_reports_sums_counters_and_merges_reasons_by_reason() {
+        let mut total = report(2, &[(RebuildReason::StateChange, 2)], 3);
+        total += &report(
+            3,
+            &[
+                (RebuildReason::ParentUpdate, 1),
+                (RebuildReason::StateChange, 2),
+            ],
+            4,
+        );
+
+        assert_eq!(total.build.elements_built, 5);
+        assert_eq!(total.build.builds_run, 5);
+        assert_eq!(total.build.count(RebuildReason::StateChange), 4);
+        assert_eq!(total.build.count(RebuildReason::ParentUpdate), 1);
+        assert_eq!(total.build.by_reason.len(), 2, "one entry per reason");
+        assert_eq!(total.pipeline.nodes_painted, 7);
+        assert_eq!(total.pipeline.frames_produced, 2);
+    }
+
+    #[test]
+    fn counters_list_every_field_once_under_a_stable_name() {
+        let names: Vec<&str> = FrameReport::default()
+            .counters()
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "elements_rebuilt",
+                "builds_run",
+                "layout_passes",
+                "layout_roots",
+                "nodes_laid_out",
+                "nodes_painted",
+                "layers_produced",
+                "layers_reused",
+                "semantics_nodes_updated",
+                "frames_produced",
+            ],
+            "these names are the perf baseline's keys"
+        );
+        let values = report(1, &[], 9).counters();
+        assert_eq!(values[0], ("elements_rebuilt", 1));
+        assert_eq!(values[5], ("nodes_painted", 9));
+        assert_eq!(values[9], ("frames_produced", 1));
+    }
+
+    #[test]
+    fn a_gesture_only_pump_reports_nothing() {
+        let mut binding = HeadlessBinding::new();
+        binding.pump_frame(Duration::from_millis(16));
+        assert_eq!(binding.last_frame_report(), &FrameReport::default());
+    }
 }
 
 #[cfg(test)]
