@@ -424,6 +424,40 @@ fn an_extern_crate_self_alias_is_a_crate_path() {
 }
 
 #[test]
+fn a_leading_colon_alias_path_is_a_crate_path() {
+    let run = |lib_extra: &str, low: &str| {
+        let lib =
+            format!("extern crate self as flui_view;\npub mod low;\npub mod high;\n{lib_extra}");
+        identities(
+            TWO,
+            &[
+                ("lib.rs", lib.as_str()),
+                ("low.rs", low),
+                ("high.rs", "pub struct High;\n"),
+            ],
+        )
+    };
+    let refused = set(&[("low", "high", "refused")]);
+    assert_eq!(
+        run("", "pub fn f() -> ::flui_view::high::High { todo() }\n"),
+        refused
+    );
+    assert_eq!(run("", "use ::flui_view::high::High;\n"), refused);
+    assert_eq!(
+        run("pub use ::flui_view::high::High as H;\n", "use crate::H;\n"),
+        refused
+    );
+    // `::` before any other name is another crate
+    assert_eq!(
+        run(
+            "pub use ::flui_types::Color;\n",
+            "use ::flui_types::Size;\nuse crate::Color;\n"
+        ),
+        set(&[])
+    );
+}
+
+#[test]
 fn cfg_test_code_is_exempt() {
     assert_eq!(
         identities(

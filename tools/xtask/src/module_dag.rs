@@ -24,7 +24,8 @@
 //! its allowlist is manifest data that names an ADR and only shrinks.
 //!
 //! What counts as a dependency: every path in non-test code that starts at
-//! `crate`, `$crate`, `self`, `super` or an `extern crate self` alias — in
+//! `crate`, `$crate`, `self`, `super` or an `extern crate self` alias (`::`
+//! before the alias too) — in
 //! `use` items, types, expressions, patterns, bounds, impl headers, a macro's
 //! path and the tokens of macro invocations and `macro_rules!` bodies. A path
 //! through a root re-export, a transparent module, a glob re-export or a

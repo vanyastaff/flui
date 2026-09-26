@@ -87,7 +87,8 @@ enum Target {
     /// top-level item, a name another root `use` binds, or an external crate;
     /// anywhere else a child item or an external crate.
     Plain(Vec<String>),
-    /// A `::`-prefixed path: always another crate.
+    /// A `::`-prefixed path that does not start at an `extern crate self`
+    /// alias: another crate.
     External,
 }
 
@@ -215,7 +216,11 @@ impl Loader<'_> {
                         Some(top) => self.scan.module_uses.entry(top.clone()).or_default(),
                     };
                     for leaf in use_leaves(&item_use.tree) {
-                        let target = if item_use.leading_colon.is_some() {
+                        let target = if other_crate(
+                            item_use.leading_colon.is_some(),
+                            leaf.path.first(),
+                            &self.aliases,
+                        ) {
                             Target::External
                         } else if let Some(path) = absolute(module, &leaf.path, &self.aliases)? {
                             Target::Absolute(path)
@@ -563,6 +568,13 @@ fn absolute(
     }))
 }
 
+/// Whether a path, `::`-prefixed when `leading_colon`, names another crate
+/// for certain: `::name` does, unless `name` is an `extern crate self` alias,
+/// which the extern prelude resolves to this crate.
+fn other_crate(leading_colon: bool, first: Option<&String>, aliases: &[String]) -> bool {
+    leading_colon && !first.is_some_and(|first| aliases.contains(first))
+}
+
 /// Collects the references of one item of a top-level module.
 struct Collector<'a> {
     module: &'a [String],
@@ -629,24 +641,27 @@ impl<'ast> Visit<'ast> for Collector<'_> {
 
     /// Each import of the tree once; a glob names the module it reads.
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        if item.leading_colon.is_some() {
-            return;
-        }
         for leaf in use_leaves(&item.tree) {
-            self.record(leaf.path, leaf.line);
+            if !other_crate(
+                item.leading_colon.is_some(),
+                leaf.path.first(),
+                self.aliases,
+            ) {
+                self.record(leaf.path, leaf.line);
+            }
         }
     }
 
     fn visit_path(&mut self, path: &'ast syn::Path) {
-        if path.leading_colon.is_none()
-            && let Some(first) = path.segments.first()
-        {
-            let segments = path
+        if let Some(first) = path.segments.first() {
+            let segments: Vec<String> = path
                 .segments
                 .iter()
                 .map(|segment| segment.ident.to_string())
                 .collect();
-            self.record(segments, first.ident.span().start().line);
+            if !other_crate(path.leading_colon.is_some(), segments.first(), self.aliases) {
+                self.record(segments, first.ident.span().start().line);
+            }
         }
         visit::visit_path(self, path);
     }
