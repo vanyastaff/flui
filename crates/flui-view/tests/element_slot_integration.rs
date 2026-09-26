@@ -1,7 +1,7 @@
 //! `ElementSlot` is `flui_foundation::IndexedSlot<ElementId>` (an alias, not a
 //! wrapper) and round-trips `Option<ElementId>` previous-sibling payloads.
 //! Co-importing `flui_view::prelude::*` and `flui_foundation::prelude::*`
-//! compiles without an `IndexedSlot` or `ElementId` ambiguity.
+//! compiles without an `ElementId` ambiguity.
 
 use flui_foundation::{ElementId, IndexedSlot};
 use flui_view::ElementSlot;
@@ -54,14 +54,14 @@ fn element_slot_preserves_value_semantics() {
 
 #[test]
 fn view_and_foundation_preludes_co_import_without_ambiguity() {
-    // Importing both preludes must not collide. `IndexedSlot` appears
-    // in both -- flui-view's must be the re-export, so there is exactly one
-    // type at that name.
+    // Importing both preludes must not collide. `ElementId` appears in both:
+    // flui-view's must be the re-export of flui-foundation's, so the glob
+    // imports name one type. `IndexedSlot` comes from flui-view's prelude
+    // alone; `element_slot_aliases_to_the_foundation_indexed_slot` pins that
+    // it is foundation's type.
     use flui_foundation::prelude::*;
     use flui_view::prelude::*;
 
-    // Disambiguate `ElementId` (both preludes re-export it from flui-foundation,
-    // identical type).
     let slot: IndexedSlot<ElementId> = IndexedSlot::first();
     assert_eq!(slot.index(), 0);
 
