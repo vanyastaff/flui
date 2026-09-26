@@ -129,7 +129,7 @@ tokio-util = { workspace = true }
 
 # Web/WASM platform (runner spawns the frame loop via spawn_local)
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen-futures = "0.4"
+wasm-bindgen-futures = { workspace = true }
 
 # Android platform (android_main entry point needs AndroidApp type)
 [target.'cfg(target_os = "android")'.dependencies]

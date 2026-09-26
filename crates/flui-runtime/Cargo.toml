@@ -52,7 +52,7 @@ tokio-util = { workspace = true }
 # The sequential backend's IO lane (`spawn_local` on the browser's microtask
 # queue).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen-futures = "0.4"
+wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
