@@ -80,7 +80,7 @@ use tokio_util::sync::CancellationToken;
 // crate even though the module itself is native-only today.
 use web_time::{Duration, Instant};
 
-use super::execution::{ExecutionServices, SpawnError};
+use flui_runtime::execution::{ExecutionServices, SpawnError};
 
 // ============================================================================
 // Cancellation
@@ -1348,8 +1348,8 @@ impl ServiceRegistry {
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use super::super::execution::{AdmissionLimits, DeterministicExecutors};
     use super::*;
+    use flui_runtime::execution::{AdmissionLimits, DeterministicExecutors};
 
     /// Deterministic fixture: services routed to an injected
     /// [`DeterministicExecutors`], so spawned work runs only when the test

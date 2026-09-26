@@ -1,4 +1,4 @@
-//! Unified background execution services (issue #557, first slice).
+//! Unified background execution services (ADR-0047).
 //!
 //! # Work-class model
 //!
@@ -13,18 +13,21 @@
 //! - **Asynchronous compute** ([`ExecutionServices::spawn_compute`]) is a
 //!   pure, possibly multi-frame CPU job (decode, tessellation, shaping). It
 //!   runs on a bounded worker pool sized to leave headroom for the owner
-//!   thread and the IO lane ([`default_compute_worker_count`]).
+//!   thread and the IO lane (`default_compute_worker_count`).
 //! - **IO** ([`ExecutionServices::spawn_io`]) is an await-heavy future (file
 //!   or network traffic). It runs on a small fixed-size async runtime
-//!   ([`IO_WORKER_THREADS`] workers).
-//! - **Durable services** are issue #558's lifecycle work and are not part
-//!   of this module yet.
+//!   (`IO_WORKER_THREADS` workers).
+//! - **Durable services** (tasks, workers and services, ADR-0049) are the
+//!   host's lifecycle layer, which spawns through these lanes; they are not
+//!   part of this module.
 //!
 //! # Ownership
 //!
-//! `AppRuntime` (the loop-scoped composition root) owns exactly one
-//! [`ExecutionServices`] value. Nothing here is ambient: there is no global
-//! accessor, and library crates cannot reach these pools. An embedded host
+//! The host's loop-scoped composition root (`flui-app`'s `AppRuntime`) owns
+//! exactly one [`ExecutionServices`] value. Nothing here is ambient: there is
+//! no global accessor, and library crates cannot reach these pools — this
+//! crate's only allowed normal dependent is `flui-app`, checked by
+//! `cargo xtask workspace`. An embedded host
 //! that already runs its own executors injects them through
 //! [`HostExecutors`] (`AppConfig::with_executors`); the default pools are
 //! then **never constructed**, so FLUI and the host cannot oversubscribe the
@@ -50,24 +53,6 @@
 //! conformance tests in this module run against both the default pools and
 //! the deterministic implementation, so an injected executor observes the
 //! same contract.
-
-// On native targets the spawn lanes now have their production consumer: the
-// task/worker/service lifecycle layer (`app/lifecycle.rs`, issue #558) spawns
-// through them and the bootstrap/teardown drive it end to end. The wasm32
-// build still has none — the lifecycle layer is native-only until the web
-// runner grows its own slice — so the ratchet survives there, narrowed to
-// exactly that target. `expect`, not `allow`: the moment a wasm consumer
-// lands, the unfulfilled expectation errors and this attribute must go.
-#![cfg_attr(
-    all(target_arch = "wasm32", not(test)),
-    expect(
-        dead_code,
-        reason = "the task/worker/service lifecycle layer (this module's production \
-                  consumer, issue #558) is native-only; the wasm32 build keeps the \
-                  sequential spawn lanes compiled for API parity but nothing drives \
-                  them until the web runner's own lifecycle slice"
-    )
-)]
 
 use std::fmt;
 use std::future::Future;
@@ -165,6 +150,10 @@ impl fmt::Debug for HostExecutors {
 /// IO futures are await-heavy, not CPU-heavy; two workers drive a large
 /// number of concurrent file/network futures. Kept const so
 /// [`default_compute_worker_count`] can reserve headroom for them.
+///
+/// Absent from a wasm32 non-test build, like its one production reader
+/// ([`default_compute_worker_count`]): that target has no default pools.
+#[cfg(any(not(target_arch = "wasm32"), test))]
 pub(crate) const IO_WORKER_THREADS: usize = 2;
 
 /// Default compute-pool size for a machine with `available_parallelism`
@@ -175,6 +164,10 @@ pub(crate) const IO_WORKER_THREADS: usize = 2;
 /// sizing half: even with every compute worker busy, the owner thread keeps
 /// a hardware thread (the other half is structural — the frame lane never
 /// runs on these pools at all, see the module doc).
+///
+/// Only the native default pools size themselves with it, so a wasm32
+/// non-test build does not compile it.
+#[cfg(any(not(target_arch = "wasm32"), test))]
 pub(crate) fn default_compute_worker_count(available_parallelism: usize) -> usize {
     available_parallelism
         .saturating_sub(IO_WORKER_THREADS + 1)
@@ -187,11 +180,11 @@ pub(crate) fn default_compute_worker_count(available_parallelism: usize) -> usiz
 /// Defaults are deliberately generous — they are overload backstops, not
 /// throttles. Tests inject small values to exercise refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AdmissionLimits {
+pub struct AdmissionLimits {
     /// Maximum in-flight compute jobs.
-    pub(crate) compute: usize,
+    pub compute: usize,
     /// Maximum in-flight IO futures.
-    pub(crate) io: usize,
+    pub io: usize,
 }
 
 impl Default for AdmissionLimits {
@@ -260,14 +253,15 @@ impl Drop for AdmissionGuard {
     }
 }
 
-/// The `AppRuntime`-owned execution services: both background lanes, their
-/// admission windows, and the shutdown protocol. See the module doc for the
-/// work-class model.
+/// The host-owned execution services: both background lanes, their
+/// admission windows, and the shutdown protocol. One per host loop,
+/// constructed only by the host's composition root. See the module doc for
+/// the work-class model.
 ///
 /// Construction is cheap; on the default backend the pools start lazily on
 /// first spawn, so a run that never spawns background work never starts a
 /// worker thread.
-pub(crate) struct ExecutionServices {
+pub struct ExecutionServices {
     accepting: AtomicBool,
     compute_admission: Admission,
     io_admission: Admission,
@@ -379,7 +373,7 @@ impl DefaultPools {
     }
 
     /// Whether either default pool has actually started worker threads.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     fn any_started(&self) -> bool {
         matches!(&*self.io.lock(), PoolSlot::Running(_))
             || matches!(&*self.compute.lock(), PoolSlot::Running(_))
@@ -388,19 +382,22 @@ impl DefaultPools {
 
 impl ExecutionServices {
     /// Services backed by FLUI's own default pools (lazily started).
-    pub(crate) fn with_defaults() -> Self {
+    #[must_use]
+    pub fn with_defaults() -> Self {
         Self::build(None, AdmissionLimits::default())
     }
 
     /// Services backed by host-injected pools; the default pools are never
     /// constructed.
-    pub(crate) fn with_host(host: HostExecutors) -> Self {
+    #[must_use]
+    pub fn with_host(host: HostExecutors) -> Self {
         Self::build(Some(host), AdmissionLimits::default())
     }
 
     /// Test seam: custom admission windows (both backends).
-    #[cfg(test)]
-    pub(crate) fn with_limits(host: Option<HostExecutors>, limits: AdmissionLimits) -> Self {
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn with_limits(host: Option<HostExecutors>, limits: AdmissionLimits) -> Self {
         Self::build(host, limits)
     }
 
@@ -422,13 +419,14 @@ impl ExecutionServices {
         }
     }
 
-    /// The root of this loop's cancellation tree. The lifecycle layer
-    /// (`app/lifecycle.rs`) derives every task's, worker's, and service's
-    /// own signal as a child of this token, so [`Self::shutdown`]'s cancel
-    /// stage reaches every outstanding unit of work without a registry
-    /// walk.
+    /// The root of this loop's cancellation tree. The host's lifecycle layer
+    /// (`flui-app`'s task, worker and service handles, ADR-0049) derives
+    /// every task's, worker's, and service's own signal as a child of this
+    /// token, so [`Self::shutdown`]'s cancel stage reaches every outstanding
+    /// unit of work without a registry walk.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn cancellation_root(&self) -> &tokio_util::sync::CancellationToken {
+    #[must_use]
+    pub fn cancellation_root(&self) -> &tokio_util::sync::CancellationToken {
         &self.cancel
     }
 
@@ -436,14 +434,23 @@ impl ExecutionServices {
     /// (`true` — the lazily-started default pools on native targets,
     /// sequential in-place execution on wasm32) rather than routing it to
     /// host-injected pools (`false`).
-    pub(crate) fn owns_default_pools(&self) -> bool {
+    #[must_use]
+    pub fn owns_default_pools(&self) -> bool {
         !matches!(self.backend, Backend::Host(_))
     }
 
     /// Spawn an **asynchronous compute** job (see the module doc's
     /// work-class model). Fire-and-forget: result delivery is the caller's
     /// business.
-    pub(crate) fn spawn_compute(&self, job: ComputeJob) -> Result<(), SpawnError> {
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::ShuttingDown`] once [`Self::shutdown`] has begun,
+    /// [`SpawnError::Saturated`] when the compute lane's admission window is
+    /// full (or a host pool refuses the job), and
+    /// [`SpawnError::Unavailable`] when the default compute pool cannot be
+    /// started. The job is dropped unrun in every case.
+    pub fn spawn_compute(&self, job: ComputeJob) -> Result<(), SpawnError> {
         if !self.accepting.load(Ordering::Acquire) {
             return Err(SpawnError::ShuttingDown);
         }
@@ -494,7 +501,15 @@ impl ExecutionServices {
     /// Spawn an **IO** future (see the module doc's work-class model).
     /// Fire-and-forget: result delivery is the caller's business. On
     /// shutdown the future is cancelled (dropped) at its next await point.
-    pub(crate) fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError> {
+    ///
+    /// # Errors
+    ///
+    /// [`SpawnError::ShuttingDown`] once [`Self::shutdown`] has begun,
+    /// [`SpawnError::Saturated`] when the IO lane's admission window is full
+    /// (or a host pool refuses the future), and [`SpawnError::Unavailable`]
+    /// when the default IO runtime cannot be started. The future is dropped
+    /// unpolled in every case.
+    pub fn spawn_io(&self, future: IoFuture) -> Result<(), SpawnError> {
         if !self.accepting.load(Ordering::Acquire) {
             return Err(SpawnError::ShuttingDown);
         }
@@ -555,8 +570,9 @@ impl ExecutionServices {
     /// Whether either default pool has started worker threads. Always
     /// `false` with host-injected pools — the probe behind the
     /// "host injection avoids duplicate pools" evidence.
-    #[cfg(test)]
-    pub(crate) fn default_pools_started(&self) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn default_pools_started(&self) -> bool {
         match &self.backend {
             Backend::Host(_) => false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -577,7 +593,7 @@ impl ExecutionServices {
     /// `grace` bounds the wait for **running** work (an IO future between
     /// await points, a compute closure mid-run); work that has not started
     /// is dropped unrun, which is the cancellation stage doing its job.
-    pub(crate) fn shutdown(&self, grace: std::time::Duration) {
+    pub fn shutdown(&self, grace: std::time::Duration) {
         self.accepting.store(false, Ordering::Release);
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -618,7 +634,7 @@ impl fmt::Debug for ExecutionServices {
 impl Drop for ExecutionServices {
     fn drop(&mut self) {
         // Last-resort teardown for the path that never ran the explicit
-        // `shutdown` (a panic mid-teardown, a test dropping `AppRuntime`).
+        // `shutdown` (a panic mid-teardown, a test dropping its host).
         // `shutdown_background` never blocks, so — unlike `Runtime`'s own
         // blocking `Drop` — this is safe even if the drop happens from
         // inside a task running on some other runtime.
@@ -1437,10 +1453,11 @@ mod tests {
 
 /// Assertions that only hold on wasm32, EXECUTED there.
 ///
-/// `ExecutionServices` is `pub(crate)`, so `Backend::Sequential` — the whole
-/// wasm execution model — is unreachable from an integration test no matter how
-/// it is written. It needs a lib test, which is why flui-app's lib-test target
-/// had to build for wasm32 at all (issue #985).
+/// These stay a lib test because they pin the private `Backend::Sequential` —
+/// the whole wasm execution model — next to its definition, and the
+/// `default_pools_started` probe they read exists only under `cfg(test)` or
+/// the `test-support` feature. That is why this crate's lib-test target builds
+/// for wasm32.
 ///
 /// Both assertions below are FALSE on native, which is the point: a wasm test
 /// that would pass identically on a native target buys a wasm build and no

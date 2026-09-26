@@ -13,7 +13,6 @@
 pub(crate) mod close_request;
 mod config;
 pub mod direct;
-pub(crate) mod execution;
 mod frame_failure;
 pub(crate) mod hot_reload;
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,10 +34,6 @@ pub(crate) mod window_test_support;
 pub use close_request::{CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse};
 pub use config::{AppConfig, DiagnosticsProfile};
 pub use direct::run_direct;
-pub use execution::{
-    ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
-    SpawnError,
-};
 pub use frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport, PanicText, SegmentPhase,
@@ -69,6 +64,13 @@ pub use runner::{run_app_android, run_app_android_with_config};
 pub use runner::{run_app_impl as run_app, run_app_with_config_impl as run_app_with_config};
 #[cfg(not(target_os = "ios"))]
 pub use runtime::{ExitPolicy, WindowPolicy};
+
+// The execution services live in the frame runtime (ADR-0083); their public
+// paths stay `flui_app::…`.
+pub use flui_runtime::execution::{
+    ComputeJob, DeterministicExecutors, HostComputePool, HostExecutors, HostIoPool, IoFuture,
+    SpawnError,
+};
 
 // Re-export RootRenderView and RootRenderElement from flui-view
 pub use flui_view::{LifecycleHook, RecoveredAt};

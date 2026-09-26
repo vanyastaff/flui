@@ -700,7 +700,7 @@ fn quit_notification_observer_reentry_is_once_and_observer_panic_does_not_skip_s
 /// leave the slot filled) and the second loop's assertions fail.
 #[test]
 fn install_resolves_execution_services_and_teardown_shuts_them_down() {
-    use crate::app::execution::DeterministicExecutors;
+    use flui_runtime::execution::DeterministicExecutors;
 
     APP_RUNTIME.with(|slot| {
         assert!(

@@ -19,8 +19,9 @@ exclude = ["/ARCHITECTURE.md"]
 workspace = true
 
 [features]
-# Test hooks (`HeldPointerQueue::append`/`len`, and the `SemanticsHost`
-# surface that has no production caller yet) for this crate's own tests and
+# Test hooks (`HeldPointerQueue::append`/`len`, the `SemanticsHost` surface
+# that has no production caller yet, and `ExecutionServices::with_limits`/
+# `default_pools_started`) for this crate's own tests and
 # for `flui-app`'s, which enable it on their dev edge. Never on a normal edge.
 test-support = []
 
@@ -34,10 +35,24 @@ flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 # `Assertiveness`/`SemanticsEvent`, what the semantics host delivers.
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 parking_lot = { workspace = true }
+# `SpawnError`'s messages.
+thiserror = { workspace = true }
 tracing = { workspace = true }
 # The cross-platform clock `PerformanceStats` samples (std's `Instant` panics
 # on wasm32).
 web-time = { workspace = true }
+
+# The execution services' default IO and compute pools, and the cancellation
+# root the host's lifecycle layer derives from. Native only: the wasm32 build
+# of `execution` is the sequential backend and needs neither crate.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
+tokio-util = { workspace = true }
+
+# The sequential backend's IO lane (`spawn_local` on the browser's microtask
+# queue).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
 
 [dev-dependencies]
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
@@ -49,11 +64,24 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # `flui-view`'s and `flui-interaction`'s are; no type crosses it, so the second
 # copy of this crate in the test build never meets the first.
 flui-testing = { workspace = true }
+# `AsyncDriver`, the frame lane that
+# `frame_lane_makes_progress_while_background_lanes_are_saturated` drives
+# while the execution services' background lanes are full.
+flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 # Pointer positions in the held-input tests.
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # Capturing emitted fields is how the semantics host's privacy contract on its
 # announce/event fallbacks is checked.
 tracing-subscriber = { workspace = true }
+
+# Executing wasm32 unit tests: the execution services' sequential backend is
+# pinned by lib tests that run on wasm32 (`cargo xtask wasm-test`). Pinned to
+# the release that pairs with the locked wasm-bindgen; the unpinned "0.3"
+# resolves to one requiring a newer wasm-bindgen and would bump the workspace
+# lock as a side effect of adding a dev-dependency. flui-foundation carries the
+# same pin for the same reason.
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.77"
 
 [package.metadata.docs.rs]
 all-features = true
