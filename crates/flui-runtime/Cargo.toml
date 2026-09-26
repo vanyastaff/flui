@@ -54,8 +54,9 @@ all-features = true
 # above `flui-view` (1), `flui-testing` (2), `flui-widgets` (3) and
 # `flui-localizations` (4), because the realm it will own drives a widget
 # tree; `flui-app` (tier H) is its only normal dependent. Internal: it is not
-# an embedder API (ADR-0027 §9). Layer 6 is the widget catalog's, the highest
-# layer below `flui-app` that its future `flui-widgets` edge allows.
+# an embedder API (ADR-0027 §9). Layer 6 is the widget catalog's: its future
+# `flui-widgets` edge allows layers 6 to 9 (`flui-app` is 9), and 6 is the
+# lowest of them.
 [package.metadata.flui]
 layer = 6
 tier = "K"
