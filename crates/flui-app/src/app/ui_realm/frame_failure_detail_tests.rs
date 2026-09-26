@@ -105,7 +105,10 @@ fn with_quiet_panics<R>(operation: impl FnOnce() -> R) -> R {
 fn pipeline_trace_obeys_detail_policy_while_handler_keeps_the_typed_error() {
     let (redacted_fields, redacted_handler_typed) =
         capture_pipeline_failure(FrameFailureDetail::Redacted);
-    assert_eq!(redacted_fields, [flui_log::REDACTED_VALUE]);
+    assert_eq!(
+        redacted_fields,
+        [flui_foundation::diagnostics::REDACTED_VALUE]
+    );
     assert!(redacted_handler_typed);
 
     let (verbatim_fields, verbatim_handler_typed) =

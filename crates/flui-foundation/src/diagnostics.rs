@@ -47,6 +47,16 @@
 /// a presentation without pretending to be a window or GPU surface.
 pub const PRESENTATION_ID: &str = "presentation_id";
 
+/// What a redacted value renders as, matching Apple's own placeholder so a
+/// reader of either platform's log recognises it.
+///
+/// `flui-log`'s privacy layer substitutes it for a field it redacts, and a
+/// framework type that withholds text it may not publish (a caught panic's
+/// payload, for one) formats as it, so both read the same in a log. It is
+/// here, not in `flui-log`, because only composition roots may depend on
+/// `flui-log`; that crate re-exports it at `flui_log::REDACTED_VALUE`.
+pub const REDACTED_VALUE: &str = "<private>";
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};

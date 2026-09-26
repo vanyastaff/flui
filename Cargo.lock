@@ -2179,6 +2179,7 @@ name = "flui-log"
 version = "0.2.0-dev"
 dependencies = [
  "android_log-sys",
+ "flui-foundation",
  "thiserror 2.0.20",
  "tracing",
  "tracing-forest",

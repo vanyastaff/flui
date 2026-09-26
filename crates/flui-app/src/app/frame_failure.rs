@@ -29,7 +29,7 @@ use flui_view::{LifecycleHook, RecoveredAt, RecoveredPanic as ViewRecoveredPanic
 /// Panic text made safe for the application's selected diagnostics policy.
 ///
 /// `Verbatim` retains the exact string supplied by the panic site. `Redacted`
-/// retains no source text and formats as [`flui_log::REDACTED_VALUE`].
+/// retains no source text and formats as [`flui_foundation::diagnostics::REDACTED_VALUE`].
 ///
 /// # Examples
 ///
@@ -37,7 +37,7 @@ use flui_view::{LifecycleHook, RecoveredAt, RecoveredPanic as ViewRecoveredPanic
 /// use flui_app::PanicText;
 ///
 /// assert_eq!(PanicText::Verbatim("boom".into()).to_string(), "boom");
-/// assert_eq!(PanicText::Redacted.to_string(), flui_log::REDACTED_VALUE);
+/// assert_eq!(PanicText::Redacted.to_string(), flui_foundation::diagnostics::REDACTED_VALUE);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -52,7 +52,7 @@ impl fmt::Display for PanicText {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Verbatim(message) => formatter.write_str(message),
-            Self::Redacted => formatter.write_str(flui_log::REDACTED_VALUE),
+            Self::Redacted => formatter.write_str(flui_foundation::diagnostics::REDACTED_VALUE),
         }
     }
 }
@@ -381,7 +381,10 @@ mod tests {
             PanicText::Verbatim("panic detail".into()).to_string(),
             "panic detail"
         );
-        assert_eq!(PanicText::Redacted.to_string(), flui_log::REDACTED_VALUE);
+        assert_eq!(
+            PanicText::Redacted.to_string(),
+            flui_foundation::diagnostics::REDACTED_VALUE
+        );
     }
 
     #[test]
@@ -401,7 +404,10 @@ mod tests {
 
         let redacted = FrameFailureDetail::Redacted.pipeline_text(&error);
         assert_eq!(redacted, PanicText::Redacted);
-        assert_eq!(redacted.to_string(), flui_log::REDACTED_VALUE);
+        assert_eq!(
+            redacted.to_string(),
+            flui_foundation::diagnostics::REDACTED_VALUE
+        );
         assert!(!redacted.to_string().contains(SENTINEL));
 
         let verbatim = FrameFailureDetail::Verbatim.pipeline_text(&error);
