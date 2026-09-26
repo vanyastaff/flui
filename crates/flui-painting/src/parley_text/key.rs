@@ -66,9 +66,6 @@ pub enum SubpixelBin {
 }
 
 impl SubpixelBin {
-    /// Bins per pixel.
-    pub const COUNT: u8 = 4;
-
     /// Whole device pixel and bin; NaN maps to `(0, Zero)`.
     ///
     /// Truncates toward zero and then bins the fraction, with the same edges
