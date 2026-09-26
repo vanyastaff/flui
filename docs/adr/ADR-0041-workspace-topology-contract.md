@@ -7,6 +7,9 @@
   and Cargo's own cycle check replace the same-layer, forbidden and projected edge lists;
   `allowed-dependents` / `allowed-dev-dependents` carry the per-crate restrictions (`flui-log`,
   the design systems); review holds the planned-crate gate.
+- **Superseded in part by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) — tiers
+  are checked beside layers; the layer table, "a crate is a layer" as the only reason, and
+  "Localization direction is locked" end when the `layer` key is removed.
 - **Related:** ADR-0028 (the design-system rule this generalizes), ADR-0037 (the
   `interaction -> platform` same-layer edge)
 

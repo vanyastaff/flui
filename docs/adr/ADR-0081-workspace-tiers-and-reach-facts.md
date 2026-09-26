@@ -1,6 +1,8 @@
 # ADR-0081: Workspace tiers, reach facts and stability kinds
 
-- **Status:** Proposed
+- **Status:** Accepted in part (2026-09-26): §1 (tiers, `order`, the direction rule,
+  `edge-exceptions`) and the `tier-kind` declarations of §3. §2 (reach), the kind rules of §3
+  (core never names official, the forward allowlist), §4 and §5 remain Proposed.
 - **Date:** 2026-09-25
 - **Supersedes in part (on acceptance):** [ADR-0041](ADR-0041-workspace-topology-contract.md)
   (the numbered layer table, "a crate is a layer" as the only reason for a crate, and the
@@ -20,9 +22,9 @@
   [architecture review](../research/2026-09-25-architecture-review/report-decisions.ru.md);
   index in [`design/decisions.md`](../../design/decisions.md)
 
-Until this record is accepted, ADR-0041 is in force unchanged and no manifest changes.
-
 ## Context
+
+Line citations in this section are to `c2ba3ae51`, before the tier gate landed.
 
 ADR-0041 made the layer graph a claim the manifests make and `cargo xtask workspace` checks:
 each crate declares `[package.metadata.flui] layer = N`, the root names eleven layers
@@ -91,15 +93,34 @@ Every workspace package declares, in `[package.metadata.flui]`:
 The rule for a **normal or build** edge between workspace packages: it points to a lower tier,
 or to the same tier and a smaller `order`. Cargo's cycle check stays, but in-tier direction no
 longer depends on it. **Dev edges** keep ADR-0041's rule: they may point anywhere unless the
-target restricts them with `allowed-dev-dependents` (the `flui-view <-> flui-testing` dev cycle,
-`crates/flui-view/Cargo.toml:63-67`, stays legal). A library package without a valid `tier`,
-`tier-kind` and `order` fails the gate. Examples and `tools/*` declare only `tier-kind = "tool"`:
-they carry no `tier` or `order`, and stay exempt from the edge rule as applications.
+target restricts them with `allowed-dev-dependents`. The four dev cycles in the graph stay legal
+and no new restriction is added for them: `flui-view <-> flui-testing`
+(`crates/flui-view/Cargo.toml:63-67`), `flui-interaction <-> flui-testing`,
+`flui-scheduler <-> flui-testing` and `flui-rendering <-> flui-objects`. A library package
+without a valid `tier`, `tier-kind` and `order` fails the gate. Examples and `tools/*` declare
+only `tier-kind = "tool"`: they carry no `tier` or `order`, and stay exempt from the edge rule as
+applications. No package with a tier has a normal or build dependency on a `tool` package.
+
+An edge the rule refuses is legal only while the **dependent** lists it in its
+`[package.metadata.flui] edge-exceptions`, an array of
+`{ to = "<package>", exit = "ADR-NNNN", reason = "<text>" }`: `exit` names the ADR whose change
+removes the edge, and its file must exist under `docs/adr`. An entry for an edge that does not
+exist, or that the rule admits, is itself a finding, so the list only shrinks. The key exempts
+the tier rule only; the layer rule of ADR-0041 is checked beside it, unchanged, until the `layer`
+key is removed in a later change.
 
 `pkg` is ordered after H, so an edge from a host to an official package points up. Such an edge
 is legal only when it is one of the dated exceptions listed under "Core never names official"
-in §3; those exceptions exempt the edge from both rules, and the gate reports any other
-H → `pkg` edge.
+in §3; each is an `edge-exceptions` entry on the host, which the kind rule of §3 reads as well,
+and the gate reports any other H → `pkg` edge.
+
+The tier assignment has six refused edges, each seeded as an `edge-exceptions` entry:
+`flui-interaction -> flui-platform` and `flui-widgets -> flui-platform` (the widget harness,
+optional under `testing`) exit with ADR-0082; `flui-app -> flui-hot-reload` and
+`flui -> flui-hot-reload` exit with ADR-0094; `flui -> flui-material` and
+`flui -> flui-cupertino` exit with ADR-0088. In K, `flui-widgets` names `flui-testing` as an
+optional normal dependency (`crates/flui-widgets/Cargo.toml:89`), so `flui-testing` has the
+smaller `order`; moving the harness above the runtime removes that edge first.
 
 | Tier | Contains | Forbidden in the normal graph (reach fact) |
 |---|---|---|
@@ -125,8 +146,11 @@ about a windowing backend. A package that must reach a forbidden crate lists it 
 2026-09-25. `flui-tree`'s tree traits have no generic consumer: its arity, slot and depth markers
 fold into `flui-foundation`, and the read, navigation and write traits become inherent methods.
 `flui-localizations` (a crate alone in its own layer) moves its RTL table into
-`flui_widgets::localization` and its other tables into the packages. Until those removals land, both carry a transitional tier (`V` for `flui-tree`, `K` with kind `internal` for `flui-localizations`, which depends only on `flui-widgets` and `flui-types`) and an entry in the gate's
-allowlist that names this record. ADR-0041's "Localization direction is locked" paragraph no
+`flui_widgets::localization` and its other tables into the packages. Until those removals land, both carry a transitional tier (`V` for `flui-tree`, `K` with kind `internal` for `flui-localizations`, which depends only on `flui-widgets` and `flui-types`), and their dependents are frozen with the existing `allowed-dependents` and
+`allowed-dev-dependents` keys, under a comment that names this record: `flui-tree` admits the
+six crates that name it today (`flui`, `flui-layer`, `flui-objects`, `flui-rendering`,
+`flui-semantics`, `flui-view`) and no dev-dependent, `flui-localizations` admits only `flui`.
+The lists only shrink. ADR-0041's "Localization direction is locked" paragraph no
 longer applies: nothing in the catalog tiers depends on a localization crate.
 
 ### 2. Reach facts are a gate over the resolved graph
@@ -180,11 +204,11 @@ from the first day, with named, dated exceptions:
 - `flui-testing` dev -> `flui-devtools` (`crates/flui-testing/Cargo.toml:106`): exits when the
   observation-seam test moves into `flui-devtools`;
 - `flui-app` optional -> `flui-hot-reload` (`crates/flui-app/Cargo.toml:65,108`), the facade's
-  optional edge and `hot-reload` feature (`Cargo.toml:519,630`) and the facade's dev-dependency
-  (`Cargo.toml:554`): exit in the change that moves `flui-hot-reload` into the official packages
+  optional edge and `hot-reload` feature (`Cargo.toml:553,664`) and the facade's dev-dependency
+  (`Cargo.toml:588`): exit in the change that moves `flui-hot-reload` into the official packages
   (ADR-0094 §2);
 - the facade's optional `material`/`cupertino` edges, features and default
-  (`Cargo.toml:525-526,598,605-606`): exit with ADR-0088 §6, which sequences the facade change
+  (`Cargo.toml:559-560,632,639-640`): exit with ADR-0088 §6, which sequences the facade change
   after the packages build on `flui-sdk`.
 
 `flui-cli`'s dev-dependency on `flui-hot-reload` (`crates/flui-cli/Cargo.toml:114`) needs no
@@ -268,19 +292,39 @@ recorded:
 - Applications that enabled `flui-view/runtime-internals` directly (none in this workspace
   besides the three composition roots) lose the feature; the items stay reachable under
   `__runtime`.
-- AGENTS.md's "Crate layering" rows and the "Crate" row of "Extending FLUI", `docs/crates.md`,
-  and `docs/ROADMAP.md:11` change with the implementation. The ADR-0041 back-link
-  (`Superseded in part by: ADR-0081`) is added when this record is accepted.
-- Migration: one change adds the three keys next to `layer` and teaches the gate both; a
-  second removes `layer`. `reach` lands with its allowlist seeded from its own first run.
+- AGENTS.md's "Crate layering" rows and the "Crate" row of "Extending FLUI" and `docs/crates.md`
+  changed with the tier gate; `docs/ROADMAP.md:11` changes with §5. ADR-0041 carries the
+  `Superseded in part by: ADR-0081` back-link.
+- Migration: one change added the three keys and `edge-exceptions` next to `layer` and taught
+  the gate both; a second removes `layer`. `reach` lands with its allowlist seeded from its own
+  first run.
 
 ## Verification
 
-None of these exist yet.
+For the accepted part:
 
-- `cargo xtask workspace --self-test`: plants an upward normal edge, an in-tier edge against
-  `order`, a missing `tier-kind`, a core crate with an optional dependency on an `official`
-  crate, and a feature with no `cfg` site; each must be reported.
+- `cargo xtask workspace` checks the tier rule on every manifest and reports zero findings;
+  removing the `flui-interaction` `edge-exceptions` entry makes it fail with
+  `flui-interaction (tier S, order 4) depends on flui-platform (tier H, order 1)`.
+- `cargo xtask workspace --self-test` runs the rule over a built-in graph that plants an upward
+  cross-tier edge, an in-tier edge against `order`, an H → `pkg` edge without an exception, a
+  stale exception, a missing `tier-kind`, a duplicate `order` and an edge onto a `tool`; it
+  fails unless exactly those are reported. `cargo xtask checks` runs it before `workspace`.
+- `cargo nextest run -p xtask workspace`: `an_upward_tier_edge_is_refused`,
+  `an_in_tier_edge_to_a_larger_order_is_refused`, `an_in_tier_edge_to_a_smaller_order_is_allowed`,
+  `a_dev_edge_may_point_up_a_tier`, `a_dev_cycle_inside_a_tier_is_allowed`,
+  `a_crate_without_tier_order_or_kind_is_reported`, `an_unknown_tier_or_kind_is_reported`,
+  `two_crates_sharing_an_order_in_a_tier_are_reported`, `an_example_declares_only_the_tool_kind`,
+  `nothing_depends_on_a_tool_kind_crate`, `an_edge_exception_admits_one_upward_edge`,
+  `a_stale_edge_exception_is_reported`, `an_edge_exception_citing_a_missing_adr_is_reported`,
+  `the_self_test_reports_exactly_the_planted_findings`, and
+  `the_tiers_match_the_adr_0081_table`, which pins the table above and the six seeded
+  exceptions against the real manifests.
+
+Still to come, with the Proposed parts:
+
+- `cargo xtask workspace --self-test` also plants a core crate with an optional dependency on an
+  `official` crate (§3) and a feature with no `cfg` site (§4).
 - `cargo xtask reach --self-test`: plants a K crate depending on `winit`; must fail. The first
   real run must fail on `flui-interaction -> flui-platform` and `flui-widgets -> flui-platform`
   (under `testing`) before ADR-0082's trait move and pass after it.
