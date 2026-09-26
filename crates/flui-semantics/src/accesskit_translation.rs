@@ -176,6 +176,9 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
         // approximated into a role that would mislead a screen reader about
         // what the control does.
         SemanticsRole::DragHandle | SemanticsRole::HotKey => Role::GenericContainer,
+        // SemanticsRole is non_exhaustive; the pin is
+        // `every_role_but_none_maps_to_an_accesskit_role`, not this match.
+        _ => return None,
     })
 }
 
@@ -227,9 +230,25 @@ fn apply_state(node: &mut Node, flags: u64) {
 /// (AccessKit expects those to reach the app through the platform's own text
 /// interface, not as tree actions). `Dismiss` likewise has no equivalent. They
 /// are dropped rather than approximated, so nothing claims support it lacks.
-fn apply_actions(node: &mut Node, actions: u64) {
+///
+/// A node with an expanded state and a tap handler also advertises the one
+/// transition its state allows — `Expand` while collapsed, `Collapse` while
+/// expanded — because [`semantics_action_for`] routes both to its tap handler,
+/// which is how FLUI toggles an expandable node. AccessKit does not count a
+/// node with an expanded state as invocable (`accesskit_consumer` 0.39,
+/// `Node::is_invocable`), so its Windows adapter offers UI Automation's
+/// `ExpandCollapse` pattern for it and no `Invoke`; without these an agent or a
+/// screen reader could neither invoke nor expand such a node.
+fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
     if has_action(actions, SemanticsAction::Tap) {
         node.add_action(accesskit::Action::Click);
+        if has_flag(flags, SemanticsFlag::HasExpandedState) {
+            node.add_action(if has_flag(flags, SemanticsFlag::IsExpanded) {
+                accesskit::Action::Collapse
+            } else {
+                accesskit::Action::Expand
+            });
+        }
     }
     if has_action(actions, SemanticsAction::LongPress) {
         node.add_action(accesskit::Action::ShowContextMenu);
@@ -286,7 +305,7 @@ fn apply_actions(node: &mut Node, actions: u64) {
 /// `None` for actions FLUI has no counterpart for (never emitted outbound, so
 /// nothing advertised them); the caller drops the request with a trace.
 ///
-/// Two deliberate asymmetries against the outbound table:
+/// Three deliberate asymmetries against the outbound table:
 ///
 /// - `Focus` maps to [`SemanticsAction::Focus`] only. Outbound, a node
 ///   registering only the legacy `DidGainAccessibilityFocus` *notification*
@@ -295,9 +314,25 @@ fn apply_actions(node: &mut Node, actions: u64) {
 ///   handler is a notification hook, not the action's implementation.
 /// - `Blur` maps to `DidLoseAccessibilityFocus`, which IS the notification,
 ///   because that is the only vocabulary FLUI (and Flutter) has for it.
+/// - `Expand` and `Collapse` have no FLUI action. They reach the node's tap
+///   handler ([`SemanticsAction::Tap`]), which is how FLUI toggles an
+///   expandable node, and `apply_actions` advertises only the one its expanded
+///   state allows. The adapter that emits them refuses a transition to the
+///   state the node already has (accesskit_windows 0.35.0, `node.rs`
+///   `ExpandCollapse` provider); no other shipped adapter emits them.
+///
+/// `SetValue` lands on [`SemanticsAction::SetText`] whatever its payload: a
+/// numeric value (UI Automation's `RangeValue.SetValue`) arrives without its
+/// number, because [`semantics_action_args_for`] has no argument shape for it.
+///
+/// The match names every AccessKit action, with no wildcard arm:
+/// `accesskit::Action` is not `#[non_exhaustive]`, so an upstream release that
+/// adds one stops this compiling until someone decides whether FLUI routes it
+/// (ADR-0089 §3).
 #[must_use]
 pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction> {
     match action {
+        accesskit::Action::Expand | accesskit::Action::Collapse => Some(SemanticsAction::Tap),
         accesskit::Action::Click => Some(SemanticsAction::Tap),
         accesskit::Action::ShowContextMenu => Some(SemanticsAction::LongPress),
         accesskit::Action::ScrollLeft => Some(SemanticsAction::ScrollLeft),
@@ -313,7 +348,11 @@ pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction
         accesskit::Action::Focus => Some(SemanticsAction::Focus),
         accesskit::Action::Blur => Some(SemanticsAction::DidLoseAccessibilityFocus),
         accesskit::Action::CustomAction => Some(SemanticsAction::CustomAction),
-        _ => None,
+        accesskit::Action::HideTooltip
+        | accesskit::Action::ShowTooltip
+        | accesskit::Action::ReplaceSelectedText
+        | accesskit::Action::ScrollToPoint
+        | accesskit::Action::SetSequentialFocusNavigationStartingPoint => None,
     }
 }
 
@@ -356,7 +395,10 @@ pub fn semantics_action_args_for(
             let extent = i32::try_from(selection.focus.character_index).ok()?;
             Some(crate::ActionArgs::SetSelection { base, extent })
         }
-        _ => None,
+        accesskit::ActionData::NumericValue(_)
+        | accesskit::ActionData::ScrollUnit(_)
+        | accesskit::ActionData::ScrollHint(_)
+        | accesskit::ActionData::ScrollToPoint(_) => None,
     }
 }
 
@@ -449,7 +491,7 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     }
 
     apply_state(&mut node, data.flags);
-    apply_actions(&mut node, data.actions);
+    apply_actions(&mut node, data.actions, data.flags);
 
     node.set_children(
         data.children
@@ -733,12 +775,24 @@ mod tests {
             accesskit::Action::Focus,
             accesskit::Action::Blur,
             accesskit::Action::CustomAction,
+            accesskit::Action::Expand,
+            accesskit::Action::Collapse,
         ];
         for &inbound in INBOUND_DOMAIN {
             let routed = semantics_action_for(inbound)
                 .expect("every action in the declared inbound domain is routable");
+            // Expand and collapse are advertised only by a node with an
+            // expanded state, and only the transition that state allows.
+            let state = match inbound {
+                accesskit::Action::Expand => flags(&[SemanticsFlag::HasExpandedState]),
+                accesskit::Action::Collapse => {
+                    flags(&[SemanticsFlag::HasExpandedState, SemanticsFlag::IsExpanded])
+                }
+                _ => 0,
+            };
             let data = SemanticsNodeData {
-                actions: routed as u64,
+                actions: routed.value(),
+                flags: state,
                 ..Default::default()
             };
             assert!(
@@ -747,6 +801,154 @@ mod tests {
                  longer advertises {inbound:?} — the two tables have drifted",
             );
         }
+    }
+
+    /// The role mapping's only pin. `SemanticsRole` is `#[non_exhaustive]` and
+    /// lives in flui-protocol, so `explicit_role` ends in a wildcard: deleting
+    /// any arm there sends that role to `None` (the flags decide) and nothing
+    /// but this test notices.
+    #[test]
+    fn every_role_but_none_maps_to_an_accesskit_role() {
+        let mut generic = Vec::new();
+        for &role in SemanticsRole::ALL {
+            let mapped = explicit_role(role);
+            if role == SemanticsRole::None {
+                assert_eq!(mapped, None, "`none` declares no role; the flags decide");
+                continue;
+            }
+            let mapped = mapped.unwrap_or_else(|| panic!("{role} maps to no AccessKit role"));
+            if mapped == Role::GenericContainer {
+                generic.push(role);
+            }
+        }
+        // The documented no-counterpart roles, and only those.
+        assert_eq!(
+            generic,
+            [SemanticsRole::DragHandle, SemanticsRole::HotKey],
+            "only the roles AccessKit has no counterpart for may be generic",
+        );
+    }
+
+    /// Every tool of the ADR-0080 wire vocabulary, as accesskit_windows 0.35.0
+    /// turns its UI Automation call into an AccessKit action (`node.rs`), and
+    /// the FLUI action that action reaches.
+    ///
+    /// `set_value` lands on `SetText` (the recorded divergence in
+    /// flui-semantics' `## Mapping decisions`); `expand` and `collapse` land
+    /// on the tap handler, which is how FLUI toggles an expandable node.
+    #[test]
+    fn every_wire_action_routes_to_a_semantics_action() {
+        use flui_protocol::ActionName;
+
+        let table: &[(ActionName, accesskit::Action, SemanticsAction)] = &[
+            // `Invoke` -> `click()` -> Click (node.rs:1340-1343, 953).
+            (
+                ActionName::Invoke,
+                accesskit::Action::Click,
+                SemanticsAction::Tap,
+            ),
+            // `Toggle` -> `click()` -> Click (node.rs:1336-1338, 953).
+            (
+                ActionName::Toggle,
+                accesskit::Action::Click,
+                SemanticsAction::Tap,
+            ),
+            // `Value`/`RangeValue.SetValue` -> SetValue (node.rs:1352, 1366).
+            (
+                ActionName::SetValue,
+                accesskit::Action::SetValue,
+                SemanticsAction::SetText,
+            ),
+            // `SelectionItem.Select` -> Click (node.rs:977-997).
+            (
+                ActionName::Select,
+                accesskit::Action::Click,
+                SemanticsAction::Tap,
+            ),
+            // `SetFocus` -> Focus (node.rs:1130).
+            (
+                ActionName::Focus,
+                accesskit::Action::Focus,
+                SemanticsAction::Focus,
+            ),
+            // `ExpandCollapse` -> Expand / Collapse, only toward the state
+            // the node lacks (node.rs:955-975).
+            (
+                ActionName::Expand,
+                accesskit::Action::Expand,
+                SemanticsAction::Tap,
+            ),
+            (
+                ActionName::Collapse,
+                accesskit::Action::Collapse,
+                SemanticsAction::Tap,
+            ),
+            // `ScrollItem` -> ScrollIntoView (node.rs:1374).
+            (
+                ActionName::ScrollIntoView,
+                accesskit::Action::ScrollIntoView,
+                SemanticsAction::ShowOnScreen,
+            ),
+        ];
+
+        let listed: Vec<ActionName> = table.iter().map(|(name, _, _)| *name).collect();
+        assert_eq!(
+            listed,
+            ActionName::ALL,
+            "one row per wire action, in ActionName::ALL's order: a wire action \
+             without a row here has no pinned route into FLUI",
+        );
+        for &(name, platform, expected) in table {
+            assert_eq!(
+                semantics_action_for(platform),
+                Some(expected),
+                "`{name}` arrives as {platform:?} and must reach {expected:?}",
+            );
+        }
+    }
+
+    /// A slider's `RangeValue.SetValue` arrives as `SetValue` with a number;
+    /// it routes to `SetText` and the number is dropped. Pinned so the loss
+    /// stays a recorded decision rather than an accident.
+    #[test]
+    fn a_numeric_set_value_routes_set_text_without_its_number() {
+        assert_eq!(
+            semantics_action_for(accesskit::Action::SetValue),
+            Some(SemanticsAction::SetText),
+        );
+        assert_eq!(
+            semantics_action_args_for(&accesskit::ActionData::NumericValue(0.5), NodeId(7)),
+            None,
+        );
+    }
+
+    /// An expandable node with a tap handler advertises the one transition
+    /// its state allows; without the tap handler nothing could perform either.
+    #[test]
+    fn an_expandable_node_advertises_only_the_transition_its_state_allows() {
+        let expandable = |state: &[SemanticsFlag], actions: u64| {
+            translate(&SemanticsNodeData {
+                flags: flags(state),
+                actions,
+                ..Default::default()
+            })
+        };
+        let tap = SemanticsAction::Tap.value();
+
+        let collapsed = expandable(&[SemanticsFlag::HasExpandedState], tap);
+        assert!(collapsed.supports_action(accesskit::Action::Expand));
+        assert!(!collapsed.supports_action(accesskit::Action::Collapse));
+
+        let expanded = expandable(
+            &[SemanticsFlag::HasExpandedState, SemanticsFlag::IsExpanded],
+            tap,
+        );
+        assert!(!expanded.supports_action(accesskit::Action::Expand));
+        assert!(expanded.supports_action(accesskit::Action::Collapse));
+
+        let inert = expandable(&[SemanticsFlag::HasExpandedState], 0);
+        assert!(!inert.supports_action(accesskit::Action::Expand));
+        assert!(!inert.supports_action(accesskit::Action::Collapse));
     }
 
     /// The mirror case: a structural role has no flag and lives only in the
