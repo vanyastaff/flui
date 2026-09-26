@@ -198,9 +198,11 @@ with no change in `flui-widgets`, `flui-app`, `flui-testing`, the facade or the 
 take `&S where S: ReadScope + ?Sized`, which accepts every context shape that compiles today;
 subscription goes through sinks the drivers mint, so the graph handle cannot subscribe anyone;
 a handle of the wrong type is `SignalError::TypeMismatch`, not a `BUG:` panic. The warm edit it
-measured (15 crates in 5.74 s for the contract, 3 crates in 3.07 s for the graph) withdrew the
-`flui-reactive` extraction: the contract already lets render code name `Signal<T>`, and a crate
-below `flui-rendering` would put the graph's frequent edits on the foundation-level rebuild set.
+measured (`cargo check -p flui-app`, one run: 15 crates in 5.74 s for the contract, 3 crates in
+3.07 s for the graph) withdrew the `flui-reactive` extraction: the contract already lets render
+code name `Signal<T>`, and a crate below `flui-rendering` and `flui-animation` would move the
+graph's frequent edits from 3 re-checked crates to about 7 (inferred from `cargo tree -i`, not
+measured).
 ADR-0085 records the numbers and the holes the prototype opened.
 
 ### D5. One raster contract in `flui-layer`
@@ -879,4 +881,6 @@ form.
 - The rebuild-weight figures (engine 74.0k lines, widgets 82.7k) include test code; `flui-engine`
   carries at least 19k lines in test files alone. The reactive warm-edit cost is measured, not
   estimated: 15 crates in 5.74 s for an edit to a foundation module against 3 crates in 3.07 s
-  for one to the graph in `flui-view` (ADR-0085, Context).
+  for one to the graph in `flui-view` (`cargo check -p flui-app`, one run; ADR-0085, Context).
+  That is cargo's re-check set for one build, not the `cargo tree -i` count of all dependents
+  behind the earlier "27 against 16".

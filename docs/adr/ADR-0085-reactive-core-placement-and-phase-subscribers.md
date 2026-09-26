@@ -341,13 +341,15 @@ foundation contract stays, because production element reads use it.
 - **The motivation for extraction is met without it.** The prototype compiled
   `PaintCx: ReadScope` with no manifest change, so render and animation code can name
   `Signal<T>` and read through `ReadScope` while the graph stays in `flui-view`.
-- **Extraction would make the frequent edit expensive.** A graph edit where the graph is
+- **Extraction would make the frequent edit more expensive.** A graph edit where the graph is
   re-checks 3 crates in 3.07 s. A `flui-reactive` crate would have to sit below
-  `flui-rendering`, since rendering would depend on it to name its types, so every graph edit
-  would re-check roughly the foundation-level set: 15 crates, 5.74 s for the contract edit. That
-  figure is inferred from the measured contract edit, not measured for a `flui-reactive` crate.
-  The graph is the part that changes (scheduling, guards, phase readers); the contract is small
-  and changes rarely, so it is the part that carries the 15-crate cost.
+  `flui-rendering` and `flui-animation`, since both would depend on it to name its types, so
+  every graph edit would re-check about 7 crates: the new crate plus the union of the reverse
+  closures of `flui-rendering` and `flui-animation` (`cargo tree -p flui-app -e normal -i
+  <crate>`: rendering, animation, objects, view, widgets, app). That count is inferred from
+  those closures, not measured for a `flui-reactive` crate, and no time is claimed for it. The
+  graph is the part that changes (scheduling, guards, phase readers); the contract is small and
+  changes rarely, so it is the part that carries the 15-crate foundation cost.
 - **Folding the graph itself into `flui-foundation` is rejected** for the same reason, and
   because it would put build-scheduling logic in the value tier. The contract adds no
   element-lifecycle type to foundation: `Reader` stays in `flui-view` (§4), and its only
@@ -368,10 +370,10 @@ foundation contract stays, because production element reads use it.
   caller, and a new publish unit that proves nothing.
 - **Extract `flui-reactive` together with the first render subscriber** (this record's earlier
   §6 step 3). Rejected: the read contract already lets render code name `Signal<T>`, and the
-  extraction would move every graph edit from 3 re-checked crates to roughly 15 (§6).
+  extraction would move every graph edit from 3 re-checked crates to about 7 (inferred, §6).
 - **Put the graph in `flui-foundation`.** Rejected: a graph edit would re-check the
-  foundation-level set (15 crates, 5.74 s, measured for the contract) against 3 crates, 3.07 s
-  in `flui-view`, and build-scheduling logic would sit in the value tier.
+  foundation-level set (15 crates, 5.74 s, measured for the contract with `cargo check -p
+  flui-app`, one run) against 3 crates, 3.07 s in `flui-view`, and build-scheduling logic would sit in the value tier.
 - **Keep `Signal<T>` in `flui-view` and let render objects subscribe through an erased trait.**
   Rejected: an inherent `Signal<T>` can only be named in its defining crate, so render and
   animation code could never take a `Signal<T>`. The adopted design keeps only the *graph* in
