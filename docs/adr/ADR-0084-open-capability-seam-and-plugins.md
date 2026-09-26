@@ -150,12 +150,18 @@ impl Unsupported {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnsupportedReason { NotRegistered, NotOnThisPlatform, NoWindow }
+impl fmt::Display for UnsupportedReason {
+    /// "no provider is registered", "not available on this platform", "the window is gone".
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* .. */ }
+}
 ```
 
 - The provider takes `&Arc<dyn PlatformWindow>` so that a handle can keep a `Weak` to its
   window; a `&dyn PlatformWindow` cannot give one.
 - `Unsupported::of::<C>` is the constructor other crates use, because the struct is
   `#[non_exhaustive]`.
+- `UnsupportedReason` implements `Display` by hand, because the `thiserror` message formats it
+  with `{reason}`; `ProviderOrigin` (§4) does the same for `{first}` and `{second}`.
 - The provider names `PlatformWindow`, so the seam lands in `flui-platform-api` no earlier than
   `PlatformWindow` does (ADR-0082 §3).
 - The class of §5 is deliberately not encoded on `PlatformCapability`, so a move between classes
@@ -206,7 +212,9 @@ same `E0599` ADR-0078 relies on. The 136 `&dyn LifecycleContext` sites are untou
   state. No realm constructor exists without the parameter, so no realm starts with a silently
   empty registry. The table is never a thread-local or a static (ADR-0097), which rules out the
   prototype's owner-thread cell. The table never changes after validation; there is no
-  registration at run time.
+  registration at run time. The `Rc` assumes one owner thread; if ADR-0091's per-realm owner
+  threads are adopted, the table becomes an `Arc` over `Send + Sync` providers or is built once
+  per owner thread.
 - **Lookup order.** `NotRegistered` (the table has no provider), then `NoWindow` (the
   presentation's window is gone, and its cache with it), then the provider, which returns a
   handle or its own `NotOnThisPlatform`.
@@ -229,6 +237,10 @@ impl CapabilityRegistrar<'_> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProviderOrigin { BuiltIn, Plugin(&'static str), Application }
+impl fmt::Display for ProviderOrigin {
+    /// "the built-in providers", "plugin `flui-haptics`", "the application".
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* .. */ }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
