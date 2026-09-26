@@ -1680,9 +1680,13 @@ is a `PageRoute<()>` named with the value's path, on a `Navigator` the router
 builds, so transitions, heroes and `PopScope` are unchanged.
 `Router::<R>::handle` takes `&dyn LifecycleContext` (ADR-0078), so a handle
 is acquired in `init_state`/`did_change_dependencies` and resolves the
-**nearest** `Router<R>`, which is `Navigator.of`'s contract.
+**nearest** `Router<R>`, which is `Navigator.of`'s contract. The page builder
+and transitions are shared with every page, so a parent rebuild reaches the
+pages already on the stack; a transition duration is fixed when a page is
+placed, because the page's animation controller is made with it.
 
 **Pinned by:** `nested_router_handle_targets_the_nearest_router`,
+`a_parent_rebuild_reaches_the_pages_already_on_the_stack`,
 `router_handle_without_a_router_is_no_router`, the `compile_fail` doctest on
 `Router::handle`, and `route_path_round_trips_a_hand_written_routable`.
 

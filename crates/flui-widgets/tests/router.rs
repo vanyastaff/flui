@@ -775,3 +775,104 @@ fn pops_never_take_the_last_page_from_above_a_popup() {
     assert_eq!(router.location().as_str(), "/note/1");
     assert!(laid_out_text(&laid, "Note 1"));
 }
+
+// ============================================================================
+// A parent rebuild
+// ============================================================================
+
+/// A parent that builds a `Router` whose page builder and transitions carry
+/// the current `version`.
+#[derive(Clone)]
+struct Shell {
+    probe: Probe,
+    version: Rc<Cell<u32>>,
+    seen: Rc<RefCell<Vec<u32>>>,
+    rebuild: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+}
+
+impl View for Shell {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+impl StatefulView for Shell {
+    type State = ShellState;
+    fn create_state(&self) -> ShellState {
+        ShellState {
+            rebuild: Rc::clone(&self.rebuild),
+        }
+    }
+}
+
+struct ShellState {
+    rebuild: Rc<RefCell<Option<flui_view::RebuildHandle>>>,
+}
+
+impl ViewState<Shell> for ShellState {
+    fn init_state(&mut self, cx: &dyn LifecycleContext) {
+        *self.rebuild.borrow_mut() = Some(cx.rebuild_handle());
+    }
+
+    fn build(&self, view: &Shell, _cx: &dyn BuildContext) -> impl IntoView {
+        let version = view.version.get();
+        let probe = view.probe.clone();
+        let seen = Rc::clone(&view.seen);
+        Router::new(AppRoute::Home, move |route: &AppRoute, _cx| match route {
+            AppRoute::Home => page(&probe, move || text(format!("v{version} home"))),
+            other => text(format!("v{version} {}", other.to_path())),
+        })
+        .transitions(move |_cx, _animation, _secondary, child| {
+            seen.borrow_mut().push(version);
+            child
+        })
+    }
+}
+
+#[test]
+fn a_parent_rebuild_reaches_the_pages_already_on_the_stack() {
+    let shell = Shell {
+        probe: Probe::default(),
+        version: Rc::new(Cell::new(1)),
+        seen: Rc::default(),
+        rebuild: Rc::default(),
+    };
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), shell.clone()),
+        tight(400.0, 400.0),
+        vsync,
+    );
+    settle(&mut laid);
+    let router = shell.probe.handle();
+    router.push(AppRoute::Note { id: 1 }).expect("mounted");
+    settle(&mut laid);
+    assert!(laid_out_text(&laid, "v1 /note/1"));
+
+    shell.version.set(2);
+    shell
+        .rebuild
+        .borrow()
+        .as_ref()
+        .expect("the shell was mounted")
+        .schedule(flui_view::RebuildReason::StateChange);
+    settle(&mut laid);
+    assert!(
+        laid_out_text(&laid, "v2 /note/1"),
+        "the page on the stack shows the new builder's content"
+    );
+    assert!(laid.find_text("v1 /note/1").is_none());
+
+    shell.seen.borrow_mut().clear();
+    assert_eq!(router.pop(), Ok(true));
+    for _ in 0..4 {
+        laid.pump_for(FRAME);
+    }
+    let seen = shell.seen.borrow().clone();
+    assert!(
+        !seen.is_empty() && seen.iter().all(|&version| version == 2),
+        "the page placed before the rebuild exits through the new transitions, got {seen:?}"
+    );
+    settle(&mut laid);
+    assert!(laid_out_text(&laid, "v2 home"));
+}

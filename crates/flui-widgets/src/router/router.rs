@@ -129,7 +129,8 @@ impl<R: Routable> Router<R> {
     }
 
     /// Wrap each page in its entrance and exit transition — the
-    /// [`PageRoute::transitions`] every page this router places receives.
+    /// [`PageRoute::transitions`] of every page on this router's stack. A
+    /// parent rebuild with new transitions reaches the pages already there.
     #[must_use]
     pub fn transitions(
         mut self,
@@ -146,6 +147,8 @@ impl<R: Routable> Router<R> {
     }
 
     /// The [`PageRoute::transition_duration`] of every page this router places.
+    /// A page keeps the duration it was placed with: a parent rebuild with a
+    /// new one reaches only the pages placed after it.
     #[must_use]
     pub fn transition_duration(mut self, duration: Duration) -> Self {
         self.transition_duration = Some(duration);
@@ -196,7 +199,7 @@ impl<R: Routable> StatefulView for Router<R> {
             navigator: NavigatorHandle::addressed(type_name::<R>()),
             stack: RefCell::new(Vec::new()),
             page: Rc::new(RefCell::new(Rc::clone(&self.page))),
-            transitions: RefCell::new(self.transitions.clone()),
+            transitions: Rc::new(RefCell::new(self.transitions.clone())),
             transition_duration: Cell::new(self.transition_duration),
             mounted: Cell::new(false),
             reconciling: Cell::new(false),
@@ -254,8 +257,11 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     }
 
     /// Take the new page builder and transitions, and rebuild every page so a
-    /// parent rebuild or hot reload reaches them. A changed initial stack is
-    /// ignored after mount, as Flutter ignores a changed initial route.
+    /// parent rebuild or hot reload reaches the pages already on the stack. A
+    /// new transition duration reaches only the pages placed afterwards: a
+    /// page's animation controller is made with its duration. A changed
+    /// initial stack is ignored after mount, as Flutter ignores a changed
+    /// initial route.
     fn did_update_view(&mut self, _old_view: &Router<R>, new_view: &Router<R>) {
         *self.shared.page.borrow_mut() = Rc::clone(&new_view.page);
         self.shared
@@ -294,7 +300,10 @@ pub(super) struct RouterShared<R: Routable> {
     /// Shared with every page's builder, so a new builder reaches pages
     /// already on the stack.
     page: Rc<RefCell<PageBuilder<R>>>,
-    transitions: RefCell<Option<RouteTransitionsBuilder>>,
+    /// Shared with every page's transitions, as `page` is.
+    transitions: Rc<RefCell<Option<RouteTransitionsBuilder>>>,
+    /// Read when a page is placed; a page keeps the duration it was placed
+    /// with.
     transition_duration: Cell<Option<Duration>>,
     pub(super) mounted: Cell<bool>,
     /// Set while the router replaces its own tail, whose removals it records
@@ -320,11 +329,16 @@ impl<R: Routable> RouterShared<R> {
             semantics.child(page(&value, cx)).boxed()
         })
         .named(route.to_path().as_str());
-        if let Some(transitions) = self.transitions.borrow().clone() {
-            page = page.transitions(move |cx, animation, secondary, child| {
-                transitions(cx, animation, secondary, child)
-            });
-        }
+        // Read at each build, so new transitions reach this page; with none,
+        // the page's own default, a jump cut.
+        let transitions = Rc::clone(&self.transitions);
+        page = page.transitions(move |cx, animation, secondary, child| {
+            let current = transitions.borrow().clone();
+            match current {
+                Some(transitions) => transitions(cx, animation, secondary, child),
+                None => child,
+            }
+        });
         if let Some(duration) = self.transition_duration.get() {
             page = page.transition_duration(duration);
         }
